@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
@@ -19,7 +19,7 @@ afterEach(async () => {
   for (const directory of directories.splice(0))
     await rm(directory, { recursive: true, force: true })
 })
-async function fixture(extra = false) {
+async function fixture(extra = false, agents = false) {
   const directory = await mkdtemp(join(tmpdir(), 'ultimate-test-'))
   directories.push(directory)
   const repoRoot = join(directory, 'repo')
@@ -54,6 +54,13 @@ async function fixture(extra = false) {
       join(repoRoot, 'extensions', 'web-only', 'README.md'),
       'A browser-only extension.\n\nMore detail.',
     )
+  }
+  if (agents) {
+    await cp(resolvePath('extensions/subagents'), join(repoRoot, 'extensions/subagents'), {
+      recursive: true,
+    })
+    await cp(resolvePath('agents'), join(repoRoot, 'agents'), { recursive: true })
+    await writeFile(join(repoRoot, 'agents/broken.md'), 'not frontmatter')
   }
   const options = { repoRoot, home: join(directory, 'home'), faux: true, port: 0 }
   const server = await createServer(options)
@@ -120,6 +127,55 @@ async function attach(server: Awaited<ReturnType<typeof createServer>>, query = 
 }
 
 describe('server', () => {
+  it('runs the faux subagent demo and streams its tree, child transcript and definition errors', async () => {
+    const { server } = await fixture(false, true)
+    const stream = await attach(server)
+    const system = stream.events.find((event) => event.name === 'system')!
+      .data as ServerEvents['system']
+    expect(system.agents.find((agent) => agent.name === 'scout')).toMatchObject({
+      description: expect.stringContaining('read-only'),
+    })
+    expect(system.agents.find((agent) => agent.name === 'broken')).toMatchObject({
+      error: expect.stringContaining('frontmatter'),
+    })
+    await post(server, '/api/conversations/1/submit', { text: 'delegate to scout' })
+    await server.root.waitForIdle(context)
+    let child: ServerEvents['conversations'][number] | undefined
+    await until(() => {
+      for (const event of stream.events) {
+        if (event.name === 'conversations')
+          child =
+            (event.data as ServerEvents['conversations']).find((item) => item.agent === 'scout') ??
+            child
+      }
+      return child?.title === 'Return the word SCOUT.' && !child.busy
+    })
+    expect(child).toMatchObject({
+      parentConversationId: server.root.id,
+      ownerTaskId: expect.any(Number),
+      background: false,
+    })
+    const childStream = await attach(server, `?conversation=${child!.id}`)
+    const view = childStream.events.find((event) => event.name === 'view')!.data as ConversationView
+    expect(
+      view.entries.some(
+        (entry) =>
+          entry.model?.[0]?.role === 'assistant' &&
+          entry.model[0].content.some((part) => part.type === 'text' && part.text === 'SCOUT'),
+      ),
+    ).toBe(true)
+    expect(
+      (
+        await post(server, `/api/conversations/${child!.id}/submit`, {
+          text: 'Return the word SCOUT.',
+          whenBusy: 'steer',
+        })
+      ).status,
+    ).toBe(202)
+    expect((await post(server, `/api/conversations/${child!.id}/abort`)).status).toBe(200)
+    await childStream.close()
+    await stream.close()
+  })
   it('prepares the core and listener without opening SQLite until go', async () => {
     const { options } = await fixture()
     const prepared = await prepareServer({ ...options, home: join(options.home, 'candidate') })

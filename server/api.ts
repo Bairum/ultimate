@@ -8,6 +8,7 @@ import { context } from './harness.ts'
 import type { OpenHost, PreparedHost } from './harness.ts'
 import type { createSystem } from './system.ts'
 import { requestSwap } from './supervisor-protocol.ts'
+import { SubagentInfo } from '../extensions/subagents/server.ts'
 
 class HttpError extends Error {
   status: number
@@ -89,6 +90,7 @@ export async function createApi(
       const view = await conversation.viewState(context)
       const agent = await conversation.agent(context)
       const metadata = await harness.snapshot(Metadata, record.id, context)
+      const subagent = await harness.snapshot(SubagentInfo, record.id, context)
       const input = view.value.entries.find((entry) => entry.kind === 'pi.user')?.model?.[0]
       const title =
         input?.role === 'user'
@@ -104,8 +106,9 @@ export async function createApi(
           ? { parentConversationId: record.owner?.conversationId ?? record.parent?.conversationId }
           : {}),
         ...(record.owner ? { ownerTaskId: record.owner.taskId } : {}),
-        ...(metadata?.title
-          ? { title: metadata.title }
+        ...(subagent?.agent ? { agent: subagent.agent, background: subagent.background } : {}),
+        ...(subagent?.title || metadata?.title
+          ? { title: subagent?.title ?? metadata?.title }
           : title
             ? { title: title.replace(/\s+/g, ' ').slice(0, 160) }
             : {}),
@@ -158,6 +161,7 @@ export async function createApi(
         change.type === 'document' &&
         change.conversationId &&
         (change.record.kind === 'ultimate.metadata' ||
+          change.record.kind === 'ultimate.subagent' ||
           (change.record.kind === 'pi.agent' &&
             change.ops.some((op) => op[0] === 'r' || op[1][0] === 'cwd')))
       )

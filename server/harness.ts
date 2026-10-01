@@ -90,6 +90,26 @@ export async function prepareHarness(options: HostOptions) {
     const demo: FauxResponseFactory = (transcript) => {
       faux.appendResponses([demo])
       const last = transcript.messages.findLast((message) => message.role !== 'system')
+      if (last?.role === 'user' && last.content === 'delegate to scout') {
+        return fauxAssistantMessage(
+          [
+            fauxToolCall('subagent', {
+              action: 'start',
+              agent: 'scout',
+              task: 'Return the word SCOUT.',
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        )
+      }
+      if (last?.role === 'user' && last.content === 'Return the word SCOUT.') {
+        return fauxAssistantMessage([fauxText('SCOUT')])
+      }
+      if (last?.role === 'toolResult' && last.toolName === 'subagent') {
+        return fauxAssistantMessage([
+          fauxText(last.content.map((block) => (block.type === 'text' ? block.text : '')).join('')),
+        ])
+      }
       if (
         last?.role === 'user' &&
         typeof last.content === 'string' &&

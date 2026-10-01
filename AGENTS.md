@@ -53,6 +53,12 @@ replay-safe only if a rerun cannot do harm, and store decisions in `api.memo()`.
 - Pin `@earendil-works/*` packages to exact versions; Pi Durable is experimental.
 - Checks: `pnpm check` (format, lint, types) and `pnpm test` must pass before a commit.
 
+## Subagents
+
+Use `subagent` to delegate bounded research, recon, review, or isolated implementation; verify the results. Foreground calls return the child's answer. Background children survive the parent's stop and report answers as follow-up inputs. Start, message/steer, wait, stop, and list all use child conversation IDs. No nested subagents.
+
+Definitions live in `agents/`, `~/.ultimate/agents/`, and `<cwd>/.ultimate/agents/` (later wins by name), and are reread at every start. See `extensions/subagents/README.md` for frontmatter. Shipped models inherit the parent's model.
+
 ## Reference
 
 - Pi Durable README and examples: `node_modules/@earendil-works/pi-durable/README.md`, upstream

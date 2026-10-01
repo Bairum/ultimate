@@ -8,6 +8,7 @@ import { getAgentDir, loadProjectContextFiles, loadSkills } from '@earendil-work
 import type { ViteDevServer } from 'vite-plus'
 import type { ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { PreparedHost } from './harness.ts'
+import { discoverAgents } from '../extensions/subagents/definitions.ts'
 
 const run = promisify(execFile)
 async function bytes(path: string) {
@@ -95,7 +96,10 @@ export async function createSystem(
       contextFiles: loadProjectContextFiles({ cwd: host.repoRoot, agentDir }).map(
         (file) => file.path,
       ),
-      agents: [],
+      agents: await discoverAgents(host.repoRoot, host.repoRoot).then(({ definitions, errors }) => [
+        ...definitions.map(({ name, description, path }) => ({ name, description, path })),
+        ...errors,
+      ]),
     }
     const json = JSON.stringify(value)
     if (json !== previous) {

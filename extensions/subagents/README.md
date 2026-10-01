@@ -1,0 +1,9 @@
+# Subagents
+
+Delegate bounded work with `subagent`: `start {agent, task, background?}`, `message {id, text, steer?}`, `wait {id}`, `stop {id}`, and `list`. Foreground children belong to the tool call; background children belong to a background anchor and their answers are reported as follow-up inputs. Child IDs are conversation IDs. Definitions are reread on every start; children never receive `subagent`.
+
+Definitions are Markdown with `---` frontmatter: required `name` and `description`, optional `model: provider/modelId`, `thinking`, and `tools: [read, bash]` (indented dash lists also work). The body is the instructions. Later directories override by name: repository `agents/`, `~/.ultimate/agents/`, and conversation cwd `.ultimate/agents/`. Invalid files appear with errors in system info. Omitted tools inherit the parent's tools minus `subagent`. Tool restrictions select tools, not a shell sandbox: read-only agents' bash restrictions are instructions.
+
+The shipped definitions inherit the active provider/model. No universally cheaper model is known across providers, so no model is hardcoded. Override locally to select an available fast model.
+
+The durable documents `ultimate.subagents` and `ultimate.subagent` hold the ownership/action index and tree metadata. Reporter request IDs and answer receipts prevent duplicate delivery across restarts; stop records its target run so a replay cannot abort a later run. No web facet yet.

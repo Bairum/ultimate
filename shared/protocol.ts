@@ -43,6 +43,8 @@ export interface ConversationSummary {
   id: number
   parentConversationId?: number
   ownerTaskId?: number
+  agent?: string
+  background?: boolean
   title?: string
   cwd?: string
   busy: boolean
@@ -99,7 +101,7 @@ export interface SystemInfo {
   extensions: ExtensionInfo[]
   skills: { name: string; description: string; path: string }[]
   contextFiles: string[]
-  agents: { name: string; description: string; path: string }[]
+  agents: { name: string; description: string; path: string; error?: string }[]
 }
 type WirePrompt<T> = T extends AuthPrompt ? Omit<T, 'signal'> : never
 export type BrowserAuthPrompt = WirePrompt<AuthPrompt>
