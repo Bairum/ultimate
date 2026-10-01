@@ -63,11 +63,18 @@ export default function prompt(host: ExtensionHost) {
       section(
         'tools',
         () =>
-          'Use read to inspect files before editing. Use bash for commands and file discovery. Use edit for precise replacements and write for new files or complete rewrites. Prefer existing helpers and platform features; keep changes focused. Run checks before claiming success.',
+          `- read: inspect files; use it instead of cat or sed, with offset/limit for large files.
+- bash: run commands, tests, and searches (rg, find, ls, git). Long output is truncated; the full output is saved to a file you can read.
+- edit: precise replacements. Each edits[].oldText must match the file exactly and be unique; keep it small. Put several changes to one file into one call; edits are matched against the original file, so never overlap them.
+- write: new files or complete rewrites only.
+- You talk to the person through a web UI that renders Markdown: short paragraphs, lists, fenced code with a language, and file paths in backticks.`,
       ),
       section('project_context', (input) =>
         resources(input.env?.cwd ?? host.repoRoot)
-          .context.map((file) => `${file.path}\n${file.content}`)
+          .context.map(
+            (file) =>
+              `<project_instructions path="${file.path}">\n${file.content}\n</project_instructions>`,
+          )
           .join('\n\n'),
       ),
       section('skills', (input) => {
@@ -77,7 +84,7 @@ export default function prompt(host: ExtensionHost) {
       section(
         'self',
         () =>
-          `Repository: ${host.repoRoot}\nUI: ${process.env.ULTIMATE_PUBLIC_URL ?? `http://127.0.0.1:${process.env.ULTIMATE_PORT ?? '4747'}`}\nSee AGENTS.md for reload and durability rules.\n| Path | Reload |\n| web/ | Vite HMR immediately |\n| extensions/ | Reinstalled on save; active calls finish on old code |\n| agents/ | Read at use |\n| server/, shared/ | Call restart after editing; a failed typecheck or boot keeps the old process running |\n| bin/ | Human restart |\nNever call restart for web/, extensions/, or agents/.`,
+          `Repository: ${host.repoRoot}\nUI: ${process.env.ULTIMATE_PUBLIC_URL ?? `http://127.0.0.1:${process.env.ULTIMATE_PORT ?? '4747'}`}\nBefore changing yourself, read ${host.repoRoot}/AGENTS.md (layers, reloads, durability) and, for any UI, ${host.repoRoot}/extensions/README.md (new UI is a new extension folder).\n| Path | Reload |\n| web/ | Vite HMR immediately |\n| extensions/ | Reinstalled on save; active calls finish on old code |\n| agents/ | Read at use |\n| server/, shared/ | Call restart after editing; a failed typecheck or boot keeps the old process running |\n| bin/ | Human restart |\nNever call restart for web/, extensions/, or agents/.`,
       ),
       section('cwd', (input) => input.env?.cwd ?? host.repoRoot),
       section('build', () => {
