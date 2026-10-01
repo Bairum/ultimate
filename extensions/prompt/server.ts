@@ -42,7 +42,7 @@ export default function prompt(host: ExtensionHost) {
       section(
         'self',
         () =>
-          `Repository: ${host.repoRoot}\nUI: http://127.0.0.1:${process.env.ULTIMATE_PORT ?? '4747'}\nSee AGENTS.md for reload and durability rules.\n| Path | Reload |\n| web/ | Vite HMR immediately |\n| extensions/ | Reinstalled on save; active calls finish on old code |\n| agents/ | Read at use |\n| server/, shared/ | Core restart |\n| bin/ | Human restart |`,
+          `Repository: ${host.repoRoot}\nUI: ${process.env.ULTIMATE_PUBLIC_URL ?? `http://127.0.0.1:${process.env.ULTIMATE_PORT ?? '4747'}`}\nSee AGENTS.md for reload and durability rules.\n| Path | Reload |\n| web/ | Vite HMR immediately |\n| extensions/ | Reinstalled on save; active calls finish on old code |\n| agents/ | Read at use |\n| server/, shared/ | Call restart after editing; a failed typecheck or boot keeps the old process running |\n| bin/ | Human restart |\nNever call restart for web/, extensions/, or agents/.`,
       ),
       section('cwd', (input) => input.env?.cwd ?? host.repoRoot),
     ],

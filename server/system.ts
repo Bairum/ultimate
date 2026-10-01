@@ -3,6 +3,7 @@ import { stat } from 'node:fs/promises'
 import { watch } from 'node:fs'
 import { arch, cpus, freemem, hostname, platform, release, totalmem, userInfo } from 'node:os'
 import { promisify } from 'node:util'
+import { relative } from 'node:path'
 import { getAgentDir, loadProjectContextFiles, loadSkills } from '@earendil-works/pi-coding-agent'
 import type { ViteDevServer } from 'vite-plus'
 import type { ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
@@ -25,6 +26,7 @@ export async function createSystem(
 ) {
   const startedAt = new Date().toISOString()
   const agentDir = getAgentDir()
+  let coreStale = false
   let code: SystemInfo['code'] = { repoRoot: host.repoRoot, branch: '', sha: '', dirty: false }
   let value: SystemInfo
   let previous = ''
@@ -46,6 +48,7 @@ export async function createSystem(
         branch: await command(['branch', '--show-current']),
         sha: await command(['rev-parse', '--short', 'HEAD']),
         dirty: (await command(['status', '--porcelain'])).length > 0,
+        coreStale,
       }
       lastGit = Date.now()
     }
@@ -99,7 +102,11 @@ export async function createSystem(
       emit(value)
     }
   }
-  const schedule = () => {
+  const schedule = (_event?: string, path?: string | null) => {
+    if (path && /^(server|shared)\//.test(relative(host.repoRoot, path))) {
+      coreStale = true
+      code.coreStale = true
+    }
     if (closed || timer) return
     timer = setTimeout(
       () => {
@@ -117,6 +124,7 @@ export async function createSystem(
     current: () => value,
     changed() {
       if (!closed) chain = chain.then(() => refresh())
+      return chain
     },
     async close() {
       closed = true

@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "node server/main.ts",
+    "start": "node bin/ultimate.ts",
     "check": "vp check",
     "test": "vp test",
     "fmt": "vp fmt",

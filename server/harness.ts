@@ -87,7 +87,19 @@ export async function prepareHarness(options: HostOptions) {
     })
     const demo: FauxResponseFactory = (transcript) => {
       faux.appendResponses([demo])
-      const last = transcript.messages.at(-1)
+      const last = transcript.messages.findLast((message) => message.role !== 'system')
+      if (
+        last?.role === 'user' &&
+        typeof last.content === 'string' &&
+        last.content === 'restart yourself'
+      ) {
+        return fauxAssistantMessage([fauxToolCall('restart', {})], { stopReason: 'toolUse' })
+      }
+      if (last?.role === 'toolResult' && last.toolName === 'restart') {
+        return fauxAssistantMessage([
+          fauxText(last.content.map((block) => (block.type === 'text' ? block.text : '')).join('')),
+        ])
+      }
       if (last?.role === 'toolResult' && last.toolName === 'bash') {
         return fauxAssistantMessage(
           [fauxToolCall('edit', { path: scratch, oldText: 'before', newText: 'after' })],

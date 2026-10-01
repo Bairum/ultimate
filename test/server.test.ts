@@ -7,7 +7,7 @@ import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
 import type { ConversationView } from '@earendil-works/pi-durable'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createServer } from '../server/main.ts'
+import { createServer, prepareServer } from '../server/main.ts'
 import { context } from '../server/harness.ts'
 import type { AuthFlowEvent, ServerEvents } from '../shared/protocol.ts'
 
@@ -120,6 +120,19 @@ async function attach(server: Awaited<ReturnType<typeof createServer>>, query = 
 }
 
 describe('server', () => {
+  it('prepares the core and listener without opening SQLite until go', async () => {
+    const { options } = await fixture()
+    const prepared = await prepareServer({ ...options, home: join(options.home, 'candidate') })
+    try {
+      expect((await fetch(prepared.url)).status).toBe(503)
+      await expect(readFile(prepared.host.database)).rejects.toMatchObject({ code: 'ENOENT' })
+      const opened = await prepared.go()
+      expect(opened.root.id).toBe(1)
+      expect((await readFile(prepared.host.database)).length).toBeGreaterThan(0)
+    } finally {
+      await prepared.close()
+    }
+  })
   it('streams a SQLite tool turn as ops that exactly replicate the committed view', async () => {
     const { server } = await fixture()
     const stream = await attach(server)
@@ -187,6 +200,30 @@ describe('server', () => {
         expect.objectContaining({ id: created.data.id, title: 'Another', busy: false }),
       ]),
     )
+    await stream.close()
+  })
+  it('updates only touched summaries and does no summary reads for streaming commits', async () => {
+    const { server } = await fixture()
+    for (let index = 0; index < 4; index++)
+      await post(server, '/api/conversations', { title: `Other ${index}` })
+    const snapshot = vi.spyOn(server.harness, 'snapshot')
+    const stream = await attach(server)
+    await post(server, '/api/conversations/1/submit', { text: 'demo' })
+    await server.harness.waitForIdle(context)
+    await until(() =>
+      stream.events.some(
+        (event) =>
+          event.name === 'conversations' &&
+          (event.data as { id: number; busy: boolean; title?: string }[]).some(
+            (summary) => summary.id === 1 && summary.title === 'demo' && !summary.busy,
+          ),
+      ),
+    )
+    const summaryReads = snapshot.mock.calls.filter(
+      ([token]) => token.definition.kind === 'ultimate.metadata',
+    )
+    expect(summaryReads).toHaveLength(1)
+    expect(summaryReads[0][1]).toBe(1)
     await stream.close()
   })
   it('reports machine, persistence, shared resources and folder facets', async () => {

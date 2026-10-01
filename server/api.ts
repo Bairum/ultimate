@@ -7,6 +7,7 @@ import type { Extensions } from './extensions.ts'
 import { context } from './harness.ts'
 import type { OpenHost, PreparedHost } from './harness.ts'
 import type { createSystem } from './system.ts'
+import { requestSwap } from './supervisor-protocol.ts'
 
 class HttpError extends Error {
   status: number
@@ -66,8 +67,12 @@ export async function createApi(
   let closed = false
   let summaries: ConversationSummary[] = []
   let refreshing = Promise.resolve()
-  async function refreshConversations() {
+  async function refreshConversations(ids?: Set<ConversationId>) {
     const records = await harness.commit(async (tx) => {
+      if (ids)
+        return (await Promise.all([...ids].map((id) => tx.conversation(id)))).filter(
+          (record) => record !== undefined,
+        )
       const scanned = []
       let cursor: Cursor | undefined
       do {
@@ -77,7 +82,7 @@ export async function createApi(
       } while (cursor !== undefined)
       return scanned
     }, context)
-    const next: ConversationSummary[] = []
+    const next: ConversationSummary[] = ids ? [...summaries] : []
     for (const record of records) {
       const conversation = await harness.conversation(record.id, context)
       if (!conversation) continue
@@ -93,7 +98,7 @@ export async function createApi(
                 .flatMap((block) => (block.type === 'text' ? [block.text] : []))
                 .join(' ')
           : undefined
-      next.push({
+      const summary: ConversationSummary = {
         id: record.id,
         ...(record.owner || record.parent
           ? { parentConversationId: record.owner?.conversationId ?? record.parent?.conversationId }
@@ -108,7 +113,10 @@ export async function createApi(
         busy: Object.values(graph.value.tasks).some(
           (task) => task.conversationId === record.id && !task.background,
         ),
-      })
+      }
+      const index = next.findIndex((item) => item.id === record.id)
+      if (index < 0) next.push(summary)
+      else next[index] = summary
       view.dispose()
     }
     if (JSON.stringify(next) !== JSON.stringify(summaries)) {
@@ -126,13 +134,38 @@ export async function createApi(
       if (current !== lastGraph) {
         lastGraph = current
         events.emit('tasks', graph.value)
+        const next = summaries.map((summary) => ({
+          ...summary,
+          busy: Object.values(graph.value.tasks).some(
+            (task) => task.conversationId === summary.id && !task.background,
+          ),
+        }))
+        if (JSON.stringify(next) !== JSON.stringify(summaries)) {
+          summaries = next
+          events.emit('conversations', summaries)
+        }
       }
     }, 100)
   })
-  const unsubscribe = harness.subscribeCommits(() => {
+  const unsubscribe = harness.subscribeCommits((publication) => {
     if (closed) return
+    const ids = new Set<ConversationId>()
+    for (const change of publication.changes) {
+      if (change.type === 'conversation') ids.add(change.value.id)
+      if (change.type === 'entry' && change.value.kind === 'pi.user')
+        ids.add(change.value.conversationId)
+      if (
+        change.type === 'document' &&
+        change.conversationId &&
+        (change.record.kind === 'ultimate.metadata' ||
+          (change.record.kind === 'pi.agent' &&
+            change.ops.some((op) => op[0] === 'r' || op[1][0] === 'cwd')))
+      )
+        ids.add(change.conversationId)
+    }
+    if (!ids.size) return
     refreshing = refreshing
-      .then(refreshConversations)
+      .then(() => refreshConversations(ids))
       .catch(() =>
         events.emit('notice', { level: 'error', message: 'Could not refresh conversation list' }),
       )
@@ -239,6 +272,13 @@ export async function createApi(
         }
         if (request.method !== 'POST') throw new HttpError(404, 'Unknown endpoint')
         const data = await body(request)
+        if (url.pathname === '/api/restart') {
+          const error = await requestSwap(async (generation) => {
+            json(202, { ok: true, generation })
+          })
+          if (!response.writableEnded) json(500, { ok: false, error })
+          return true
+        }
         if (url.pathname === '/api/conversations') {
           const cwd = data.cwd === undefined ? host.repoRoot : text(data.cwd, 'cwd')
           const title = data.title === undefined ? undefined : text(data.title, 'title')
@@ -254,7 +294,7 @@ export async function createApi(
             await created.commit(async (tx) => {
               ;(await tx.doc(Metadata, created.id)).title = title
             }, context)
-          await refreshConversations()
+          await refreshing
           json(201, { id: created.id })
           return true
         }

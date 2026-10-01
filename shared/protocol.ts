@@ -82,7 +82,7 @@ export interface SystemInfo {
   process: { pid: number; node: string; startedAt: string; generation: number; url: string }
   persistence: { kind: 'sqlite'; path: string; sizeBytes: number; walBytes: number }
   execution: { kind: 'node-local'; defaultCwd: string }
-  code: { repoRoot: string; branch: string; sha: string; dirty: boolean }
+  code: { repoRoot: string; branch: string; sha: string; dirty: boolean; coreStale?: boolean }
   extensions: ExtensionInfo[]
   skills: { name: string; description: string; path: string }[]
   contextFiles: string[]
