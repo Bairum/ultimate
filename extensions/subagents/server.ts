@@ -129,7 +129,7 @@ const reply = (text: string, conversationId?: ConversationId) => ({
   ...(conversationId === undefined ? {} : { details: { conversationId } }),
 })
 
-export default function subagents(host: ExtensionHost) {
+export default function subagents(host: Pick<ExtensionHost, 'repoRoot'>) {
   return defineExtension({
     name: 'subagents',
     tasks: [Anchor, Reporter],

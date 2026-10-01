@@ -1,15 +1,39 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import type { ConversationDocToken, Extension, JsonObject } from '@earendil-works/pi-durable'
+import type {
+  ConversationDocToken,
+  Extension,
+  Harness,
+  JsonObject,
+} from '@earendil-works/pi-durable'
 import type { ViteDevServer } from 'vite-plus'
-import type { ExtensionInfo } from '../shared/protocol.ts'
+import type { ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { PreparedHost } from './harness.ts'
 
-export type ExtensionHost = Pick<PreparedHost, 'repoRoot' | 'modelRuntime' | 'settings' | 'build'>
-export async function loadExtensions(vite: ViteDevServer, host: PreparedHost, changed: () => void) {
+export type ExtensionHost = Pick<
+  PreparedHost,
+  'repoRoot' | 'modelRuntime' | 'settings' | 'build' | 'uiState'
+> & {
+  harness(): Harness
+  system(): SystemInfo
+  extensions(): ExtensionInfo[]
+  doc(kind: string): ConversationDocToken<JsonObject> | undefined
+}
+export async function loadExtensions(
+  vite: ViteDevServer,
+  host: PreparedHost,
+  changed: () => void,
+  runtime: Pick<ExtensionHost, 'harness' | 'system'>,
+) {
   const directory = join(host.repoRoot, 'extensions')
   const records = new Map<string, ExtensionInfo>()
   const documents = new Map<string, ConversationDocToken<JsonObject>[]>()
+  const extensionHost: ExtensionHost = {
+    ...host,
+    ...runtime,
+    extensions: () => [...records.values()],
+    doc: (kind) => [...documents.values()].flat().find((doc) => doc.definition.kind === kind),
+  }
   let chain = Promise.resolve()
   let closed = false
   async function reload() {
@@ -35,7 +59,9 @@ export async function loadExtensions(vite: ViteDevServer, host: PreparedHost, ch
         try {
           const module = await vite.ssrLoadModule(join(directory, name, 'server.ts'))
           const extension: Extension =
-            typeof module.default === 'function' ? await module.default(host) : module.default
+            typeof module.default === 'function'
+              ? await module.default(extensionHost)
+              : module.default
           if (!extension || extension.name !== name)
             throw new Error('Extension name must match its folder')
           const docs: ConversationDocToken<JsonObject>[] = module.docs ?? []

@@ -44,7 +44,17 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     appType: 'spa',
   })
   let system: Awaited<ReturnType<typeof createSystem>> | undefined
-  const extensions = await loadExtensions(vite, host, () => system?.changed())
+  let opened: OpenHost | undefined
+  const extensions = await loadExtensions(vite, host, () => system?.changed(), {
+    harness: () => {
+      if (!opened) throw new Error('Harness is not open')
+      return opened.harness
+    },
+    system: () => {
+      if (!system) throw new Error('System is not ready')
+      return system.current()
+    },
+  })
   await new Promise<void>((resolve, reject) => {
     http.once('error', reject)
     http.listen(options.port ?? Number(process.env.ULTIMATE_PORT ?? 4747), '127.0.0.1', () => {
@@ -58,7 +68,6 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
   system = await createSystem(host, vite, url, extensions.info, (info) =>
     events.emit('system', info),
   )
-  let opened: OpenHost | undefined
   return {
     http,
     vite,

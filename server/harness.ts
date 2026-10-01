@@ -115,6 +115,23 @@ export async function prepareHarness(options: HostOptions) {
       if (
         last?.role === 'user' &&
         typeof last.content === 'string' &&
+        last.content === 'codemode demo'
+      ) {
+        return fauxAssistantMessage(
+          [
+            fauxToolCall('codemode', {
+              code: `const source = await tools.read({ path: ${JSON.stringify(scratch)} }); text(source); return await tools.bash({ command: "echo codemode; sleep 0.3" });`,
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        )
+      }
+      if (last?.role === 'toolResult' && last.toolName === 'codemode') {
+        return fauxAssistantMessage([fauxText('Codemode demo complete.')])
+      }
+      if (
+        last?.role === 'user' &&
+        typeof last.content === 'string' &&
         last.content === 'restart yourself'
       ) {
         return fauxAssistantMessage([fauxToolCall('restart', {})], { stopReason: 'toolUse' })

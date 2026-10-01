@@ -24,6 +24,10 @@ Each extension is a folder `extensions/<name>/`: `server.ts` exports a Durable e
 subscribe with `/api/events?conversation=<id>&docs=<kind>,<kind>` for `doc` snapshots and `docOps` batches.
 Local imported modules reload with the facet. Failed loads leave the previous version installed.
 
+## Inspecting yourself
+
+Use `codemode` to compose dependent or parallel `tools.*` calls and filter results before they enter your context. Its read-only `ultimate.*` API is the way to inspect yourself: system/build, extension facets and load errors, conversations, stored entries and search (including before compactions/resets), task graph, models, and exported documents. Use ordinary tools for writes and single simple calls. `store`/`load` persist conversation-scoped values; see `extensions/codemode/README.md` for interruption semantics.
+
 ## Durability
 
 Conversations, tool calls, subagents, and documents are committed to SQLite (`$ULTIMATE_HOME/state.sqlite`, default
