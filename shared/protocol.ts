@@ -1,3 +1,4 @@
+import type { JsonValue } from '@earendil-works/chord'
 import type { Op } from '@earendil-works/chord/delta'
 import type { AuthEvent, AuthPrompt, AuthType, ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { ConversationView, JsonObject, ModelRef, TaskGraph } from '@earendil-works/pi-durable'
@@ -139,6 +140,8 @@ export interface ServerEvents {
   conversations: ConversationSummary[]
   view: ConversationView
   ops: readonly Op[]
+  ui: { value: Readonly<Record<string, JsonValue>> }
+  uiOps: { ops: readonly Op[] }
   doc: { kind: string; value: Readonly<JsonObject> | null }
   docOps: { kind: string; ops: readonly Op[] }
   tasks: TaskGraph

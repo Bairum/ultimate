@@ -13,7 +13,9 @@ import {
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { ModelRuntime, SettingsManager } from '@earendil-works/pi-coding-agent'
 import { createRegistry, Harness } from '@earendil-works/pi-durable'
-import type { EnvTarget, HarnessSettings } from '@earendil-works/pi-durable'
+import type { Context } from '@earendil-works/chord'
+import { UiState } from './ui-state.ts'
+import type { ConversationId, EnvTarget, HarnessSettings } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
@@ -153,7 +155,12 @@ export async function prepareHarness(options: HostOptions) {
     available.find(
       (m) => m.provider === settings.getDefaultProvider() && m.id === settings.getDefaultModel(),
     ) ?? available[0]
+  let active: { harness: Harness; root: { id: ConversationId } } | undefined
   return {
+    async uiState(caller: Context) {
+      if (!active) throw new Error('Harness is not open')
+      return (await active.harness.snapshot(UiState, active.root.id, caller)) ?? {}
+    },
     repoRoot,
     builds,
     build: builds.current,
@@ -186,11 +193,16 @@ export async function prepareHarness(options: HostOptions) {
           thinkingLevel: settings.getDefaultThinkingLevel(),
         },
       })
+      await root.commit(async (tx) => {
+        await tx.doc(UiState, root.id)
+      }, context)
+      active = { harness, root }
       harness.resume()
       return {
         harness,
         root,
         async close() {
+          active = undefined
           await harness.close(context)
           for (const execution of envs.values()) await execution.cleanup(context)
         },

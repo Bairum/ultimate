@@ -9,6 +9,7 @@ import type { ConversationView } from '@earendil-works/pi-durable'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createServer, prepareServer } from '../server/main.ts'
 import { context } from '../server/harness.ts'
+import { UiState } from '../server/ui-state.ts'
 import type { AuthFlowEvent, ServerEvents } from '../shared/protocol.ts'
 
 const servers: Awaited<ReturnType<typeof createServer>>[] = []
@@ -127,6 +128,73 @@ async function attach(server: Awaited<ReturnType<typeof createServer>>, query = 
 }
 
 describe('server', () => {
+  it('shares root UI snapshots and set/delete deltas across conversations and reopen', async () => {
+    const { server, options } = await fixture()
+    const created = await post(server, '/api/conversations')
+    const first = await attach(server)
+    const second = await attach(server, `?conversation=${created.data.id as number}`)
+    expect(
+      await post(server, '/api/ui', { set: { 'shell.panel': 'tasks', 'app.count': 2 } }),
+    ).toEqual({ status: 200, data: { ok: true } })
+    await until(() => second.events.some((event) => event.name === 'uiOps'))
+    let value = (second.events.find((event) => event.name === 'ui')!.data as ServerEvents['ui'])
+      .value
+    for (const event of second.events.filter((item) => item.name === 'uiOps'))
+      value = applyImmutable(value, (event.data as ServerEvents['uiOps']).ops)
+    expect(value).toEqual({ 'shell.panel': 'tasks', 'app.count': 2 })
+    const count = second.events.filter((event) => event.name === 'uiOps').length
+    await post(server, '/api/ui', { delete: ['app.count'] })
+    await until(() => second.events.filter((event) => event.name === 'uiOps').length > count)
+    const deletion = second.events.filter((event) => event.name === 'uiOps').at(-1)!
+    expect(applyImmutable(value, (deletion.data as ServerEvents['uiOps']).ops)).toEqual({
+      'shell.panel': 'tasks',
+    })
+    await until(() => first.events.filter((event) => event.name === 'uiOps').length === 2)
+    expect(await server.host.uiState(context)).toEqual({ 'shell.panel': 'tasks' })
+    await first.close()
+    await second.close()
+    await server.close()
+    servers.splice(servers.indexOf(server), 1)
+    const reopened = await createServer(options)
+    servers.push(reopened)
+    const stream = await attach(reopened)
+    expect(stream.events.find((event) => event.name === 'ui')!.data).toEqual({
+      value: { 'shell.panel': 'tasks' },
+    })
+    await stream.close()
+  })
+
+  it('validates UI keys and the merged document size atomically', async () => {
+    const { server } = await fixture()
+    for (const key of ['', 'bad key', 'x'.repeat(201)])
+      expect((await post(server, '/api/ui', { set: { [key]: true } })).status).toBe(400)
+    expect((await post(server, '/api/ui', { delete: [4] })).status).toBe(400)
+    expect((await post(server, '/api/ui', { set: [] })).status).toBe(400)
+    await post(server, '/api/ui', { set: { large: 'x'.repeat(200000) } })
+    expect((await post(server, '/api/ui', { set: { extra: 'é'.repeat(40000) } })).status).toBe(413)
+    expect(await server.host.uiState(context)).toEqual({ large: 'x'.repeat(200000) })
+    await post(server, '/api/ui', {
+      set: JSON.parse('{"__proto__":{"safe":true}}'),
+      delete: ['large'],
+    })
+    expect(await server.host.uiState(context)).toEqual(JSON.parse('{"__proto__":{"safe":true}}'))
+  })
+
+  it('forks root UI state as of the selected entry', async () => {
+    const { server } = await fixture()
+    await post(server, '/api/ui', { set: { 'shell.panel': 'tasks' } })
+    const entry = await server.root.commit(
+      async (tx) => tx.appendEntry(server.root.id, { kind: 'test.marker' }),
+      context,
+    )
+    await post(server, '/api/ui', { set: { 'shell.panel': 'settings' } })
+    const fork = await server.root.fork(entry.id, { ownership: { kind: 'ownerless' } }, context)
+    expect(await server.harness.snapshot(UiState, fork.id, context)).toEqual({
+      'shell.panel': 'tasks',
+    })
+    expect(await server.host.uiState(context)).toEqual({ 'shell.panel': 'settings' })
+  })
+
   it('runs the faux subagent demo and streams its tree, child transcript and definition errors', async () => {
     const { server } = await fixture(false, true)
     const stream = await attach(server)

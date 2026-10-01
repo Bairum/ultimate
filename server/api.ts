@@ -8,6 +8,8 @@ import { context } from './harness.ts'
 import type { OpenHost, PreparedHost } from './harness.ts'
 import type { createSystem } from './system.ts'
 import { requestSwap } from './supervisor-protocol.ts'
+import { UiState } from './ui-state.ts'
+import type { JsonValue } from '@earendil-works/chord'
 import { SubagentInfo } from '../extensions/subagents/server.ts'
 
 class HttpError extends Error {
@@ -52,6 +54,8 @@ const Metadata = defineDoc<{ title?: string }>({
   fork: 'initial',
   initial: () => ({}),
 })
+const validUiKey = (key: unknown) =>
+  typeof key === 'string' && key.length <= 200 && /^[A-Za-z0-9_.:-]+$/.test(key)
 const thinking = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh'])
 export async function createApi(
   host: PreparedHost,
@@ -196,6 +200,7 @@ export async function createApi(
       const watch = await harness.watchDoc(token, id, context)
       if (watch) docs.push({ kind, watch })
     }
+    const ui = await harness.watchDoc(UiState, root.id, context)
     const watch = await conversation.watch(context)
     const send = (name: keyof ServerEvents, data: ServerEvents[keyof ServerEvents]) => {
       if (!response.destroyed) response.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`)
@@ -210,6 +215,10 @@ export async function createApi(
     send('system', system.current())
     send('conversations', summaries)
     send('view', watch.value)
+    send('ui', { value: ui!.value! })
+    ui!.start(async (_value, ops) => {
+      send('uiOps', { ops })
+    })
     send('tasks', graph.value)
     for (const kind of unknown)
       send('notice', { level: 'warning', message: `Unknown extension document: ${kind}` })
@@ -234,6 +243,7 @@ export async function createApi(
       events.listeners.delete(send)
       streams.delete(stop)
       await watch.stop()
+      await ui!.stop()
       await Promise.all(docs.map((doc) => doc.watch.stop()))
       response.end()
     }
@@ -276,6 +286,25 @@ export async function createApi(
         }
         if (request.method !== 'POST') throw new HttpError(404, 'Unknown endpoint')
         const data = await body(request)
+        if (url.pathname === '/api/ui') {
+          const set = data.set === undefined ? {} : data.set
+          const remove = data.delete === undefined ? [] : data.delete
+          if (!set || typeof set !== 'object' || Array.isArray(set) || !Array.isArray(remove))
+            throw new HttpError(400, 'Invalid UI update')
+          if (!Object.keys(set).every(validUiKey) || !remove.every(validUiKey))
+            throw new HttpError(400, 'Invalid UI key')
+          await root.commit(async (tx) => {
+            const value = await tx.doc(UiState, root.id)
+            const next = { ...value, ...(set as Record<string, JsonValue>) }
+            for (const key of remove) delete next[key]
+            if (Buffer.byteLength(JSON.stringify(next)) > 256 * 1024)
+              throw new HttpError(413, 'UI state too large')
+            for (const [key, item] of Object.entries(set)) value[key] = item as JsonValue
+            for (const key of remove) delete value[key]
+          }, context)
+          json(200, { ok: true })
+          return true
+        }
         if (url.pathname === '/api/restart') {
           const error = await requestSwap(async (generation) => {
             json(202, { ok: true, generation })

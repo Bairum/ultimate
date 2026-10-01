@@ -28,6 +28,9 @@ Conversations, tool calls, subagents, and documents are committed to SQLite (`$U
 `replay: "safe"` reruns after a crash; any other interrupted tool reports "interrupted" to the model. Make a tool
 replay-safe only if a rerun cannot do harm, and store decisions in `api.memo()`.
 
+The web SDK's `useUiState(key, initial)` stores shared durable UI state; scroll positions and drafts stay in the browser.
+The host owns `ultimate.ui` on the root conversation, persisted in SQLite and copied as of the fork entry.
+
 ## Running the server
 
 - `pnpm install`, then `pnpm start` runs the supervisor on Node 26. It owns the public TCP port and single-instance lock, prints and opens the URL (`--no-open` or `ULTIMATE_NO_OPEN=1` disables opening).
