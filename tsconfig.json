@@ -10,7 +10,10 @@
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "paths": { "@/*": ["./web/src/*"] }
   },
-  "include": ["server", "shared", "extensions", "test", "web/src", "vite.config.ts"]
+  "include": ["server", "shared", "extensions/**/*.ts", "test", "vite.config.ts"],
+  "exclude": ["test/web"],
+  "references": [{ "path": "./tsconfig.web.json" }]
 }

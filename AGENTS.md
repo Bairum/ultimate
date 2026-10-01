@@ -6,18 +6,21 @@ tells you which change reloads how, so the conversation you are in keeps running
 
 ## Layers and how they reload
 
-| Path                 | What lives there                                                     | How a change goes live                                                                                                                                                                                 |
-| -------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `web/`               | The UI (React, Tailwind, shadcn components we own)                   | Vite hot reload, instantly. Nothing else to do.                                                                                                                                                        |
-| `extensions/`        | Agent behaviour: system prompt, tools, hooks (Pi Durable extensions) | Reinstalled on save. Running tool calls finish on the old code; the next call uses the new code.                                                                                                       |
-| `agents/`            | Subagent definitions (Markdown with frontmatter)                     | Read at each use.                                                                                                                                                                                      |
-| `server/`, `shared/` | Core plumbing: harness, storage, API, login, Vite hookup             | Call the `restart` tool. A new process boots and type-checks next to the old one; if it fails you get the error and the old process keeps running. If it succeeds, the run resumes in the new process. |
-| `bin/`               | The supervisor                                                       | Only a human restart (`pnpm start`) applies it. Keep it tiny and change it rarely.                                                                                                                     |
+| Path                          | What lives there                                                                               | How a change goes live                                                                                                                                                                                 |
+| ----------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `extensions/<name>/web.tsx`   | UI of an extension: slots, panels, views, tool and entry renderers, commands                   | Vite hot reload, instantly, without a page reload. A broken facet shows an error card; the rest keeps running.                                                                                         |
+| `extensions/<name>/server.ts` | Agent behaviour: system prompt, tools, hooks (Pi Durable extensions)                           | Reinstalled on save. Running tool calls finish on the old code; the next call uses the new code.                                                                                                       |
+| `web/`                        | The web core: shell with slots, SDK (`web/src/sdk`), transcript, composer, palette, components | Vite hot reload, instantly. Nothing else to do.                                                                                                                                                        |
+| `agents/`                     | Subagent definitions (Markdown with frontmatter)                                               | Read at each use.                                                                                                                                                                                      |
+| `server/`, `shared/`          | Core plumbing: harness, storage, API, login, Vite hookup                                       | Call the `restart` tool. A new process boots and type-checks next to the old one; if it fails you get the error and the old process keeps running. If it succeeds, the run resumes in the new process. |
+| `bin/`                        | The supervisor                                                                                 | Only a human restart (`pnpm start`) applies it. Keep it tiny and change it rarely.                                                                                                                     |
 
 Put behaviour in `extensions/` rather than `server/` whenever you can: it reloads without a restart.
+New UI is a new extension folder, not a change to `web/`: follow [extensions/README.md](extensions/README.md), the
+guide to writing extensions, and copy the closest existing one (`status-line`, `coding-tools`).
 Each extension is a folder `extensions/<name>/`: `server.ts` exports a Durable extension with that name
-(or a factory receiving `{repoRoot, modelRuntime, settings}`), `web.tsx` is its optional browser facet,
-and `README.md` describes it. The server facet may export `docs`, an array of conversation document tokens;
+(or a factory receiving `{repoRoot, modelRuntime, settings}`), `web.tsx` is its optional browser facet
+(`defineWebExtension` from `@/sdk`), and `README.md` describes it. The server facet may export `docs`, an array of conversation document tokens;
 subscribe with `/api/events?conversation=<id>&docs=<kind>,<kind>` for `doc` snapshots and `docOps` batches.
 Local imported modules reload with the facet. Failed loads leave the previous version installed.
 
@@ -44,6 +47,8 @@ The host owns `ultimate.ui` on the root conversation, persisted in SQLite and co
 - Pi's models, settings, auth, skills, and context loaders are shared with `~/.pi/agent`.
 - `pnpm check` checks format/lint/types; `pnpm test` runs faux integration tests with temporary homes.
 - `tsconfig.server.json` is the server-only type-check gate for swaps.
+- `tsconfig.json` (server, tests, tooling) references `tsconfig.web.json` (browser: `web/src`, `extensions/**/*.tsx`).
+  `pnpm check` type-checks both; with plain `tsc`, run `tsc -b`.
 - The standalone server shuts down on SIGINT/SIGTERM; reopening resumes durable work.
 
 ## Conventions

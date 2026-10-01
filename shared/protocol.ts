@@ -135,6 +135,11 @@ export interface ModelsResponse {
     available: boolean
   }[]
 }
+/** `POST /api/ui`: set and delete keys of the root conversation's `ultimate.ui` document. */
+export interface UiUpdateRequest {
+  set?: Record<string, JsonValue>
+  delete?: string[]
+}
 export interface ServerEvents {
   system: SystemInfo
   conversations: ConversationSummary[]

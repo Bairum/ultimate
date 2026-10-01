@@ -1,0 +1,70 @@
+import { useEffect } from 'react'
+import { actions, allCommands, currentContext } from '../sdk/actions.ts'
+import { store } from '../sdk/client.ts'
+import { chordOf, parseKeys } from '../sdk/keys.ts'
+
+function editable(target: EventTarget | null) {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+  )
+}
+
+/**
+ * Runs command shortcuts, including sequences such as `mod+k m`: a sequence's first chord runs its own command (the
+ * palette) and, for a second, waits for the next key. Plain keys never fire while typing, except as the second key of a
+ * sequence typed into the still-empty palette.
+ */
+export function useShortcuts() {
+  useEffect(() => {
+    let pending: string[] = []
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return
+      const chord = chordOf(event)
+      if (!chord || ['mod', 'alt', 'shift', 'ctrl'].includes(chord)) return
+      const sequence = [...pending, chord]
+      const context = currentContext()
+      const candidates = allCommands().flatMap((command) =>
+        command.keys && (!command.when || command.when(context))
+          ? [{ command, keys: parseKeys(command.keys) }]
+          : [],
+      )
+      const typing = editable(event.target)
+      const emptyPalette =
+        store.getState().ui.paletteOpen &&
+        event.target instanceof HTMLInputElement &&
+        event.target.value === ''
+      const dialogOpen = !!document.querySelector('[role="dialog"]')
+      const allowed = (keys: string[]) => {
+        if (pending.length > 0) return !typing || emptyPalette
+        if (chord === 'escape') return !dialogOpen
+        return !typing || /\b(mod|alt|ctrl)\+/.test(keys[0] ?? '')
+      }
+      const exact = candidates.find(
+        ({ keys }) =>
+          keys.length === sequence.length && keys.every((key, i) => key === sequence[i]),
+      )
+      const longer = candidates.some(
+        ({ keys }) => keys.length > sequence.length && sequence.every((key, i) => keys[i] === key),
+      )
+      clearTimeout(timer)
+      pending = []
+      if (exact && allowed(exact.keys)) {
+        event.preventDefault()
+        if (sequence.length > 1) store.setUi({ paletteOpen: false })
+        actions.runCommand(exact.command.id)
+      }
+      if (longer && (exact || !typing || /\b(mod|alt|ctrl)\+/.test(chord))) {
+        if (!exact) event.preventDefault()
+        pending = sequence
+        timer = setTimeout(() => (pending = []), 1200)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown, { capture: true })
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('keydown', onKeyDown, { capture: true })
+    }
+  }, [])
+}
