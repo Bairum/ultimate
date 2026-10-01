@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.ultimate/
+*.sqlite
+*.sqlite-*
+.DS_Store
