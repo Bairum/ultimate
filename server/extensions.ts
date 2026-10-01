@@ -12,8 +12,10 @@ import type { PreparedHost } from './harness.ts'
 
 export type ExtensionHost = Pick<
   PreparedHost,
-  'repoRoot' | 'modelRuntime' | 'settings' | 'build' | 'uiState'
+  'repoRoot' | 'home' | 'modelRuntime' | 'settings' | 'build' | 'uiState'
 > & {
+  resource<T>(key: string, create: () => T): T
+  onClose(cleanup: () => Promise<void>): void
   harness(): Harness
   system(): SystemInfo
   extensions(): ExtensionInfo[]
@@ -28,7 +30,14 @@ export async function loadExtensions(
   const directory = join(host.repoRoot, 'extensions')
   const records = new Map<string, ExtensionInfo>()
   const documents = new Map<string, ConversationDocToken<JsonObject>[]>()
+  const cleanups = new Set<() => Promise<void>>()
+  const resources = new Map<string, unknown>()
   const extensionHost: ExtensionHost = {
+    resource: <T>(key: string, create: () => T) => {
+      if (!resources.has(key)) resources.set(key, create())
+      return resources.get(key) as T
+    },
+    onClose: (cleanup) => cleanups.add(cleanup),
     ...host,
     ...runtime,
     extensions: () => [...records.values()],
@@ -171,6 +180,7 @@ export async function loadExtensions(
       for (const event of ['add', 'unlink', 'addDir', 'unlinkDir'])
         vite.watcher.off(event, onStructure)
       await chain
+      await Promise.all([...cleanups].map((cleanup) => cleanup()))
     },
   }
 }
