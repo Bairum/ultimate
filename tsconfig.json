@@ -13,7 +13,7 @@
     "skipLibCheck": true,
     "paths": { "@/*": ["./web/src/*"] }
   },
-  "include": ["server", "shared", "extensions/**/*.ts", "test", "vite.config.ts"],
+  "include": ["bin", "server", "shared", "extensions/**/*.ts", "test", "vite.config.ts"],
   "exclude": ["test/web"],
   "references": [{ "path": "./tsconfig.web.json" }]
 }

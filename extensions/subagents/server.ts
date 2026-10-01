@@ -18,16 +18,9 @@ import type {
   TaskId,
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { discoverAgents } from './definitions.ts'
+import { discoverAgents } from '../../server/agents.ts'
 
-export const SubagentInfo = defineDoc<{ agent?: string; title?: string; background?: boolean }>({
-  kind: 'ultimate.subagent',
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({}),
-})
+import { Metadata } from '../../server/metadata.ts'
 export const Subagents = defineDoc<{
   agents: Record<
     string,
@@ -42,7 +35,7 @@ export const Subagents = defineDoc<{
   fork: 'initial',
   initial: () => ({ agents: {}, actions: {} }),
 })
-export const docs = [Subagents, SubagentInfo]
+export const docs = [Subagents]
 const Anchor = defineTask<null, { phase: 'done' }, null>({
   name: 'ultimate.subagent-anchor',
   version: 1,
@@ -242,7 +235,7 @@ export default function subagents(host: Pick<ExtensionHost, 'repoRoot'>) {
                   ...(definition.model ? { model: definition.model } : {}),
                   ...(definition.thinking ? { thinkingLevel: definition.thinking } : {}),
                 })
-                Object.assign(await tx.doc(SubagentInfo, child.id), {
+                Object.assign(await tx.doc(Metadata, child.id), {
                   agent: definition.name,
                   title: text,
                   background: args.background === true,

@@ -1,7 +1,8 @@
 import { fork, spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, open, readFile, unlink } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
+import { acquireLock, readOwner, alive, pause } from '../server/lock.ts'
 import { watch } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
@@ -15,38 +16,25 @@ const repo = resolvePath(fileURLToPath(new URL('..', import.meta.url)))
 const home = process.env.ULTIMATE_HOME ?? join(homedir(), '.ultimate')
 const lockPath = join(home, 'ultimate.lock')
 await mkdir(home, { recursive: true })
-let lock: Awaited<ReturnType<typeof open>>
-for (;;) {
-  try {
-    lock = await open(lockPath, 'wx')
-    break
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    let previous: { pid: number; port: number }
-    try {
-      previous = JSON.parse(await readFile(lockPath, 'utf8'))
-    } catch {
-      // Another starter may still be writing its newly-created lock.
-      await new Promise((resolve) => setTimeout(resolve, 100))
-      previous = JSON.parse(await readFile(lockPath, 'utf8'))
+const lock = await acquireLock(lockPath, {
+  pid: process.pid,
+  port: Number(process.env.ULTIMATE_PORT ?? 4747),
+}).catch((error) => {
+  console.error(String(error))
+  process.exit(1)
+})
+if (lock.stale) {
+  const owner = await readOwner(join(home, 'storage.lock'))
+  if (owner && alive(owner.pid)) {
+    process.kill(owner.pid, 'SIGTERM')
+    const deadline = Date.now() + 10000
+    while (alive(owner.pid) && Date.now() < deadline) await pause(50)
+    if (alive(owner.pid)) {
+      process.kill(owner.pid, 'SIGKILL')
+      while (alive(owner.pid)) await pause(50)
     }
-    try {
-      process.kill(previous.pid, 0)
-    } catch (probeError) {
-      if ((probeError as NodeJS.ErrnoException).code === 'ESRCH') {
-        await unlink(lockPath)
-        continue
-      }
-    }
-    console.error(
-      `Ultimate is already running (pid ${previous.pid}) at http://127.0.0.1:${previous.port}`,
-    )
-    process.exit(1)
   }
 }
-await lock.writeFile(
-  JSON.stringify({ pid: process.pid, port: Number(process.env.ULTIMATE_PORT ?? 4747) }),
-)
 let active: Core | undefined
 let swapping = false
 let stopping = false
@@ -101,14 +89,12 @@ try {
   })
 } catch (error) {
   await lock.close()
-  await unlink(lockPath)
   throw error
 }
 const address = proxy.address()
 if (!address || typeof address === 'string') throw new Error('No proxy address')
 const publicUrl = `http://127.0.0.1:${address.port}`
-await lock.truncate(0)
-await lock.write(JSON.stringify({ pid: process.pid, port: address.port }), 0, 'utf8')
+await lock.update({ pid: process.pid, port: address.port })
 
 type Core = {
   child: ChildProcess
@@ -159,6 +145,22 @@ async function kill(core: Core) {
   core.child.kill('SIGKILL')
   await exited
 }
+async function exit(core: Core) {
+  if (core.child.exitCode !== null || core.child.signalCode !== null) return
+  const deadline = Date.now() + 10000
+  try {
+    const released = wait(core, 'released', undefined, 10000)
+    send(core, { type: 'release' })
+    await released
+    const exited = once(core.child, 'exit')
+    send(core, { type: 'exit' })
+    await Promise.race([exited, pause(Math.max(0, deadline - Date.now()))])
+  } catch {
+    // A child that cannot release must be killed before another owner opens.
+  } finally {
+    await kill(core)
+  }
+}
 function boot(previousBuild?: BuildInfo): Core {
   const child = fork(join(repo, 'server/main.ts'), [], {
     cwd: repo,
@@ -200,7 +202,7 @@ function boot(previousBuild?: BuildInfo): Core {
 async function checkTypes() {
   const child = spawn(
     join(repo, 'node_modules/.bin/tsc'),
-    ['--noEmit', '-p', 'tsconfig.server.json'],
+    ['--noEmit', '-p', 'tsconfig.swap.json'],
     { cwd: repo, stdio: ['ignore', 'pipe', 'pipe'] },
   )
   let output = ''
@@ -260,21 +262,33 @@ async function swap(old: Core, requestId: string, previousBuild?: BuildInfo) {
     await prepare(next)
     const ack = wait(old, 'swap-ack', requestId)
     send(old, { type: 'swap-result', requestId, ok: true, generation: next.generation })
-    await ack
+    const acknowledgement = await ack
+    if (acknowledgement.type === 'swap-ack' && !acknowledgement.ok)
+      throw new Error(acknowledgement.error ?? 'Restart memo failed')
     active = undefined
     released = true
     const release = wait(old, 'released', undefined, 10000)
     send(old, { type: 'release' })
-    await release.catch(() => kill(old))
-    // Even a timed-out release must leave no old storage owner alive.
-    await kill(old)
+    await release
     await start(next)
+    await exit(old)
   } catch (error) {
     if (next) await kill(next)
     stderr = tail(String(error) + '\n' + (next?.stderr ?? ''))
     if (!released && old.child.connected)
       send(old, { type: 'swap-result', requestId, ok: false, error: stderr })
-    else active = undefined
+    else {
+      old.messages = old.messages.filter((message) => message.type !== 'failed')
+      send(old, { type: 'reacquire', error: stderr })
+      try {
+        await wait(old, 'ready')
+        active = old
+        flush()
+      } catch {
+        await kill(old)
+        active = undefined
+      }
+    }
   } finally {
     swapping = false
     if (active && (active.child.exitCode !== null || active.child.signalCode !== null))
@@ -292,7 +306,6 @@ async function recover() {
       if (stopping) break
       let core: Core | undefined
       try {
-        await checkTypes()
         core = boot()
         await prepare(core)
         await start(core)
@@ -325,9 +338,8 @@ async function shutdown() {
   for (const watcher of watchers) watcher.close()
   for (const socket of sockets) socket.destroy()
   proxy.close()
-  await Promise.all([...children].map(kill))
+  await Promise.all([...children].map(exit))
   await lock.close()
-  await unlink(lockPath)
   process.exit(0)
 }
 process.on('SIGINT', () => {

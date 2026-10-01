@@ -6,4 +6,4 @@ Definitions are Markdown with `---` frontmatter: required `name` and `descriptio
 
 The shipped definitions inherit the active provider/model. No universally cheaper model is known across providers, so no model is hardcoded. Override locally to select an available fast model.
 
-The durable documents `ultimate.subagents` and `ultimate.subagent` hold the ownership/action index and tree metadata. Reporter request IDs and answer receipts prevent duplicate delivery across restarts; stop records its target run so a replay cannot abort a later run. No web facet yet.
+The extension document `ultimate.subagents` holds the ownership/action index; the core document `ultimate.metadata` holds tree metadata. Reporter request IDs and answer receipts prevent duplicate delivery across restarts; stop records its target run so a replay cannot abort a later run. No web facet yet.

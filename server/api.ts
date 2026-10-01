@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { defineDoc } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, DocumentWatch, JsonObject } from '@earendil-works/pi-durable'
 import type { ServerEvents, ConversationSummary, ConfigureRequest } from '../shared/protocol.ts'
 import { AuthBridge, listModels } from './auth.ts'
@@ -10,7 +9,8 @@ import type { createSystem } from './system.ts'
 import { requestSwap } from './supervisor-protocol.ts'
 import { UiState } from './ui-state.ts'
 import type { JsonValue } from '@earendil-works/chord'
-import { SubagentInfo } from '../extensions/subagents/server.ts'
+import { Metadata } from './metadata.ts'
+import { loopbackOrigin } from './request-security.ts'
 
 class HttpError extends Error {
   status: number
@@ -46,14 +46,6 @@ function text(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new HttpError(400, `Expected ${name}`)
   return value
 }
-const Metadata = defineDoc<{ title?: string }>({
-  kind: 'ultimate.metadata',
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({}),
-})
 const validUiKey = (key: unknown) =>
   typeof key === 'string' && key.length <= 200 && /^[A-Za-z0-9_.:-]+$/.test(key)
 const thinking = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh'])
@@ -94,7 +86,6 @@ export async function createApi(
       const view = await conversation.viewState(context)
       const agent = await conversation.agent(context)
       const metadata = await harness.snapshot(Metadata, record.id, context)
-      const subagent = await harness.snapshot(SubagentInfo, record.id, context)
       const input = view.value.entries.find((entry) => entry.kind === 'pi.user')?.model?.[0]
       const title =
         input?.role === 'user'
@@ -110,9 +101,9 @@ export async function createApi(
           ? { parentConversationId: record.owner?.conversationId ?? record.parent?.conversationId }
           : {}),
         ...(record.owner ? { ownerTaskId: record.owner.taskId } : {}),
-        ...(subagent?.agent ? { agent: subagent.agent, background: subagent.background } : {}),
-        ...(subagent?.title || metadata?.title
-          ? { title: subagent?.title ?? metadata?.title }
+        ...(metadata?.agent ? { agent: metadata.agent, background: metadata.background } : {}),
+        ...(metadata?.title
+          ? { title: metadata.title }
           : title
             ? { title: title.replace(/\s+/g, ' ').slice(0, 160) }
             : {}),
@@ -165,7 +156,6 @@ export async function createApi(
         change.type === 'document' &&
         change.conversationId &&
         (change.record.kind === 'ultimate.metadata' ||
-          change.record.kind === 'ultimate.subagent' ||
           (change.record.kind === 'pi.agent' &&
             change.ops.some((op) => op[0] === 'r' || op[1][0] === 'cwd')))
       )
@@ -188,70 +178,81 @@ export async function createApi(
     if (!conversation) throw new HttpError(404, 'Unknown conversation')
     const docs: { kind: string; watch: DocumentWatch<JsonObject> }[] = []
     const unknown: string[] = []
-    for (const kind of new Set(kinds)) {
-      const token = extensions.doc(kind)
-      if (!token) {
-        unknown.push(kind)
-        continue
+    const watches: { stop(): Promise<unknown> }[] = []
+    try {
+      for (const kind of new Set(kinds)) {
+        const token = extensions.doc(kind)
+        if (!token) {
+          unknown.push(kind)
+          continue
+        }
+        await conversation.commit(async (tx) => {
+          await tx.doc(token, id)
+        }, context)
+        const watch = await harness.watchDoc(token, id, context)
+        if (watch) {
+          docs.push({ kind, watch })
+          watches.push(watch)
+        }
       }
-      await conversation.commit(async (tx) => {
-        await tx.doc(token, id)
-      }, context)
-      const watch = await harness.watchDoc(token, id, context)
-      if (watch) docs.push({ kind, watch })
-    }
-    const ui = await harness.watchDoc(UiState, root.id, context)
-    const watch = await conversation.watch(context)
-    const send = (name: keyof ServerEvents, data: ServerEvents[keyof ServerEvents]) => {
-      if (!response.destroyed) response.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`)
-    }
-    response.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    })
-    response.write('retry: 500\n\n')
-    send('system', system.current())
-    send('conversations', summaries)
-    send('view', watch.value)
-    send('ui', { value: ui!.value! })
-    ui!.start(async (_value, ops) => {
-      send('uiOps', { ops })
-    })
-    send('tasks', graph.value)
-    for (const kind of unknown)
-      send('notice', { level: 'warning', message: `Unknown extension document: ${kind}` })
-    for (const doc of docs) {
-      send('doc', { kind: doc.kind, value: doc.watch.value })
-      doc.watch.start(async (_value, ops) => {
-        send('docOps', { kind: doc.kind, ops })
+      const ui = await harness.watchDoc(UiState, root.id, context)
+      if (ui) watches.push(ui)
+      const watch = await conversation.watch(context)
+      watches.push(watch)
+      const send = (name: keyof ServerEvents, data: ServerEvents[keyof ServerEvents]) => {
+        if (!response.destroyed) response.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`)
+      }
+      response.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
       })
+      response.write('retry: 500\n\n')
+      send('system', system.current())
+      send('conversations', summaries)
+      send('view', watch.value)
+      send('ui', { value: ui!.value! })
+      ui!.start(async (_value, ops) => {
+        send('uiOps', { ops })
+      })
+      send('tasks', graph.value)
+      for (const kind of unknown)
+        send('notice', { level: 'warning', message: `Unknown extension document: ${kind}` })
+      for (const doc of docs) {
+        send('doc', { kind: doc.kind, value: doc.watch.value })
+        doc.watch.start(async (_value, ops) => {
+          send('docOps', { kind: doc.kind, ops })
+        })
+      }
+      events.listeners.add(send)
+      watch.start(async (_value, ops) => {
+        send('ops', ops)
+      })
+      const heartbeat = setInterval(() => {
+        if (!response.destroyed) response.write(': heartbeat\n\n')
+      }, 15000)
+      let stopped = false
+      const stop = async () => {
+        if (stopped) return
+        stopped = true
+        clearInterval(heartbeat)
+        events.listeners.delete(send)
+        streams.delete(stop)
+        await watch.stop()
+        await ui!.stop()
+        await Promise.all(docs.map((doc) => doc.watch.stop()))
+        response.end()
+      }
+      streams.add(stop)
+      response.on('close', () => {
+        void stop()
+      })
+      if (request.destroyed || response.destroyed) await stop()
+    } catch (error) {
+      await Promise.all(watches.map((watch) => watch.stop()))
+      throw error
     }
-    events.listeners.add(send)
-    watch.start(async (_value, ops) => {
-      send('ops', ops)
-    })
-    const heartbeat = setInterval(() => {
-      if (!response.destroyed) response.write(': heartbeat\n\n')
-    }, 15000)
-    let stopped = false
-    const stop = async () => {
-      if (stopped) return
-      stopped = true
-      clearInterval(heartbeat)
-      events.listeners.delete(send)
-      streams.delete(stop)
-      await watch.stop()
-      await ui!.stop()
-      await Promise.all(docs.map((doc) => doc.watch.stop()))
-      response.end()
-    }
-    streams.add(stop)
-    response.on('close', () => {
-      void stop()
-    })
-    if (request.destroyed || response.destroyed) await stop()
   }
   return {
     auth,
@@ -265,7 +266,7 @@ export async function createApi(
       try {
         // Local-only does not mean safe from cross-origin browser requests.
         const origin = request.headers.origin
-        if (origin && origin !== system.current().process.url)
+        if (origin && !loopbackOrigin(origin, new URL(system.current().process.url).port || '80'))
           throw new HttpError(403, 'Invalid origin')
         if (request.method === 'GET' && url.pathname === '/api/events') {
           const selected = url.searchParams.get('conversation')

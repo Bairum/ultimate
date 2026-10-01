@@ -1,14 +1,24 @@
 import { execFile } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import { watch } from 'node:fs'
-import { arch, cpus, freemem, hostname, platform, release, totalmem, userInfo } from 'node:os'
+import {
+  arch,
+  cpus,
+  freemem,
+  homedir,
+  hostname,
+  platform,
+  release,
+  totalmem,
+  userInfo,
+} from 'node:os'
 import { promisify } from 'node:util'
 import { relative } from 'node:path'
 import { getAgentDir, loadProjectContextFiles, loadSkills } from '@earendil-works/pi-coding-agent'
 import type { ViteDevServer } from 'vite-plus'
 import type { ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { PreparedHost } from './harness.ts'
-import { discoverAgents } from '../extensions/subagents/definitions.ts'
+import { discoverAgents } from './agents.ts'
 
 const run = promisify(execFile)
 async function bytes(path: string) {
@@ -58,6 +68,7 @@ export async function createSystem(
       build: host.build(),
       machine: {
         hostname: hostname(),
+        home: homedir(),
         platform: platform(),
         release: release(),
         arch: arch(),

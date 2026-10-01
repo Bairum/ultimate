@@ -21,7 +21,8 @@ afterEach(async () => {
     child.kill('SIGTERM')
     await exited
   }
-  for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true })
+  for (const home of homes.splice(0))
+    await rm(home, { recursive: true, force: true, maxRetries: 5 })
 })
 async function until(test: () => boolean | Promise<boolean>) {
   const deadline = Date.now() + 30000
@@ -189,6 +190,83 @@ describe('supervisor', () => {
     expect(transcript(stream.view())).toContain('"isError":true')
     expect((await fetch(running.url + '/api/models')).status).toBe(200)
   }, 60000)
+  it('rolls back failed activation and reports it from the replayed restart tool', async () => {
+    const running = await fixture({ ULTIMATE_FAIL_GO_GENERATION: '2' })
+    const stream = await attach(running.url)
+    const pid = stream.system().process.pid
+    await post(running.url, '/api/conversations/1/submit', { text: 'restart yourself' })
+    await until(() =>
+      transcript(stream.view()).includes(
+        'Restart failed during activation; rolled back to generation 1',
+      ),
+    )
+    expect(transcript(stream.view())).toContain('Injected activation failure')
+    expect(transcript(stream.view())).toContain('"isError":true')
+    expect(stream.system().process.pid).toBe(pid)
+    expect(stream.system().process.generation).toBe(1)
+    expect((await fetch(running.url + '/api/models')).status).toBe(200)
+    const owner = JSON.parse(await readFile(join(running.home, 'storage.lock'), 'utf8'))
+    expect(owner.pid).toBe(pid)
+  }, 60000)
+  it('rolls back an API activation failure and refuses standalone storage ownership', async () => {
+    const running = await fixture({ ULTIMATE_FAIL_GO_GENERATION: '2' })
+    const stream = await attach(running.url)
+    const pid = stream.system().process.pid
+    expect((await post(running.url, '/api/restart')).status).toBe(202)
+    await until(() => stream.connections() > 1)
+    expect(stream.system().process.generation).toBe(1)
+    expect((await fetch(running.url + '/api/models')).status).toBe(200)
+    const standalone = spawn(process.execPath, [resolvePath('server/main.ts')], {
+      env: { ...process.env, ULTIMATE_HOME: running.home, ULTIMATE_PORT: '0', ULTIMATE_FAUX: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    children.push(standalone)
+    let output = ''
+    standalone.stderr.on('data', (chunk) => {
+      output += chunk
+    })
+    const [code] = await once(standalone, 'exit')
+    expect(code).not.toBe(0)
+    expect(output).toContain(`Ultimate core already owns this storage (pid ${pid})`)
+  }, 60000)
+  it('terminates an orphaned storage owner before booting a new supervisor', async () => {
+    const running = await fixture()
+    const stream = await attach(running.url)
+    const pid = stream.system().process.pid
+    await stream.close()
+    const exited = once(running.child, 'exit')
+    running.child.kill('SIGKILL')
+    await exited
+    const next = launch(running.home)
+    await until(() => next.output().includes('Ultimate: http://'))
+    const owner = JSON.parse(await readFile(join(running.home, 'storage.lock'), 'utf8'))
+    expect(owner.pid).not.toBe(pid)
+    expect(() => process.kill(pid, 0)).toThrow('ESRCH')
+    const url = /Ultimate: (http:\/\/[^\s]+)/.exec(next.output())![1]
+    expect((await fetch(url + '/api/models')).status).toBe(200)
+  }, 60000)
+  it('terminates a live detached core when taking over a stale supervisor lock', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ultimate-orphan-'))
+    homes.push(home)
+    const core = spawn(process.execPath, [resolvePath('server/main.ts')], {
+      env: { ...process.env, ULTIMATE_HOME: home, ULTIMATE_PORT: '0', ULTIMATE_FAUX: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    children.push(core)
+    let output = ''
+    core.stdout.on('data', (chunk) => {
+      output += chunk
+    })
+    await until(() => output.includes('Ultimate: http://'))
+    await writeFile(join(home, 'ultimate.lock'), JSON.stringify({ pid: 2147483647, port: 4747 }))
+    const exited = once(core, 'exit')
+    const supervisor = launch(home)
+    await until(() => supervisor.output().includes('Ultimate: http://'))
+    await exited
+    expect(core.exitCode).toBe(0)
+    const owner = JSON.parse(await readFile(join(home, 'storage.lock'), 'utf8'))
+    expect(owner.pid).not.toBe(core.pid)
+  }, 60000)
   it('survives SIGKILL mid-turn and resumes the transcript through the same public port', async () => {
     const running = await fixture()
     const stream = await attach(running.url)
@@ -204,34 +282,27 @@ describe('supervisor', () => {
     expect(stream.connections()).toBeGreaterThan(1)
     expect(await readFile(join(running.home, 'demo.txt'), 'utf8')).toBe('after\n')
   }, 60000)
-  it('takes over a dead lock and serves boot diagnostics until core changes permit recovery', async () => {
+  it('takes over a dead lock and recovers despite a test type error', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ultimate-supervisor-'))
     homes.push(home)
     await writeFile(join(home, 'ultimate.lock'), JSON.stringify({ pid: 2147483647, port: 4747 }))
-    const file = resolvePath('shared/ultimate-boot-test.ts')
+    const running = launch(home)
+    await until(() => running.output().includes('Ultimate: http://'))
+    const url = /Ultimate: (http:\/\/[^\s]+)/.exec(running.output())![1]
+    const stream = await attach(url)
+    const file = resolvePath('test/ultimate-recovery-test.ts')
+    const extensionFile = resolvePath('extensions/ultimate-swap-test.ts')
     try {
       await writeFile(file, 'export const invalid: string = 7\n')
-      const running = launch(home)
-      let url = ''
-      await until(async () => {
-        const contents = await readFile(join(home, 'ultimate.lock'), 'utf8').catch(() => '')
-        if (!contents) return false
-        const lock = JSON.parse(contents) as { pid: number; port: number }
-        if (!lock.port || lock.pid !== running.child.pid) return false
-        url = `http://127.0.0.1:${lock.port}`
-        return true
-      })
-      const response = await fetch(url, { signal: AbortSignal.timeout(20000) })
-      expect(response.status).toBe(503)
-      const page = await response.text()
-      expect(page).toContain('Waiting for changes in server/, shared/, extensions/')
-      expect(page).toContain('not assignable to type')
-      await rm(file)
-      await until(() => running.output().includes('Ultimate: http://'))
-      const stream = await attach(url)
-      expect(stream.system().process.generation).toBe(1)
+      await writeFile(extensionFile, 'export const invalid: string = 7\n')
+      process.kill(stream.system().process.pid, 'SIGKILL')
+      await until(() => stream.system().process.generation === 2)
+      expect((await fetch(url + '/api/models')).status).toBe(200)
+      expect((await post(url, '/api/restart')).status).toBe(202)
+      await until(() => stream.system().process.generation === 3)
     } finally {
       await rm(file, { force: true })
+      await rm(extensionFile, { force: true })
     }
   }, 60000)
   it('accepts an API swap and rejects a type error without releasing the active owner', async () => {

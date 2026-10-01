@@ -4,17 +4,20 @@ import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { LiveDoc } from '@earendil-works/pi-durable'
+import { CodingTools } from '@earendil-works/pi-durable/tools'
 import { afterEach, describe, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
-import subagents, { Subagents, SubagentInfo } from '../extensions/subagents/server.ts'
-import { discoverAgents, parseDefinition } from '../extensions/subagents/definitions.ts'
+import subagents, { Subagents } from '../extensions/subagents/server.ts'
+import { Metadata } from '../server/metadata.ts'
+import { discoverAgents, parseDefinition } from '../server/agents.ts'
 
 const directories: string[] = []
 const hosts: OpenHost[] = []
 afterEach(async () => {
   for (const host of hosts.splice(0)) await host.close()
-  for (const path of directories.splice(0)) await rm(path, { recursive: true, force: true })
+  for (const path of directories.splice(0))
+    await rm(path, { recursive: true, force: true, maxRetries: 5 })
 })
 const definition = (body = 'Original instructions') =>
   `---\nname: scout\ndescription: Search\ntools: [read, bash]\n---\n${body}\n`
@@ -35,6 +38,7 @@ async function fixture() {
   await mkdir(join(repoRoot, 'agents'))
   await writeFile(join(repoRoot, 'agents/scout.md'), definition())
   const prepared = await prepareHarness({ repoRoot, home: join(repoRoot, 'home'), faux: true })
+  prepared.registry.install(CodingTools)
   prepared.registry.install(subagents(prepared))
   const route: FauxResponseFactory = (transcript) => {
     prepared.faux!.appendResponses([route])
@@ -161,9 +165,11 @@ describe('subagents', () => {
       (await (await opened.harness.conversation(second.conversationId, context))!.agent(context))
         .instructions,
     ).toBe('Updated instructions')
-    expect(
-      await opened.harness.snapshot(SubagentInfo, first.conversationId, context),
-    ).toMatchObject({ agent: 'scout', title: 'facts', background: false })
+    expect(await opened.harness.snapshot(Metadata, first.conversationId, context)).toMatchObject({
+      agent: 'scout',
+      title: 'facts',
+      background: false,
+    })
     expect(
       (
         await call(opened, {

@@ -6,9 +6,10 @@ export type ChildMessage =
   | { type: 'ready' | 'released' }
   | { type: 'failed'; error: string }
   | { type: 'swap'; requestId: string; build?: BuildInfo }
-  | { type: 'swap-ack'; requestId: string }
+  | { type: 'swap-ack'; requestId: string; ok: boolean; error?: string }
 export type SupervisorMessage =
-  | { type: 'go' | 'release' }
+  | { type: 'go' | 'release' | 'exit' }
+  | { type: 'reacquire'; error: string }
   | { type: 'swap-result'; requestId: string; ok: false; error: string }
   | { type: 'swap-result'; requestId: string; ok: true; generation: number }
 
@@ -26,9 +27,17 @@ export async function requestSwap(
       if (!message.ok) return resolve(message.error.slice(-4096))
       void approved(message.generation).then(
         () => {
-          process.send?.({ type: 'swap-ack', requestId } satisfies ChildMessage)
+          process.send?.({ type: 'swap-ack', requestId, ok: true } satisfies ChildMessage)
         },
-        (error) => resolve(String(error)),
+        (error) => {
+          process.send?.({
+            type: 'swap-ack',
+            requestId,
+            ok: false,
+            error: String(error),
+          } satisfies ChildMessage)
+          resolve(String(error))
+        },
       )
     }
     process.on('message', listener)

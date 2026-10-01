@@ -9,6 +9,8 @@ import type { HostOptions, OpenHost } from './harness.ts'
 import { createSystem } from './system.ts'
 import type { ChildMessage, SupervisorMessage } from './supervisor-protocol.ts'
 
+import { loopbackAuthority, loopbackOrigin } from './request-security.ts'
+
 const send = (message: ChildMessage) => process.send?.(message)
 
 export interface ServerOptions extends HostOptions {
@@ -25,6 +27,19 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
   let api: Awaited<ReturnType<typeof createApi>> | undefined
   const http = createHttpServer((request, response) => {
     void (async () => {
+      const port =
+        new URL(
+          process.env.ULTIMATE_PUBLIC_URL ??
+            `http://127.0.0.1:${(http.address() as import('node:net').AddressInfo).port}`,
+        ).port || '80'
+      if (
+        !loopbackAuthority(request.headers.host, port) ||
+        (request.headers.origin && !loopbackOrigin(request.headers.origin, port))
+      ) {
+        response.writeHead(403)
+        response.end('Forbidden')
+        return
+      }
       if (!api) {
         response.writeHead(503)
         response.end('Preparing')
@@ -76,10 +91,23 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     events,
     url,
     port: address.port,
+    async release() {
+      await api?.close()
+      api = undefined
+      http.closeAllConnections()
+      await opened?.close()
+      opened = undefined
+    },
     async go() {
-      opened = await host.open()
+      opened = await host.open(false)
       await system.changed()
+      if (
+        process.env.ULTIMATE_FAIL_GO_GENERATION &&
+        process.env.ULTIMATE_FAIL_GO_GENERATION === process.env.ULTIMATE_GENERATION
+      )
+        throw new Error('Injected activation failure')
       api = await createApi(host, opened, events, system, extensions)
+      opened.harness.resume()
       return { ...opened, api, system }
     },
     async close() {
@@ -122,14 +150,17 @@ if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.met
       server = await prepareServer({ port: 0 })
       process.on('message', (message: SupervisorMessage) => {
         void (async () => {
-          if (message.type === 'go') {
+          if (message.type === 'go' || message.type === 'reacquire') {
+            if (message.type === 'reacquire') process.env.ULTIMATE_ACTIVATION_ERROR = message.error
             await server!.go()
             send({ type: 'ready' })
           }
           if (message.type === 'release') {
-            await close()
+            await server!.release()
             send({ type: 'released' })
-            process.disconnect?.()
+          }
+          if (message.type === 'exit') {
+            await close()
             process.exit(0)
           }
         })().catch((error) => {

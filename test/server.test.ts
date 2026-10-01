@@ -1,11 +1,13 @@
 import { spawn } from 'node:child_process'
+import { request } from 'node:http'
 import { once } from 'node:events'
 import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
 import type { ConversationView } from '@earendil-works/pi-durable'
+import { defineExtension } from '@earendil-works/pi-durable'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createServer, prepareServer } from '../server/main.ts'
 import { context } from '../server/harness.ts'
@@ -18,13 +20,16 @@ afterEach(async () => {
   vi.restoreAllMocks()
   for (const server of servers.splice(0)) await server.close()
   for (const directory of directories.splice(0))
-    await rm(directory, { recursive: true, force: true })
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
 })
 async function fixture(extra = false, agents = false) {
   const directory = await mkdtemp(join(tmpdir(), 'ultimate-test-'))
   directories.push(directory)
   const repoRoot = join(directory, 'repo')
   await mkdir(join(repoRoot, 'extensions', 'prompt'), { recursive: true })
+  await cp(resolvePath('extensions/coding-tools'), join(repoRoot, 'extensions/coding-tools'), {
+    recursive: true,
+  })
   await mkdir(join(repoRoot, 'web'), { recursive: true })
   await symlink(resolvePath('node_modules'), join(repoRoot, 'node_modules'), 'dir')
   await writeFile(
@@ -57,6 +62,9 @@ async function fixture(extra = false, agents = false) {
     )
   }
   if (agents) {
+    await mkdir(join(repoRoot, 'server'), { recursive: true })
+    await cp(resolvePath('server/metadata.ts'), join(repoRoot, 'server/metadata.ts'))
+    await cp(resolvePath('server/agents.ts'), join(repoRoot, 'server/agents.ts'))
     await cp(resolvePath('extensions/subagents'), join(repoRoot, 'extensions/subagents'), {
       recursive: true,
     })
@@ -355,6 +363,7 @@ describe('server', () => {
     const info = server.system.current()
     expect(info.machine.cpuCount).toBeGreaterThan(0)
     expect(info.machine.hostname).not.toBe('')
+    expect(info.machine.home).toBe(homedir())
     expect(info.process.url).toBe(server.url)
     expect(info.persistence.kind).toBe('sqlite')
     expect(info.persistence.sizeBytes).toBeGreaterThan(0)
@@ -411,10 +420,42 @@ describe('server', () => {
     expect(server.host.build().history).toHaveLength(3)
     await stream.close()
   })
+  it('rejects foreign Hosts on API and Vite and accepts localhost Origin', async () => {
+    const { server } = await fixture()
+    for (const path of ['/api/events', '/']) {
+      const status = await new Promise<number | undefined>((resolve, reject) => {
+        const req = request(
+          server.url + path,
+          { headers: { Host: `evil.example:${server.port}` } },
+          (response) => {
+            response.resume()
+            resolve(response.statusCode)
+          },
+        )
+        req.on('error', reject)
+        req.end()
+      })
+      expect(status).toBe(403)
+    }
+    expect(
+      (
+        await fetch(server.url + '/api/conversations/1/configure', {
+          method: 'POST',
+          headers: {
+            Origin: `http://localhost:${server.port}`,
+            'Content-Type': 'application/json',
+          },
+          body: '{}',
+        })
+      ).status,
+    ).toBe(200)
+  })
   it('hot reloads a transitive local import and retains the old extension on a syntax error', async () => {
     const { server } = await fixture(true)
     const entry = () => server.extensions.info().find((extension) => extension.name === 'counter')!
     const loaded = entry().server!.loadedAt
+    const promptLoaded = server.extensions.info().find((extension) => extension.name === 'prompt')!
+      .server!.loadedAt
     await writeFile(
       join(server.host.repoRoot, 'extensions/counter/value.ts'),
       "export const value = 'two'",
@@ -423,6 +464,9 @@ describe('server', () => {
     const installed = server.host.registry.snapshot().extension('counter')!
     const section = installed.sections![0]
     expect(await section.render({} as Parameters<typeof section.render>[0], context)).toBe('two')
+    expect(
+      server.extensions.info().find((extension) => extension.name === 'prompt')!.server!.loadedAt,
+    ).toBe(promptLoaded)
     const successful = entry().server!.loadedAt
     await new Promise((resolve) => setTimeout(resolve, 200))
     await writeFile(
@@ -432,6 +476,28 @@ describe('server', () => {
     await until(() => !!entry().server!.error)
     expect(entry().server!.loadedAt).toBe(successful)
     expect(server.host.registry.snapshot().extension('counter')).toBe(installed)
+  })
+  it('does not uninstall an extension installed outside the folder loader', async () => {
+    const { server } = await fixture(true)
+    const external = defineExtension({ name: 'web-only' })
+    server.host.registry.install(external)
+    await writeFile(
+      join(server.host.repoRoot, 'extensions/web-only/README.md'),
+      'Changed browser facet',
+    )
+    await until(
+      () =>
+        server.extensions.info().find((extension) => extension.name === 'web-only')?.readme ===
+        'Changed browser facet',
+    )
+    expect(server.host.registry.snapshot().extension('web-only')).toBe(external)
+    await rm(join(server.host.repoRoot, 'extensions/web-only'), {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+    })
+    await until(() => !server.extensions.info().some((extension) => extension.name === 'web-only'))
+    expect(server.host.registry.snapshot().extension('web-only')).toBe(external)
   })
   it('discovers and removes extension folders while running', async () => {
     const { server } = await fixture()

@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
+import { acquireLock } from './lock.ts'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
@@ -18,7 +19,6 @@ import { UiState } from './ui-state.ts'
 import type { ConversationId, EnvTarget, HarnessSettings } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
-import { CodingTools } from '@earendil-works/pi-durable/tools'
 import { createBuild } from './build.ts'
 import { applyHttpProxySettings, configureHttpDispatcher } from './http.ts'
 import type { Notice } from '../shared/protocol.ts'
@@ -66,7 +66,6 @@ export async function prepareHarness(options: HostOptions) {
   applyHttpProxySettings(settings.getGlobalSettings().httpProxy)
   configureHttpDispatcher(settings.getHttpIdleTimeoutMs())
   const registry = createRegistry()
-  registry.install(CodingTools)
   const envs = new Map<string, NodeExecutionEnv>()
   const env = ({ cwd = repoRoot }: EnvTarget) => {
     let found = envs.get(cwd)
@@ -187,42 +186,61 @@ export async function prepareHarness(options: HostOptions) {
     settings,
     registry,
     faux: fauxHandle,
-    async open() {
-      const harness = await Harness.open(
-        await openNodeSqliteStorage(database),
-        {
-          models,
-          registry,
-          settings: createHarnessSettings(settings),
-          env,
-          onReport: (error) => options.report?.({ level: 'error', message: String(error) }),
-        },
-        context,
+    async open(resume = true) {
+      const owner = await acquireLock(
+        join(home, 'storage.lock'),
+        { pid: process.pid },
+        process.env.ULTIMATE_SUPERVISED === '1' ? 10000 : 0,
       )
-      const root = await harness.root(context, {
-        agent: {
-          cwd: repoRoot,
-          ...(fauxMode
-            ? { model: { provider: 'faux', modelId: 'faux-1' } }
-            : preferred
-              ? { model: { provider: preferred.provider, modelId: preferred.id } }
-              : {}),
-          thinkingLevel: settings.getDefaultThinkingLevel(),
-        },
-      })
-      await root.commit(async (tx) => {
-        await tx.doc(UiState, root.id)
-      }, context)
-      active = { harness, root }
-      harness.resume()
-      return {
-        harness,
-        root,
-        async close() {
-          active = undefined
-          await harness.close(context)
-          for (const execution of envs.values()) await execution.cleanup(context)
-        },
+      let harness: Harness | undefined
+      let storage: Awaited<ReturnType<typeof openNodeSqliteStorage>> | undefined
+      try {
+        storage = await openNodeSqliteStorage(database)
+        harness = await Harness.open(
+          storage,
+          {
+            models,
+            registry,
+            settings: createHarnessSettings(settings),
+            env,
+            onReport: (error) => options.report?.({ level: 'error', message: String(error) }),
+          },
+          context,
+        )
+        const root = await harness.root(context, {
+          agent: {
+            cwd: repoRoot,
+            ...(fauxMode
+              ? { model: { provider: 'faux', modelId: 'faux-1' } }
+              : preferred
+                ? { model: { provider: preferred.provider, modelId: preferred.id } }
+                : {}),
+            thinkingLevel: settings.getDefaultThinkingLevel(),
+          },
+        })
+        await root.commit(async (tx) => {
+          await tx.doc(UiState, root.id)
+        }, context)
+        active = { harness, root }
+        const openedHarness = harness
+        if (resume) openedHarness.resume()
+        return {
+          harness: openedHarness,
+          root,
+          async close() {
+            active = undefined
+            await openedHarness.close(context)
+            for (const execution of envs.values()) await execution.cleanup(context)
+            envs.clear()
+            await owner.close()
+          },
+        }
+      } catch (error) {
+        active = undefined
+        if (harness) await harness.close(context)
+        else await storage?.close(context)
+        await owner.close()
+        throw error
       }
     },
   }

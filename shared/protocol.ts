@@ -86,6 +86,7 @@ export interface SystemInfo {
   build: BuildInfo
   machine: {
     hostname: string
+    home: string
     platform: string
     release: string
     arch: string

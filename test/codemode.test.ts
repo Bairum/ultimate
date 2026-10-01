@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -17,13 +17,16 @@ afterEach(async () => {
     await server.close()
   }
   for (const directory of directories.splice(0))
-    await rm(directory, { recursive: true, force: true, maxRetries: 3 })
+    await rm(directory, { recursive: true, force: true, maxRetries: 5 })
 })
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'ultimate-codemode-'))
   directories.push(directory)
   const repoRoot = join(directory, 'repo')
   await mkdir(join(repoRoot, 'extensions/codemode'), { recursive: true })
+  await cp(resolve('extensions/coding-tools'), join(repoRoot, 'extensions/coding-tools'), {
+    recursive: true,
+  })
   await mkdir(join(repoRoot, 'web'), { recursive: true })
   await symlink(resolve('node_modules'), join(repoRoot, 'node_modules'), 'dir')
   await writeFile(

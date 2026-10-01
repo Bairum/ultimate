@@ -34,14 +34,16 @@ export async function loadExtensions(
     extensions: () => [...records.values()],
     doc: (kind) => [...documents.values()].flat().find((doc) => doc.definition.kind === kind),
   }
+  const installed = new Set<string>()
   let chain = Promise.resolve()
   let closed = false
-  async function reload() {
+  async function reload(selected?: Set<string>, servers = selected) {
     const folders = (await readdir(directory, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .toSorted()
     for (const name of folders) {
+      if (selected && !selected.has(name)) continue
       const files = await readdir(join(directory, name))
       const previous = records.get(name)
       let readme: string | undefined
@@ -55,7 +57,7 @@ export async function loadExtensions(
         facets: { server: files.includes('server.ts'), web: files.includes('web.tsx') },
         ...(previous?.server ? { server: previous.server } : {}),
       }
-      if (record.facets.server) {
+      if (record.facets.server && (!servers || servers.has(name))) {
         try {
           const module = await vite.ssrLoadModule(join(directory, name, 'server.ts'))
           const extension: Extension =
@@ -68,6 +70,7 @@ export async function loadExtensions(
           if (!Array.isArray(docs) || docs.some((doc) => doc.definition.scope !== 'conversation'))
             throw new Error('docs must contain conversation document tokens')
           host.registry.install(extension)
+          installed.add(name)
           documents.set(name, docs)
           record.server = {
             loadedAt: new Date().toISOString(),
@@ -82,8 +85,8 @@ export async function loadExtensions(
             error: String(error),
           }
         }
-      } else {
-        host.registry.uninstall({ name })
+      } else if (!record.facets.server) {
+        if (installed.delete(name)) host.registry.uninstall({ name })
         documents.delete(name)
         delete record.server
       }
@@ -92,7 +95,7 @@ export async function loadExtensions(
     }
     for (const name of records.keys()) {
       if (!folders.includes(name)) {
-        host.registry.uninstall({ name })
+        if (installed.delete(name)) host.registry.uninstall({ name })
         records.delete(name)
         host.builds.remove(name)
         documents.delete(name)
@@ -119,8 +122,27 @@ export async function loadExtensions(
     if (!file.startsWith(directory + '/') && !/\.[cm]?[jt]s$/.test(file)) return
     chain = chain
       .then(async () => {
-        vite.moduleGraph.invalidateAll()
-        await reload()
+        const selected = new Set<string>()
+        const modules = vite.moduleGraph.getModulesByFile(file)
+        const visited = new Set<import('vite-plus').ModuleNode>()
+        const visit = (module: import('vite-plus').ModuleNode) => {
+          if (visited.has(module)) return
+          visited.add(module)
+          for (const name of records.keys())
+            if (module.file === join(directory, name, 'server.ts')) selected.add(name)
+          for (const importer of module.importers) visit(importer)
+        }
+        for (const module of modules ?? []) visit(module)
+        for (const module of visited) vite.moduleGraph.invalidateModule(module)
+        const name = file.startsWith(directory + '/')
+          ? file.slice(directory.length + 1).split('/')[0]
+          : undefined
+        const servers = new Set(selected)
+        if (name) {
+          selected.add(name)
+          if (file === join(directory, name, 'server.ts')) servers.add(name)
+        }
+        await reload(selected, servers)
       })
       .catch((error) => {
         for (const record of records.values())
@@ -128,21 +150,26 @@ export async function loadExtensions(
         changed()
       })
   }
+  const onStructure = (file: string) => {
+    if (!file.startsWith(directory + '/')) return onChange(file)
+    chain = chain.then(() => reload()).catch(() => changed())
+  }
   vite.watcher.add([directory, join(host.repoRoot, 'agents')])
   vite.watcher
     .on('change', onChange)
-    .on('add', onChange)
-    .on('unlink', onChange)
-    .on('addDir', onChange)
-    .on('unlinkDir', onChange)
+    .on('add', onStructure)
+    .on('unlink', onStructure)
+    .on('addDir', onStructure)
+    .on('unlinkDir', onStructure)
   return {
     info: () => [...records.values()],
     doc: (kind: string) =>
       [...documents.values()].flat().find((doc) => doc.definition.kind === kind),
     async close() {
       closed = true
-      for (const event of ['change', 'add', 'unlink', 'addDir', 'unlinkDir'])
-        vite.watcher.off(event, onChange)
+      vite.watcher.off('change', onChange)
+      for (const event of ['add', 'unlink', 'addDir', 'unlinkDir'])
+        vite.watcher.off(event, onStructure)
       await chain
     },
   }

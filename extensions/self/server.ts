@@ -18,6 +18,16 @@ export default (host: ExtensionHost) =>
         async execute(_args, api, context) {
           const key = `restart:${api.taskId}`
           const done = await api.memo<{ generation: number; build: string }>(key, context)
+          if (done && Number(process.env.ULTIMATE_GENERATION) !== done.generation)
+            return {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: `Restart failed during activation; rolled back to generation ${process.env.ULTIMATE_GENERATION}. ${process.env.ULTIMATE_ACTIVATION_ERROR ?? ''}`,
+                },
+              ],
+            }
           if (done)
             return {
               content: [
