@@ -5,7 +5,7 @@ import type { ViteDevServer } from 'vite-plus'
 import type { ExtensionInfo } from '../shared/protocol.ts'
 import type { PreparedHost } from './harness.ts'
 
-export type ExtensionHost = Pick<PreparedHost, 'repoRoot' | 'modelRuntime' | 'settings'>
+export type ExtensionHost = Pick<PreparedHost, 'repoRoot' | 'modelRuntime' | 'settings' | 'build'>
 export async function loadExtensions(vite: ViteDevServer, host: PreparedHost, changed: () => void) {
   const directory = join(host.repoRoot, 'extensions')
   const records = new Map<string, ExtensionInfo>()
@@ -61,15 +61,18 @@ export async function loadExtensions(vite: ViteDevServer, host: PreparedHost, ch
         documents.delete(name)
         delete record.server
       }
+      if (!record.server?.error) host.builds.extension(name)
       records.set(name, record)
     }
     for (const name of records.keys()) {
       if (!folders.includes(name)) {
         host.registry.uninstall({ name })
         records.delete(name)
+        host.builds.remove(name)
         documents.delete(name)
       }
     }
+    host.builds.refresh()
     changed()
   }
   await reload()
@@ -77,6 +80,16 @@ export async function loadExtensions(vite: ViteDevServer, host: PreparedHost, ch
   const onChange = (file: string) => {
     if (closed || !resolve(file).startsWith(host.repoRoot + '/') || file.includes('/node_modules/'))
       return
+    if (
+      file.startsWith(join(host.repoRoot, 'agents') + '/') ||
+      file === join(host.repoRoot, 'agents')
+    ) {
+      chain = chain.then(() => {
+        host.builds.refresh()
+        changed()
+      })
+      return
+    }
     if (!file.startsWith(directory + '/') && !/\.[cm]?[jt]s$/.test(file)) return
     chain = chain
       .then(async () => {
@@ -89,7 +102,7 @@ export async function loadExtensions(vite: ViteDevServer, host: PreparedHost, ch
         changed()
       })
   }
-  vite.watcher.add(directory)
+  vite.watcher.add([directory, join(host.repoRoot, 'agents')])
   vite.watcher
     .on('change', onChange)
     .on('add', onChange)

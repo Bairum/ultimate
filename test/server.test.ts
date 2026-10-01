@@ -36,7 +36,7 @@ async function fixture(extra = false) {
   )
   await writeFile(
     join(repoRoot, 'extensions', 'prompt', 'server.ts'),
-    "import { defineExtension, section } from '@earendil-works/pi-durable'; export default defineExtension({ name: 'prompt', sections: [section('preamble', () => 'Test')] })",
+    await readFile(resolvePath('extensions/prompt/server.ts'), 'utf8'),
   )
   if (extra) {
     await mkdir(join(repoRoot, 'extensions', 'counter'), { recursive: true })
@@ -247,6 +247,45 @@ describe('server', () => {
     expect(info.extensions.find((extension) => extension.name === 'counter')?.server?.docs).toEqual(
       ['test.counter'],
     )
+  })
+  it('tracks extension and web builds and stores positional prompt changes', async () => {
+    const { server, options } = await fixture(true)
+    const first = server.host.build()
+    const prepared = await prepareServer({ ...options, home: join(options.home, 'second') })
+    expect(prepared.host.build().id).toBe(first.id)
+    await prepared.close()
+    const stream = await attach(server)
+    await post(server, '/api/conversations/1/submit', { text: 'before' })
+    await server.harness.waitForIdle(context)
+    await writeFile(
+      join(options.repoRoot, 'extensions/counter/value.ts'),
+      "export const value = 'new'",
+    )
+    await until(() => server.host.build().id !== first.id)
+    const second = server.host.build()
+    expect(second.extensions.counter).not.toBe(first.extensions.counter)
+    expect(second.changed).toEqual(['extensions/counter'])
+    await until(() =>
+      stream.events.some(
+        (event) =>
+          event.name === 'system' && (event.data as ServerEvents['system']).build.id === second.id,
+      ),
+    )
+    await post(server, '/api/conversations/1/submit', { text: 'after' })
+    await server.harness.waitForIdle(context)
+    const view = await server.root.viewState(context)
+    const systems = view.value.entries.filter((entry) => entry.kind === 'pi.system')
+    expect(systems.length).toBeGreaterThan(1)
+    expect(JSON.stringify(systems.at(-1))).toContain(`Ultimate build ${second.id}`)
+    view.dispose()
+    await writeFile(
+      join(options.repoRoot, 'extensions/web-only/web.tsx'),
+      'export default () => "changed"',
+    )
+    await until(() => server.host.build().id !== second.id)
+    expect(server.host.build().changed).toEqual(['extensions/web-only'])
+    expect(server.host.build().history).toHaveLength(3)
+    await stream.close()
   })
   it('hot reloads a transitive local import and retains the old extension on a syntax error', async () => {
     const { server } = await fixture(true)

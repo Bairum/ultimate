@@ -67,7 +67,20 @@ export interface ExtensionInfo {
     error?: string
   }
 }
+export interface BuildEntry {
+  id: string
+  at: string
+  generation: number
+  changed: string[]
+}
+export interface BuildInfo extends BuildEntry {
+  core: string
+  extensions: Record<string, string>
+  agents?: string
+  history: BuildEntry[]
+}
 export interface SystemInfo {
+  build: BuildInfo
   machine: {
     hostname: string
     platform: string

@@ -17,6 +17,7 @@ import type { EnvTarget, HarnessSettings } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
+import { createBuild } from './build.ts'
 import { applyHttpProxySettings, configureHttpDispatcher } from './http.ts'
 import type { Notice } from '../shared/protocol.ts'
 
@@ -54,6 +55,7 @@ export interface HostOptions {
 }
 export async function prepareHarness(options: HostOptions) {
   const { repoRoot } = options
+  const builds = createBuild(repoRoot)
   const home = options.home ?? process.env.ULTIMATE_HOME ?? join(homedir(), '.ultimate')
   await mkdir(home, { recursive: true })
   const database = join(home, 'state.sqlite')
@@ -133,6 +135,8 @@ export async function prepareHarness(options: HostOptions) {
     ) ?? available[0]
   return {
     repoRoot,
+    builds,
+    build: builds.current,
     home,
     database,
     modelRuntime,

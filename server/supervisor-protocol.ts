@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto'
+import type { BuildInfo } from '../shared/protocol.ts'
 
 export type ChildMessage =
   | { type: 'prepared'; port: number }
   | { type: 'ready' | 'released' }
   | { type: 'failed'; error: string }
-  | { type: 'swap'; requestId: string }
+  | { type: 'swap'; requestId: string; build?: BuildInfo }
   | { type: 'swap-ack'; requestId: string }
 export type SupervisorMessage =
   | { type: 'go' | 'release' }
@@ -14,6 +15,7 @@ export type SupervisorMessage =
 // Success is acknowledged only after the caller has durably recorded its replay result.
 export async function requestSwap(
   approved: (generation: number) => Promise<void>,
+  build?: BuildInfo,
 ): Promise<string> {
   if (!process.send) return 'Restart requires pnpm start (the supervisor).'
   const requestId = randomUUID()
@@ -30,6 +32,6 @@ export async function requestSwap(
       )
     }
     process.on('message', listener)
-    process.send?.({ type: 'swap', requestId } satisfies ChildMessage)
+    process.send?.({ type: 'swap', requestId, build } satisfies ChildMessage)
   })
 }

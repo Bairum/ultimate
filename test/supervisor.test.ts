@@ -151,6 +151,7 @@ describe('supervisor', () => {
   it('replays a memoed restart in generation 2 and reconnects SSE to the finished transcript', async () => {
     const running = await fixture()
     const stream = await attach(running.url)
+    const oldBuild = stream.system().build
     expect(
       (await post(running.url, '/api/conversations/1/submit', { text: 'restart yourself' })).status,
     ).toBe(202)
@@ -163,6 +164,12 @@ describe('supervisor', () => {
       () => stream.view().entries.filter((entry) => entry.kind === 'pi.assistant').length === 2,
     )
     expect(stream.connections()).toBeGreaterThan(1)
+    expect(stream.system().build.id).toBe(oldBuild.id)
+    expect(stream.system().build.changed).toEqual([])
+    expect(stream.system().build.generation).toBe(2)
+    expect(transcript(stream.view())).toContain(
+      `build ${oldBuild.id} → ${stream.system().build.id}`,
+    )
     expect(transcript(stream.view())).toContain(`(pid ${stream.system().process.pid})`)
     expect(
       JSON.stringify(stream.view().entries.filter((entry) => entry.kind === 'pi.tool-result')),

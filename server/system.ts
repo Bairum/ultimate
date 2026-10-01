@@ -54,6 +54,7 @@ export async function createSystem(
     }
     const cpu = cpus()
     value = {
+      build: host.build(),
       machine: {
         hostname: hostname(),
         platform: platform(),

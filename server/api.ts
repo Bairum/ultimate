@@ -275,7 +275,7 @@ export async function createApi(
         if (url.pathname === '/api/restart') {
           const error = await requestSwap(async (generation) => {
             json(202, { ok: true, generation })
-          })
+          }, host.build())
           if (!response.writableEnded) json(500, { ok: false, error })
           return true
         }

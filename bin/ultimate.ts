@@ -8,6 +8,7 @@ import { join, resolve as resolvePath } from 'node:path'
 import { createServer, connect } from 'node:net'
 import type { Socket } from 'node:net'
 import { fileURLToPath } from 'node:url'
+import type { BuildInfo } from '../shared/protocol.ts'
 import type { ChildMessage, SupervisorMessage } from '../server/supervisor-protocol.ts'
 
 const repo = resolvePath(fileURLToPath(new URL('..', import.meta.url)))
@@ -158,7 +159,7 @@ async function kill(core: Core) {
   core.child.kill('SIGKILL')
   await exited
 }
-function boot(): Core {
+function boot(previousBuild?: BuildInfo): Core {
   const child = fork(join(repo, 'server/main.ts'), [], {
     cwd: repo,
     env: {
@@ -167,6 +168,7 @@ function boot(): Core {
       ULTIMATE_SUPERVISED: '1',
       ULTIMATE_GENERATION: String(++generation),
       ULTIMATE_PUBLIC_URL: publicUrl,
+      ...(previousBuild ? { ULTIMATE_PREVIOUS_BUILD: JSON.stringify(previousBuild) } : {}),
     },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   })
@@ -183,7 +185,8 @@ function boot(): Core {
   })
   child.on('message', (message: ChildMessage) => {
     core.messages.push(message)
-    if (message.type === 'swap' && core === active) void swap(core, message.requestId)
+    if (message.type === 'swap' && core === active)
+      void swap(core, message.requestId, message.build)
   })
   child.on('exit', () => {
     children.delete(core)
@@ -238,7 +241,7 @@ async function start(core: Core) {
     }
   }
 }
-async function swap(old: Core, requestId: string) {
+async function swap(old: Core, requestId: string, previousBuild?: BuildInfo) {
   if (swapping) {
     send(old, {
       type: 'swap-result',
@@ -253,7 +256,7 @@ async function swap(old: Core, requestId: string) {
   let released = false
   try {
     await checkTypes()
-    next = boot()
+    next = boot(previousBuild)
     await prepare(next)
     const ack = wait(old, 'swap-ack', requestId)
     send(old, { type: 'swap-result', requestId, ok: true, generation: next.generation })
