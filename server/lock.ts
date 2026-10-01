@@ -1,7 +1,5 @@
-import { open, readFile, unlink, rename } from 'node:fs/promises'
-import { randomUUID } from 'node:crypto'
-import { spawn } from 'node:child_process'
-import { once } from 'node:events'
+import { readFile, writeFile, unlink, rename } from 'node:fs/promises'
+import { DatabaseSync } from 'node:sqlite'
 
 export const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 export function alive(pid: number) {
@@ -22,76 +20,60 @@ export async function readOwner(path: string): Promise<{ pid: number; port?: num
     throw new Error(`Cannot parse Ultimate lock ${path}`, { cause: error })
   }
 }
-// flock serializes the wx/create and stale-takeover transaction. The kernel releases
-// the guard even if a contender crashes; the guard inode is never replaced.
-async function guarded<T>(path: string, action: () => Promise<T>) {
-  const guard = spawn(
-    'flock',
-    ['-x', path + '.guard', 'sh', '-c', 'printf ready; cat >/dev/null'],
-    { stdio: ['pipe', 'pipe', 'pipe'] },
-  )
-  const exited = once(guard, 'exit')
-  await Promise.race([
-    once(guard.stdout, 'data'),
-    exited.then(() => {
-      throw new Error(`Cannot acquire lock guard ${path}`)
-    }),
-  ])
-  try {
-    return await action()
-  } finally {
-    guard.stdin.end()
-    await exited
-  }
-}
 export async function acquireLock(path: string, value: { pid: number; port?: number }, waitMs = 0) {
   const deadline = Date.now() + waitMs
-  let stale = false
-  for (;;) {
-    const owner = await guarded(path, async () => {
-      const previous = await readOwner(path)
-      if (previous && alive(previous.pid)) return previous
-      if (previous) {
-        const moved = `${path}.${randomUUID()}`
-        await rename(path, moved)
-        if ((await readOwner(moved))?.pid !== previous.pid)
-          throw new Error('Lock changed during stale takeover')
-        await unlink(moved)
-        stale = true
-      }
-      const file = await open(path, 'wx')
+  const database = new DatabaseSync(path + '.db')
+  database.exec('PRAGMA busy_timeout = 0')
+  async function update(next: typeof value) {
+    const temporary = `${path}.${value.pid}`
+    try {
+      await writeFile(temporary, JSON.stringify(next))
+      await rename(temporary, path)
+    } finally {
+      await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error
+      })
+    }
+  }
+  try {
+    for (;;) {
       try {
-        await file.writeFile(JSON.stringify(value))
-      } finally {
-        await file.close()
+        database.exec('BEGIN EXCLUSIVE')
+        break
+      } catch (error) {
+        if ((error as { errcode?: number }).errcode !== 5) throw error
+        let owner = await readOwner(path)
+        if (!owner) {
+          await pause(50)
+          owner = await readOwner(path)
+        }
+        if (Date.now() >= deadline)
+          throw new Error(
+            path.endsWith('/ultimate.lock')
+              ? `Ultimate is already running (pid ${owner?.pid ?? 'unknown'}) at http://127.0.0.1:${owner?.port ?? 'unknown'}`
+              : `Ultimate core already owns this storage (pid ${owner?.pid ?? 'unknown'})`,
+            { cause: error },
+          )
+        await pause(50)
       }
-      return undefined
-    })
-    if (!owner)
-      return {
-        stale,
-        async close() {
-          await guarded(path, async () => {
-            if ((await readOwner(path))?.pid === value.pid) await unlink(path)
-          })
-        },
-        async update(next: typeof value) {
-          await guarded(path, async () => {
-            const file = await open(path, 'w')
-            try {
-              await file.writeFile(JSON.stringify(next))
-            } finally {
-              await file.close()
-            }
-          })
-        },
-      }
-    if (Date.now() >= deadline)
-      throw new Error(
-        path.endsWith('/ultimate.lock')
-          ? `Ultimate is already running (pid ${owner.pid}) at http://127.0.0.1:${owner.port}`
-          : `Ultimate core already owns this storage (pid ${owner.pid})`,
-      )
-    await pause(50)
+    }
+    const stale = Boolean(await readOwner(path))
+    await update(value)
+    return {
+      stale,
+      update,
+      async close() {
+        try {
+          // Remove our sidecar before releasing the transaction, never a successor's.
+          if ((await readOwner(path))?.pid === value.pid) await unlink(path)
+        } finally {
+          database.exec('ROLLBACK')
+          database.close()
+        }
+      },
+    }
+  } catch (error) {
+    database.close()
+    throw error
   }
 }
