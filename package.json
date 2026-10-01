@@ -1,0 +1,29 @@
+{
+  "name": "ultimate",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server/main.ts",
+    "check": "vp check",
+    "test": "vp test",
+    "fmt": "vp fmt",
+    "lint": "vp lint"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.0.0",
+    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-coding-agent": "1.0.0",
+    "@earendil-works/pi-durable": "1.0.0",
+    "undici": "8.10.2",
+    "vite-plus": "0.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.0.0",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
+  },
+  "engines": {
+    "node": ">=26"
+  },
+  "packageManager": "pnpm@11.8.0"
+}
