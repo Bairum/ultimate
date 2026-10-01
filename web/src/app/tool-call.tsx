@@ -3,6 +3,7 @@ import {
   ToolContent,
   ToolDiagnostics,
   ToolHeader,
+  ToolImages,
   ToolInput,
   ToolOutput,
 } from '@/components/ai/tool'
@@ -39,11 +40,12 @@ function summary(args: ToolCallView['args']): string {
 export function GenericToolCall({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
   return (
-    <Tool defaultOpen={call.status === 'error'}>
+    <Tool defaultOpen={call.status === 'error' || call.images.length > 0}>
       <ToolHeader meta={duration} name={call.name} state={call.status} title={summary(call.args)} />
       <ToolContent>
         <ToolInput input={call.args} />
         <ToolOutput isError={call.status === 'error'} output={call.output} />
+        <ToolImages images={call.images} />
         <ToolDiagnostics diagnostics={call.diagnostics} />
       </ToolContent>
     </Tool>

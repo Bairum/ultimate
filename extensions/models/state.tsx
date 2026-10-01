@@ -1,0 +1,96 @@
+import { useSyncExternalStore } from 'react'
+import { api, useConversation, useModels } from '@/sdk'
+import type { ModelsResponse, UltimateActions } from '@/sdk'
+
+export type ModelInfo = ModelsResponse['models'][number]
+export type ProviderInfo = ModelsResponse['providers'][number]
+export type ThinkingLevel = ModelInfo['thinkingLevels'][number]
+
+/** Dialog ids this extension's overlays read with `useDialog`. */
+export const dialogs = {
+  picker: 'models.picker',
+  thinking: 'models.thinking',
+  login: 'models.login',
+} as const
+
+const order: readonly ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/** The supported level closest to `level`: the highest one not above it, else the lowest. */
+export function clampThinking(
+  level: ThinkingLevel | undefined,
+  supported: readonly ThinkingLevel[],
+) {
+  if (supported.length === 0) return 'off'
+  const wanted = order.indexOf(level ?? 'off')
+  const sorted = supported.toSorted((a, b) => order.indexOf(a) - order.indexOf(b))
+  return sorted.findLast((candidate) => order.indexOf(candidate) <= wanted) ?? sorted[0]
+}
+
+export const levelsOf = (model: ModelInfo | undefined): readonly ThinkingLevel[] =>
+  model?.reasoning ? model.thinkingLevels : ['off']
+
+/** The shown conversation's model, its catalogue entry, and the thinking level. */
+export function useCurrentModel() {
+  const { agent } = useConversation()
+  const models = useModels()
+  const ref = agent.model
+  const model = models?.models.find(
+    (candidate) => candidate.provider === ref?.provider && candidate.id === ref.modelId,
+  )
+  return { ref, model, thinking: agent.thinkingLevel, models }
+}
+
+/** Configure the shown conversation's model, clamping its thinking level to what the model supports. */
+export function selectModel(model: ModelInfo, thinking: ThinkingLevel | undefined) {
+  return api.configure({
+    model: { provider: model.provider, modelId: model.id },
+    thinkingLevel: clampThinking(thinking, levelsOf(model)),
+  })
+}
+
+/** The next supported thinking level after `current`, wrapping around, as Pi's Shift+Tab does. */
+export function nextThinking(current: ThinkingLevel | undefined, model: ModelInfo | undefined) {
+  const levels = levelsOf(model)
+  const index = levels.indexOf(clampThinking(current, levels))
+  return levels[(index + 1) % levels.length]
+}
+
+/** Which provider the login dialog should open on; set just before it opens. */
+let loginProvider: string | undefined
+const listeners = new Set<() => void>()
+export function openLogin(actions: Pick<UltimateActions, 'open' | 'close'>, provider?: string) {
+  loginProvider = provider
+  for (const listener of listeners) listener()
+  actions.close(dialogs.picker)
+  actions.open(dialogs.login)
+}
+export function useLoginProvider() {
+  return useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+    () => loginProvider,
+  )
+}
+
+/** 128k, 1M: a context window. */
+export function formatWindow(tokens: number) {
+  if (tokens >= 1_000_000) return `${+(tokens / 1_000_000).toFixed(1)}M`
+  return `${Math.round(tokens / 1000)}k`
+}
+
+/** Dollars per million tokens, compact: 0.1, 2, 12.5. */
+export const price = (value: number) => (value === 0 ? '0' : String(+value.toFixed(3)))
+
+/** How a provider is configured, for labels: `stored`, `env`, … */
+export function authLabel(provider: ProviderInfo | undefined) {
+  if (!provider?.status.configured) return undefined
+  const { source, label } = provider.status
+  if (label) return label
+  if (source === 'environment') return 'env'
+  if (source === 'models_json_key' || source === 'models_json_command') return 'models.json'
+  return source ?? 'configured'
+}

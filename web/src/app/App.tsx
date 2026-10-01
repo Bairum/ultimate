@@ -6,9 +6,11 @@ import {
   PanelRightIcon,
   PanelRightOpenIcon,
 } from 'lucide-react'
+import { Fragment } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import type { ConversationSummary } from '../../../shared/protocol.ts'
 import { actions, shellKeys } from '../sdk/actions.ts'
 import { useConversation, useConversations, useExtensions, useUiState } from '../sdk/hooks.ts'
 import { panelItems, slotItems, viewItems } from '../sdk/registry.ts'
@@ -55,9 +57,27 @@ function IconButton({
   )
 }
 
+/** The conversations above `id`, root first, by their parent links. */
+function ancestors(id: number | undefined, conversations: readonly ConversationSummary[]) {
+  const chain: ConversationSummary[] = []
+  let parent = conversations.find((conversation) => conversation.id === id)?.parentConversationId
+  while (parent !== undefined && !chain.some((conversation) => conversation.id === parent)) {
+    const found = conversations.find((conversation) => conversation.id === parent)
+    if (!found) break
+    chain.unshift(found)
+    parent = found.parentConversationId
+  }
+  return chain
+}
+
+const nameOf = (conversation: ConversationSummary) =>
+  conversation.id === 1 ? 'main' : (conversation.agent ?? `#${conversation.id}`)
+
 function Header({ view }: { view: string | undefined }) {
   const { id, busy } = useConversation()
-  const summary = useConversations().find((conversation) => conversation.id === id)
+  const conversations = useConversations()
+  const summary = conversations.find((conversation) => conversation.id === id)
+  const trail = ancestors(id, conversations)
   const records = useExtensions()
   const views = viewItems(records)
   const hasSidebar = slotItems(records, 'sidebar').length > 0
@@ -72,12 +92,28 @@ function Header({ view }: { view: string | undefined }) {
         </IconButton>
       )}
       <div className="flex min-w-0 items-center gap-2 pl-1">
+        {trail.map((conversation) => (
+          <Fragment key={conversation.id}>
+            <button
+              className="shrink-0 rounded-sm px-1 font-mono text-[12px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onClick={() => actions.switchConversation(conversation.id)}
+              title={conversation.title ?? `Show #${conversation.id}`}
+              type="button"
+            >
+              {nameOf(conversation)}
+            </button>
+            <span className="-mx-1 shrink-0 text-muted-foreground/40">/</span>
+          </Fragment>
+        ))}
         {busy && <span className="size-1.5 shrink-0 animate-pulse-dot rounded-full bg-brand" />}
+        {summary?.agent && (
+          <span className="shrink-0 font-mono text-[12px] text-brand">{summary.agent}</span>
+        )}
         <span className="truncate text-[13px] font-medium">{title}</span>
         {id !== undefined && (
           <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70">#{id}</span>
         )}
-        {id !== undefined && id !== 1 && (
+        {id !== undefined && id !== 1 && trail.length === 0 && (
           <Button
             className="h-6 px-2 font-mono text-[11px] text-muted-foreground"
             onClick={() => actions.switchConversation(1)}

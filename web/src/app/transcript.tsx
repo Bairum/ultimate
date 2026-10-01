@@ -49,7 +49,7 @@ export function Transcript({ dock }: { dock?: boolean }) {
         {partial && (
           <AssistantView busy message={partial} results={results} slots={slots} streaming />
         )}
-        <LiveStatus live={live} busy={busy} streaming={!!partial} />
+        <LiveStatus busy={busy} live={live} partial={partial} />
       </ConversationContent>
       <ConversationScrollButton />
     </Conversation>
@@ -135,7 +135,7 @@ const EntryView = memo(function EntryView({
     const Renderer = custom.component
     return (
       <ExtensionBoundary extension={custom.extension} fallback={core} version={custom.version}>
-        <Renderer entry={entry} />
+        <Renderer core={core} entry={entry} />
       </ExtensionBoundary>
     )
   }
@@ -380,18 +380,34 @@ function UnknownEntry({ entry }: { entry: EntryRecord }) {
   )
 }
 
+/** Whether a streaming partial shows anything yet; a reasoning model's first phase is often an empty thinking block. */
+function shows(message: AssistantMessage | undefined) {
+  return !!message?.content.some((block) =>
+    block.type === 'toolCall'
+      ? true
+      : block.type === 'text'
+        ? !!block.text
+        : !!block.thinking || !!block.redacted,
+  )
+}
+
+/** When this page first saw each run, for the working indicator's clock. */
+const runSeen = new Map<number, number>()
+
 /** What the run is doing when the transcript alone does not show it. */
 function LiveStatus({
   live,
   busy,
-  streaming,
+  partial,
 }: {
   live: LiveState
   busy: boolean
-  streaming: boolean
+  partial: AssistantMessage | undefined
 }) {
   const retry = live.generation?.retry
-  const now = useNow(250, !!retry)
+  const running = (live.tools ?? []).some((slot) => slot.status !== 'done')
+  const idle = busy && !shows(partial) && !running
+  const now = useNow(retry ? 250 : 1000, !!retry || idle)
   const lines: ReactNode[] = []
   if (retry)
     lines.push(
@@ -409,9 +425,23 @@ function LiveStatus({
         {`compacting context · ${compaction.reason}${compaction.attempt > 1 ? ` · attempt ${compaction.attempt}` : ''}…`}
       </Shimmer>,
     )
-  const running = (live.tools ?? []).some((slot) => slot.status !== 'done')
-  if (busy && !streaming && !running && lines.length === 0)
-    lines.push(<Shimmer key="working">working…</Shimmer>)
+  if (idle && lines.length === 0) {
+    const run = live.run?.taskId
+    if (run !== undefined && !runSeen.has(run)) runSeen.set(run, Date.now())
+    const since = run === undefined ? undefined : runSeen.get(run)
+    const thinking = partial?.content.some((block) => block.type === 'thinking')
+    lines.push(
+      <span className="flex items-center gap-2" key="working">
+        <span className="size-1.5 animate-pulse-dot rounded-full bg-brand" />
+        <Shimmer>{thinking ? 'thinking…' : 'working…'}</Shimmer>
+        {since !== undefined && now - since >= 2000 && (
+          <span className="text-muted-foreground/60 tabular-nums">
+            {formatDuration(now - since)}
+          </span>
+        )}
+      </span>,
+    )
+  }
   if (lines.length === 0) return null
   return (
     <div className="flex flex-col gap-1 font-mono text-[12px] text-muted-foreground">{lines}</div>

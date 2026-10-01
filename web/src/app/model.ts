@@ -73,6 +73,7 @@ export function toolCallView(
     args: call.arguments ?? {},
     status,
     output: result ? resultText(result) : (slot?.output ?? ''),
+    images: result?.message.content.filter((block) => block.type === 'image') ?? [],
     details: result ? result.message.details : slot?.details,
     diagnostics: result?.diagnostics ?? slot?.diagnostics ?? [],
     ...(slot?.droppedBytes

@@ -1,5 +1,3 @@
-# Codemode
-
 Run an async JavaScript function body in a fresh QuickJS/WASM sandbox. Only injected functions can access the host. Prefer it for dependent or parallel tool calls, filtering large outputs, and inspecting Ultimate; use ordinary tools for a single simple operation.
 
 `await tools.<name>(args)` calls the conversation's currently resolved tools, except codemode. Nested calls share the parent durable task (no separate durable tool task), bypass `beforeTool`/`afterTool` hooks, and capture their output privately. Failures reject with the tool's error text. Tools declaring an `outputSchema` and returning `structuredContent` resolve to that JSON; other tools resolve to text. Durable 1.0 does not declare these optional structured fields itself.
@@ -31,3 +29,7 @@ Entry/search limits default to 100 and must be 1–1000. Pagination of raw entri
 **Crash window:** Pi Durable 1.0 has no result-transaction callback. Store writes use a separate `api.commit()` immediately before returning success. A crash between that commit and durable tool settlement retains the writes while the model may be told the script was **interrupted**. Do not treat store updates as atomic receipts of external side effects.
 
 With `ULTIMATE_FAUX=1`, submit `codemode demo` to see nested read/bash progress and the final result without a model account.
+
+## UI
+
+`web.tsx` renders each `codemode` call: the script with highlighting (collapsed when long), the nested-call log (✓/✗, tool, arguments, duration; streamed while running, from `details.calls` when done), the text output, images, and the returned value as a JSON tree (`json-tree.tsx`). The right panel's Store tab shows the shown conversation's `codemode.store` through `useDoc`.

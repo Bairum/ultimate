@@ -1,5 +1,5 @@
-# Self
-
-The replay-safe `restart` tool requests a type-checked blue/green core swap from the supervisor (`pnpm start`). Failed preparation returns diagnostics while the old core continues. Before storage is released, the tool records the next generation in its task memo; replay in the new owner returns the running generation and pid.
+Ultimate's awareness of its own code: the replay-safe `restart` tool requests a type-checked blue/green core swap from the supervisor (`pnpm start`). Failed preparation returns diagnostics while the old core continues. Before storage is released, the tool records the next generation in its task memo; replay in the new owner returns the running generation and pid.
 
 Call after changing `server/` or `shared/`. Never call for `web/`, `extensions/`, or `agents/`: those reload without a core swap. `POST /api/restart` requests the same swap and returns an accepted generation before handover; reconnect to `/api/events` to observe readiness.
+
+`web.tsx` shows the same in the UI: the `restart` call as the new generation and build (or the boot error), a "core changed — restart" header badge while `system.code.coreStale` that swaps through `api.restart()`, `build <id>` in the status line with its components and recent history, and a "Reloaded · build a → b · changed: …" marker in the transcript where the build section of the prompt changed (an entry renderer for `pi.system` that falls back to the core divider).

@@ -85,6 +85,10 @@ function derive(view: ConversationView | undefined): ConversationState {
 export function useConversation(): ConversationState {
   return derive(useStore((state) => state.view))
 }
+/** The shown conversation now, outside React: for commands and callbacks. Components use `useConversation()`. */
+export const getConversation = (): ConversationState => derive(store.getState().view)
+/** The whole client state now, outside React (`useStore` inside). */
+export const getState = (): State => store.getState()
 export const useSystem = () => useStore((state) => state.system)
 export const useConversations = () => useStore((state) => state.conversations)
 /** The live task graph of every conversation. */

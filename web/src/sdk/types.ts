@@ -1,5 +1,5 @@
-import type { ComponentType } from 'react'
-import type { ToolCall, ToolResultMessage } from '@earendil-works/pi-ai'
+import type { ComponentType, ReactNode } from 'react'
+import type { ImageContent, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai'
 import type { EntryRecord, ToolDiagnostic } from '@earendil-works/pi-durable'
 
 /** Named places in the shell that extensions fill with components. */
@@ -47,6 +47,8 @@ export interface ToolCallView {
   status: 'streaming' | 'pending' | 'running' | 'done' | 'error' | 'interrupted'
   /** Streamed output while running; the result's text once finished. */
   output: string
+  /** Images of the result, such as screenshots; `ToolImages` from `@/components/ai/tool` renders them. */
+  images: readonly ImageContent[]
   /** Last `details()` while running, the result's details once finished; each tool defines its shape. */
   details?: unknown
   diagnostics: readonly ToolDiagnostic[]
@@ -59,7 +61,8 @@ export interface ToolCallView {
 }
 
 export type ToolRenderer = ComponentType<{ call: ToolCallView }>
-export type EntryRenderer = ComponentType<{ entry: EntryRecord }>
+/** `core` is the core's rendering of the entry: return it for entries you leave alone, or wrap it. */
+export type EntryRenderer = ComponentType<{ entry: EntryRecord; core: ReactNode }>
 
 /** Navigation and shell actions, passed to commands and returned by `useUltimate()`. */
 export interface UltimateActions {

@@ -19,11 +19,13 @@ const ROOT = 1
 export function createApi(store: Store, options: { base?: string; fetch?: typeof fetch } = {}) {
   const base = options.base ?? ''
   const request = options.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args))
-  async function post<T>(path: string, body: object = {}): Promise<T> {
+  async function post<T>(path: string, body: object = {}, keepalive = false): Promise<T> {
     const response = await request(base + path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      // Lets a small request outlive the page, such as cancelling a login when the tab closes.
+      keepalive,
     })
     const data: unknown = await response.json().catch(() => ({}))
     if (!response.ok) {
@@ -59,8 +61,13 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
       return post<EmptyResponse>(`/api/auth/flows/${encodeURIComponent(flowId)}/answer`, { value })
     },
     cancel: (flowId: string) =>
-      post<EmptyResponse>(`/api/auth/flows/${encodeURIComponent(flowId)}/cancel`),
-    logout: (provider: string) => post<EmptyResponse>('/api/auth/logout', { provider }),
+      post<EmptyResponse>(`/api/auth/flows/${encodeURIComponent(flowId)}/cancel`, {}, true),
+    logout: async (provider: string) => {
+      const result = await post<EmptyResponse>('/api/auth/logout', { provider })
+      // Unlike a login, a logout sends no event; refresh which models are available.
+      void store.refreshModels()
+      return result
+    },
     restart: () => post<unknown>('/api/restart'),
     /** Write durable UI state; prefer `useUiState`, which batches and applies writes at once. */
     updateUi: (change: UiUpdateRequest) => post<EmptyResponse>('/api/ui', change),

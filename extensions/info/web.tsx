@@ -1,0 +1,587 @@
+import { InfoIcon, RotateCwIcon } from 'lucide-react'
+import { useState } from 'react'
+import type { ReactNode } from 'react'
+import { Button } from '@/components/ui/button'
+import {
+  api,
+  cn,
+  defineWebExtension,
+  elidePath,
+  formatBytes,
+  formatTokens,
+  shortenPath,
+  useConversation,
+  useExtensions,
+  useModels,
+  useNow,
+  useSystem,
+} from '@/sdk'
+import type { SystemInfo, Usage } from '@/sdk'
+import { Copy, ErrorText, Meter, Row, Rows, Section, Tag } from './rows.tsx'
+
+const pad = (value: number) => String(value).padStart(2, '0')
+
+/** 3d 04h, 2h 14m, 5m 03s, 42s. */
+function uptime(ms: number) {
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+  const [d, h, m, s] = [
+    Math.floor(seconds / 86400),
+    Math.floor(seconds / 3600) % 24,
+    Math.floor(seconds / 60) % 60,
+    seconds % 60,
+  ]
+  if (d) return `${d}d ${pad(h)}h ${pad(m)}m`
+  if (h) return `${h}h ${pad(m)}m ${pad(s)}s`
+  if (m) return `${m}m ${pad(s)}s`
+  return `${s}s`
+}
+
+/** `~/…` paths, elided in the middle to fit the panel. */
+function usePath(system: SystemInfo) {
+  return (path: string, max = 34) =>
+    elidePath(shortenPath(path, { user: system.machine.user }), max)
+}
+
+/** `api.restart()` with its outcome: the accepted generation until it serves, or the error. */
+function useRestart(system: SystemInfo) {
+  const [state, setState] = useState<{ pending?: number; error?: string; busy?: boolean }>({})
+  const serving = system.process.generation
+  const pending = state.pending !== undefined && serving < state.pending ? state.pending : undefined
+  return {
+    pending,
+    busy: !!state.busy || pending !== undefined,
+    error: state.error,
+    run: () => {
+      setState({ busy: true })
+      api.restart().then(
+        (result) => {
+          const generation = (result as { generation?: number } | undefined)?.generation
+          setState({ pending: generation })
+        },
+        (error: unknown) =>
+          setState({ error: error instanceof Error ? error.message : String(error) }),
+      )
+    },
+  }
+}
+
+function Machine({ system }: { system: SystemInfo }) {
+  const { machine } = system
+  const used = machine.totalMemory - machine.freeMemory
+  return (
+    <Section id="machine" meta={machine.hostname} title="Machine">
+      <Rows>
+        <Row label="host">
+          {machine.hostname}
+          <span className="text-muted-foreground/70">· {machine.user}</span>
+        </Row>
+        <Row label="os">
+          <span className="truncate">
+            {machine.platform} {machine.release}
+          </span>
+        </Row>
+        <Row label="arch">{machine.arch}</Row>
+        <Row label="cpu">
+          <span className="truncate" title={machine.cpuModel}>
+            {machine.cpuModel || 'unknown'}
+          </span>
+          <span className="shrink-0 text-muted-foreground/70">×{machine.cpuCount}</span>
+        </Row>
+        <Row label="memory">
+          <Meter
+            className={used / machine.totalMemory > 0.9 ? 'text-warning' : undefined}
+            value={used / machine.totalMemory}
+          />
+          {formatGiB(used)} / {formatGiB(machine.totalMemory)}
+        </Row>
+      </Rows>
+    </Section>
+  )
+}
+
+const formatGiB = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)}G`
+
+function Process({ system }: { system: SystemInfo }) {
+  const now = useNow(1000)
+  const { process } = system
+  const restart = useRestart(system)
+  return (
+    <Section id="process" meta={`pid ${process.pid}`} title="Process">
+      <Rows>
+        <Row label="pid">{process.pid}</Row>
+        <Row label="node">{process.node}</Row>
+        <Row label="uptime">
+          <span className="tabular-nums">{uptime(now - Date.parse(process.startedAt))}</span>
+          <span className="truncate text-muted-foreground/60">
+            since {new Date(process.startedAt).toLocaleTimeString()}
+          </span>
+        </Row>
+        <Row label="generation">
+          gen {process.generation}
+          {restart.pending !== undefined && (
+            <span className="text-brand">→ {restart.pending} swapping…</span>
+          )}
+          <Button
+            className="ml-auto h-5 gap-1 px-1.5 font-mono text-[10.5px] text-muted-foreground"
+            disabled={restart.busy}
+            onClick={restart.run}
+            size="sm"
+            title="Blue/green swap the core: type-check and boot a new process, then hand over"
+            variant="ghost"
+          >
+            <RotateCwIcon className={cn('size-3', restart.busy && 'animate-spin')} />
+            restart
+          </Button>
+        </Row>
+        <Row label="url">
+          <Copy value={process.url} />
+        </Row>
+      </Rows>
+      {restart.error && <ErrorText>{restart.error}</ErrorText>}
+    </Section>
+  )
+}
+
+function Persistence({ system }: { system: SystemInfo }) {
+  const path = usePath(system)
+  const { persistence } = system
+  return (
+    <Section
+      id="persistence"
+      meta={formatBytes(persistence.sizeBytes + persistence.walBytes)}
+      title="Persistence"
+    >
+      <Rows>
+        <Row label="storage">{persistence.kind}</Row>
+        <Row label="path">
+          <Copy value={persistence.path}>{path(persistence.path)}</Copy>
+        </Row>
+        <Row label="size">
+          {formatBytes(persistence.sizeBytes)}
+          <span className="text-muted-foreground/70">
+            + wal {formatBytes(persistence.walBytes)}
+          </span>
+        </Row>
+      </Rows>
+    </Section>
+  )
+}
+
+function Execution({ system }: { system: SystemInfo }) {
+  const path = usePath(system)
+  const { agent } = useConversation()
+  const cwd = agent.cwd ?? system.execution.defaultCwd
+  return (
+    <Section id="execution" meta="local" title="Execution">
+      <Rows>
+        <Row label="env">
+          {system.execution.kind === 'node-local' ? 'local Node' : system.execution.kind}
+        </Row>
+        <Row label="cwd">
+          <Copy value={cwd}>{path(cwd)}</Copy>
+        </Row>
+        {cwd !== system.execution.defaultCwd && (
+          <Row label="default">
+            <Copy value={system.execution.defaultCwd}>{path(system.execution.defaultCwd)}</Copy>
+          </Row>
+        )}
+      </Rows>
+    </Section>
+  )
+}
+
+function Code({ system }: { system: SystemInfo }) {
+  const path = usePath(system)
+  const { code, build } = system
+  const restart = useRestart(system)
+  return (
+    <Section
+      id="code"
+      meta={
+        <>
+          {code.branch || 'detached'}
+          {code.dirty && <span className="text-warning">*</span>}
+        </>
+      }
+      title="Code"
+    >
+      <Rows>
+        <Row label="repo">
+          <Copy value={code.repoRoot}>{path(code.repoRoot)}</Copy>
+        </Row>
+        <Row label="branch">
+          <Copy value={code.branch}>{code.branch || '—'}</Copy>
+        </Row>
+        <Row label="sha">
+          <Copy value={code.sha} />
+          {code.dirty ? (
+            <span className="text-warning">uncommitted changes</span>
+          ) : (
+            <span className="text-muted-foreground/60">clean</span>
+          )}
+        </Row>
+        <Row label="build">
+          <Copy value={build.id}>{build.id.slice(0, 7)}</Copy>
+          <span className="truncate text-muted-foreground/60">
+            {build.changed.length
+              ? `changed ${build.changed.join(', ')}`
+              : `gen ${build.generation}`}
+          </span>
+        </Row>
+        <Row label="core">
+          {code.coreStale ? (
+            <>
+              <span className="text-warning">changed · restart pending</span>
+              <Button
+                className="ml-auto h-5 gap-1 px-1.5 font-mono text-[10.5px] text-warning hover:text-warning"
+                disabled={restart.busy}
+                onClick={restart.run}
+                size="sm"
+                variant="ghost"
+              >
+                <RotateCwIcon className={cn('size-3', restart.busy && 'animate-spin')} />
+                restart
+              </Button>
+            </>
+          ) : (
+            <span className="text-muted-foreground/60">{build.core.slice(0, 12)} · current</span>
+          )}
+        </Row>
+      </Rows>
+      {restart.error && <ErrorText>{restart.error}</ErrorText>}
+    </Section>
+  )
+}
+
+const cost = (value: number) =>
+  `$${value < 1 ? value.toFixed(value < 0.01 ? 4 : 3) : value.toFixed(2)}`
+
+function Model() {
+  const { agent, usage } = useConversation()
+  const models = useModels()
+  const ref = agent.model
+  const model = models?.models.find(
+    (candidate) => candidate.provider === ref?.provider && candidate.id === ref.modelId,
+  )
+  const provider = models?.providers.find((candidate) => candidate.id === ref?.provider)
+  const buckets: [string, Usage][] = [
+    ...Object.entries(usage.models),
+    ...Object.entries(usage.tools).map(([name, bucket]): [string, Usage] => [
+      `tool ${name}`,
+      bucket,
+    ]),
+  ]
+  const total = buckets.reduce(
+    (sum, [, bucket]) => ({
+      input: sum.input + bucket.input,
+      output: sum.output + bucket.output,
+      cacheRead: sum.cacheRead + bucket.cacheRead,
+      cacheWrite: sum.cacheWrite + bucket.cacheWrite,
+      cost: sum.cost + bucket.cost.total,
+    }),
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+  )
+  return (
+    <Section id="model" meta={ref?.modelId ?? 'none'} title="Model & usage">
+      <Rows>
+        <Row label="provider">
+          {ref?.provider ?? <span className="text-warning">none</span>}
+          {provider?.isUsingSubscription && (
+            <span className="text-muted-foreground/70">· subscription</span>
+          )}
+        </Row>
+        <Row label="model">
+          <span className="truncate">{ref?.modelId ?? '—'}</span>
+          {model && model.name !== model.id && (
+            <span className="truncate text-muted-foreground/60">{model.name}</span>
+          )}
+        </Row>
+        <Row label="thinking">
+          {model && !model.reasoning ? (
+            <span className="text-muted-foreground/70">not supported</span>
+          ) : (
+            <span
+              className={
+                agent.thinkingLevel && agent.thinkingLevel !== 'off' ? 'text-brand' : undefined
+              }
+            >
+              {agent.thinkingLevel ?? 'off'}
+            </span>
+          )}
+        </Row>
+        {model && (
+          <>
+            <Row label="context">
+              {formatTokens(model.contextWindow)}
+              <span className="text-muted-foreground/60">
+                · out {formatTokens(model.maxTokens)}
+              </span>
+            </Row>
+            <Row label="price /M">
+              <span className="truncate">
+                ↑${model.cost.input} ↓${model.cost.output}
+                {model.cost.cacheRead > 0 && ` R$${model.cost.cacheRead}`}
+              </span>
+            </Row>
+          </>
+        )}
+        <Row label="tokens">
+          <span className="truncate">
+            ↑{formatTokens(total.input)} ↓{formatTokens(total.output)} R
+            {formatTokens(total.cacheRead)} W{formatTokens(total.cacheWrite)}
+          </span>
+        </Row>
+        <Row label="cost">
+          {cost(total.cost)}
+          {provider?.isUsingSubscription && <span className="text-muted-foreground/70">(sub)</span>}
+        </Row>
+      </Rows>
+      {buckets.length > 0 && (
+        <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-3 border-t border-border/50 pt-2 font-mono text-[11px] text-muted-foreground">
+          {buckets.map(([name, bucket]) => (
+            <Bucket bucket={bucket} key={name} name={name} />
+          ))}
+        </div>
+      )}
+    </Section>
+  )
+}
+
+function Bucket({ name, bucket }: { name: string; bucket: Usage }) {
+  return (
+    <>
+      <span className="truncate text-foreground/75" title={name}>
+        {name}
+      </span>
+      <span className="text-right tabular-nums">
+        ↑{formatTokens(bucket.input + bucket.cacheRead + bucket.cacheWrite)} ↓
+        {formatTokens(bucket.output)}
+      </span>
+      <span className="text-right tabular-nums">{cost(bucket.cost.total)}</span>
+    </>
+  )
+}
+
+function List({ label, items }: { label: string; items: readonly string[] }) {
+  if (items.length === 0) return null
+  return (
+    <div className="flex min-w-0 gap-2">
+      <span className="w-14 shrink-0 text-muted-foreground/60">{label}</span>
+      <span className="min-w-0 break-words text-foreground/80">{items.join(' ')}</span>
+    </div>
+  )
+}
+
+function Extensions({ system }: { system: SystemInfo }) {
+  const web = useExtensions()
+  const failed = system.extensions.filter(
+    (extension) =>
+      extension.server?.error ||
+      web.some((record) => record.name === extension.name && record.error),
+  ).length
+  return (
+    <Section
+      id="extensions"
+      meta={
+        <>
+          {system.extensions.length}
+          {failed > 0 && <span className="text-error"> · {failed} failing</span>}
+        </>
+      }
+      title="Extensions"
+    >
+      <div className="flex flex-col gap-1.5">
+        {system.extensions
+          .toSorted((a, b) => a.name.localeCompare(b.name))
+          .map((extension) => {
+            const record = web.find((candidate) => candidate.name === extension.name)
+            const server = extension.server
+            const error = server?.error || record?.error
+            return (
+              <div
+                className={cn(
+                  'rounded-md border px-2 py-1.5 font-mono text-[11px]',
+                  error ? 'border-error/40' : 'border-border/60',
+                )}
+                key={extension.name}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className={cn('font-medium', error ? 'text-error' : 'text-foreground')}>
+                    {extension.name}
+                  </span>
+                  {extension.facets.server && (
+                    <Tag className={server?.error ? 'border-error/40 text-error' : undefined}>
+                      server
+                    </Tag>
+                  )}
+                  {extension.facets.web && (
+                    <Tag className={record?.error ? 'border-error/40 text-error' : undefined}>
+                      web
+                    </Tag>
+                  )}
+                  {server?.loadedAt && (
+                    <span
+                      className="ml-auto text-[10.5px] text-muted-foreground/60"
+                      title={`server facet loaded ${server.loadedAt}`}
+                    >
+                      {new Date(server.loadedAt).toLocaleTimeString()}
+                    </span>
+                  )}
+                </div>
+                {extension.readme && !extension.readme.startsWith('#') && (
+                  <p className="mt-1 line-clamp-2 font-sans text-[11.5px] leading-snug text-muted-foreground">
+                    {extension.readme.replaceAll('`', '')}
+                  </p>
+                )}
+                {server && (
+                  <div className="mt-1 flex flex-col gap-px">
+                    <List items={server.tools} label="tools" />
+                    <List items={server.sections} label="prompt" />
+                    <List items={server.docs} label="docs" />
+                    {server.hooks > 0 && <List items={[String(server.hooks)]} label="hooks" />}
+                  </div>
+                )}
+                {server?.error && <ErrorText>server.ts: {server.error}</ErrorText>}
+                {record?.error && (
+                  <ErrorText>
+                    web.tsx: {record.error}
+                    {record.extension ? '\nprevious version still running' : ''}
+                  </ErrorText>
+                )}
+              </div>
+            )
+          })}
+      </div>
+    </Section>
+  )
+}
+
+function Described({
+  name,
+  description,
+  path,
+  error,
+  extra,
+}: {
+  name: string
+  description: string
+  path: string
+  error?: string
+  extra?: ReactNode
+}) {
+  return (
+    <div className="min-w-0 font-mono text-[11px]">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <Copy className={error ? 'text-error' : 'text-foreground/90'} value={path}>
+          {name}
+        </Copy>
+        {extra}
+      </div>
+      {description && (
+        <p className="line-clamp-2 font-sans text-[11.5px] leading-snug text-muted-foreground">
+          {description}
+        </p>
+      )}
+      {error && <ErrorText>{error}</ErrorText>}
+    </div>
+  )
+}
+
+function Skills({ system }: { system: SystemInfo }) {
+  return (
+    <Section id="skills" meta={system.skills.length} title="Skills">
+      <div className="flex flex-col gap-1.5">
+        {system.skills.map((skill) => (
+          <Described
+            description={skill.description}
+            key={skill.path}
+            name={skill.name}
+            path={skill.path}
+          />
+        ))}
+        {system.skills.length === 0 && <Empty>no skills</Empty>}
+      </div>
+    </Section>
+  )
+}
+
+function ContextFiles({ system }: { system: SystemInfo }) {
+  const path = usePath(system)
+  return (
+    <Section id="context" meta={system.contextFiles.length} title="Context files">
+      <div className="flex flex-col gap-0.5 font-mono text-[11.5px] text-foreground/85">
+        {system.contextFiles.map((file) => (
+          <Copy key={file} value={file}>
+            {path(file, 52)}
+          </Copy>
+        ))}
+        {system.contextFiles.length === 0 && <Empty>no AGENTS.md or CLAUDE.md</Empty>}
+      </div>
+    </Section>
+  )
+}
+
+function Agents({ system }: { system: SystemInfo }) {
+  const errors = system.agents.filter((agent) => agent.error).length
+  return (
+    <Section
+      id="agents"
+      meta={
+        <>
+          {system.agents.length - errors}
+          {errors > 0 && <span className="text-error"> · {errors} invalid</span>}
+        </>
+      }
+      title="Subagent definitions"
+    >
+      <div className="flex flex-col gap-1.5">
+        {system.agents.map((agent) => (
+          <Described
+            description={agent.description}
+            error={agent.error}
+            key={agent.path}
+            name={agent.name}
+            path={agent.path}
+          />
+        ))}
+        {system.agents.length === 0 && <Empty>no definitions</Empty>}
+      </div>
+    </Section>
+  )
+}
+
+function Empty({ children }: { children: ReactNode }) {
+  return <div className="font-mono text-[11px] text-muted-foreground/60">{children}</div>
+}
+
+function InfoPanel() {
+  const system = useSystem()
+  if (!system)
+    return <div className="p-3 font-mono text-[11.5px] text-muted-foreground">connecting…</div>
+  return (
+    <div className="pb-4">
+      <Machine system={system} />
+      <Process system={system} />
+      <Persistence system={system} />
+      <Execution system={system} />
+      <Code system={system} />
+      <Model />
+      <Extensions system={system} />
+      <Skills system={system} />
+      <ContextFiles system={system} />
+      <Agents system={system} />
+    </div>
+  )
+}
+
+export default defineWebExtension({
+  panels: [{ id: 'info', title: 'Info', icon: InfoIcon, component: InfoPanel, order: -10 }],
+  commands: [
+    {
+      id: 'info.open',
+      title: 'Show system info',
+      keys: 'mod+k i',
+      run: (context) => context.openPanel('info'),
+    },
+  ],
+})

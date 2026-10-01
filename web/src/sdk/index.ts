@@ -19,6 +19,8 @@ export type {
 export { api } from './client.ts'
 export type { Api } from './api.ts'
 export {
+  getConversation,
+  getState,
   useAuthFlows,
   useCommands,
   useConnection,

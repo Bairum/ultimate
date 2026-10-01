@@ -1,0 +1,308 @@
+import { ChevronRightIcon, RotateCwIcon, TriangleAlertIcon } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
+import { Shimmer } from '@/components/ai/shimmer'
+import { Tool, ToolContent, ToolHeader, ToolOutput, ToolSection } from '@/components/ai/tool'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { api, cn, defineWebExtension, useConversation, useSystem, useToolDuration } from '@/sdk'
+import type { EntryRecord, SystemInfo, ToolCallView } from '@/sdk'
+
+const short = (id: string | undefined) => id?.slice(0, 7)
+
+/** The `restart` tool: the swap's new generation and build, or the boot error that kept the old core serving. */
+function RestartCall({ call }: { call: ToolCallView }) {
+  const duration = useToolDuration(call)
+  const done = /generation (\d+) \(pid (\d+)\), build (\S+) → (\S+?)\.?$/.exec(call.output)
+  const failed = call.status === 'error'
+  const title: ReactNode =
+    call.status === 'done' && done ? (
+      <>
+        <span className="text-success">swapped</span> → gen {done[1]} · pid {done[2]} · build{' '}
+        {short(done[3])} → <span className="text-foreground/85">{short(done[4])}</span>
+      </>
+    ) : failed ? (
+      <span className="text-error">boot failed · the old core kept serving</span>
+    ) : call.status === 'running' || call.status === 'pending' ? (
+      'type-checking and booting a new core…'
+    ) : call.status === 'interrupted' ? (
+      'interrupted'
+    ) : (
+      'core swap'
+    )
+  return (
+    <Tool defaultOpen={failed}>
+      <ToolHeader meta={duration} name="restart" state={call.status} title={title} />
+      <ToolContent>
+        {call.status === 'running' && (
+          <ToolSection>
+            <Shimmer className="text-[12px]">
+              blue/green swap: type-check, boot, hand over storage, resume this run…
+            </Shimmer>
+          </ToolSection>
+        )}
+        {failed ? (
+          <ToolOutput isError output={call.output} />
+        ) : (
+          call.output && <ToolSection className="text-muted-foreground">{call.output}</ToolSection>
+        )}
+      </ToolContent>
+    </Tool>
+  )
+}
+
+/** `api.restart()` with its outcome: the accepted generation until it serves, or the error. */
+function useRestart(system: SystemInfo | undefined) {
+  const [state, setState] = useState<{ pending?: number; error?: string; busy?: boolean }>({})
+  const serving = system?.process.generation ?? 0
+  const pending = state.pending !== undefined && serving < state.pending ? state.pending : undefined
+  return {
+    pending,
+    busy: !!state.busy || pending !== undefined,
+    error: state.error,
+    clear: () => setState({}),
+    run: () => {
+      setState({ busy: true })
+      api.restart().then(
+        (result) => setState({ pending: (result as { generation?: number }).generation }),
+        (error: unknown) =>
+          setState({ error: error instanceof Error ? error.message : String(error) }),
+      )
+    },
+  }
+}
+
+/** Header badge while `server/` or `shared/` changed since this core booted. */
+function CoreStale() {
+  const system = useSystem()
+  const restart = useRestart(system)
+  if (restart.error)
+    return (
+      <Popover onOpenChange={(open) => !open && restart.clear()}>
+        <PopoverTrigger asChild>
+          <button
+            className="flex h-6 items-center gap-1.5 rounded-md border border-error/40 bg-error/10 px-2 font-mono text-[11px] text-error"
+            type="button"
+          >
+            <TriangleAlertIcon className="size-3" />
+            restart failed
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-[32rem] p-0 font-mono">
+          <div className="border-b border-border/70 px-3 py-2 text-[11.5px] text-muted-foreground">
+            The new core did not boot; generation {system?.process.generation} keeps serving.
+          </div>
+          <pre className="max-h-80 overflow-auto px-3 py-2 text-[11.5px] leading-[1.55] whitespace-pre-wrap text-error">
+            {restart.error}
+          </pre>
+        </PopoverContent>
+      </Popover>
+    )
+  if (!system?.code.coreStale && !restart.busy) return null
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          className={cn(
+            'flex h-6 items-center gap-1.5 rounded-md border px-2 font-mono text-[11px] transition-colors',
+            restart.busy
+              ? 'border-brand/40 bg-brand/10 text-brand'
+              : 'border-warning/40 bg-warning/10 text-warning hover:bg-warning/20',
+          )}
+          disabled={restart.busy}
+          onClick={restart.run}
+          type="button"
+        >
+          <RotateCwIcon className={cn('size-3', restart.busy && 'animate-spin')} />
+          {restart.pending !== undefined
+            ? `swapping to gen ${restart.pending}…`
+            : restart.busy
+              ? 'checking…'
+              : 'core changed — restart'}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-80 font-mono text-[11px]" side="bottom">
+        server/ or shared/ changed since generation {system?.process.generation} booted. Restart
+        type-checks and boots a new core next to this one; if it fails, this one keeps serving.
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+/** `build a1b2c3d` in the status line; it lights up when the build changes. */
+function Build() {
+  const system = useSystem()
+  const id = system?.build.id
+  const [fresh, setFresh] = useState(false)
+  const last = useRef(id)
+  useEffect(() => {
+    if (!id || last.current === id) return undefined
+    const first = last.current === undefined
+    last.current = id
+    if (first) return undefined
+    setFresh(true)
+    const timer = setTimeout(() => setFresh(false), 4000)
+    return () => clearTimeout(timer)
+  }, [id])
+  if (!system) return null
+  const { build } = system
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn(
+            'transition-colors duration-700',
+            fresh ? 'text-brand' : 'text-muted-foreground/80',
+          )}
+        >
+          build {short(build.id)}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-[28rem] font-mono text-[11px]" side="top">
+        <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3">
+          <span className="opacity-60">build</span>
+          <span>
+            {build.id} · gen {build.generation}
+          </span>
+          <span className="opacity-60">core</span>
+          <span>{build.core.slice(0, 12)}</span>
+          {build.agents && (
+            <>
+              <span className="opacity-60">agents</span>
+              <span>{build.agents.slice(0, 12)}</span>
+            </>
+          )}
+          {Object.entries(build.extensions).map(([name, hash]) => (
+            <span className="contents" key={name}>
+              <span className="opacity-60">{name}</span>
+              <span>{hash.slice(0, 12)}</span>
+            </span>
+          ))}
+        </div>
+        {build.history.length > 1 && (
+          <div className="mt-2 border-t border-current/20 pt-1.5">
+            {build.history
+              .toReversed()
+              .slice(0, 8)
+              .map((entry) => (
+                <div className="flex gap-2" key={`${entry.id}-${entry.at}`}>
+                  <span className="opacity-60">{new Date(entry.at).toLocaleTimeString()}</span>
+                  <span>{short(entry.id)}</span>
+                  <span className="truncate opacity-80">
+                    {entry.changed.length ? entry.changed.join(', ') : `gen ${entry.generation}`}
+                  </span>
+                </div>
+              ))}
+          </div>
+        )}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+interface BuildLine {
+  id: string
+  generation?: number
+  changed: string[]
+}
+/** The prompt's build section: `Ultimate build <id> · generation <n> …` and `Changed in this build: …`. */
+function parseBuild(section: string | null | undefined): BuildLine | undefined {
+  if (typeof section !== 'string') return undefined
+  const id = /Ultimate build (\w+)/.exec(section)?.[1]
+  if (!id) return undefined
+  const generation = /generation (\d+)/.exec(section)?.[1]
+  const changed = /Changed in this build: (.+)/.exec(section)?.[1]
+  return {
+    id,
+    generation: generation === undefined ? undefined : Number(generation),
+    changed: changed ? changed.split(',').map((item) => item.trim()) : [],
+  }
+}
+const systemOf = (entry: EntryRecord | undefined) => {
+  const message = entry?.model?.[0]
+  return entry?.kind === 'pi.system' && message?.role === 'system' ? message : undefined
+}
+
+/**
+ * A `pi.system` entry that changes the build section is a hot reload: show it as one marker with what changed. A
+ * remove-all entry that Pi Durable writes right before a reordered re-add belongs to that marker and shows nothing.
+ */
+function SystemEntry({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
+  const { entries } = useConversation()
+  const system = useSystem()
+  const message = systemOf(entry)
+  if (!message?.sections) return core
+  const index = entries.findIndex((candidate) => candidate.id === entry.id)
+  const values = Object.values(message.sections)
+  if (values.length > 0 && values.every((value) => value === null) && systemOf(entries[index + 1]))
+    return null
+  const current = parseBuild(message.sections.build)
+  let previous: BuildLine | undefined
+  for (let at = index - 1; at >= 0 && !previous; at--)
+    previous = parseBuild(systemOf(entries[at])?.sections?.build)
+  if (!current || !previous || previous.id === current.id) return core
+  // Builds the conversation did not see in between still count: union their changes from the history.
+  const history = system?.build.history ?? []
+  const from = history.findIndex((item) => item.id === previous.id)
+  const to = history.findIndex((item) => item.id === current.id)
+  // When the previous build fell out of the history (20 builds), everything kept since is a lower bound: mark it "…".
+  const since = to >= 0 && from < to ? history.slice(from + 1, to + 1) : undefined
+  const changed = since
+    ? [...new Set(since.flatMap((item) => item.changed))].toSorted()
+    : current.changed
+  const partial = since !== undefined && from < 0
+  const sections = Object.entries(message.sections).filter(([, value]) => value !== null)
+  const added = message.toolsAdded?.map((tool) => tool.name) ?? []
+  const removed = message.toolsRemoved?.map((tool) => tool.name) ?? []
+  return (
+    <Collapsible className="group/reload">
+      <CollapsibleTrigger className="w-full">
+        <div className="flex items-center gap-3 font-mono text-[11px] text-muted-foreground/80 before:h-px before:flex-1 before:bg-brand/25 after:h-px after:flex-1 after:bg-brand/25 hover:text-muted-foreground">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <ChevronRightIcon className="size-3 shrink-0 transition-transform group-data-[state=open]/reload:rotate-90" />
+            <RotateCwIcon className="size-3 shrink-0 text-brand" />
+            <span className="text-brand">Reloaded</span>
+            <span className="truncate">
+              · build {short(previous.id)} →{' '}
+              <span className="text-foreground/80">{short(current.id)}</span>
+              {previous.generation !== undefined &&
+                current.generation !== undefined &&
+                previous.generation !== current.generation &&
+                ` · gen ${previous.generation} → ${current.generation}`}
+              {changed.length > 0 && ` · changed: ${changed.join(', ')}${partial ? ', …' : ''}`}
+            </span>
+          </span>
+        </div>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-2 rounded-md border border-border/70 bg-card/40 px-3 py-2 font-mono text-[11.5px] text-muted-foreground">
+        <div className="mb-1 text-foreground/80">The agent's prompt and tools changed here:</div>
+        {sections.map(([key, value]) => (
+          <div className="flex gap-3" key={key}>
+            <span className="w-32 shrink-0 text-foreground/80">{key}</span>
+            <span className="truncate">{(value ?? '').length.toLocaleString()} chars</span>
+          </div>
+        ))}
+        {(added.length > 0 || removed.length > 0) && (
+          <div className="flex gap-3">
+            <span className="w-32 shrink-0 text-foreground/80">tools</span>
+            <span className="min-w-0 break-words">
+              {added.length > 0 && `re-declared ${added.join(' ')}`}
+              {removed.filter((name) => !added.includes(name)).length > 0 &&
+                ` · removed ${removed.filter((name) => !added.includes(name)).join(' ')}`}
+            </span>
+          </div>
+        )}
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
+export default defineWebExtension({
+  tools: { restart: RestartCall },
+  entries: { 'pi.system': SystemEntry },
+  slots: {
+    'header.right': CoreStale,
+    'statusline.right': { component: Build, order: 1 },
+  },
+})

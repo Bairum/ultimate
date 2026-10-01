@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import type { ComponentProps, ReactNode } from 'react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Dialog, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { CodeBlock } from './code-block.tsx'
 
 export type ToolState = 'streaming' | 'pending' | 'running' | 'done' | 'error' | 'interrupted'
@@ -142,5 +143,55 @@ export const ToolDiagnostics = ({
           {diagnostic.message}
         </div>
       ))}
+    </ToolSection>
+  ) : null
+
+/** An image of a tool result as a thumbnail; a click opens it full size. */
+export const ToolImage = ({
+  image,
+  className,
+  alt = 'Tool result image',
+}: {
+  image: { data: string; mimeType: string }
+  className?: string
+  alt?: string
+}) => {
+  const src = `data:${image.mimeType};base64,${image.data}`
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <button
+          className={cn(
+            'block cursor-zoom-in overflow-hidden rounded-sm border border-border/80 bg-terminal transition-colors hover:border-brand/60',
+            className,
+          )}
+          type="button"
+        >
+          <img alt={alt} className="max-h-48 max-w-full object-contain" src={src} />
+        </button>
+      </DialogTrigger>
+      <DialogContent
+        className="w-auto max-w-[94vw] border-border/80 bg-terminal p-2 sm:max-w-[94vw]"
+        showCloseButton={false}
+      >
+        <DialogTitle className="sr-only">{alt}</DialogTitle>
+        <img alt={alt} className="max-h-[88vh] max-w-[90vw] object-contain" src={src} />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** The images of a tool result, such as screenshots. */
+export const ToolImages = ({
+  images,
+  ...props
+}: ComponentProps<'div'> & { images: readonly { data: string; mimeType: string }[] }) =>
+  images.length ? (
+    <ToolSection label={images.length > 1 ? `${images.length} images` : 'Image'} {...props}>
+      <div className="flex flex-wrap gap-2">
+        {images.map((image, index) => (
+          <ToolImage image={image} key={index} />
+        ))}
+      </div>
     </ToolSection>
   ) : null

@@ -6,24 +6,41 @@ import {
   elidePath,
   formatTokens,
   homeOf,
+  useCommands,
   useConnection,
   useConversation,
   useModels,
   useSystem,
+  useUltimate,
 } from '@/sdk'
 import type { EntryRecord, Usage } from '@/sdk'
 
-/** A status-line item with a tooltip of details. */
+/** A status-line item with a tooltip of details; a button when it has `onClick`. */
 function Item({
   children,
   tip,
   className,
+  onClick,
 }: {
   children: ReactNode
   tip?: ReactNode
   className?: string
+  onClick?: () => void
 }) {
-  const content = <span className={cn('flex items-center gap-1.5', className)}>{children}</span>
+  const content = onClick ? (
+    <button
+      className={cn(
+        '-mx-1 flex items-center gap-1.5 rounded-sm px-1 transition-colors hover:bg-accent hover:text-foreground',
+        className,
+      )}
+      onClick={onClick}
+      type="button"
+    >
+      {children}
+    </button>
+  ) : (
+    <span className={cn('flex items-center gap-1.5', className)}>{children}</span>
+  )
   if (!tip) return content
   return (
     <Tooltip>
@@ -195,11 +212,32 @@ function Context() {
   )
 }
 
+/** Opens the model picker when an extension provides `model.pick`. */
+function usePicker() {
+  const { runCommand } = useUltimate()
+  const available = useCommands().some((command) => command.id === 'model.pick')
+  return available ? () => runCommand('model.pick') : undefined
+}
+
 function Model() {
   const { ref, model, thinking } = useModel()
-  if (!ref) return <Item className="text-warning">no model</Item>
+  const pick = usePicker()
+  if (!ref)
+    return (
+      <Item className="text-warning" onClick={pick}>
+        no model
+      </Item>
+    )
   return (
-    <Item tip={model ? `${model.name} · ${model.provider}` : `${ref.provider}/${ref.modelId}`}>
+    <Item
+      onClick={pick}
+      tip={
+        <>
+          {model ? `${model.name} · ${model.provider}` : `${ref.provider}/${ref.modelId}`}
+          {pick && <div className="text-muted-foreground">click to change</div>}
+        </>
+      }
+    >
       <span className="text-foreground/85">{ref.modelId}</span>
       {model?.reasoning && (
         <>

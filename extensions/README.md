@@ -2,15 +2,25 @@
 
 Almost everything in Ultimate is an extension: tools, prompt sections, tool renderers, the status line, panels, whole
 app views. The web core only provides the frame (layout with slots, the live data layer, transcript, composer, command
-palette). New UI is a new extension folder. Copy the closest existing extension and change it.
+palette). New UI is a new extension folder. Copy the closest existing extension and change it:
+
+| Want                                              | Copy                                              |
+| ------------------------------------------------- | ------------------------------------------------- |
+| A status-line item                                | `status-line`                                     |
+| Tool renderers (diffs, terminals, images)         | `coding-tools`, `browser`, `instance`             |
+| A right-panel tab                                 | `info` (key/value sections), `tasks`, `subagents` |
+| Toolbar buttons, dialogs, commands, a popover     | `models`                                          |
+| A header badge, an entry renderer that wraps core | `self`                                            |
+| An extension document in the UI (`useDoc`)        | `codemode`                                        |
+| Toasts or other global overlays                   | `notices`                                         |
 
 An extension is a folder `extensions/<name>/`:
 
-| File        | Facet                                                                    | Goes live                                                  |
-| ----------- | ------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| `server.ts` | Agent: a Pi Durable extension (tools, prompt sections, hooks, documents) | Reinstalled on save; running tool calls finish on old code |
-| `web.tsx`   | UI: `export default defineWebExtension({ … })`                           | Vite hot reload, no page reload                            |
-| `README.md` | What it does; the first paragraph is shown in the UI. Required.          | Read on change                                             |
+| File        | Facet                                                                                                   | Goes live                                                  |
+| ----------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `server.ts` | Agent: a Pi Durable extension (tools, prompt sections, hooks, documents)                                | Reinstalled on save; running tool calls finish on old code |
+| `web.tsx`   | UI: `export default defineWebExtension({ … })`                                                          | Vite hot reload, no page reload                            |
+| `README.md` | What it does; the first paragraph is shown in the UI, so open with a sentence, not a heading. Required. | Read on change                                             |
 
 Files ending in `.ts` belong to the server facet, files ending in `.tsx` to the web facet: split a large `web.tsx` into
 more `.tsx` files in the same folder (see `coding-tools/diff.tsx`). The folder name is the extension name; a
@@ -106,9 +116,12 @@ tools: {
 ```
 
 `ToolCallView`: `id`, `name`, `args` (partial while the model streams them), `status` (`streaming`, `pending`,
-`running`, `done`, `error`, `interrupted`), `output` (streamed while running, the result's text when done), `details`
-(the tool's `details()`; cast to its shape), `diagnostics`, `dropped`, `startedAt`/`endedAt`, and `result`.
-`useToolDuration(call)` gives a ticking duration.
+`running`, `done`, `error`, `interrupted`), `output` (streamed while running, the result's text when done), `images`
+(the result's images, such as screenshots), `details` (the tool's `details()`; cast to its shape), `diagnostics`,
+`dropped`, `startedAt`/`endedAt`, and `result`. `useToolDuration(call)` gives a ticking duration. `ToolImages` (or one
+`ToolImage`) from `@/components/ai/tool` shows images as thumbnails that open full size; the generic card already does.
+To put a button beside the header (such as "open"), wrap `ToolHeader` in a flex row inside `Tool`: a button inside the
+header would toggle it.
 
 ### Entry renderers
 
@@ -118,6 +131,10 @@ How an entry kind looks in the transcript. Extensions that append their own entr
 ```tsx
 entries: { 'notes.pinned': ({ entry }) => <div className="text-muted-foreground">📌 {String(entry.data)}</div> }
 ```
+
+A renderer also gets `core`, the core's rendering of the same entry: return it for the entries you leave alone, wrap
+it, or return `null` to hide the entry. `self` renders `pi.system` entries that change the build section as a reload
+marker and returns `core` for the rest.
 
 ### Commands
 
@@ -131,7 +148,13 @@ commands: [
 ```
 
 `run(context)` gets the shell actions (below) and the shown `conversationId`; return a promise to have a failure
-reported. `when(context)` hides the command when it returns false.
+reported as a notice. `when(context)` hides the command when it returns false. Commands run outside React: read the
+current state with `getConversation()` and `getState()`, not hooks.
+
+Plain keys and Shift+letter never fire while the user types; chords with `mod`, `alt`, or `ctrl` do, and so do Escape
+and Shift+Tab (Pi's thinking toggle) outside dialogs. To let a command open UI an extension renders, such as a
+popover, use a dialog id: the command calls `context.open(id)` and the component reads `useDialog(id)` as its open
+state (see `models`).
 
 ## SDK (`@/sdk`)
 
@@ -152,6 +175,7 @@ open an `EventSource` yourself: the SDK keeps one live stream per shown conversa
 | `useUltimate()`                                                  | `conversationId` and actions: `switchConversation`, `openView`, `openPanel`, `togglePanel`, `toggleSidebar`, `runCommand`, `open(dialog)`, `close(dialog)`, `openPalette`, `focusComposer` |
 | `useDialog(id)`                                                  | `[open, setOpen]` for a dialog an `overlay` component renders; `useUltimate().open(id)` opens it anywhere                                                                                  |
 | `useConnection()`                                                | Stream status: `connecting`, `open`, `reconnecting`                                                                                                                                        |
+| `getConversation()`, `getState()`                                | The same data now, outside React: in commands and callbacks. Components use the hooks.                                                                                                     |
 | `useNotices()`, `useCommands()`, `useExtensions()`, `useNow(ms)` | Server notices, all commands, installed web facets, a ticking clock                                                                                                                        |
 
 `api` sends commands: `submit(text, whenBusy?)`, `abort()`, `configure({ model, thinkingLevel })`, `compact()`,
@@ -167,8 +191,9 @@ Keep UI state that should survive a reload in `useExtensionUiState`; keep throwa
 
 ## Styling
 
-- Use the components first: `@/components/ui/*` (shadcn: button, badge, collapsible, command, dialog, kbd, separator,
-  tabs, tooltip) and `@/components/ai/*` (code block, conversation, message, reasoning, shimmer, tool, prompt input).
+- Use the components first: `@/components/ui/*` (shadcn: button, badge, collapsible, command, dialog, kbd, popover,
+  separator, tabs, tooltip) and `@/components/ai/*` (code block, conversation, message, reasoning, shimmer, tool,
+  prompt input).
   Need another shadcn component? `pnpm dlx shadcn@latest add <component>` writes it to `web/src/components/ui`.
 - Style with Tailwind utilities and the theme tokens: `bg-background`, `bg-card`, `bg-muted`, `bg-terminal`,
   `text-foreground`, `text-muted-foreground`, `border-border`, `text-brand` (the one accent), `text-success`,

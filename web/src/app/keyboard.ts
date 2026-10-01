@@ -13,7 +13,8 @@ function editable(target: EventTarget | null) {
 /**
  * Runs command shortcuts, including sequences such as `mod+k m`: a sequence's first chord runs its own command (the
  * palette) and, for a second, waits for the next key. Plain keys never fire while typing, except as the second key of a
- * sequence typed into the still-empty palette.
+ * sequence typed into the still-empty palette. Escape and Shift+Tab (Pi's thinking toggle) fire while typing, but not
+ * in a dialog, where they close it and move focus.
  */
 export function useShortcuts() {
   useEffect(() => {
@@ -38,7 +39,7 @@ export function useShortcuts() {
       const dialogOpen = !!document.querySelector('[role="dialog"]')
       const allowed = (keys: string[]) => {
         if (pending.length > 0) return !typing || emptyPalette
-        if (chord === 'escape') return !dialogOpen
+        if (chord === 'escape' || chord === 'shift+tab') return !dialogOpen
         return !typing || /\b(mod|alt|ctrl)\+/.test(keys[0] ?? '')
       }
       const exact = candidates.find(
