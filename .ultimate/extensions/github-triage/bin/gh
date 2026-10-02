@@ -1,9 +1,15 @@
 #!/usr/bin/env node
-import { accessSync, constants, realpathSync } from 'node:fs'
+// ultimate-gh-shim: other shims skip any gh that carries this marker, so two copies on PATH never call each other.
+import { accessSync, constants, readFileSync, realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const args = process.argv.slice(2)
+// A shim started by a shim means a loop on PATH; refuse instead of forking until memory runs out.
+if (process.env.ULTIMATE_GH_SHIM) {
+  console.error('gh shim loop: refusing to run gh from inside another gh shim')
+  process.exit(1)
+}
 const blocked = () => {
   console.error("Blocked: Ultimate's agent does not write to GitHub. Propose with triage_propose; the user applies it in the Triage surface.")
   process.exit(1)
@@ -42,16 +48,19 @@ for (const directory of (process.env.PATH ?? '').split(':')) {
   const candidate = join(directory || '.', 'gh')
   try {
     accessSync(candidate, constants.X_OK)
-    if (realpathSync(candidate) !== shim) {
-      real = candidate
-      break
-    }
+    if (realpathSync(candidate) === shim) continue
+    if (readFileSync(candidate).subarray(0, 256).includes('ultimate-gh-shim')) continue
+    real = candidate
+    break
   } catch {}
 }
 if (!real) {
   console.error('gh is not installed on the original PATH')
   process.exit(1)
 }
-const result = spawnSync(real, args, { stdio: 'inherit' })
+const result = spawnSync(real, args, {
+  stdio: 'inherit',
+  env: { ...process.env, ULTIMATE_GH_SHIM: '1' },
+})
 if (result.error) console.error(result.error.message)
 process.exit(result.status ?? 1)
