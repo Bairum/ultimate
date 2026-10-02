@@ -34,4 +34,4 @@ With `ULTIMATE_FAUX=1`, submit `codemode demo` to see nested read/bash progress 
 
 ## UI
 
-`web.tsx` renders each `codemode` call: the script with highlighting (collapsed when long), the nested-call log (✓/✗, tool, arguments, duration; streamed while running, from `details.calls` when done), the text output, images, and the returned value as a JSON tree (`@/components/json-tree`). The right panel's Store tab shows the shown conversation's `codemode.store` through `useDoc`.
+`web.tsx` renders each `codemode` call: the script with highlighting (collapsed when long), the nested-call log (✓/✗, tool, arguments, duration; streamed while running, from `details.calls` when done), the text output, images, and the returned value as a JSON tree (`@/components/json-tree`). The Documents tab shows the shown conversation's `codemode.store` under Store, through the renderer `web.tsx` registers for it.

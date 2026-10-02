@@ -3,8 +3,8 @@ import { CodeBlock } from '@/components/ai/code-block'
 import { Tool, ToolContent, ToolHeader, ToolImages, ToolSection } from '@/components/ai/tool'
 import { JsonTree } from '@/components/json-tree'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { cn, defineWebExtension, useDoc, useToolDuration } from '@/sdk'
-import type { ToolCallView } from '@/sdk'
+import { cn, defineWebExtension, useToolDuration } from '@/sdk'
+import type { DocumentProps, ToolCallView } from '@/sdk'
 
 interface NestedCall {
   name: string
@@ -192,34 +192,21 @@ function CodemodeCall({ call }: { call: ToolCallView }) {
   )
 }
 
-/** The shown conversation's `codemode.store`: what scripts saved with `store(key, value)`. */
-function StorePanel() {
-  const store = useDoc('codemode.store')
-  const keys = Object.keys(store ?? {})
+/** The Documents tab's view of `codemode.store`: what scripts saved with `store(key, value)`. */
+function StoreDocument({ value }: DocumentProps) {
+  if (Object.keys(value).length > 0) return <JsonTree className="px-2" open={1} value={value} />
   return (
-    <div className="py-2">
-      <div className="flex items-center gap-2 px-3 pb-2 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
-        codemode.store
-        <span className="ml-auto tracking-normal normal-case text-muted-foreground/70">
-          {store === undefined ? 'loading…' : `${keys.length} key${keys.length === 1 ? '' : 's'}`}
-        </span>
-      </div>
-      {keys.length > 0 ? (
-        <JsonTree className="px-2" open={1} value={store} />
-      ) : (
-        store !== undefined && (
-          <p className="px-3 pt-1 font-sans text-[12px] leading-relaxed text-muted-foreground/70">
-            Empty. Codemode scripts keep values across runs with{' '}
-            <code className="font-mono">store(key, value)</code> and read them with{' '}
-            <code className="font-mono">load(key)</code>; they live with this conversation.
-          </p>
-        )
-      )}
-    </div>
+    <p className="px-3 font-sans text-[12px] leading-relaxed text-muted-foreground/70">
+      Empty. Codemode scripts keep values across runs with{' '}
+      <code className="font-mono">store(key, value)</code> and read them with{' '}
+      <code className="font-mono">load(key)</code>; they live with this conversation.
+    </p>
   )
 }
 
 export default defineWebExtension({
   tools: { codemode: CodemodeCall },
-  panels: [{ id: 'codemode.store', title: 'Store', icon: DatabaseIcon, component: StorePanel }],
+  documents: [
+    { kind: 'codemode.store', title: 'Store', icon: DatabaseIcon, component: StoreDocument },
+  ],
 })

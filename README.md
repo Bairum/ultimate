@@ -82,7 +82,7 @@ agent can only propose; the UI writes labels or comments after you confirm, and 
 - Change something in `server/` and ask it to `restart`: a new process boots and type-checks next to the old one, and the
   conversation carries on in the new generation. A failed boot rolls back.
 - Press `Ctrl+Alt+B` for the right panel: Info (machine, process, storage, build, extensions, skills), Agents, Tasks,
-  and the codemode Store, each a tab.
+  and Documents (the plan, the codemode store, and every other extension document), each a tab.
 
 The conversation is one long-running thread by design; compaction keeps it going.
 
