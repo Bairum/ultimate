@@ -85,58 +85,72 @@ export async function createApi(
       } while (cursor !== undefined)
       return scanned
     }, context)
-    const next: ConversationSummary[] = ids ? [...summaries] : []
+    const refreshed: ConversationSummary[] = []
     for (const record of records) {
       const conversation = await harness.conversation(record.id, context)
       if (!conversation) continue
       const view = await conversation.viewState(context)
-      const agent = await conversation.agent(context)
-      const metadata = await harness.snapshot(Metadata, record.id, context)
-      const input = view.value.entries.find((entry) => entry.kind === 'pi.user')?.model?.[0]
-      const title =
-        input?.role === 'user'
-          ? typeof input.content === 'string'
-            ? input.content
-            : input.content
-                .flatMap((block) => (block.type === 'text' ? [block.text] : []))
-                .join(' ')
-          : undefined
-      // The view holds only the active context; a reset or compaction must not clear these times.
-      let inputAt: number | undefined
-      let answerAt: number | undefined
-      let cursor: Cursor | undefined
-      do {
-        const page = await conversation.entries({}, 64, cursor, context)
-        for (const entry of page.items) {
-          const timestamp = entry.model?.[0]?.timestamp
-          if (entry.kind === 'pi.user') inputAt ??= timestamp
-          if (entry.kind === 'pi.assistant') answerAt ??= timestamp
+      try {
+        const agent = await conversation.agent(context)
+        const metadata = await harness.snapshot(Metadata, record.id, context)
+        const { entries } = view.value
+        const input = entries.find((entry) => entry.kind === 'pi.user')?.model?.[0]
+        const title =
+          input?.role === 'user'
+            ? typeof input.content === 'string'
+              ? input.content
+              : input.content
+                  .flatMap((block) => (block.type === 'text' ? [block.text] : []))
+                  .join(' ')
+            : undefined
+        let inputAt = entries.findLast((entry) => entry.kind === 'pi.user')?.model?.[0]?.timestamp
+        let answerAt = entries.findLast((entry) => entry.kind === 'pi.assistant')?.model?.[0]
+          ?.timestamp
+        // A reset or compaction marker starts the view at its head; older times are in the history before it.
+        const head = entries[0]?.head
+        if (head !== undefined && (inputAt === undefined || answerAt === undefined)) {
+          let cursor: Cursor | undefined
+          do {
+            const page = await conversation.entries({ maxEntryId: head }, 64, cursor, context)
+            for (const entry of page.items) {
+              const timestamp = entry.model?.[0]?.timestamp
+              if (entry.kind === 'pi.user') inputAt ??= timestamp
+              if (entry.kind === 'pi.assistant') answerAt ??= timestamp
+            }
+            cursor = page.next
+          } while (cursor !== undefined && (inputAt === undefined || answerAt === undefined))
         }
-        cursor = page.next
-      } while (cursor !== undefined && (inputAt === undefined || answerAt === undefined))
-      const summary: ConversationSummary = {
-        id: record.id,
-        ...(record.owner || record.parent
-          ? { parentConversationId: record.owner?.conversationId ?? record.parent?.conversationId }
-          : {}),
-        ...(record.owner ? { ownerTaskId: record.owner.taskId } : {}),
-        ...(metadata?.label ? { label: metadata.label } : {}),
-        ...(metadata?.title
-          ? { title: metadata.title }
-          : title
-            ? { title: title.replace(/\s+/g, ' ').slice(0, 160) }
+        refreshed.push({
+          id: record.id,
+          ...(record.owner || record.parent
+            ? {
+                parentConversationId: record.owner?.conversationId ?? record.parent?.conversationId,
+              }
             : {}),
-        cwd: agent.cwd,
-        busy: Object.values(graph.value.tasks).some(
-          (task) => task.conversationId === record.id && !task.background,
-        ),
-        ...(inputAt === undefined ? {} : { inputAt }),
-        ...(answerAt === undefined ? {} : { answerAt }),
+          ...(record.owner ? { ownerTaskId: record.owner.taskId } : {}),
+          ...(metadata?.label ? { label: metadata.label } : {}),
+          ...(metadata?.title
+            ? { title: metadata.title }
+            : title
+              ? { title: title.replace(/\s+/g, ' ').slice(0, 160) }
+              : {}),
+          cwd: agent.cwd,
+          busy: Object.values(graph.value.tasks).some(
+            (task) => task.conversationId === record.id && !task.background,
+          ),
+          ...(inputAt === undefined ? {} : { inputAt }),
+          ...(answerAt === undefined ? {} : { answerAt }),
+        })
+      } finally {
+        view.dispose()
       }
-      const index = next.findIndex((item) => item.id === record.id)
+    }
+    // Merged into the current list, so busy updates made during the awaits above survive.
+    const next = ids ? [...summaries] : []
+    for (const summary of refreshed) {
+      const index = next.findIndex((item) => item.id === summary.id)
       if (index < 0) next.push(summary)
       else next[index] = summary
-      view.dispose()
     }
     if (JSON.stringify(next) !== JSON.stringify(summaries)) {
       summaries = next
@@ -447,8 +461,17 @@ export async function createApi(
                 data.whenBusy !== 'followUp'
               )
                 throw new HttpError(400, 'Invalid whenBusy')
+              const content = text(data.text, 'text')
+              // The view loses the first message to a compaction or reset; keep it as the title.
+              if (
+                summaries.find((summary) => summary.id === conversation.id)?.inputAt === undefined
+              )
+                await conversation.commit(async (tx) => {
+                  const metadata = await tx.doc(Metadata, conversation.id)
+                  metadata.title ??= content.replace(/\s+/g, ' ').trim().slice(0, 160)
+                }, context)
               const submission = await conversation.submit(
-                { type: 'input', content: text(data.text, 'text'), whenBusy: data.whenBusy },
+                { type: 'input', content, whenBusy: data.whenBusy },
                 context,
               )
               json(202, { submissionId: submission.id })

@@ -512,16 +512,20 @@ export const actions = { keys: async () => keys }`,
       stream.events.some(
         (event) =>
           event.name === 'conversations' &&
-          (event.data as { id: number; busy: boolean; title?: string }[]).some(
-            (summary) => summary.id === 1 && summary.title === 'demo' && !summary.busy,
+          (event.data as ConversationSummary[]).some(
+            (summary) =>
+              summary.id === 1 &&
+              summary.title === 'demo' &&
+              summary.inputAt !== undefined &&
+              !summary.busy,
           ),
       ),
     )
     const summaryReads = snapshot.mock.calls.filter(
       ([token]) => token.definition.kind === 'ultimate.metadata',
     )
-    expect(summaryReads).toHaveLength(1)
-    expect(summaryReads[0][1]).toBe(1)
+    // One for the title the first message stores, one for its entry.
+    expect(summaryReads.map(([, id]) => id)).toEqual([1, 1])
     await stream.close()
   })
   it('streams input and answer times, keeps them across a reset, and gives summaries to server facets', async () => {
@@ -553,8 +557,16 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     expect(
       (await post(server, '/api/extensions/summaries/actions/list', { args: null })).data.result,
     ).toEqual(server.api.conversations())
-    // A reset empties the active view; the times come from the whole history.
+    // A view holding both kinds gives the times without reading the history.
     const conversation = (await server.harness.conversation(created as ConversationId, context))!
+    const history = vi.spyOn(Object.getPrototypeOf(conversation), 'entries')
+    await conversation.commit(async (tx) => {
+      ;(await tx.doc(Metadata, created as ConversationId)).label = 'before reset'
+    }, context)
+    await until(() => summary()?.label === 'before reset')
+    expect(summary()).toMatchObject({ inputAt: streamed!.inputAt, answerAt: streamed!.answerAt })
+    expect(history).not.toHaveBeenCalled()
+    // A reset empties the active view; the times come from the history before it.
     await conversation.reset(undefined, context)
     await server.harness.waitForIdle(context)
     const view = await conversation.viewState(context)
@@ -565,6 +577,7 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     }, context)
     await until(() => summary()?.label === 'after reset')
     expect(summary()).toMatchObject({ inputAt: streamed!.inputAt, answerAt: streamed!.answerAt })
+    expect(history).toHaveBeenCalled()
     // A new answer updates its summary directly, without reading the conversation again.
     const reads = vi.spyOn(server.harness, 'conversation')
     const answerAt = streamed!.answerAt! + 1000
@@ -587,6 +600,41 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     )
     expect(reads).not.toHaveBeenCalled()
     await stream.close()
+  })
+  it('keeps the first submitted message as the title through a reset and later messages', async () => {
+    const { server } = await fixture()
+    server.host.faux!.setResponses(
+      ['One', 'Two', 'Three'].map((text) => fauxAssistantMessage(text)),
+    )
+    const created = Number((await post(server, '/api/conversations')).data.id) as ConversationId
+    const named = Number((await post(server, '/api/conversations', { title: 'Named' })).data.id)
+    const summary = (id: number) => server.api.conversations().find((item) => item.id === id)
+    await post(server, `/api/conversations/${created}/submit`, { text: '  First\n\n message ' })
+    await server.harness.waitForIdle(context)
+    expect(await server.harness.snapshot(Metadata, created, context)).toEqual({
+      title: 'First message',
+    })
+    const conversation = (await server.harness.conversation(created, context))!
+    await conversation.reset(undefined, context)
+    await server.harness.waitForIdle(context)
+    await post(server, `/api/conversations/${created}/submit`, { text: 'Second message' })
+    await server.harness.waitForIdle(context)
+    await conversation.commit(async (tx) => {
+      ;(await tx.doc(Metadata, created)).label = 'refreshed'
+    }, context)
+    await until(() => summary(created)?.label === 'refreshed')
+    expect(summary(created)?.title).toBe('First message')
+    expect(await server.harness.snapshot(Metadata, created, context)).toMatchObject({
+      title: 'First message',
+    })
+    // A title given at creation is not replaced by the first message.
+    await post(server, `/api/conversations/${named}/submit`, { text: 'Not the title' })
+    await server.harness.waitForIdle(context)
+    await until(() => summary(named)?.inputAt !== undefined)
+    expect(summary(named)?.title).toBe('Named')
+    expect(await server.harness.snapshot(Metadata, named as ConversationId, context)).toEqual({
+      title: 'Named',
+    })
   })
   it('reports machine, persistence, shared resources and folder facets', async () => {
     const { server } = await fixture(true)
