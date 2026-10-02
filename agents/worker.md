@@ -1,5 +1,6 @@
 ---
 name: worker
+isolate: worktree
 description: Implement one bounded task, verify it, and report what changed.
 ---
 

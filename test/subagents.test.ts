@@ -255,6 +255,7 @@ describe('subagents', () => {
       ['tools: [read, bash]', 'tools: read', 'tools must be a list of tool names'],
       ['tools: [read, bash]', 'model: " "', 'model must be a nonempty string'],
       ['tools: [read, bash]', 'tool: [read]', 'Unknown field: tool'],
+      ['tools: [read, bash]', 'isolate: remote', 'isolate must be none or worktree'],
       ['Original instructions', '', 'Instructions are required'],
     ])
       expect(() => parseDefinition(definition().replace(from, to), 'test')).toThrow(error)

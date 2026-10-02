@@ -13,6 +13,7 @@ export interface AgentDefinition {
   model?: { provider: string; modelId: string }
   thinking?: ModelThinkingLevel
   tools?: string[]
+  isolate?: 'none' | 'worktree'
 }
 export interface AgentDiscovery {
   definitions: (AgentDefinition & { source: Source })[]
@@ -28,7 +29,7 @@ const levels = {
   xhigh: true,
   max: true,
 } satisfies Record<ModelThinkingLevel, true>
-const fields = new Set(['name', 'description', 'model', 'thinking', 'tools'])
+const fields = new Set(['name', 'description', 'model', 'thinking', 'tools', 'isolate'])
 
 /** A definition file: Pi's YAML frontmatter with Ultimate's fields, and the instructions as its body. */
 export function parseDefinition(
@@ -43,7 +44,7 @@ export function parseDefinition(
     !Object.keys(frontmatter).length
   )
     throw new Error('Expected frontmatter fields between --- lines')
-  const { name, description, model, thinking, tools } = frontmatter
+  const { name, description, model, thinking, tools, isolate } = frontmatter
   const unknown = Object.keys(frontmatter).find((key) => !fields.has(key))
   if (unknown) throw new Error(`Unknown field: ${unknown}`)
   if (typeof name !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(name))
@@ -59,6 +60,8 @@ export function parseDefinition(
     (!Array.isArray(tools) || !tools.every((tool) => typeof tool === 'string'))
   )
     throw new Error('tools must be a list of tool names')
+  if (isolate !== undefined && isolate !== 'none' && isolate !== 'worktree')
+    throw new Error('isolate must be none or worktree')
   if (!body) throw new Error('Instructions are required')
   return {
     name,
@@ -68,6 +71,7 @@ export function parseDefinition(
     ...(model !== undefined ? { model } : {}),
     ...(thinking ? { thinking: thinking as ModelThinkingLevel } : {}),
     ...(tools ? { tools } : {}),
+    ...(isolate ? { isolate } : {}),
   }
 }
 

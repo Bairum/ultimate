@@ -1,5 +1,10 @@
 {
   "exclusiveCommands": ["\\bpnpm( run)? test\\b", "\\bvp test\\b"],
+  "isolates": {
+    "worktree": {
+      "setup": ["pnpm install --frozen-lockfile --prefer-offline"]
+    }
+  },
   "githubTriage": {
     "writableRepos": ["HazAT/ultimate"]
   }

@@ -1,3 +1,5 @@
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import type { Context } from '@earendil-works/chord'
 import type { JsonValue } from '@earendil-works/chord'
 import { clampThinkingLevel, Type } from '@earendil-works/pi-ai'
 import type { AssistantMessage, ModelThinkingLevel } from '@earendil-works/pi-ai'
@@ -21,11 +23,19 @@ import type {
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { discoverAgents } from './agents.ts'
+import * as worktree from './isolates/worktree.ts'
+import type { Isolate, CreatedIsolate } from './isolates/types.ts'
 
 export const Subagents = defineDoc<{
   agents: Record<
     string,
-    { conversationId: ConversationId; agent: string; background: boolean; reported: EntryId[] }
+    {
+      conversationId: ConversationId
+      agent: string
+      background: boolean
+      reported: EntryId[]
+      isolate?: Isolate
+    }
   >
   actions: Record<string, { conversationId: ConversationId; reporter?: TaskId }>
 }>({
@@ -133,8 +143,55 @@ const reply = (text: string, info?: ReturnType<typeof details>) => ({
   ...(info === undefined ? {} : { details: info }),
 })
 
-/** Definitions and invalid files for the Agents tab, without their instructions. */
+async function operate(
+  host: Pick<ExtensionHost, 'harness' | 'projectRoot' | 'ultimateRoot'>,
+  conversationId: ConversationId,
+  id: ConversationId,
+  action: 'land' | 'discard',
+  context: Context = BACKGROUND_CONTEXT,
+) {
+  const harness = host.harness()
+  const child = (await harness.snapshot(Subagents, conversationId, context))?.agents[String(id)]
+  if (!child?.isolate) throw new Error('id must identify a worktree child of this conversation')
+  if ((await harness.snapshot(LiveDoc, id, context))?.run)
+    throw new Error('Child is running; wait or stop it first')
+  const parent = (await harness.conversation(conversationId, context))!
+  const cwd = (await parent.agent(context)).cwd ?? host.projectRoot
+  const result = await (child.isolate.kind === 'worktree'
+    ? (action === 'land' ? worktree.land : worktree.discard)(cwd, child.isolate)
+    : Promise.reject(new Error('Unsupported isolate kind')))
+  await harness.commit(async (tx) => {
+    const isolate = (await tx.doc(Subagents, conversationId)).agents[String(id)].isolate!
+    if (result.state) isolate.state = result.state
+    if (result.landed) isolate.landed = result.landed
+  }, context)
+  return {
+    ...result,
+    ...(host.projectRoot === host.ultimateRoot &&
+    result.paths?.some((path) => /^(server|shared)\//.test(path))
+      ? { needsRestart: true, text: `${result.text}\nNeeds restart.` }
+      : {}),
+  }
+}
+function childId(args: JsonValue, conversationId?: number) {
+  if (
+    !conversationId ||
+    !args ||
+    typeof args !== 'object' ||
+    Array.isArray(args) ||
+    typeof args.id !== 'number'
+  )
+    throw new Error('conversationId and child id are required')
+  return args.id as ConversationId
+}
+/** Workspace operations and definitions for the Agents tab. */
 export const actions = {
+  async land(args: JsonValue, { host, conversationId }: ActionContext) {
+    return operate(host, conversationId as ConversationId, childId(args, conversationId), 'land')
+  },
+  async discard(args: JsonValue, { host, conversationId }: ActionContext) {
+    return operate(host, conversationId as ConversationId, childId(args, conversationId), 'discard')
+  },
   async definitions(_args: JsonValue, { host }: ActionContext) {
     const { definitions, errors } = await discoverAgents(
       host.ultimateRoot,
@@ -165,7 +222,7 @@ function thinkingFor(
 export default function subagents(
   host: Pick<
     ExtensionHost,
-    'ultimateRoot' | 'projectRoot' | 'userHome' | 'harness' | 'metadata' | 'modelRuntime'
+    'ultimateRoot' | 'projectRoot' | 'userHome' | 'harness' | 'metadata' | 'modelRuntime' | 'home'
   >,
 ) {
   return defineExtension({
@@ -180,7 +237,7 @@ export default function subagents(
           host.modelRuntime,
         )
         return (
-          'You coordinate. Delegate bounded, self-contained research, reconnaissance, review, and isolated implementation to subagents. Run independent work in parallel in the background. Verify results before relying on them.\nAvailable definitions:\n' +
+          'You coordinate. Delegate bounded, self-contained research, reconnaissance, review, and isolated implementation to subagents. Run independent work in parallel in the background. Workers run in worktrees: verify their commits, then land them. Verify results before relying on them.\nAvailable definitions:\n' +
           discovered.definitions.map((agent) => `${agent.name}: ${agent.description}`).join('\n')
         )
       }),
@@ -189,7 +246,7 @@ export default function subagents(
       defineTool({
         name: 'subagent',
         description:
-          'Delegate to a named agent. start returns its answer (foreground) or id (background). message sends a follow-up or steer; wait returns the latest answer; stop stops current work; list shows your children. Background answers join the current run after its tool round.',
+          'Delegate to a named agent. start returns its answer (foreground) or id (background). message sends a follow-up or steer; wait returns the latest answer; stop stops current work; list shows your children; land verifies and fast-forwards a finished worktree child; discard removes its worktree but keeps its branch. start accepts isolate none or worktree. Background answers join the current run after its tool round.',
         replay: 'safe',
         parameters: Type.Object({
           action: Type.Union([
@@ -198,6 +255,8 @@ export default function subagents(
             Type.Literal('wait'),
             Type.Literal('stop'),
             Type.Literal('list'),
+            Type.Literal('land'),
+            Type.Literal('discard'),
           ]),
           agent: Type.Optional(Type.String()),
           task: Type.Optional(Type.String()),
@@ -205,6 +264,7 @@ export default function subagents(
           id: Type.Optional(Type.Integer({ minimum: 1 })),
           text: Type.Optional(Type.String()),
           steer: Type.Optional(Type.Boolean()),
+          isolate: Type.Optional(Type.Union([Type.Literal('none'), Type.Literal('worktree')])),
         }),
         execute: async (args, api, context) => {
           const cached = await api.memo<ReturnType<typeof reply>>('result', context)
@@ -230,6 +290,18 @@ export default function subagents(
             (!args.id || !Object.hasOwn(index.agents, String(args.id)))
           )
             throw new Error('id must identify a child of this conversation')
+          if (args.action === 'land' || args.action === 'discard')
+            return finish(
+              JSON.stringify(
+                await operate(
+                  host,
+                  api.conversationId,
+                  args.id as ConversationId,
+                  args.action,
+                  context,
+                ),
+              ),
+            )
           if (args.action === 'start' || args.action === 'message') {
             const text = args.action === 'start' ? args.task : args.text
             if (!text?.trim())
@@ -259,6 +331,36 @@ export default function subagents(
               throw new Error(
                 'Definition tools must be a subset of parent tools, excluding subagent',
               )
+            let isolate = existingAction
+              ? index.agents[String(existingAction.conversationId)].isolate
+              : undefined
+            let childCwd = isolate?.path
+            if (definition && (args.isolate ?? definition.isolate ?? 'none') === 'worktree') {
+              let created = await api.memo<CreatedIsolate>('isolate', context)
+              if (!created)
+                created = await api.memo(
+                  'isolate',
+                  await worktree.create(
+                    parent.cwd ?? host.projectRoot,
+                    host.home,
+                    definition.name,
+                    api.callId,
+                    host.projectRoot,
+                    context.abortSignal,
+                  ),
+                  context,
+                )
+              isolate = created.record
+              childCwd = created.cwd
+            }
+            const warning =
+              isolate &&
+              (await worktree.git(parent.cwd ?? host.projectRoot, 'status', '--porcelain'))
+                ? '\nWarning: parent has uncommitted changes; they are not in the worktree.'
+                : ''
+            const isolateInfo = isolate
+              ? `\nIsolate: ${isolate.path}\nBranch: ${isolate.branch}${warning}`
+              : ''
             const action = await api.commit(async (tx) => {
               const state = await tx.doc(Subagents, api.conversationId)
               if (state.actions[api.callId]) return { ...state.actions[api.callId] }
@@ -283,7 +385,12 @@ export default function subagents(
                   extensions: parent.extensions.filter(
                     (extension) => extension.name !== 'subagents',
                   ),
-                  instructions: definition.instructions,
+                  instructions:
+                    definition.instructions +
+                    (isolate
+                      ? `\nWork only in ${isolate.path} on ${isolate.branch}, cut from ${isolate.base}. Commit your work on this branch with clear messages. Never push and never touch other checkouts.`
+                      : ''),
+                  ...(childCwd ? { cwd: childCwd } : {}),
                   ...(definition.model ? { model: definition.model } : {}),
                   ...(definition.thinking
                     ? { thinkingLevel: thinkingFor(definition, parent, host) }
@@ -298,6 +405,7 @@ export default function subagents(
                   agent: definition.name,
                   background: args.background === true,
                   reported: [],
+                  ...(isolate ? { isolate } : {}),
                 }
               }
               const background = state.agents[String(conversationId)].background
@@ -319,7 +427,7 @@ export default function subagents(
             await api.details(info, context)
             if (action.reporter !== undefined)
               return finish(
-                `Started ${args.action === 'message' ? 'message to' : 'subagent'} ${action.conversationId}.`,
+                `Started ${args.action === 'message' ? 'message to' : 'subagent'} ${action.conversationId}.${isolateInfo}`,
                 info,
               )
             const child = (await api.conversation(action.conversationId, context))!
@@ -335,12 +443,18 @@ export default function subagents(
               )
             ).wait(context)
             if (settled.status !== 'done' || settled.type !== 'input')
-              return finish(`Subagent ${action.conversationId}: ${settled.status}`, info)
+              return finish(
+                `Subagent ${action.conversationId}: ${settled.status}${isolateInfo}`,
+                info,
+              )
             const answer = await api.commit(
               (tx) => tx.entry(AssistantEntry, settled.answer),
               context,
             )
-            return finish(textOf(answer?.model?.[0] as AssistantMessage | undefined), info)
+            return finish(
+              textOf(answer?.model?.[0] as AssistantMessage | undefined) + isolateInfo,
+              info,
+            )
           }
           const id = args.id as ConversationId
           const info = details(id, index.agents[String(id)].background)

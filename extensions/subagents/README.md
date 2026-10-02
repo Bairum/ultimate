@@ -1,6 +1,24 @@
 Delegate bounded work with `subagent`: `start {agent, task, background?}`, `message {id, text, steer?}`, `wait {id}`, `stop {id}`, and `list`. Foreground children belong to the tool call; background children belong to a background anchor and their answers steer the current run at its next tool-round boundary, or start a run when the parent is idle. Child IDs are conversation IDs. Definitions are reread on every start; children never receive `subagent`.
 
-Definitions are Markdown with YAML frontmatter, parsed by Pi's `parseFrontmatter`: required `name` and `description`, optional `model` (Pi's `resolveCliModel` accepts `provider/id`, fuzzy id or name, and a `:thinking` suffix; unknown models are errors and custom models must be registered in Pi's `models.json`), `thinking` (a Pi thinking level), and `tools` (a YAML list, `[read, bash]` or one `- item` per line); other fields are errors. An explicit `thinking` field overrides the model suffix. The body is the instructions. `agents.ts` reads them from three directories, later overriding by name: `agents/` in Ultimate's clone, `~/.ultimate/agents/`, and the project root's `.ultimate/agents/` (not a conversation's cwd). Omitted tools inherit the parent's tools minus `subagent`. Tool restrictions select tools, not a shell sandbox: read-only agents' bash restrictions are instructions. An edited definition is not a code change, so it does not change the build id.
+Definitions are Markdown with YAML frontmatter, parsed by Pi's `parseFrontmatter`: required `name` and `description`, optional `isolate` (`none` or `worktree`), `model` (Pi's `resolveCliModel` accepts `provider/id`, fuzzy id or name, and a `:thinking` suffix; unknown models are errors and custom models must be registered in Pi's `models.json`), `thinking` (a Pi thinking level), and `tools` (a YAML list, `[read, bash]` or one `- item` per line); other fields are errors. An explicit `thinking` field overrides the model suffix. The body is the instructions. `agents.ts` reads them from three directories, later overriding by name: `agents/` in Ultimate's clone, `~/.ultimate/agents/`, and the project root's `.ultimate/agents/` (not a conversation's cwd). Omitted tools inherit the parent's tools minus `subagent`. Tool restrictions select tools, not a shell sandbox: read-only agents' bash restrictions are instructions. An edited definition is not a code change, so it does not change the build id.
+
+## Isolates
+
+An isolate is where a child's tools run, separate from the parent. Worktree is the first, local kind; sandboxes, containers, Cloudflare, and remote machines are not implemented. Each kind lives in its own module with create, land and discard operations, without a registry or plugin API.
+
+`start {agent, task, isolate?: "none" | "worktree"}` overrides the definition's isolate. The default is none (the shared parent directory); the shipped worker uses worktree. A worktree is created before the child starts, on `ultimate/<agent>-<key>` from the parent checkout's HEAD, under the instance home's `worktrees/`. The child's cwd and instructions point there. Uncommitted parent changes are not included. The isolate and child are reused on replay.
+
+Optional project `.ultimate/settings.json` configuration:
+
+```json
+{ "isolates": { "worktree": { "setup": ["pnpm install --frozen-lockfile --prefer-offline"] } } }
+```
+
+Commands run in order with `sh -c`, closed stdin and a two-minute timeout per command. `ULTIMATE_SOURCE` is the parent checkout path (for example, `cp "$ULTIMATE_SOURCE/.env" .`). A failure reports the output tail and removes the worktree. Setup is recorded so a completed setup is not repeated on replay.
+
+Verify the child's commits, then `land {id}`: refuses a running child or dirty worktree, rebases onto the parent HEAD and merges fast-forward only. Conflicts abort the rebase and name files to resolve by messaging the child. Repeated landing is a no-op. Results list commits and paths, and flag Ultimate core changes that need restart. Lands into one parent checkout are serialized in-process. `discard {id}` refuses a running child, removes the worktree even if dirty, and keeps its branch and commits. Both operations are also extension actions for the UI; `list` includes isolate records.
+
+Isolation is by working directory, not a sandbox: absolute paths can still reach other checkouts. Children are instructed to work only in their workspace, commit clearly, and never push. There are no remote operations, preview instances, or cross-process landing locks.
 
 The shipped definitions inherit the active provider/model. No universally cheaper model is known across providers, so no model is hardcoded. Override locally to select an available fast model.
 

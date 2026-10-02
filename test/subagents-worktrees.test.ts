@@ -1,0 +1,209 @@
+import { mkdir, readFile, rm, writeFile, access } from 'node:fs/promises'
+import { join } from 'node:path'
+import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
+import { LiveDoc } from '@earendil-works/pi-durable'
+import { CodingTools } from '@earendil-works/pi-durable/tools'
+import { afterEach, expect, it } from 'vitest'
+import { context, prepareHarness } from '../server/harness.ts'
+import type { OpenHost } from '../server/harness.ts'
+import { Metadata } from '../server/metadata.ts'
+import subagents, { Subagents } from '../extensions/subagents/server.ts'
+import { create, git } from '../extensions/subagents/isolates/worktree.ts'
+import { temp, until } from './helpers.ts'
+
+const directories: string[] = []
+const hosts: OpenHost[] = []
+afterEach(async () => {
+  for (const host of hosts.splice(0)) await host.close()
+  for (const path of directories.splice(0)) await rm(path, { recursive: true, force: true })
+})
+async function fixture() {
+  const root = await temp('ultimate-worktrees-')
+  directories.push(root)
+  const project = join(root, 'project')
+  await mkdir(join(project, 'agents'), { recursive: true })
+  await writeFile(
+    join(project, 'agents/worker.md'),
+    '---\nname: worker\ndescription: Work\nisolate: worktree\n---\nImplement.\n',
+  )
+  await writeFile(join(project, 'conflict.txt'), 'base\n')
+  await git(project, 'init', '-b', 'main')
+  await git(project, 'config', 'user.email', 'test@example.com')
+  await git(project, 'config', 'user.name', 'Test')
+  await git(project, 'add', '.')
+  await git(project, 'commit', '-m', 'base')
+  const home = join(root, 'home')
+  const prepared = await prepareHarness({
+    ultimateRoot: project,
+    projectRoot: project,
+    home,
+    userHome: root,
+    faux: true,
+  })
+  prepared.registry.install(CodingTools)
+  let opened: OpenHost
+  prepared.registry.install(
+    subagents({ ...prepared, harness: () => opened.harness, metadata: Metadata }),
+  )
+  const route: FauxResponseFactory = (transcript) => {
+    prepared.faux!.appendResponses([route])
+    const last = transcript.messages.findLast((message) => message.role !== 'system')!
+    const text =
+      typeof last.content === 'string'
+        ? last.content
+        : last.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
+    if (last.role === 'user' && text.startsWith('CALL '))
+      return fauxAssistantMessage([fauxToolCall('subagent', JSON.parse(text.slice(5)))], {
+        stopReason: 'toolUse',
+      })
+    if (last.role === 'user' && text === 'write')
+      return fauxAssistantMessage(
+        [fauxToolCall('write', { path: 'child.txt', content: 'child\n' })],
+        { stopReason: 'toolUse' },
+      )
+    if (last.role === 'user' && text === 'slow')
+      return fauxAssistantMessage([fauxText('Working '.repeat(700))])
+    return fauxAssistantMessage([fauxText('Finished')])
+  }
+  prepared.faux!.setResponses([route])
+  opened = await prepared.open()
+  hosts.push(opened)
+  const call = async (args: object) => {
+    await (
+      await opened.root.submit({ type: 'input', content: `CALL ${JSON.stringify(args)}` }, context)
+    ).wait(context)
+    const view = await opened.root.viewState(context)
+    const result = view.value.entries.filter((entry) => entry.kind === 'pi.tool-result').at(-1)
+      ?.model?.[0]
+    view.dispose()
+    if (result?.role !== 'toolResult') throw new Error('Missing tool result')
+    return result.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
+  }
+  const children = async () =>
+    Object.values((await opened.harness.snapshot(Subagents, opened.root.id, context))?.agents ?? {})
+  return {
+    project,
+    home,
+    prepared,
+    get opened() {
+      return opened
+    },
+    set opened(value: OpenHost) {
+      opened = value
+    },
+    call,
+    children,
+  }
+}
+it('isolates writes, lands once, aborts conflicts cleanly and discards while retaining commits', async () => {
+  const f = await fixture()
+  expect(await f.call({ action: 'start', agent: 'worker', task: 'write' })).toContain('Isolate:')
+  const child = (await f.children())[0]
+  const workspace = child.isolate!
+  expect(await readFile(join(workspace.path, 'child.txt'), 'utf8')).toBe('child\n')
+  await expect(access(join(f.project, 'child.txt'))).rejects.toThrow('ENOENT')
+  expect(await f.call({ action: 'land', id: child.conversationId })).toContain('Worktree is dirty:')
+  expect(await f.call({ action: 'land', id: child.conversationId })).toContain('child.txt')
+  await git(workspace.path, 'add', '.')
+  await git(workspace.path, 'commit', '-m', 'child change')
+  expect(await f.call({ action: 'land', id: child.conversationId })).toContain('Landed commits')
+  expect(await readFile(join(f.project, 'child.txt'), 'utf8')).toBe('child\n')
+  expect(await git(f.project, 'rev-parse', 'HEAD')).toBe(
+    await git(workspace.path, 'rev-parse', 'HEAD'),
+  )
+  expect(await f.call({ action: 'land', id: child.conversationId })).toContain('Nothing to land')
+  await writeFile(join(workspace.path, 'conflict.txt'), 'child\n')
+  await git(workspace.path, 'add', '.')
+  await git(workspace.path, 'commit', '-m', 'child conflict')
+  await writeFile(join(f.project, 'conflict.txt'), 'parent\n')
+  await git(f.project, 'add', '.')
+  await git(f.project, 'commit', '-m', 'parent conflict')
+  expect(await f.call({ action: 'land', id: child.conversationId })).toContain(
+    'Rebase failed: conflict.txt',
+  )
+  expect(await git(workspace.path, 'status', '--porcelain')).toBe('')
+  expect(await git(f.project, 'status', '--porcelain')).toBe('')
+  expect(await f.call({ action: 'discard', id: child.conversationId })).toContain(
+    `kept branch ${workspace.branch}`,
+  )
+  await expect(access(workspace.path)).rejects.toThrow('ENOENT')
+  expect(await git(f.project, 'branch', '--list', workspace.branch)).toContain(workspace.branch)
+  expect((await f.children())[0].isolate?.state).toBe('discarded')
+})
+it('replays an interrupted start with the same child and worktree', async () => {
+  const f = await fixture()
+  await f.opened.root.submit(
+    { type: 'input', content: 'CALL {"action":"start","agent":"worker","task":"slow"}' },
+    context,
+  )
+  await until(async () => {
+    const [child] = await f.children()
+    return (
+      child !== undefined &&
+      (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run !== undefined
+    )
+  })
+  const before = (await f.children())[0]
+  await f.opened.close()
+  hosts.splice(hosts.indexOf(f.opened), 1)
+  f.opened = await f.prepared.open()
+  hosts.push(f.opened)
+  await f.opened.root.waitForIdle(context)
+  expect(await f.children()).toHaveLength(1)
+  expect((await f.children())[0]).toEqual(before)
+  const index = (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!
+  const call = Object.keys(index.actions)[0]
+  expect((await create(f.project, f.home, 'worker', call)).record).toEqual(before.isolate)
+}, 20000)
+it('lets the call override the definition isolate and reports omitted parent changes', async () => {
+  const f = await fixture()
+  await f.call({ action: 'start', agent: 'worker', task: 'inspect', isolate: 'none' })
+  expect((await f.children())[0].isolate).toBeUndefined()
+  await writeFile(join(f.project, 'uncommitted.txt'), 'parent only')
+  expect(await f.call({ action: 'start', agent: 'worker', task: 'inspect' })).toContain(
+    'parent has uncommitted changes',
+  )
+  const isolate = (await f.children())[1].isolate!
+  await expect(access(join(isolate.path, 'uncommitted.txt'))).rejects.toThrow('ENOENT')
+})
+it('refuses lifecycle operations while the child is running', async () => {
+  const f = await fixture()
+  await f.call({ action: 'start', agent: 'worker', task: 'slow', background: true })
+  const [child] = await f.children()
+  expect(await f.call({ action: 'land', id: child.conversationId })).toContain('Child is running')
+  expect(await f.call({ action: 'discard', id: child.conversationId })).toContain(
+    'Child is running',
+  )
+  await f.call({ action: 'stop', id: child.conversationId })
+  expect(await f.call({ action: 'discard', id: child.conversationId })).toContain('kept branch')
+})
+it('runs setup once with source env and removes a failed worktree', async () => {
+  const f = await fixture()
+  await mkdir(join(f.project, '.ultimate'))
+  const settings = join(f.project, '.ultimate/settings.json')
+  await writeFile(
+    settings,
+    JSON.stringify({
+      isolates: {
+        worktree: {
+          setup: [
+            'printf "%s" "$ULTIMATE_SOURCE" > source.txt',
+            'echo run >> "$ULTIMATE_SOURCE/runs.txt"',
+          ],
+        },
+      },
+    }),
+  )
+  const { record: workspace } = await create(f.project, f.home, 'worker', 'setup')
+  expect(await readFile(join(workspace.path, 'source.txt'), 'utf8')).toBe(f.project)
+  expect((await create(f.project, f.home, 'worker', 'setup')).record).toEqual(workspace)
+  expect(await readFile(join(f.project, 'runs.txt'), 'utf8')).toBe('run\n')
+  await writeFile(
+    settings,
+    JSON.stringify({ isolates: { worktree: { setup: ['echo setup-broken >&2; exit 1'] } } }),
+  )
+  const before = await git(f.project, 'worktree', 'list', '--porcelain')
+  await expect(create(f.project, f.home, 'worker', 'failed')).rejects.toThrow('setup-broken')
+  expect(await git(f.project, 'worktree', 'list', '--porcelain')).toBe(before)
+})
