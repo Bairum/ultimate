@@ -150,10 +150,13 @@ it('supports structured nested results, validates arguments, and documents host 
 
 it('runs Promise.all calls in parallel', async () => {
   const { server } = await fixture()
+  // The marker files live in a scratch directory, not in the project root the tools run in.
+  const scratch = await mkdtemp(join(tmpdir(), 'ultimate-codemode-'))
   const result = await run(
     server,
-    `return await Promise.all([tools.bash({command:'touch one; for i in $(seq 1 50); do test -f two && { echo one; exit 0; }; sleep 0.02; done; exit 1'}),tools.bash({command:'touch two; for i in $(seq 1 50); do test -f one && { echo two; exit 0; }; sleep 0.02; done; exit 1'})]);`,
+    `return await Promise.all([tools.bash({command:'cd ${scratch} && touch one; for i in $(seq 1 50); do test -f two && { echo one; exit 0; }; sleep 0.02; done; exit 1'}),tools.bash({command:'cd ${scratch} && touch two; for i in $(seq 1 50); do test -f one && { echo two; exit 0; }; sleep 0.02; done; exit 1'})]);`,
   )
+  await rm(scratch, { recursive: true, force: true })
   expect(result.data.details.value).toEqual(['one\n', 'two\n'])
   expect(result.data.details.calls).toHaveLength(2)
   expect(result.data.details.calls.every((call) => call.status === 'ok')).toBe(true)
