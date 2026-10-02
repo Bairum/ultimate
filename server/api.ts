@@ -318,7 +318,9 @@ export async function createApi(
             json(200, { result })
           } catch (error) {
             console.error(`Extension action ${name}/${key}:`, error)
-            json(500, { error: 'Extension action failed' })
+            // The message is the action author's; the UI shows it, so a setup problem can say what is missing.
+            const message = error instanceof Error ? error.message : String(error)
+            json(500, { error: message.slice(0, 500) })
           } finally {
             response.off('close', cancel)
           }

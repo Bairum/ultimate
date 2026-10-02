@@ -198,7 +198,7 @@ it('loads external project facets over user and built-in names, actions and tran
   expect((await post(server.url, '/api/extensions/coding-tools/actions/unknown')).status).toBe(404)
   expect(await post(server.url, '/api/extensions/coding-tools/actions/fail')).toEqual({
     status: 500,
-    data: { error: 'Extension action failed' },
+    data: { error: 'deliberate failure' },
   })
   expect((await post(server.url, '/api/extensions/coding-tools/actions/timeout')).status).toBe(500)
   expect(

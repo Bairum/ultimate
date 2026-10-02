@@ -144,12 +144,10 @@ it('switches surfaces without interrupting the conversation, and tells the agent
   await expect
     .poll(() => page.getByTestId('item').allTextContents(), timeout)
     .toEqual(['item 1', 'item 2', 'item 3'])
-  await expect
-    .poll(() => page.getByTestId('error').textContent(), timeout)
-    .toBe('Extension action failed')
+  await expect.poll(() => page.getByTestId('error').textContent(), timeout).toBe('deliberate')
   await expect
     .poll(() => page.getByRole('status').textContent(), timeout)
-    .toContain('fixture/broken: Extension action failed')
+    .toContain('fixture/broken: deliberate')
 
   // The choice is durable, and the agent's prompt names the surface.
   expect(await ui()).toMatchObject({
