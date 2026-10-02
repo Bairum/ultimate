@@ -350,7 +350,9 @@ function List({ label, items }: { label: string; items: readonly string[] }) {
 
 function Extensions({ system }: { system: SystemInfo }) {
   const web = useExtensions()
-  const failed = system.extensions.filter(
+  const enabled = system.extensions.filter((extension) => extension.enabled)
+  const off = system.extensions.length - enabled.length
+  const failed = enabled.filter(
     (extension) =>
       extension.server?.error ||
       web.some((record) => record.name === extension.name && record.error),
@@ -360,7 +362,8 @@ function Extensions({ system }: { system: SystemInfo }) {
       id="extensions"
       meta={
         <>
-          {system.extensions.length}
+          {enabled.length}
+          {off > 0 && ` · ${off} off`}
           {failed > 0 && <span className="text-error"> · {failed} failing</span>}
         </>
       }
@@ -368,7 +371,7 @@ function Extensions({ system }: { system: SystemInfo }) {
     >
       <div className="flex flex-col gap-1.5">
         {system.extensions
-          .toSorted((a, b) => a.name.localeCompare(b.name))
+          .toSorted((a, b) => Number(b.enabled) - Number(a.enabled) || a.name.localeCompare(b.name))
           .map((extension) => {
             const record = web.find((candidate) => candidate.name === extension.name)
             const server = extension.server
@@ -378,13 +381,24 @@ function Extensions({ system }: { system: SystemInfo }) {
                 className={cn(
                   'rounded-md border px-2 py-1.5 font-mono text-[11px]',
                   error ? 'border-error/40' : 'border-border/60',
+                  !extension.enabled && 'opacity-60',
                 )}
                 key={extension.name}
               >
                 <div className="flex items-center gap-1.5">
-                  <span className={cn('font-medium', error ? 'text-error' : 'text-foreground')}>
+                  <span
+                    className={cn(
+                      'font-medium',
+                      error
+                        ? 'text-error'
+                        : extension.enabled
+                          ? 'text-foreground'
+                          : 'text-muted-foreground',
+                    )}
+                  >
                     {extension.name}
                   </span>
+                  {!extension.enabled && <Tag>off</Tag>}
                   {extension.facets.server && (
                     <Tag className={server?.error ? 'border-error/40 text-error' : undefined}>
                       server

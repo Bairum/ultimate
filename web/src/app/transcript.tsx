@@ -82,7 +82,13 @@ function EmptyState() {
         <span className="text-warning">none configured</span>
       ),
     ],
-    ['ext', system?.extensions.map((extension) => extension.name).join(' · ') ?? '…'],
+    [
+      'ext',
+      system?.extensions
+        .filter((extension) => extension.enabled)
+        .map((extension) => extension.name)
+        .join(' · ') ?? '…',
+    ],
     [
       'host',
       system
