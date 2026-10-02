@@ -212,7 +212,7 @@ export const actions = { keys: async () => keys }`,
       const view = await server.root.viewState(context)
       try {
         const system = view.value.entries.find((entry) => entry.kind === 'pi.system')?.model?.[0]
-        expect(system?.role === 'system' ? system.sections?.self : undefined).toContain(
+        expect(system?.role === 'system' ? system.sections?.environment : undefined).toContain(
           `UI: ${server.url}`,
         )
       } finally {
