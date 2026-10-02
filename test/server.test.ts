@@ -633,6 +633,11 @@ export const actions = { keys: async () => keys }`,
     const watcher = server.vite.watcher
     await writeFile(config, `${await readFile(config, 'utf8')}\n`)
     await until(() => server.vite.watcher !== watcher)
+    // Replacing the watcher does not wait for its initial extension-directory scan.
+    await until(() => {
+      const watched = server.vite.watcher.getWatched()
+      return watched[join(server.host.ultimateRoot, 'extensions/counter')]?.includes('value.ts')
+    })
     const loaded = entry().server!.loadedAt
     await writeFile(
       join(server.host.ultimateRoot, 'extensions/counter/value.ts'),
