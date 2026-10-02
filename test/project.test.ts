@@ -18,6 +18,7 @@ import { projectHome } from '../server/project.ts'
 import { actionExec } from '../server/actions.ts'
 import type { SystemInfo } from '../shared/protocol.ts'
 import { defineExtension } from '@earendil-works/pi-durable'
+import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 
 const directories: string[] = []
 const servers: Awaited<ReturnType<typeof createServer>>[] = []
@@ -207,6 +208,8 @@ it('loads external project facets over user and built-in names, actions and tran
     root: projectRoot,
     name: projectRoot.split('/').at(-1),
     hasConfig: true,
+    config: true,
+    decision: true,
     settings: { defaultSurface: 'workbench', custom: 1 },
   })
   expect((await server.root.agent(context)).cwd).toBe(projectRoot)
@@ -373,6 +376,7 @@ it('starts two project supervisors concurrently on distinct free ports and stora
   await extension(join(projects[0], '.ultimate'), 'hello', 'live')
   const launch = (project: string) => {
     const home = projectHome(project, userHome)
+    new ProjectTrustStore(join(userHome, '.ultimate')).set(project, true)
     const env: NodeJS.ProcessEnv = {
       ...cleanEnv(),
       HOME: userHome,

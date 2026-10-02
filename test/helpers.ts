@@ -7,6 +7,7 @@ import type { ConversationView } from '@earendil-works/pi-durable'
 import { beforeEach, afterEach, vi } from 'vitest'
 import type { TestContext } from 'vitest'
 import { browserBinary } from '../extensions/browser/server.ts'
+import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { createServer, prepareServer } from '../server/main.ts'
 import type { ServerOptions } from '../server/main.ts'
 import type { ServerEvents, SystemInfo } from '../shared/protocol.ts'
@@ -53,9 +54,10 @@ export async function sourceCopy(parent: string) {
       "export default defineConfig({ cacheDir: '.vite-cache',",
     ),
   )
+  new ProjectTrustStore(join(parent, '.ultimate')).set(root, true)
   return root
 }
-type FixtureOptions = ServerOptions & { home: string; userHome: string }
+type FixtureOptions = ServerOptions & { home: string; userHome: string; localSetup?: boolean }
 async function isolated(options: FixtureOptions) {
   const { home, userHome } = options
   const ultimateRoot =
@@ -64,6 +66,8 @@ async function isolated(options: FixtureOptions) {
     !options.projectRoot || options.projectRoot === resolve('.')
       ? ultimateRoot
       : options.projectRoot
+  if (options.localSetup !== false)
+    new ProjectTrustStore(join(userHome, '.ultimate')).set(projectRoot, true)
   return {
     ...options,
     ultimateRoot,

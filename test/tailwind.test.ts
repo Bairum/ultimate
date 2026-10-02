@@ -5,6 +5,7 @@ import { createServer, type ViteDevServer } from 'vite-plus'
 import { expect, it } from 'vitest'
 import { skipWithoutChromium, temp, linkDependencies } from './helpers.ts'
 import { extensionModules } from '../server/vite-extensions.ts'
+import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 
 it.for(['builtin', 'user', 'project'] as const)(
   'scans and hot-reloads created, edited and removed %s facets without navigating',
@@ -26,6 +27,7 @@ it.for(['builtin', 'user', 'project'] as const)(
       await mkdir(join(ultimate, 'web/src'), { recursive: true })
       await mkdir(extensions, { recursive: true })
       await mkdir(project, { recursive: true })
+      new ProjectTrustStore(join(user, '.ultimate')).set(project, true)
       await copyFile(resolve('vite.config.ts'), join(ultimate, 'vite.config.ts'))
       await linkDependencies(ultimate)
       await writeFile(join(ultimate, 'package.json'), '{"type":"module"}')

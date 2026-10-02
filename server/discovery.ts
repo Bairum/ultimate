@@ -2,18 +2,22 @@ import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { discoveryRoots } from './project.ts'
 import type { Source } from './project.ts'
+import { useProjectSetup } from './project-setup.ts'
 import { DEFAULT_EXTENSIONS, extensionSettings } from './extension-settings.ts'
 
 export async function discoverExtensions(
   ultimateRoot: string,
   projectRoot: string,
   userHome?: string,
+  includeProject = false,
 ) {
   const winners = new Map<
     string,
     { name: string; path: string; source: Source; files: string[]; error?: string }
   >()
   for (const root of discoveryRoots(ultimateRoot, projectRoot, userHome)) {
+    if (root.source === 'project' && !includeProject && !useProjectSetup(projectRoot, userHome))
+      continue
     const directory = join(root.path, 'extensions')
     const entries = await readdir(directory, { withFileTypes: true }).catch(
       (error: NodeJS.ErrnoException) => {

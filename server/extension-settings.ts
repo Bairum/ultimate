@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { useProjectSetup } from './project-setup.ts'
 
 export const DEFAULT_EXTENSIONS = [
   'agent',
@@ -13,6 +14,7 @@ export const DEFAULT_EXTENSIONS = [
   'faux',
   'codemode',
   'browser',
+  'onboarding',
 ] as const
 
 export function extensionSettingsFiles(projectRoot: string, userHome = homedir()) {
@@ -21,9 +23,14 @@ export function extensionSettingsFiles(projectRoot: string, userHome = homedir()
 
 export async function extensionSettings(projectRoot: string, userHome?: string) {
   const overrides = new Map<string, boolean>()
+  const layers = new Map<string, 'user' | 'project'>()
   const contents: (string | null)[] = []
   const notices: string[] = []
-  for (const path of extensionSettingsFiles(projectRoot, userHome)) {
+  for (const [index, path] of extensionSettingsFiles(projectRoot, userHome).entries()) {
+    if (index === 1 && !useProjectSetup(projectRoot, userHome)) {
+      contents.push(null)
+      continue
+    }
     let content: string | null = null
     try {
       content = await readFile(path, 'utf8')
@@ -38,7 +45,10 @@ export async function extensionSettings(projectRoot: string, userHome?: string) 
         if (names === undefined) continue
         if (!Array.isArray(names) || names.some((name) => typeof name !== 'string'))
           throw new Error(`extensions.${key} must be an array of names`)
-        for (const name of names) overrides.set(name, enabled)
+        for (const name of names) {
+          overrides.set(name, enabled)
+          layers.set(name, index === 0 ? 'user' : 'project')
+        }
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
@@ -46,5 +56,5 @@ export async function extensionSettings(projectRoot: string, userHome?: string) 
     }
     contents.push(content)
   }
-  return { overrides, contents, notices }
+  return { overrides, layers, contents, notices }
 }

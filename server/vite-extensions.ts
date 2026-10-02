@@ -5,6 +5,7 @@ import { discoverExtensions } from './discovery.ts'
 import { discoveryRoots } from './project.ts'
 import { watchRoots } from './watch-roots.ts'
 import { extensionSettingsFiles } from './extension-settings.ts'
+import { useProjectSetup } from './project-setup.ts'
 
 const virtual = 'virtual:ultimate/web-facets'
 const resolved = '\0' + virtual
@@ -16,7 +17,8 @@ export function extensionModules(
   const roots = discoveryRoots(ultimateRoot, projectRoot, userHome).map((root) =>
     join(root.path, 'extensions'),
   )
-  const settingsFiles = extensionSettingsFiles(projectRoot, userHome)
+  const trustFile = join(userHome, '.ultimate/trust.json')
+  const settingsFiles = [...extensionSettingsFiles(projectRoot, userHome), trustFile]
   let stopWatching: (() => void) | undefined
   return {
     name: 'ultimate:extension-modules',
@@ -68,7 +70,10 @@ export function extensionModules(
         return (
           (await readFile(join(ultimateRoot, 'web/src/index.css'), 'utf8')) +
           '\n' +
-          roots.map((root) => `@source ${JSON.stringify(root)};`).join('\n')
+          roots
+            .filter((_, index) => index !== 2 || useProjectSetup(projectRoot, userHome))
+            .map((root) => `@source ${JSON.stringify(root)};`)
+            .join('\n')
         )
       if (id !== resolved) return undefined
       const facets = (await discoverExtensions(ultimateRoot, projectRoot, userHome)).filter(
@@ -100,10 +105,15 @@ export function extensionModules(
           !roots.some((root) => file === root || file.startsWith(root + '/'))
         )
           return
-        const module = server.moduleGraph.getModuleById(resolved)
-        if (module) {
-          server.moduleGraph.invalidateModule(module)
-          void server.reloadModule(module)
+        for (const id of [
+          resolved,
+          ...(file === trustFile ? [join(ultimateRoot, 'web/src/index.css')] : []),
+        ]) {
+          const module = server.moduleGraph.getModuleById(id)
+          if (module) {
+            server.moduleGraph.invalidateModule(module)
+            void server.reloadModule(module)
+          }
         }
       }
       const stopRoots = watchRoots([...roots, ...settingsFiles], (root) => {

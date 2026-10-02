@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { discoverExtensions } from './discovery.ts'
+import { projectSetup } from './project-setup.ts'
+import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { discoveryRoots } from './project.ts'
 import { extensionSettings, extensionSettingsFiles } from './extension-settings.ts'
 import { watchRoots } from './watch-roots.ts'
@@ -39,7 +41,14 @@ export type ExtensionHost = Pick<
   onClose(cleanup: () => Promise<void>): void
   harness(): Harness
   system(): SystemInfo
+  /** Discovered extensions, including disabled project folders, with effective deciding layers. */
   extensions(): ExtensionInfo[]
+  /** Project setup availability, exact-root decision, and capped README. */
+  projectSetup(): ReturnType<typeof projectSetup>
+  /** Remember the local/global choice and apply it through the live settings reload path. */
+  setProjectDecision(local: boolean): Promise<void>
+  /** Apply settings writes to the registry, browser facets, and styles before returning. */
+  reloadExtensions(): Promise<void>
   doc(kind: string): ConversationDocToken<JsonObject> | undefined
   metadata: typeof Metadata
 }
@@ -50,7 +59,7 @@ export type Watch = (attach: (watcher: ViteDevServer['watcher']) => () => void) 
 export async function loadExtensions(
   vite: ViteDevServer,
   host: PreparedHost,
-  changed: () => void,
+  changed: () => void | Promise<void>,
   runtime: Pick<ExtensionHost, 'harness' | 'system'>,
   watch: Watch,
   notice: (message: string) => void = () => {},
@@ -91,16 +100,53 @@ export async function loadExtensions(
     harness: runtime.harness,
     system: runtime.system,
     extensions: () => [...records.values()],
+    projectSetup: () => projectSetup(host.projectRoot, host.userHome),
+    setProjectDecision: async (local) => {
+      new ProjectTrustStore(join(host.userHome, '.ultimate')).set(host.projectRoot, local)
+      await extensionHost.reloadExtensions()
+    },
+    reloadExtensions: async () => {
+      chain = chain.then(() => reloadSettings())
+      await chain
+      for (const id of [
+        '\0virtual:ultimate/web-facets',
+        join(host.ultimateRoot, 'web/src/index.css'),
+      ]) {
+        const module = vite.moduleGraph.getModuleById(id)
+        if (module) {
+          vite.moduleGraph.invalidateModule(module)
+          await vite.reloadModule(module)
+        }
+      }
+    },
     doc: findDoc,
     metadata: Metadata,
   }
   const installed = host.extensionOrders
   let chain = Promise.resolve()
   let closed = false
-  const settingsFiles = extensionSettingsFiles(host.projectRoot, host.userHome)
+  const settingsFiles = [
+    ...extensionSettingsFiles(host.projectRoot, host.userHome),
+    join(host.userHome, '.ultimate/trust.json'),
+  ]
   let previousSettings: string | undefined
+  async function discover() {
+    const active = await discoverExtensions(host.ultimateRoot, host.projectRoot, host.userHome)
+    const available = await discoverExtensions(
+      host.ultimateRoot,
+      host.projectRoot,
+      host.userHome,
+      true,
+    )
+    return [
+      ...active,
+      ...available
+        .filter((entry) => !active.some((current) => current.name === entry.name))
+        .map((entry) => ({ ...entry, enabled: false })),
+    ].toSorted((a, b) => a.name.localeCompare(b.name))
+  }
   async function reload(selected?: Set<string>, servers = selected) {
-    const winners = await discoverExtensions(host.ultimateRoot, host.projectRoot, host.userHome)
+    const winners = await discover()
     const folders = winners.map((winner) => winner.name)
     const settings = await extensionSettings(host.projectRoot, host.userHome)
     const signature = JSON.stringify([settings.contents, folders])
@@ -111,8 +157,12 @@ export async function loadExtensions(
       previousSettings = signature
     }
     for (const { name, path, source, enabled, files, error: discoveryError } of winners) {
-      if (selected && !selected.has(name)) continue
       const previous = records.get(name)
+      const layer = settings.layers.get(name) ?? (source === 'builtin' ? 'default' : 'folder')
+      if (selected && !selected.has(name)) {
+        if (previous) previous.layer = layer
+        continue
+      }
       let readme: string | undefined
       if (files.includes('README.md'))
         readme = (await readFile(join(path, 'README.md'), 'utf8')).trim().split(/\n\s*\n/)[0]
@@ -121,6 +171,7 @@ export async function loadExtensions(
         path,
         source,
         enabled,
+        layer,
         actions: Object.keys(actions.get(name) ?? {}),
         readme,
         facets: { server: files.includes('server.ts'), web: files.includes('web.tsx') },
@@ -182,10 +233,10 @@ export async function loadExtensions(
       }
     }
     host.builds.refresh(settings.contents)
-    changed()
+    await changed()
   }
   async function reloadSettings() {
-    const winners = await discoverExtensions(host.ultimateRoot, host.projectRoot, host.userHome)
+    const winners = await discover()
     await reload(
       new Set(
         winners
@@ -246,7 +297,7 @@ export async function loadExtensions(
       .catch((error) => {
         for (const record of records.values())
           if (record.server) record.server.error = String(error)
-        changed()
+        return changed()
       })
   }
   const onStructure = (file: string) => {

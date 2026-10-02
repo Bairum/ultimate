@@ -4,6 +4,7 @@ import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import { parseFrontmatter, resolveCliModel } from '@earendil-works/pi-coding-agent'
 import type { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import type { Source } from '../../server/project.ts'
+import { useProjectSetup } from '../../server/project-setup.ts'
 
 export interface AgentDefinition {
   name: string
@@ -85,7 +86,9 @@ export async function discoverAgents(
   const roots = [
     { source: 'builtin' as const, path: join(ultimateRoot, 'agents') },
     { source: 'user' as const, path: join(userHome, '.ultimate/agents') },
-    { source: 'project' as const, path: join(projectRoot, '.ultimate/agents') },
+    ...(useProjectSetup(projectRoot, userHome)
+      ? [{ source: 'project' as const, path: join(projectRoot, '.ultimate/agents') }]
+      : []),
   ]
   const definitions = new Map<string, AgentDefinition & { source: Source }>()
   const errors: AgentDiscovery['errors'] = []

@@ -16,6 +16,7 @@ import {
 import { promisify } from 'node:util'
 import { relative, basename, join } from 'node:path'
 import { projectSkills } from './skills.ts'
+import { projectSetup } from './project-setup.ts'
 import { getAgentDir, loadProjectContextFiles } from '@earendil-works/pi-coding-agent'
 import type { ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { Watch } from './extensions.ts'
@@ -95,6 +96,7 @@ export async function createSystem(
         root: host.projectRoot,
         name: basename(host.projectRoot),
         hasConfig: existsSync(config),
+        ...(await projectSetup(host.projectRoot, host.userHome)),
         settings: settings as SystemInfo['project']['settings'],
         ...(settingsError ? { settingsError } : {}),
       },

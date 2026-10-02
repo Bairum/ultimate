@@ -49,6 +49,7 @@ export interface ExtensionInfo {
   name: string
   enabled: boolean
   source: 'builtin' | 'user' | 'project'
+  layer: 'default' | 'user' | 'project' | 'folder'
   path: string
   actions: string[]
   readme?: string
@@ -101,6 +102,9 @@ export interface SystemInfo {
     root: string
     name: string
     hasConfig: boolean
+    config: boolean
+    decision: boolean | null
+    readme?: string
     settings: Record<string, JsonValue>
     settingsError?: string
   }

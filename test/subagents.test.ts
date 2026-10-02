@@ -15,6 +15,7 @@ import codemode from '../extensions/codemode/server.ts'
 import { Metadata } from '../server/metadata.ts'
 import { UiState } from '../server/ui-state.ts'
 import { discoverAgents, parseDefinition } from '../extensions/subagents/agents.ts'
+import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { until, temp } from './helpers.ts'
 
 const directories: string[] = []
@@ -67,6 +68,9 @@ async function fixture(
         throw new Error('Not used')
       },
       extensions: () => [],
+      reloadExtensions: async () => {},
+      projectSetup: async () => ({ config: false, decision: null }),
+      setProjectDecision: async () => {},
       doc: () => undefined,
       metadata: Metadata,
     }),
@@ -262,6 +266,7 @@ describe('subagents', () => {
           .replace('name: scout', `name: ${name}`)
           .replace('tools: [read, bash]', `model: ${model}\n${thinking}`),
       )
+    new ProjectTrustStore(join(home, '.ultimate')).set(cwd, true)
     const found = await discoverAgents(repo, cwd, home, modelRuntime)
     expect(found.definitions.find((agent) => agent.name === 'exact')?.model).toEqual({
       provider: 'anthropic',
