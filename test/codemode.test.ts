@@ -26,6 +26,7 @@ async function fixture() {
   await cp(resolve('extensions/coding-tools'), join(ultimateRoot, 'extensions/coding-tools'), {
     recursive: true,
   })
+  await cp(resolve('extensions/faux'), join(ultimateRoot, 'extensions/faux'), { recursive: true })
   await mkdir(join(ultimateRoot, 'web'), { recursive: true })
   await linkDependencies(ultimateRoot)
   await writeFile(
@@ -33,12 +34,6 @@ async function fixture() {
     "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', cacheDir: '.vite-cache', optimizeDeps: { noDiscovery: true } })",
   )
   await writeFile(join(ultimateRoot, 'web/index.html'), '<html>Codemode</html>')
-  // Type-only server imports erase; auth.ts is a runtime import used by ultimate.models().
-  await mkdir(join(ultimateRoot, 'server'))
-  await writeFile(
-    join(ultimateRoot, 'server/auth.ts'),
-    await readFile(resolve('server/auth.ts'), 'utf8'),
-  )
   await writeFile(
     join(ultimateRoot, 'extensions/codemode/server.ts'),
     await readFile(resolve('extensions/codemode/server.ts'), 'utf8'),

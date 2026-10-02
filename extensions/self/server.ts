@@ -2,7 +2,6 @@ import { awaitWithContext } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
-import { requestSwap } from '../../server/supervisor-protocol.ts'
 
 import type { ExtensionHost } from '../../server/extensions.ts'
 
@@ -57,7 +56,7 @@ export default (host: ExtensionHost) =>
               ],
             }
           const error = await awaitWithContext(
-            requestSwap(async (generation) => {
+            host.restart(async (generation) => {
               await api.memo(
                 key,
                 {
@@ -67,7 +66,7 @@ export default (host: ExtensionHost) =>
                 },
                 context,
               )
-            }, host.build()),
+            }),
             context,
           )
           return {

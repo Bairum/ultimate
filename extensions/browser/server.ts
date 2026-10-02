@@ -88,7 +88,6 @@ export default function browserExtension(host: ExtensionHost) {
         replay: 'safe',
         parameters: Type.Object({
           ...base,
-          conversation: Type.Optional(Type.String()),
           width: Type.Optional(Type.Integer({ minimum: 1 })),
           height: Type.Optional(Type.Integer({ minimum: 1 })),
           fullPage: Type.Optional(Type.Boolean()),
@@ -204,6 +203,12 @@ export default function browserExtension(host: ExtensionHost) {
       })
       page.on('pageerror', (error) => outcomes.push(`Page error: ${error.message}`))
       const url = new URL(args.path ?? '', args.url ?? host.system().process.url).href
+      if (args.theme && new URL(url).origin === new URL(host.system().process.url).origin) {
+        await page.addInitScript(
+          (theme) => localStorage.setItem('ultimate.theme', theme),
+          args.theme,
+        )
+      }
       api.output(`Loading ${url}\n`)
       await page.goto(url, { waitUntil: 'domcontentloaded' })
       const result = await action(page, outcomes)

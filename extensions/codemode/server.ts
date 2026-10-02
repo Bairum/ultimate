@@ -29,7 +29,6 @@ import type {
   ToolExecutionResult,
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { listModels } from '../../server/auth.ts'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 
 export const Store = defineDoc({
@@ -203,7 +202,7 @@ function globals(
       name: 'models',
       description: 'Model metadata (no credentials or provider headers).',
       signature: '(): Promise<unknown[]>',
-      execute: async () => (await listModels(host.modelRuntime)).models,
+      execute: () => host.models(),
     },
     {
       name: 'doc',

@@ -8,6 +8,7 @@ import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
 import type { ConversationView } from '@earendil-works/pi-durable'
 import { defineExtension, InboxDoc, LiveDoc } from '@earendil-works/pi-durable'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   fauxServer as createServer,
@@ -34,12 +35,20 @@ afterEach(async () => {
   for (const directory of directories.splice(0))
     await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
 })
-async function fixture(extra = false, agents = false, sources?: Record<string, string>) {
+async function fixture(
+  extra = false,
+  agents = false,
+  sources?: Record<string, string>,
+  empty = false,
+) {
   const directory = await temp()
   directories.push(directory)
   const ultimateRoot = join(directory, 'repo')
   await mkdir(join(ultimateRoot, 'extensions', 'prompt'), { recursive: true })
   await cp(resolvePath('extensions/coding-tools'), join(ultimateRoot, 'extensions/coding-tools'), {
+    recursive: true,
+  })
+  await cp(resolvePath('extensions/faux'), join(ultimateRoot, 'extensions/faux'), {
     recursive: true,
   })
   await mkdir(join(ultimateRoot, 'web'), { recursive: true })
@@ -98,6 +107,10 @@ async function fixture(extra = false, agents = false, sources?: Record<string, s
       await writeFile(join(ultimateRoot, 'extensions', name, 'server.ts'), source)
     }
   }
+  if (empty) {
+    await rm(join(ultimateRoot, 'extensions'), { recursive: true })
+    await mkdir(join(ultimateRoot, 'extensions'))
+  }
   const options = {
     ultimateRoot,
     // Explicit, so an inherited ULTIMATE_PROJECT (tests run from inside Ultimate) cannot add its project's extensions.
@@ -125,6 +138,60 @@ export const order = ${order}
 export default defineExtension({ name: '${name}', sections: [section('${name === '0-new' ? 'new' : name}', () => '${name}')], tools: [defineTool({ name: '${name === '0-new' ? 'new' : name}', description: '${name}', parameters: Type.Object({}), execute: async () => ({}) })] })`
 
 describe('server', () => {
+  it('serves and completes a faux submit with an empty extensions directory', async () => {
+    const { server } = await fixture(false, false, undefined, true)
+    expect((await fetch(server.url)).status).toBe(200)
+    expect(server.extensions.info()).toEqual([])
+    server.host.faux!.setResponses([fauxAssistantMessage('Core-only response')])
+    const submitted = await server.root.submit({ type: 'input', content: 'hello' }, context)
+    await submitted.wait(context)
+    await server.harness.waitForIdle(context)
+    const view = await server.root.viewState(context)
+    try {
+      const messages = view.value.entries.flatMap((entry) => entry.model ?? [])
+      expect(
+        messages.some((message) => message.role === 'assistant' && message.stopReason === 'stop'),
+      ).toBe(true)
+      expect(messages.some((message) => message.role === 'toolResult')).toBe(false)
+    } finally {
+      view.dispose()
+    }
+    await expect(readFile(join(server.host.home, 'demo.txt'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+  })
+  it('passes exactly the documented ExtensionHost keys to extensions', async () => {
+    const { server } = await fixture(false, false, {
+      inspect: `import { defineExtension } from '@earendil-works/pi-durable'
+let keys
+export default (host) => { keys = Object.keys(host).toSorted(); return defineExtension({ name: 'inspect' }) }
+export const actions = { keys: async () => keys }`,
+    })
+    const response = await post(server, '/api/extensions/inspect/actions/keys', { args: null })
+    expect(response.status).toBe(200)
+    expect(response.data.result).toEqual(
+      [
+        'build',
+        'doc',
+        'extensions',
+        'faux',
+        'harness',
+        'home',
+        'modelRuntime',
+        'models',
+        'onClose',
+        'projectRoot',
+        'resource',
+        'restart',
+        'settings',
+        'skills',
+        'system',
+        'uiState',
+        'ultimateRoot',
+        'userHome',
+      ].toSorted(),
+    )
+  })
   it('does not inherit the supervisor public URL in an embedded server', async () => {
     vi.stubEnv('ULTIMATE_PUBLIC_URL', 'http://127.0.0.1:1')
     try {
@@ -645,8 +712,6 @@ describe('server', () => {
     expect(stream.events.find((event) => event.name === 'notice')!.data).toEqual(
       expect.objectContaining({ message: 'Unknown extension document: missing' }),
     )
-    const { fauxAssistantMessage, fauxToolCall } =
-      await import('@earendil-works/pi-ai/providers/faux')
     server.host.faux!.setResponses([
       fauxAssistantMessage([fauxToolCall('increment', {})], { stopReason: 'toolUse' }),
       fauxAssistantMessage('Incremented'),

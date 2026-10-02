@@ -432,17 +432,12 @@ export async function createApi(
                 const provider = text(model.provider, 'model.provider'),
                   modelId = text(model.modelId, 'model.modelId')
                 if (
-                  !(
-                    provider === 'faux' &&
-                    modelId === 'faux-1' &&
-                    (process.env.ULTIMATE_FAUX === '1' ||
-                      (await root.agent(context)).model?.provider === 'faux')
-                  ) &&
-                  !host.modelRuntime
-                    .getAvailableSnapshot()
-                    .some(
-                      (candidate) => candidate.provider === provider && candidate.id === modelId,
-                    )
+                  !(await host.models()).some(
+                    (candidate) =>
+                      candidate.available &&
+                      candidate.provider === provider &&
+                      candidate.id === modelId,
+                  )
                 )
                   throw new HttpError(400, 'Model is not available')
               }

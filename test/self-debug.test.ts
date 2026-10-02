@@ -3,7 +3,7 @@ import { once } from 'node:events'
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import type { ConversationId, JsonObject } from '@earendil-works/pi-durable'
 import {
   fauxServer as createServer,
@@ -71,7 +71,37 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
     expect((await readFile(join(home, 'screenshots', files[0]))).subarray(1, 4).toString()).toBe(
       'PNG',
     )
-    await (await browserState.launched!).close()
+    const browser = await browserState.launched!
+    const newContext = browser.newContext.bind(browser)
+    const themes: { preference: string | null; dark: boolean }[] = []
+    const observe = vi.spyOn(browser, 'newContext').mockImplementation(async (options) => {
+      const isolated = await newContext(options)
+      isolated.on('page', (page) => {
+        const screenshot = page.screenshot.bind(page)
+        vi.spyOn(page, 'screenshot').mockImplementation(async (captureOptions) => {
+          themes.push(
+            await page.evaluate(() => ({
+              preference: localStorage.getItem('ultimate.theme'),
+              dark: document.documentElement.classList.contains('dark'),
+            })),
+          )
+          return screenshot(captureOptions)
+        })
+      })
+      return isolated
+    })
+    const ui = await server.host.uiState(context)
+    for (const theme of ['light', 'dark']) {
+      const shot = await run(server, 'screenshot', { theme, waitMs: 500 })
+      expect(shot.isError).not.toBe(true)
+    }
+    expect(themes).toEqual([
+      { preference: 'light', dark: false },
+      { preference: 'dark', dark: true },
+    ])
+    expect(await server.host.uiState(context)).toEqual(ui)
+    observe.mockRestore()
+    await browser.close()
     const recovered = await run(server, 'screenshot', { url: server.url, waitMs: 0 })
     expect(recovered.isError).not.toBe(true)
     expect(recovered.content.some((block) => block.type === 'image')).toBe(true)

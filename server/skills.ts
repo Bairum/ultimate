@@ -1,9 +1,9 @@
 import { join } from 'node:path'
 import { getAgentDir, loadSkills } from '@earendil-works/pi-coding-agent'
-import type { PreparedHost } from './harness.ts'
+import type { SettingsManager } from '@earendil-works/pi-coding-agent'
 
 export function projectSkills(
-  host: Pick<PreparedHost, 'projectRoot' | 'userHome' | 'settings'>,
+  host: { projectRoot: string; userHome: string; settings: SettingsManager },
   cwd = host.projectRoot,
 ) {
   const layers = [

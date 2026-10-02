@@ -5,15 +5,10 @@ import {
 } from '@earendil-works/pi-coding-agent'
 import { defineExtension, section } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { projectSkills } from '../../server/skills.ts'
 
 export const order = -100
 
 export default function prompt(host: ExtensionHost) {
-  const resources = (cwd: string) => ({
-    context: loadProjectContextFiles({ cwd, agentDir: getAgentDir() }),
-    skills: projectSkills(host, cwd),
-  })
   return defineExtension({
     name: 'prompt',
     sections: [
@@ -57,31 +52,39 @@ export default function prompt(host: ExtensionHost) {
             : []),
         ].join('\n')
       }),
-      section(
-        'tools',
-        () =>
-          `- read: inspect files; use it instead of cat or sed, with offset/limit for large files.
-- bash: run commands, tests, and searches (rg, find, ls, git). Long output is truncated; the full output is saved to a file you can read.
-- edit: precise replacements. Each edits[].oldText must match the file exactly and be unique; keep it small. Put several changes to one file into one call; edits are matched against the original file, so never overlap them.
-- write: new files or complete rewrites only.
-- You talk to the person through a web UI that renders Markdown: short paragraphs, lists, fenced code with a language, and file paths in backticks.`,
-      ),
+      section('tools', (input) => {
+        const guidance: Record<string, string> = {
+          read: '- read: inspect files; use it instead of cat or sed, with offset/limit for large files.',
+          bash: '- bash: run commands, tests, and searches (rg, find, ls, git). Long output is truncated; the full output is saved to a file you can read.',
+          edit: '- edit: precise replacements. Each edits[].oldText must match the file exactly and be unique; keep it small. Put several changes to one file into one call; edits are matched against the original file, so never overlap them.',
+          write: '- write: new files or complete rewrites only.',
+        }
+        return [
+          ...(input.agent.tools ?? []).flatMap((tool) =>
+            guidance[tool.name] ? [guidance[tool.name]] : [],
+          ),
+          '- You talk to the person through a web UI that renders Markdown: short paragraphs, lists, fenced code with a language, and file paths in backticks.',
+        ].join('\n')
+      }),
       section('project_context', (input) =>
-        resources(input.env?.cwd ?? host.projectRoot)
-          .context.map(
+        loadProjectContextFiles({
+          cwd: input.env?.cwd ?? host.projectRoot,
+          agentDir: getAgentDir(),
+        })
+          .map(
             (file) =>
               `<project_instructions path="${file.path}">\n${file.content}\n</project_instructions>`,
           )
           .join('\n\n'),
       ),
       section('skills', (input) => {
-        const skills = resources(input.env?.cwd ?? host.projectRoot).skills
+        const skills = host.skills(input.env?.cwd ?? host.projectRoot)
         return formatSkillsForPrompt(skills)
       }),
       section(
         'self',
         () =>
-          `Project (your work): ${host.projectRoot}\nUltimate (yourself): ${host.ultimateRoot}\n${host.projectRoot === host.ultimateRoot ? 'The project is Ultimate itself.\n' : ''}Project-specific extensions, agents, skills, and surfaces belong in ${host.projectRoot}/.ultimate/. Ultimate's core and built-ins live in its clone.\nUI: ${host.system().process.url}\nBefore changing yourself, read ${host.ultimateRoot}/AGENTS.md (layers, reloads, durability) and, for any UI, ${host.ultimateRoot}/extensions/README.md (new UI is a new extension folder).\n| Path in Ultimate | Reload |\n| web/ | Vite HMR immediately |\n| extensions/ | Reinstalled on save; active calls finish on old code |\n| agents/ | Read at use |\n| server/, shared/ | Call restart after editing; a failed typecheck or boot keeps the old process running |\n| bin/ | Human restart |\nNever call restart for web/, extensions/, or agents/.`,
+          `Project (your work): ${host.projectRoot}\nUltimate (yourself): ${host.ultimateRoot}\n${host.projectRoot === host.ultimateRoot ? 'The project is Ultimate itself.\n' : ''}Project-specific extensions, agents, skills, and surfaces belong in ${host.projectRoot}/.ultimate/. Ultimate's core and built-ins live in its clone.\nUI: ${host.system().process.url}\nBefore changing yourself, read ${host.ultimateRoot}/AGENTS.md (layers, reloads, durability) and, for any UI, ${host.ultimateRoot}/extensions/README.md (new UI is a new extension folder).\nCall restart only after editing server/ or shared/, never for web/, extensions/, or agents/.`,
       ),
       section('cwd', (input) => input.env?.cwd ?? host.projectRoot),
       section('build', () => {

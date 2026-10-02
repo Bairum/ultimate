@@ -26,6 +26,10 @@ export type ExtensionHost = Pick<
   | 'settings'
   | 'build'
   | 'uiState'
+  | 'faux'
+  | 'models'
+  | 'skills'
+  | 'restart'
 > & {
   resource<T>(key: string, create: () => T): T
   onClose(cleanup: () => Promise<void>): void
@@ -59,8 +63,20 @@ export async function loadExtensions(
       return resources.get(key) as T
     },
     onClose: (cleanup) => cleanups.add(cleanup),
-    ...host,
-    ...runtime,
+    ultimateRoot: host.ultimateRoot,
+    projectRoot: host.projectRoot,
+    userHome: host.userHome,
+    home: host.home,
+    modelRuntime: host.modelRuntime,
+    settings: host.settings,
+    build: host.build,
+    uiState: (caller) => host.uiState(caller),
+    faux: host.faux,
+    models: () => host.models(),
+    skills: (cwd) => host.skills(cwd),
+    restart: (approved) => host.restart(approved),
+    harness: runtime.harness,
+    system: runtime.system,
     extensions: () => [...records.values()],
     doc: findDoc,
   }
