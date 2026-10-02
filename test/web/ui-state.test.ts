@@ -47,24 +47,24 @@ describe('durable UI state', () => {
     const { state, requests, commit, ack, other, start } = setup()
     const listener = vi.fn<() => void>()
     state.subscribe(listener)
-    start({ 'shell.panelOpen': false, 'shell.view': 'board' })
+    start({ 'shell.panelOpen': false, 'shell.surface': 'board' })
 
     state.set('shell.panelOpen', true)
     state.set('shell.panel', 'info')
-    state.delete('shell.view')
+    state.delete('shell.surface')
     expect(state.get('shell.panelOpen')).toBe(true)
-    expect(state.get('shell.view')).toBeUndefined()
+    expect(state.get('shell.surface')).toBeUndefined()
     expect(listener).toHaveBeenCalled()
 
     await wait()
     expect(requests.map((request) => request.change)).toEqual([
       {
         set: { 'shell.panelOpen': true, 'shell.panel': 'info', ...marker(1) },
-        delete: ['shell.view'],
+        delete: ['shell.surface'],
       },
     ])
     // A stream update from before the write does not undo it.
-    state.receive({ 'shell.panelOpen': false, 'shell.view': 'board', other: 1 })
+    state.receive({ 'shell.panelOpen': false, 'shell.surface': 'board', other: 1 })
     expect(state.get('shell.panelOpen')).toBe(true)
     expect(state.get('other')).toBe(1)
 
@@ -84,8 +84,8 @@ describe('durable UI state', () => {
       delayMs: 5,
       onError: (error) => errors.push(error),
     })
-    state.receive({ 'shell.view': 'board' })
-    state.set('shell.view', 'board')
+    state.receive({ 'shell.surface': 'board' })
+    state.set('shell.surface', 'board')
     state.set('bad key', 1)
     expect(state.get('bad key')).toBe(1)
     await wait()

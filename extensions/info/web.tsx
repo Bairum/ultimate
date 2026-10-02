@@ -395,6 +395,15 @@ function Extensions({ system }: { system: SystemInfo }) {
                       web
                     </Tag>
                   )}
+                  <span
+                    className={cn(
+                      'text-[10.5px]',
+                      extension.source === 'builtin' ? 'text-muted-foreground/60' : 'text-brand',
+                    )}
+                    title={extension.path}
+                  >
+                    {extension.source}
+                  </span>
                   {server?.loadedAt && (
                     <span
                       className="ml-auto text-[10.5px] text-muted-foreground/60"

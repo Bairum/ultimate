@@ -6,10 +6,11 @@ import {
   extensionName,
   panelItems,
   rendererFor,
+  resolveSurface,
   slotItems,
-  viewItems,
+  surfaceItems,
 } from '../../web/src/sdk/registry.ts'
-import type { ExtensionLoader } from '../../web/src/sdk/registry.ts'
+import type { ExtensionLoader, SurfaceItem } from '../../web/src/sdk/registry.ts'
 import type { WebExtension } from '../../web/src/sdk/types.ts'
 
 const path = (name: string) => `../../extensions/${name}/web.tsx`
@@ -138,7 +139,7 @@ describe('web extension registry', () => {
     expect(registry.getSnapshot()[0]).toBe(before)
   })
 
-  it('resolves renderers, panels, and views across facets', async () => {
+  it('resolves renderers and panels across facets', async () => {
     const First = component('first')
     const Second = component('second')
     const registry = createRegistry()
@@ -153,7 +154,6 @@ describe('web extension registry', () => {
           tools: { bash: Second },
           entries: { 'pi.compaction': Second },
           panels: [{ id: 'tasks', title: 'Tasks', component: Second, order: 1 }],
-          views: [{ id: 'board', title: 'Board', component: Second }],
         }),
     })
     const records = registry.getSnapshot()
@@ -161,7 +161,90 @@ describe('web extension registry', () => {
     expect(rendererFor(records, 'entries', 'pi.compaction')?.component).toBe(Second)
     expect(rendererFor(records, 'tools', 'read')).toBeUndefined()
     expect(panelItems(records).map((panel) => panel.id)).toEqual(['tasks', 'info'])
-    expect(viewItems(records).map((view) => `${view.extension}:${view.id}`)).toEqual(['b:board'])
+  })
+
+  it('lists surfaces with Agent first, then by order and title, a later facet winning an id', async () => {
+    const icon = component('icon')
+    const surface = (id: string, title: string, order?: number) => ({
+      id,
+      title,
+      icon,
+      order,
+      component: component(id),
+    })
+    const registry = createRegistry()
+    await registry.setLoaders({
+      [path('agent')]: async () => module({ surfaces: [surface('agent', 'Agent', 50)] }),
+      [path('apps')]: async () =>
+        module({
+          surfaces: [
+            surface('apps.zebra', 'Zebra'),
+            surface('apps.alpha', 'Alpha'),
+            surface('apps.first', 'Way first', -1),
+            surface('shared', 'Shared by apps'),
+          ],
+        }),
+      [path('broken')]: async () => {
+        throw new SyntaxError('Unexpected token')
+      },
+      [path('later')]: async () => module({ surfaces: [surface('shared', 'Shared by later')] }),
+    })
+    const items = surfaceItems(registry.getSnapshot())
+    expect(items.map((item) => `${item.extension}:${item.id}`)).toEqual([
+      'agent:agent',
+      'apps:apps.first',
+      'apps:apps.alpha',
+      'later:shared',
+      'apps:apps.zebra',
+    ])
+    expect(items.find((item) => item.id === 'shared')?.title).toBe('Shared by later')
+  })
+
+  it('shows the chosen surface, the project default, or Agent, and names a missing choice', () => {
+    const item = (id: string): SurfaceItem => ({
+      id,
+      title: id,
+      icon: component('icon'),
+      component: component(id),
+      extension: id,
+      version: 1,
+    })
+    const surfaces = [item('agent'), item('triage')]
+    const shown = (options: Parameters<typeof resolveSurface>[1]) => {
+      const { surface, ...rest } = resolveSurface(surfaces, options)
+      return { surface: surface?.id, ...rest }
+    }
+    expect(shown({ loading: false })).toEqual({ surface: 'agent', pending: false })
+    expect(shown({ chosen: 'triage', loading: false })).toEqual({
+      surface: 'triage',
+      pending: false,
+    })
+    // An explicit choice beats the project default, which applies only until the user picks.
+    expect(shown({ chosen: 'agent', preferred: 'triage', loading: false }).surface).toBe('agent')
+    expect(shown({ preferred: 'triage', loading: false }).surface).toBe('triage')
+    // A default naming no installed surface falls back quietly; a missing choice is reported.
+    expect(shown({ preferred: 'gone', loading: false })).toEqual({
+      surface: 'agent',
+      pending: false,
+    })
+    expect(shown({ chosen: 'gone', loading: false })).toEqual({
+      surface: 'agent',
+      pending: false,
+      missing: 'gone',
+    })
+    // While facets load, a surface that is not there yet may still arrive.
+    expect(shown({ chosen: 'gone', loading: true })).toEqual({ surface: undefined, pending: true })
+    expect(shown({ preferred: 'gone', loading: true })).toEqual({
+      surface: undefined,
+      pending: true,
+    })
+    expect(shown({ chosen: 'triage', loading: true }).surface).toBe('triage')
+    // Without even Agent, nothing resolves and the host shows its bare frame.
+    expect(resolveSurface([item('triage')], { chosen: 'gone', loading: false })).toEqual({
+      surface: undefined,
+      pending: false,
+      missing: 'gone',
+    })
   })
 
   it('hides a command whose when() throws and reports it instead of throwing', async () => {

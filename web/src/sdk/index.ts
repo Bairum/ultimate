@@ -9,18 +9,30 @@ export type {
   EntryRenderer,
   PanelContribution,
   SlotName,
+  SurfaceContribution,
   ToolCallView,
   ToolRenderer,
   UltimateActions,
   UltimateContext,
-  ViewContribution,
   WebExtension,
 } from './types.ts'
+/** Building blocks of surfaces; see "Surfaces" in extensions/README.md. */
+export {
+  Conversation,
+  Dock,
+  Header,
+  Panels,
+  Sidebar,
+  Slot,
+  StatusLine,
+} from '../app/primitives.tsx'
 export { api } from './client.ts'
+export { ActionError } from './api.ts'
 export type { Api } from './api.ts'
 export {
   getConversation,
   getState,
+  useAction,
   useAuthFlows,
   useCommands,
   useConnection,
@@ -41,7 +53,7 @@ export {
   useUiState,
   useUltimate,
 } from './hooks.ts'
-export type { ConversationState, Restart } from './hooks.ts'
+export type { ActionState, ConversationState, Restart } from './hooks.ts'
 export type { AuthFlow, Connection, State } from './store.ts'
 export {
   elidePath,
@@ -58,6 +70,8 @@ export type {
   AuthFlowEvent,
   BrowserAuthPrompt,
   ConversationSummary,
+  ExtensionActionRequest,
+  ExtensionActionResponse,
   ExtensionInfo,
   ModelsResponse,
   Notice,

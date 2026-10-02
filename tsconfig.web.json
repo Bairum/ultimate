@@ -16,5 +16,11 @@
     "skipLibCheck": true,
     "paths": { "@/*": ["./web/src/*"] }
   },
-  "include": ["web/src", "extensions/**/*.tsx", "shared/protocol.ts", "test/web"]
+  "include": [
+    "web/src",
+    "extensions/**/*.tsx",
+    ".ultimate/extensions/**/*.tsx",
+    "shared/protocol.ts",
+    "test/web"
+  ]
 }

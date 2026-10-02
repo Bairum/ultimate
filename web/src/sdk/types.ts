@@ -23,14 +23,20 @@ export interface PanelContribution {
   order?: number
 }
 
-/** A full main-area app view; while it shows, the conversation moves to a side dock with the composer. */
-export interface ViewContribution {
-  /** Global id, stored in `shell.view`; prefix it with the extension name when it is generic. */
+/**
+ * A full-screen composition the user switches to: the built-in Agent surface (`extensions/agent`) or an app. Build it
+ * from the primitives in `@/sdk` (`Header`, `Conversation`, `Dock`, `StatusLine`, …) and your own components.
+ */
+export interface SurfaceContribution {
+  /** Global id, stored in `shell.surface`; prefix it with the extension name when it is generic. `agent` is the home. */
   id: string
   title: string
-  icon?: ComponentType<{ className?: string }>
-  component: ComponentType
+  icon: ComponentType<{ className?: string }>
+  /** One line for the switcher. */
+  description?: string
+  /** Position after Agent in the switcher, ⌘K, and `mod+1…9`; lower first (default 0), then by title. */
   order?: number
+  component: ComponentType
 }
 
 /** One tool call as the transcript sees it: the model's call, live progress, and the result. */
@@ -67,8 +73,8 @@ export type EntryRenderer = ComponentType<{ entry: EntryRecord; core: ReactNode 
 /** Navigation and shell actions, passed to commands and returned by `useUltimate()`. */
 export interface UltimateActions {
   switchConversation: (id: number) => void
-  /** Show view `id` in the main area, or the conversation when `id` is undefined. */
-  openView: (id: string | undefined) => void
+  /** Show surface `id` (`agent` is the home); the conversation keeps running. */
+  showSurface: (id: string) => void
   /** Open the right panel, on tab `id` when given. */
   openPanel: (id?: string) => void
   closePanel: () => void
@@ -84,6 +90,8 @@ export interface UltimateActions {
 export interface UltimateContext extends UltimateActions {
   /** The shown conversation, once known. */
   conversationId?: number
+  /** The shown surface's id. */
+  surface: string
 }
 
 export interface CommandContribution {
@@ -103,7 +111,7 @@ export interface CommandContribution {
 export interface WebExtension {
   slots?: Partial<Record<SlotName, Contribution | readonly Contribution[]>>
   panels?: readonly PanelContribution[]
-  views?: readonly ViewContribution[]
+  surfaces?: readonly SurfaceContribution[]
   /** Tool-call renderers by tool name. */
   tools?: Readonly<Record<string, ToolRenderer>>
   /** Entry renderers by entry kind; they also replace the core renderer of a `pi.*` kind. */

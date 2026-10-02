@@ -30,7 +30,7 @@ import { indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
 import type { ToolResult } from './model.ts'
 import { ToolCallBlock } from './tool-call.tsx'
 
-/** The shown conversation; `dock` fits it beside a view. */
+/** The shown conversation; `dock` fits it into a narrow side region. */
 export function Transcript({ dock }: { dock?: boolean }) {
   const { entries, live, busy, loading } = useConversation()
   const { results, calls } = useMemo(() => indexTools(entries), [entries])
@@ -95,7 +95,9 @@ function EmptyState() {
       <div className="w-full max-w-md font-mono text-[12px]">
         <div className="text-[13px] font-semibold tracking-[0.3em] text-brand">ULTIMATE</div>
         <div className="mt-1 font-sans text-[13px] text-muted-foreground">
-          A coding agent that edits this repository, itself included.
+          {!system || system.project.root === system.code.ultimateRoot
+            ? 'A coding agent that edits this repository, itself included.'
+            : `A coding agent that edits ${system.project.name}, and can change itself too.`}
         </div>
         <div className="mt-5 grid grid-cols-[4rem_1fr] gap-x-3 gap-y-1 border-t border-border/70 pt-4 text-left">
           {rows.map(([label, value]) => (

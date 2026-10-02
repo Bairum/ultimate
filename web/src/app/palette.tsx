@@ -33,8 +33,10 @@ export function CommandPalette() {
   const open = useStore((state) => state.ui.paletteOpen)
   const commands = useCommands()
   const context = currentContext()
+  // The palette itself and a switch to the shown surface would do nothing here.
+  const hidden = new Set(['ultimate.palette', `ultimate.surface.${context.surface}`])
   const visible = open
-    ? commands.filter((command) => command.id !== 'ultimate.palette' && applies(command, context))
+    ? commands.filter((command) => !hidden.has(command.id) && applies(command, context))
     : []
   const groups = Map.groupBy(visible, (command) => command.group ?? command.extension)
   return (

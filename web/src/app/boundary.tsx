@@ -2,7 +2,8 @@ import { cn } from 'cn'
 import { PuzzleIcon, TriangleAlertIcon } from 'lucide-react'
 import { Component, Fragment } from 'react'
 import type { ErrorInfo, ReactNode } from 'react'
-import { ExtensionNameContext, useExtensions } from '../sdk/hooks.ts'
+import { shortenPath } from '../sdk/format.ts'
+import { ExtensionNameContext, useExtensions, useSystem } from '../sdk/hooks.ts'
 import { slotItems } from '../sdk/registry.ts'
 import type { SlotName } from '../sdk/types.ts'
 
@@ -57,7 +58,7 @@ export function ErrorCard({
 
 /**
  * Catches what one extension's component throws; a new version of the extension retries. Where one boundary position
- * shows different contributions (panel tabs, views), key it by extension and contribution, so an error stays with
+ * shows different contributions (panel tabs), key it by extension and contribution, so an error stays with
  * the contribution that threw.
  */
 export class ExtensionBoundary extends Component<
@@ -132,7 +133,17 @@ export function useSlotEmpty(name: SlotName): boolean {
 /** Extensions whose web facet failed to load, until it loads again. */
 export function ExtensionErrors() {
   const failed = useExtensions().filter((record) => record.error !== undefined)
+  const system = useSystem()
   if (failed.length === 0) return null
+  /** Where the facet lives: `extensions/…` in the clone, `~/.ultimate/…` or the project's `.ultimate/…` otherwise. */
+  const facet = (name: string) => {
+    const info = system?.extensions.find((extension) => extension.name === name)
+    if (!info) return `extensions/${name}/web.tsx`
+    return shortenPath(`${info.path}/web.tsx`, {
+      cwd: info.source === 'builtin' ? system?.code.ultimateRoot : system?.project.root,
+      user: system?.machine.user,
+    })
+  }
   return (
     <div className="pointer-events-none fixed right-3 bottom-10 z-40 flex w-96 max-w-[calc(100vw-1.5rem)] flex-col gap-2">
       {failed.map((record) => (
@@ -147,7 +158,7 @@ export function ExtensionErrors() {
           />
           <div className="flex items-center gap-1.5 px-2.5 pb-2 font-mono text-[10.5px] text-muted-foreground/80">
             <PuzzleIcon className="size-3" />
-            extensions/{record.name}/web.tsx
+            {facet(record.name)}
             {record.extension ? ' · previous version still running' : ' · not loaded'}
           </div>
         </div>

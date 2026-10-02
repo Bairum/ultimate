@@ -95,8 +95,8 @@ describe('web replica store', () => {
 
     // The root conversation's UI document rides along on every stream.
     source.send('ui', { value: { 'shell.panelOpen': true } })
-    source.send('uiOps', { ops: [['s', ['shell.view'], 'board']] })
-    expect(store.getState().shared).toEqual({ 'shell.panelOpen': true, 'shell.view': 'board' })
+    source.send('uiOps', { ops: [['s', ['shell.surface'], 'board']] })
+    expect(store.getState().shared).toEqual({ 'shell.panelOpen': true, 'shell.surface': 'board' })
 
     source.drop()
     expect(store.getState().connection.status).toBe('reconnecting')

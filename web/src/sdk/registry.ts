@@ -5,9 +5,9 @@ import type {
   EntryRenderer,
   PanelContribution,
   SlotName,
+  SurfaceContribution,
   ToolRenderer,
   UltimateContext,
-  ViewContribution,
   WebExtension,
 } from './types.ts'
 
@@ -35,7 +35,7 @@ export interface PanelItem extends PanelContribution {
   extension: string
   version: number
 }
-export interface ViewItem extends ViewContribution {
+export interface SurfaceItem extends SurfaceContribution {
   extension: string
   version: number
 }
@@ -167,12 +167,39 @@ export function panelItems(records: readonly ExtensionRecord[]): PanelItem[] {
     .toSorted((a, b) => (a.order ?? 0) - (b.order ?? 0))
 }
 
-export function viewItems(records: readonly ExtensionRecord[]): ViewItem[] {
-  return records
-    .flatMap(({ name, extension, version }) =>
-      (extension?.views ?? []).map((view) => ({ ...view, extension: name, version })),
-    )
-    .toSorted((a, b) => (a.order ?? 0) - (b.order ?? 0))
+/** The home surface: shown by default, and whenever the chosen surface cannot be. */
+export const HOME = 'agent'
+
+/** Surfaces as the switcher lists them: Agent first, then by `order` and title. A later facet wins an id. */
+export function surfaceItems(records: readonly ExtensionRecord[]): SurfaceItem[] {
+  const byId = new Map<string, SurfaceItem>()
+  for (const { name, extension, version } of records)
+    for (const surface of extension?.surfaces ?? [])
+      byId.set(surface.id, { ...surface, extension: name, version })
+  return [...byId.values()].toSorted(
+    (a, b) =>
+      Number(b.id === HOME) - Number(a.id === HOME) ||
+      (a.order ?? 0) - (b.order ?? 0) ||
+      a.title.localeCompare(b.title),
+  )
+}
+
+/**
+ * Which surface shows. The chosen one (`shell.surface`), else the project's `defaultSurface` when installed, else
+ * Agent. While facets still load, a surface not yet installed is `pending`; after that, a chosen surface that is
+ * missing falls back to Agent and is named in `missing`. `surface` is undefined only while pending or when even
+ * Agent is not installed.
+ */
+export function resolveSurface(
+  surfaces: readonly SurfaceItem[],
+  { chosen, preferred, loading }: { chosen?: string; preferred?: string; loading: boolean },
+): { surface?: SurfaceItem; pending: boolean; missing?: string } {
+  const find = (id: string | undefined) => surfaces.find((surface) => surface.id === id)
+  const wanted = chosen ?? (find(preferred) || loading ? preferred : undefined) ?? HOME
+  const surface = find(wanted)
+  if (surface) return { surface, pending: false }
+  if (loading) return { pending: true }
+  return { surface: find(HOME), pending: false, missing: chosen }
 }
 
 /**

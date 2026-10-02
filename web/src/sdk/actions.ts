@@ -1,17 +1,66 @@
 import { api, registry, store, uiState } from './client.ts'
-import { commandApplies, commandItems, panelItems, slotItems, viewItems } from './registry.ts'
+import {
+  HOME,
+  commandApplies,
+  commandItems,
+  panelItems,
+  resolveSurface,
+  slotItems,
+  surfaceItems,
+} from './registry.ts'
 import type { CommandItem } from './registry.ts'
 import type { CommandContribution, UltimateActions, UltimateContext } from './types.ts'
 
 /** Shell state that survives reloads and follows across tabs (see ui-state.ts). */
 export const shellKeys = {
   conversation: 'shell.conversation',
+  /** The chosen surface's id. */
+  surface: 'shell.surface',
+  /** `{ id, title }` of the surface on screen, which the agent's prompt names (extensions/surfaces). */
+  shownSurface: 'shell.shownSurface',
   panel: 'shell.panel',
   panelOpen: 'shell.panelOpen',
   sidebarOpen: 'shell.sidebarOpen',
-  view: 'shell.view',
-  dockOpen: 'shell.dockOpen',
+  /** `{ open, width }` of a surface's `Dock`, under `shell.dock.<surface id>.<side>`. */
+  dock: 'shell.dock',
 } as const
+
+/** The shown surface, from the installed facets, the chosen id, and the project's `defaultSurface`; now by default. */
+export function shownSurface(
+  records = registry.getSnapshot(),
+  chosen = uiState.get(shellKeys.surface),
+  preferred = store.getState().system?.project.settings.defaultSurface,
+) {
+  return resolveSurface(surfaceItems(records), {
+    chosen: typeof chosen === 'string' ? chosen : undefined,
+    preferred: typeof preferred === 'string' ? preferred : undefined,
+    loading: records.some((record) => record.loading),
+  })
+}
+
+/**
+ * Regions the shown surface renders (`Sidebar`, `Panels` mount themselves here); their header toggles and commands
+ * exist only while they do.
+ */
+const regions = new Map<'sidebar' | 'panels', number>()
+const regionListeners = new Set<() => void>()
+export const layout = {
+  mount: (region: 'sidebar' | 'panels') => {
+    regions.set(region, (regions.get(region) ?? 0) + 1)
+    for (const listener of regionListeners) listener()
+    return () => {
+      regions.set(region, (regions.get(region) ?? 1) - 1)
+      for (const listener of regionListeners) listener()
+    }
+  },
+  has: (region: 'sidebar' | 'panels') => (regions.get(region) ?? 0) > 0,
+  subscribe: (listener: () => void) => {
+    regionListeners.add(listener)
+    return () => {
+      regionListeners.delete(listener)
+    }
+  },
+}
 
 const flag = (key: string, fallback: boolean) => {
   const value = uiState.get(key)
@@ -20,10 +69,7 @@ const flag = (key: string, fallback: boolean) => {
 
 export const actions: UltimateActions = {
   switchConversation: (id) => uiState.set(shellKeys.conversation, id),
-  openView: (id) => {
-    if (id) uiState.set(shellKeys.view, id)
-    else uiState.delete(shellKeys.view)
-  },
+  showSurface: (id) => uiState.set(shellKeys.surface, id),
   openPanel: (id) => {
     uiState.set(shellKeys.panelOpen, true)
     if (id) uiState.set(shellKeys.panel, id)
@@ -52,7 +98,11 @@ export const actions: UltimateActions = {
 }
 
 export function currentContext(): UltimateContext {
-  return { ...actions, conversationId: store.getState().view?.conversation.id }
+  return {
+    ...actions,
+    conversationId: store.getState().view?.conversation.id,
+    surface: shownSurface().surface?.id ?? HOME,
+  }
 }
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -105,14 +155,14 @@ const core: CommandContribution[] = [
     id: 'ultimate.panel',
     title: 'Toggle the right panel',
     keys: 'mod+alt+b',
-    when: () => panelItems(registry.getSnapshot()).length > 0,
+    when: () => layout.has('panels') && panelItems(registry.getSnapshot()).length > 0,
     run: (context) => context.togglePanel(),
   },
   {
     id: 'ultimate.sidebar',
     title: 'Toggle the sidebar',
     keys: 'mod+b',
-    when: () => slotItems(registry.getSnapshot(), 'sidebar').length > 0,
+    when: () => layout.has('sidebar') && slotItems(registry.getSnapshot(), 'sidebar').length > 0,
     run: (context) => context.toggleSidebar(),
   },
   {
@@ -127,32 +177,18 @@ export const coreCommands: CommandItem[] = core.map((command) => ({
   extension: 'core',
 }))
 
-/** Core commands, a command per view, and extension commands. */
+/** Core commands, a command per surface (`mod+1…9` for the first nine), and extension commands. */
 export function allCommands(): CommandItem[] {
   const records = registry.getSnapshot()
-  const views = viewItems(records)
-  const shown = () => uiState.get(shellKeys.view)
   return [
     ...coreCommands,
-    ...(views.length
-      ? [
-          {
-            id: 'ultimate.view.conversation',
-            title: 'Show the conversation',
-            group: 'Views',
-            extension: 'core',
-            when: () => shown() !== undefined,
-            run: () => actions.openView(undefined),
-          },
-        ]
-      : []),
-    ...views.map((view) => ({
-      id: `ultimate.view.${view.id}`,
-      title: `Show ${view.title}`,
-      group: 'Views',
-      extension: view.extension,
-      when: () => shown() !== view.id,
-      run: () => actions.openView(view.id),
+    ...surfaceItems(records).map((surface, index) => ({
+      id: `ultimate.surface.${surface.id}`,
+      title: `Switch to ${surface.title}`,
+      keys: index < 9 ? `mod+${index + 1}` : undefined,
+      group: 'Surfaces',
+      extension: surface.extension,
+      run: () => actions.showSurface(surface.id),
     })),
     ...commandItems(records),
   ]

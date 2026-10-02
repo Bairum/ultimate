@@ -1,4 +1,4 @@
-import { createApi } from './api.ts'
+import { ActionError, actionMessage, createApi } from './api.ts'
 import { createRegistry } from './registry.ts'
 import { createStore } from './store.ts'
 import { createUiState } from './ui-state.ts'
@@ -31,6 +31,12 @@ uiState.subscribe(() => {
   store.show(typeof id === 'number' ? id : undefined)
 })
 addEventListener('pagehide', () => uiState.flush())
+// An action failure no caller handled: show it rather than lose it in the console.
+addEventListener('unhandledrejection', (event) => {
+  if (!(event.reason instanceof ActionError)) return
+  event.preventDefault()
+  store.notify({ level: 'error', message: actionMessage(event.reason) })
+})
 
 // These singletons own the live stream: a change to them reloads the page rather than run a second copy. The new
 // module only constructs (nothing connects before `start()`), then the page reloads.

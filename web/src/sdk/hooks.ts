@@ -18,8 +18,11 @@ import type {
   LiveState,
   UsageState,
 } from '@earendil-works/pi-durable'
-import { actions, allCommands } from './actions.ts'
+import { actions, allCommands, shellKeys, shownSurface } from './actions.ts'
+import { actionMessage } from './api.ts'
+import type { ActionError } from './api.ts'
 import { api, registry, store, uiState } from './client.ts'
+import { HOME } from './registry.ts'
 import type { State } from './store.ts'
 import { formatDuration } from './format.ts'
 import type { ToolCallView, UltimateContext } from './types.ts'
@@ -108,10 +111,19 @@ export function useDoc<T extends JsonObject = JsonObject>(
   return useStore((state) => state.docs[kind]) as Readonly<T> | null | undefined
 }
 
-/** The shown conversation id and the shell's actions. */
+/** The shown conversation and surface ids, and the shell's actions. */
 export function useUltimate(): UltimateContext {
   const conversationId = useStore((state) => state.view?.conversation.id)
-  return useMemo(() => ({ ...actions, conversationId }), [conversationId])
+  const surface = useShownSurface().surface?.id ?? HOME
+  return useMemo(() => ({ ...actions, conversationId, surface }), [conversationId, surface])
+}
+
+/** `shownSurface()` that re-renders when the facets, the choice, or the project's default change. */
+export function useShownSurface() {
+  const records = useExtensions()
+  const [chosen] = useUiState<JsonValue>(shellKeys.surface, null)
+  const preferred = useStore((state) => state.system?.project.settings.defaultSurface)
+  return shownSurface(records, chosen, preferred)
 }
 
 /**
@@ -247,6 +259,79 @@ export function useRestart(timeoutMs = 120000): Restart {
       )
     },
   }
+}
+
+export interface ActionState<T> {
+  /** The latest result; kept while a refetch runs, cleared when the action or its args change. */
+  data?: T
+  /** Why the latest call failed; cleared by the next success. */
+  error?: ActionError
+  /** A call is in flight. */
+  loading: boolean
+  /** Call again with the same args (also when `enabled` is false); resolves with the result, or undefined on failure. */
+  refetch: () => Promise<T | undefined>
+}
+
+/**
+ * Call a server action of an extension and keep its result: on mount and whenever `extension`, `name`, or `args`
+ * (compared as JSON) change, unless `enabled` is false. A newer call aborts the older one. A failure shows as a notice
+ * unless you pass `onError`.
+ */
+export function useAction<T = JsonValue>(
+  extension: string,
+  name: string,
+  args: JsonValue = null,
+  options: { enabled?: boolean; onError?: (error: ActionError) => void } = {},
+): ActionState<T> {
+  const key = JSON.stringify([extension, name, args])
+  const [state, setState] = useState<{
+    key: string
+    data?: T
+    error?: ActionError
+    loading: boolean
+  }>({ key, loading: options.enabled !== false })
+  const latest = useRef({
+    args,
+    onError: options.onError,
+    controller: undefined as AbortController | undefined,
+  })
+  latest.current.args = args
+  latest.current.onError = options.onError
+  const call = useCallback(async () => {
+    latest.current.controller?.abort()
+    const controller = new AbortController()
+    latest.current.controller = controller
+    setState((previous) => ({ ...(previous.key === key ? previous : { key }), loading: true }))
+    try {
+      const data = await api.action<T>(extension, name, latest.current.args, {
+        signal: controller.signal,
+      })
+      if (!controller.signal.aborted) setState({ key, data, loading: false })
+      return data
+    } catch (error) {
+      if (controller.signal.aborted) {
+        // Disabled or unmounted rather than replaced by a newer call: nothing is in flight anymore.
+        if (latest.current.controller === controller)
+          setState((previous) => ({ ...previous, loading: false }))
+        return undefined
+      }
+      const failure = error as ActionError
+      setState((previous) => ({ ...previous, key, error: failure, loading: false }))
+      const { onError } = latest.current
+      if (onError) onError(failure)
+      else store.notify({ level: 'error', message: actionMessage(failure) })
+      return undefined
+    }
+    // `key` stands for extension, name, and args.
+  }, [key])
+  const enabled = options.enabled !== false
+  useEffect(() => {
+    if (!enabled) return undefined
+    void call()
+    return () => latest.current.controller?.abort()
+  }, [call, enabled])
+  const current = state.key === key ? state : { key, loading: enabled }
+  return { data: current.data, error: current.error, loading: current.loading, refetch: call }
 }
 
 /** The current time, updated every `intervalMs` while `active`. */
