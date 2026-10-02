@@ -2,6 +2,8 @@ Run an isolated second Ultimate from the current working tree before restarting 
 
 `instance` supports start, stop, logs and list. Start allocates a temporary home and free localhost port, launches `node server/main.ts` without the supervisor, and waits up to 60 seconds for `/api/models`. Set faux for token-free testing, or provide a separate home. Startup errors include the combined output tail. Logs returns the last 200 lines; list shows running process-local instances. There are at most three concurrent instances, all stopped during host shutdown. Homes and logs are not durable instance registrations; temporary homes remain available for inspecting test artifacts.
 
+`start { subagent: <child id> }` reads the calling conversation's Subagents document and runs from that child's active worktree, with the worktree also set as the project. It refuses unknown children, discarded/shared-directory isolates, missing `server/main.ts` (not Ultimate), and missing `node_modules` (run `pnpm install`). The default model is unchanged: previews are real-model instances unless `faux: true` is supplied, even when the parent uses faux. No main state is copied; previews use a fresh temporary home unless a separate home is explicitly supplied. Pi Durable's public abort API runs task abort protocols rather than inertly terminalizing a copied database, while submitting or waiting starts its scheduler; copying pending work is therefore not offered.
+
 The tool is not replay-safe. Returned URLs can be passed directly to screenshot or browser. Never point a test instance at another running server's home.
 
 `web.tsx` renders each `instance` call: a started instance as a card with its URL as a link, pid, and home; `list` as one card per running instance; `logs` collapsible.

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtemp, mkdir } from 'node:fs/promises'
+import { mkdtemp, mkdir, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
 import { createServer } from 'node:net'
@@ -8,6 +8,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { Subagents } from '../subagents/server.ts'
 
 const info = ({ id, url, home, pid }: { id: string; url: string; home: string; pid: number }) => ({
   id,
@@ -16,7 +17,12 @@ const info = ({ id, url, home, pid }: { id: string; url: string; home: string; p
   pid,
 })
 
-export default function instanceExtension(host: ExtensionHost) {
+export default function instanceExtension(
+  host: Pick<
+    ExtensionHost,
+    'resource' | 'onClose' | 'home' | 'ultimateRoot' | 'projectRoot' | 'userHome'
+  >,
+) {
   const instances = host.resource('instance', () => {
     host.onClose(async () => {
       await Promise.all([...instances.keys()].map(stop))
@@ -55,7 +61,7 @@ export default function instanceExtension(host: ExtensionHost) {
       defineTool({
         name: 'instance',
         description:
-          'Start, inspect logs, list or stop isolated standalone Ultimate test servers (maximum three).',
+          'Start, inspect logs, list or stop isolated standalone Ultimate test servers (maximum three). Set subagent to preview a child worktree; set faux for token-free testing.',
         parameters: Type.Object({
           action: Type.Union(
             ['start', 'stop', 'logs', 'list'].map((action) => Type.Literal(action)),
@@ -63,6 +69,7 @@ export default function instanceExtension(host: ExtensionHost) {
           id: Type.Optional(Type.String()),
           faux: Type.Optional(Type.Boolean()),
           home: Type.Optional(Type.String()),
+          subagent: Type.Optional(Type.Integer({ minimum: 1 })),
         }),
         async execute(args, api, context) {
           let reserved = false
@@ -91,6 +98,25 @@ export default function instanceExtension(host: ExtensionHost) {
                 throw new Error('At most three instances may run at once')
               starts.pending++
               reserved = true
+              let cwd = host.ultimateRoot
+              let project = host.projectRoot
+              if (args.subagent !== undefined) {
+                const child = (await api.snapshot(Subagents, api.conversationId, context))?.agents[
+                  String(args.subagent)
+                ]
+                if (!child) throw new Error(`Unknown subagent: ${args.subagent}`)
+                if (child.isolate?.kind !== 'worktree' || child.isolate.state === 'discarded')
+                  throw new Error('Subagent must have an active worktree isolate')
+                cwd = project = child.isolate.path
+                for (const [path, directory, message] of [
+                  ['server/main.ts', false, 'Worktree is not Ultimate: missing server/main.ts'],
+                  ['node_modules', true, 'Worktree has no node_modules; run pnpm install first'],
+                ] as const) {
+                  const entry = await stat(join(cwd, path)).catch(() => undefined)
+                  if (!entry || (directory ? !entry.isDirectory() : !entry.isFile()))
+                    throw new Error(message)
+                }
+              }
               const home = args.home
                 ? resolvePath(args.home)
                 : await mkdtemp(join(tmpdir(), 'ultimate-instance-'))
@@ -126,7 +152,7 @@ export default function instanceExtension(host: ExtensionHost) {
                   ),
                 ),
                 ULTIMATE_HOME: home,
-                ULTIMATE_PROJECT: host.projectRoot,
+                ULTIMATE_PROJECT: project,
                 HOME: host.userHome,
                 ULTIMATE_PORT: String(port),
                 ULTIMATE_NO_OPEN: '1',
@@ -134,7 +160,7 @@ export default function instanceExtension(host: ExtensionHost) {
               }
               if (args.faux) env.ULTIMATE_FAUX = '1'
               const child = spawn(process.execPath, ['server/main.ts'], {
-                cwd: host.ultimateRoot,
+                cwd,
                 env,
                 stdio: ['ignore', 'pipe', 'pipe'],
               })
