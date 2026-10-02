@@ -6,14 +6,17 @@ to SQLite before anything is shown, so Ultimate can rewrite its own UI, extensio
 
 ## Start
 
-Needs Node 26 and pnpm, and a `pi` login (Ultimate shares `~/.pi/agent`: credentials, models, settings, skills).
+Needs Node 26 and pnpm, and a `pi` login (Ultimate shares `~/.pi/agent`: credentials, models, settings, skills). The
+screenshot and browser tools need a Chromium: `/usr/bin/chromium`, Google Chrome, Playwright's cached Chromium, or
+`ULTIMATE_CHROMIUM=<path>`.
 
 ```bash
 pnpm install
 pnpm start          # http://127.0.0.1:4747 opens in your browser
 ```
 
-- No `pi` login yet? Open the command palette (`Ctrl+K`) → "Log in to a provider". Logins are shared with `pi`.
+- No `pi` login yet? Open the command palette (`Ctrl+K`, `⌘K` on macOS) → "Log in to a provider". Logins are shared
+  with `pi`, and so is logging out.
 - On another machine: `ssh -L 4747:127.0.0.1:4747 <host>`, then open `http://127.0.0.1:4747`. Ultimate only listens on
   loopback.
 - State lives in `~/.ultimate` (`ULTIMATE_HOME`); the port is `ULTIMATE_PORT`. One Ultimate per home.
@@ -28,7 +31,8 @@ pnpm start          # http://127.0.0.1:4747 opens in your browser
 - "Use codemode to check which of your extensions failed to load" — one sandboxed script over its own runtime.
 - Change something in `server/` and ask it to `restart`: a new process boots and type-checks next to the old one, and the
   conversation carries on in the new generation. A failed boot rolls back.
-- Press `Ctrl+Alt+B` for the info panel: machine, process, storage, build, extensions, skills, tasks.
+- Press `Ctrl+Alt+B` for the right panel: Info (machine, process, storage, build, extensions, skills), Agents, Tasks,
+  and the codemode Store, each a tab.
 
 The conversation is one long-running thread by design; compaction keeps it going.
 
