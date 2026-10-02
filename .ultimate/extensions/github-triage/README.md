@@ -21,7 +21,8 @@ Files: `web.tsx` (surface, agent buttons), `list.tsx` (filters, list), `detail.t
 
 Safety: accidental GitHub writes by the agent are blocked at the process level. Wrapped `bash` (also used by
 codemode and subagents) prepends a `gh` shim that permits only read commands and blocks `auth token`, and unsets
-GitHub token environment variables. Scripts and indirect shell invocations use the same shim. This is not a security
+GitHub token environment variables. `auth git-credential` stays allowed because `git push` uses it as its credential
+helper; a script that calls it on purpose can read the token. Scripts and indirect shell invocations use the same shim. This is not a security
 boundary against a deliberately evasive shell (for example, calling `gh` by absolute path or forging browser headers).
 The agent proposes with `triage_propose` instead. Extension actions require same-origin browser request headers.
 The UI's Apply and Post only write to repositories listed in `githubTriage.writableRepos` in `.ultimate/settings.json`
