@@ -19,13 +19,17 @@ place.
 - **Build applications on the fly.** A surface is a full-screen composition of extensions: the agent interface you start
   with is one; a GitHub triage app, a dashboard, or an internal tool can be another. Ultimate provides the primitives
   (shadcn components, Tailwind, durable state, server actions, the docked agent), builds the surface with you, and you
-  switch to it while it is being built. Or hook an agent interface tailored to your application into your existing
+  switch to it while it is being built. Enable `surfaces` for the agent's surface awareness and `documents` for the
+  Documents tab when your app needs them. Or hook an agent interface tailored to your application into your existing
   project.
 - **Lean and malleable.** Like Pi and Pi Durable, the core stays as small as possible and everything else is replaceable.
 
 You do not have to build your application inside Ultimate, but you can build a lot with it out of the box.
 
 ## Start
+
+By default you get Pi's coding agent in a web UI: read, write, edit, bash, codemode, and browser debugging tools,
+with the conversation, model and thinking controls, login, and footer. Other built-ins are opt-in.
 
 Needs Node 26 and pnpm, and a `pi` login (Ultimate shares `~/.pi/agent`: credentials, models, settings, skills). The
 screenshot and browser tools need a Chromium: `/usr/bin/chromium`, Google Chrome, Playwright's cached Chromium, or
@@ -56,12 +60,31 @@ source stays in the clone; the tools and the conversation work in your project.
 - **Actions** let an extension's UI call its server code: `export const actions = { … }` in `server.ts`, then
   `useAction(extension, name, args)` in `web.tsx`. See [extensions/README.md](extensions/README.md).
 
+## Building blocks
+
+Built-ins live in the clone's `extensions/`. Enabled by default: `agent`, `coding-tools`, `prompt`, `models`,
+`status-line`, `notices`, `theme`, `faux` (inert outside demo mode), `codemode`, and `browser`.
+Available but off: `clock`, `documents`, `exclusive-commands`, `info`, `instance`, `plan`, `self`, `subagents`,
+`surfaces`, and `tasks`. Each folder's README describes the building block.
+
+Enable them in `~/.ultimate/settings.json` for this machine or `<project>/.ultimate/settings.json` for this project:
+
+```json
+{ "extensions": { "enable": ["self", "subagents", "surfaces", "documents"] } }
+```
+
+Settings layer defaults → machine → project; later layers win. `extensions.disable` can turn off any extension.
+Changes apply live, with no restart. User and project extension folders are enabled by default: adding the folder
+is the opt-in. This repository's [.ultimate/settings.json](.ultimate/settings.json) is the suggested full setup;
+it enables all the building blocks, which is why `pnpm start` in the clone gives you everything.
+
 ## Surfaces
 
 A surface is a full-screen app made of extensions: the **Agent** surface is the conversation you start with; another
 can be anything you build. Switch with the menu on the ULTIMATE brand, `⌘K` → "Switch to …", or `mod+1…9`. The agent
 stays docked on every surface and knows which one you are looking at, and the choice is durable: reloads, other tabs,
-and restarts land on the same view.
+and restarts land on the same view. Enable `surfaces` for the agent to know which surface you are viewing;
+enable `documents` if the app needs the Documents tab. Surface UI contributions themselves work without either.
 
 **Example: GitHub Triage.** This repository's own `.ultimate/extensions/github-triage/` was built by Ultimate itself
 through its UI: open issues and pull requests of any repository via the `gh` CLI, filters and search, details with the
@@ -70,6 +93,8 @@ agent can only propose; the UI writes labels or comments after you confirm, and 
 `githubTriage.writableRepos` in `.ultimate/settings.json`. If `gh` is missing or logged out, it shows how to set it up.
 
 ## What to try
+
+These examples use the full setup above; enable the corresponding building blocks in other projects.
 
 - Ask it anything about this repository; watch tool calls, diffs, and thinking stream in.
 - "Build a surface for …" — a whole app with its UI, server actions, and the agent docked beside it; switch to it while

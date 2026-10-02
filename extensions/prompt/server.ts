@@ -23,7 +23,6 @@ export default function prompt(host: ExtensionHost) {
 - Keep it simple: question the need, reuse what exists, prefer platform features and installed dependencies, and write the least code that solves the actual problem. No speculative abstractions, compatibility shims, or fallbacks for situations that do not exist.
 - Fail fast, iterate quickly, verify by trying: make a small change, run it, check the result in tests, the running app, or a screenshot, then take the next step.
 - Never claim success you have not verified. When a check fails, say so and show the output. When you skipped something, say that.
-- Delegate bounded work to subagents (recon, research, review, isolated implementation) and run independent ones in parallel. Verify what they return before you rely on it; the judgment stays with you.
 - Taste matters. Code reads like the code around it; UI is clean, consistent, and quiet. Leave things better than you found them, within the scope you were asked for.
 - Be concise and direct. Surface the risks and tradeoffs that matter, and recommend one option instead of listing them all.`,
       ),
@@ -82,10 +81,25 @@ export default function prompt(host: ExtensionHost) {
         const skills = host.skills(input.env?.cwd ?? host.projectRoot)
         return formatSkillsForPrompt(skills)
       }),
+      section('building_blocks', () => {
+        const off = host.extensions().filter((extension) => !extension.enabled)
+        if (!off.length) return undefined
+        return [
+          `Available but off building blocks live in ${host.ultimateRoot}/extensions/:`,
+          ...off.map((extension) => {
+            const sentence = extension.readme
+              ?.trim()
+              .split(/(?<=[.!?])\s/)[0]
+              ?.replace(/\s+/g, ' ')
+            return `- ${extension.name}: ${sentence ?? ''}`
+          }),
+          'Enable names with "extensions": { "enable": [...] } in ~/.ultimate/settings.json (this machine) or <project>/.ultimate/settings.json (this project). Changes apply live with no restart.',
+          `${host.ultimateRoot}/.ultimate/settings.json is the suggested full setup.`,
+        ].join('\n')
+      }),
       section(
-        'self',
-        () =>
-          `Project (your work): ${host.projectRoot}\nUltimate (yourself): ${host.ultimateRoot}\n${host.projectRoot === host.ultimateRoot ? 'The project is Ultimate itself.\n' : ''}Project-specific extensions, agents, skills, and surfaces belong in ${host.projectRoot}/.ultimate/. Ultimate's core and built-ins live in its clone.\nUI: ${host.system().process.url}\nBefore changing yourself, read ${host.ultimateRoot}/AGENTS.md (layers, reloads, durability) and, for any UI, ${host.ultimateRoot}/extensions/README.md (new UI is a new extension folder).\nCall restart only after editing server/ or shared/, never for web/, extensions/, or agents/.`,
+        'environment',
+        () => `Project: ${host.projectRoot}\nUI: ${host.system().process.url}`,
       ),
       section('cwd', (input) => input.env?.cwd ?? host.projectRoot),
       section('build', () => {

@@ -387,7 +387,11 @@ export default function codemode(host: ExtensionHost) {
     sections: [
       section('codemode', ({ agent }) =>
         agent.tools.some((tool) => tool.name === 'codemode')
-          ? 'Prefer codemode for many dependent or parallel tool calls, filtering large results, or introspecting Ultimate. For a single simple operation use its tool directly. Call restart only at top level. Only text(), images and the return value enter context; return concise findings.\n\n' +
+          ? 'Prefer codemode for many dependent or parallel tool calls, filtering large results, or introspecting Ultimate. For a single simple operation use its tool directly.' +
+            (agent.tools.some((tool) => tool.name === 'restart')
+              ? ' Call restart only at top level.'
+              : '') +
+            ' Only text(), images and the return value enter context; return concise findings.\n\n' +
             renderDeclarations({ tools: declarations(agent.tools) })
           : undefined,
       ),

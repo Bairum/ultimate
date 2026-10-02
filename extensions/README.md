@@ -32,8 +32,16 @@ replaces the whole extension, both facets:
 | `user`    | `~/.ultimate/extensions/`         | Your additions, in every project                                   |
 | `project` | `<project>/.ultimate/extensions/` | One project's tools and apps, committed with the project; wins all |
 
+Built-ins are available building blocks, not automatically enabled features. A new built-in stays off unless added
+explicitly to `DEFAULT_EXTENSIONS` in `server/extension-settings.ts`. Enable one with
+`{ "extensions": { "enable": ["hello"] } }` in `~/.ultimate/settings.json` (this machine) or
+`<project>/.ultimate/settings.json` (this project). Settings layer defaults → machine → project; later layers win.
+`extensions.disable` can turn off defaults or user/project extensions too. User and project extension folders are
+enabled by default: adding the folder is the opt-in. Settings changes apply live without a restart; unknown names
+produce a notice. The clone's `.ultimate/settings.json` is the suggested full setup.
+
 The project is the directory Ultimate was started in (`ultimate [dir]`); the Info panel lists every extension with its
-source, and the system prompt names both roots. Put a project's app in its `.ultimate/extensions/<name>/`. When the
+source when `info` is enabled; the building-blocks prompt names the clone root. Put a project's app in its `.ultimate/extensions/<name>/`. When the
 project is Ultimate itself, that is `.ultimate/extensions/` in the clone, not `extensions/`, which holds the built-ins.
 
 Extensions outside the clone import exactly what built-ins import (`@/sdk`, `@/components/…`, `react`,
@@ -98,7 +106,9 @@ export default defineWebExtension({
 })
 ```
 
-Save it and the item appears in the status line. No restart, no reload.
+Add a `README.md`, enable `hello` in settings if it is a built-in, and the item appears in the status line.
+For a project extension, use `<project>/.ultimate/extensions/hello/` instead; it is enabled automatically.
+No restart, no reload.
 
 ## Contributions
 
@@ -190,7 +200,7 @@ marker and returns `core` for the rest.
 ### Documents
 
 Extension documents are durable state on a conversation: a ledger, a store, login flows. The Documents tab
-(`extensions/documents`) lists every kind the server facets export for the shown conversation and shows each through
+(enable `documents` in settings) lists every kind the server facets export for the shown conversation and shows each through
 the renderer a web facet registers for it, or as a JSON tree without one. To give yours a view:
 
 1. Export the document from `server.ts`: `export const docs = [Plan]`, conversation-scoped tokens from `defineDoc`.
@@ -335,7 +345,8 @@ answers `{"result": …}` or `{"error": …}` (the URL is in the system prompt a
 
 The window shows one surface at a time. **Agent** is the built-in home surface (`extensions/agent`): the conversation
 with the sidebar and the right panel. An app surface puts its own UI first and keeps the agent one keystroke away,
-usually docked beside it.
+usually docked beside it. Enable `surfaces` in settings for the agent's surface-awareness prompt; the UI itself
+works without it. Enable `documents` if your app needs the Documents tab.
 
 - **Switching**: the brand at the top left opens the switcher (Agent first, then by `order`, then title); ⌘K has
   "Switch to …"; `mod+1…9` select the first nine (Ctrl+1…9 off macOS, which Chrome lets the page take before its tab

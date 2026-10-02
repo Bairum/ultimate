@@ -27,6 +27,17 @@ subscribe with `/api/events?conversation=<id>&docs=<kind>,<kind>` for `doc` snap
 The Documents tab shows each exported kind through the renderer a web facet registers (`documents: [{ kind, title, component }]`), or as JSON.
 Local imported modules reload with the facet. Failed loads leave the previous version installed.
 
+## Discovery and settings
+
+Discovery is clone built-ins, then `~/.ultimate/`, then `<project>/.ultimate/`; later names replace earlier ones.
+The default set is `agent`, `coding-tools`, `prompt`, `models`, `status-line`, `notices`, `theme`, `faux` (inert unless
+`ULTIMATE_FAUX=1`), `codemode`, and `browser`. Other built-ins are opt-in building blocks. Settings layer defaults,
+`~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`: `extensions.enable` and `extensions.disable`
+are name arrays, later layers win, and changes apply live without a restart. User/project extension folders are
+on by default; `disable` can turn off those or defaults too. Unknown names produce a notice. User config is independent
+of `ULTIMATE_HOME`. This repository's `.ultimate/settings.json` enables the suggested full setup. Enable `self` for
+its guidance and `restart` tool, `surfaces` for surface awareness, and `documents` for the Documents tab.
+
 ## Inspecting yourself
 
 Use `codemode` to compose dependent or parallel `tools.*` calls and filter results before they enter your context. Its read-only `ultimate.*` API is the way to inspect yourself: system/build, extension facets and load errors, conversations, stored entries and search (including before compactions/resets), task graph, models, and exported documents. Use ordinary tools for writes and single simple calls. `store`/`load` persist conversation-scoped values; see `extensions/codemode/README.md` for interruption semantics.
