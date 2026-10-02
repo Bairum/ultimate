@@ -21,6 +21,7 @@ import type { ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { Watch } from './extensions.ts'
 import type { PreparedHost } from './harness.ts'
 import { discoverAgents } from './agents.ts'
+import { watchRoots } from './watch-roots.ts'
 
 const run = promisify(execFile)
 async function bytes(path: string) {
@@ -36,6 +37,7 @@ export async function createSystem(
   url: string,
   registry: () => ExtensionInfo[],
   emit: (info: SystemInfo) => void,
+  notice: (message: string) => void = () => {},
 ) {
   const startedAt = new Date().toISOString()
   const agentDir = getAgentDir()
@@ -52,6 +54,8 @@ export async function createSystem(
   let lastGit = 0
   let closed = false
   let chain = Promise.resolve()
+  let previousSettingsError: string | undefined
+  const reportError = (error: unknown) => notice(`System refresh failed: ${String(error)}`)
   async function refresh(git = false) {
     if (git) {
       const command = async (args: string[]) => {
@@ -72,14 +76,19 @@ export async function createSystem(
     }
     const cpu = cpus()
     const config = join(host.projectRoot, '.ultimate')
-    const settings = await readFile(join(config, 'settings.json'), 'utf8')
-      .then((text) => JSON.parse(text) as unknown)
-      .catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== 'ENOENT') throw error
-        return {}
-      })
-    if (!settings || typeof settings !== 'object' || Array.isArray(settings))
-      throw new Error('Project settings must be a JSON object')
+    let settings: unknown = {}
+    let settingsError: string | undefined
+    try {
+      settings = JSON.parse(await readFile(join(config, 'settings.json'), 'utf8'))
+      if (!settings || typeof settings !== 'object' || Array.isArray(settings))
+        throw new Error('Project settings must be a JSON object')
+    } catch (error) {
+      settings = {}
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') settingsError = String(error)
+    }
+    if (settingsError && settingsError !== previousSettingsError)
+      notice(`${join(config, 'settings.json')}: ${settingsError}`)
+    previousSettingsError = settingsError
     value = {
       build: host.build(),
       project: {
@@ -87,6 +96,7 @@ export async function createSystem(
         name: basename(host.projectRoot),
         hasConfig: existsSync(config),
         settings: settings as SystemInfo['project']['settings'],
+        ...(settingsError ? { settingsError } : {}),
       },
       machine: {
         hostname: hostname(),
@@ -153,7 +163,7 @@ export async function createSystem(
     timer = setTimeout(
       () => {
         timer = undefined
-        chain = chain.then(() => refresh(true))
+        chain = chain.then(() => refresh(true)).catch(reportError)
       },
       Math.max(100, 2000 - (Date.now() - lastGit)),
     )
@@ -169,14 +179,21 @@ export async function createSystem(
       join(agentDir, 'skills'),
       join(host.projectRoot, '.pi/skills'),
     ])
+    const stopRoots = watchRoots([join(host.projectRoot, '.ultimate')], (root) => {
+      watcher.add(root)
+      schedule()
+    })
     watcher.on('all', schedule)
-    return () => watcher.off('all', schedule)
+    return () => {
+      stopRoots()
+      watcher.off('all', schedule)
+    }
   })
   await refresh(true)
   return {
     current: () => value,
     changed() {
-      if (!closed) chain = chain.then(() => refresh())
+      if (!closed) chain = chain.then(() => refresh()).catch(reportError)
       return chain
     },
     async close() {

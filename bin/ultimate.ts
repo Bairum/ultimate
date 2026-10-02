@@ -6,7 +6,8 @@ import { mkdir } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 import { migrateProject, projectHome, resolveProject } from '../server/project.ts'
 import { acquireLock, retireStorageOwner, pause } from '../server/lock.ts'
-import { watch } from 'node:fs'
+import { watch, existsSync } from 'node:fs'
+import { watchRoots } from '../server/watch-roots.ts'
 import { join, resolve as resolvePath } from 'node:path'
 import { createServer, connect } from 'node:net'
 import type { Socket } from 'node:net'
@@ -20,7 +21,12 @@ const { values, positionals } = parseArgs({
   allowPositionals: true,
 })
 if (positionals.length > 1) throw new Error('Usage: ultimate [dir] [--port N] [--no-open]')
-const projectRoot = await resolveProject(positionals[0] ?? process.cwd())
+const projectRoot = await resolveProject(positionals[0] ?? process.cwd()).catch((error) => {
+  console.error(
+    `Cannot open project ${positionals[0] ?? process.cwd()}: ${error.code ?? error.message}`,
+  )
+  process.exit(1)
+})
 const home = process.env.ULTIMATE_HOME ?? projectHome(projectRoot)
 if (!process.env.ULTIMATE_HOME && (await migrateProject(ultimateRoot, projectRoot)))
   console.log(`Migrated Ultimate state to ${home}`)
@@ -346,18 +352,30 @@ async function recover() {
     recovering = false
   }
 }
+const retry = () => {
+  if (crashPage && !recovering && !stopping) {
+    failures = 0
+    crashPage = false
+    void recover()
+  }
+}
 const watchers = ['server', 'shared', 'extensions'].map((directory) =>
-  watch(join(ultimateRoot, directory), { recursive: true }, () => {
-    if (crashPage && !recovering && !stopping) {
-      failures = 0
-      crashPage = false
-      void recover()
-    }
-  }),
+  watch(join(ultimateRoot, directory), { recursive: true }, retry),
 )
+const projectConfig = join(projectRoot, '.ultimate')
+let configWatcher: ReturnType<typeof watch> | undefined
+const watchConfig = () => {
+  configWatcher?.close()
+  configWatcher = watch(projectConfig, { recursive: true }, retry)
+  retry()
+}
+if (existsSync(projectConfig)) watchConfig()
+const stopRoots = watchRoots([projectConfig], watchConfig)
 async function shutdown() {
   if (stopping) return
   stopping = true
+  stopRoots()
+  configWatcher?.close()
   for (const watcher of watchers) watcher.close()
   for (const socket of sockets) socket.destroy()
   proxy.close()

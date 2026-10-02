@@ -3,6 +3,7 @@ import { readdir, readFile } from 'node:fs/promises'
 import type { Plugin } from 'vite-plus'
 import { discoverExtensions } from './discovery.ts'
 import { discoveryRoots } from './project.ts'
+import { watchRoots } from './watch-roots.ts'
 
 const virtual = 'virtual:ultimate/web-facets'
 const resolved = '\0' + virtual
@@ -14,8 +15,12 @@ export function extensionModules(
   const roots = discoveryRoots(ultimateRoot, projectRoot, userHome).map((root) =>
     join(root.path, 'extensions'),
   )
+  let stopWatching: (() => void) | undefined
   return {
     name: 'ultimate:extension-modules',
+    closeBundle() {
+      stopWatching?.()
+    },
     enforce: 'pre',
     async config() {
       const modules = join(ultimateRoot, 'node_modules')
@@ -98,12 +103,18 @@ export function extensionModules(
           void server.reloadModule(module)
         }
       }
+      const stopRoots = watchRoots(roots, (root) => {
+        server.watcher.add(root)
+        structure(root)
+      })
       for (const event of ['add', 'unlink', 'addDir', 'unlinkDir'] as const)
         server.watcher.on(event, structure)
-      server.httpServer?.once('close', () => {
+      stopWatching = () => {
+        stopRoots()
         for (const event of ['add', 'unlink', 'addDir', 'unlinkDir'] as const)
           server.watcher.off(event, structure)
-      })
+      }
+      server.httpServer?.once('close', stopWatching)
     },
   }
 }

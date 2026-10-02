@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { discoverExtensions } from './discovery.ts'
 import { discoveryRoots } from './project.ts'
+import { watchRoots } from './watch-roots.ts'
 import { actionExec } from './actions.ts'
 import type { ExtensionAction } from './actions.ts'
 import type { JsonValue } from '@earendil-works/chord'
@@ -67,7 +68,7 @@ export async function loadExtensions(
   async function reload(selected?: Set<string>, servers = selected) {
     const winners = await discoverExtensions(host.ultimateRoot, host.projectRoot, host.userHome)
     const folders = winners.map((winner) => winner.name)
-    for (const { name, path, source, files } of winners) {
+    for (const { name, path, source, files, error: discoveryError } of winners) {
       if (selected && !selected.has(name)) continue
       const previous = records.get(name)
       let readme: string | undefined
@@ -122,6 +123,8 @@ export async function loadExtensions(
         record.actions = []
         delete record.server
       }
+      if (discoveryError)
+        record.server = { tools: [], sections: [], hooks: 0, docs: [], error: discoveryError }
       if (!record.server?.error) host.builds.extension(name, path)
       records.set(name, record)
     }
@@ -203,14 +206,20 @@ export async function loadExtensions(
   const unwatch = watch((watcher) => {
     graphLost = attached
     attached = true
-    watcher.add([
+    const watchedRoots = [
       ...directories,
       ...agentDirectories,
       ...roots.slice(1).map((root) => join(root.path, 'skills')),
-    ])
+    ]
+    watcher.add(watchedRoots)
+    const stopRoots = watchRoots(watchedRoots, (root) => {
+      watcher.add(root)
+      chain = chain.then(() => reload()).catch(() => changed())
+    })
     watcher.on('change', onChange)
     for (const event of structure) watcher.on(event, onStructure)
     return () => {
+      stopRoots()
       watcher.off('change', onChange)
       for (const event of structure) watcher.off(event, onStructure)
     }

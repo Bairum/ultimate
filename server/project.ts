@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, realpath, rename } from 'node:fs/promises'
+import { mkdir, realpath, rename, writeFile, unlink } from 'node:fs/promises'
+import { DatabaseSync } from 'node:sqlite'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
-import { acquireLock } from './lock.ts'
+import { acquireLock, retireStorageOwner } from './lock.ts'
 
 export type Source = 'builtin' | 'user' | 'project'
 export function discoveryRoots(ultimateRoot: string, projectRoot: string, userHome = homedir()) {
@@ -27,22 +28,33 @@ export async function migrateProject(
 ) {
   const legacy = join(userHome, '.ultimate')
   const home = projectHome(projectRoot, userHome)
+  const pending = join(home, 'migration.pending')
   if (
     projectRoot !== ultimateRoot ||
-    existsSync(join(home, 'state.sqlite')) ||
-    !existsSync(join(legacy, 'state.sqlite'))
+    (!existsSync(join(legacy, 'state.sqlite')) && !existsSync(pending))
   )
     return false
   const supervisor = await acquireLock(join(legacy, 'ultimate.lock'), { pid: process.pid })
   try {
+    await retireStorageOwner(join(legacy, 'storage.lock'))
     const storage = await acquireLock(join(legacy, 'storage.lock'), { pid: process.pid })
     try {
-      if (existsSync(join(home, 'state.sqlite')) || !existsSync(join(legacy, 'state.sqlite')))
-        return false
+      if (!existsSync(pending) && existsSync(join(home, 'state.sqlite'))) return false
       await mkdir(home, { recursive: true })
-      for (const file of ['state.sqlite', 'state.sqlite-wal', 'state.sqlite-shm', 'screenshots']) {
-        if (existsSync(join(legacy, file))) await rename(join(legacy, file), join(home, file))
+      if (existsSync(join(legacy, 'state.sqlite'))) {
+        const database = new DatabaseSync(join(legacy, 'state.sqlite'))
+        try {
+          const checkpoint = database.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get()!
+          if (checkpoint.busy !== 0) throw new Error('Legacy database checkpoint is busy')
+        } finally {
+          database.close()
+        }
+        await writeFile(pending, '')
+        await rename(join(legacy, 'state.sqlite'), join(home, 'state.sqlite'))
       }
+      if (existsSync(join(legacy, 'screenshots')))
+        await rename(join(legacy, 'screenshots'), join(home, 'screenshots'))
+      await unlink(pending)
       return true
     } finally {
       await storage.close()

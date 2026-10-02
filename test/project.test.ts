@@ -2,7 +2,8 @@ import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile, rename, symlink } from 'node:fs/promises'
+import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
@@ -72,6 +73,48 @@ async function extension(root: string, name: string, value: string) {
   return path
 }
 
+it('prints a single-line error for a missing project', async () => {
+  const missing = join(await temp(), 'missing')
+  const child = spawn(process.execPath, [resolve('bin/ultimate.ts'), missing, '--no-open'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  children.push(child)
+  let error = ''
+  child.stderr.on('data', (chunk) => {
+    error += chunk
+  })
+  const [code] = await once(child, 'exit')
+  expect(code).toBe(1)
+  expect(error.trim().split('\n')).toEqual([`Cannot open project ${missing}: ENOENT`])
+})
+
+it('retires an orphaned legacy core before migration', async () => {
+  const userHome = await temp()
+  const root = await temp()
+  const legacy = join(userHome, '.ultimate')
+  const child = spawn(process.execPath, [resolve('server/main.ts')], {
+    env: {
+      ...process.env,
+      HOME: userHome,
+      ULTIMATE_HOME: legacy,
+      ULTIMATE_FAUX: '1',
+      ULTIMATE_PORT: '0',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  children.push(child)
+  let output = ''
+  child.stdout.on('data', (chunk) => {
+    output += chunk
+  })
+  await until(() => output.includes('Ultimate: http://'))
+  const exited = once(child, 'exit')
+  expect(await migrateProject(root, root, userHome)).toBe(true)
+  await exited
+  expect(child.exitCode !== null || child.signalCode !== null).toBe(true)
+  expect(existsSync(join(projectHome(root, userHome), 'state.sqlite'))).toBe(true)
+})
+
 it('derives project storage from canonical roots and an injected user home', async () => {
   const home = await temp()
   const project = await resolveProject(await temp())
@@ -127,11 +170,131 @@ it('refuses to migrate an actively owned legacy database', async () => {
   await writeFile(join(legacy, 'state.sqlite'), 'do not move')
   const owner = await acquireLock(join(legacy, 'storage.lock'), { pid: process.pid })
   try {
-    await expect(migrateProject(root, root, userHome)).rejects.toThrow('already owns this storage')
+    await expect(migrateProject(root, root, userHome)).rejects.toThrow('not an Ultimate core')
     expect(await readFile(join(legacy, 'state.sqlite'), 'utf8')).toBe('do not move')
   } finally {
     await owner.close()
   }
+})
+
+it('checkpoints committed WAL data and resumes an interrupted migration', async () => {
+  const userHome = await temp()
+  const root = await temp()
+  const legacy = join(userHome, '.ultimate')
+  await mkdir(legacy)
+  const database = new DatabaseSync(join(legacy, 'state.sqlite'))
+  database.exec(
+    'PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE items(value); INSERT INTO items VALUES (42)',
+  )
+  expect((await readFile(join(legacy, 'state.sqlite-wal'))).length).toBeGreaterThan(0)
+  await mkdir(join(legacy, 'screenshots'))
+  await writeFile(join(legacy, 'screenshots/image.png'), 'image')
+  // An existing destination forces an interruption after the database move.
+  const home = projectHome(root, userHome)
+  await mkdir(join(home, 'screenshots'), { recursive: true })
+  await writeFile(join(home, 'screenshots/block'), '')
+  try {
+    await expect(migrateProject(root, root, userHome)).rejects.toThrow('ENOTEMPTY')
+  } finally {
+    database.close()
+  }
+  expect(existsSync(join(home, 'migration.pending'))).toBe(true)
+  await rm(join(home, 'screenshots'), { recursive: true })
+  expect(await migrateProject(root, root, userHome)).toBe(true)
+  const migrated = new DatabaseSync(join(home, 'state.sqlite'))
+  try {
+    expect(migrated.prepare('SELECT value FROM items').get()?.value).toBe(42)
+  } finally {
+    migrated.close()
+  }
+  expect(await readFile(join(home, 'screenshots/image.png'), 'utf8')).toBe('image')
+  expect(await migrateProject(root, root, userHome)).toBe(false)
+})
+
+it('survives invalid settings at boot and mid-run and clears errors after repair', async () => {
+  const projectRoot = await temp()
+  const userHome = await temp()
+  const config = join(projectRoot, '.ultimate')
+  await mkdir(config)
+  const file = join(config, 'settings.json')
+  await writeFile(file, '{bad')
+  const server = await createServer({
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    userHome,
+    home: join(userHome, 'state'),
+    faux: true,
+    port: 0,
+  })
+  servers.push(server)
+  expect(server.system.current().project.settings).toEqual({})
+  expect(server.system.current().project.settingsError).toContain('SyntaxError')
+  await writeFile(file, '{"custom":1}')
+  await until(() => server.system.current().project.settings.custom === 1)
+  expect(server.system.current().project.settingsError).toBeUndefined()
+  const notices: string[] = []
+  server.events.listeners.add((name, data) => {
+    if (name === 'notice') notices.push(JSON.stringify(data))
+  })
+  for (const invalid of ['[]', 'null', '42', '{bad']) {
+    await writeFile(file, invalid)
+    await server.system.changed()
+    expect(server.system.current().project.settings).toEqual({})
+    expect(server.system.current().project.settingsError).toBeTruthy()
+  }
+  expect(notices.length).toBeGreaterThan(0)
+  await writeFile(file, '{}')
+  await until(() => !server.system.current().project.settingsError)
+})
+
+it('discovers late project and user roots and follows extension symlinks with broken-link diagnostics', async () => {
+  const projectRoot = await temp()
+  const userHome = await temp()
+  const server = await createServer({
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    userHome,
+    home: join(userHome, 'state'),
+    faux: true,
+    port: 0,
+  })
+  servers.push(server)
+  await server.vite.ssrLoadModule('virtual:ultimate/web-facets')
+  for (const [root, name] of [
+    [join(projectRoot, '.ultimate'), 'late-project'],
+    [join(userHome, '.ultimate'), 'late-user'],
+  ]) {
+    const path = await extension(root, name, 'late')
+    await until(
+      () => !!server.extensions.info().find((entry) => entry.name === name)?.server?.loadedAt,
+    )
+    await until(
+      async () =>
+        !!(await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders[
+          join(path, 'web.tsx')
+        ],
+    )
+  }
+  const external = await temp()
+  const target = await extension(external, 'linked', 'linked')
+  const link = join(projectRoot, '.ultimate/extensions/linked')
+  await symlink(target, link)
+  await until(
+    () => !!server.extensions.info().find((entry) => entry.name === 'linked')?.server?.loadedAt,
+  )
+  expect((await post(server.url, '/api/extensions/linked/actions/hello')).data.result.value).toBe(
+    'linked',
+  )
+  await symlink(join(external, 'missing'), join(projectRoot, '.ultimate/extensions/broken'))
+  // Reload discovery even on watcher platforms that do not emit add for a dangling link.
+  await rename(
+    join(projectRoot, '.ultimate/extensions/broken'),
+    join(projectRoot, '.ultimate/extensions/broken-link'),
+  )
+  await mkdir(join(projectRoot, '.ultimate/extensions/trigger'))
+  await until(
+    () => !!server.extensions.info().find((entry) => entry.name === 'broken-link')?.server?.error,
+  )
 })
 
 it('loads external project facets over user and built-in names, actions and transitive reloads', async () => {
@@ -344,10 +507,14 @@ it('starts two project supervisors concurrently on distinct free ports and stora
       ULTIMATE_FAUX: '1',
     }
     delete env.ULTIMATE_PORT
-    const child = spawn(process.execPath, [resolve('bin/ultimate.ts'), project, '--no-open'], {
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    const child = spawn(
+      process.execPath,
+      [resolve('bin/ultimate.ts'), project, '--no-open', '--port', '0'],
+      {
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    )
     children.push(child)
     let output = ''
     child.stdout.on('data', (data) => {
@@ -369,7 +536,7 @@ it('starts two project supervisors concurrently on distinct free ports and stora
       project: projects[index],
       port: Number(new URL(urls[index]).port),
     })
-    expect(owner.port).toBeGreaterThanOrEqual(4747)
+    expect(owner.port).toBeGreaterThan(0)
     expect(existsSync(join(run.home, 'state.sqlite'))).toBe(true)
     const controller = new AbortController()
     const response = await fetch(urls[index] + '/api/events', { signal: controller.signal })

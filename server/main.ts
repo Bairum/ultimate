@@ -128,8 +128,13 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
   const address = http.address()
   if (!address || typeof address === 'string') throw new Error('No listening address')
   const url = options.publicUrl ?? `http://127.0.0.1:${address.port}`
-  system = await createSystem(host, watch, url, extensions.info, (info) =>
-    events.emit('system', info),
+  system = await createSystem(
+    host,
+    watch,
+    url,
+    extensions.info,
+    (info) => events.emit('system', info),
+    (message) => events.emit('notice', { level: 'error', message }),
   )
   return {
     http,

@@ -56,6 +56,7 @@ if (import.meta.hot) import.meta.hot.accept()
 `,
     )
     server = await createServer({
+      plugins: [extensionModules(repo, repo, join(repo, 'user'))],
       configFile: join(repo, 'vite.config.ts'),
       configLoader: 'runner',
       root: join(repo, 'web'),
