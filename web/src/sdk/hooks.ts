@@ -96,9 +96,10 @@ export const useSystem = () => useStore((state) => state.system)
 export const useConversations = () => useStore((state) => state.conversations)
 /** The live task graph of every conversation. */
 export const useTasks = () => useStore((state) => state.tasks)
-/** `GET /api/models`, refreshed after (re)connects and logins. */
+/** `GET /api/models`, refreshed after (re)connects and by `refreshModels()`. */
 export const useModels = () => useStore((state) => state.models)
-export const useAuthFlows = () => useStore((state) => state.authFlows)
+/** Fetch `GET /api/models` again, such as after a login or logout changed which models are available. */
+export const refreshModels = () => store.refreshModels()
 export const useNotices = () => useStore((state) => state.notices)
 /** Stream state: connecting, open, or reconnecting. */
 export const useConnection = () => useStore((state) => state.connection)

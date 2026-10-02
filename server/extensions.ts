@@ -33,6 +33,8 @@ export type ExtensionHost = Pick<
   | 'restart'
 > & {
   resource<T>(key: string, create: () => T): T
+  /** Run `callback` each time the harness opens, at once when it is open; the server serves once it settles. */
+  onOpen(callback: () => Promise<void>): void
   onClose(cleanup: () => Promise<void>): void
   harness(): Harness
   system(): SystemInfo
@@ -40,6 +42,8 @@ export type ExtensionHost = Pick<
   doc(kind: string): ConversationDocToken<JsonObject> | undefined
   metadata: typeof Metadata
 }
+const runOpener = (callback: () => Promise<void>) =>
+  callback().catch((error: unknown) => console.error('Extension onOpen:', error))
 /** Attach listeners to Vite's current watcher and to each replacement; `attach` returns their removal. */
 export type Watch = (attach: (watcher: ViteDevServer['watcher']) => () => void) => () => void
 export async function loadExtensions(
@@ -56,12 +60,18 @@ export async function loadExtensions(
   const documents = new Map<string, ConversationDocToken<JsonObject>[]>()
   const findDoc = (kind: string) =>
     [...documents.values()].flat().find((doc) => doc.definition.kind === kind)
+  const openers = new Set<() => Promise<void>>()
+  let open = false
   const cleanups = new Set<() => Promise<void>>()
   const resources = new Map<string, unknown>()
   const extensionHost: ExtensionHost = {
     resource: <T>(key: string, create: () => T) => {
       if (!resources.has(key)) resources.set(key, create())
       return resources.get(key) as T
+    },
+    onOpen: (callback) => {
+      openers.add(callback)
+      if (open) void runOpener(callback)
     },
     onClose: (cleanup) => cleanups.add(cleanup),
     ultimateRoot: host.ultimateRoot,
@@ -256,6 +266,14 @@ export async function loadExtensions(
       })
     },
     doc: findDoc,
+    /** The harness is open: run the `onOpen` callbacks. */
+    async opened() {
+      open = true
+      await Promise.all([...openers].map(runOpener))
+    },
+    released() {
+      open = false
+    },
     async close() {
       closed = true
       unwatch()

@@ -12,7 +12,7 @@ tells you which change reloads how, so the conversation you are in keeps running
 | `extensions/<name>/server.ts` | Agent behaviour: system prompt, tools, hooks (Pi Durable extensions)                           | Reinstalled on save. Running tool calls finish on the old code; the next call uses the new code.                                                                                                       |
 | `web/`                        | The web core: surface host with primitives, SDK (`web/src/sdk`), transcript, composer, palette | Vite hot reload, instantly. Nothing else to do.                                                                                                                                                        |
 | `agents/`                     | Subagent definitions (Markdown with frontmatter)                                               | Read at each use.                                                                                                                                                                                      |
-| `server/`, `shared/`          | Core plumbing: harness, storage, API, login, Vite hookup                                       | Call the `restart` tool. A new process boots and type-checks next to the old one; if it fails you get the error and the old process keeps running. If it succeeds, the run resumes in the new process. |
+| `server/`, `shared/`          | Core plumbing: harness, storage, API, Vite hookup                                              | Call the `restart` tool. A new process boots and type-checks next to the old one; if it fails you get the error and the old process keeps running. If it succeeds, the run resumes in the new process. |
 | `bin/`                        | The supervisor                                                                                 | Only a human restart (`pnpm start`) applies it. Keep it tiny and change it rarely.                                                                                                                     |
 
 Put behaviour in `extensions/` rather than `server/` whenever you can: it reloads without a restart.
@@ -53,7 +53,7 @@ The host owns `ultimate.ui` on the root conversation, persisted in SQLite and co
 - `ULTIMATE_HOME` overrides state storage; the default is `~/.ultimate/projects/<basename>-<sha256(projectRoot) first 8 hex>/`. Different projects can run concurrently. Never run two storage owners on the same home.
 - `ULTIMATE_GENERATION` defaults to `1` and labels the process in system info.
 - `ULTIMATE_FAUX=1` uses a looping demo provider without tokens; its tools edit only a scratch file in the home.
-- Pi's models, settings, auth, skills, and context loaders are shared with `~/.pi/agent`.
+- Pi's models, settings, auth, skills, and context loaders are shared with `~/.pi/agent`; the `models` extension logs in to providers.
 - `pnpm check` checks format/lint/types; `pnpm test` runs faux integration tests with temporary homes.
 - `tsconfig.swap.json` is the server-only type-check gate for swaps.
 - `tsconfig.json` (server, tests, tooling) references `tsconfig.web.json` (browser: `web/src`, `extensions/**/*.tsx`).

@@ -16,7 +16,7 @@ existing extension and change it:
 | A right-panel tab                                 | `info` (key/value sections), `tasks`, `subagents`   |
 | Toolbar buttons, dialogs, commands, a popover     | `models`                                            |
 | A header badge, an entry renderer that wraps core | `self`                                              |
-| An extension document in the UI (`useDoc`)        | `codemode`                                          |
+| An extension document in the UI (`useDoc`)        | `codemode`, `models` (login flows)                  |
 | A prompt section from durable UI state            | `surfaces`                                          |
 | Toasts or other global overlays                   | `notices`                                           |
 
@@ -57,7 +57,8 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 - `harness()`, `uiState(context)`, `doc(kind)`: durable harness, root UI snapshot and exported conversation document token.
 - `metadata`: the core's `ultimate.metadata` conversation document, `{ title?, label? }`; the shell names a conversation
   by them, so set them on conversations you create (`subagents` labels each child with its definition).
-- `resource(key, create)`, `onClose(cleanup)`: shared reload-stable resources and async shutdown cleanup.
+- `resource(key, create)`, `onOpen(callback)`, `onClose(cleanup)`: shared reload-stable resources, async work each
+  time the harness opens (at once if it is open; the server serves once it settles), and async shutdown cleanup.
 
 Core runtime modules must not be imported by extensions; use host capabilities instead.
 
@@ -274,10 +275,10 @@ Call actions from the UI in one of two ways:
   `name`, or `args` (compared as JSON) change, unless `enabled` is false; a newer call aborts the older one. It returns
   `{ data, error, loading, refetch }`: `data` stays while a refetch runs and resets when the args change; `refetch()`
   calls again, also when not `enabled`. A failure shows as a notice unless you pass `onError`.
-- `api.action(extension, name, args?, { conversationId?, signal? })` acts, once: a click that saves, closes, or
-  labels something. It returns a promise of the result; afterwards, `refetch()` what changed. A rejection (an `ActionError`
-  with `extension`, `action`, `status`, `message`) that nothing catches shows as a notice; catch it to handle it
-  yourself.
+- `api.action(extension, name, args?, { conversationId?, signal?, keepalive? })` acts, once: a click that saves,
+  closes, or labels something; `keepalive` lets a call sent on `pagehide` outlive the page. It returns a promise of
+  the result; afterwards, `refetch()` what changed. A rejection (an `ActionError` with `extension`, `action`,
+  `status`, `message`) that nothing catches shows as a notice; catch it to handle it yourself.
 
 ```tsx
 <Button
@@ -564,8 +565,7 @@ server code is reached through [actions](#actions). The surface primitives are i
 | `useSystem()`                                                             | Build identity, machine, process (pid, generation, url), persistence, code (branch, sha, dirty, coreStale), extensions, skills, context files                                                                           |
 | `useConversations()`                                                      | Summaries of every conversation: id, parent, owner task, label (what its creator calls it, such as a subagent's definition), title, cwd, busy                                                                           |
 | `useTasks()`                                                              | The live task graph                                                                                                                                                                                                     |
-| `useModels()`                                                             | `GET /api/models`: providers with auth status, models with context window, reasoning, cost                                                                                                                              |
-| `useAuthFlows()`                                                          | Login flows by id: status, the pending prompt, events                                                                                                                                                                   |
+| `useModels()`                                                             | `GET /api/models`: providers with auth status, models with context window, reasoning, cost; `refreshModels()` fetches it again after credentials change                                                                 |
 | `useDoc(kind)`                                                            | An extension document of the shown conversation (`export const docs` in `server.ts`); `undefined` until the stream delivers it (subscribing creates it with its initial value)                                          |
 | `useUiState(key, initial)`                                                | Durable UI state, stored with the main conversation: survives reloads and restarts, shared by every tab. `[value, set]`, JSON values only                                                                               |
 | `useExtensionUiState(key, initial)`                                       | `useUiState` under `ext.<your extension>.<key>`; use it for your own UI state                                                                                                                                           |
@@ -579,8 +579,8 @@ server code is reached through [actions](#actions). The surface primitives are i
 | `useStore(select)`                                                        | Any slice of the client state (`State`), re-rendering when it changes                                                                                                                                                   |
 
 `api` sends commands: `submit(text, whenBusy?)`, `abort()`, `configure({ model, thinkingLevel })`, `compact()`,
-`createConversation()`, `login(provider, type)`, `answer(flowId, value)`, `cancel(flowId)`, `logout(provider)`,
-`restart()`, and `action(extension, name, args?)`. Conversation commands default to the shown conversation.
+`createConversation()`, `restart()`, and `action(extension, name, args?)`. Conversation commands default to the shown
+conversation.
 
 `api.cancelSubmission(submissionId, conversationId?)` withdraws one queued input without stopping the run.
 

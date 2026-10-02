@@ -1,5 +1,4 @@
 import type { JsonValue } from '@earendil-works/chord'
-import type { AuthType } from '@earendil-works/pi-ai'
 import type {
   CompactResponse,
   ConfigureRequest,
@@ -8,7 +7,6 @@ import type {
   EmptyResponse,
   ExtensionActionRequest,
   ExtensionActionResponse,
-  LoginResponse,
   SubmitRequest,
   SubmitResponse,
   UiUpdateRequest,
@@ -58,7 +56,7 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      // Lets a small request outlive the page, such as cancelling a login when the tab closes.
+      // Lets a small request outlive the page, such as an action cancelling work when the tab closes.
       keepalive,
       signal,
     })
@@ -91,40 +89,27 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
       post<CompactResponse>(conversation(id, 'compact'), { instructions }),
     createConversation: (create: CreateConversationRequest = {}) =>
       post<CreateConversationResponse>('/api/conversations', create),
-    login: (provider: string, type: AuthType) =>
-      post<LoginResponse>('/api/auth/login', { provider, type }),
-    answer: async (flowId: string, value: string) => {
-      store.clearAuthPrompt(flowId)
-      return post<EmptyResponse>(`/api/auth/flows/${encodeURIComponent(flowId)}/answer`, { value })
-    },
-    cancel: (flowId: string) =>
-      post<EmptyResponse>(
-        `/api/auth/flows/${encodeURIComponent(flowId)}/cancel`,
-        {},
-        { keepalive: true },
-      ),
-    logout: async (provider: string) => {
-      const result = await post<EmptyResponse>('/api/auth/logout', { provider })
-      // Unlike a login, a logout sends no event; refresh which models are available.
-      void store.refreshModels()
-      return result
-    },
     restart: () => post<unknown>('/api/restart'),
     /**
      * Call action `name` of `extension`'s server facet (`export const actions` in its `server.ts`) with JSON `args`,
      * on behalf of the shown conversation, and resolve with its result. Rejects with an `ActionError`; one you do not
-     * catch shows as a notice. Aborting `signal` aborts the action's processes too.
+     * catch shows as a notice. Aborting `signal` aborts the action's processes too; `keepalive` lets the call outlive
+     * the page, such as one sent on `pagehide`.
      */
     action: async <T = JsonValue>(
       extension: string,
       name: string,
       args: JsonValue = null,
-      { conversationId, signal }: { conversationId?: number; signal?: AbortSignal } = {},
+      {
+        conversationId,
+        signal,
+        keepalive,
+      }: { conversationId?: number; signal?: AbortSignal; keepalive?: boolean } = {},
     ): Promise<T> => {
       const path = `/api/extensions/${encodeURIComponent(extension)}/actions/${encodeURIComponent(name)}`
       const body: ExtensionActionRequest = { args, conversationId: conversationId ?? shown() }
       try {
-        const { result } = await post<ExtensionActionResponse>(path, body, { signal })
+        const { result } = await post<ExtensionActionResponse>(path, body, { signal, keepalive })
         return result as T
       } catch (error) {
         if (signal?.aborted) throw error

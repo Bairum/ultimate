@@ -52,6 +52,7 @@ async function fixture(extension?: Extension) {
     codemode({
       ...prepared,
       resource: (_key, create) => create(),
+      onOpen: () => {},
       onClose: () => {},
       harness: () => {
         throw new Error('Not used')

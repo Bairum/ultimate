@@ -32,8 +32,8 @@ export type { Api } from './api.ts'
 export {
   getConversation,
   getState,
+  refreshModels,
   useAction,
-  useAuthFlows,
   useCommands,
   useConnection,
   useConversation,
@@ -54,14 +54,12 @@ export {
   useUltimate,
 } from './hooks.ts'
 export type { ActionState, ConversationState, Restart } from './hooks.ts'
-export type { AuthFlow, Connection, State } from './store.ts'
+export type { Connection, State } from './store.ts'
 export { elidePath, formatBytes, formatDuration, formatTokens, shortenPath } from './format.ts'
 /** Class names joined, Tailwind conflicts resolved: `cn('px-2', active && 'bg-accent')`. */
 export { cn } from 'cn'
 export { formatKeys } from './keys.ts'
 export type {
-  AuthFlowEvent,
-  BrowserAuthPrompt,
   ConversationSummary,
   ExtensionActionRequest,
   ExtensionActionResponse,
@@ -86,6 +84,8 @@ export type {
 export type { JsonValue } from '@earendil-works/chord'
 export type {
   AssistantMessage,
+  AuthEvent,
+  AuthPrompt,
   TextContent,
   ThinkingContent,
   ToolCall,

@@ -129,6 +129,13 @@ describe('web replica store', () => {
     expect(store.getState().docs['test.counter']).toBeUndefined()
     latest().send('docOps', { kind: 'test.counter', ops: [['s', ['count'], 2]] })
     expect(store.getState().docs['test.counter']).toBeUndefined()
+    // Watched again: the old stream's ops wait for the new stream's snapshot.
+    store.watchDoc('test.counter')
+    latest().send('docOps', { kind: 'test.counter', ops: [['s', ['count'], 3]] })
+    expect(store.getState().docs['test.counter']).toBeUndefined()
+    await tick()
+    latest().send('doc', { kind: 'test.counter', value: { count: 3 } })
+    expect(store.getState().docs['test.counter']).toEqual({ count: 3 })
     store.stop()
   })
 
@@ -151,7 +158,7 @@ describe('web replica store', () => {
     store.stop()
   })
 
-  it('refreshes models after (re)starts and logins and keeps auth flows and notices', async () => {
+  it('refreshes models after (re)starts and keeps notices', async () => {
     const { store, latest, fetch } = setup()
     const source = latest()
     source.open()
@@ -163,15 +170,6 @@ describe('web replica store', () => {
     expect(fetch).toHaveBeenCalledOnce()
     source.send('system', { ...system, process: { ...system.process, generation: 2 } })
     expect(fetch).toHaveBeenCalledTimes(2)
-
-    source.send('auth', { flowId: 'f', type: 'prompt', prompt: { type: 'text', message: 'Code?' } })
-    expect(store.getState().authFlows.f).toMatchObject({
-      status: 'running',
-      prompt: { message: 'Code?' },
-    })
-    source.send('auth', { flowId: 'f', type: 'complete' })
-    expect(store.getState().authFlows.f).toMatchObject({ status: 'complete', prompt: undefined })
-    expect(fetch).toHaveBeenCalledTimes(3)
 
     source.send('notice', { level: 'warning', message: 'Unknown extension document: x' })
     expect(store.getState().notices.map((notice) => notice.message)).toEqual([

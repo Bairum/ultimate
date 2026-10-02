@@ -147,6 +147,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     url,
     port: address.port,
     async release() {
+      extensions.released()
       await api?.close()
       api = undefined
       http.closeAllConnections()
@@ -156,6 +157,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     async go(activationError?: string) {
       processInfo.activationError = activationError
       opened = await host.open(false)
+      await extensions.opened()
       await system.changed()
       api = await createApi(host, opened, events, system, extensions)
       opened.harness.resume()

@@ -1,9 +1,7 @@
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { JsonValue } from '@earendil-works/chord'
-import type { AuthEvent } from '@earendil-works/pi-ai'
 import type { ConversationView, JsonObject, TaskGraph } from '@earendil-works/pi-durable'
 import type {
-  BrowserAuthPrompt,
   ConversationSummary,
   ModelsResponse,
   Notice,
@@ -11,14 +9,6 @@ import type {
   SystemInfo,
 } from '../../../shared/protocol.ts'
 
-export interface AuthFlow {
-  id: string
-  status: 'running' | 'complete' | 'cancel' | 'error'
-  /** The prompt waiting for an answer. */
-  prompt?: BrowserAuthPrompt
-  events: readonly AuthEvent[]
-  error?: string
-}
 export interface Connection {
   /** `connecting` before the first open, `reconnecting` after a drop. */
   status: 'connecting' | 'open' | 'reconnecting'
@@ -47,7 +37,6 @@ export interface State {
   conversations: readonly ConversationSummary[]
   tasks?: TaskGraph
   models?: ModelsResponse
-  authFlows: Readonly<Record<string, AuthFlow>>
   notices: readonly (Notice & { id: number; at: number })[]
   ui: UiState
 }
@@ -81,7 +70,6 @@ const names = [
   'doc',
   'docOps',
   'tasks',
-  'auth',
   'notice',
 ] as const satisfies readonly (keyof ServerEvents)[]
 
@@ -93,7 +81,6 @@ export function createStore(options: StoreOptions = {}) {
     connection: { status: 'connecting', since: Date.now() },
     docs: {},
     conversations: [],
-    authFlows: {},
     notices: [],
     ui: {
       paletteOpen: false,
@@ -156,30 +143,14 @@ export function createStore(options: StoreOptions = {}) {
       }
       case 'docOps': {
         const { kind, ops } = data as ServerEvents['docOps']
-        if (!docKinds.has(kind)) break
+        // Ops need this stream's snapshot: a kind watched again waits for the reconnect that brings one.
+        if (!docKinds.has(kind) || state.docs[kind] === undefined) break
         set({ docs: { ...state.docs, [kind]: applyImmutable(state.docs[kind] ?? {}, ops) } })
         break
       }
       case 'tasks':
         set({ tasks: data as TaskGraph })
         break
-      case 'auth': {
-        const event = data as ServerEvents['auth']
-        const flow: AuthFlow = state.authFlows[event.flowId] ?? {
-          id: event.flowId,
-          status: 'running',
-          events: [],
-        }
-        let next: AuthFlow
-        if (event.type === 'prompt') next = { ...flow, prompt: event.prompt }
-        else if (event.type === 'event') next = { ...flow, events: [...flow.events, event.event] }
-        else if (event.type === 'error')
-          next = { ...flow, status: 'error', prompt: undefined, error: event.error }
-        else next = { ...flow, status: event.type, prompt: undefined }
-        set({ authFlows: { ...state.authFlows, [event.flowId]: next } })
-        if (event.type === 'complete') void refreshModels()
-        break
-      }
       case 'notice':
         set({
           notices: [
@@ -291,11 +262,6 @@ export function createStore(options: StoreOptions = {}) {
     },
     dismissNotice(id: number) {
       set({ notices: state.notices.filter((notice) => notice.id !== id) })
-    },
-    clearAuthPrompt(flowId: string) {
-      const flow = state.authFlows[flowId]
-      if (flow?.prompt)
-        set({ authFlows: { ...state.authFlows, [flowId]: { ...flow, prompt: undefined } } })
     },
   }
 }

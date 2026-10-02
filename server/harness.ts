@@ -10,7 +10,7 @@ import { ModelRuntime, SettingsManager } from '@earendil-works/pi-coding-agent'
 import { createRegistry, Harness } from '@earendil-works/pi-durable'
 import type { Context } from '@earendil-works/chord'
 import { UiState } from './ui-state.ts'
-import { listModels } from './auth.ts'
+import { listModels } from './models.ts'
 import { projectSkills } from './skills.ts'
 import { requestSwap } from './supervisor-protocol.ts'
 import type {

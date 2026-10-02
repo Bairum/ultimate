@@ -56,6 +56,7 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
       browserExtension({
         ...server.host,
         resource: <T>(_key: string, _create: () => T) => browserState as T,
+        onOpen: () => {},
         onClose: () => {},
         harness: () => server.harness,
         system: () => server.system.current(),

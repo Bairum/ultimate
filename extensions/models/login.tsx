@@ -13,13 +13,29 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { api, cn, useAuthFlows, useDialog, useModels, useNow, useUltimate } from '@/sdk'
-import type { AuthFlow, BrowserAuthPrompt } from '@/sdk'
+import { api, cn, refreshModels, useDialog, useDoc, useModels, useNow, useUltimate } from '@/sdk'
+import type { AuthEvent, AuthPrompt } from '@/sdk'
 import { authLabel, dialogs, useLoginProvider } from './state.tsx'
 import type { ProviderInfo } from './state.tsx'
 
 type AuthType = ProviderInfo['authTypes'][number]['type']
-type AuthEvent = AuthFlow['events'][number]
+/** A flow of `models.login`, the document `server.ts` keeps on the conversation that started it. */
+interface LoginFlow {
+  provider: string
+  type: AuthType
+  status: 'running' | 'complete' | 'cancel' | 'error'
+  /** The prompt waiting for an answer. */
+  prompt?: AuthPrompt
+  events: AuthEvent[]
+  error?: string
+}
+function useLoginFlow(flowId: string | undefined) {
+  const flows = useDoc('models.login')?.flows as Readonly<Record<string, LoginFlow>> | undefined
+  return flowId === undefined ? undefined : flows?.[flowId]
+}
+/** Cancel a running flow; it may have just ended, which needs no notice. */
+const cancel = (flowId: string) =>
+  api.action('models', 'cancel', { flowId }, { keepalive: true }).catch(() => undefined)
 interface Method {
   provider: ProviderInfo
   type: AuthType
@@ -165,16 +181,16 @@ function DeviceCode({
   )
 }
 
-/** The prompt a flow waits on, answered through `api.answer`. */
-function PromptForm({ flowId, prompt }: { flowId: string; prompt: BrowserAuthPrompt }) {
+/** The prompt a flow waits on, answered through the `answer` action; the next prompt replaces this form. */
+function PromptForm({ flowId, prompt }: { flowId: string; prompt: AuthPrompt }) {
   const [value, setValue] = useState('')
   const [error, setError] = useState<string>()
   const [sending, setSending] = useState(false)
   const answer = (text: string) => {
     setSending(true)
     setError(undefined)
-    api.answer(flowId, text).then(
-      () => setSending(false),
+    api.action('models', 'answer', { flowId, value: text }).then(
+      () => undefined,
       (failure: unknown) => {
         setSending(false)
         setError(message(failure))
@@ -258,6 +274,7 @@ function FlowView({
   onBack,
   onRetry,
   onDone,
+  onRunning,
 }: {
   method: Method
   flowId?: string
@@ -265,11 +282,17 @@ function FlowView({
   onBack: () => void
   onRetry: () => void
   onDone: () => void
+  /** The flow id while it runs, so closing the dialog can cancel it. */
+  onRunning: (flowId: string | undefined) => void
 }) {
-  const flow = useAuthFlows()[flowId ?? '']
+  const flow = useLoginFlow(flowId)
   const actions = useUltimate()
   const status = error ? 'error' : (flow?.status ?? 'running')
   const failure = error ?? flow?.error
+  useEffect(() => onRunning(status === 'running' ? flowId : undefined), [flowId, onRunning, status])
+  useEffect(() => {
+    if (status === 'complete') void refreshModels()
+  }, [status])
   return (
     <div className="flex flex-col">
       <div className="flex items-center gap-2 border-b border-border/70 px-3 py-2.5">
@@ -310,9 +333,10 @@ function FlowView({
         </span>
       </div>
       <div className="flex max-h-[60vh] flex-col gap-4 overflow-y-auto px-4 py-4">
-        {flow?.events.map((event, index) => (
-          <EventView event={event} flowId={flow.id} index={index} key={index} />
-        ))}
+        {flowId &&
+          flow?.events.map((event, index) => (
+            <EventView event={event} flowId={flowId} index={index} key={index} />
+          ))}
         {flow?.prompt && status === 'running' && flowId && (
           <PromptForm flowId={flowId} key={JSON.stringify(flow.prompt)} prompt={flow.prompt} />
         )}
@@ -338,7 +362,7 @@ function FlowView({
         {status === 'running' && flowId && (
           <Button
             className="h-7 text-[12px]"
-            onClick={() => void api.cancel(flowId)}
+            onClick={() => void cancel(flowId)}
             size="sm"
             variant="ghost"
           >
@@ -406,8 +430,11 @@ function Chooser({
     setConfirming(undefined)
     setBusy(provider.id)
     setError(undefined)
-    api.logout(provider.id).then(
-      () => setBusy(undefined),
+    api.action('models', 'logout', { provider: provider.id }).then(
+      () => {
+        setBusy(undefined)
+        void refreshModels()
+      },
       (failure: unknown) => {
         setBusy(undefined)
         setError(message(failure))
@@ -530,33 +557,37 @@ function Chooser({
   )
 }
 
-/** Log in to a provider: pick a method, then follow the flow the server streams as `auth` events. */
+/** Log in to a provider: pick a method, then follow the flow in the `models.login` document. */
 export function LoginDialog() {
   const [open, setOpen] = useDialog(dialogs.login)
   const requested = useLoginProvider()
-  const flows = useAuthFlows()
   const [state, setState] = useState<{ method: Method; flowId?: string; error?: string }>()
-  const running =
-    state?.flowId && flows[state.flowId]?.status === 'running' ? state.flowId : undefined
+  const [running, setRunning] = useState<string>()
 
   const start = (method: Method) => {
     setState({ method })
-    api.login(method.provider.id, method.type).then(
-      ({ flowId }) => setState({ method, flowId }),
-      (failure: unknown) => setState({ method, error: message(failure) }),
-    )
+    api
+      .action<{ flowId: string }>('models', 'login', {
+        provider: method.provider.id,
+        type: method.type,
+      })
+      .then(
+        ({ flowId }) => setState({ method, flowId }),
+        (failure: unknown) => setState({ method, error: message(failure) }),
+      )
   }
   const close = () => {
-    if (running) void api.cancel(running)
+    if (running) void cancel(running)
     setOpen(false)
     setState(undefined)
+    setRunning(undefined)
   }
   // Pi serializes logins per provider: a flow left waiting when the tab closes would block the next one.
   useEffect(() => {
     if (!running) return undefined
-    const cancel = () => void api.cancel(running)
-    addEventListener('pagehide', cancel)
-    return () => removeEventListener('pagehide', cancel)
+    const leave = () => void cancel(running)
+    addEventListener('pagehide', leave)
+    return () => removeEventListener('pagehide', leave)
   }, [running])
 
   return (
@@ -577,6 +608,7 @@ export function LoginDialog() {
             onBack={() => setState(undefined)}
             onDone={close}
             onRetry={() => start(state.method)}
+            onRunning={setRunning}
           />
         ) : (
           <Chooser initialQuery={requested ?? ''} key={requested ?? ''} onChoose={start} />

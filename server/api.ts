@@ -7,7 +7,7 @@ import type {
   SubmissionId,
 } from '@earendil-works/pi-durable'
 import type { ServerEvents, ConversationSummary, ConfigureRequest } from '../shared/protocol.ts'
-import { AuthBridge, listModels } from './auth.ts'
+import { listModels } from './models.ts'
 import type { Extensions } from './extensions.ts'
 import { context } from './harness.ts'
 import type { OpenHost, PreparedHost } from './harness.ts'
@@ -64,7 +64,6 @@ export async function createApi(
   extensions: Extensions,
 ) {
   const { harness, root } = opened
-  const auth = new AuthBridge(host.modelRuntime, (event) => events.emit('auth', event))
   const streams = new Set<() => Promise<void>>()
   const graph = await harness.taskGraph(context)
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -262,7 +261,6 @@ export async function createApi(
     }
   }
   return {
-    auth,
     async handle(request: IncomingMessage, response: ServerResponse) {
       const url = new URL(request.url ?? '/', 'http://localhost')
       if (!url.pathname.startsWith('/api/')) return false
@@ -476,34 +474,6 @@ export async function createApi(
           }
           return true
         }
-        if (url.pathname === '/api/auth/login') {
-          if (data.type !== 'api_key' && data.type !== 'oauth')
-            throw new HttpError(400, 'Invalid auth type')
-          const provider = text(data.provider, 'provider')
-          const definition = host.modelRuntime.getProvider(provider)
-          if (!definition?.auth[data.type === 'oauth' ? 'oauth' : 'apiKey']?.login)
-            throw new HttpError(400, 'Unsupported provider or login type')
-          json(202, { flowId: auth.login(provider, data.type) })
-          return true
-        }
-        if (url.pathname === '/api/auth/logout') {
-          await host.modelRuntime.logout(text(data.provider, 'provider'))
-          json(200, { ok: true })
-          return true
-        }
-        const flow = /^\/api\/auth\/flows\/([^/]+)\/(answer|cancel)$/.exec(url.pathname)
-        if (flow) {
-          const pending = auth.flows.get(flow[1])
-          if (!pending) throw new HttpError(404, 'Unknown login flow')
-          if (flow[2] === 'answer' && !pending.answer)
-            throw new HttpError(409, 'No pending prompt for flow')
-          if (flow[2] === 'answer') {
-            if (typeof data.value !== 'string') throw new HttpError(400, 'Expected value')
-            auth.answer(flow[1], data.value)
-          } else auth.cancel(flow[1])
-          json(200, { ok: true })
-          return true
-        }
         throw new HttpError(404, 'Unknown endpoint')
       } catch (error) {
         if (!response.headersSent)
@@ -516,7 +486,6 @@ export async function createApi(
     },
     async close() {
       closed = true
-      auth.close()
       unsubscribe()
       unsubscribeGraph()
       clearTimeout(timer)

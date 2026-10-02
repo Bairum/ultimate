@@ -6,7 +6,7 @@ import { homedir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
-import type { ConversationView } from '@earendil-works/pi-durable'
+import type { ConversationId, ConversationView } from '@earendil-works/pi-durable'
 import { defineExtension, InboxDoc, LiveDoc } from '@earendil-works/pi-durable'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -22,7 +22,8 @@ import {
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { UiState } from '../server/ui-state.ts'
-import type { AuthFlowEvent, ServerEvents } from '../shared/protocol.ts'
+import type { ServerEvents } from '../shared/protocol.ts'
+import { Logins } from '../extensions/models/server.ts'
 
 const servers: Awaited<ReturnType<typeof createServer>>[] = []
 const directories: string[] = []
@@ -176,6 +177,7 @@ export const actions = { keys: async () => keys }`,
         'modelRuntime',
         'models',
         'onClose',
+        'onOpen',
         'projectRoot',
         'resource',
         'restart',
@@ -804,8 +806,10 @@ export const actions = { keys: async () => keys }`,
       }
     }
   })
-  it('bridges login prompts to answers and cancellation without exposing credentials', async () => {
-    const { server } = await fixture()
+  it('runs logins in the models extension: prompt, answer, cancel, no credential leak, dead flows cancelled', async () => {
+    const { server, options } = await fixture(false, false, {
+      models: await readFile(resolvePath('extensions/models/server.ts'), 'utf8'),
+    })
     vi.spyOn(server.host.modelRuntime, 'getProvider').mockReturnValue({
       id: 'stub',
       auth: {
@@ -820,61 +824,69 @@ export const actions = { keys: async () => keys }`,
         return { type: 'api_key', key: answered }
       },
     )
-    const stream = await attach(server)
-    const login = await post(server, '/api/auth/login', { provider: 'stub', type: 'api_key' })
-    expect(login.status).toBe(202)
-    await until(() =>
-      stream.events.some(
-        (event) => event.name === 'auth' && (event.data as AuthFlowEvent).type === 'prompt',
-      ),
+    const stream = await attach(server, '?docs=models.login')
+    const action = (name: string, args: unknown, conversationId = 1) =>
+      post(server, `/api/extensions/models/actions/${name}`, { args, conversationId })
+    const flows = async (id = 1) =>
+      (await server.harness.snapshot(Logins, id as ConversationId, context))?.flows ?? {}
+    const login = async (conversationId = 1) => {
+      const response = await action('login', { provider: 'stub', type: 'api_key' }, conversationId)
+      expect(response.status).toBe(200)
+      const flowId = String(response.data.result.flowId)
+      await until(async () => (await flows(conversationId))[flowId]?.prompt?.type === 'secret')
+      return flowId
+    }
+    const first = await login()
+    expect((await action('answer', { flowId: first, value: 'not-a-real-credential' })).status).toBe(
+      200,
     )
-    expect(
-      (
-        await post(server, `/api/auth/flows/${String(login.data.flowId)}/answer`, {
-          value: 'not-a-real-credential',
-        })
-      ).status,
-    ).toBe(200)
-    await until(() =>
-      stream.events.some(
-        (event) => event.name === 'auth' && (event.data as AuthFlowEvent).type === 'complete',
-      ),
-    )
+    await until(async () => (await flows())[first].status === 'complete')
     expect(answered).toBe('not-a-real-credential')
-    expect(JSON.stringify(stream.events)).not.toContain('not-a-real-credential')
-    const blank = await post(server, '/api/auth/login', { provider: 'stub', type: 'api_key' })
-    await until(
-      () =>
-        stream.events.filter(
-          (event) => event.name === 'auth' && (event.data as AuthFlowEvent).type === 'prompt',
-        ).length === 2,
-    )
-    expect(
-      (await post(server, `/api/auth/flows/${String(blank.data.flowId)}/answer`, { value: '' }))
-        .status,
-    ).toBe(200)
-    await until(
-      () =>
-        stream.events.filter(
-          (event) => event.name === 'auth' && (event.data as AuthFlowEvent).type === 'complete',
-        ).length === 2,
-    )
+    expect((await flows())[first]).toEqual({
+      provider: 'stub',
+      type: 'api_key',
+      status: 'complete',
+      events: [{ type: 'info', message: 'Stub login' }],
+    })
+    const blank = await login()
+    expect((await action('answer', { flowId: blank, value: '' })).status).toBe(200)
+    await until(async () => (await flows())[blank].status === 'complete')
     expect(answered).toBe('')
-    const second = await post(server, '/api/auth/login', { provider: 'stub', type: 'api_key' })
-    await until(
-      () =>
-        stream.events.filter(
-          (event) => event.name === 'auth' && (event.data as AuthFlowEvent).type === 'prompt',
-        ).length === 3,
-    )
+    // A flow lives in the document of the conversation that started it.
+    const other = Number((await post(server, '/api/conversations', {})).data.id)
+    const second = await login(other)
+    expect((await action('cancel', { flowId: second })).status).toBe(200)
+    await until(async () => (await flows(other))[second].status === 'cancel')
+    expect((await flows(other))[second].prompt).toBeUndefined()
+    expect((await action('answer', { flowId: second, value: 'late' })).data).toEqual({
+      error: 'Unknown login flow',
+    })
     expect(
-      (await post(server, `/api/auth/flows/${String(second.data.flowId)}/cancel`)).status,
-    ).toBe(200)
-    await until(() =>
       stream.events.some(
-        (event) => event.name === 'auth' && (event.data as AuthFlowEvent).type === 'cancel',
+        (event) =>
+          event.name === 'docOps' && (event.data as ServerEvents['docOps']).kind === 'models.login',
       ),
-    )
+    ).toBe(true)
+    expect(JSON.stringify(stream.events)).not.toContain('not-a-real-credential')
+    expect(JSON.stringify(await flows())).not.toContain('not-a-real-credential')
     await stream.close()
+    // A flow that dies with its process reads cancelled on the next start.
+    await server.harness.commit(async (tx) => {
+      ;(await tx.doc(Logins, 1 as ConversationId)).flows.dead = {
+        provider: 'stub',
+        type: 'api_key',
+        status: 'running',
+        prompt: { type: 'secret', message: 'Enter key' },
+        events: [],
+      }
+    }, context)
+    await server.vite.watcher.close()
+    await server.close()
+    servers.splice(servers.indexOf(server), 1)
+    const reopened = await createServer(options)
+    servers.push(reopened)
+    expect(
+      (await reopened.harness.snapshot(Logins, 1 as ConversationId, context))?.flows.dead,
+    ).toEqual({ provider: 'stub', type: 'api_key', status: 'cancel', events: [] })
   })
 })

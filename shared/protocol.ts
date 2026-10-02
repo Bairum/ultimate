@@ -1,6 +1,6 @@
 import type { JsonValue } from '@earendil-works/chord'
 import type { Op } from '@earendil-works/chord/delta'
-import type { AuthEvent, AuthPrompt, AuthType, ModelThinkingLevel } from '@earendil-works/pi-ai'
+import type { AuthType, ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { ConversationView, JsonObject, ModelRef, TaskGraph } from '@earendil-works/pi-durable'
 import type { ModelRuntime } from '@earendil-works/pi-coding-agent'
 
@@ -17,9 +17,6 @@ export interface ConfigureRequest {
 }
 export interface CompactResponse {
   taskId: number
-}
-export interface LoginResponse {
-  flowId: string
 }
 export interface EmptyResponse {
   ok: true
@@ -111,13 +108,6 @@ export interface SystemInfo {
   skills: { name: string; description: string; path: string }[]
   contextFiles: string[]
 }
-type WirePrompt<T> = T extends AuthPrompt ? Omit<T, 'signal'> : never
-export type BrowserAuthPrompt = WirePrompt<AuthPrompt>
-export type AuthFlowEvent =
-  | { flowId: string; type: 'prompt'; prompt: BrowserAuthPrompt }
-  | { flowId: string; type: 'event'; event: AuthEvent }
-  | { flowId: string; type: 'complete' | 'cancel' }
-  | { flowId: string; type: 'error'; error: string }
 export interface Notice {
   level: 'info' | 'warning' | 'error'
   message: string
@@ -157,6 +147,5 @@ export interface ServerEvents {
   doc: { kind: string; value: Readonly<JsonObject> | null }
   docOps: { kind: string; ops: readonly Op[] }
   tasks: TaskGraph
-  auth: AuthFlowEvent
   notice: Notice
 }
