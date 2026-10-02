@@ -9,7 +9,7 @@ import {
   CommandShortcut,
 } from '@/components/ui/command'
 import { Kbd, KbdGroup } from '@/components/ui/kbd'
-import { actions, currentContext } from '../sdk/actions.ts'
+import { actions, applies, currentContext } from '../sdk/actions.ts'
 import { store } from '../sdk/client.ts'
 import { useCommands, useStore } from '../sdk/hooks.ts'
 import { formatKeys } from '../sdk/keys.ts'
@@ -34,9 +34,7 @@ export function CommandPalette() {
   const commands = useCommands()
   const context = currentContext()
   const visible = open
-    ? commands.filter(
-        (command) => command.id !== 'ultimate.palette' && (!command.when || command.when(context)),
-      )
+    ? commands.filter((command) => command.id !== 'ultimate.palette' && applies(command, context))
     : []
   const groups = Map.groupBy(visible, (command) => command.group ?? command.extension)
   return (

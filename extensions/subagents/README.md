@@ -6,4 +6,4 @@ The shipped definitions inherit the active provider/model. No universally cheape
 
 The extension document `ultimate.subagents` holds the ownership/action index; the core document `ultimate.metadata` holds tree metadata. Reporter request IDs and answer receipts prevent duplicate delivery across restarts; stop records its target run so a replay cannot abort a later run.
 
-`web.tsx` renders each `subagent` call (agent, task or message, whether the child is working, its answer, and "open #id" to show the child) and adds the right panel's Agents tab: main and its subagents as a tree with background and working marks. Showing a child makes the composer steer, follow up, and stop that child; the header leads back to main. `mod+k a` opens the tab.
+`web.tsx` renders each `subagent` call (agent, task or message, whether the child is working, its answer, and "open #id" to show the child) and adds the right panel's Agents tab: main and its subagents as a tree with background and working marks. Showing a child makes the composer steer, follow up, and stop that child; the header leads back to main.

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  commandApplies,
   commandItems,
   createRegistry,
   extensionName,
@@ -161,5 +162,34 @@ describe('web extension registry', () => {
     expect(rendererFor(records, 'tools', 'read')).toBeUndefined()
     expect(panelItems(records).map((panel) => panel.id)).toEqual(['tasks', 'info'])
     expect(viewItems(records).map((view) => `${view.extension}:${view.id}`)).toEqual(['b:board'])
+  })
+
+  it('hides a command whose when() throws and reports it instead of throwing', async () => {
+    const registry = createRegistry()
+    await registry.setLoaders({
+      [path('broken')]: async () =>
+        module({
+          commands: [
+            {
+              id: 'broken.cmd',
+              title: 'Broken',
+              when: () => {
+                throw new Error('predicate failed')
+              },
+              run: () => undefined,
+            },
+            { id: 'broken.ok', title: 'Fine', when: () => true, run: () => undefined },
+          ],
+        }),
+    })
+    const report = vi.fn<(command: { id: string; extension: string }, error: unknown) => void>()
+    const context = { conversationId: 1 } as Parameters<typeof commandApplies>[1]
+    const shown = commandItems(registry.getSnapshot()).filter((command) =>
+      commandApplies(command, context, report),
+    )
+    expect(shown.map((command) => command.id)).toEqual(['broken.ok'])
+    expect(report).toHaveBeenCalledOnce()
+    expect(report.mock.calls[0][0]).toMatchObject({ id: 'broken.cmd', extension: 'broken' })
+    expect(String(report.mock.calls[0][1])).toContain('predicate failed')
   })
 })

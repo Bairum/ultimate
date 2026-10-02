@@ -6,6 +6,7 @@ import type {
   PanelContribution,
   SlotName,
   ToolRenderer,
+  UltimateContext,
   ViewContribution,
   WebExtension,
 } from './types.ts'
@@ -172,6 +173,24 @@ export function viewItems(records: readonly ExtensionRecord[]): ViewItem[] {
       (extension?.views ?? []).map((view) => ({ ...view, extension: name, version })),
     )
     .toSorted((a, b) => (a.order ?? 0) - (b.order ?? 0))
+}
+
+/**
+ * Whether `command` applies in `context`. A `when` that throws hides the command and goes to `report`, so one broken
+ * extension cannot take down the palette, shortcuts, or the shell around them.
+ */
+export function commandApplies(
+  command: CommandItem,
+  context: UltimateContext,
+  report: (command: CommandItem, error: unknown) => void,
+): boolean {
+  if (!command.when) return true
+  try {
+    return command.when(context)
+  } catch (error) {
+    report(command, error)
+    return false
+  }
 }
 
 export function commandItems(records: readonly ExtensionRecord[]): CommandItem[] {

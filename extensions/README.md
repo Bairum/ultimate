@@ -138,8 +138,10 @@ marker and returns `core` for the rest.
 
 ### Commands
 
-Entries of the command palette (`mod+k`), optionally with a shortcut. `mod` is ⌘ on macOS and Ctrl elsewhere; a
-sequence such as `mod+k m` runs when `m` follows the palette shortcut.
+Entries of the command palette (`mod+k`), optionally with a shortcut. `mod` is ⌘ on macOS and Ctrl elsewhere. Most
+commands need none: the palette finds them by title. A sequence such as `mod+k m` runs when `m` follows the palette
+shortcut, which takes that letter away from palette search (typing "models" would run it), so use sequences only for
+something you reach for constantly.
 
 ```tsx
 commands: [
@@ -148,8 +150,9 @@ commands: [
 ```
 
 `run(context)` gets the shell actions (below) and the shown `conversationId`; return a promise to have a failure
-reported as a notice. `when(context)` hides the command when it returns false. Commands run outside React: read the
-current state with `getConversation()` and `getState()`, not hooks.
+reported as a notice. `when(context)` hides the command when it returns false; a `when` that throws hides it too and
+reports a notice naming your extension. Commands run outside React: read the current state with `getConversation()`
+and `getState()`, not hooks.
 
 Plain keys and Shift+letter never fire while the user types; chords with `mod`, `alt`, or `ctrl` do, and so do Escape
 and Shift+Tab (Pi's thinking toggle) outside dialogs. To let a command open UI an extension renders, such as a
@@ -161,22 +164,23 @@ state (see `models`).
 Import only from `@/sdk`, `@/components/ui/*`, `@/components/ai/*`, `react`, and `lucide-react`. Never call `fetch` or
 open an `EventSource` yourself: the SDK keeps one live stream per shown conversation and replays its changes.
 
-| Hook                                                             | Returns                                                                                                                                                                                    |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `useConversation()`                                              | The shown conversation: `id`, `entries`, `agent` (`pi.agent`), `usage`, `live` (`pi.live`), `inbox`, `busy`, `loading`                                                                     |
-| `useSystem()`                                                    | Machine, process (pid, generation, url), persistence, code (branch, sha, dirty), extensions, skills, agents                                                                                |
-| `useConversations()`                                             | Summaries of every conversation: id, parent, owner task, title, busy                                                                                                                       |
-| `useTasks()`                                                     | The live task graph                                                                                                                                                                        |
-| `useModels()`                                                    | `GET /api/models`: providers with auth status, models with context window, reasoning, cost                                                                                                 |
-| `useAuthFlows()`                                                 | Login flows by id: status, the pending prompt, events                                                                                                                                      |
-| `useDoc(kind)`                                                   | An extension document of the shown conversation (`export const docs` in `server.ts`); `null` until created                                                                                 |
-| `useUiState(key, initial)`                                       | Durable UI state, stored with the main conversation: survives reloads and restarts, shared by every tab. `[value, set]`, JSON values only                                                  |
-| `useExtensionUiState(key, initial)`                              | `useUiState` under `ext.<your extension>.<key>`; use it for your own UI state                                                                                                              |
-| `useUltimate()`                                                  | `conversationId` and actions: `switchConversation`, `openView`, `openPanel`, `togglePanel`, `toggleSidebar`, `runCommand`, `open(dialog)`, `close(dialog)`, `openPalette`, `focusComposer` |
-| `useDialog(id)`                                                  | `[open, setOpen]` for a dialog an `overlay` component renders; `useUltimate().open(id)` opens it anywhere                                                                                  |
-| `useConnection()`                                                | Stream status: `connecting`, `open`, `reconnecting`                                                                                                                                        |
-| `getConversation()`, `getState()`                                | The same data now, outside React: in commands and callbacks. Components use the hooks.                                                                                                     |
-| `useNotices()`, `useCommands()`, `useExtensions()`, `useNow(ms)` | Server notices, all commands, installed web facets, a ticking clock                                                                                                                        |
+| Hook                                                                      | Returns                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `useConversation()`                                                       | The shown conversation: `id`, `entries`, `agent` (`pi.agent`), `usage`, `live` (`pi.live`), `inbox`, `busy`, `loading`                                                                                   |
+| `useSystem()`                                                             | Build identity, machine, process (pid, generation, url), persistence, code (branch, sha, dirty, coreStale), extensions, skills, context files, agents                                                    |
+| `useConversations()`                                                      | Summaries of every conversation: id, parent, owner task, agent and background (subagents), title, cwd, busy                                                                                              |
+| `useTasks()`                                                              | The live task graph                                                                                                                                                                                      |
+| `useModels()`                                                             | `GET /api/models`: providers with auth status, models with context window, reasoning, cost                                                                                                               |
+| `useAuthFlows()`                                                          | Login flows by id: status, the pending prompt, events                                                                                                                                                    |
+| `useDoc(kind)`                                                            | An extension document of the shown conversation (`export const docs` in `server.ts`); `undefined` until the stream delivers it (subscribing creates it with its initial value)                           |
+| `useUiState(key, initial)`                                                | Durable UI state, stored with the main conversation: survives reloads and restarts, shared by every tab. `[value, set]`, JSON values only                                                                |
+| `useExtensionUiState(key, initial)`                                       | `useUiState` under `ext.<your extension>.<key>`; use it for your own UI state                                                                                                                            |
+| `useUltimate()`                                                           | `conversationId` and actions: `switchConversation`, `openView`, `openPanel`, `closePanel`, `togglePanel`, `toggleSidebar`, `runCommand`, `open(dialog)`, `close(dialog)`, `openPalette`, `focusComposer` |
+| `useDialog(id)`                                                           | `[open, setOpen]` for a dialog an `overlay` component renders; `useUltimate().open(id)` opens it anywhere                                                                                                |
+| `useConnection()`                                                         | Stream status: `connecting`, `open`, `reconnecting`                                                                                                                                                      |
+| `getConversation()`, `getState()`                                         | The same data now, outside React: in commands and callbacks. Components use the hooks.                                                                                                                   |
+| `useNotices()`, `useCommands()`, `useExtensions()`, `useNow(ms, active?)` | Server and client notices, all commands, installed web facets, a clock ticking every `ms` while `active`                                                                                                 |
+| `useStore(select)`                                                        | Any slice of the client state (`State`), re-rendering when it changes                                                                                                                                    |
 
 `api` sends commands: `submit(text, whenBusy?)`, `abort()`, `configure({ model, thinkingLevel })`, `compact()`,
 `createConversation()`, `login(provider, type)`, `answer(flowId, value)`, `cancel(flowId)`, `logout(provider)`,
@@ -187,14 +191,15 @@ Helpers: `cn()` for class names, `formatTokens`, `formatBytes`, `formatDuration`
 
 Keep UI state that should survive a reload in `useExtensionUiState`; keep throwaway state (hover, an open menu) in
 `useState`. The shell keeps its own layout there too (`shell.conversation`, `shell.view`, `shell.panel`,
-`shell.panelOpen`, `shell.sidebarOpen`).
+`shell.panelOpen`, `shell.sidebarOpen`, `shell.dockOpen`).
 
 ## Styling
 
 - Use the components first: `@/components/ui/*` (shadcn: button, badge, collapsible, command, dialog, kbd, popover,
   separator, tabs, tooltip) and `@/components/ai/*` (code block, conversation, message, reasoning, shimmer, tool,
   prompt input).
-  Need another shadcn component? `pnpm dlx shadcn@latest add <component>` writes it to `web/src/components/ui`.
+  Need another shadcn component? `pnpm dlx shadcn@latest add <component>` writes it to `web/src/components/ui`; then
+  import `cn` from `'cn'` in it, as the others do (there is no `@/lib/utils`).
 - Style with Tailwind utilities and the theme tokens: `bg-background`, `bg-card`, `bg-muted`, `bg-terminal`,
   `text-foreground`, `text-muted-foreground`, `border-border`, `text-brand` (the one accent), `text-success`,
   `text-warning`, `text-error`, `text-diff-add`, `text-diff-del`. Opacity modifiers work: `bg-error/10`. They follow

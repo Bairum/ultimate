@@ -8,65 +8,88 @@ import type { UiUpdateRequest } from '../../../shared/protocol.ts'
  */
 export type UiValues = Readonly<Record<string, JsonValue>>
 
-/** A key's pending value; `undefined` deletes it. */
-type Overlay = Map<string, JsonValue | undefined>
+/**
+ * The newest local write of one key (`undefined` deletes it). `seq` orders writes: an acknowledgement only settles
+ * the key when it carries the newest write, so a slower, older batch can never bring back a value written after it.
+ */
+interface LocalWrite {
+  value: JsonValue | undefined
+  seq: number
+  /** `pending` until sent, `sent` until the server accepts it, then `acknowledged`. */
+  state: 'pending' | 'sent' | 'acknowledged'
+  /** The stream has shown this value since it was sent. */
+  seen: boolean
+}
 
 const same = (a: JsonValue | undefined, b: JsonValue | undefined) =>
   JSON.stringify(a) === JSON.stringify(b)
 
 export function createUiState(
   write: (change: UiUpdateRequest) => Promise<unknown>,
-  options: { delayMs?: number; onError?: (error: unknown) => void } = {},
+  options: { delayMs?: number; settleMs?: number; onError?: (error: unknown) => void } = {},
 ) {
   const listeners = new Set<() => void>()
   let remote: UiValues = {}
-  /** Writes not sent yet, and sent batches the stream has not confirmed. */
-  let pending: Overlay = new Map()
-  const sent: { overlay: Overlay; acknowledged: boolean }[] = []
+  const local = new Map<string, LocalWrite>()
   let values: UiValues = {}
+  let seq = 0
   let timer: ReturnType<typeof setTimeout> | undefined
 
   function update() {
     const next: Record<string, JsonValue> = { ...remote }
-    for (const overlay of [...sent.map((batch) => batch.overlay), pending])
-      for (const [key, value] of overlay) {
-        if (value === undefined) delete next[key]
-        else next[key] = value
-      }
+    for (const [key, { value }] of local) {
+      if (value === undefined) delete next[key]
+      else next[key] = value
+    }
     values = next
     for (const listener of listeners) listener()
   }
-  /** Drop acknowledged batches once the stream shows what they wrote. */
+  /** Drop acknowledged writes the stream has shown: from then on the stream is the truth, other tabs included. */
   function settle() {
-    for (const batch of sent.filter((candidate) => candidate.acknowledged))
-      if ([...batch.overlay].every(([key, value]) => same(remote[key], value)))
-        sent.splice(sent.indexOf(batch), 1)
+    for (const [key, entry] of local)
+      if (entry.state === 'acknowledged' && entry.seen) local.delete(key)
+  }
+  /** Run `change` on the keys of a batch whose newest write is still the one the batch sent. */
+  function current(
+    batch: ReadonlyMap<string, number>,
+    change: (key: string, entry: LocalWrite) => void,
+  ) {
+    for (const [key, sent] of batch) {
+      const entry = local.get(key)
+      if (entry?.seq === sent) change(key, entry)
+    }
   }
   function flush() {
     timer = undefined
-    if (pending.size === 0) return
-    const batch = { overlay: pending, acknowledged: false }
-    pending = new Map()
-    sent.push(batch)
+    const batch = new Map<string, number>()
     const change: UiUpdateRequest = { set: {}, delete: [] }
-    for (const [key, value] of batch.overlay)
-      if (value === undefined) change.delete?.push(key)
-      else if (change.set) change.set[key] = value
+    for (const [key, entry] of local) {
+      if (entry.state !== 'pending') continue
+      entry.state = 'sent'
+      batch.set(key, entry.seq)
+      if (entry.value === undefined) change.delete?.push(key)
+      else if (change.set) change.set[key] = entry.value
+    }
+    if (batch.size === 0) return
     write(change).then(
       () => {
-        batch.acknowledged = true
+        current(batch, (key, entry) => {
+          entry.state = 'acknowledged'
+          // The commit may already be on screen (it can arrive before this response).
+          if (same(remote[key], entry.value)) entry.seen = true
+        })
         settle()
         update()
-        // The stream delivers the commit right away; never let a stale overlay hide a later write.
+        // The stream delivers the commit right away; never let an unconfirmed overlay hide later writes for long.
         setTimeout(() => {
-          const index = sent.indexOf(batch)
-          if (index < 0) return
-          sent.splice(index, 1)
+          current(batch, (key, entry) => {
+            if (entry.state === 'acknowledged') local.delete(key)
+          })
           update()
-        }, 2000)
+        }, options.settleMs ?? 2000)
       },
       (error: unknown) => {
-        sent.splice(sent.indexOf(batch), 1)
+        current(batch, (key) => local.delete(key))
         update()
         options.onError?.(error)
       },
@@ -74,7 +97,7 @@ export function createUiState(
   }
   function set(key: string, value: JsonValue | undefined) {
     if (same(values[key], value)) return
-    pending.set(key, value)
+    local.set(key, { value, seq: ++seq, state: 'pending', seen: false })
     timer ??= setTimeout(flush, options.delayMs ?? 150)
     update()
   }
@@ -94,6 +117,8 @@ export function createUiState(
     receive(next: UiValues) {
       if (next === remote) return
       remote = next
+      for (const [key, entry] of local)
+        if (entry.state !== 'pending' && same(remote[key], entry.value)) entry.seen = true
       settle()
       update()
     },

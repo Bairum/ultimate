@@ -27,7 +27,7 @@ function Toasts() {
   if (shown.length === 0) return null
   return (
     <div
-      className="fixed top-12 right-3 z-40 flex w-80 max-w-[calc(100vw-1.5rem)] flex-col gap-1.5"
+      className="fixed top-12 right-3 z-40 flex w-80 max-w-[calc(100vw-1.5rem)] flex-col divide-y divide-border/70 overflow-hidden rounded-md border border-border/80 bg-popover shadow-lg"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       role="status"
@@ -37,12 +37,9 @@ function Toasts() {
         return (
           <div
             className={cn(
-              'group/notice flex items-start gap-2 rounded-md border bg-popover px-2.5 py-2 font-mono text-[11.5px] leading-snug shadow-lg',
-              notice.level === 'error'
-                ? 'border-error/30'
-                : notice.level === 'warning'
-                  ? 'border-warning/30'
-                  : 'border-border/80',
+              'group/notice flex items-start gap-2 px-2.5 py-2 font-mono text-[11.5px] leading-snug',
+              notice.level === 'error' && 'bg-error/6',
+              notice.level === 'warning' && 'bg-warning/6',
             )}
             key={notice.id}
           >

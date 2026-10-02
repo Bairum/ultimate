@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { actions, allCommands, currentContext } from '../sdk/actions.ts'
+import { actions, allCommands, applies, currentContext } from '../sdk/actions.ts'
 import { store } from '../sdk/client.ts'
 import { chordOf, parseKeys } from '../sdk/keys.ts'
 
@@ -27,7 +27,7 @@ export function useShortcuts() {
       const sequence = [...pending, chord]
       const context = currentContext()
       const candidates = allCommands().flatMap((command) =>
-        command.keys && (!command.when || command.when(context))
+        command.keys && applies(command, context)
           ? [{ command, keys: parseKeys(command.keys) }]
           : [],
       )

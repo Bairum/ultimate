@@ -6,7 +6,7 @@ import {
   PanelRightIcon,
   PanelRightOpenIcon,
 } from 'lucide-react'
-import { Fragment } from 'react'
+import { Fragment, useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -57,6 +57,9 @@ function IconButton({
   )
 }
 
+/** The root conversation: Ultimate's one ongoing conversation, named by role rather than by its first prompt. */
+const ROOT = 1
+
 /** The conversations above `id`, root first, by their parent links. */
 function ancestors(id: number | undefined, conversations: readonly ConversationSummary[]) {
   const chain: ConversationSummary[] = []
@@ -71,7 +74,7 @@ function ancestors(id: number | undefined, conversations: readonly ConversationS
 }
 
 const nameOf = (conversation: ConversationSummary) =>
-  conversation.id === 1 ? 'main' : (conversation.agent ?? `#${conversation.id}`)
+  conversation.id === ROOT ? 'main' : (conversation.agent ?? `#${conversation.id}`)
 
 function Header({ view }: { view: string | undefined }) {
   const { id, busy } = useConversation()
@@ -83,7 +86,12 @@ function Header({ view }: { view: string | undefined }) {
   const hasSidebar = slotItems(records, 'sidebar').length > 0
   const hasPanels = panelItems(records).length > 0
   const [panelOpen] = useUiState(shellKeys.panelOpen, false)
-  const title = summary?.title ?? (id === undefined ? 'Connecting…' : 'New conversation')
+  const root = id === ROOT
+  const title = summary?.title ?? (id === undefined ? 'connecting…' : 'New conversation')
+  useEffect(() => {
+    const name = root || id === undefined ? 'Ultimate' : `${summary?.agent ?? `#${id}`} · Ultimate`
+    document.title = busy ? `● ${name}` : name
+  }, [busy, id, root, summary?.agent])
   return (
     <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border/70 px-2">
       {hasSidebar && (
@@ -91,13 +99,22 @@ function Header({ view }: { view: string | undefined }) {
           <PanelLeftIcon className="size-4" />
         </IconButton>
       )}
-      <div className="flex min-w-0 items-center gap-2 pl-1">
+      <button
+        className="shrink-0 rounded-sm px-1 text-[11px] font-semibold tracking-[0.28em] text-brand transition-opacity hover:opacity-80"
+        onClick={() => actions.switchConversation(ROOT)}
+        title="Ultimate · the main conversation"
+        type="button"
+      >
+        ULTIMATE
+      </button>
+      <span className="h-4 w-px shrink-0 bg-border" />
+      <div className="flex min-w-0 items-center gap-2">
         {trail.map((conversation) => (
           <Fragment key={conversation.id}>
             <button
               className="shrink-0 rounded-sm px-1 font-mono text-[12px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               onClick={() => actions.switchConversation(conversation.id)}
-              title={conversation.title ?? `Show #${conversation.id}`}
+              title={conversation.id === ROOT ? 'The main conversation' : conversation.title}
               type="button"
             >
               {nameOf(conversation)}
@@ -106,22 +123,20 @@ function Header({ view }: { view: string | undefined }) {
           </Fragment>
         ))}
         {busy && <span className="size-1.5 shrink-0 animate-pulse-dot rounded-full bg-brand" />}
-        {summary?.agent && (
-          <span className="shrink-0 font-mono text-[12px] text-brand">{summary.agent}</span>
-        )}
-        <span className="truncate text-[13px] font-medium">{title}</span>
-        {id !== undefined && (
-          <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70">#{id}</span>
-        )}
-        {id !== undefined && id !== 1 && trail.length === 0 && (
-          <Button
-            className="h-6 px-2 font-mono text-[11px] text-muted-foreground"
-            onClick={() => actions.switchConversation(1)}
-            size="sm"
-            variant="ghost"
-          >
-            ← main
-          </Button>
+        {root ? (
+          <span className="font-mono text-[12px] text-foreground/85">main</span>
+        ) : (
+          <>
+            {summary?.agent && (
+              <span className="shrink-0 font-mono text-[12px] text-brand">{summary.agent}</span>
+            )}
+            <span className="truncate text-[13px] font-medium" title={title}>
+              {title}
+            </span>
+            {id !== undefined && (
+              <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70">#{id}</span>
+            )}
+          </>
         )}
       </div>
       {views.length > 0 && (
@@ -215,7 +230,11 @@ function RightPanel() {
         })}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <ExtensionBoundary extension={active.extension} version={active.version}>
+        <ExtensionBoundary
+          extension={active.extension}
+          key={`${active.extension}:${active.id}`}
+          version={active.version}
+        >
           <Panel />
         </ExtensionBoundary>
       </div>
@@ -279,7 +298,11 @@ export function App() {
             {view && View ? (
               <div className="flex min-h-0 flex-1">
                 <div className="min-w-0 flex-1 overflow-auto">
-                  <ExtensionBoundary extension={view.extension} version={view.version}>
+                  <ExtensionBoundary
+                    extension={view.extension}
+                    key={`${view.extension}:${view.id}`}
+                    version={view.version}
+                  >
                     <View />
                   </ExtensionBoundary>
                 </div>

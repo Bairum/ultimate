@@ -11,17 +11,55 @@ import type { EntryRecord, SystemInfo, ToolCallView } from '@/sdk'
 
 const short = (id: string | undefined) => id?.slice(0, 7)
 
-/** The `restart` tool: the swap's new generation and build, or the boot error that kept the old core serving. */
+interface RestartDetails {
+  fromGeneration?: number
+  toGeneration?: number
+  fromBuild?: string
+  toBuild?: string
+  rolledBack?: boolean
+  error?: string
+}
+
+/** What a finished `restart` reports: its `details` when the tool sends them, else what its text says. */
+function outcome(call: ToolCallView): RestartDetails {
+  const details = (call.details ?? {}) as RestartDetails
+  if (details.toGeneration !== undefined || details.rolledBack || details.error) return details
+  const done = /generation (\d+) \(pid \d+\), build (\S+) → (\S+?)\.?$/.exec(call.output)
+  if (done) return { toGeneration: Number(done[1]), fromBuild: done[2], toBuild: done[3] }
+  const rolledBack = /rolled back to generation (\d+)/.exec(call.output)
+  if (rolledBack) return { rolledBack: true, toGeneration: Number(rolledBack[1]) }
+  return {}
+}
+
+/** The `restart` tool: the swap's generations and builds, or the boot error that kept the old core serving. */
 function RestartCall({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
-  const done = /generation (\d+) \(pid (\d+)\), build (\S+) → (\S+?)\.?$/.exec(call.output)
+  const result = outcome(call)
   const failed = call.status === 'error'
-  const title: ReactNode =
-    call.status === 'done' && done ? (
+  const generations =
+    result.fromGeneration !== undefined
+      ? `gen ${result.fromGeneration} → ${result.toGeneration}`
+      : `gen → ${result.toGeneration}`
+  const builds =
+    result.fromBuild && result.toBuild && result.fromBuild === result.toBuild ? (
+      ' · same build'
+    ) : result.fromBuild && result.toBuild ? (
       <>
-        <span className="text-success">swapped</span> → gen {done[1]} · pid {done[2]} · build{' '}
-        {short(done[3])} → <span className="text-foreground/85">{short(done[4])}</span>
+        {' '}
+        · build {short(result.fromBuild)} →{' '}
+        <span className="text-foreground/85">{short(result.toBuild)}</span>
       </>
+    ) : null
+  const title: ReactNode =
+    call.status === 'done' && result.toGeneration !== undefined ? (
+      <>
+        <span className="text-success">swapped</span> · {generations}
+        {builds}
+      </>
+    ) : failed && result.rolledBack ? (
+      <span className="text-error">
+        activation failed · rolled back to gen {result.toGeneration ?? result.fromGeneration}
+      </span>
     ) : failed ? (
       <span className="text-error">boot failed · the old core kept serving</span>
     ) : call.status === 'running' || call.status === 'pending' ? (
@@ -31,6 +69,7 @@ function RestartCall({ call }: { call: ToolCallView }) {
     ) : (
       'core swap'
     )
+  const error = result.error ?? (failed ? call.output : undefined)
   return (
     <Tool defaultOpen={failed}>
       <ToolHeader meta={duration} name="restart" state={call.status} title={title} />
@@ -42,8 +81,8 @@ function RestartCall({ call }: { call: ToolCallView }) {
             </Shimmer>
           </ToolSection>
         )}
-        {failed ? (
-          <ToolOutput isError output={call.output} />
+        {error ? (
+          <ToolOutput isError output={error} />
         ) : (
           call.output && <ToolSection className="text-muted-foreground">{call.output}</ToolSection>
         )}
@@ -224,6 +263,18 @@ const systemOf = (entry: EntryRecord | undefined) => {
   return entry?.kind === 'pi.system' && message?.role === 'system' ? message : undefined
 }
 
+/** A core restart that kept the same code: only the generation in the build section changed. */
+function Restarted({ from, to }: { from: number; to: number }) {
+  return (
+    <div className="flex items-center gap-3 font-mono text-[11px] text-muted-foreground/60 before:h-px before:flex-1 before:bg-border/50 after:h-px after:flex-1 after:bg-border/50">
+      <span className="flex items-center gap-1.5">
+        <RotateCwIcon className="size-3" />
+        Restarted · gen {from} → {to} · same build
+      </span>
+    </div>
+  )
+}
+
 /**
  * A `pi.system` entry that changes the build section is a hot reload: show it as one marker with what changed. A
  * remove-all entry that Pi Durable writes right before a reordered re-add belongs to that marker and shows nothing.
@@ -241,7 +292,15 @@ function SystemEntry({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   let previous: BuildLine | undefined
   for (let at = index - 1; at >= 0 && !previous; at--)
     previous = parseBuild(systemOf(entries[at])?.sections?.build)
-  if (!current || !previous || previous.id === current.id) return core
+  if (!current || !previous) return core
+  if (previous.id === current.id)
+    return previous.generation !== undefined &&
+      current.generation !== undefined &&
+      previous.generation !== current.generation ? (
+      <Restarted from={previous.generation} to={current.generation} />
+    ) : (
+      core
+    )
   // Builds the conversation did not see in between still count: union their changes from the history.
   const history = system?.build.history ?? []
   const from = history.findIndex((item) => item.id === previous.id)

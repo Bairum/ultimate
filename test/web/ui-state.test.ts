@@ -60,4 +60,73 @@ describe('durable UI state', () => {
     expect(state.get('bad key')).toBeUndefined()
     expect(errors).toHaveLength(1)
   })
+
+  it('never lets an older batch bring back a value written after it', async () => {
+    const { state, writes, done } = setup()
+    state.receive({ panel: 'start' })
+    state.set('panel', 'first')
+    await wait()
+    state.set('panel', 'second')
+    await wait()
+    expect(writes).toEqual([
+      { set: { panel: 'first' }, delete: [] },
+      { set: { panel: 'second' }, delete: [] },
+    ])
+    // Both commits stream in before either save answers.
+    state.receive({ panel: 'first' })
+    expect(state.get('panel')).toBe('second')
+    state.receive({ panel: 'second' })
+    done[0]()
+    await wait()
+    expect(state.get('panel')).toBe('second')
+    done[1]()
+    await wait()
+    expect(state.get('panel')).toBe('second')
+    // Settled: another tab's later write shows at once, not after a timeout.
+    state.receive({ panel: 'third' })
+    expect(state.get('panel')).toBe('third')
+  })
+
+  it('settles when the saves answer before the stream, in either order', async () => {
+    const { state, done } = setup()
+    state.receive({ panel: 'start' })
+    state.set('panel', 'first')
+    await wait()
+    state.set('panel', 'second')
+    await wait()
+    done[1]()
+    done[0]()
+    await wait()
+    expect(state.get('panel')).toBe('second')
+    state.receive({ panel: 'first' })
+    expect(state.get('panel')).toBe('second')
+    state.receive({ panel: 'second' })
+    state.receive({ panel: 'third' })
+    expect(state.get('panel')).toBe('third')
+  })
+
+  it('keeps a newer write when an older batch fails', async () => {
+    const errors: unknown[] = []
+    const answers: { resolve: () => void; reject: (error: unknown) => void }[] = []
+    const state = createUiState(
+      () => new Promise((resolve, reject) => answers.push({ resolve: () => resolve({}), reject })),
+      { delayMs: 5, onError: (error) => errors.push(error) },
+    )
+    state.receive({ panel: 'start' })
+    state.set('panel', 'first')
+    state.set('view', 'board')
+    await wait()
+    state.set('panel', 'second')
+    await wait()
+    expect(answers).toHaveLength(2)
+    answers[0].reject(new Error('offline'))
+    await wait()
+    expect(errors).toHaveLength(1)
+    // The failed batch's own key reverts; the key written again keeps its newer value.
+    expect(state.get('view')).toBeUndefined()
+    expect(state.get('panel')).toBe('second')
+    answers[1].resolve()
+    state.receive({ panel: 'second' })
+    expect(state.get('panel')).toBe('second')
+  })
 })

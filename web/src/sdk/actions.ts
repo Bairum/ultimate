@@ -1,5 +1,5 @@
 import { api, registry, store, uiState } from './client.ts'
-import { commandItems, panelItems, slotItems, viewItems } from './registry.ts'
+import { commandApplies, commandItems, panelItems, slotItems, viewItems } from './registry.ts'
 import type { CommandItem } from './registry.ts'
 import type { CommandContribution, UltimateActions, UltimateContext } from './types.ts'
 
@@ -35,11 +35,14 @@ export const actions: UltimateActions = {
     const command = allCommands().find((candidate) => candidate.id === id)
     if (!command) return
     const context = currentContext()
-    if (command.when && !command.when(context)) return
+    if (!applies(command, context)) return
     void Promise.resolve()
       .then(() => command.run(context))
       .catch((error: unknown) =>
-        store.notify({ level: 'error', message: `${command.title}: ${String(error)}` }),
+        store.notify({
+          level: 'error',
+          message: `${command.title}${command.extension === 'core' ? '' : ` (${command.extension})`}: ${messageOf(error)}`,
+        }),
       )
   },
   open: (dialog) => store.setUi({ dialogs: { ...store.getState().ui.dialogs, [dialog]: true } }),
@@ -50,6 +53,19 @@ export const actions: UltimateActions = {
 
 export function currentContext(): UltimateContext {
   return { ...actions, conversationId: store.getState().view?.conversation.id }
+}
+
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
+const reported = new Set<string>()
+/** `commandApplies` that reports a broken `when` once as a notice naming its extension. */
+export function applies(command: CommandItem, context: UltimateContext = currentContext()) {
+  return commandApplies(command, context, (item, error) => {
+    const message = `extension ${item.extension}: command ${item.id} is hidden, its when() threw: ${messageOf(error)}`
+    if (reported.has(message)) return
+    reported.add(message)
+    // Predicates run while React renders the palette; notify after that render.
+    queueMicrotask(() => store.notify({ level: 'error', message }))
+  })
 }
 
 const busy = () => !!store.getState().view?.docs['pi.live']?.run

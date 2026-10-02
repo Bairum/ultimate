@@ -21,7 +21,7 @@ import {
   openLogin,
   useCurrentModel,
 } from './state.tsx'
-import type { ModelInfo, ThinkingLevel } from './state.tsx'
+import type { ThinkingLevel } from './state.tsx'
 
 const toolbarButton =
   'flex h-7 max-w-56 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground'
@@ -100,34 +100,17 @@ function ThinkingButton() {
   )
 }
 
-/** Configure the next level; a level the server refuses is skipped, so cycling never gets stuck. */
-async function cycle(current: ThinkingLevel | undefined, model: ModelInfo): Promise<unknown> {
-  let level = current
-  let failure: unknown
-  for (let attempt = 1; attempt < levelsOf(model).length; attempt++) {
-    level = nextThinking(level, model)
-    try {
-      return await api.configure({ thinkingLevel: level })
-    } catch (error) {
-      failure = error
-    }
-  }
-  throw failure
-}
-
 export default defineWebExtension({
   slots: { 'composer.toolbar': [ModelButton, ThinkingButton], overlay: [ModelPicker, LoginDialog] },
   commands: [
     {
       id: 'model.pick',
       title: 'Pick a model',
-      keys: 'mod+k m',
       run: (context) => context.open(dialogs.picker),
     },
     {
       id: 'model.thinking',
       title: 'Set the thinking level',
-      keys: 'mod+k t',
       run: (context) => context.open(dialogs.thinking),
     },
     {
@@ -141,13 +124,12 @@ export default defineWebExtension({
             candidate.provider === agent.model?.provider && candidate.id === agent.model.modelId,
         )
         if (!model?.reasoning) return undefined
-        return cycle(agent.thinkingLevel, model)
+        return api.configure({ thinkingLevel: nextThinking(agent.thinkingLevel, model) })
       },
     },
     {
       id: 'auth.login',
       title: 'Log in to a provider',
-      keys: 'mod+k l',
       run: (context) => openLogin(context),
     },
   ],

@@ -22,7 +22,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai/r
 import { Shimmer } from '@/components/ai/shimmer'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { elidePath, formatDuration, formatTokens, shortenPath } from '../sdk/format.ts'
-import { useConversation, useExtensions, useNow, useSystem } from '../sdk/hooks.ts'
+import { useConversation, useExtensions, useModels, useNow, useSystem } from '../sdk/hooks.ts'
 import { rendererFor } from '../sdk/registry.ts'
 import { ExtensionBoundary } from './boundary.tsx'
 import { column } from './layout.ts'
@@ -60,6 +60,9 @@ export function Transcript({ dock }: { dock?: boolean }) {
 function EmptyState() {
   const system = useSystem()
   const { agent } = useConversation()
+  const reasoning = useModels()?.models.find(
+    (model) => model.provider === agent.model?.provider && model.id === agent.model.modelId,
+  )?.reasoning
   const cwd = agent.cwd ?? system?.execution.defaultCwd ?? ''
   const rows: [string, ReactNode][] = [
     [
@@ -74,7 +77,7 @@ function EmptyState() {
     [
       'model',
       agent.model ? (
-        `${agent.model.provider}/${agent.model.modelId}${agent.thinkingLevel ? ` · ${agent.thinkingLevel}` : ''}`
+        `${agent.model.provider}/${agent.model.modelId}${reasoning !== false && agent.thinkingLevel ? ` · ${agent.thinkingLevel}` : ''}`
       ) : (
         <span className="text-warning">none configured</span>
       ),
@@ -134,7 +137,12 @@ const EntryView = memo(function EntryView({
   if (custom) {
     const Renderer = custom.component
     return (
-      <ExtensionBoundary extension={custom.extension} fallback={core} version={custom.version}>
+      <ExtensionBoundary
+        extension={custom.extension}
+        fallback={core}
+        key={custom.extension}
+        version={custom.version}
+      >
         <Renderer core={core} entry={entry} />
       </ExtensionBoundary>
     )

@@ -535,15 +535,27 @@ function Agents({ system }: { system: SystemInfo }) {
       title="Subagent definitions"
     >
       <div className="flex flex-col gap-1.5">
-        {system.agents.map((agent) => (
-          <Described
-            description={agent.description}
-            error={agent.error}
-            key={agent.path}
-            name={agent.name}
-            path={agent.path}
-          />
-        ))}
+        {system.agents.map((agent) => {
+          const { model, thinking } = agent
+          const shown = model && `${model.provider}/${model.modelId}`
+          return (
+            <Described
+              description={agent.description}
+              error={agent.error}
+              extra={
+                !agent.error && (
+                  <span className="ml-auto truncate pl-2 text-[10.5px] text-muted-foreground/70">
+                    {shown ?? 'inherits model'}
+                    {thinking && ` · ${thinking}`}
+                  </span>
+                )
+              }
+              key={agent.path}
+              name={agent.name}
+              path={agent.path}
+            />
+          )
+        })}
         {system.agents.length === 0 && <Empty>no definitions</Empty>}
       </div>
     </Section>
@@ -580,7 +592,6 @@ export default defineWebExtension({
     {
       id: 'info.open',
       title: 'Show system info',
-      keys: 'mod+k i',
       run: (context) => context.openPanel('info'),
     },
   ],

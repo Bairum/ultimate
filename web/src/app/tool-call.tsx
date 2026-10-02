@@ -20,6 +20,7 @@ export function ToolCallBlock({ call }: { call: ToolCallView }) {
   return (
     <ExtensionBoundary
       extension={renderer.extension}
+      key={renderer.extension}
       fallback={<GenericToolCall call={call} />}
       version={renderer.version}
     >

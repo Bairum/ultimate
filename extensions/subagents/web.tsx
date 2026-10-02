@@ -185,7 +185,7 @@ function Node({
           {conversation.id === 1 ? 'main' : (conversation.agent ?? 'subagent')}
         </span>
         <span className="shrink-0 text-muted-foreground/60">#{conversation.id}</span>
-        {conversation.title && (
+        {conversation.title && conversation.id !== 1 && (
           <span
             className="min-w-0 truncate font-sans text-[12px] text-muted-foreground"
             title={conversation.title}
@@ -249,7 +249,6 @@ export default defineWebExtension({
     {
       id: 'subagents.open',
       title: 'Show conversations and subagents',
-      keys: 'mod+k a',
       run: (context) => context.openPanel('agents'),
     },
   ],

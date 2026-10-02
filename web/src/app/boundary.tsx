@@ -55,7 +55,11 @@ export function ErrorCard({
   )
 }
 
-/** Catches what one extension's component throws; a new version of the extension retries. */
+/**
+ * Catches what one extension's component throws; a new version of the extension retries. Where one boundary position
+ * shows different contributions (panel tabs, views), key it by extension and contribution, so an error stays with
+ * the contribution that threw.
+ */
 export class ExtensionBoundary extends Component<
   {
     extension: string

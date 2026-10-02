@@ -200,7 +200,6 @@ export default defineWebExtension({
     {
       id: 'tasks.open',
       title: 'Show the task graph',
-      keys: 'mod+k g',
       run: (context) => context.openPanel('tasks'),
     },
   ],
