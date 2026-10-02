@@ -49,6 +49,7 @@ it('gates project resources, remembers choices, and applies onboarding settings 
     userHome: home,
     home: join(home, 'state'),
     localSetup: false,
+    firstRun: true,
   }
   let server: Awaited<ReturnType<typeof fauxServer>> | undefined
   const watchers: FSWatcher[] = []

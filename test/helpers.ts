@@ -65,7 +65,13 @@ export async function sourceCopy(parent: string) {
   new ProjectTrustStore(join(parent, '.ultimate')).set(root, true)
   return root
 }
-type FixtureOptions = ServerOptions & { home: string; userHome: string; localSetup?: boolean }
+type FixtureOptions = ServerOptions & {
+  home: string
+  userHome: string
+  localSetup?: boolean
+  /** Keep the first-run welcome; by default it is marked done so it does not cover the UI under test. */
+  firstRun?: boolean
+}
 async function isolated(options: FixtureOptions) {
   const { home, userHome } = options
   const ultimateRoot =
@@ -76,8 +82,13 @@ async function isolated(options: FixtureOptions) {
       : options.projectRoot
   if (options.localSetup !== false)
     new ProjectTrustStore(join(userHome, '.ultimate')).set(projectRoot, true)
+  if (!options.firstRun) {
+    await mkdir(join(userHome, '.ultimate'), { recursive: true })
+    await writeFile(join(userHome, '.ultimate/onboarding.json'), '{"firstRunDone":true}\n')
+  }
+  const { firstRun: _firstRun, ...server } = options
   return {
-    ...options,
+    ...server,
     ultimateRoot,
     projectRoot,
     userHome,
