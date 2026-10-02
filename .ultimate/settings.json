@@ -1,4 +1,5 @@
 {
+  "exclusiveCommands": ["\\bpnpm( run)? test\\b", "\\bvp test\\b"],
   "githubTriage": {
     "writableRepos": ["HazAT/ultimate"]
   }
