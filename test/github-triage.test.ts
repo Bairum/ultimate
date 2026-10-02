@@ -207,7 +207,8 @@ it('loads the bash wrap into agent.tools and requires browser headers on actions
 it('records proposal outcomes with the write, once, in the conversation document', async () => {
   const home = await temp('triage-outcomes-')
   const record = join(home, 'calls')
-  // Lists one label, posts after a pause (so two posts overlap), and refuses a body saying "refuse".
+  // Lists one label, posts after a pause (so two posts overlap), refuses a body saying "refuse" like GitHub does, and
+  // fails a body saying "offline" the way a lost connection does.
   await writeFile(
     join(home, 'gh'),
     `#!/usr/bin/env node
@@ -215,7 +216,8 @@ const fs = require('node:fs')
 const args = process.argv.slice(2)
 fs.appendFileSync(process.env.RECORD, JSON.stringify(args) + '\\n')
 if (args[0] === 'label') console.log('[{"name":"bug","color":"fff"}]')
-else if (args.includes('body=refuse')) { console.error('gh: Forbidden'); process.exit(1) }
+else if (args.includes('body=refuse')) { console.error('gh: Forbidden (HTTP 403)'); process.exit(1) }
+else if (args.includes('body=offline')) { console.error('error connecting to api.github.com'); process.exit(1) }
 else setTimeout(() => console.log('https://github.com/HazAT/ultimate/issues/1#c'), 300)
 `,
   )
@@ -282,7 +284,7 @@ else setTimeout(() => console.log('https://github.com/HazAT/ultimate/issues/1#c'
     // GitHub refused: the claim is released, so the user can try again.
     expect((await call('comment', { ...item, callId: 'b', body: 'refuse' })).data.result).toEqual({
       status: 'error',
-      message: 'gh: Forbidden',
+      message: 'gh: Forbidden (HTTP 403)',
     })
     expect((await outcomes())?.b?.reply).toBeUndefined()
     expect((await call('discard', { callId: 'b', part: 'reply' })).data.result.status).toBe('ok')
@@ -291,6 +293,18 @@ else setTimeout(() => console.log('https://github.com/HazAT/ultimate/issues/1#c'
       'error',
     )
     expect(await writes()).toBe(3)
+
+    // An unclear failure may have written: the claim stays until the user checks GitHub and discards it.
+    expect(
+      (await call('comment', { ...item, callId: 'c', body: 'offline' })).data.result.status,
+    ).toBe('error')
+    expect((await outcomes())?.c?.reply).toMatchObject({ state: 'pending' })
+    expect(
+      (await call('comment', { ...item, callId: 'c', body: 'again' })).data.result.status,
+    ).toBe('error')
+    expect((await call('discard', { callId: 'c', part: 'reply' })).data.result.status).toBe('ok')
+    expect((await outcomes())?.c?.reply).toMatchObject({ state: 'discarded' })
+    expect(await writes()).toBe(4)
   } finally {
     await server.close()
     process.env.PATH = oldPath

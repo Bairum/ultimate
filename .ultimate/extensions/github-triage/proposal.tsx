@@ -21,10 +21,10 @@ interface Args {
 type Written = { status: 'ok'; url?: string } | { status: 'error'; message: string }
 
 /** What became of one half, as the server recorded it. */
-function Done({ outcome }: { outcome: Outcome }) {
+function Done({ outcome, onDiscard }: { outcome: Outcome; onDiscard: () => void }) {
   const text =
     outcome.state === 'pending'
-      ? 'being written…'
+      ? 'being written… if this stays, check GitHub, then discard'
       : outcome.state === 'applied'
         ? 'applied on GitHub'
         : outcome.state === 'posted'
@@ -34,6 +34,11 @@ function Done({ outcome }: { outcome: Outcome }) {
     <p className="flex items-center gap-1.5 text-[11.5px] break-all text-muted-foreground">
       {outcome.state !== 'pending' && <CheckIcon className="size-3 shrink-0 text-success" />}
       {text}
+      {outcome.state === 'pending' && (
+        <Button className="ml-1" onClick={onDiscard} size="xs" variant="ghost">
+          Discard
+        </Button>
+      )}
     </p>
   )
 }
@@ -149,7 +154,12 @@ export function Proposal({ call }: { call: ToolCallView }) {
                     )}
                   </p>
                 )}
-                {outcome.labels && <Done outcome={outcome.labels} />}
+                {outcome.labels && (
+                  <Done
+                    outcome={outcome.labels}
+                    onDiscard={() => void run('labels', 'discard', { part: 'labels' })}
+                  />
+                )}
                 {open('labels') && (
                   <div className="flex flex-wrap gap-1.5 pt-1">
                     <Button
@@ -191,7 +201,12 @@ export function Proposal({ call }: { call: ToolCallView }) {
                     <MessageResponse className="text-[13px]">{reply}</MessageResponse>
                   </div>
                 )}
-                {outcome.reply && <Done outcome={outcome.reply} />}
+                {outcome.reply && (
+                  <Done
+                    outcome={outcome.reply}
+                    onDiscard={() => void run('reply', 'discard', { part: 'reply' })}
+                  />
+                )}
                 {open('reply') && (
                   <div className="flex flex-wrap gap-1.5 pt-1">
                     <Button

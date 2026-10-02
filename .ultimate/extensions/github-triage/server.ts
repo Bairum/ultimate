@@ -183,14 +183,18 @@ function settle(
   })
 }
 
-/** The result of a failed write: a timed-out gh keeps its claim, since the write may have landed. */
+/**
+ * The result of a failed write. Only a GitHub refusal (HTTP 4xx) surely wrote nothing and releases the claim; anything
+ * else (a timeout, a network error, a 5xx) keeps it, since the write may have landed — the user checks and discards.
+ */
 async function failed(
   ctx: ActionContext,
   proposal: ReturnType<typeof proposalArg>,
   part: Part,
   result: Gh & { ok: false },
 ) {
-  if (!result.killed) await settle(ctx, proposal, part, null)
+  if (!result.killed && /\bHTTP 4\d\d\b/.test(result.message))
+    await settle(ctx, proposal, part, null)
   return { status: 'error', message: result.message }
 }
 
@@ -451,15 +455,22 @@ export const actions = {
     })
     return { status: 'ok', url }
   },
-  /** Discards one half of a proposal, unless it already has an outcome. */
+  /** Discards one half in one commit: an open half, or one left `pending` by an interrupted or unclear write. */
   async discard(args: JsonValue, ctx: ActionContext) {
     const part = field(args, 'part')
     if (part !== 'labels' && part !== 'reply') throw new Error('Expected part labels or reply')
     const proposal = proposalArg(args, ctx)
-    const taken = await claim(ctx, proposal, part)
-    if (taken) return { status: 'error', message: taken }
-    await settle(ctx, proposal, part, { state: 'discarded', at: new Date().toISOString() })
-    return { status: 'ok' }
+    const taken = await record(ctx, proposal, (outcomes) => {
+      const outcome = outcomes[proposal.callId]?.[part]
+      if (outcome && outcome.state !== 'pending')
+        return `This proposal was already ${outcome.state}.`
+      outcomes[proposal.callId] = {
+        ...outcomes[proposal.callId],
+        [part]: { state: 'discarded', at: new Date().toISOString() },
+      }
+      return null
+    })
+    return taken ? { status: 'error', message: taken } : { status: 'ok' }
   },
   /** The repository's labels, for the filter and for suggestions. */
   async labels(args: JsonValue, ctx: ActionContext) {
