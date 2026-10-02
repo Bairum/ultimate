@@ -10,7 +10,7 @@ import {
   SearchIcon,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import type { FormEvent, ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { api, cn, useAuthFlows, useDialog, useModels, useNow, useUltimate } from '@/sdk'
@@ -206,38 +206,48 @@ function PromptForm({ flowId, prompt }: { flowId: string; prompt: BrowserAuthPro
     )
   // A text prompt may accept a blank answer ("blank for github.com"); secrets and codes may not.
   const optional = prompt.type === 'text'
-  const submit = (event: FormEvent) => {
-    event.preventDefault()
-    if (value.trim() || optional) answer(value.trim())
+  const submit = () => {
+    if ((value.trim() || optional) && !sending) answer(value.trim())
   }
+  // No <form> and a one-time-code field: browsers must not take an API key for a password to save.
   return (
-    <form className="flex flex-col gap-1.5" onSubmit={submit}>
+    <div className="flex flex-col gap-1.5">
       <label className="font-sans text-[13px] text-foreground/90" htmlFor="login-answer">
         {prompt.message}
       </label>
       <div className="flex gap-2">
         <input
-          autoComplete="off"
+          autoComplete={prompt.type === 'secret' ? 'one-time-code' : 'off'}
           autoFocus
           className="h-8 min-w-0 flex-1 rounded-md border border-input bg-transparent px-2.5 text-[12.5px] outline-none placeholder:text-muted-foreground/60 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+          data-1p-ignore
+          data-bwignore
+          data-lpignore="true"
           id="login-answer"
           onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
+            event.preventDefault()
+            submit()
+          }}
           placeholder={
             prompt.placeholder ?? (prompt.type === 'manual_code' ? 'code or redirect URL' : '')
           }
+          spellCheck={false}
           type={prompt.type === 'secret' ? 'password' : 'text'}
           value={value}
         />
         <Button
           className="h-8 px-3 text-[12px]"
           disabled={(!value.trim() && !optional) || sending}
-          type="submit"
+          onClick={submit}
+          type="button"
         >
           {sending ? <LoaderCircleIcon className="size-3.5 animate-spin" /> : 'Continue'}
         </Button>
       </div>
       {error && <p className="text-[12px] text-error">{error}</p>}
-    </form>
+    </div>
   )
 }
 
@@ -374,6 +384,8 @@ function Chooser({
   const [query, setQuery] = useState(initialQuery)
   const [busy, setBusy] = useState<string>()
   const [error, setError] = useState<string>()
+  /** The row whose logout waits for a second click: the credential is shared with pi. */
+  const [confirming, setConfirming] = useState<string>()
   const methods: Method[] = (models?.providers ?? [])
     .flatMap((provider) =>
       provider.authTypes.map((auth) => ({ provider, type: auth.type, name: auth.name })),
@@ -391,6 +403,7 @@ function Chooser({
     ),
   )
   const logout = (provider: ProviderInfo) => {
+    setConfirming(undefined)
     setBusy(provider.id)
     setError(undefined)
     api.logout(provider.id).then(
@@ -419,10 +432,44 @@ function Chooser({
       <div className="max-h-[55vh] overflow-y-auto p-1">
         {shown.map((method) => {
           const label = authLabel(method.provider)
+          const row = `${method.provider.id}:${method.type}`
+          if (confirming === row)
+            return (
+              <div
+                className="flex flex-col gap-2 rounded-sm border border-warning/40 bg-warning/8 px-2.5 py-2"
+                key={row}
+              >
+                <p className="font-sans text-[12.5px] text-foreground/90">
+                  Log out of {method.provider.name}? This also logs out <code>pi</code>: the
+                  credential is removed from{' '}
+                  <span className="font-mono text-[11.5px]">~/.pi/agent/auth.json</span>.
+                </p>
+                <div className="flex justify-end gap-2">
+                  <Button
+                    autoFocus
+                    className="h-7 text-[12px]"
+                    onClick={() => setConfirming(undefined)}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    className="h-7 gap-1.5 text-[12px]"
+                    onClick={() => logout(method.provider)}
+                    size="sm"
+                    variant="destructive"
+                  >
+                    <LogOutIcon className="size-3" />
+                    Log out
+                  </Button>
+                </div>
+              </div>
+            )
           return (
             <div
               className="group/row flex items-center gap-2 rounded-sm px-2 py-1.5 transition-colors hover:bg-accent/60"
-              key={`${method.provider.id}:${method.type}`}
+              key={row}
             >
               <button
                 className="flex min-w-0 flex-1 items-center gap-2 text-left"
@@ -450,7 +497,7 @@ function Chooser({
                     <Button
                       className="h-6 gap-1 px-1.5 text-[11px] text-muted-foreground opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"
                       disabled={busy === method.provider.id}
-                      onClick={() => logout(method.provider)}
+                      onClick={() => setConfirming(row)}
                       size="sm"
                       title={`Remove the stored ${method.provider.id} credential from ~/.pi/agent/auth.json`}
                       variant="ghost"

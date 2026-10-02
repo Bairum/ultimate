@@ -4,21 +4,21 @@ import type { UiUpdateRequest } from '../../../shared/protocol.ts'
 /**
  * Durable UI state: the flat JSON map of the root conversation's `ultimate.ui` document, shared by every tab and
  * device, such as which conversation, panel, and view the shell shows. Writes apply locally at once, reach the server
- * coalesced (`POST /api/ui`), and stay overlaid until the stream confirms them.
+ * coalesced (`POST /api/ui`), and stay overlaid until the stream shows the commit that carried them.
  */
 export type UiValues = Readonly<Record<string, JsonValue>>
 
 /**
- * The newest local write of one key (`undefined` deletes it). `seq` orders writes: an acknowledgement only settles
- * the key when it carries the newest write, so a slower, older batch can never bring back a value written after it.
+ * Each batch also writes `<tab>:<batch>` here, in the same commit. The stream delivers commits in order, so once it
+ * shows this tab's marker for batch n, every write of batches up to n is in the stream's values: writes are confirmed
+ * by identity, never by a value that happens to be equal (A → B → A).
  */
+export const WRITE_MARKER = 'ui.write'
+
+/** The newest local write of one key (`undefined` deletes it), and the batch that sent it, once sent. */
 interface LocalWrite {
   value: JsonValue | undefined
-  seq: number
-  /** `pending` until sent, `sent` until the server accepts it, then `acknowledged`. */
-  state: 'pending' | 'sent' | 'acknowledged'
-  /** The stream has shown this value since it was sent. */
-  seen: boolean
+  batch?: number
 }
 
 const same = (a: JsonValue | undefined, b: JsonValue | undefined) =>
@@ -26,13 +26,23 @@ const same = (a: JsonValue | undefined, b: JsonValue | undefined) =>
 
 export function createUiState(
   write: (change: UiUpdateRequest) => Promise<unknown>,
-  options: { delayMs?: number; settleMs?: number; onError?: (error: unknown) => void } = {},
+  options: {
+    delayMs?: number
+    settleMs?: number
+    onError?: (error: unknown) => void
+    /** This tab's id in the write marker; random by default. */
+    tab?: string
+  } = {},
 ) {
+  const tab = options.tab ?? Math.random().toString(36).slice(2, 10)
   const listeners = new Set<() => void>()
   let remote: UiValues = {}
   const local = new Map<string, LocalWrite>()
   let values: UiValues = {}
-  let seq = 0
+  /** The last batch sent, and the newest one the stream has shown. */
+  let sent = 0
+  let shown = 0
+  let inFlight = false
   let timer: ReturnType<typeof setTimeout> | undefined
 
   function update() {
@@ -44,52 +54,54 @@ export function createUiState(
     values = next
     for (const listener of listeners) listener()
   }
-  /** Drop acknowledged writes the stream has shown: from then on the stream is the truth, other tabs included. */
-  function settle() {
+  /** Drop the overlay of writes from batches up to `batch`: the stream is the truth for them now. */
+  function release(batch: number) {
     for (const [key, entry] of local)
-      if (entry.state === 'acknowledged' && entry.seen) local.delete(key)
+      if (entry.batch !== undefined && entry.batch <= batch) local.delete(key)
   }
-  /** Run `change` on the keys of a batch whose newest write is still the one the batch sent. */
-  function current(
-    batch: ReadonlyMap<string, number>,
-    change: (key: string, entry: LocalWrite) => void,
-  ) {
-    for (const [key, sent] of batch) {
-      const entry = local.get(key)
-      if (entry?.seq === sent) change(key, entry)
-    }
+  function schedule(delay: number) {
+    timer ??= setTimeout(() => {
+      timer = undefined
+      send(false)
+    }, delay)
   }
-  function flush() {
-    timer = undefined
-    const batch = new Map<string, number>()
+  /**
+   * Send what is pending as one batch. One batch is in flight at a time, so the server commits them in write order;
+   * `force` sends anyway, for a page that is going away.
+   */
+  function send(force: boolean) {
+    if (inFlight && !force) return
     const change: UiUpdateRequest = { set: {}, delete: [] }
+    const batch = sent + 1
+    let count = 0
     for (const [key, entry] of local) {
-      if (entry.state !== 'pending') continue
-      entry.state = 'sent'
-      batch.set(key, entry.seq)
+      if (entry.batch !== undefined) continue
+      entry.batch = batch
+      count++
       if (entry.value === undefined) change.delete?.push(key)
       else if (change.set) change.set[key] = entry.value
     }
-    if (batch.size === 0) return
+    if (count === 0) return
+    sent = batch
+    if (change.set) change.set[WRITE_MARKER] = `${tab}:${batch}`
+    inFlight = true
+    const settled = () => {
+      inFlight = false
+      if ([...local.values()].some((entry) => entry.batch === undefined)) schedule(0)
+    }
     write(change).then(
       () => {
-        current(batch, (key, entry) => {
-          entry.state = 'acknowledged'
-          // The commit may already be on screen (it can arrive before this response).
-          if (same(remote[key], entry.value)) entry.seen = true
-        })
-        settle()
-        update()
-        // The stream delivers the commit right away; never let an unconfirmed overlay hide later writes for long.
+        settled()
+        // The stream normally shows the commit at once. If it never names this batch (a reconnect, or another tab's
+        // commit in the same frame), let go after a while so later writes from elsewhere show through.
         setTimeout(() => {
-          current(batch, (key, entry) => {
-            if (entry.state === 'acknowledged') local.delete(key)
-          })
+          release(batch)
           update()
         }, options.settleMs ?? 2000)
       },
       (error: unknown) => {
-        current(batch, (key) => local.delete(key))
+        for (const [key, entry] of local) if (entry.batch === batch) local.delete(key)
+        settled()
         update()
         options.onError?.(error)
       },
@@ -97,8 +109,8 @@ export function createUiState(
   }
   function set(key: string, value: JsonValue | undefined) {
     if (same(values[key], value)) return
-    local.set(key, { value, seq: ++seq, state: 'pending', seen: false })
-    timer ??= setTimeout(flush, options.delayMs ?? 150)
+    local.set(key, { value })
+    schedule(options.delayMs ?? 150)
     update()
   }
 
@@ -117,13 +129,18 @@ export function createUiState(
     receive(next: UiValues) {
       if (next === remote) return
       remote = next
-      for (const [key, entry] of local)
-        if (entry.state !== 'pending' && same(remote[key], entry.value)) entry.seen = true
-      settle()
+      const marker = remote[WRITE_MARKER]
+      if (typeof marker === 'string' && marker.startsWith(`${tab}:`))
+        shown = Math.max(shown, Number(marker.slice(tab.length + 1)) || 0)
+      release(shown)
       update()
     },
     /** Send what is pending now, such as before the page goes away. */
-    flush,
+    flush: () => {
+      clearTimeout(timer)
+      timer = undefined
+      send(true)
+    },
   }
 }
 export type UiState = ReturnType<typeof createUiState>

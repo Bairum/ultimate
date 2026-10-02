@@ -1,9 +1,7 @@
 import { InfoIcon, RotateCwIcon } from 'lucide-react'
-import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import {
-  api,
   cn,
   defineWebExtension,
   elidePath,
@@ -14,6 +12,7 @@ import {
   useExtensions,
   useModels,
   useNow,
+  useRestart,
   useSystem,
 } from '@/sdk'
 import type { SystemInfo, Usage } from '@/sdk'
@@ -40,29 +39,6 @@ function uptime(ms: number) {
 function usePath(system: SystemInfo) {
   return (path: string, max = 34) =>
     elidePath(shortenPath(path, { user: system.machine.user }), max)
-}
-
-/** `api.restart()` with its outcome: the accepted generation until it serves, or the error. */
-function useRestart(system: SystemInfo) {
-  const [state, setState] = useState<{ pending?: number; error?: string; busy?: boolean }>({})
-  const serving = system.process.generation
-  const pending = state.pending !== undefined && serving < state.pending ? state.pending : undefined
-  return {
-    pending,
-    busy: !!state.busy || pending !== undefined,
-    error: state.error,
-    run: () => {
-      setState({ busy: true })
-      api.restart().then(
-        (result) => {
-          const generation = (result as { generation?: number } | undefined)?.generation
-          setState({ pending: generation })
-        },
-        (error: unknown) =>
-          setState({ error: error instanceof Error ? error.message : String(error) }),
-      )
-    },
-  }
 }
 
 function Machine({ system }: { system: SystemInfo }) {
@@ -104,7 +80,7 @@ const formatGiB = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)}G`
 function Process({ system }: { system: SystemInfo }) {
   const now = useNow(1000)
   const { process } = system
-  const restart = useRestart(system)
+  const restart = useRestart()
   return (
     <Section id="process" meta={`pid ${process.pid}`} title="Process">
       <Rows>
@@ -193,7 +169,7 @@ function Execution({ system }: { system: SystemInfo }) {
 function Code({ system }: { system: SystemInfo }) {
   const path = usePath(system)
   const { code, build } = system
-  const restart = useRestart(system)
+  const restart = useRestart()
   return (
     <Section
       id="code"

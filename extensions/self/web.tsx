@@ -3,11 +3,19 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Shimmer } from '@/components/ai/shimmer'
 import { Tool, ToolContent, ToolHeader, ToolOutput, ToolSection } from '@/components/ai/tool'
+import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { api, cn, defineWebExtension, useConversation, useSystem, useToolDuration } from '@/sdk'
-import type { EntryRecord, SystemInfo, ToolCallView } from '@/sdk'
+import {
+  cn,
+  defineWebExtension,
+  useConversation,
+  useRestart,
+  useSystem,
+  useToolDuration,
+} from '@/sdk'
+import type { EntryRecord, ToolCallView } from '@/sdk'
 
 const short = (id: string | undefined) => id?.slice(0, 7)
 
@@ -91,31 +99,10 @@ function RestartCall({ call }: { call: ToolCallView }) {
   )
 }
 
-/** `api.restart()` with its outcome: the accepted generation until it serves, or the error. */
-function useRestart(system: SystemInfo | undefined) {
-  const [state, setState] = useState<{ pending?: number; error?: string; busy?: boolean }>({})
-  const serving = system?.process.generation ?? 0
-  const pending = state.pending !== undefined && serving < state.pending ? state.pending : undefined
-  return {
-    pending,
-    busy: !!state.busy || pending !== undefined,
-    error: state.error,
-    clear: () => setState({}),
-    run: () => {
-      setState({ busy: true })
-      api.restart().then(
-        (result) => setState({ pending: (result as { generation?: number }).generation }),
-        (error: unknown) =>
-          setState({ error: error instanceof Error ? error.message : String(error) }),
-      )
-    },
-  }
-}
-
 /** Header badge while `server/` or `shared/` changed since this core booted. */
 function CoreStale() {
   const system = useSystem()
-  const restart = useRestart(system)
+  const restart = useRestart()
   if (restart.error)
     return (
       <Popover onOpenChange={(open) => !open && restart.clear()}>
@@ -130,11 +117,27 @@ function CoreStale() {
         </PopoverTrigger>
         <PopoverContent align="end" className="w-[32rem] p-0 font-mono">
           <div className="border-b border-border/70 px-3 py-2 text-[11.5px] text-muted-foreground">
-            The new core did not boot; generation {system?.process.generation} keeps serving.
+            The restart did not take.
           </div>
           <pre className="max-h-80 overflow-auto px-3 py-2 text-[11.5px] leading-[1.55] whitespace-pre-wrap text-error">
             {restart.error}
           </pre>
+          <div className="flex justify-end gap-2 border-t border-border/70 px-3 py-2">
+            <Button className="h-7 text-[12px]" onClick={restart.clear} size="sm" variant="ghost">
+              Dismiss
+            </Button>
+            <Button
+              className="h-7 text-[12px]"
+              onClick={() => {
+                restart.clear()
+                restart.run()
+              }}
+              size="sm"
+              variant="outline"
+            >
+              Try again
+            </Button>
+          </div>
         </PopoverContent>
       </Popover>
     )

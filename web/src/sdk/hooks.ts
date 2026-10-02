@@ -19,7 +19,7 @@ import type {
   UsageState,
 } from '@earendil-works/pi-durable'
 import { actions, allCommands } from './actions.ts'
-import { registry, store, uiState } from './client.ts'
+import { api, registry, store, uiState } from './client.ts'
 import type { State } from './store.ts'
 import { formatDuration } from './format.ts'
 import type { ToolCallView, UltimateContext } from './types.ts'
@@ -171,6 +171,82 @@ export function useExtensions() {
 export function useCommands() {
   const records = useExtensions()
   return useMemo(() => allCommands(), [records])
+}
+
+export interface Restart {
+  /** The generation the supervisor accepted, until it serves. */
+  pending?: number
+  /** Asking the supervisor, or waiting for the new generation. */
+  busy: boolean
+  /** Why the last restart did not take: a failed type check or boot, or an activation that was rolled back. */
+  error?: string
+  run: () => void
+  /** Forget the last error. */
+  clear: () => void
+}
+
+/**
+ * `api.restart()` with its outcome. The stream drops while the core swaps; the first system info after it reconnects
+ * shows either the new generation (done) or the old one (the new core failed to activate and was rolled back).
+ */
+export function useRestart(timeoutMs = 120000): Restart {
+  const system = useStore((state) => state.system)
+  const connection = useStore((state) => state.connection.status)
+  const [state, setState] = useState<{
+    phase: 'idle' | 'asking' | 'swapping'
+    target?: number
+    /** System info when the stream dropped; a different object after reconnecting is fresh. */
+    dropped?: object
+    error?: string
+  }>({ phase: 'idle' })
+  const serving = system?.process.generation ?? 0
+  useEffect(() => {
+    if (state.phase !== 'swapping' || state.target === undefined) return undefined
+    if (serving >= state.target) {
+      setState({ phase: 'idle' })
+      return undefined
+    }
+    if (connection !== 'open' && !state.dropped) {
+      setState({ ...state, dropped: system ?? {} })
+      return undefined
+    }
+    if (state.dropped && connection === 'open' && system && system !== state.dropped) {
+      setState({
+        phase: 'idle',
+        error: `Generation ${state.target} failed to activate and was rolled back; generation ${serving} keeps serving. The reason is in the supervisor's output.`,
+      })
+      return undefined
+    }
+    const timer = setTimeout(
+      () =>
+        setState({
+          phase: 'idle',
+          error: `Generation ${state.target} did not start serving within ${Math.round(timeoutMs / 1000)} s.`,
+        }),
+      timeoutMs,
+    )
+    return () => clearTimeout(timer)
+  }, [state, serving, connection, system, timeoutMs])
+  return {
+    pending: state.phase === 'swapping' ? state.target : undefined,
+    busy: state.phase !== 'idle',
+    error: state.error,
+    clear: () => setState({ phase: 'idle' }),
+    run: () => {
+      setState({ phase: 'asking' })
+      api.restart().then(
+        (result) => {
+          const target = (result as { generation?: number } | undefined)?.generation
+          setState(target === undefined ? { phase: 'idle' } : { phase: 'swapping', target })
+        },
+        (error: unknown) =>
+          setState({
+            phase: 'idle',
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      )
+    },
+  }
 }
 
 /** The current time, updated every `intervalMs` while `active`. */

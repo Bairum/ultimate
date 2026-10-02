@@ -128,7 +128,8 @@ function Tokens() {
   if (total.cacheRead) parts.push(`R${formatTokens(total.cacheRead)}`)
   if (total.cacheWrite) parts.push(`W${formatTokens(total.cacheWrite)}`)
   if (hit !== undefined) parts.push(`CH${hit.toFixed(1)}%`)
-  if (total.cost || subscription)
+  // A subscription's $0.000 says something once there is usage, and looks broken before.
+  if (total.cost || (subscription && parts.length > 0))
     parts.push(
       <span className="text-foreground/80">
         ${total.cost.toFixed(3)}

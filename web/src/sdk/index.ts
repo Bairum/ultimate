@@ -33,6 +33,7 @@ export {
   useModels,
   useNotices,
   useNow,
+  useRestart,
   useStore,
   useSystem,
   useTasks,
@@ -40,7 +41,7 @@ export {
   useUiState,
   useUltimate,
 } from './hooks.ts'
-export type { ConversationState } from './hooks.ts'
+export type { ConversationState, Restart } from './hooks.ts'
 export type { AuthFlow, Connection, State } from './store.ts'
 export {
   elidePath,
