@@ -118,6 +118,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
         if (!system) throw new Error('System is not ready')
         return system.current()
       },
+      conversations: () => api?.conversations() ?? [],
     },
     watch,
     (message) => events.emit('notice', { level: 'warning', message }),

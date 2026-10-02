@@ -30,6 +30,10 @@ export interface ConversationSummary {
   title?: string
   cwd?: string
   busy: boolean
+  /** Timestamp (ms) of its latest user message; absent when it has none. */
+  inputAt?: number
+  /** Timestamp (ms) of its latest assistant message; absent when it has none. */
+  answerAt?: number
 }
 export interface CreateConversationRequest {
   cwd?: string

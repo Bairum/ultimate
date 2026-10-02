@@ -73,6 +73,7 @@ async function fixture(
       system: () => {
         throw new Error('Not used')
       },
+      conversations: () => [],
       extensions: () => [],
       reloadExtensions: async () => {},
       projectSetup: async () => ({ config: false, decision: null }),

@@ -101,6 +101,19 @@ export async function createApi(
                 .flatMap((block) => (block.type === 'text' ? [block.text] : []))
                 .join(' ')
           : undefined
+      // The view holds only the active context; a reset or compaction must not clear these times.
+      let inputAt: number | undefined
+      let answerAt: number | undefined
+      let cursor: Cursor | undefined
+      do {
+        const page = await conversation.entries({}, 64, cursor, context)
+        for (const entry of page.items) {
+          const timestamp = entry.model?.[0]?.timestamp
+          if (entry.kind === 'pi.user') inputAt ??= timestamp
+          if (entry.kind === 'pi.assistant') answerAt ??= timestamp
+        }
+        cursor = page.next
+      } while (cursor !== undefined && (inputAt === undefined || answerAt === undefined))
       const summary: ConversationSummary = {
         id: record.id,
         ...(record.owner || record.parent
@@ -117,6 +130,8 @@ export async function createApi(
         busy: Object.values(graph.value.tasks).some(
           (task) => task.conversationId === record.id && !task.background,
         ),
+        ...(inputAt === undefined ? {} : { inputAt }),
+        ...(answerAt === undefined ? {} : { answerAt }),
       }
       const index = next.findIndex((item) => item.id === record.id)
       if (index < 0) next.push(summary)
@@ -154,10 +169,17 @@ export async function createApi(
   const unsubscribe = harness.subscribeCommits((publication) => {
     if (closed) return
     const ids = new Set<ConversationId>()
+    const answers = new Map<number, number>()
     for (const change of publication.changes) {
       if (change.type === 'conversation') ids.add(change.value.id)
       if (change.type === 'entry' && change.value.kind === 'pi.user')
         ids.add(change.value.conversationId)
+      if (
+        change.type === 'entry' &&
+        change.value.kind === 'pi.assistant' &&
+        change.value.model?.[0]
+      )
+        answers.set(change.value.conversationId, change.value.model[0].timestamp)
       if (
         change.type === 'document' &&
         change.conversationId &&
@@ -167,6 +189,17 @@ export async function createApi(
       )
         ids.add(change.conversationId)
     }
+    // Queued behind refreshes, so one that read history before this answer cannot overwrite it.
+    if (answers.size)
+      refreshing = refreshing.then(() => {
+        const answered = summaries.map((summary) =>
+          answers.has(summary.id) ? { ...summary, answerAt: answers.get(summary.id) } : summary,
+        )
+        if (JSON.stringify(answered) !== JSON.stringify(summaries)) {
+          summaries = answered
+          events.emit('conversations', summaries)
+        }
+      })
     if (!ids.size) return
     refreshing = refreshing
       .then(() => refreshConversations(ids))
@@ -261,6 +294,9 @@ export async function createApi(
     }
   }
   return {
+    conversations() {
+      return summaries
+    },
     async handle(request: IncomingMessage, response: ServerResponse) {
       const url = new URL(request.url ?? '/', 'http://localhost')
       if (!url.pathname.startsWith('/api/')) return false

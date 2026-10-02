@@ -19,7 +19,8 @@ import {
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { UiState } from '../server/ui-state.ts'
-import type { ServerEvents } from '../shared/protocol.ts'
+import { Metadata } from '../server/metadata.ts'
+import type { ConversationSummary, ServerEvents } from '../shared/protocol.ts'
 import { Logins } from '../extensions/models/server.ts'
 
 const servers: Awaited<ReturnType<typeof createServer>>[] = []
@@ -176,6 +177,7 @@ export const actions = { keys: async () => keys }`,
     expect(response.data.result).toEqual(
       [
         'build',
+        'conversations',
         'doc',
         'extensions',
         'faux',
@@ -371,7 +373,7 @@ export const actions = { keys: async () => keys }`,
             (event.data as ServerEvents['conversations']).find((item) => item.label === 'scout') ??
             child
       }
-      return child?.title === 'Return the word SCOUT.' && !child.busy
+      return child?.title === 'Return the word SCOUT.' && !child.busy && !!child.answerAt
     })
     expect(child).toEqual({
       id: expect.any(Number),
@@ -381,6 +383,8 @@ export const actions = { keys: async () => keys }`,
       title: 'Return the word SCOUT.',
       cwd: server.host.projectRoot,
       busy: false,
+      inputAt: expect.any(Number),
+      answerAt: expect.any(Number),
     })
     const childStream = await attach(server, `?conversation=${child!.id}`)
     const view = childStream.events.find((event) => event.name === 'view')!.data as ConversationView
@@ -518,6 +522,70 @@ export const actions = { keys: async () => keys }`,
     )
     expect(summaryReads).toHaveLength(1)
     expect(summaryReads[0][1]).toBe(1)
+    await stream.close()
+  })
+  it('streams input and answer times, keeps them across a reset, and gives summaries to server facets', async () => {
+    const { server } = await fixture(false, false, {
+      summaries: `import { defineExtension } from '@earendil-works/pi-durable'
+export default defineExtension({ name: 'summaries' })
+export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`,
+    })
+    const created = Number((await post(server, '/api/conversations')).data.id)
+    const summary = () => server.api.conversations().find((item) => item.id === created)
+    expect(summary()).toBeDefined()
+    expect(summary()).not.toHaveProperty('inputAt')
+    expect(summary()).not.toHaveProperty('answerAt')
+    const stream = await attach(server)
+    await post(server, `/api/conversations/${created}/submit`, { text: 'Return the word SCOUT.' })
+    await server.harness.waitForIdle(context)
+    let streamed: ConversationSummary | undefined
+    await until(() => {
+      streamed = stream.events
+        .filter((event) => event.name === 'conversations')
+        .map((event) =>
+          (event.data as ServerEvents['conversations']).find((item) => item.id === created),
+        )
+        .at(-1)
+      return streamed?.inputAt !== undefined && streamed.answerAt !== undefined
+    })
+    expect(streamed!.inputAt).toEqual(expect.any(Number))
+    expect(streamed!.answerAt).toBeGreaterThanOrEqual(streamed!.inputAt!)
+    expect(
+      (await post(server, '/api/extensions/summaries/actions/list', { args: null })).data.result,
+    ).toEqual(server.api.conversations())
+    // A reset empties the active view; the times come from the whole history.
+    const conversation = (await server.harness.conversation(created as ConversationId, context))!
+    await conversation.reset(undefined, context)
+    await server.harness.waitForIdle(context)
+    const view = await conversation.viewState(context)
+    expect(view.value.entries.some((entry) => entry.kind === 'pi.user')).toBe(false)
+    view.dispose()
+    await conversation.commit(async (tx) => {
+      ;(await tx.doc(Metadata, created as ConversationId)).label = 'after reset'
+    }, context)
+    await until(() => summary()?.label === 'after reset')
+    expect(summary()).toMatchObject({ inputAt: streamed!.inputAt, answerAt: streamed!.answerAt })
+    // A new answer updates its summary directly, without reading the conversation again.
+    const reads = vi.spyOn(server.harness, 'conversation')
+    const answerAt = streamed!.answerAt! + 1000
+    await conversation.commit(
+      async (tx) =>
+        tx.appendEntry(created as ConversationId, {
+          kind: 'pi.assistant',
+          model: [{ ...fauxAssistantMessage('Later'), timestamp: answerAt }],
+        }),
+      context,
+    )
+    await until(() =>
+      stream.events.some(
+        (event) =>
+          event.name === 'conversations' &&
+          (event.data as ServerEvents['conversations']).some(
+            (item) => item.id === created && item.answerAt === answerAt,
+          ),
+      ),
+    )
+    expect(reads).not.toHaveBeenCalled()
     await stream.close()
   })
   it('reports machine, persistence, shared resources and folder facets', async () => {

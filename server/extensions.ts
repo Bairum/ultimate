@@ -17,7 +17,7 @@ import type {
   JsonObject,
 } from '@earendil-works/pi-durable'
 import type { ViteDevServer } from 'vite-plus'
-import type { ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
+import type { ConversationSummary, ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { PreparedHost } from './harness.ts'
 import { Metadata } from './metadata.ts'
 
@@ -42,6 +42,8 @@ export type ExtensionHost = Pick<
   onClose(cleanup: () => Promise<void>): void
   harness(): Harness
   system(): SystemInfo
+  /** Summaries of every conversation, as the web's conversation list shows them; empty until the harness is open. */
+  conversations(): ConversationSummary[]
   /** Discovered extensions, including disabled project folders, with effective deciding layers. */
   extensions(): ExtensionInfo[]
   /** Project setup availability, exact-root decision, and capped README. */
@@ -65,7 +67,7 @@ export async function loadExtensions(
   vite: ViteDevServer,
   host: PreparedHost,
   changed: () => void | Promise<void>,
-  runtime: Pick<ExtensionHost, 'harness' | 'system'>,
+  runtime: Pick<ExtensionHost, 'harness' | 'system' | 'conversations'>,
   watch: Watch,
   notice: (message: string) => void = () => {},
 ) {
@@ -104,6 +106,7 @@ export async function loadExtensions(
     restart: (approved) => host.restart(approved),
     harness: runtime.harness,
     system: runtime.system,
+    conversations: runtime.conversations,
     extensions: () => [...records.values()],
     projectSetup: () => projectSetup(host.projectRoot, host.userHome),
     projectSettings: () => projectSettings(host.projectRoot, host.userHome, notice),

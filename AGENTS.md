@@ -21,7 +21,7 @@ A surface is a full-screen app the user switches to (header, ⌘K, `mod+1…9`);
 New UI is a new extension folder, not a change to `web/`: follow [extensions/README.md](extensions/README.md), the
 guide to writing extensions, and copy the closest existing one (`status-line`, `coding-tools`).
 Each extension is a folder `extensions/<name>/`: `server.ts` exports a Durable extension with that name
-(or a factory receiving `ExtensionHost`, which provides `ultimateRoot` (the clone), `projectRoot` (your work), state/home paths, models/settings, build and system inspection, harness access, shared resources, and lifecycle hooks), `web.tsx` is its optional browser facet
+(or a factory receiving `ExtensionHost`, which provides `ultimateRoot` (the clone), `projectRoot` (your work), state/home paths, models/settings, build and system inspection, conversation summaries, harness access, shared resources, and lifecycle hooks), `web.tsx` is its optional browser facet
 (`defineWebExtension` from `@/sdk`), and `README.md` describes it. The server facet may export `docs`, an array of conversation document tokens;
 subscribe with `/api/events?conversation=<id>&docs=<kind>,<kind>` for `doc` snapshots and `docOps` batches.
 The Documents tab shows each exported kind through the renderer a web facet registers (`documents: [{ kind, title, component }]`), or as JSON.
