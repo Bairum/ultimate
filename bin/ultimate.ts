@@ -2,7 +2,7 @@ import { fork, spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdir } from 'node:fs/promises'
-import { acquireLock, readOwner, alive, pause } from '../server/lock.ts'
+import { acquireLock, retireStorageOwner, pause } from '../server/lock.ts'
 import { watch } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
@@ -24,15 +24,11 @@ const lock = await acquireLock(lockPath, {
   process.exit(1)
 })
 if (lock.stale) {
-  const owner = await readOwner(join(home, 'storage.lock'))
-  if (owner && alive(owner.pid)) {
-    process.kill(owner.pid, 'SIGTERM')
-    const deadline = Date.now() + 10000
-    while (alive(owner.pid) && Date.now() < deadline) await pause(50)
-    if (alive(owner.pid)) {
-      process.kill(owner.pid, 'SIGKILL')
-      while (alive(owner.pid)) await pause(50)
-    }
+  try {
+    await retireStorageOwner(join(home, 'storage.lock'))
+  } catch (error) {
+    await lock.close()
+    throw error
   }
 }
 let active: Core | undefined

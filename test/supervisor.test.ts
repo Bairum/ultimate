@@ -10,6 +10,20 @@ import type { ConversationView } from '@earendil-works/pi-durable'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { SystemInfo } from '../shared/protocol.ts'
 
+it('starts past stale lock sidecars without killing an unrelated live pid', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'ultimate-stale-supervisor-'))
+  homes.push(home)
+  const unrelated = spawn('sleep', ['60'])
+  children.push(unrelated)
+  await writeFile(join(home, 'ultimate.lock'), JSON.stringify({ pid: 2147483647 }))
+  await writeFile(join(home, 'storage.lock'), JSON.stringify({ pid: unrelated.pid }))
+  const running = launch(home)
+  await until(() => running.output().includes('Ultimate: http://'))
+  expect(unrelated.exitCode).toBeNull()
+  expect(unrelated.signalCode).toBeNull()
+  expect(() => process.kill(unrelated.pid!, 0)).not.toThrow()
+}, 60000)
+
 const children: ChildProcess[] = []
 const homes: string[] = []
 const streams: { close(): Promise<void> }[] = []
@@ -167,6 +181,16 @@ describe('supervisor', () => {
     expect(stream.connections()).toBeGreaterThan(1)
     expect(stream.system().build.id).toBe(oldBuild.id)
     expect(stream.system().build.changed).toEqual([])
+    expect(
+      stream.view().entries.findLast((entry) => entry.kind === 'pi.tool-result')?.model?.[0],
+    ).toMatchObject({
+      details: {
+        fromGeneration: 1,
+        toGeneration: 2,
+        fromBuild: oldBuild.id,
+        toBuild: stream.system().build.id,
+      },
+    })
     expect(stream.system().build.generation).toBe(2)
     expect(transcript(stream.view())).toContain(
       `build ${oldBuild.id} → ${stream.system().build.id}`,
@@ -202,6 +226,16 @@ describe('supervisor', () => {
     )
     expect(transcript(stream.view())).toContain('Injected activation failure')
     expect(transcript(stream.view())).toContain('"isError":true')
+    expect(
+      stream.view().entries.findLast((entry) => entry.kind === 'pi.tool-result')?.model?.[0],
+    ).toMatchObject({
+      details: {
+        fromGeneration: 1,
+        toGeneration: 1,
+        rolledBack: true,
+        error: expect.stringContaining('Injected activation failure'),
+      },
+    })
     expect(stream.system().process.pid).toBe(pid)
     expect(stream.system().process.generation).toBe(1)
     expect((await fetch(running.url + '/api/models')).status).toBe(200)

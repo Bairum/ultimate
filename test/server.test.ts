@@ -70,6 +70,10 @@ async function fixture(extra = false, agents = false, sources?: Record<string, s
     })
     await cp(resolvePath('agents'), join(repoRoot, 'agents'), { recursive: true })
     await writeFile(join(repoRoot, 'agents/broken.md'), 'not frontmatter')
+    await writeFile(
+      join(repoRoot, 'agents/configured.md'),
+      '---\nname: configured\ndescription: Configured agent\nmodel: openai-codex/gpt-5.4\nthinking: max\n---\nInvestigate.',
+    )
   }
   if (sources) {
     await rm(join(repoRoot, 'extensions/coding-tools'), { recursive: true })
@@ -273,6 +277,10 @@ describe('server', () => {
     expect(system.agents.find((agent) => agent.name === 'scout')).toMatchObject({
       description: expect.stringContaining('read-only'),
     })
+    expect(system.agents.find((agent) => agent.name === 'configured')).toMatchObject({
+      model: { provider: 'openai-codex', modelId: 'gpt-5.4' },
+      thinking: 'max',
+    })
     expect(system.agents.find((agent) => agent.name === 'broken')).toMatchObject({
       error: expect.stringContaining('frontmatter'),
     })
@@ -362,6 +370,10 @@ describe('server', () => {
       ).status,
     ).toBe(200)
     expect((await server.root.agent(context)).thinkingLevel).toBe('high')
+    expect(
+      (await post(server, '/api/conversations/1/configure', { thinkingLevel: 'max' })).status,
+    ).toBe(200)
+    expect((await server.root.agent(context)).thinkingLevel).toBe('max')
     expect((await post(server, '/api/conversations/1/submit', { text: 'start' })).status).toBe(202)
     expect(
       (await post(server, '/api/conversations/1/submit', { text: 'steer', whenBusy: 'steer' }))
@@ -705,12 +717,30 @@ describe('server', () => {
     )
     expect(answered).toBe('not-a-real-credential')
     expect(JSON.stringify(stream.events)).not.toContain('not-a-real-credential')
-    const second = await post(server, '/api/auth/login', { provider: 'stub', type: 'api_key' })
+    const blank = await post(server, '/api/auth/login', { provider: 'stub', type: 'api_key' })
     await until(
       () =>
         stream.events.filter(
           (event) => event.name === 'auth' && (event.data as AuthFlowEvent).type === 'prompt',
         ).length === 2,
+    )
+    expect(
+      (await post(server, `/api/auth/flows/${String(blank.data.flowId)}/answer`, { value: '' }))
+        .status,
+    ).toBe(200)
+    await until(
+      () =>
+        stream.events.filter(
+          (event) => event.name === 'auth' && (event.data as AuthFlowEvent).type === 'complete',
+        ).length === 2,
+    )
+    expect(answered).toBe('')
+    const second = await post(server, '/api/auth/login', { provider: 'stub', type: 'api_key' })
+    await until(
+      () =>
+        stream.events.filter(
+          (event) => event.name === 'auth' && (event.data as AuthFlowEvent).type === 'prompt',
+        ).length === 3,
     )
     expect(
       (await post(server, `/api/auth/flows/${String(second.data.flowId)}/cancel`)).status,

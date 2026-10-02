@@ -10,6 +10,41 @@ export function alive(pid: number) {
     return (error as NodeJS.ErrnoException).code !== 'ESRCH'
   }
 }
+export async function retireStorageOwner(path: string) {
+  try {
+    const probe = await acquireLock(path, { pid: process.pid })
+    await probe.close()
+    return
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith('Ultimate core already owns'))
+      throw error
+  }
+  const owner = await readOwner(path)
+  if (!owner || !alive(owner.pid)) return
+  let command: string
+  try {
+    command = await readFile(`/proc/${owner.pid}/cmdline`, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !alive(owner.pid)) return
+    throw new Error(`Cannot verify storage owner pid ${owner.pid}; refusing to signal it`, {
+      cause: error,
+    })
+  }
+  if (!command.split('\0').some((arg) => /(?:^|\/)server\/main\.ts$/.test(arg)))
+    throw new Error(`Storage owner pid ${owner.pid} is not an Ultimate core; refusing to signal it`)
+  const signal = (name: NodeJS.Signals) => {
+    try {
+      process.kill(owner.pid, name)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
+        throw new Error(`Cannot signal Ultimate core pid ${owner.pid}`, { cause: error })
+    }
+  }
+  signal('SIGTERM')
+  const deadline = Date.now() + 10000
+  while (alive(owner.pid) && Date.now() < deadline) await pause(50)
+  if (alive(owner.pid)) signal('SIGKILL')
+}
 export async function readOwner(path: string): Promise<{ pid: number; port?: number } | undefined> {
   try {
     const owner = JSON.parse(await readFile(path, 'utf8'))

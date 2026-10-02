@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
+import codemode from '../extensions/codemode/server.ts'
 import { Metadata } from '../server/metadata.ts'
 import { discoverAgents, parseDefinition } from '../server/agents.ts'
 
@@ -40,6 +41,21 @@ async function fixture() {
   const prepared = await prepareHarness({ repoRoot, home: join(repoRoot, 'home'), faux: true })
   prepared.registry.install(CodingTools)
   prepared.registry.install(subagents(prepared))
+  prepared.registry.install(
+    codemode({
+      ...prepared,
+      resource: (_key, create) => create(),
+      onClose: () => {},
+      harness: () => {
+        throw new Error('Not used')
+      },
+      system: () => {
+        throw new Error('Not used')
+      },
+      extensions: () => [],
+      doc: () => undefined,
+    }),
+  )
   const route: FauxResponseFactory = (transcript) => {
     prepared.faux!.appendResponses([route])
     const last = transcript.messages.findLast((message) => message.role !== 'system')!
@@ -47,6 +63,10 @@ async function fixture() {
       typeof last.content === 'string'
         ? last.content
         : last.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
+    if (last.role === 'user' && text.startsWith('CODE '))
+      return fauxAssistantMessage([fauxToolCall('codemode', { code: text.slice(5) })], {
+        stopReason: 'toolUse',
+      })
     if (last.role === 'user' && text.startsWith('CALL '))
       return fauxAssistantMessage([fauxToolCall('subagent', JSON.parse(text.slice(5)))], {
         stopReason: 'toolUse',
@@ -96,6 +116,45 @@ async function reports(opened: OpenHost) {
 }
 
 describe('subagents', () => {
+  it('keeps nested parallel starts distinct and delivers a subsequent nested message', async () => {
+    const { opened } = await fixture()
+    await (
+      await opened.root.submit(
+        {
+          type: 'input',
+          content: `CODE const results = await Promise.all(['first','second'].map(task => tools.subagent({action:'start',agent:'scout',task}))); text(results);`,
+        },
+        context,
+      )
+    ).wait(context)
+    const agents = await children(opened)
+    expect(agents).toHaveLength(2)
+    expect(new Set(agents.map((agent) => agent.conversationId)).size).toBe(2)
+    let view = await opened.root.viewState(context)
+    expect(JSON.stringify(view.value.entries)).toContain('Child: first')
+    expect(JSON.stringify(view.value.entries)).toContain('Child: second')
+    view.dispose()
+    await (
+      await opened.root.submit(
+        {
+          type: 'input',
+          content: `CODE const child = await tools.subagent({action:'start',agent:'scout',task:'third'}); text(await tools.subagent({action:'message',id:JSON.parse(await tools.subagent({action:'list'})).at(-1).conversationId,text:'follow-up'}));`,
+        },
+        context,
+      )
+    ).wait(context)
+    view = await opened.root.viewState(context)
+    expect(JSON.stringify(view.value.entries)).toContain('Child: follow-up')
+    view.dispose()
+  })
+  it('accepts max thinking in definitions', () => {
+    expect(
+      parseDefinition(
+        '---\nname: scout\ndescription: Search\nthinking: max\n---\nSearch',
+        'scout.md',
+      ).thinking,
+    ).toBe('max')
+  })
   it('discovers all three locations, overrides by name, reports malformed files and rereads edits', async () => {
     const repo = await directory(),
       home = await directory(),
@@ -230,6 +289,23 @@ describe('subagents', () => {
     await resumed.root.waitForIdle(context)
     expect((await children(resumed))[0].reported).toHaveLength(2)
   }, 20000)
+  it('records a background child answer returned by wait as reported', async () => {
+    const { opened } = await fixture()
+    await call(opened, { action: 'start', agent: 'scout', task: 'slow', background: true })
+    const [agent] = await children(opened)
+    await call(opened, { action: 'stop', id: agent.conversationId })
+    const child = (await opened.harness.conversation(agent.conversationId, context))!
+    const answer = await (
+      await child.submit({ type: 'input', content: 'wait-only answer' }, context)
+    ).wait(context)
+    expect(answer.status).toBe('done')
+    expect((await call(opened, { action: 'wait', id: agent.conversationId })).text).toBe(
+      'Child: wait-only answer',
+    )
+    if (answer.status !== 'done' || answer.type !== 'input') throw new Error('Expected answer')
+    expect((await children(opened))[0].reported).toContain(answer.answer)
+    expect(await reports(opened)).toHaveLength(0)
+  })
   it('replays an interrupted foreground start using its existing owned child', async () => {
     const { prepared, opened } = await fixture()
     await opened.root.submit(

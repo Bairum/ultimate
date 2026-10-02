@@ -9,6 +9,7 @@ import type { HostOptions, OpenHost } from './harness.ts'
 import { createSystem } from './system.ts'
 import type { ChildMessage, SupervisorMessage } from './supervisor-protocol.ts'
 
+import { alive } from './lock.ts'
 import { loopbackAuthority, loopbackOrigin } from './request-security.ts'
 
 const send = (message: ChildMessage) => process.send?.(message)
@@ -130,6 +131,13 @@ export async function createServer(options: Partial<ServerOptions> = {}) {
 }
 
 if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (process.env.ULTIMATE_INSTANCE_OWNER) {
+    const owner = Number(process.env.ULTIMATE_INSTANCE_OWNER)
+    if (!Number.isSafeInteger(owner) || owner < 1) throw new Error('Invalid instance owner')
+    setInterval(() => {
+      if (!alive(owner)) process.exit(0)
+    }, 500).unref()
+  }
   let server: Awaited<ReturnType<typeof prepareServer>> | undefined
   let closing = false
   const close = async () => {

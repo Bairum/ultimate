@@ -16,7 +16,17 @@ export interface AgentDiscovery {
   definitions: AgentDefinition[]
   errors: { name: string; description: string; path: string; error: string }[]
 }
-const levels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']
+const levels = {
+  off: true,
+  minimal: true,
+  low: true,
+  medium: true,
+  high: true,
+  xhigh: true,
+  max: true,
+} satisfies Record<ModelThinkingLevel, true>
+export const isThinkingLevel = (value: unknown): value is ModelThinkingLevel =>
+  typeof value === 'string' && Object.hasOwn(levels, value)
 const scalar = (text: string) => {
   const value = text.trim()
   if (value.startsWith('"')) return JSON.parse(value) as string
@@ -62,7 +72,7 @@ export function parseDefinition(text: string, path: string): AgentDefinition {
     throw new Error('name must be a nonempty identifier')
   if (typeof fields.description !== 'string' || !fields.description.trim())
     throw new Error('description is required')
-  if (fields.thinking !== undefined && !levels.includes(fields.thinking as string))
+  if (fields.thinking !== undefined && !isThinkingLevel(fields.thinking))
     throw new Error('Invalid thinking level')
   let model: AgentDefinition['model']
   if (fields.model !== undefined) {
@@ -77,7 +87,7 @@ export function parseDefinition(text: string, path: string): AgentDefinition {
     path,
     instructions: match[2].trim(),
     ...(model ? { model } : {}),
-    ...(fields.thinking ? { thinking: fields.thinking as ModelThinkingLevel } : {}),
+    ...(fields.thinking ? { thinking: fields.thinking } : {}),
     ...(fields.tools ? { tools: fields.tools as string[] } : {}),
   }
 }

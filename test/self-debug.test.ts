@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -6,7 +8,8 @@ import { expect, it } from 'vitest'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { createServer } from '../server/main.ts'
 import { context } from '../server/harness.ts'
-import { browserBinary } from '../extensions/browser/server.ts'
+import type { Browser } from 'playwright-core'
+import browserExtension, { browserBinary } from '../extensions/browser/server.ts'
 
 async function run(
   server: Awaited<ReturnType<typeof createServer>>,
@@ -40,7 +43,19 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
   }
   const home = await mkdtemp(join(tmpdir(), 'ultimate-browser-test-'))
   const server = await createServer({ repoRoot: resolve('.'), home, faux: true, port: 0 })
+  const browserState: { launched?: Promise<Browser> } = {}
   try {
+    server.host.registry.install(
+      browserExtension({
+        ...server.host,
+        resource: <T>(_key: string, _create: () => T) => browserState as T,
+        onClose: () => {},
+        harness: () => server.harness,
+        system: () => server.system.current(),
+        extensions: () => server.extensions.info(),
+        doc: () => undefined,
+      }),
+    )
     const result = await run(server, 'screenshot', { url: server.url, waitMs: 500 })
     expect(result.isError).not.toBe(true)
     expect(
@@ -51,6 +66,10 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
     expect((await readFile(join(home, 'screenshots', files[0]))).subarray(1, 4).toString()).toBe(
       'PNG',
     )
+    await (await browserState.launched!).close()
+    const recovered = await run(server, 'screenshot', { url: server.url, waitMs: 0 })
+    expect(recovered.isError).not.toBe(true)
+    expect(recovered.content.some((block) => block.type === 'image')).toBe(true)
     const driven = await run(server, 'browser', {
       url: server.url,
       steps: [
@@ -63,17 +82,100 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
     expect(JSON.stringify(driven.content)).toContain('self-debug-console-test')
     expect(JSON.stringify(driven.content)).toContain('answer')
     const nested = await run(server, 'codemode', {
-      code: `text(typeof tools.browser); const shot = await tools.screenshot({url:${JSON.stringify(server.url)},waitMs:0}); image(shot.image);`,
+      code: `text('restart:' + ('restart' in tools)); text(typeof tools.browser); const shot = await tools.screenshot({url:${JSON.stringify(server.url)},waitMs:0}); image(shot.image);`,
     })
+    if (nested.isError) throw new Error(JSON.stringify(nested.content))
     expect(nested.isError).not.toBe(true)
     expect(nested.content.some((block) => block.type === 'image')).toBe(true)
     expect(JSON.stringify(nested.content)).toContain('function')
+    expect(JSON.stringify(nested.content)).toContain('restart:false')
   } finally {
+    await (await browserState.launched)?.close()
     await server.vite.watcher.close()
     await server.close()
     await rm(home, { recursive: true, force: true })
   }
 }, 60000)
+
+it('terminates an isolated instance after its owner is SIGKILLed', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'ultimate-owner-test-'))
+  const resultPath = join(home, 'instance.json')
+  const code = `
+    import {createServer} from './server/main.ts';
+    import {context} from './server/harness.ts';
+    import {fauxAssistantMessage,fauxToolCall} from '@earendil-works/pi-ai/providers/faux';
+    import {writeFile} from 'node:fs/promises';
+    const server = await createServer({repoRoot:process.cwd(),home:${JSON.stringify(home)},faux:true,port:0});
+    server.host.faux.setResponses([fauxAssistantMessage([fauxToolCall('instance',{action:'start',faux:true})],{stopReason:'toolUse'}),fauxAssistantMessage('Complete')]);
+    await (await server.root.submit({type:'input',content:'start'},context)).wait(context);
+    const view = await server.root.viewState(context);
+    const result = view.value.entries.findLast(e => e.kind === 'pi.tool-result').model[0];
+    await writeFile(${JSON.stringify(resultPath)}, result.content.find(p => p.type === 'text').text);
+  `
+  const owner = spawn(process.execPath, ['--input-type=module', '-e', code], {
+    env: {
+      ...process.env,
+      ULTIMATE_GENERATION: '99',
+      ULTIMATE_SUPERVISED: '1',
+      ULTIMATE_PREVIOUS_BUILD: 'null',
+      ULTIMATE_FAIL_PREPARE_GENERATION: '1',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let output = ''
+  owner.stderr.on('data', (chunk) => {
+    output += chunk
+  })
+  let instance: { pid: number; home: string; url: string } | undefined
+  try {
+    const deadline = Date.now() + 60000
+    while (!instance && Date.now() < deadline) {
+      try {
+        instance = JSON.parse(await readFile(resultPath, 'utf8'))
+      } catch {
+        /* booting */
+      }
+      if (owner.exitCode !== null) throw new Error(output)
+      await new Promise((done) => setTimeout(done, 100))
+    }
+    expect(instance?.pid).toBeGreaterThan(0)
+    const environment = await readFile(`/proc/${instance!.pid}/environ`, 'utf8')
+    expect(environment).not.toContain('ULTIMATE_SUPERVISED=')
+    expect(environment).not.toContain('ULTIMATE_PUBLIC_URL=')
+    expect(environment).not.toContain('ULTIMATE_GENERATION=')
+    expect(environment).not.toContain('ULTIMATE_PREVIOUS_BUILD=')
+    expect(environment).not.toContain('ULTIMATE_FAIL_')
+    const exited = once(owner, 'exit')
+    owner.kill('SIGKILL')
+    await exited
+    const deathDeadline = Date.now() + 5000
+    let dead = false
+    while (!dead && Date.now() < deathDeadline) {
+      try {
+        dead = /\) Z /.test(await readFile(`/proc/${instance!.pid}/stat`, 'utf8'))
+      } catch {
+        dead = true
+      }
+      await new Promise((done) => setTimeout(done, 100))
+    }
+    expect(dead).toBe(true)
+  } finally {
+    if (owner.exitCode === null && owner.signalCode === null) {
+      const exited = once(owner, 'exit')
+      owner.kill('SIGKILL')
+      await exited
+    }
+    if (instance) {
+      try {
+        process.kill(instance.pid, 'SIGKILL')
+      } catch {
+        /* already exited */
+      }
+      await rm(instance.home, { recursive: true, force: true })
+    }
+    await rm(home, { recursive: true, force: true })
+  }
+}, 90000)
 
 it('starts an isolated standalone instance, reads logs and stops it', async () => {
   const home = await mkdtemp(join(tmpdir(), 'ultimate-instance-test-'))

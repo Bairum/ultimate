@@ -103,7 +103,14 @@ export interface SystemInfo {
   extensions: ExtensionInfo[]
   skills: { name: string; description: string; path: string }[]
   contextFiles: string[]
-  agents: { name: string; description: string; path: string; error?: string }[]
+  agents: {
+    name: string
+    description: string
+    path: string
+    model?: ModelRef
+    thinking?: ModelThinkingLevel
+    error?: string
+  }[]
 }
 type WirePrompt<T> = T extends AuthPrompt ? Omit<T, 'signal'> : never
 export type BrowserAuthPrompt = WirePrompt<AuthPrompt>

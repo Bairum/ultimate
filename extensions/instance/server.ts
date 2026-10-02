@@ -110,21 +110,29 @@ export default function instanceExtension(host: ExtensionHost) {
                 })
               })
               const url = `http://127.0.0.1:${port}`
-              const env = {
-                ...process.env,
+              const env: NodeJS.ProcessEnv = {
+                ...Object.fromEntries(
+                  [
+                    'PATH',
+                    'HOME',
+                    'USER',
+                    'LANG',
+                    'LC_ALL',
+                    'TMPDIR',
+                    'XDG_CONFIG_HOME',
+                    'XDG_DATA_HOME',
+                    'XDG_CACHE_HOME',
+                    'PI_CODING_AGENT_DIR',
+                  ].flatMap((key) =>
+                    process.env[key] === undefined ? [] : [[key, process.env[key]]],
+                  ),
+                ),
                 ULTIMATE_HOME: home,
                 ULTIMATE_PORT: String(port),
                 ULTIMATE_NO_OPEN: '1',
-                ULTIMATE_PUBLIC_URL: url,
+                ULTIMATE_INSTANCE_OWNER: String(process.pid),
               }
-              for (const key of [
-                'ULTIMATE_SUPERVISOR',
-                'ULTIMATE_SUPERVISOR_SOCKET',
-                'ULTIMATE_GENERATION',
-                'ULTIMATE_FAUX',
-              ])
-                delete (env as Record<string, string | undefined>)[key]
-              if (args.faux) (env as Record<string, string | undefined>).ULTIMATE_FAUX = '1'
+              if (args.faux) env.ULTIMATE_FAUX = '1'
               const child = spawn(process.execPath, ['server/main.ts'], {
                 cwd: host.repoRoot,
                 env,

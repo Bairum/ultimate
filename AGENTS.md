@@ -19,7 +19,7 @@ Put behaviour in `extensions/` rather than `server/` whenever you can: it reload
 New UI is a new extension folder, not a change to `web/`: follow [extensions/README.md](extensions/README.md), the
 guide to writing extensions, and copy the closest existing one (`status-line`, `coding-tools`).
 Each extension is a folder `extensions/<name>/`: `server.ts` exports a Durable extension with that name
-(or a factory receiving `{repoRoot, modelRuntime, settings}`), `web.tsx` is its optional browser facet
+(or a factory receiving `ExtensionHost`, which provides repo/home paths, models/settings, build and system inspection, harness access, shared resources, and lifecycle hooks), `web.tsx` is its optional browser facet
 (`defineWebExtension` from `@/sdk`), and `README.md` describes it. The server facet may export `docs`, an array of conversation document tokens;
 subscribe with `/api/events?conversation=<id>&docs=<kind>,<kind>` for `doc` snapshots and `docOps` batches.
 Local imported modules reload with the facet. Failed loads leave the previous version installed.

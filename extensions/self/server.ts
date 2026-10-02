@@ -1,5 +1,6 @@
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
+import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import { requestSwap } from '../../server/supervisor-protocol.ts'
 
@@ -15,12 +16,24 @@ export default (host: ExtensionHost) =>
           'Apply changes to server/ or shared/ with a verified core swap. Not needed for web/, extensions/, or agents/.',
         parameters: Type.Object({}),
         replay: 'safe',
-        async execute(_args, api, context) {
+        async execute(_args, api, context): Promise<ToolExecutionResult> {
           const key = `restart:${api.taskId}`
-          const done = await api.memo<{ generation: number; build: string }>(key, context)
+          const done = await api.memo<{
+            generation: number
+            fromGeneration: number
+            build: string
+          }>(key, context)
           if (done && Number(process.env.ULTIMATE_GENERATION) !== done.generation)
             return {
               isError: true,
+              details: {
+                fromGeneration: done.fromGeneration,
+                toGeneration: Number(process.env.ULTIMATE_GENERATION),
+                fromBuild: done.build,
+                toBuild: host.build().id,
+                rolledBack: true,
+                error: process.env.ULTIMATE_ACTIVATION_ERROR ?? 'Activation failed',
+              },
               content: [
                 {
                   type: 'text',
@@ -30,6 +43,12 @@ export default (host: ExtensionHost) =>
             }
           if (done)
             return {
+              details: {
+                fromGeneration: done.fromGeneration,
+                toGeneration: done.generation,
+                fromBuild: done.build,
+                toBuild: host.build().id,
+              },
               content: [
                 {
                   type: 'text',
@@ -39,11 +58,29 @@ export default (host: ExtensionHost) =>
             }
           const error = await awaitWithContext(
             requestSwap(async (generation) => {
-              await api.memo(key, { generation, build: host.build().id }, context)
+              await api.memo(
+                key,
+                {
+                  generation,
+                  fromGeneration: Number(process.env.ULTIMATE_GENERATION ?? 1),
+                  build: host.build().id,
+                },
+                context,
+              )
             }, host.build()),
             context,
           )
-          return { isError: true, content: [{ type: 'text', text: error }] }
+          return {
+            isError: true,
+            details: {
+              fromGeneration: Number(process.env.ULTIMATE_GENERATION ?? 1),
+              toGeneration: Number(process.env.ULTIMATE_GENERATION ?? 1),
+              fromBuild: host.build().id,
+              toBuild: host.build().id,
+              error,
+            },
+            content: [{ type: 'text', text: error }],
+          }
         },
       }),
     ],

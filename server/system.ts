@@ -108,7 +108,13 @@ export async function createSystem(
         (file) => file.path,
       ),
       agents: await discoverAgents(host.repoRoot, host.repoRoot).then(({ definitions, errors }) => [
-        ...definitions.map(({ name, description, path }) => ({ name, description, path })),
+        ...definitions.map(({ name, description, path, model, thinking }) => ({
+          name,
+          description,
+          path,
+          ...(model ? { model } : {}),
+          ...(thinking ? { thinking } : {}),
+        })),
         ...errors,
       ]),
     }

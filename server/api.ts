@@ -10,6 +10,7 @@ import { requestSwap } from './supervisor-protocol.ts'
 import { UiState } from './ui-state.ts'
 import type { JsonValue } from '@earendil-works/chord'
 import { Metadata } from './metadata.ts'
+import { isThinkingLevel } from './agents.ts'
 import { loopbackOrigin } from './request-security.ts'
 
 class HttpError extends Error {
@@ -48,7 +49,7 @@ function text(value: unknown, name: string): string {
 }
 const validUiKey = (key: unknown) =>
   typeof key === 'string' && key.length <= 200 && /^[A-Za-z0-9_.:-]+$/.test(key)
-const thinking = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh'])
+
 export async function createApi(
   host: PreparedHost,
   opened: OpenHost,
@@ -361,10 +362,7 @@ export async function createApi(
               json(200, { ok: true })
               break
             case 'configure': {
-              if (
-                data.thinkingLevel !== undefined &&
-                (typeof data.thinkingLevel !== 'string' || !thinking.has(data.thinkingLevel))
-              )
+              if (data.thinkingLevel !== undefined && !isThinkingLevel(data.thinkingLevel))
                 throw new HttpError(400, 'Invalid thinking level')
               if (data.model !== undefined) {
                 if (!data.model || typeof data.model !== 'object')
@@ -390,8 +388,7 @@ export async function createApi(
               const configure: ConfigureRequest = {}
               if (data.model !== undefined)
                 configure.model = data.model as ConfigureRequest['model']
-              if (data.thinkingLevel !== undefined)
-                configure.thinkingLevel = data.thinkingLevel as ConfigureRequest['thinkingLevel']
+              if (data.thinkingLevel !== undefined) configure.thinkingLevel = data.thinkingLevel
               await conversation.configure(configure, context)
               json(200, { ok: true })
               break
@@ -427,8 +424,10 @@ export async function createApi(
           if (!pending) throw new HttpError(404, 'Unknown login flow')
           if (flow[2] === 'answer' && !pending.answer)
             throw new HttpError(409, 'No pending prompt for flow')
-          if (flow[2] === 'answer') auth.answer(flow[1], text(data.value, 'value'))
-          else auth.cancel(flow[1])
+          if (flow[2] === 'answer') {
+            if (typeof data.value !== 'string') throw new HttpError(400, 'Expected value')
+            auth.answer(flow[1], data.value)
+          } else auth.cancel(flow[1])
           json(200, { ok: true })
           return true
         }

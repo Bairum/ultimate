@@ -187,7 +187,7 @@ export default function subagents(host: Pick<ExtensionHost, 'repoRoot'>) {
                 `${args.action} requires ${args.action === 'start' ? 'task' : 'text'}`,
               )
             const parent = await api.agent(context)
-            const existingAction = index.actions[String(api.taskId)]
+            const existingAction = index.actions[api.callId]
             const definition =
               args.action === 'start' && !existingAction
                 ? (
@@ -206,21 +206,18 @@ export default function subagents(host: Pick<ExtensionHost, 'repoRoot'>) {
               )
             const action = await api.commit(async (tx) => {
               const state = await tx.doc(Subagents, api.conversationId)
-              if (state.actions[String(api.taskId)]) return { ...state.actions[String(api.taskId)] }
+              if (state.actions[api.callId]) return { ...state.actions[api.callId] }
               let conversationId = args.id as ConversationId
               if (definition) {
-                const existing = args.background
-                  ? undefined
-                  : (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0]
                 const owner = args.background
                   ? await tx.createTask(Anchor, null, {
                       ownership: { kind: 'conversation' },
                       background: true,
                     })
                   : api.taskId
-                const child =
-                  existing ??
-                  (await tx.createConversation({ ownership: { kind: 'task', taskId: owner } }))
+                const child = await tx.createConversation({
+                  ownership: { kind: 'task', taskId: owner },
+                })
                 conversationId = child.id
                 await configure(tx, child.id, {
                   tools: parent.tools.filter(
@@ -259,7 +256,7 @@ export default function subagents(host: Pick<ExtensionHost, 'repoRoot'>) {
                 conversationId,
                 ...(reporter === undefined ? {} : { reporter }),
               }
-              state.actions[String(api.taskId)] = createdAction
+              state.actions[api.callId] = createdAction
               return createdAction
             }, context)
             await api.details({ conversationId: action.conversationId }, context)
@@ -275,7 +272,7 @@ export default function subagents(host: Pick<ExtensionHost, 'repoRoot'>) {
                   type: 'input',
                   content: text,
                   whenBusy: args.steer ? 'steer' : 'followUp',
-                  requestId: `subagent:${api.taskId}`,
+                  requestId: `subagent:${api.callId}`,
                 },
                 context,
               )
@@ -320,6 +317,10 @@ export default function subagents(host: Pick<ExtensionHost, 'repoRoot'>) {
                 if (entry.kind === 'pi.assistant' && latest === undefined) latest = entry
               cursor = page.next
             } while (cursor !== undefined)
+            if (latest) {
+              const agent = (await tx.doc(Subagents, api.conversationId)).agents[String(id)]
+              if (!agent.reported.includes(latest.id)) agent.reported.push(latest.id)
+            }
             return latest
           }, context)
           return finish(textOf(answer?.model?.[0] as AssistantMessage | undefined), id)

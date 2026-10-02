@@ -173,7 +173,13 @@ export default function browserExtension(host: ExtensionHost) {
     try {
       context.abortSignal?.throwIfAborted()
       state.launched ??= browserBinary()
-        .then((executablePath) => chromium.launch({ executablePath, headless: true }))
+        .then(async (executablePath) => {
+          const browser = await chromium.launch({ executablePath, headless: true })
+          browser.once('disconnected', () => {
+            state.launched = undefined
+          })
+          return browser
+        })
         .catch((error) => {
           state.launched = undefined
           throw error
