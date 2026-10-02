@@ -246,7 +246,7 @@ export default function subagents(
       defineTool({
         name: 'subagent',
         description:
-          'Delegate to a named agent. start returns its answer (foreground) or id (background). message sends a follow-up or steer; wait returns the latest answer; stop stops current work; list shows your children; land verifies and fast-forwards a finished worktree child; discard removes its worktree but keeps its branch. start accepts isolate none or worktree. Background answers join the current run after its tool round.',
+          'Delegate to a named agent. start returns its answer (foreground) or id (background). message sends a follow-up or steer; wait returns the latest answer; stop stops current work; list shows your children; land verifies and fast-forwards a finished worktree child; discard removes its worktree but keeps its branch. start accepts isolate none or worktree, and fork true to inherit parent history before this call (more context cost; prompt caching usually covers the shared prefix). Background answers join the current run after its tool round.',
         replay: 'safe',
         parameters: Type.Object({
           action: Type.Union([
@@ -261,6 +261,7 @@ export default function subagents(
           agent: Type.Optional(Type.String()),
           task: Type.Optional(Type.String()),
           background: Type.Optional(Type.Boolean()),
+          fork: Type.Optional(Type.Boolean()),
           id: Type.Optional(Type.Integer({ minimum: 1 })),
           text: Type.Optional(Type.String()),
           steer: Type.Optional(Type.Boolean()),
@@ -361,6 +362,21 @@ export default function subagents(
             const isolateInfo = isolate
               ? `\nIsolate: ${isolate.path}\nBranch: ${isolate.branch}${warning}`
               : ''
+            let forkAt: EntryId | undefined
+            if (definition && args.fork) {
+              const task = await api.getTask(api.taskId, context)
+              // Pi upstream: @earendil-works/pi-durable@1.0.0 src/harness/tool.ts — internal ToolTaskInput.assistant locates the calling assistant. Drop when ToolExecutionApi exposes the calling assistant entry ID.
+              const assistant = (task!.input as { assistant: EntryId }).assistant
+              const conversation = (await host.harness().conversation(api.conversationId, context))!
+              const view = await conversation.viewState(context)
+              try {
+                const position = view.value.entries.findIndex((entry) => entry.id === assistant)
+                forkAt = view.value.entries[position - 1]?.id
+                if (forkAt === undefined) throw new Error('No parent history before this call')
+              } finally {
+                view.dispose()
+              }
+            }
             const action = await api.commit(async (tx) => {
               const state = await tx.doc(Subagents, api.conversationId)
               if (state.actions[api.callId]) return { ...state.actions[api.callId] }
@@ -372,9 +388,11 @@ export default function subagents(
                       background: true,
                     })
                   : api.taskId
-                const child = await tx.createConversation({
-                  ownership: { kind: 'task', taskId: owner },
-                })
+                const ownership = { kind: 'task' as const, taskId: owner }
+                const child =
+                  forkAt === undefined
+                    ? await tx.createConversation({ ownership })
+                    : await tx.forkConversation(api.conversationId, forkAt, { ownership })
                 conversationId = child.id
                 await configure(tx, child.id, {
                   tools: parent.tools.filter(
@@ -390,11 +408,11 @@ export default function subagents(
                     (isolate
                       ? `\nWork only in ${isolate.path} on ${isolate.branch}, cut from ${isolate.base}. Commit your work on this branch with clear messages. Never push and never touch other checkouts.`
                       : ''),
-                  ...(childCwd ? { cwd: childCwd } : {}),
-                  ...(definition.model ? { model: definition.model } : {}),
-                  ...(definition.thinking
-                    ? { thinkingLevel: thinkingFor(definition, parent, host) }
-                    : {}),
+                  cwd: childCwd ?? parent.cwd ?? null,
+                  model: definition.model ?? parent.model ?? null,
+                  thinkingLevel: definition.thinking
+                    ? thinkingFor(definition, parent, host)
+                    : (parent.thinkingLevel ?? null),
                 })
                 Object.assign(await tx.doc(host.metadata, child.id), {
                   label: definition.name,

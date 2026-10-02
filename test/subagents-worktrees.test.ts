@@ -96,41 +96,48 @@ async function fixture() {
     children,
   }
 }
-it('isolates writes, lands once, aborts conflicts cleanly and discards while retaining commits', async () => {
-  const f = await fixture()
-  expect(await f.call({ action: 'start', agent: 'worker', task: 'write' })).toContain('Isolate:')
-  const child = (await f.children())[0]
-  const workspace = child.isolate!
-  expect(await readFile(join(workspace.path, 'child.txt'), 'utf8')).toBe('child\n')
-  await expect(access(join(f.project, 'child.txt'))).rejects.toThrow('ENOENT')
-  expect(await f.call({ action: 'land', id: child.conversationId })).toContain('Worktree is dirty:')
-  expect(await f.call({ action: 'land', id: child.conversationId })).toContain('child.txt')
-  await git(workspace.path, 'add', '.')
-  await git(workspace.path, 'commit', '-m', 'child change')
-  expect(await f.call({ action: 'land', id: child.conversationId })).toContain('Landed commits')
-  expect(await readFile(join(f.project, 'child.txt'), 'utf8')).toBe('child\n')
-  expect(await git(f.project, 'rev-parse', 'HEAD')).toBe(
-    await git(workspace.path, 'rev-parse', 'HEAD'),
-  )
-  expect(await f.call({ action: 'land', id: child.conversationId })).toContain('Nothing to land')
-  await writeFile(join(workspace.path, 'conflict.txt'), 'child\n')
-  await git(workspace.path, 'add', '.')
-  await git(workspace.path, 'commit', '-m', 'child conflict')
-  await writeFile(join(f.project, 'conflict.txt'), 'parent\n')
-  await git(f.project, 'add', '.')
-  await git(f.project, 'commit', '-m', 'parent conflict')
-  expect(await f.call({ action: 'land', id: child.conversationId })).toContain(
-    'Rebase failed: conflict.txt',
-  )
-  expect(await git(workspace.path, 'status', '--porcelain')).toBe('')
-  expect(await git(f.project, 'status', '--porcelain')).toBe('')
-  expect(await f.call({ action: 'discard', id: child.conversationId })).toContain(
-    `kept branch ${workspace.branch}`,
-  )
-  await expect(access(workspace.path)).rejects.toThrow('ENOENT')
-  expect(await git(f.project, 'branch', '--list', workspace.branch)).toContain(workspace.branch)
-  expect((await f.children())[0].isolate?.state).toBe('discarded')
-})
+it.each([false, true])(
+  'isolates writes, lands once, aborts conflicts cleanly and discards while retaining commits (fork: %s)',
+  async (fork) => {
+    const f = await fixture()
+    expect(await f.call({ action: 'start', agent: 'worker', task: 'write', fork })).toContain(
+      'Isolate:',
+    )
+    const child = (await f.children())[0]
+    const workspace = child.isolate!
+    expect(await readFile(join(workspace.path, 'child.txt'), 'utf8')).toBe('child\n')
+    await expect(access(join(f.project, 'child.txt'))).rejects.toThrow('ENOENT')
+    expect(await f.call({ action: 'land', id: child.conversationId })).toContain(
+      'Worktree is dirty:',
+    )
+    expect(await f.call({ action: 'land', id: child.conversationId })).toContain('child.txt')
+    await git(workspace.path, 'add', '.')
+    await git(workspace.path, 'commit', '-m', 'child change')
+    expect(await f.call({ action: 'land', id: child.conversationId })).toContain('Landed commits')
+    expect(await readFile(join(f.project, 'child.txt'), 'utf8')).toBe('child\n')
+    expect(await git(f.project, 'rev-parse', 'HEAD')).toBe(
+      await git(workspace.path, 'rev-parse', 'HEAD'),
+    )
+    expect(await f.call({ action: 'land', id: child.conversationId })).toContain('Nothing to land')
+    await writeFile(join(workspace.path, 'conflict.txt'), 'child\n')
+    await git(workspace.path, 'add', '.')
+    await git(workspace.path, 'commit', '-m', 'child conflict')
+    await writeFile(join(f.project, 'conflict.txt'), 'parent\n')
+    await git(f.project, 'add', '.')
+    await git(f.project, 'commit', '-m', 'parent conflict')
+    expect(await f.call({ action: 'land', id: child.conversationId })).toContain(
+      'Rebase failed: conflict.txt',
+    )
+    expect(await git(workspace.path, 'status', '--porcelain')).toBe('')
+    expect(await git(f.project, 'status', '--porcelain')).toBe('')
+    expect(await f.call({ action: 'discard', id: child.conversationId })).toContain(
+      `kept branch ${workspace.branch}`,
+    )
+    await expect(access(workspace.path)).rejects.toThrow('ENOENT')
+    expect(await git(f.project, 'branch', '--list', workspace.branch)).toContain(workspace.branch)
+    expect((await f.children())[0].isolate?.state).toBe('discarded')
+  },
+)
 it('replays an interrupted start with the same child and worktree', async () => {
   const f = await fixture()
   await f.opened.root.submit(

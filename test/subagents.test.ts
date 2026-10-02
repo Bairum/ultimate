@@ -13,6 +13,7 @@ import type { OpenHost } from '../server/harness.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
 import codemode from '../extensions/codemode/server.ts'
 import { Metadata } from '../server/metadata.ts'
+import { UiState } from '../server/ui-state.ts'
 import { discoverAgents, parseDefinition } from '../extensions/subagents/agents.ts'
 import { until, temp } from './helpers.ts'
 
@@ -30,7 +31,10 @@ async function directory() {
   directories.push(path)
   return path
 }
-async function fixture(extension?: Extension) {
+async function fixture(
+  extension?: Extension,
+  observe?: (transcript: Parameters<FauxResponseFactory>[0]) => void,
+) {
   const ultimateRoot = await directory()
   const userHome = await directory()
   await mkdir(join(ultimateRoot, 'agents'))
@@ -68,6 +72,7 @@ async function fixture(extension?: Extension) {
     }),
   )
   const route: FauxResponseFactory = (transcript) => {
+    observe?.(transcript)
     prepared.faux!.appendResponses([route])
     const last = transcript.messages.findLast((message) => message.role !== 'system')!
     const text =
@@ -129,6 +134,67 @@ async function reports(opened: OpenHost) {
 }
 
 describe('subagents', () => {
+  it('forks before the calling assistant, keeps child configuration and starts with empty agents', async () => {
+    const requests: Parameters<FauxResponseFactory>[0][] = []
+    const { opened } = await fixture(undefined, (transcript) => requests.push(transcript))
+    await opened.harness.commit(async (tx) => {
+      Object.assign(await tx.doc(UiState, opened.root.id), {
+        'subagents.selected': opened.root.id,
+      })
+    }, context)
+    await (
+      await opened.root.submit(
+        { type: 'input', content: 'Remember the parent secret: violet' },
+        context,
+      )
+    ).wait(context)
+    await call(opened, { action: 'start', agent: 'scout', task: 'older child' })
+    const result = await call(opened, {
+      action: 'start',
+      agent: 'scout',
+      task: 'fork task',
+      fork: true,
+    })
+    expect(result.text).toContain('Child: fork task')
+    const request = requests.find((candidate) =>
+      candidate.messages.some(
+        (message) => message.role === 'user' && message.content === 'fork task',
+      ),
+    )!
+    expect(request).toBeDefined()
+    expect(JSON.stringify(request.messages)).toContain('Remember the parent secret: violet')
+    expect(request.messages.findLast((message) => message.role !== 'system')).toMatchObject({
+      role: 'user',
+      content: 'fork task',
+    })
+    expect(
+      request.messages.some(
+        (message) =>
+          message.role === 'assistant' &&
+          Array.isArray(message.content) &&
+          message.content.some(
+            (part) =>
+              part.type === 'toolCall' &&
+              part.name === 'subagent' &&
+              (part.arguments as { fork?: boolean }).fork === true,
+          ),
+      ),
+    ).toBe(false)
+    const childId = (await children(opened)).at(-1)!.conversationId
+    const child = (await opened.harness.conversation(childId, context))!
+    const agent = await child.agent(context)
+    expect(agent.instructions).toBe('Original instructions')
+    expect(agent.extensions.map((extension) => extension.name)).not.toContain('subagents')
+    expect(agent.tools.map((tool) => tool.name).toSorted()).toEqual(['bash', 'read'])
+    expect(await opened.harness.snapshot(Subagents, childId, context)).toBeUndefined()
+    expect(await opened.harness.snapshot(UiState, childId, context)).toEqual({
+      'subagents.selected': opened.root.id,
+    })
+    expect(await opened.harness.snapshot(Metadata, childId, context)).toMatchObject({
+      label: 'scout',
+      title: 'fork task',
+    })
+  })
   it('keeps nested parallel starts distinct and delivers a subsequent nested message', async () => {
     const { opened } = await fixture()
     await (

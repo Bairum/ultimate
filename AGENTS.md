@@ -93,6 +93,7 @@ Definitions live in `agents/`, `~/.ultimate/agents/`, and the project root's `.u
 - `web/src/sdk/format.ts` — copied formatTokens helper, not exported. Drop when Pi exports formatTokens.
 - `extensions/coding-tools/web.tsx` — internal bash error wording drives exitOf and untyped details.patch/details.diff drive Edit. Drop when Pi exports structured bash outcomes and structured diff rows for rendering.
 - `extensions/self/web.tsx` — internal remove-all pi.system entry immediately precedes a reordered re-add, hidden here. Drop when Pi exposes prompt reorder metadata instead of requiring entry-sequence inference.
+- `extensions/subagents/server.ts` — internal ToolTaskInput.assistant locates the calling assistant for history forks. Drop when ToolExecutionApi exposes the calling assistant entry ID.
 
 On a Pi upgrade, run `rg "Pi upstream:"` and recheck each marked item against the new version; test/pi-upstream.test.ts checks that every tracked marker matches the installed package version and its path appears in this list, and every backticked path in this list is tracked and contains a marker.
 Delete copies and patches that Pi now exports or fixes, then update the remaining markers and this list after verification.
