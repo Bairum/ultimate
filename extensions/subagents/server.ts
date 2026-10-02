@@ -1,6 +1,6 @@
 import type { JsonValue } from '@earendil-works/chord'
-import { Type } from '@earendil-works/pi-ai'
-import type { AssistantMessage } from '@earendil-works/pi-ai'
+import { clampThinkingLevel, Type } from '@earendil-works/pi-ai'
+import type { AssistantMessage, ModelThinkingLevel } from '@earendil-works/pi-ai'
 import {
   AssistantEntry,
   configure,
@@ -148,8 +148,24 @@ export const actions = {
   },
 }
 
+/** A definition's thinking level, clamped to the child's model by Pi's rule (the HTTP configure path does the same). */
+function thinkingFor(
+  definition: { model?: { provider: string; modelId: string }; thinking?: ModelThinkingLevel },
+  parent: { model?: { provider: string; modelId: string } },
+  host: Pick<ExtensionHost, 'modelRuntime'>,
+) {
+  const ref = definition.model ?? parent.model
+  const model = ref && host.modelRuntime.getModel(ref.provider, ref.modelId)
+  return model && definition.thinking
+    ? clampThinkingLevel(model, definition.thinking)
+    : definition.thinking
+}
+
 export default function subagents(
-  host: Pick<ExtensionHost, 'ultimateRoot' | 'projectRoot' | 'userHome' | 'harness' | 'metadata'>,
+  host: Pick<
+    ExtensionHost,
+    'ultimateRoot' | 'projectRoot' | 'userHome' | 'harness' | 'metadata' | 'modelRuntime'
+  >,
 ) {
   return defineExtension({
     name: 'subagents',
@@ -258,7 +274,9 @@ export default function subagents(
                   ),
                   instructions: definition.instructions,
                   ...(definition.model ? { model: definition.model } : {}),
-                  ...(definition.thinking ? { thinkingLevel: definition.thinking } : {}),
+                  ...(definition.thinking
+                    ? { thinkingLevel: thinkingFor(definition, parent, host) }
+                    : {}),
                 })
                 Object.assign(await tx.doc(host.metadata, child.id), {
                   label: definition.name,
