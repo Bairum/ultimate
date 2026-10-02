@@ -296,6 +296,8 @@ export async function createApi(
         const data = await body(request)
         const action = /^\/api\/extensions\/([^/]+)\/actions\/([^/]+)$/.exec(url.pathname)
         if (action) {
+          if (request.headers['sec-fetch-site'] !== 'same-origin' && !origin)
+            throw new HttpError(403, 'Extension actions require a browser request')
           const [, name, key] = action
           if (!extensions.action(name, key)) throw new HttpError(404, 'Unknown extension action')
           if (!Object.hasOwn(data, 'args')) throw new HttpError(400, 'Expected args')

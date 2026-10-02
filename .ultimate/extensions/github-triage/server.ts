@@ -2,6 +2,7 @@ import type { JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineExtension, defineTool, section, wrapTool } from '@earendil-works/pi-durable'
 import { createBashTool } from '@earendil-works/pi-durable/tools'
 import type { ActionContext } from '../../../server/actions.ts'
@@ -10,12 +11,8 @@ import type { ActionContext } from '../../../server/actions.ts'
  * The agent never writes to GitHub: it proposes labels or a reply with `triage_propose`, the Triage surface shows the
  * proposal with Apply and Discard, and only the user's confirmed click calls the write actions below.
  */
-/** gh commands that change something on GitHub. The agent proposes; only the user's click in the UI writes. */
-const GITHUB_WRITES = [
-  /\bgh\s+(?:issue|pr)\s+(?:comment|edit|close|reopen|create|merge|review|lock|unlock|delete|transfer|pin|unpin|ready)\b/,
-  /\bgh\s+label\s+(?:create|edit|delete|clone)\b/,
-  /\bgh\s+api\b[^\n]*(?:(?:-X|--method)\s*['"]?(?:POST|PATCH|PUT|DELETE)\b|\s(?:-f|-F|--field|--raw-field|--input)\b)/i,
-]
+const shimDir = fileURLToPath(new URL('./bin/', import.meta.url))
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 
 export default defineExtension({
   name: 'github-triage',
@@ -23,11 +20,14 @@ export default defineExtension({
     wrapTool(createBashTool(), (bash) => ({
       ...bash,
       execute: (args, api, context) => {
-        if (GITHUB_WRITES.some((pattern) => pattern.test(args.command)))
-          throw new Error(
-            'Blocked by github-triage: the agent never writes to GitHub. Propose labels or a reply with triage_propose; the user applies it in the Triage surface.',
-          )
-        return bash.execute(args, api, context)
+        return bash.execute(
+          {
+            ...args,
+            command: `export PATH=${shellQuote(shimDir)}:"$PATH"\nunset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN\n${args.command}`,
+          },
+          api,
+          context,
+        )
       },
     })),
   ],
@@ -93,7 +93,11 @@ function field(args: JsonValue, name: string): JsonValue | undefined {
 
 function repoArg(args: JsonValue): string {
   const repo = field(args, 'repo')
-  if (typeof repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(repo))
+  if (
+    typeof repo !== 'string' ||
+    !/^[\w.-]+\/[\w.-]+$/.test(repo) ||
+    repo.split('/').some((part) => part === '.' || part === '..')
+  )
     throw new Error('Expected repo as owner/name')
   return repo
 }
@@ -280,6 +284,12 @@ export const actions = {
     const number = numberArg(args)
     const add = namesArg(args, 'add')
     const remove = namesArg(args, 'remove')
+    const existing = await actions.labels({ repo }, ctx)
+    const unknown = [...add, ...remove].filter(
+      (name) => !existing.some((label) => label.name === name),
+    )
+    if (unknown.length)
+      return { status: 'error', message: `Unknown repository labels: ${unknown.join(', ')}` }
     if (add.length) {
       const fields = add.flatMap((name) => ['-f', `labels[]=${name}`])
       const result = await gh(ctx, [

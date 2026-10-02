@@ -264,8 +264,10 @@ Call actions from the UI in one of two ways:
 </Button>
 ```
 
-To check an action without the UI, `curl` it:
-`curl -s -X POST -H 'Content-Type: application/json' -d '{"args":null}' <url>/api/extensions/todos/actions/list`
+Actions are browser-only: requests require `Sec-Fetch-Site: same-origin` or a loopback `Origin` matching the server's
+port. A plain agent `curl` receives 403. This prevents accidental calls, not deliberate header forgery. For an intentional
+local test, emulate the browser:
+`curl -s -X POST -H 'Sec-Fetch-Site: same-origin' -H 'Content-Type: application/json' -d '{"args":null}' <url>/api/extensions/todos/actions/list`
 answers `{"result": …}` or `{"error": …}` (the URL is in the system prompt and the Info panel).
 
 ## Surfaces

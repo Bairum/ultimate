@@ -14,7 +14,10 @@ per proposal, and the surface reloads after a write.
 Files: `web.tsx` (surface, agent buttons), `list.tsx` (filters, list), `detail.tsx` (item, comments),
 `repo-picker.tsx`, `setup.tsx`, `proposal.tsx` (the `triage_propose` card), `types.tsx` (shared types).
 
-Safety: the agent cannot write to GitHub. A wrapped `bash` (also used by codemode) blocks `gh` commands that comment,
-edit, close, label, or call `gh api` with a write method or fields; the agent proposes with `triage_propose` instead.
+Safety: accidental GitHub writes by the agent are blocked at the process level. Wrapped `bash` (also used by
+codemode and subagents) prepends a `gh` shim that permits only read commands and blocks `auth token`, and unsets
+GitHub token environment variables. Scripts and indirect shell invocations use the same shim. This is not a security
+boundary against a deliberately evasive shell (for example, calling `gh` by absolute path or forging browser headers).
+The agent proposes with `triage_propose` instead. Extension actions require same-origin browser request headers.
 The UI's Apply and Post only write to repositories listed in `githubTriage.writableRepos` in `.ultimate/settings.json`
 (here only the private `HazAT/ultimate`); every other repository is read-only.
