@@ -6,6 +6,7 @@ import {
   KeyRoundIcon,
   LoaderCircleIcon,
   MessageSquareTextIcon,
+  ReplaceIcon,
   XIcon,
 } from 'lucide-react'
 import { Fragment, useRef, useState } from 'react'
@@ -26,7 +27,7 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { SystemInfo } from '@/sdk'
-import { Heading, Line, message, projectLists, useLines } from './parts.tsx'
+import { Heading, Line, message, projectLists, useDescribed } from './parts.tsx'
 import type { Status } from './parts.tsx'
 
 /**
@@ -202,7 +203,7 @@ function Card({
 
 /** What is on: the default set with its lines, then what settings or folders added on top, by name. */
 function OnNow({ system }: { system: SystemInfo }) {
-  const line = useLines()
+  const { line } = useDescribed()
   const on = system.extensions.filter((extension) => extension.enabled)
   const available = system.extensions.length - on.length
   const defaults = on.filter((extension) => extension.layer === 'default')
@@ -228,7 +229,7 @@ function OnNow({ system }: { system: SystemInfo }) {
               {extension.name}
             </dt>
             <dd className="truncate text-[12.5px] leading-5 text-muted-foreground">
-              <Line text={line(extension.name)} />
+              <Line text={line(extension.name, extension.source)} />
             </dd>
           </Fragment>
         ))}
@@ -336,15 +337,47 @@ export function Welcome({
   )
 }
 
+/** A project's extension folders that run in place of built-ins of the same name, set apart as replaced trusted code. */
+function Replaces({ names, line }: { names: readonly string[]; line: (name: string) => string }) {
+  if (names.length === 0) return null
+  return (
+    <section className="rounded-md border border-warning/40 bg-warning/8 px-3 py-2.5">
+      <Heading className="text-warning" meta={names.length}>
+        <ReplaceIcon className="size-3" />
+        Replaces built-in
+      </Heading>
+      <ul className="mt-2 flex flex-col gap-2">
+        {names.map((name) => (
+          <li key={name}>
+            <div className="font-mono text-[12px] text-foreground/90">{name}</div>
+            <Line
+              className="line-clamp-2 text-[12px] leading-snug text-muted-foreground"
+              text={line(name)}
+            />
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-[12px] leading-snug text-foreground/80">
+        Its own code runs under the built-in's name, in place of the one that ships with Ultimate.
+      </p>
+    </section>
+  )
+}
+
 /**
- * What a project's setup brings: the built-ins its settings turn on or off, its own extensions with their lines, and
- * its agents and skills by name.
+ * What a project's setup brings: the built-ins its folders replace, the built-ins its settings turn on or off, its own
+ * extensions with their lines, and its agents and skills by name.
  */
 function Adds({ system, adds }: { system: SystemInfo; adds?: Status['adds'] }) {
-  const line = useLines()
+  const { line } = useDescribed()
   const { enable, disable } = projectLists(system)
-  const own = system.extensions.filter((extension) => extension.source === 'project')
-  const builtins = enable.filter((name) => !own.some((extension) => extension.name === name))
+  const replaces = adds?.replaces ?? []
+  const own = system.extensions.filter(
+    (extension) => extension.source === 'project' && !replaces.includes(extension.name),
+  )
+  const builtins = enable.filter(
+    (name) => !own.some((extension) => extension.name === name) && !replaces.includes(name),
+  )
   const groups: [string, readonly string[]][] = [
     ['Built-ins it turns on', builtins],
     ['Its own extensions', own.map((extension) => extension.name)],
@@ -354,9 +387,11 @@ function Adds({ system, adds }: { system: SystemInfo; adds?: Status['adds'] }) {
     ['Agents', adds?.agents ?? []],
     ['Skills', adds?.skills ?? []],
   ]
-  const empty = [...groups, ...named].every(([, names]) => names.length === 0)
+  const empty =
+    replaces.length === 0 && [...groups, ...named].every(([, names]) => names.length === 0)
   return (
     <div className="flex flex-col gap-5">
+      <Replaces line={line} names={replaces} />
       {groups.map(
         ([title, names]) =>
           names.length > 0 && (

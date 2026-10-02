@@ -8,9 +8,11 @@ import {
 } from 'lucide-react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { PointerEvent, ReactNode } from 'react'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { actions, layout, shellKeys } from '../sdk/actions.ts'
 import { useConversation, useExtensions, useUiState } from '../sdk/hooks.ts'
 import { panelItems, slotItems } from '../sdk/registry.ts'
+import type { PanelItem } from '../sdk/registry.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
 import { Composer } from './composer.tsx'
 import { IconButton } from './header.tsx'
@@ -62,6 +64,72 @@ export function Sidebar() {
   )
 }
 
+const tab = 'flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 whitespace-nowrap'
+
+/**
+ * A tab per extension panel. When not every label fits, the tabs other than the shown one keep only their icon and
+ * name themselves in a tooltip.
+ */
+function PanelTabs({ panels, active }: { panels: PanelItem[]; active: PanelItem }) {
+  const row = useRef<HTMLDivElement>(null)
+  const labelled = useRef<HTMLDivElement>(null)
+  const [compact, setCompact] = useState(false)
+  useLayoutEffect(() => {
+    const fit = () => setCompact(labelled.current!.offsetWidth > row.current!.clientWidth)
+    fit()
+    const observer = new ResizeObserver(fit)
+    observer.observe(row.current!)
+    observer.observe(labelled.current!)
+    return () => observer.disconnect()
+  }, [])
+  return (
+    <div className="flex h-10 shrink-0 items-center border-b border-border/70 px-2 font-mono text-[11.5px]">
+      <div className="relative flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden" ref={row}>
+        {/* Every tab with its label, unseen: how wide the row needs to be. */}
+        <div aria-hidden className="invisible absolute flex w-max gap-0.5" ref={labelled}>
+          {panels.map((panel) => {
+            const Icon = panel.icon
+            return (
+              <span className={tab} key={`${panel.extension}:${panel.id}`}>
+                {Icon && <Icon className="size-3.5" />}
+                {panel.title}
+              </span>
+            )
+          })}
+        </div>
+        {panels.map((panel) => {
+          const Icon = panel.icon
+          const iconOnly = compact && Icon !== undefined && panel.id !== active.id
+          const button = (
+            <button
+              aria-label={iconOnly ? panel.title : undefined}
+              className={cn(
+                tab,
+                'text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
+                panel.id === active.id && 'bg-accent text-foreground',
+              )}
+              key={`${panel.extension}:${panel.id}`}
+              onClick={() => actions.openPanel(panel.id)}
+              type="button"
+            >
+              {Icon && <Icon className="size-3.5" />}
+              {!iconOnly && panel.title}
+            </button>
+          )
+          return iconOnly ? (
+            <Tooltip key={`${panel.extension}:${panel.id}`}>
+              <TooltipTrigger asChild>{button}</TooltipTrigger>
+              <TooltipContent side="bottom">{panel.title}</TooltipContent>
+            </Tooltip>
+          ) : (
+            button
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 /** The right panel: a tab per extension panel (`mod+alt+b`). */
 export function Panels() {
   useMountRegion('panels')
@@ -73,25 +141,7 @@ export function Panels() {
   const Panel = active.component
   return (
     <aside className="flex w-[22rem] shrink-0 flex-col border-l border-border/70 bg-sidebar">
-      <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border/70 px-2 font-mono text-[11.5px]">
-        {panels.map((panel) => {
-          const Icon = panel.icon
-          return (
-            <button
-              className={cn(
-                'flex h-6 items-center gap-1.5 rounded-md px-2 text-muted-foreground transition-colors hover:text-foreground',
-                panel.id === active.id && 'bg-accent text-foreground',
-              )}
-              key={`${panel.extension}:${panel.id}`}
-              onClick={() => actions.openPanel(panel.id)}
-              type="button"
-            >
-              {Icon && <Icon className="size-3.5" />}
-              {panel.title}
-            </button>
-          )
-        })}
-      </div>
+      <PanelTabs active={active} panels={panels} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <ExtensionBoundary
           extension={active.extension}

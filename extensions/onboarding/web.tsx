@@ -1,5 +1,5 @@
 import { BlocksIcon } from 'lucide-react'
-import { useReducer, useRef, useState } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import {
   api,
   defineWebExtension,
@@ -27,14 +27,21 @@ function Onboarding() {
   const [, deferred] = useReducer((count: number) => count + 1, 0)
   // Where focus goes once the welcome has gone: the composer, unless it opened the Extensions panel.
   const composer = useRef(true)
-  if (!system) return null
-  const { project } = system
+  const project = system?.project
   const asking =
-    project.config &&
+    project?.config === true &&
     project.decision === null &&
     sessionStorage.getItem(later(project.root)) === null
-  const welcoming = status.data?.firstRun === true && !welcomed
   const projectOpen = reopened || asking
+  // Each opening reads the setup again, so agents, skills, and folders added since show.
+  const { refetch } = status
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    if (projectOpen && !wasOpen.current) void refetch()
+    wasOpen.current = projectOpen
+  }, [projectOpen, refetch])
+  if (!project) return null
+  const welcoming = status.data?.firstRun === true && !welcomed
   return (
     <>
       <ProjectPage

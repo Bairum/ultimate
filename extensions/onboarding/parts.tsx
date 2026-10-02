@@ -1,17 +1,23 @@
 import { useEffect, useRef } from 'react'
-import type { ReactNode } from 'react'
+import type { ReactNode, Ref } from 'react'
 import { cn, useAction, useSystem } from '@/sdk'
 import type { ExtensionInfo, SystemInfo } from '@/sdk'
 
-/** What the `status` action returns: first-run state and the names of the project's own agents and skills. */
+/**
+ * What the `status` action returns: first-run state, the names of the project's own agents and skills, and its
+ * extension folders that replace a built-in of the same name.
+ */
 export interface Status {
   firstRun: boolean
-  adds: { agents: string[]; skills: string[] }
+  adds: { agents: string[]; skills: string[]; replaces: string[] }
 }
 /** One entry of the `extensions` action: the first sentence of its README is the line the UI shows. */
 interface Described {
   name: string
+  source: ExtensionInfo['source']
   readme: string
+  /** A project folder named like a built-in: with the project's setup it runs instead. */
+  replaces?: 'builtin'
 }
 
 /** The dialog id of the project page; the Extensions panel opens it again. */
@@ -25,8 +31,11 @@ export const sources: Record<ExtensionInfo['source'], string> = {
   project: 'this project',
 }
 
-/** Each extension's line by name, refetched when the set of extension folders changes. */
-export function useLines() {
+/**
+ * Each extension's line by name, and whether a project folder replaces a built-in of that name; read when mounted and
+ * again when the set of extension folders changes.
+ */
+export function useDescribed() {
   const system = useSystem()
   const described = useAction<Described[]>('onboarding', 'extensions')
   const folders = system?.extensions.map((extension) => extension.path).join('\n')
@@ -37,11 +46,16 @@ export function useLines() {
     seen.current = folders
     void refetch()
   }, [folders, refetch])
-  return (name: string) => {
-    const line = described.data?.find((entry) => entry.name === name)?.readme
-    if (line) return line
-    const readme = system?.extensions.find((extension) => extension.name === name)?.readme
-    return readme && !readme.startsWith('#') ? readme : ''
+  const entry = (name: string) => described.data?.find((candidate) => candidate.name === name)
+  return {
+    /** With `source`, the line of that folder: a built-in a project folder replaces has its own. */
+    line: (name: string, source?: ExtensionInfo['source']) => {
+      const known = entry(name)
+      if (known && (!source || known.source === source)) return known.readme
+      const readme = system?.extensions.find((extension) => extension.name === name)?.readme
+      return readme && !readme.startsWith('#') ? readme : ''
+    },
+    replaces: (name: string) => entry(name)?.replaces === 'builtin',
   }
 }
 
@@ -105,7 +119,7 @@ export function Heading({
   )
 }
 
-/** An on/off switch. */
+/** An on/off switch. While `busy` it ignores presses but keeps focus, which a disabled button would drop. */
 export function Switch({
   checked,
   onChange,
@@ -113,6 +127,7 @@ export function Switch({
   disabled,
   busy,
   title,
+  ref,
 }: {
   checked: boolean
   onChange: (checked: boolean) => void
@@ -120,18 +135,21 @@ export function Switch({
   disabled?: boolean
   busy?: boolean
   title?: string
+  ref?: Ref<HTMLButtonElement>
 }) {
   return (
     <button
+      aria-busy={busy || undefined}
       aria-checked={checked}
       aria-label={label}
       className={cn(
         'relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40',
         checked ? 'bg-brand' : 'bg-input',
-        busy && 'animate-pulse',
+        busy && 'animate-pulse cursor-progress',
       )}
       disabled={disabled}
-      onClick={() => onChange(!checked)}
+      onClick={() => !busy && onChange(!checked)}
+      ref={ref}
       role="switch"
       title={title}
       type="button"

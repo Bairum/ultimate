@@ -1,5 +1,12 @@
-import { CircleAlertIcon, CopyPlusIcon, LoaderCircleIcon, TriangleAlertIcon } from 'lucide-react'
-import { useState } from 'react'
+import {
+  CircleAlertIcon,
+  CopyPlusIcon,
+  LoaderCircleIcon,
+  ReplaceIcon,
+  TriangleAlertIcon,
+} from 'lucide-react'
+import { useLayoutEffect, useRef, useState } from 'react'
+import type { Ref } from 'react'
 import { Button } from '@/components/ui/button'
 import { api, cn, elidePath, shortenPath, useExtensions, useSystem, useUltimate } from '@/sdk'
 import type { ExtensionInfo, SystemInfo } from '@/sdk'
@@ -12,7 +19,7 @@ import {
   projectDialog,
   projectLists,
   sources,
-  useLines,
+  useDescribed,
 } from './parts.tsx'
 
 type Scope = 'project' | 'user'
@@ -189,6 +196,7 @@ function ProjectSetup({ system }: { system: SystemInfo }) {
 function Row({
   extension,
   line,
+  replaces,
   local,
   scope,
   pending,
@@ -197,9 +205,11 @@ function Row({
   confirming,
   onToggle,
   onConfirm,
+  switchRef,
 }: {
   extension: ExtensionInfo
   line: string
+  replaces: boolean
   local: boolean
   scope: Scope
   pending?: boolean
@@ -208,6 +218,7 @@ function Row({
   confirming: boolean
   onToggle: (enabled: boolean) => void
   onConfirm: (confirming: boolean) => void
+  switchRef: Ref<HTMLButtonElement>
 }) {
   const web = useExtensions().find((record) => record.name === extension.name)
   const [label, reason] = decided(extension, local)
@@ -253,12 +264,24 @@ function Row({
             className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-muted-foreground"
             text={line}
           />
+          {/* A project folder in place of a built-in runs its own code under a trusted name. */}
+          {replaces && (
+            <p
+              className="mt-1 flex items-center gap-1.5 font-mono text-[10.5px] text-warning"
+              title={`This project's .ultimate/extensions/${extension.name} runs instead of the built-in ${extension.name}`}
+            >
+              <ReplaceIcon className="size-3 shrink-0" />
+              {extension.source === 'project'
+                ? 'replaces the built-in'
+                : "this project's setup replaces it"}
+            </p>
+          )}
         </div>
         <span className="mt-0.5">
           <Switch
             busy={pending !== undefined}
             checked={checked}
-            disabled={pending !== undefined || unusable}
+            disabled={unusable}
             label={`${extension.name} ${scope === 'project' ? 'for this project' : 'everywhere'}`}
             onChange={(next) => (!next && holds[extension.name] ? onConfirm(true) : onToggle(next))}
             title={
@@ -266,6 +289,7 @@ function Row({
                 ? "Choose this project's setup to use it"
                 : `${checked ? 'Turn off' : 'Turn on'} ${scope === 'project' ? 'for this project' : 'everywhere'}`
             }
+            ref={switchRef}
           />
         </span>
       </div>
@@ -316,12 +340,33 @@ function Row({
  */
 export function ExtensionsPanel() {
   const system = useSystem()
-  const line = useLines()
+  const { line, replaces } = useDescribed()
   const [chosen, setChosen] = useState<Scope>()
   const [pending, setPending] = useState<Record<string, boolean>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [notes, setNotes] = useState<Record<string, string>>({})
   const [confirming, setConfirming] = useState<string>()
+  // Read by screen readers once a toggle has applied, since the row has moved.
+  const [announcement, setAnnouncement] = useState('')
+  const root = useRef<HTMLDivElement>(null)
+  const switches = useRef(new Map<string, HTMLButtonElement>())
+  // A toggle moves its row between On and Available, which remounts its switch; focus follows the row there.
+  const follow = useRef<{ name: string; enabled: boolean }>(undefined)
+  const track = (name: string, enabled: boolean) => {
+    if (root.current?.contains(document.activeElement)) follow.current = { name, enabled }
+  }
+  useLayoutEffect(() => {
+    if (!follow.current) return
+    const { name, enabled } = follow.current
+    const target = switches.current.get(name)
+    // Only where focus fell to the document: a user who moved on keeps their place.
+    if (target && (!document.activeElement || document.activeElement === document.body))
+      target.focus()
+    const settled =
+      pending[name] === undefined &&
+      system?.extensions.find((extension) => extension.name === name)?.enabled === enabled
+    if (settled) follow.current = undefined
+  })
   if (!system)
     return <div className="p-3 font-mono text-[11.5px] text-muted-foreground">connecting…</div>
   const local = system.project.decision === true
@@ -337,19 +382,27 @@ export function ExtensionsPanel() {
       : '~/.ultimate/settings.json'
   const toggle = async (extension: ExtensionInfo, enabled: boolean) => {
     const { name } = extension
+    track(name, enabled)
     setConfirming(undefined)
     setPending((previous) => ({ ...previous, [name]: enabled }))
     setErrors(without(name))
     setNotes(without(name))
     try {
       await api.action('onboarding', 'setExtension', { name, enabled, scope })
-      if (scope === 'user' && extension.layer === 'project' && local)
-        setNotes((previous) => ({
-          ...previous,
-          [name]: `Saved everywhere; this project's settings keep it ${extension.enabled ? 'on' : 'off'} here.`,
-        }))
+      if (scope === 'user' && extension.layer === 'project' && local) {
+        const note = `Saved everywhere; this project's settings keep it ${extension.enabled ? 'on' : 'off'} here.`
+        setNotes((previous) => ({ ...previous, [name]: note }))
+        setAnnouncement(`${name}: ${note}`)
+        // It stays where it is.
+        follow.current = undefined
+      } else
+        setAnnouncement(
+          `${name} is ${enabled ? 'on' : 'off'}, under ${enabled ? 'On' : 'Available'}`,
+        )
     } catch (failure) {
       setErrors((previous) => ({ ...previous, [name]: message(failure) }))
+      setAnnouncement(`${name} did not change: ${message(failure)}`)
+      follow.current = undefined
     } finally {
       setPending(without(name))
     }
@@ -360,7 +413,10 @@ export function ExtensionsPanel() {
     ['Available', sorted.filter((extension) => !extension.enabled)],
   ]
   return (
-    <div className="pb-4">
+    <div className="pb-4" ref={root}>
+      <p aria-live="polite" className="sr-only">
+        {announcement}
+      </p>
       <Diagnostics messages={system.extensionDiagnostics} />
       <ProjectSetup system={system} />
       <div className="sticky top-0 z-10 border-b border-border/60 bg-sidebar/95 px-3 py-2 backdrop-blur-sm">
@@ -392,7 +448,7 @@ export function ExtensionsPanel() {
         </p>
       </div>
       {groups.map(([title, extensions]) => (
-        <section className="pt-3" key={title}>
+        <section aria-label={title} className="pt-3" key={title}>
           <Heading className="px-3 pb-1" meta={extensions.length}>
             {title}
           </Heading>
@@ -403,13 +459,25 @@ export function ExtensionsPanel() {
                 error={errors[extension.name]}
                 extension={extension}
                 key={extension.name}
-                line={line(extension.name)}
+                line={line(extension.name, extension.source)}
                 local={local}
                 note={notes[extension.name]}
-                onConfirm={(next) => setConfirming(next ? extension.name : undefined)}
+                onConfirm={(next) => {
+                  // Keeping it on closes the question under focus; focus goes back to the switch.
+                  if (!next) track(extension.name, extension.enabled)
+                  setConfirming(next ? extension.name : undefined)
+                }}
                 onToggle={(enabled) => void toggle(extension, enabled)}
                 pending={pending[extension.name]}
+                replaces={replaces(extension.name)}
                 scope={scope}
+                switchRef={(node) => {
+                  if (node) switches.current.set(extension.name, node)
+                  return () => {
+                    if (switches.current.get(extension.name) === node)
+                      switches.current.delete(extension.name)
+                  }
+                }}
               />
             ))}
           </ul>
