@@ -1,7 +1,8 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
-import { parseFrontmatter } from '@earendil-works/pi-coding-agent'
+import { parseFrontmatter, resolveCliModel } from '@earendil-works/pi-coding-agent'
+import type { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import type { Source } from '../../server/project.ts'
 
 export interface AgentDefinition {
@@ -30,7 +31,10 @@ const levels = {
 const fields = new Set(['name', 'description', 'model', 'thinking', 'tools'])
 
 /** A definition file: Pi's YAML frontmatter with Ultimate's fields, and the instructions as its body. */
-export function parseDefinition(text: string, path: string): AgentDefinition {
+export function parseDefinition(
+  text: string,
+  path: string,
+): Omit<AgentDefinition, 'model'> & { model?: string } {
   const { frontmatter, body } = parseFrontmatter(text)
   // Without a frontmatter block Pi returns no fields; YAML may also parse to a list or a scalar.
   if (
@@ -48,8 +52,8 @@ export function parseDefinition(text: string, path: string): AgentDefinition {
     throw new Error('description is required')
   if (thinking !== undefined && (typeof thinking !== 'string' || !Object.hasOwn(levels, thinking)))
     throw new Error(`thinking must be one of ${Object.keys(levels).join(', ')}`)
-  const ref = typeof model === 'string' ? /^([^/]+)\/(.+)$/.exec(model) : null
-  if (model !== undefined && !ref) throw new Error('model must be provider/modelId')
+  if (model !== undefined && (typeof model !== 'string' || !model.trim()))
+    throw new Error('model must be a nonempty string')
   if (
     tools !== undefined &&
     (!Array.isArray(tools) || !tools.every((tool) => typeof tool === 'string'))
@@ -61,7 +65,7 @@ export function parseDefinition(text: string, path: string): AgentDefinition {
     description: description.trim(),
     path,
     instructions: body,
-    ...(ref ? { model: { provider: ref[1], modelId: ref[2] } } : {}),
+    ...(model !== undefined ? { model } : {}),
     ...(thinking ? { thinking: thinking as ModelThinkingLevel } : {}),
     ...(tools ? { tools } : {}),
   }
@@ -72,6 +76,7 @@ export async function discoverAgents(
   ultimateRoot: string,
   projectRoot: string,
   userHome: string,
+  modelRuntime: ModelRuntime,
 ): Promise<AgentDiscovery> {
   const roots = [
     { source: 'builtin' as const, path: join(ultimateRoot, 'agents') },
@@ -92,8 +97,26 @@ export async function discoverAgents(
     for (const file of files.filter((entry) => entry.endsWith('.md')).toSorted()) {
       const path = join(directory, file)
       try {
-        const definition = parseDefinition(await readFile(path, 'utf8'), path)
-        definitions.set(definition.name, { ...definition, source })
+        const { model: cliModel, ...definition } = parseDefinition(
+          await readFile(path, 'utf8'),
+          path,
+        )
+        const resolved = resolveCliModel({
+          cliModel,
+          cliThinking: definition.thinking,
+          modelRuntime,
+        })
+        if (resolved.error || resolved.warning)
+          throw new Error(`model: ${resolved.error || resolved.warning}`)
+        const thinking = definition.thinking ?? resolved.thinkingLevel
+        definitions.set(definition.name, {
+          ...definition,
+          source,
+          ...(resolved.model
+            ? { model: { provider: resolved.model.provider, modelId: resolved.model.id } }
+            : {}),
+          ...(thinking ? { thinking } : {}),
+        })
       } catch (error) {
         errors.push({ name: file.slice(0, -3), path, source, error: String(error) })
       }

@@ -6,6 +6,7 @@ import { defineExtension, defineTool, InboxDoc, LiveDoc } from '@earendil-works/
 import type { Extension } from '@earendil-works/pi-durable'
 import { Type } from '@earendil-works/pi-ai'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
+import { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { afterEach, describe, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
@@ -181,21 +182,51 @@ describe('subagents', () => {
       definition('research').replace('name: scout', 'name: researcher'),
     )
     await writeFile(join(cwd, '.ultimate/agents/broken.md'), 'broken')
-    const found = await discoverAgents(repo, cwd, home)
+    const modelRuntime = await ModelRuntime.create()
+    for (const [name, model, thinking] of [
+      ['exact', 'anthropic/claude-opus-4-8', ''],
+      ['suffix', 'anthropic/claude-opus-4-8:high', ''],
+      ['explicit', 'anthropic/claude-opus-4-8:high', 'thinking: low\n'],
+      ['unknown', 'anthropic/ultimate-nonexistent-model', ''],
+      ['missing', 'ultimate-nonexistent-model', ''],
+    ])
+      await writeFile(
+        join(repo, `agents/${name}.md`),
+        definition(name)
+          .replace('name: scout', `name: ${name}`)
+          .replace('tools: [read, bash]', `model: ${model}\n${thinking}`),
+      )
+    const found = await discoverAgents(repo, cwd, home, modelRuntime)
+    expect(found.definitions.find((agent) => agent.name === 'exact')?.model).toEqual({
+      provider: 'anthropic',
+      modelId: 'claude-opus-4-8',
+    })
+    expect(found.definitions.find((agent) => agent.name === 'suffix')?.thinking).toBe('high')
+    expect(found.definitions.find((agent) => agent.name === 'explicit')?.thinking).toBe('low')
+    expect(found.errors.find((file) => file.name === 'unknown')?.error).toContain(
+      'model: Model "ultimate-nonexistent-model" not found for provider "anthropic". Using custom model id.',
+    )
+    expect(found.errors.find((file) => file.name === 'missing')?.error).toContain(
+      'model: Model "ultimate-nonexistent-model" not found.',
+    )
     expect(found.definitions.map((agent) => agent.name).toSorted()).toEqual([
+      'exact',
+      'explicit',
       'researcher',
       'scout',
+      'suffix',
       'worker',
     ])
     expect(found.definitions.find((agent) => agent.name === 'scout')?.instructions).toBe('cwd')
-    expect(found.errors[0]).toMatchObject({
+    expect(found.errors.find((file) => file.name === 'broken')).toMatchObject({
       name: 'broken',
       error: expect.stringContaining('frontmatter'),
     })
     await writeFile(join(cwd, '.ultimate/agents/scout.md'), definition('edited'))
     expect(
-      (await discoverAgents(repo, cwd, home)).definitions.find((agent) => agent.name === 'scout')
-        ?.instructions,
+      (await discoverAgents(repo, cwd, home, modelRuntime)).definitions.find(
+        (agent) => agent.name === 'scout',
+      )?.instructions,
     ).toBe('edited')
   })
   it('parses definitions with Pi frontmatter and validates their fields', () => {
@@ -209,7 +240,7 @@ describe('subagents', () => {
       description: 'A read-only scout that searches.',
       path: 'scout.md',
       instructions: 'Search',
-      model: { provider: 'openai-codex', modelId: 'gpt-5.4' },
+      model: 'openai-codex/gpt-5.4',
       thinking: 'max',
       tools: ['read', 'bash'],
     })
@@ -222,7 +253,7 @@ describe('subagents', () => {
       ['description: Search', 'description: " "', 'description is required'],
       ['name: scout', 'name: a scout', 'name must be a nonempty identifier'],
       ['tools: [read, bash]', 'tools: read', 'tools must be a list of tool names'],
-      ['tools: [read, bash]', 'model: gpt', 'model must be provider/modelId'],
+      ['tools: [read, bash]', 'model: " "', 'model must be a nonempty string'],
       ['tools: [read, bash]', 'tool: [read]', 'Unknown field: tool'],
       ['Original instructions', '', 'Instructions are required'],
     ])

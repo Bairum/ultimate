@@ -140,6 +140,7 @@ export const actions = {
       host.ultimateRoot,
       host.projectRoot,
       host.userHome,
+      host.modelRuntime,
     )
     return {
       definitions: definitions.map(({ instructions: _instructions, ...definition }) => definition),
@@ -172,7 +173,12 @@ export default function subagents(
     tasks: [Anchor, Reporter],
     sections: [
       section('subagents', async () => {
-        const discovered = await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome)
+        const discovered = await discoverAgents(
+          host.ultimateRoot,
+          host.projectRoot,
+          host.userHome,
+          host.modelRuntime,
+        )
         return (
           'You coordinate. Delegate bounded, self-contained research, reconnaissance, review, and isolated implementation to subagents. Run independent work in parallel in the background. Verify results before relying on them.\nAvailable definitions:\n' +
           discovered.definitions.map((agent) => `${agent.name}: ${agent.description}`).join('\n')
@@ -235,7 +241,12 @@ export default function subagents(
             const definition =
               args.action === 'start' && !existingAction
                 ? (
-                    await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome)
+                    await discoverAgents(
+                      host.ultimateRoot,
+                      host.projectRoot,
+                      host.userHome,
+                      host.modelRuntime,
+                    )
                   ).definitions.find((agent) => agent.name === args.agent)
                 : undefined
             if (args.action === 'start' && !existingAction && !definition)
