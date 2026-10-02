@@ -14,9 +14,6 @@ export function watchRoots(roots: string[], appeared: (root: string) => void) {
         try {
           watcher = watch(ancestor, () => {
             if (closed) return
-            const next = existsSync(root)
-            if (next && !present) appeared(root)
-            present = next
             watcher.close()
             attach()
           })
@@ -26,6 +23,9 @@ export function watchRoots(roots: string[], appeared: (root: string) => void) {
           ancestor = dirname(ancestor)
         }
       }
+      const next = existsSync(root)
+      if (next && !present) appeared(root)
+      present = next
     }
     attach()
     return () => {
