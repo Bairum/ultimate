@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-// Exercise the installed pnpm patch, not a local copy of the sanitizer.
+// Pi upstream: @earendil-works/pi-durable@1.0.0 dist/harness/output.js — internal import exercises the installed sanitizer patch. Drop when Pi exports the sanitizer and OutputBuffer or ships equivalent sanitizer tests.
 import {
   OutputBuffer,
   sanitizeOutput,

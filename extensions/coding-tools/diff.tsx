@@ -1,3 +1,4 @@
+// Pi upstream: @earendil-works/pi-durable@1.0.0 src/tools/edit.ts and src/tools/edit-diff.ts — internal untyped details.patch/details.diff formats drive the diff renderer. Drop when Pi exports structured diff rows for rendering.
 import { cn } from '@/sdk'
 
 export interface DiffRow {

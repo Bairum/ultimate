@@ -1,4 +1,5 @@
-// Adapted from earendil-works/pi coding-agent/src/core/http-dispatcher.ts.
+// Pi upstream: @earendil-works/pi-coding-agent@1.0.0 src/core/http-dispatcher.ts — copied, not exported; prevents early provider stream termination. Drop when Pi exports configureHttpDispatcher and applyHttpProxySettings.
+// The undici dependency in package.json exists only for this file.
 /*
 MIT License — Copyright (c) 2025 Mario Zechner
 

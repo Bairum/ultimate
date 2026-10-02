@@ -12,5 +12,7 @@ minimumReleaseAgeExclude:
   - '@earendil-works/pi-mcp@1.0.0'
   - '@earendil-works/pi-telemetry@1.0.0'
   - '@earendil-works/pi-tui@1.0.0'
+# Pi upstream: @earendil-works/pi-durable@1.0.0 dist/harness/output.js — patched sanitizeOutput to remove whole CSI/OSC/control strings while keeping numeric SGR. Drop when Pi ships equivalent sanitization.
+# patches/@earendil-works__pi-durable@1.0.0.patch: pnpm errors when the versioned patch no longer matches.
 patchedDependencies:
   '@earendil-works/pi-durable@1.0.0': patches/@earendil-works__pi-durable@1.0.0.patch
