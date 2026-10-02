@@ -47,15 +47,17 @@ export default function exclusiveCommands(host: ExtensionHost) {
         ...bash,
         async execute(args, api, context) {
           let sources: string[] = []
+          const warnings: string[] = []
           try {
             const settings = JSON.parse(
               await readFile(join(host.projectRoot, '.ultimate/settings.json'), 'utf8'),
             )
-            sources = settings.exclusiveCommands ?? []
+            const configured = settings.exclusiveCommands ?? []
+            if (Array.isArray(configured)) sources = configured
+            else warnings.push('Invalid exclusiveCommands ignored: expected an array of patterns\n')
           } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
           }
-          const warnings: string[] = []
           let matches = false
           for (const source of sources) {
             try {

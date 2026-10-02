@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile, access } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile, access, symlink, chmod } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
@@ -10,7 +10,7 @@ import type { OpenHost } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import type { ActionContext } from '../server/actions.ts'
 import subagents, { actions, Subagents } from '../extensions/subagents/server.ts'
-import { create, git } from '../extensions/subagents/isolates/worktree.ts'
+import { create, git, discard } from '../extensions/subagents/isolates/worktree.ts'
 import { temp, until } from './helpers.ts'
 
 const directories: string[] = []
@@ -137,6 +137,9 @@ it.each([false, true])(
     await expect(access(workspace.path)).rejects.toThrow('ENOENT')
     expect(await git(f.project, 'branch', '--list', workspace.branch)).toContain(workspace.branch)
     expect((await f.children())[0].isolate?.state).toBe('discarded')
+    expect(
+      await f.call({ action: 'message', id: child.conversationId, text: 'inspect' }),
+    ).toContain("Child's worktree was discarded; start a new child")
   },
 )
 it('replays an interrupted start with the same child and worktree', async () => {
@@ -239,4 +242,70 @@ it('reads an isolate with its commits ahead of the parent for the Agents tab', a
   await actions.discard({ id: child.conversationId }, { ...ctx, conversationId: parent })
   await git(f.project, 'branch', '-D', child.isolate!.branch)
   expect(await read()).toMatchObject({ state: 'discarded', ahead: null })
+})
+
+it('rechecks queued lifecycle operations and refuses messages during land', async () => {
+  const f = await fixture()
+  await f.call({ action: 'start', agent: 'worker', task: 'write' })
+  await f.call({ action: 'start', agent: 'worker', task: 'inspect' })
+  const [first, second] = await f.children()
+  await git(first.isolate!.path, 'add', '.')
+  await git(first.isolate!.path, 'commit', '-m', 'child change')
+  await writeFile(join(f.project, 'parent.txt'), 'parent')
+  await git(f.project, 'add', '.')
+  await git(f.project, 'commit', '-m', 'parent change')
+  const hook = join(await git(f.project, 'rev-parse', '--absolute-git-dir'), 'hooks/pre-rebase')
+  const entered = join(f.home, 'entered')
+  const release = join(f.home, 'release')
+  await writeFile(
+    hook,
+    `#!/bin/sh\ntouch '${entered}'\nwhile [ ! -f '${release}' ]; do sleep 0.05; done\n`,
+  )
+  await chmod(hook, 0o755)
+  const ctx = {
+    host: { projectRoot: f.project, ultimateRoot: f.project, harness: () => f.opened.harness },
+    conversationId: f.opened.root.id,
+  } as unknown as ActionContext
+  const waitingHook = await readFile(hook, 'utf8')
+  await writeFile(hook, '#!/bin/sh\necho original-hook-failure >&2\nexit 1\n')
+  await expect(actions.land({ id: first.conversationId }, ctx)).rejects.toThrow(
+    'original-hook-failure',
+  )
+  await writeFile(hook, waitingHook)
+  const landing = actions.land({ id: first.conversationId }, ctx)
+  await until(async () =>
+    access(entered).then(
+      () => true,
+      () => false,
+    ),
+  )
+  expect(await f.call({ action: 'message', id: first.conversationId, text: 'inspect' })).toContain(
+    'lifecycle operation is in progress',
+  )
+  const dropping = actions.discard({ id: second.conversationId }, ctx)
+  const refused = dropping.catch((error: Error) => error)
+  const child = (await f.opened.harness.conversation(second.conversationId, context))!
+  await child.submit({ type: 'input', content: 'slow' }, context)
+  await until(
+    async () => !!(await f.opened.harness.snapshot(LiveDoc, second.conversationId, context))?.run,
+  )
+  await writeFile(release, '')
+  await landing
+  expect(await refused).toMatchObject({ message: 'Child is running; wait or stop it first' })
+  await access(second.isolate!.path)
+  await child.abort(context)
+})
+it('creates, replays and discards through a symlinked home without marking an empty branch landed', async () => {
+  const f = await fixture()
+  const alias = `${f.home}-alias`
+  await symlink(f.home, alias)
+  const created = await create(f.project, alias, 'worker', 'symlink')
+  expect((await create(f.project, alias, 'worker', 'symlink')).record).toEqual(created.record)
+  await discard(f.project, created.record)
+  await expect(access(created.cwd)).rejects.toThrow('ENOENT')
+  expect(await git(f.project, 'worktree', 'list', '--porcelain')).not.toContain(created.cwd)
+  await f.call({ action: 'start', agent: 'worker', task: 'inspect' })
+  const [child] = await f.children()
+  expect(await f.call({ action: 'land', id: child.conversationId })).toContain('Nothing to land')
+  expect((await f.children())[0].isolate?.landed).toBeUndefined()
 })

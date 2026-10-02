@@ -76,6 +76,10 @@ const Reporter = defineTask<
   phases: {
     deliver: async (task, runtime, context) => {
       const child = (await runtime.conversation(task.input.conversationId, context))!
+      const indexed = (await runtime.snapshot(Subagents, runtime.conversationId, context))?.agents[
+        String(child.id)
+      ]
+      assertMessageable(child.id, indexed?.isolate)
       const settled = await (
         await child.submit(
           {
@@ -143,6 +147,13 @@ const reply = (text: string, info?: ReturnType<typeof details>) => ({
   ...(info === undefined ? {} : { details: info }),
 })
 
+const operating = new Set<ConversationId>()
+function assertMessageable(id: ConversationId, isolate?: Isolate) {
+  if (isolate?.state === 'discarded')
+    throw new Error("Child's worktree was discarded; start a new child")
+  if (operating.has(id)) throw new Error('Child worktree lifecycle operation is in progress')
+}
+
 async function operate(
   host: Pick<ExtensionHost, 'harness' | 'projectRoot' | 'ultimateRoot'>,
   conversationId: ConversationId,
@@ -151,20 +162,26 @@ async function operate(
   context: Context = BACKGROUND_CONTEXT,
 ) {
   const harness = host.harness()
-  const child = (await harness.snapshot(Subagents, conversationId, context))?.agents[String(id)]
-  if (!child?.isolate) throw new Error('id must identify a worktree child of this conversation')
-  if ((await harness.snapshot(LiveDoc, id, context))?.run)
-    throw new Error('Child is running; wait or stop it first')
   const parent = (await harness.conversation(conversationId, context))!
   const cwd = (await parent.agent(context)).cwd ?? host.projectRoot
-  const result = await (child.isolate.kind === 'worktree'
-    ? (action === 'land' ? worktree.land : worktree.discard)(cwd, child.isolate)
-    : Promise.reject(new Error('Unsupported isolate kind')))
-  await harness.commit(async (tx) => {
-    const isolate = (await tx.doc(Subagents, conversationId)).agents[String(id)].isolate!
-    if (result.state) isolate.state = result.state
-    if (result.landed) isolate.landed = result.landed
-  }, context)
+  const result = await worktree.locked(cwd, async () => {
+    operating.add(id)
+    try {
+      const child = (await harness.snapshot(Subagents, conversationId, context))?.agents[String(id)]
+      if (!child?.isolate) throw new Error('id must identify a worktree child of this conversation')
+      if ((await harness.snapshot(LiveDoc, id, context))?.run)
+        throw new Error('Child is running; wait or stop it first')
+      const outcome = await worktree.operate(cwd, child.isolate, action)
+      await harness.commit(async (tx) => {
+        const isolate = (await tx.doc(Subagents, conversationId)).agents[String(id)].isolate!
+        if (outcome.state) isolate.state = outcome.state
+        if (outcome.landed) isolate.landed = outcome.landed
+      }, context)
+      return outcome
+    } finally {
+      operating.delete(id)
+    }
+  })
   return {
     ...result,
     ...(host.projectRoot === host.ultimateRoot &&
@@ -357,6 +374,8 @@ Available definitions:
               throw new Error(
                 `${args.action} requires ${args.action === 'start' ? 'task' : 'text'}`,
               )
+            if (args.action === 'message')
+              assertMessageable(args.id as ConversationId, index.agents[String(args.id)].isolate)
             const parent = await api.agent(context)
             const existingAction = index.actions[api.callId]
             const definition =
@@ -474,6 +493,8 @@ Available definitions:
                   ...(isolate ? { isolate } : {}),
                 }
               }
+              if (args.action === 'message')
+                assertMessageable(conversationId, state.agents[String(conversationId)].isolate)
               const background = state.agents[String(conversationId)].background
               const reporter = background
                 ? await tx.createTask(
@@ -497,6 +518,11 @@ Available definitions:
                 info,
               )
             const child = (await api.conversation(action.conversationId, context))!
+            const current = await api.snapshot(Subagents, api.conversationId, context)
+            assertMessageable(
+              action.conversationId,
+              current?.agents[String(action.conversationId)]?.isolate,
+            )
             const settled = await (
               await child.submit(
                 {

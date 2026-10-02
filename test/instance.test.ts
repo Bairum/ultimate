@@ -1,4 +1,4 @@
-import { rm } from 'node:fs/promises'
+import { rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
@@ -12,7 +12,15 @@ import { temp } from './helpers.ts'
 
 it('previews a worktree child on its own home and port and validates child inputs', async () => {
   const root = await temp('ultimate-preview-')
-  const source = resolve('.')
+  const checkout = resolve('.')
+  const source = join(root, 'source')
+  await git(root, 'clone', '--no-hardlinks', checkout, source)
+  await writeFile(
+    join(source, '.ultimate/settings.json'),
+    JSON.stringify({
+      isolates: { worktree: { setup: [`ln -s '${join(checkout, 'node_modules')}' node_modules`] } },
+    }),
+  )
   const prepared = await prepareHarness({
     ultimateRoot: source,
     projectRoot: source,
@@ -52,8 +60,6 @@ it('previews a worktree child on its own home and port and validates child input
   }
   prepared.faux!.setResponses([route])
   opened = await prepared.open()
-  let path: string | undefined
-  let branch: string | undefined
   async function call(tool: string, args: object) {
     await (
       await opened.root.submit(
@@ -81,8 +87,6 @@ it('previews a worktree child on its own home and port and validates child input
     const child = Object.values(
       (await opened.harness.snapshot(Subagents, opened.root.id, context))!.agents,
     )[0]
-    path = child.isolate!.path
-    branch = child.isolate!.branch
     const preview = JSON.parse(
       await call('instance', { action: 'start', subagent: child.conversationId, faux: true }),
     )
@@ -101,8 +105,6 @@ it('previews a worktree child on its own home and port and validates child input
   } finally {
     for (const cleanup of cleanups) await cleanup()
     await opened.close()
-    if (path) await git(source, 'worktree', 'remove', '--force', path)
-    if (branch) await git(source, 'branch', '-D', branch)
     await rm(root, { recursive: true, force: true })
   }
 }, 120000)

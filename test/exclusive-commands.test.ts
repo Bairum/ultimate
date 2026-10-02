@@ -88,6 +88,20 @@ it('serializes matching commands across conversations without delaying other bas
     } finally {
       view.dispose()
     }
+    await writeFile(
+      join(server.host.projectRoot, '.ultimate/settings.json'),
+      JSON.stringify({ exclusiveCommands: '# heavy' }),
+    )
+    await (
+      await server.root.submit({ type: 'input', content: 'echo valid' }, context)
+    ).wait(context)
+    const invalid = await server.root.viewState(context)
+    try {
+      expect(JSON.stringify(invalid.value)).toContain('expected an array of patterns')
+      expect(JSON.stringify(invalid.value)).toContain('valid')
+    } finally {
+      invalid.dispose()
+    }
   } finally {
     await server.close()
     await rm(directory, { recursive: true, force: true })

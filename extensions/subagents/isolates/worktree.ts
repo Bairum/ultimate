@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 
 import type { CreatedIsolate, Isolate } from './types.ts'
@@ -19,7 +19,7 @@ export async function create(
   signal?: AbortSignal,
 ) {
   const key = createHash('sha256').update(call).digest('hex')
-  const path = join(home, 'worktrees', key)
+  const path = await worktreePath(home, key)
   const branch = `ultimate/${agent}-${key.slice(0, 16)}`
   let base: string
   try {
@@ -31,7 +31,6 @@ export async function create(
     .split('\n')
     .includes(`worktree ${path}`)
   if (!registered) {
-    await mkdir(join(home, 'worktrees'), { recursive: true })
     await rm(path, { recursive: true, force: true })
     const branches = await git(parent, 'branch', '--list', branch)
     if (branches) base = await git(parent, 'rev-parse', branch)
@@ -101,66 +100,70 @@ async function setupWorktree(project: string, parent: string, path: string, sign
     })
   }
 }
+async function worktreePath(home: string, key: string) {
+  const directory = join(home, 'worktrees')
+  await mkdir(directory, { recursive: true })
+  return join(await realpath(directory), key)
+}
 const locks = new Map<string, Promise<unknown>>()
-export const land = (parent: string, record: Isolate) => operate(parent, record, 'land')
-export const discard = (parent: string, record: Isolate) => operate(parent, record, 'discard')
-async function operate(parent: string, isolate: Isolate, action: 'land' | 'discard') {
+export async function locked<T>(parent: string, run: () => Promise<T>) {
   parent = await git(parent, 'rev-parse', '--show-toplevel')
   const previous = locks.get(parent) ?? Promise.resolve()
-  const operation = previous
-    .catch(() => {})
-    .then(async () => {
-      if (isolate.state === 'discarded') {
-        if (action === 'discard')
-          return { text: `Already discarded; kept branch ${isolate.branch}.` }
-        throw new Error('Isolate is discarded')
-      }
-      if (action === 'discard') {
-        if (
-          (await git(parent, 'worktree', 'list', '--porcelain'))
-            .split('\n')
-            .includes(`worktree ${isolate.path}`)
-        )
-          await git(parent, 'worktree', 'remove', '--force', isolate.path)
-        return {
-          text: `Discarded isolate; kept branch ${isolate.branch}.`,
-          state: 'discarded' as const,
-        }
-      }
-      const head = await git(parent, 'rev-parse', 'HEAD')
-      const dirty = await git(isolate.path, 'status', '--porcelain')
-      if (dirty) throw new Error(`Worktree is dirty:\n${dirty}`)
-      if (!Number(await git(parent, 'rev-list', '--count', `${head}..${isolate.branch}`)))
-        return {
-          text: 'Nothing to land.',
-          landed: await git(parent, 'rev-parse', isolate.branch),
-        }
-      try {
-        await git(isolate.path, 'rebase', head)
-      } catch (error) {
-        const conflicts = await git(isolate.path, 'diff', '--name-only', '--diff-filter=U')
-        await git(isolate.path, 'rebase', '--abort')
-        throw new Error(
-          `Rebase failed: ${conflicts || String(error)}. Message the child to rebase onto ${head} and resolve these files before landing.`,
-          { cause: error },
-        )
-      }
-      const commits = await git(isolate.path, 'log', '--oneline', `${head}..HEAD`)
-      const paths = (await git(isolate.path, 'diff', '--name-only', head, 'HEAD'))
-        .split('\n')
-        .filter(Boolean)
-      await git(parent, 'merge', '--ff-only', isolate.branch)
-      const landed = await git(parent, 'rev-parse', 'HEAD')
-      return {
-        text: `Landed commits:\n${commits}\nChanged paths:\n${paths.join('\n')}`,
-        landed,
-        paths,
-      }
-    })
+  const operation = previous.catch(() => {}).then(run)
   locks.set(parent, operation)
   try {
     return await operation
   } finally {
     if (locks.get(parent) === operation) locks.delete(parent)
+  }
+}
+export const land = (parent: string, record: Isolate) =>
+  locked(parent, () => operate(parent, record, 'land'))
+export const discard = (parent: string, record: Isolate) =>
+  locked(parent, () => operate(parent, record, 'discard'))
+export async function operate(parent: string, isolate: Isolate, action: 'land' | 'discard') {
+  if (isolate.state === 'discarded') {
+    if (action === 'discard') return { text: `Already discarded; kept branch ${isolate.branch}.` }
+    throw new Error('Isolate is discarded')
+  }
+  if (action === 'discard') {
+    if (
+      (await git(parent, 'worktree', 'list', '--porcelain'))
+        .split('\n')
+        .includes(`worktree ${join(await realpath(dirname(isolate.path)), basename(isolate.path))}`)
+    )
+      await git(parent, 'worktree', 'remove', '--force', isolate.path)
+    return {
+      text: `Discarded isolate; kept branch ${isolate.branch}.`,
+      state: 'discarded' as const,
+    }
+  }
+  const head = await git(parent, 'rev-parse', 'HEAD')
+  const dirty = await git(isolate.path, 'status', '--porcelain')
+  if (dirty) throw new Error(`Worktree is dirty:\n${dirty}`)
+  if (!Number(await git(parent, 'rev-list', '--count', `${head}..${isolate.branch}`))) {
+    const tip = await git(parent, 'rev-parse', isolate.branch)
+    return { text: 'Nothing to land.', ...(tip === isolate.base ? {} : { landed: tip }) }
+  }
+  try {
+    await git(isolate.path, 'rebase', head)
+  } catch (error) {
+    const conflicts = await git(isolate.path, 'diff', '--name-only', '--diff-filter=U')
+    await git(isolate.path, 'rebase', '--abort').catch(() => {})
+    throw new Error(
+      `Rebase failed: ${conflicts || String(error)}. Message the child to rebase onto ${head} and resolve these files before landing.`,
+      { cause: error },
+    )
+  }
+  const commits = await git(isolate.path, 'log', '--oneline', `${head}..HEAD`)
+  const paths = (await git(isolate.path, 'diff', '--name-only', head, 'HEAD'))
+    .split('\n')
+    .filter(Boolean)
+  await git(parent, 'merge', '--ff-only', isolate.branch)
+  const landed = await git(parent, 'rev-parse', 'HEAD')
+  return {
+    text: `Landed commits:\n${commits}\nChanged paths:\n${paths.join('\n')}`,
+    landed,
+    paths,
   }
 }
