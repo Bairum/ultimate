@@ -112,7 +112,13 @@ export default function browserExtension(host: ExtensionHost) {
           steps: Type.Array(
             Type.Union([
               Type.Object({ click: Type.String() }),
-              Type.Object({ fill: Type.Tuple([Type.String(), Type.String()]) }),
+              Type.Object({
+                fill: Type.Array(Type.String(), {
+                  minItems: 2,
+                  maxItems: 2,
+                  description: '[selector, value]',
+                }),
+              }),
               Type.Object({ press: Type.String() }),
               Type.Object({ wait: Type.Union([Type.Number({ minimum: 0 }), Type.String()]) }),
               Type.Object({ eval: Type.String() }),
