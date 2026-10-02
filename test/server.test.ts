@@ -5,7 +5,7 @@ import { join, resolve as resolvePath } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
 import type { ConversationId, ConversationView } from '@earendil-works/pi-durable'
-import { defineExtension, InboxDoc, LiveDoc } from '@earendil-works/pi-durable'
+import { defineExtension, InboxDoc, LiveDoc, ResetEntry } from '@earendil-works/pi-durable'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -571,13 +571,14 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     await server.harness.waitForIdle(context)
     const view = await conversation.viewState(context)
     expect(view.value.entries.some((entry) => entry.kind === 'pi.user')).toBe(false)
+    const reset = view.value.entries.find((entry) => ResetEntry.is(entry))!
     view.dispose()
     await conversation.commit(async (tx) => {
       ;(await tx.doc(Metadata, created as ConversationId)).label = 'after reset'
     }, context)
     await until(() => summary()?.label === 'after reset')
     expect(summary()).toMatchObject({ inputAt: streamed!.inputAt, answerAt: streamed!.answerAt })
-    expect(history).toHaveBeenCalled()
+    expect(history.mock.calls.map(([query]) => query)).toContainEqual({ maxEntryId: reset.id })
     // A new answer updates its summary directly, without reading the conversation again.
     const reads = vi.spyOn(server.harness, 'conversation')
     const answerAt = streamed!.answerAt! + 1000

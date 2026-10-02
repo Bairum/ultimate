@@ -85,7 +85,7 @@ export async function createApi(
       } while (cursor !== undefined)
       return scanned
     }, context)
-    const refreshed: ConversationSummary[] = []
+    const refreshed: Omit<ConversationSummary, 'busy'>[] = []
     for (const record of records) {
       const conversation = await harness.conversation(record.id, context)
       if (!conversation) continue
@@ -135,9 +135,6 @@ export async function createApi(
               ? { title: title.replace(/\s+/g, ' ').slice(0, 160) }
               : {}),
           cwd: agent.cwd,
-          busy: Object.values(graph.value.tasks).some(
-            (task) => task.conversationId === record.id && !task.background,
-          ),
           ...(inputAt === undefined ? {} : { inputAt }),
           ...(answerAt === undefined ? {} : { answerAt }),
         })
@@ -145,9 +142,15 @@ export async function createApi(
         view.dispose()
       }
     }
-    // Merged into the current list, so busy updates made during the awaits above survive.
+    // Merged into the current list with busy from the current graph, so updates made during the awaits above survive.
     const next = ids ? [...summaries] : []
-    for (const summary of refreshed) {
+    for (const fresh of refreshed) {
+      const summary = {
+        ...fresh,
+        busy: Object.values(graph.value.tasks).some(
+          (task) => task.conversationId === fresh.id && !task.background,
+        ),
+      }
       const index = next.findIndex((item) => item.id === summary.id)
       if (index < 0) next.push(summary)
       else next[index] = summary

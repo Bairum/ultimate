@@ -252,6 +252,8 @@ function Row({
             onFocus={(event) => event.currentTarget.select()}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                // Without it, the keypress lands on the refocused row button and opens the row.
+                event.preventDefault()
                 refocus.current = true
                 event.currentTarget.blur()
               }

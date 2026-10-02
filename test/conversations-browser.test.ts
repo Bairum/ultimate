@@ -142,12 +142,25 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
       )
       .toEqual(['first message'])
 
+    // Renaming a row that is not shown saves on Enter and keeps the shown conversation.
+    const hiddenRow = page.getByRole('region', { name: 'Archived' }).locator('[data-conversation]')
+    await hiddenRow.hover()
+    await hiddenRow.getByRole('button', { name: 'Conversation actions' }).click()
+    await page.getByRole('menuitem', { name: 'Rename' }).click()
+    const input = page.getByRole('textbox', { name: 'Conversation title' })
+    await expect.poll(() => input.inputValue(), timeout).toBe('first message')
+    await input.fill('Earlier work')
+    await page.keyboard.press('Enter')
+    await expect
+      .poll(() => hiddenRow.locator('.truncate').textContent(), timeout)
+      .toBe('Earlier work')
+    expect(await shown()).toBe(draft)
+
     // Rename from the menu: Enter saves, and the row and the header trail show the new title.
     const renamed = rows.first()
     await renamed.hover()
     await renamed.getByRole('button', { name: 'Conversation actions' }).click()
     await page.getByRole('menuitem', { name: 'Rename' }).click()
-    const input = page.getByRole('textbox', { name: 'Conversation title' })
     await expect.poll(() => input.inputValue(), timeout).toBe('second message')
     await input.fill('Sidebar work')
     await page.keyboard.press('Enter')
@@ -184,7 +197,7 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
       .toBe(1)
     expect(await titles()).toEqual(['Sidebar work'])
     expect(await trail.count()).toBe(1)
-    expect(calls).toEqual(['rename', 'reset'])
+    expect(calls).toEqual(['rename', 'rename', 'reset'])
     expect(failed).toEqual([])
     expect(errors).toEqual([])
   } finally {
