@@ -187,6 +187,8 @@ open an `EventSource` yourself: the SDK keeps one live stream per shown conversa
 `createConversation()`, `login(provider, type)`, `answer(flowId, value)`, `cancel(flowId)`, `logout(provider)`,
 `restart()`. Conversation commands default to the shown conversation.
 
+`api.cancelSubmission(submissionId, conversationId?)` withdraws one queued input without stopping the run.
+
 Helpers: `cn()` for class names, `formatTokens`, `formatBytes`, `formatDuration`, `shortenPath`, `elidePath`, `homeOf`,
 `formatKeys`. Types for everything above are exported too (`EntryRecord`, `AssistantMessage`, `SystemInfo`, …).
 

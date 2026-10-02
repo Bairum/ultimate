@@ -197,10 +197,7 @@ export default function browserExtension(host: ExtensionHost) {
         if (message.type() === 'error') outcomes.push(`Console error: ${message.text()}`)
       })
       page.on('pageerror', (error) => outcomes.push(`Page error: ${error.message}`))
-      const url = new URL(
-        args.path ?? '',
-        args.url ?? process.env.ULTIMATE_PUBLIC_URL ?? host.system().process.url,
-      ).href
+      const url = new URL(args.path ?? '', args.url ?? host.system().process.url).href
       api.output(`Loading ${url}\n`)
       await page.goto(url, { waitUntil: 'domcontentloaded' })
       const result = await action(page, outcomes)

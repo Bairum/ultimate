@@ -1,5 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { ConversationId, Cursor, DocumentWatch, JsonObject } from '@earendil-works/pi-durable'
+import type {
+  ConversationId,
+  Cursor,
+  DocumentWatch,
+  JsonObject,
+  SubmissionId,
+} from '@earendil-works/pi-durable'
 import type { ServerEvents, ConversationSummary, ConfigureRequest } from '../shared/protocol.ts'
 import { AuthBridge, listModels } from './auth.ts'
 import type { Extensions } from './extensions.ts'
@@ -331,6 +337,27 @@ export async function createApi(
             }, context)
           await refreshing
           json(201, { id: created.id })
+          return true
+        }
+        const cancel = /^\/api\/conversations\/(\d+)\/inbox\/(\d+)\/cancel$/.exec(url.pathname)
+        if (cancel) {
+          const submission = await harness.submission(Number(cancel[2]) as SubmissionId, context)
+          if (
+            !submission ||
+            (await submission.status(context)).conversationId !== Number(cancel[1])
+          )
+            throw new HttpError(404, 'Unknown queued input')
+          const outcome = await submission.abort(context)
+          if (outcome !== 'aborted') {
+            const settled = await submission.status(context)
+            if (
+              settled.status !== 'unanswered' ||
+              settled.reason !== 'aborted' ||
+              settled.entry !== undefined
+            )
+              throw new HttpError(409, 'Input is already being processed or has finished')
+          }
+          json(200, { ok: true })
           return true
         }
         const match = /^\/api\/conversations\/(\d+)\/(submit|abort|configure|compact)$/.exec(

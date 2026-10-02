@@ -1,6 +1,6 @@
 import type { AgentState, InboxItem } from '@earendil-works/pi-durable'
 import { cn } from 'cn'
-import { CornerDownRightIcon, ListPlusIcon } from 'lucide-react'
+import { CornerDownRightIcon, ListPlusIcon, XIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import {
@@ -41,23 +41,47 @@ function inboxText(item: InboxItem): string {
 
 /** Steers and follow-ups waiting for the run, as Pi lists them above its editor. */
 function Inbox({ items }: { items: readonly InboxItem[] }) {
+  const { id } = useConversation()
+  const [error, setError] = useState<string>()
   const queued = items.filter((item) => item.mode !== 'write')
   if (queued.length === 0) return null
+  const cancel = async (submissionId: number) => {
+    setError(undefined)
+    try {
+      await api.cancelSubmission(submissionId, id)
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure))
+    }
+  }
   return (
-    <div className="mb-2 flex flex-col gap-1 font-mono text-[12px]">
-      {queued.map((item) => (
-        <div className="flex min-w-0 items-center gap-2 text-muted-foreground" key={item.id}>
-          {item.mode === 'steer' ? (
-            <CornerDownRightIcon className="size-3 shrink-0 text-brand" />
-          ) : (
-            <ListPlusIcon className="size-3 shrink-0" />
-          )}
-          <span className="shrink-0 text-foreground/80">
-            {item.mode === 'steer' ? 'steer' : 'follow-up'}
-          </span>
-          <span className="truncate">{inboxText(item)}</span>
-        </div>
-      ))}
+    <div className="mb-2 font-mono text-[12px]">
+      <div className="max-h-24 overflow-y-auto">
+        {queued.map((item) => (
+          <div className="flex min-w-0 items-center gap-2 text-muted-foreground" key={item.id}>
+            {item.mode === 'steer' ? (
+              <CornerDownRightIcon className="size-3 shrink-0 text-brand" />
+            ) : (
+              <ListPlusIcon className="size-3 shrink-0" />
+            )}
+            <span className="shrink-0 text-foreground/80">
+              {item.mode === 'steer' ? 'steer' : 'follow-up'}
+            </span>
+            <span className="min-w-0 flex-1 truncate" title={inboxText(item)}>
+              {inboxText(item)}
+            </span>
+            <button
+              aria-label={`Cancel queued input: ${inboxText(item)}`}
+              className="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-sm hover:bg-accent hover:text-foreground"
+              onClick={() => void cancel(item.id)}
+              title="Cancel queued input"
+              type="button"
+            >
+              <XIcon className="size-3" />
+            </button>
+          </div>
+        ))}
+      </div>
+      {error && <p className="mt-1 text-error">{error}</p>}
     </div>
   )
 }

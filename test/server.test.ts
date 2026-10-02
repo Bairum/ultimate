@@ -7,7 +7,7 @@ import { join, resolve as resolvePath } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
 import type { ConversationView } from '@earendil-works/pi-durable'
-import { defineExtension } from '@earendil-works/pi-durable'
+import { defineExtension, InboxDoc, LiveDoc } from '@earendil-works/pi-durable'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createServer, prepareServer } from '../server/main.ts'
 import { context } from '../server/harness.ts'
@@ -18,7 +18,10 @@ const servers: Awaited<ReturnType<typeof createServer>>[] = []
 const directories: string[] = []
 afterEach(async () => {
   vi.restoreAllMocks()
-  for (const server of servers.splice(0)) await server.close()
+  for (const server of servers.splice(0)) {
+    await server.vite.watcher.close()
+    await server.close()
+  }
   for (const directory of directories.splice(0))
     await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
 })
@@ -34,7 +37,7 @@ async function fixture(extra = false, agents = false, sources?: Record<string, s
   await symlink(resolvePath('node_modules'), join(repoRoot, 'node_modules'), 'dir')
   await writeFile(
     join(repoRoot, 'vite.config.ts'),
-    "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web' })",
+    "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', optimizeDeps: { noDiscovery: true } })",
   )
   await writeFile(
     join(repoRoot, 'web', 'index.html'),
@@ -153,6 +156,57 @@ export const order = ${order}
 export default defineExtension({ name: '${name}', sections: [section('${name === '0-new' ? 'new' : name}', () => '${name}')], tools: [defineTool({ name: '${name === '0-new' ? 'new' : name}', description: '${name}', parameters: Type.Object({}), execute: async () => ({}) })] })`
 
 describe('server', () => {
+  it('does not inherit the supervisor public URL in an embedded server', async () => {
+    vi.stubEnv('ULTIMATE_PUBLIC_URL', 'http://127.0.0.1:1')
+    try {
+      const { server } = await fixture()
+      expect(server.url).toBe(`http://127.0.0.1:${server.port}`)
+      expect((await fetch(server.url)).status).toBe(200)
+      expect((await post(server, '/api/ui', { set: { 'test.isolated': true } })).status).toBe(200)
+      expect(await server.host.uiState(context)).toEqual({ 'test.isolated': true })
+      await (
+        await server.root.submit({ type: 'input', content: 'self URL' }, context)
+      ).wait(context)
+      const view = await server.root.viewState(context)
+      try {
+        const system = view.value.entries.find((entry) => entry.kind === 'pi.system')?.model?.[0]
+        expect(system?.role === 'system' ? system.sections?.self : undefined).toContain(
+          `UI: ${server.url}`,
+        )
+      } finally {
+        view.dispose()
+      }
+      await server.root.abort(context)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+  it('withdraws one queued input without aborting the current run or another conversation', async () => {
+    const { server } = await fixture()
+    await post(server, '/api/conversations/1/submit', { text: 'start' })
+    const run = (await server.harness.snapshot(LiveDoc, server.root.id, context))?.run?.taskId
+    expect(run).toBeDefined()
+    const queued = await post(server, '/api/conversations/1/submit', {
+      text: 'queued input',
+      whenBusy: 'followUp',
+    })
+    const submissionId = queued.data.submissionId
+    if (typeof submissionId !== 'number') throw new Error('Expected submission id')
+    const path = `/api/conversations/1/inbox/${submissionId}/cancel`
+    expect((await post(server, `/api/conversations/999/inbox/${submissionId}/cancel`)).status).toBe(
+      404,
+    )
+    expect((await post(server, path)).status).toBe(200)
+    expect((await post(server, path)).status).toBe(200)
+    expect((await server.harness.snapshot(InboxDoc, server.root.id, context))?.items).toEqual([])
+    expect((await server.harness.snapshot(LiveDoc, server.root.id, context))?.run?.taskId).toBe(run)
+    await server.root.abort(context)
+    const completed = await server.root.submit({ type: 'input', content: 'complete' }, context)
+    await completed.wait(context)
+    expect((await post(server, `/api/conversations/1/inbox/${completed.id}/cancel`)).status).toBe(
+      409,
+    )
+  })
   it('orders live-added sections and tools deterministically across reopen', async () => {
     const { server, options } = await fixture(false, false, {
       a: orderedSource('a'),
@@ -179,6 +233,7 @@ describe('server', () => {
     expect(message.toolsAdded!.map((tool) => tool.name)).toEqual(['prompt', 'new', 'a'])
     const lastId = systems.at(-1)!.id
     view.dispose()
+    await server.vite.watcher.close()
     await server.close()
     servers.splice(servers.indexOf(server), 1)
     const reopened = await createServer(options)
@@ -227,6 +282,7 @@ describe('server', () => {
     expect(await server.host.uiState(context)).toEqual({ 'shell.panel': 'tasks' })
     await first.close()
     await second.close()
+    await server.vite.watcher.close()
     await server.close()
     servers.splice(servers.indexOf(server), 1)
     const reopened = await createServer(options)
@@ -619,6 +675,7 @@ describe('server', () => {
   })
   it('resumes a committed mid-turn checkpoint after SIGKILL', async () => {
     const { server, options } = await fixture()
+    await server.vite.watcher.close()
     await server.close()
     servers.splice(servers.indexOf(server), 1)
     const child = spawn(

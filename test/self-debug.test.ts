@@ -71,16 +71,21 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
     expect(recovered.isError).not.toBe(true)
     expect(recovered.content.some((block) => block.type === 'image')).toBe(true)
     const driven = await run(server, 'browser', {
-      url: server.url,
       steps: [
         { wait: 'button[aria-label="Command palette"]' },
         { click: 'button[aria-label="Command palette"]' },
-        { eval: 'console.error("self-debug-console-test"); ({answer:42})' },
+        { press: 'Escape' },
+        { fill: ['textarea', 'browser fill test'] },
+        {
+          eval: 'console.error("self-debug-console-test"); ({answer:42,origin:location.origin,draft:document.querySelector("textarea").value})',
+        },
       ],
     })
     expect(driven.isError).not.toBe(true)
     expect(JSON.stringify(driven.content)).toContain('self-debug-console-test')
     expect(JSON.stringify(driven.content)).toContain('answer')
+    expect(JSON.stringify(driven.content)).toContain(server.url)
+    expect(JSON.stringify(driven.content)).toContain('browser fill test')
     const nested = await run(server, 'codemode', {
       code: `text('restart:' + ('restart' in tools)); text(typeof tools.browser); const shot = await tools.screenshot({url:${JSON.stringify(server.url)},waitMs:0}); image(shot.image);`,
     })

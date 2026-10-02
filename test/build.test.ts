@@ -10,6 +10,8 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 it('freezes core at boot, compares generations, watches agents and caps history', () => {
+  vi.stubEnv('ULTIMATE_PREVIOUS_BUILD', undefined)
+  vi.stubEnv('ULTIMATE_GENERATION', '1')
   const root = mkdtempSync(join(tmpdir(), 'ultimate-build-'))
   roots.push(root)
   mkdirSync(join(root, 'server'))

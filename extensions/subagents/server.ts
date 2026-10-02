@@ -101,7 +101,7 @@ const Reporter = defineTask<
           {
             type: 'input',
             content: task.state.checkpoint.report,
-            whenBusy: 'followUp',
+            whenBusy: 'steer',
             requestId: `subagent-report:${task.id}`,
           },
           context,
@@ -143,7 +143,7 @@ export default function subagents(host: Pick<ExtensionHost, 'repoRoot' | 'home'>
       defineTool({
         name: 'subagent',
         description:
-          'Delegate to a named agent. start returns its answer (foreground) or id (background). message sends a follow-up or steer; wait returns the latest answer; stop stops current work; list shows your children. Background answers arrive as follow-up inputs.',
+          'Delegate to a named agent. start returns its answer (foreground) or id (background). message sends a follow-up or steer; wait returns the latest answer; stop stops current work; list shows your children. Background answers join the current run after its tool round.',
         replay: 'safe',
         parameters: Type.Object({
           action: Type.Union([

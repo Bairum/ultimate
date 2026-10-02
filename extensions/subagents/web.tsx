@@ -182,7 +182,9 @@ function Node({
         {depth > 0 && <span className="-ml-2 shrink-0 text-muted-foreground/40">└</span>}
         <Icon className={cn('size-3.5 shrink-0', shown ? 'text-brand' : 'text-muted-foreground')} />
         <span className={cn('shrink-0', shown ? 'text-foreground' : 'text-foreground/85')}>
-          {conversation.id === 1 ? 'main' : (conversation.agent ?? 'subagent')}
+          {conversation.id === 1
+            ? 'main'
+            : (conversation.agent ?? (main ? 'conversation' : 'subagent'))}
         </span>
         <span className="shrink-0 text-muted-foreground/60">#{conversation.id}</span>
         {conversation.title && conversation.id !== 1 && (

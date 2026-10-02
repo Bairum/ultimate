@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { LiveDoc } from '@earendil-works/pi-durable'
+import { defineExtension, defineTool, InboxDoc, LiveDoc } from '@earendil-works/pi-durable'
+import type { Extension } from '@earendil-works/pi-durable'
+import { Type } from '@earendil-works/pi-ai'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
 import { afterEach, describe, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
@@ -34,12 +36,16 @@ async function until(check: () => Promise<boolean>) {
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
 }
-async function fixture() {
+async function fixture(extension?: Extension) {
   const repoRoot = await directory()
   await mkdir(join(repoRoot, 'agents'))
-  await writeFile(join(repoRoot, 'agents/scout.md'), definition())
+  await writeFile(
+    join(repoRoot, 'agents/scout.md'),
+    extension ? definition().replace('tools: [read, bash]\n', '') : definition(),
+  )
   const prepared = await prepareHarness({ repoRoot, home: join(repoRoot, 'home'), faux: true })
   prepared.registry.install(CodingTools)
+  if (extension) prepared.registry.install(extension)
   prepared.registry.install(subagents(prepared))
   prepared.registry.install(
     codemode({
@@ -67,6 +73,8 @@ async function fixture() {
       return fauxAssistantMessage([fauxToolCall('codemode', { code: text.slice(5) })], {
         stopReason: 'toolUse',
       })
+    if (last.role === 'user' && text === 'HOLD')
+      return fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
     if (last.role === 'user' && text.startsWith('CALL '))
       return fauxAssistantMessage([fauxToolCall('subagent', JSON.parse(text.slice(5)))], {
         stopReason: 'toolUse',
@@ -289,6 +297,65 @@ describe('subagents', () => {
     await resumed.root.waitForIdle(context)
     expect((await children(resumed))[0].reported).toHaveLength(2)
   }, 20000)
+  it('delivers a background answer as a steer while the parent is in a tool round', async () => {
+    let releaseParent!: () => void
+    let releaseChild!: () => void
+    const parentGate = new Promise<void>((resolve) => {
+      releaseParent = resolve
+    })
+    const childGate = new Promise<void>((resolve) => {
+      releaseChild = resolve
+    })
+    let parentHolding = false
+    let childHolding = false
+    const { opened } = await fixture(
+      defineExtension({
+        name: 'hold',
+        tools: [
+          defineTool({
+            name: 'hold',
+            description: 'Hold the current tool round',
+            parameters: Type.Object({}),
+            execute: async (_args, api) => {
+              if (api.conversationId === 1) {
+                parentHolding = true
+                await parentGate
+              } else {
+                childHolding = true
+                await childGate
+              }
+              return { content: [{ type: 'text', text: 'released' }] }
+            },
+          }),
+        ],
+      }),
+    )
+    try {
+      await call(opened, { action: 'start', agent: 'scout', task: 'HOLD', background: true })
+      await until(async () => childHolding)
+      await opened.root.submit({ type: 'input', content: 'HOLD' }, context)
+      await until(async () => parentHolding)
+      releaseChild()
+      await until(
+        async () =>
+          (await opened.harness.snapshot(InboxDoc, opened.root.id, context))?.items.some(
+            (item) =>
+              item.mode !== 'write' &&
+              typeof item.content === 'string' &&
+              item.content.startsWith('[subagent'),
+          ) === true,
+      )
+      const inbox = await opened.harness.snapshot(InboxDoc, opened.root.id, context)
+      expect(inbox?.items).toHaveLength(1)
+      expect(inbox?.items[0].mode).toBe('steer')
+      releaseParent()
+      await opened.root.waitForIdle(context)
+      expect(await reports(opened)).toHaveLength(1)
+    } finally {
+      releaseChild()
+      releaseParent()
+    }
+  })
   it('records a background child answer returned by wait as reported', async () => {
     const { opened } = await fixture()
     await call(opened, { action: 'start', agent: 'scout', task: 'slow', background: true })

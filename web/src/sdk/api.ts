@@ -48,6 +48,8 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
     submit: (text: string, whenBusy?: SubmitRequest['whenBusy'], id?: number) =>
       post<SubmitResponse>(conversation(id, 'submit'), { text, whenBusy } satisfies SubmitRequest),
     abort: (id?: number) => post<EmptyResponse>(conversation(id, 'abort')),
+    cancelSubmission: (submissionId: number, id?: number) =>
+      post<EmptyResponse>(conversation(id, `inbox/${submissionId}/cancel`)),
     configure: (change: ConfigureRequest, id?: number) =>
       post<EmptyResponse>(conversation(id, 'configure'), change),
     compact: (instructions?: string, id?: number) =>

@@ -16,6 +16,7 @@ const send = (message: ChildMessage) => process.send?.(message)
 
 export interface ServerOptions extends HostOptions {
   port?: number
+  publicUrl?: string
 }
 export async function prepareServer(options: Partial<ServerOptions> = {}) {
   const repoRoot = options.repoRoot ?? resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
@@ -30,7 +31,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     void (async () => {
       const port =
         new URL(
-          process.env.ULTIMATE_PUBLIC_URL ??
+          options.publicUrl ??
             `http://127.0.0.1:${(http.address() as import('node:net').AddressInfo).port}`,
         ).port || '80'
       if (
@@ -80,7 +81,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
   })
   const address = http.address()
   if (!address || typeof address === 'string') throw new Error('No listening address')
-  const url = process.env.ULTIMATE_PUBLIC_URL ?? `http://127.0.0.1:${address.port}`
+  const url = options.publicUrl ?? `http://127.0.0.1:${address.port}`
   system = await createSystem(host, vite, url, extensions.info, (info) =>
     events.emit('system', info),
   )
@@ -155,7 +156,7 @@ if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.met
     try {
       if (process.env.ULTIMATE_FAIL_PREPARE_GENERATION === process.env.ULTIMATE_GENERATION)
         throw new Error('Injected preparation failure')
-      server = await prepareServer({ port: 0 })
+      server = await prepareServer({ port: 0, publicUrl: process.env.ULTIMATE_PUBLIC_URL })
       process.on('message', (message: SupervisorMessage) => {
         void (async () => {
           if (message.type === 'go' || message.type === 'reacquire') {
