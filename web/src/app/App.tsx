@@ -20,8 +20,15 @@ import { CommandPalette } from './palette.tsx'
 import { Conversation, Header, StatusLine } from './primitives.tsx'
 import { SurfaceContext } from './surface.ts'
 
+/** Records the surface on screen, for the window title, `useUltimate().surface`, and the agent's prompt. */
+function onScreen({ id, title }: { id: string; title: string }) {
+  const current = store.getState().ui.surface
+  if (current?.id !== id || current.title !== title) store.setUi({ surface: { id, title } })
+}
+
 /** What shows when not even the Agent surface can, such as after a broken `extensions/agent` reloads. */
 function Frame() {
+  useEffect(() => onScreen({ id: HOME, title: 'Agent' }), [])
   return (
     <>
       <Header />
@@ -63,6 +70,13 @@ class SurfaceBoundary extends Component<
       message: `The ${surface.title} surface (${surface.extension}) failed, so ${instead}: ${error instanceof Error ? error.message : String(error)}`,
     })
   }
+  // A failed boundary renders the next in line, which reports itself instead.
+  componentDidMount() {
+    if (!this.state.failed) onScreen(this.props.surface)
+  }
+  componentDidUpdate() {
+    if (!this.state.failed) onScreen(this.props.surface)
+  }
   render() {
     if (this.state.failed) return this.props.fallback
     const { surface } = this.props
@@ -91,7 +105,7 @@ function Surfaces({ surfaces }: { surfaces: readonly SurfaceItem[] }) {
 }
 
 /** The window title: the shown conversation on Agent, the surface elsewhere; a dot while the agent works. */
-function useDocumentTitle(surface: SurfaceItem | undefined) {
+function useDocumentTitle(surface: { id: string; title: string } | undefined) {
   const { id, busy } = useConversation()
   const agent = useConversations().find((conversation) => conversation.id === id)?.agent
   const app = surface && surface.id !== HOME ? surface.title : undefined
@@ -113,7 +127,8 @@ export function App() {
   // Until the stream delivered the UI state and system info, the choice and the project default are unknown.
   const ready = useStore((state) => state.shared !== undefined && state.system !== undefined)
   const home = surfaceItems(records).find((item) => item.id === HOME)
-  useDocumentTitle(surface)
+  const shown = useStore((state) => state.ui.surface)
+  useDocumentTitle(shown)
 
   useEffect(() => {
     if (!ready || pending || missing === reported) return
@@ -127,12 +142,11 @@ export function App() {
             : `The ${missing} surface is not installed, so Agent shows.`,
       })
   }, [ready, pending, missing])
-  // Tell the agent what the user looks at (extensions/surfaces). Equal writes are dropped, so its prompt changes
-  // only with the surface.
+  // Tell the agent what the user looks at (extensions/surfaces): what rendered, so Agent after the chosen surface
+  // failed. Equal writes are dropped, so its prompt changes only with the surface.
   useEffect(() => {
-    if (ready && !pending && surface)
-      uiState.set(shellKeys.shownSurface, { id: surface.id, title: surface.title })
-  }, [ready, pending, surface?.id, surface?.title])
+    if (ready && shown) uiState.set(shellKeys.shownSurface, shown)
+  }, [ready, shown])
 
   const line = [surface, surface?.id === HOME ? undefined : home].filter(
     (item): item is SurfaceItem => item !== undefined,

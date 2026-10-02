@@ -30,6 +30,8 @@ export interface UiState {
   paletteOpen: boolean
   dialogs: Readonly<Record<string, boolean | undefined>>
   theme: 'dark' | 'light'
+  /** The surface on screen, which the host records as it renders: the shown one, or the next in line after it failed. */
+  surface?: { id: string; title: string }
 }
 export interface State {
   connection: Connection

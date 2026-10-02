@@ -114,7 +114,7 @@ export function useDoc<T extends JsonObject = JsonObject>(
 /** The shown conversation and surface ids, and the shell's actions. */
 export function useUltimate(): UltimateContext {
   const conversationId = useStore((state) => state.view?.conversation.id)
-  const surface = useShownSurface().surface?.id ?? HOME
+  const surface = useStore((state) => state.ui.surface?.id) ?? HOME
   return useMemo(() => ({ ...actions, conversationId, surface }), [conversationId, surface])
 }
 
@@ -268,14 +268,17 @@ export interface ActionState<T> {
   error?: ActionError
   /** A call is in flight. */
   loading: boolean
-  /** Call again with the same args (also when `enabled` is false); resolves with the result, or undefined on failure. */
+  /**
+   * Call again with the same args (also when `enabled` is false); resolves with the result, or undefined when the call
+   * failed or was aborted by a newer call, new args, or an unmount.
+   */
   refetch: () => Promise<T | undefined>
 }
 
 /**
  * Call a server action of an extension and keep its result: on mount and whenever `extension`, `name`, or `args`
- * (compared as JSON) change, unless `enabled` is false. A newer call aborts the older one. A failure shows as a notice
- * unless you pass `onError`.
+ * (compared as JSON) change, unless `enabled` is false. A newer call, new args, or an unmount abort the call in flight,
+ * also one `refetch` started; its late result is ignored. A failure shows as a notice unless you pass `onError`.
  */
 export function useAction<T = JsonValue>(
   extension: string,
@@ -306,7 +309,8 @@ export function useAction<T = JsonValue>(
       const data = await api.action<T>(extension, name, latest.current.args, {
         signal: controller.signal,
       })
-      if (!controller.signal.aborted) setState({ key, data, loading: false })
+      if (controller.signal.aborted) return undefined
+      setState({ key, data, loading: false })
       return data
     } catch (error) {
       if (controller.signal.aborted) {
@@ -326,8 +330,8 @@ export function useAction<T = JsonValue>(
   }, [key])
   const enabled = options.enabled !== false
   useEffect(() => {
-    if (!enabled) return undefined
-    void call()
+    if (enabled) void call()
+    // Disabled too: a `refetch` in flight must not outlive the component or its args.
     return () => latest.current.controller?.abort()
   }, [call, enabled])
   const current = state.key === key ? state : { key, loading: enabled }

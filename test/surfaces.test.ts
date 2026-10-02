@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { chromium } from 'playwright-core'
-import type { Browser, Page } from 'playwright-core'
+import type { Browser } from 'playwright-core'
 import { afterEach, expect, it } from 'vitest'
+import type { TestContext } from 'vitest'
 import { browserBinary } from '../extensions/browser/server.ts'
 import { context } from '../server/harness.ts'
 import { createServer } from '../server/main.ts'
@@ -75,18 +76,16 @@ export default defineWebExtension({
   )
 }
 
-it('switches surfaces without interrupting the conversation, and tells the agent', async (test) => {
+/** A faux server for `projectRoot` and a headless page; skips the test when no browser is installed. */
+async function launch(test: TestContext, projectRoot: string) {
   let executablePath: string
   try {
     executablePath = await browserBinary()
   } catch (error) {
     console.warn(`Skipping browser integration: ${String(error)}`)
-    test.skip()
-    return
+    return test.skip()
   }
-  const projectRoot = await temp()
   const userHome = await temp()
-  await fixture(projectRoot)
   const server = await createServer({
     ultimateRoot: resolve('.'),
     projectRoot,
@@ -98,10 +97,23 @@ it('switches surfaces without interrupting the conversation, and tells the agent
   servers.push(server)
   const browser = await chromium.launch({ executablePath, headless: true })
   browsers.push(browser)
-  const page: Page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
-  const ui = () => server.host.uiState(context)
+  return { server, page, errors, ui: () => server.host.uiState(context) }
+}
+
+/** The prompt's surface line for the main conversation, as the agent would see it now. */
+function surfaceSection(server: Awaited<ReturnType<typeof createServer>>) {
+  const section = server.host.registry.snapshot().extension('surfaces')!.sections![0]
+  return (conversationId: number = ROOT_CONVERSATION_ID) =>
+    section.render({ conversationId } as unknown as Parameters<typeof section.render>[0], context)
+}
+
+it('switches surfaces without interrupting the conversation, and tells the agent', async (test) => {
+  const projectRoot = await temp()
+  await fixture(projectRoot)
+  const { server, page, errors, ui } = await launch(test, projectRoot)
   /** The surface lines of the system prompt, in the order the conversation saw them change. */
   async function surfaceLines() {
     const view = await server.root.viewState(context)
@@ -154,9 +166,7 @@ it('switches surfaces without interrupting the conversation, and tells the agent
     'shell.surface': 'fixture',
     'shell.shownSurface': { id: 'fixture', title: 'Fixture' },
   })
-  const section = server.host.registry.snapshot().extension('surfaces')!.sections![0]
-  const render = (conversationId: number) =>
-    section.render({ conversationId } as unknown as Parameters<typeof section.render>[0], context)
+  const render = surfaceSection(server)
   expect(await render(ROOT_CONVERSATION_ID)).toBe(
     'The user is looking at the Fixture surface (fixture).',
   )
@@ -210,5 +220,100 @@ it('switches surfaces without interrupting the conversation, and tells the agent
   await expect
     .poll(() => page.getByRole('status').textContent(), timeout)
     .toContain('The gone surface is not installed, so Agent shows.')
+  expect(errors).toEqual([])
+}, 120000)
+
+it('names the surface that shows after one throws, and aborts a manual action call on unmount', async (test) => {
+  const projectRoot = await temp()
+  const path = join(projectRoot, '.ultimate/extensions/probe')
+  await mkdir(path, { recursive: true })
+  // `slow` logs to the project root whether it was aborted or ran to the end.
+  await writeFile(
+    join(path, 'server.ts'),
+    `import { appendFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { defineExtension } from '@earendil-works/pi-durable'
+export default defineExtension({ name: 'probe' })
+export const actions = {
+  slow: async (_args, ctx) => {
+    const log = join(ctx.host.projectRoot, 'slow.log')
+    await appendFile(log, 'started\\n')
+    await new Promise((done) => {
+      const timer = setTimeout(done, 5000)
+      ctx.signal.addEventListener('abort', () => {
+        clearTimeout(timer)
+        done()
+      })
+    })
+    await appendFile(log, ctx.signal.aborted ? 'aborted\\n' : 'finished\\n')
+    return 'late'
+  },
+}
+`,
+  )
+  await writeFile(
+    join(path, 'web.tsx'),
+    `import { FlaskConicalIcon } from 'lucide-react'
+import { Header, StatusLine, defineWebExtension, useAction } from '@/sdk'
+function Manual() {
+  const slow = useAction('probe', 'slow', null, { enabled: false })
+  return (
+    <>
+      <Header />
+      <main className="flex-1" data-testid="manual">
+        <button onClick={() => void slow.refetch()} type="button">Load</button>
+        {slow.loading && <p data-testid="manual-loading">loading</p>}
+      </main>
+      <StatusLine />
+    </>
+  )
+}
+function Broken() {
+  throw new Error('deliberate render failure')
+}
+export default defineWebExtension({
+  surfaces: [
+    { id: 'manual', title: 'Manual', icon: FlaskConicalIcon, component: Manual },
+    { id: 'broken', title: 'Broken', icon: FlaskConicalIcon, component: Broken },
+  ],
+})
+`,
+  )
+  const { server, page, errors, ui } = await launch(test, projectRoot)
+  const log = () => readFile(join(projectRoot, 'slow.log'), 'utf8').catch(() => '')
+
+  await page.goto(server.url)
+  await expect.poll(() => page.locator('main #composer-input').count(), timeout).toBe(1)
+  // Agent, Broken, Manual: by title after Agent.
+  await page.keyboard.press('Control+3')
+  await expect.poll(() => page.getByTestId('manual').count(), timeout).toBe(1)
+  await expect
+    .poll(async () => (await ui())['shell.shownSurface'], timeout)
+    .toEqual({ id: 'manual', title: 'Manual' })
+
+  // A disabled action called by hand is aborted when its surface goes away.
+  await page.getByRole('button', { name: 'Load' }).click()
+  await expect.poll(log, timeout).toBe('started\n')
+  await expect(page.getByTestId('manual-loading').count()).resolves.toBe(1)
+
+  // Broken throws, so Agent shows; the prompt, the title, and the context name Agent, not Broken.
+  await page.keyboard.press('Control+2')
+  await expect.poll(() => page.getByTestId('manual').count(), timeout).toBe(0)
+  await expect.poll(log, timeout).toBe('started\naborted\n')
+  await expect.poll(() => page.locator('main #composer-input').count(), timeout).toBe(1)
+  await expect
+    .poll(() => page.getByRole('status').textContent(), timeout)
+    .toContain('The Broken surface (probe) failed, so Agent shows: deliberate render failure')
+  await expect
+    .poll(async () => (await ui())['shell.shownSurface'], timeout)
+    .toEqual({ id: 'agent', title: 'Agent' })
+  expect((await ui())['shell.surface']).toBe('broken')
+  expect(await surfaceSection(server)()).toBe('The user is looking at the Agent surface (agent).')
+  expect(await page.title()).toBe('Ultimate')
+  await page.keyboard.press('Control+k')
+  await page.keyboard.type('switch to')
+  await expect
+    .poll(() => page.locator('[cmdk-item]').allTextContents(), timeout)
+    .toEqual(['Switch to BrokenCtrl2', 'Switch to ManualCtrl3'])
   expect(errors).toEqual([])
 }, 120000)

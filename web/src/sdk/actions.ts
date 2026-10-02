@@ -101,7 +101,7 @@ export function currentContext(): UltimateContext {
   return {
     ...actions,
     conversationId: store.getState().view?.conversation.id,
-    surface: shownSurface().surface?.id ?? HOME,
+    surface: store.getState().ui.surface?.id ?? HOME,
   }
 }
 

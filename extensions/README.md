@@ -38,8 +38,10 @@ project is Ultimate itself, that is `.ultimate/extensions/` in the clone, not `e
 Extensions outside the clone import exactly what built-ins import (`@/sdk`, `@/components/…`, `react`,
 `lucide-react`, any package installed in the clone): Ultimate resolves those from its clone, and Tailwind picks up their
 classes. In the clone, `pnpm check` type-checks and lints `extensions/` and `.ultimate/extensions/`; extensions of
-other projects are not checked by anything, so try them in the browser. Agents and skills live in the same three places
-(`agents/`, `skills/`), and a project's `.ultimate/settings.json` may set `defaultSurface` (see [Surfaces](#surfaces)).
+other projects are not checked by anything, so try them in the browser. Agents live in the same three places
+(`agents/`); skills come from Pi (`~/.pi/agent/skills/`, the project's `.pi/skills/`), then `~/.ultimate/skills/`, then
+`<project>/.ultimate/skills/`, later winning by name. A project's `.ultimate/settings.json` may set `defaultSurface` (see
+[Surfaces](#surfaces)).
 
 ## An extension's files
 
@@ -233,9 +235,10 @@ runs either way.
   never a shell string, so quoting is never the problem; meaning is.
 - **Return small JSON shaped for the UI**, not raw command output. Ask CLIs for JSON (`gh … --json`) and limit how much
   they return.
-- **Errors are not messages.** A thrown error reaches the UI only as `Extension action failed` (HTTP 500); the details
-  go to the server log. Return states the user should see and act on as data instead, such as
-  `{ status: 'setup', reason: 'gh is not installed' }`, and render them.
+- **Throw clear messages; return states as data.** A thrown error's message, up to 500 characters, reaches the UI as
+  `error.message` and in the notice (`todos/list: <message>`, HTTP 500); the whole error goes to the server log. Throw
+  for faults, with a message that says what went wrong. Return states the user should see and act on as data instead,
+  such as `{ status: 'setup', reason: 'gh is not installed' }`, and render them as a screen of their own.
 - **Live**: saving `server.ts` reinstalls it and the next call runs the new code. No restart.
 - **Quick**: an action holds a request open, and `exec` stops at 30 s. Hand long work to the agent (`api.submit`).
 
@@ -272,7 +275,8 @@ with the sidebar and the right panel. An app surface puts its own UI first and k
 usually docked beside it.
 
 - **Switching**: the brand at the top left opens the switcher (Agent first, then by `order`, then title); ⌘K has
-  "Switch to …"; `mod+1…9` select the first nine. In code: `useUltimate().showSurface(id)` or
+  "Switch to …"; `mod+1…9` select the first nine (Ctrl+1…9 off macOS, which Chrome lets the page take before its tab
+  switching). In code: `useUltimate().showSurface(id)` or
   `context.showSurface(id)` in a command. Switching never interrupts the agent: the run goes on, and the transcript and
   the composer's draft are where they were.
 - **Durable**: the choice is UI state `shell.surface`; it survives reloads and restarts and follows every tab. Until the
@@ -282,8 +286,9 @@ usually docked beside it.
   surface (commits).", from `extensions/surfaces`), so "this list" in a message means yours. The line changes only
   when the surface does.
 - **Failure**: if the chosen surface is not installed, or its component throws, Agent shows instead, with a notice; a
-  fixed version comes back on its own. If even Agent fails, a bare header, conversation, and status line remain.
-- `useUltimate().surface` and `context.surface` give the shown surface's id.
+  fixed version comes back on its own. If even Agent fails, a bare header, conversation, and status line remain. The
+  prompt, the window title, and `surface` below name what is on screen, so Agent while it stands in.
+- `useUltimate().surface` and `context.surface` give the id of the surface on screen.
 
 The contribution:
 
