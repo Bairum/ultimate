@@ -589,6 +589,20 @@ export function LoginDialog() {
     addEventListener('pagehide', leave)
     return () => removeEventListener('pagehide', leave)
   }, [running])
+  // A flow's document lives on the conversation that started it: showing another one ends the flow.
+  const { conversationId } = useUltimate()
+  const shown = useRef(conversationId)
+  useEffect(() => {
+    if (shown.current === conversationId) return
+    shown.current = conversationId
+    if (state) close()
+  }, [conversationId])
+  // Another tab or pi may have logged in or out since this window last had focus.
+  useEffect(() => {
+    const refresh = () => void refreshModels()
+    addEventListener('focus', refresh)
+    return () => removeEventListener('focus', refresh)
+  }, [])
 
   return (
     <Dialog onOpenChange={(next) => (next ? setOpen(true) : close())} open={open}>
