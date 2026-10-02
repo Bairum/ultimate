@@ -39,7 +39,8 @@ export function useShortcuts() {
         event.target.value === ''
       const dialogOpen = !!document.querySelector('[role="dialog"]')
       const allowed = ({ command, keys }: { command: CommandItem; keys: string[] }) => {
-        if (pending.length > 0) return !typing || emptyPalette
+        // The second key of a sequence; `pending` is already reset when this runs.
+        if (sequence.length > 1) return !typing || emptyPalette
         if (/\b(mod|alt|ctrl)\+/.test(keys[0] ?? '')) return true
         if (command.whileTyping) return !dialogOpen
         return !typing
