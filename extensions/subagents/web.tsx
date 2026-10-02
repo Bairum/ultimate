@@ -446,7 +446,9 @@ function Row({
 
 /**
  * A subagent's row, with its isolate's state and commits ahead in it and the branch and actions below. Refetched
- * when the child or its parent settles, since either may have committed or landed.
+ * when the child or its parent settles, since either may have committed or landed, and as soon as the parent's
+ * `ultimate.subagents` document records a land or discard, such as one by the `subagent` tool. The stream carries
+ * the shown conversation's documents only, so the last refresh needs the parent on screen.
  */
 function Child({
   conversation,
@@ -461,7 +463,11 @@ function Child({
     parent: parent.id,
     id: conversation.id,
   })
-  useRefresh(refetch, `${conversation.busy} ${parent.busy}`)
+  const { conversationId } = useUltimate()
+  const recorded = useDoc<Index>('ultimate.subagents')?.agents[String(conversation.id)]?.isolate
+  const settled =
+    conversationId === parent.id && recorded ? `${recorded.state} ${recorded.landed ?? ''}` : ''
+  useRefresh(refetch, `${conversation.busy} ${parent.busy} ${settled}`)
   return (
     <>
       <Row
