@@ -14,8 +14,8 @@ function editable(target: EventTarget | null) {
 /**
  * Runs command shortcuts, including sequences such as `mod+k m`: a sequence's first chord runs its own command (the
  * palette) and, for a second, waits for the next key. Plain keys never fire while typing, except as the second key of a
- * sequence typed into the still-empty palette, or for a command marked `whileTyping` (such as Escape or Shift+Tab);
- * those do not fire in a dialog, where the keys close it and move focus.
+ * sequence typed into the still-empty palette, or in the composer for a command marked `whileTyping` (such as Escape or
+ * Shift+Tab); those do not fire in a dialog, where the keys close it and move focus.
  */
 export function useShortcuts() {
   useEffect(() => {
@@ -33,6 +33,7 @@ export function useShortcuts() {
           : [],
       )
       const typing = editable(event.target)
+      const composer = event.target instanceof HTMLElement && event.target.id === 'composer-input'
       const emptyPalette =
         store.getState().ui.paletteOpen &&
         event.target instanceof HTMLInputElement &&
@@ -42,7 +43,7 @@ export function useShortcuts() {
         // The second key of a sequence; `pending` is already reset when this runs.
         if (sequence.length > 1) return !typing || emptyPalette
         if (/\b(mod|alt|ctrl)\+/.test(keys[0] ?? '')) return true
-        if (command.whileTyping) return !dialogOpen
+        if (command.whileTyping) return !dialogOpen && (!typing || composer)
         return !typing
       }
       const exact = candidates.find(

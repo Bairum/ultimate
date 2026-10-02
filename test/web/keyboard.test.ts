@@ -34,6 +34,7 @@ it('respects typing, dialogs, sequences, timeout, composition and listener teard
   vi.useFakeTimers()
   class Element {
     tagName = 'DIV'
+    id = ''
     isContentEditable = false
   }
   class Input extends Element {
@@ -84,10 +85,16 @@ it('respects typing, dialogs, sequences, timeout, composition and listener teard
   expect(runCommand).toHaveBeenLastCalledWith('plain')
   expect(send('y')).toBe(false)
   expect(send('x', input, { isComposing: true })).toBe(false)
-  expect(send('Tab', input, { shiftKey: true })).toBe(true)
+  const calls = runCommand.mock.calls.length
+  expect(send('Tab', input, { shiftKey: true })).toBe(false)
+  expect(runCommand).toHaveBeenCalledTimes(calls)
+  const composer = new Element()
+  composer.tagName = 'TEXTAREA'
+  composer.id = 'composer-input'
+  expect(send('Tab', composer, { shiftKey: true })).toBe(true)
   expect(runCommand).toHaveBeenLastCalledWith('thinking')
   dialog.mockReturnValue({})
-  expect(send('Tab', input, { shiftKey: true })).toBe(false)
+  expect(send('Tab', composer, { shiftKey: true })).toBe(false)
   dialog.mockReturnValue(null)
   expect(send('k', input, { ctrlKey: true })).toBe(true)
   ui.paletteOpen = true

@@ -252,9 +252,10 @@ and `getState()`, not hooks.
 
 Plain keys and Shift+letter never fire while the user types; chords with `mod`, `alt`, or `ctrl` do. A plain key that
 must work in the composer too sets `whileTyping: true`, as Escape (`agent.stop`) and Shift+Tab
-(`model.thinking.cycle`) do; it still leaves the key to an open dialog, which closes or moves focus with it. To let a
-command open UI an extension renders, such as a popover, use a dialog id: the command calls `context.open(id)` and the
-component reads `useDialog(id)` as its open state (see `models`).
+(`model.thinking.cycle`) do; it fires while the user types in the composer, not in other inputs, and still leaves the
+key to an open dialog, which closes or moves focus with it. To let a command open UI an extension renders, such as a
+popover, use a dialog id: the command calls `context.open(id)` and the component reads `useDialog(id)` as its open state
+(see `models`).
 
 Command ids are global and resolve like surface ids: a later facet in folder-name order wins an id, in the place of the
 command it replaces. The shell itself has only the palette (`ultimate.palette`), the panel and sidebar toggles

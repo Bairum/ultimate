@@ -119,7 +119,10 @@ export interface CommandContribution {
   keys?: string
   /** Palette group; defaults to the extension name. */
   group?: string
-  /** Fire a plain-key shortcut (`escape`, `shift+tab`) even while the user types, though not while a dialog is open. */
+  /**
+   * Fire a plain-key shortcut (`escape`, `shift+tab`) even while the user types in the composer (not in other inputs),
+   * though not while a dialog is open.
+   */
   whileTyping?: boolean
   /** Hide the command when this returns false. */
   when?(context: UltimateContext): boolean
