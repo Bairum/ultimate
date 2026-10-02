@@ -2,6 +2,18 @@ Delegate bounded work with `subagent`: `start {agent, task, background?, fork?}`
 
 Definitions are Markdown with YAML frontmatter, parsed by Pi's `parseFrontmatter`: required `name` and `description`, optional `isolate` (`none` or `worktree`), `model` (Pi's `resolveCliModel` accepts `provider/id`, fuzzy id or name, and a `:thinking` suffix; unknown models are errors and custom models must be registered in Pi's `models.json`), `thinking` (a Pi thinking level), and `tools` (a YAML list, `[read, bash]` or one `- item` per line); other fields are errors. An explicit `thinking` field overrides the model suffix. The body is the instructions. `agents.ts` reads them from three directories, later overriding by name: `agents/` in Ultimate's clone, `~/.ultimate/agents/`, and the project root's `.ultimate/agents/` (not a conversation's cwd). Omitted tools inherit the parent's tools minus `subagent`. Tool restrictions select tools, not a shell sandbox: read-only agents' bash restrictions are instructions. An edited definition is not a code change, so it does not change the build id.
 
+## Coordinator flow
+
+The extension's prompt section makes the parent the coordinator; without this extension, that steering is absent. Do quick fixes and simple questions directly. For substantive work, inspect the code, recommend one approach, and ask only for decisions affecting behaviour or scope. Use the `plan` tool to write an epic with binary acceptance criteria and one self-contained task per unit of work; link children and record dependencies and status.
+
+Delegate implementation to `worker` in worktree isolates and bounded reconnaissance to `scout`. Use background children for independent work; children touching the same files run sequentially. Read each report, inspect its isolate's commit diff, and rerun meaningful checks yourself before landing. Land, reload (or `restart` for `server/` and `shared/`), and rerun meaningful checks in the parent after the last land of a batch. Discard landed isolates when their children have no further work. Record evidence and mark tasks done yourself; an idle child or a child's check report is not verification.
+
+When all tasks are done, run every definition whose name starts with `reviewer` in parallel on the same explicit `base..head` commit range, never merely a directory. Merge and verify findings yourself, route confirmed fixes back by message or a new task, and verify, land, and review fixes. Post the epic verdict and report to the user. Never delegate judgment. Heavy commands are serialized by `exclusive-commands`; do not bypass it. Children never push; the coordinator never pushes, merges to remotes, or ships unless asked.
+
+### Add another reviewer
+
+Copy `agents/reviewer.md` to `~/.ultimate/agents/reviewer-second.md`, keep its read-only contract and tools, change `name` to `reviewer-second`, and add `model: provider/model-id` using an available registered model different from the parent's. The shipped `reviewer` inherits the parent's model; the `reviewer*` naming convention includes both in the parallel review. Definitions are reread on every start; no restart is needed.
+
 ## History forks
 
 `start {agent, task, fork: true}` gives the child the parent's visible history up to the entry before the assistant message containing this call, excluding the pending call itself. The task text is still the child's first new input. Foreground/background ownership, definition instructions, model, thinking, tools (never `subagent`), and isolates work exactly as for a fresh child.
