@@ -77,6 +77,8 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       },
     },
     appType: 'spa',
+    // One dependency cache per state home, so tests and instances never re-optimize the live instance's page.
+    cacheDir: resolvePath(host.home, 'vite'),
     resolve: { alias: { '@': resolvePath(ultimateRoot, 'web/src') } },
     plugins: [
       extensionModules(ultimateRoot, projectRoot, host.userHome),
