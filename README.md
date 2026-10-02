@@ -33,8 +33,8 @@ screenshot and browser tools need a Chromium: `/usr/bin/chromium`, Google Chrome
 
 ```bash
 pnpm install
-pnpm start          # first free port from 4747 opens in your browser
-pnpm link --global  # once, in this clone
+pnpm start          # Ultimate on its own repository; opens http://127.0.0.1:4747
+pnpm link --global  # once, in this clone, to get the `ultimate` command
 cd ~/Projects/app && ultimate
 ```
 
@@ -42,15 +42,38 @@ cd ~/Projects/app && ultimate
   with `pi`, and so is logging out.
 - On another machine: `ssh -L 4747:127.0.0.1:4747 <host>`, then open `http://127.0.0.1:4747`. Ultimate only listens on
   loopback.
-- `ultimate [dir] [--port N] [--no-open]` defaults to the current directory. Ultimate's source stays in the clone; tools and the root conversation work in the project.
-- State lives in `~/.ultimate/projects/<basename>-<sha256(projectRoot) first 8 hex>/`; `ULTIMATE_HOME` overrides it. One supervisor per project, so projects can run concurrently. `--port` or `ULTIMATE_PORT` wins; otherwise the first free port from 4747 is used.
-- Extensions and agents load from the clone, `~/.ultimate/`, and `<project>/.ultimate/` (later names win). Skills add user/project `.ultimate/skills` to Pi's loader. These config folders are independent of state storage. Optional `.ultimate/settings.json` passes through in system info; `defaultSurface` names the preferred surface.
-- The first start in the clone migrates the legacy `~/.ultimate/state.sqlite` and screenshots to its project state directory, without moving user config.
-- Extension server facets may export `actions = { name: async (args, ctx) => result }`. Call `POST /api/extensions/:name/actions/:action` with `{ args, conversationId? }` to get `{ result }`; `ctx` provides `host`, `signal`, and `exec(command, args, { cwd?, timeout? })` (project cwd, no shell, bounded output, 30 second maximum).
+
+### In your project
+
+`ultimate [dir] [--port N] [--no-open]` starts Ultimate for a project (default: the current directory). Ultimate's own
+source stays in the clone; the tools and the conversation work in your project.
+
+- **`.ultimate/` in your project** tailors it: `extensions/`, `agents/`, `skills/`, and an optional `settings.json`
+  (`defaultSurface` picks the surface to open). Ultimate also reads your personal `~/.ultimate/` the same way. Lookup
+  order is the clone, then `~/.ultimate/`, then the project; later names win.
+- **State** lives in `~/.ultimate/projects/<name>-<hash>/` (`ULTIMATE_HOME` overrides it), so each project keeps its
+  own conversation, and several projects can run at once on their own ports (the first free one from 4747).
+- **Actions** let an extension's UI call its server code: `export const actions = { … }` in `server.ts`, then
+  `useAction(extension, name, args)` in `web.tsx`. See [extensions/README.md](extensions/README.md).
+
+## Surfaces
+
+A surface is a full-screen app made of extensions: the **Agent** surface is the conversation you start with; another
+can be anything you build. Switch with the menu on the ULTIMATE brand, `⌘K` → "Switch to …", or `mod+1…9`. The agent
+stays docked on every surface and knows which one you are looking at, and the choice is durable: reloads, other tabs,
+and restarts land on the same view.
+
+**Example: GitHub Triage.** This repository's own `.ultimate/extensions/github-triage/` was built by Ultimate itself
+through its UI: open issues and pull requests of any repository via the `gh` CLI, filters and search, details with the
+body and comments, and buttons that hand an item to the docked agent (summarize, suggest labels, draft a reply). The
+agent can only propose; the UI writes labels or comments after you confirm, and only to repositories listed in
+`githubTriage.writableRepos` in `.ultimate/settings.json`. If `gh` is missing or logged out, it shows how to set it up.
 
 ## What to try
 
 - Ask it anything about this repository; watch tool calls, diffs, and thinking stream in.
+- "Build a surface for …" — a whole app with its UI, server actions, and the agent docked beside it; switch to it while
+  it is being built. The Triage surface was its first.
 - "Build a small extension that …" — it reads [extensions/README.md](extensions/README.md), writes
   `extensions/<name>/web.tsx`, and the UI hot-reloads in front of you. The status-line clock was its first one.
 - "Take a screenshot of yourself and tell me what looks off" — it can see and drive its own UI.
