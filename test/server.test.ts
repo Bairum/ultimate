@@ -607,6 +607,24 @@ describe('server', () => {
     expect(entry().server!.loadedAt).toBe(successful)
     expect(server.host.registry.snapshot().extension('counter')).toBe(installed)
   })
+  it('keeps hot reloading extensions after a Vite config change restarts Vite', async () => {
+    const { server } = await fixture(true)
+    const entry = () => server.extensions.info().find((extension) => extension.name === 'counter')!
+    const config = join(server.host.repoRoot, 'vite.config.ts')
+    const watcher = server.vite.watcher
+    await writeFile(config, `${await readFile(config, 'utf8')}\n`)
+    await until(() => server.vite.watcher !== watcher)
+    const loaded = entry().server!.loadedAt
+    await writeFile(
+      join(server.host.repoRoot, 'extensions/counter/value.ts'),
+      "export const value = 'after restart'",
+    )
+    await until(() => entry().server!.loadedAt !== loaded)
+    const section = server.host.registry.snapshot().extension('counter')!.sections![0]
+    expect(await section.render({} as Parameters<typeof section.render>[0], context)).toBe(
+      'after restart',
+    )
+  })
   it('does not uninstall an extension installed outside the folder loader', async () => {
     const { server } = await fixture(true)
     const external = defineExtension({ name: 'web-only' })

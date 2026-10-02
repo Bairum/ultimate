@@ -21,11 +21,14 @@ export type ExtensionHost = Pick<
   extensions(): ExtensionInfo[]
   doc(kind: string): ConversationDocToken<JsonObject> | undefined
 }
+/** Attach listeners to Vite's current watcher and to each replacement; `attach` returns their removal. */
+export type Watch = (attach: (watcher: ViteDevServer['watcher']) => () => void) => () => void
 export async function loadExtensions(
   vite: ViteDevServer,
   host: PreparedHost,
   changed: () => void,
   runtime: Pick<ExtensionHost, 'harness' | 'system'>,
+  watch: Watch,
 ) {
   const directory = join(host.repoRoot, 'extensions')
   const records = new Map<string, ExtensionInfo>()
@@ -114,6 +117,8 @@ export async function loadExtensions(
     changed()
   }
   await reload()
+  // A restarted Vite starts with an empty module graph, so the next change reloads every extension.
+  let graphLost = false
   // Vite owns the transitive local module graph; query-string imports do not.
   const onChange = (file: string) => {
     if (closed || !resolve(file).startsWith(host.repoRoot + '/') || file.includes('/node_modules/'))
@@ -129,6 +134,11 @@ export async function loadExtensions(
       return
     }
     if (!file.startsWith(directory + '/') && !/\.[cm]?[jt]s$/.test(file)) return
+    if (graphLost) {
+      graphLost = false
+      chain = chain.then(() => reload()).catch(() => changed())
+      return
+    }
     chain = chain
       .then(async () => {
         const selected = new Set<string>()
@@ -163,22 +173,26 @@ export async function loadExtensions(
     if (!file.startsWith(directory + '/')) return onChange(file)
     chain = chain.then(() => reload()).catch(() => changed())
   }
-  vite.watcher.add([directory, join(host.repoRoot, 'agents')])
-  vite.watcher
-    .on('change', onChange)
-    .on('add', onStructure)
-    .on('unlink', onStructure)
-    .on('addDir', onStructure)
-    .on('unlinkDir', onStructure)
+  const structure = ['add', 'unlink', 'addDir', 'unlinkDir'] as const
+  let attached = false
+  const unwatch = watch((watcher) => {
+    graphLost = attached
+    attached = true
+    watcher.add([directory, join(host.repoRoot, 'agents')])
+    watcher.on('change', onChange)
+    for (const event of structure) watcher.on(event, onStructure)
+    return () => {
+      watcher.off('change', onChange)
+      for (const event of structure) watcher.off(event, onStructure)
+    }
+  })
   return {
     info: () => [...records.values()],
     doc: (kind: string) =>
       [...documents.values()].flat().find((doc) => doc.definition.kind === kind),
     async close() {
       closed = true
-      vite.watcher.off('change', onChange)
-      for (const event of ['add', 'unlink', 'addDir', 'unlinkDir'])
-        vite.watcher.off(event, onStructure)
+      unwatch()
       await chain
       await Promise.all([...cleanups].map((cleanup) => cleanup()))
     },

@@ -2,8 +2,10 @@ import { createServer as createHttpServer } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { createServer as createViteServer } from 'vite-plus'
+import type { ViteDevServer } from 'vite-plus'
 import { createApi, Events } from './api.ts'
 import { loadExtensions } from './extensions.ts'
+import type { Watch } from './extensions.ts'
 import { prepareHarness } from './harness.ts'
 import type { HostOptions, OpenHost } from './harness.ts'
 import { createSystem } from './system.ts'
@@ -54,24 +56,52 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       response.end('Internal server error')
     })
   })
+  // A vite.config.ts change restarts Vite with a new watcher; listeners move to each new one.
+  const restarted = new Set<(watcher: ViteDevServer['watcher']) => void>()
   const vite = await createViteServer({
     configFile: resolvePath(repoRoot, 'vite.config.ts'),
     root: resolvePath(repoRoot, 'web'),
     server: { middlewareMode: true, hmr: { server: http }, fs: { allow: [repoRoot] } },
     appType: 'spa',
+    plugins: [
+      {
+        name: 'ultimate:watchers',
+        configureServer: (server) => {
+          for (const move of restarted) move(server.watcher)
+        },
+      },
+    ],
   })
+  const watch: Watch = (attach) => {
+    let detach = attach(vite.watcher)
+    const move = (watcher: ViteDevServer['watcher']) => {
+      detach()
+      detach = attach(watcher)
+    }
+    restarted.add(move)
+    return () => {
+      restarted.delete(move)
+      detach()
+    }
+  }
   let system: Awaited<ReturnType<typeof createSystem>> | undefined
   let opened: OpenHost | undefined
-  const extensions = await loadExtensions(vite, host, () => system?.changed(), {
-    harness: () => {
-      if (!opened) throw new Error('Harness is not open')
-      return opened.harness
+  const extensions = await loadExtensions(
+    vite,
+    host,
+    () => system?.changed(),
+    {
+      harness: () => {
+        if (!opened) throw new Error('Harness is not open')
+        return opened.harness
+      },
+      system: () => {
+        if (!system) throw new Error('System is not ready')
+        return system.current()
+      },
     },
-    system: () => {
-      if (!system) throw new Error('System is not ready')
-      return system.current()
-    },
-  })
+    watch,
+  )
   await new Promise<void>((resolve, reject) => {
     http.once('error', reject)
     http.listen(options.port ?? Number(process.env.ULTIMATE_PORT ?? 4747), '127.0.0.1', () => {
@@ -82,7 +112,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
   const address = http.address()
   if (!address || typeof address === 'string') throw new Error('No listening address')
   const url = options.publicUrl ?? `http://127.0.0.1:${address.port}`
-  system = await createSystem(host, vite, url, extensions.info, (info) =>
+  system = await createSystem(host, watch, url, extensions.info, (info) =>
     events.emit('system', info),
   )
   return {

@@ -15,8 +15,8 @@ import {
 import { promisify } from 'node:util'
 import { relative } from 'node:path'
 import { getAgentDir, loadProjectContextFiles, loadSkills } from '@earendil-works/pi-coding-agent'
-import type { ViteDevServer } from 'vite-plus'
 import type { ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
+import type { Watch } from './extensions.ts'
 import type { PreparedHost } from './harness.ts'
 import { discoverAgents } from './agents.ts'
 
@@ -30,7 +30,7 @@ async function bytes(path: string) {
 }
 export async function createSystem(
   host: PreparedHost,
-  vite: ViteDevServer,
+  watchRepo: Watch,
   url: string,
   registry: () => ExtensionInfo[],
   emit: (info: SystemInfo) => void,
@@ -141,8 +141,11 @@ export async function createSystem(
     )
   }
   const storageWatcher = watch(host.home, schedule)
-  vite.watcher.add(host.repoRoot)
-  vite.watcher.on('all', schedule)
+  const unwatch = watchRepo((watcher) => {
+    watcher.add(host.repoRoot)
+    watcher.on('all', schedule)
+    return () => watcher.off('all', schedule)
+  })
   await refresh(true)
   return {
     current: () => value,
@@ -153,7 +156,7 @@ export async function createSystem(
     async close() {
       closed = true
       clearTimeout(timer)
-      vite.watcher.off('all', schedule)
+      unwatch()
       storageWatcher.close()
       await chain
     },
