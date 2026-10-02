@@ -32,12 +32,12 @@ export default (host: ExtensionHost) =>
                 fromBuild: done.build,
                 toBuild: host.build().id,
                 rolledBack: true,
-                error: process.env.ULTIMATE_ACTIVATION_ERROR ?? 'Activation failed',
+                error: host.system().process.activationError ?? 'Activation failed',
               },
               content: [
                 {
                   type: 'text',
-                  text: `Restart failed during activation; rolled back to generation ${process.env.ULTIMATE_GENERATION}. ${process.env.ULTIMATE_ACTIVATION_ERROR ?? ''}`,
+                  text: `Restart failed during activation; rolled back to generation ${process.env.ULTIMATE_GENERATION}. ${host.system().process.activationError ?? ''}`,
                 },
               ],
             }

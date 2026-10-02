@@ -76,10 +76,7 @@ export function extensionModules(
         (entry) =>
           `${JSON.stringify(join(entry.path, 'web.tsx'))}: () => import(${JSON.stringify('/@fs/' + join(entry.path, 'web.tsx'))})`,
       )
-      const sources = Object.fromEntries(
-        facets.map((entry) => [entry.name, { source: entry.source, path: entry.path }]),
-      )
-      return `export const loaders = {${entries.join(',')}}; export const sources = ${JSON.stringify(sources)};`
+      return `export const loaders = {${entries.join(',')}};`
     },
     hotUpdate({ file, modules, type }) {
       if (

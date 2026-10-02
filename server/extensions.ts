@@ -49,6 +49,8 @@ export async function loadExtensions(
   const actions = new Map<string, Record<string, ExtensionAction>>()
   const records = new Map<string, ExtensionInfo>()
   const documents = new Map<string, ConversationDocToken<JsonObject>[]>()
+  const findDoc = (kind: string) =>
+    [...documents.values()].flat().find((doc) => doc.definition.kind === kind)
   const cleanups = new Set<() => Promise<void>>()
   const resources = new Map<string, unknown>()
   const extensionHost: ExtensionHost = {
@@ -60,7 +62,7 @@ export async function loadExtensions(
     ...host,
     ...runtime,
     extensions: () => [...records.values()],
-    doc: (kind) => [...documents.values()].flat().find((doc) => doc.definition.kind === kind),
+    doc: findDoc,
   }
   const installed = host.extensionOrders
   let chain = Promise.resolve()
@@ -245,8 +247,7 @@ export async function loadExtensions(
         exec: actionExec(host.projectRoot, signal),
       })
     },
-    doc: (kind: string) =>
-      [...documents.values()].flat().find((doc) => doc.definition.kind === kind),
+    doc: findDoc,
     async close() {
       closed = true
       unwatch()

@@ -1,5 +1,5 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile, rm, writeFile } from 'node:fs/promises'
+import { temp } from './helpers.ts'
 import { join, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
@@ -14,7 +14,7 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true, maxRetries: 5 })
 })
 async function path() {
-  const directory = await mkdtemp(join(tmpdir(), 'ultimate-lock-'))
+  const directory = await temp('ultimate-lock-')
   directories.push(directory)
   return join(directory, 'storage.lock')
 }

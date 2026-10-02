@@ -1,6 +1,6 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, realpath, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { discoveryRoots, migrateProject, projectHome, resolveProject } from './project.ts'
+import { discoveryRoots, projectHome } from './project.ts'
 import { acquireLock } from './lock.ts'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
@@ -71,19 +71,13 @@ export interface HostOptions {
 }
 export async function prepareHarness(options: HostOptions) {
   const { ultimateRoot } = options
-  const projectRoot = await resolveProject(options.projectRoot ?? ultimateRoot)
+  const projectRoot = await realpath(options.projectRoot ?? ultimateRoot)
   const userHome = options.userHome ?? homedir()
   const builds = createBuild(
     ultimateRoot,
     discoveryRoots(ultimateRoot, projectRoot, userHome).map((root) => join(root.path, 'agents')),
   )
   const home = options.home ?? process.env.ULTIMATE_HOME ?? projectHome(projectRoot, userHome)
-  if (
-    !options.home &&
-    !process.env.ULTIMATE_HOME &&
-    (await migrateProject(ultimateRoot, projectRoot, userHome))
-  )
-    console.log(`Migrated Ultimate state to ${home}`)
   await mkdir(home, { recursive: true })
   const database = join(home, 'state.sqlite')
   const modelRuntime = await ModelRuntime.create()

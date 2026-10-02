@@ -1,5 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
@@ -14,6 +13,7 @@ import subagents, { Subagents } from '../extensions/subagents/server.ts'
 import codemode from '../extensions/codemode/server.ts'
 import { Metadata } from '../server/metadata.ts'
 import { discoverAgents, parseDefinition } from '../server/agents.ts'
+import { until, temp } from './helpers.ts'
 
 const directories: string[] = []
 const hosts: OpenHost[] = []
@@ -25,16 +25,9 @@ afterEach(async () => {
 const definition = (body = 'Original instructions') =>
   `---\nname: scout\ndescription: Search\ntools: [read, bash]\n---\n${body}\n`
 async function directory() {
-  const path = await mkdtemp(join(tmpdir(), 'ultimate-subagents-'))
+  const path = await temp('ultimate-subagents-')
   directories.push(path)
   return path
-}
-async function until(check: () => Promise<boolean>) {
-  const deadline = Date.now() + 10000
-  while (!(await check())) {
-    if (Date.now() > deadline) throw new Error('Timed out')
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
 }
 async function fixture(extension?: Extension) {
   const ultimateRoot = await directory()

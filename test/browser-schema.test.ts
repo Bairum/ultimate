@@ -1,15 +1,14 @@
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { rm } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { createModels, toToolDeclaration } from '@earendil-works/pi-ai'
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic'
 import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter'
 import { expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
-import { createServer } from '../server/main.ts'
+import { fauxServer as createServer, temp } from './helpers.ts'
 
 it('emits draft-2020-compatible browser fill schemas for Anthropic and OpenRouter', async () => {
-  const home = await mkdtemp(join(tmpdir(), 'ultimate-browser-schema-'))
+  const home = await temp('ultimate-browser-schema-')
   const server = await createServer({
     ultimateRoot: resolve('.'),
     userHome: home,

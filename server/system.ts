@@ -38,6 +38,7 @@ export async function createSystem(
   registry: () => ExtensionInfo[],
   emit: (info: SystemInfo) => void,
   notice: (message: string) => void = () => {},
+  processInfo: { activationError?: string } = {},
 ) {
   const startedAt = new Date().toISOString()
   const agentDir = getAgentDir()
@@ -115,6 +116,7 @@ export async function createSystem(
         node: process.version,
         startedAt,
         generation: Number(process.env.ULTIMATE_GENERATION ?? 1),
+        ...(processInfo.activationError ? { activationError: processInfo.activationError } : {}),
         url,
       },
       persistence: {

@@ -122,7 +122,7 @@ export default function instanceExtension(host: ExtensionHost) {
                         'ULTIMATE_HOME',
                         'ULTIMATE_PORT',
                         'ULTIMATE_FAUX',
-                      ].includes(key) && !key.startsWith('ULTIMATE_FAIL_'),
+                      ].includes(key),
                   ),
                 ),
                 ULTIMATE_HOME: home,

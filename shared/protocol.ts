@@ -15,30 +15,14 @@ export interface ConfigureRequest {
   model?: ModelRef
   thinkingLevel?: ModelThinkingLevel
 }
-export interface CompactRequest {
-  instructions?: string
-}
 export interface CompactResponse {
   taskId: number
-}
-export interface LoginRequest {
-  provider: string
-  type: AuthType
 }
 export interface LoginResponse {
   flowId: string
 }
-export interface AnswerRequest {
-  value: string
-}
-export interface LogoutRequest {
-  provider: string
-}
 export interface EmptyResponse {
   ok: true
-}
-export interface ErrorResponse {
-  error: string
 }
 export interface ConversationSummary {
   id: number
@@ -106,7 +90,14 @@ export interface SystemInfo {
     freeMemory: number
     user: string
   }
-  process: { pid: number; node: string; startedAt: string; generation: number; url: string }
+  process: {
+    pid: number
+    node: string
+    startedAt: string
+    generation: number
+    url: string
+    activationError?: string
+  }
   persistence: { kind: 'sqlite'; path: string; sizeBytes: number; walBytes: number }
   execution: { kind: 'node-local'; defaultCwd: string }
   project: {

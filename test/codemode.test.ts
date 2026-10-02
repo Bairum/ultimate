@@ -1,11 +1,10 @@
-import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
-import { createServer } from '../server/main.ts'
+import { fauxServer as createServer, until, temp, linkDependencies } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { Store } from '../extensions/codemode/server.ts'
 
@@ -20,7 +19,7 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true, maxRetries: 5 })
 })
 async function fixture() {
-  const directory = await mkdtemp(join(tmpdir(), 'ultimate-codemode-'))
+  const directory = await temp('ultimate-codemode-')
   directories.push(directory)
   const ultimateRoot = join(directory, 'repo')
   await mkdir(join(ultimateRoot, 'extensions/codemode'), { recursive: true })
@@ -28,10 +27,10 @@ async function fixture() {
     recursive: true,
   })
   await mkdir(join(ultimateRoot, 'web'), { recursive: true })
-  await symlink(resolve('node_modules'), join(ultimateRoot, 'node_modules'), 'dir')
+  await linkDependencies(ultimateRoot)
   await writeFile(
     join(ultimateRoot, 'vite.config.ts'),
-    "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', optimizeDeps: { noDiscovery: true } })",
+    "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', cacheDir: '.vite-cache', optimizeDeps: { noDiscovery: true } })",
   )
   await writeFile(join(ultimateRoot, 'web/index.html'), '<html>Codemode</html>')
   // Type-only server imports erase; auth.ts is a runtime import used by ultimate.models().
@@ -46,6 +45,7 @@ async function fixture() {
   )
   const options = {
     ultimateRoot,
+    projectRoot: ultimateRoot,
     userHome: directory,
     home: join(directory, 'home'),
     faux: true,
@@ -85,13 +85,6 @@ async function run(
     }
   } finally {
     state.dispose()
-  }
-}
-async function until(test: () => Promise<boolean>) {
-  const deadline = Date.now() + 10000
-  while (!(await test())) {
-    if (Date.now() > deadline) throw new Error('Timed out')
-    await new Promise((done) => setTimeout(done, 20))
   }
 }
 
@@ -151,7 +144,7 @@ it('supports structured nested results, validates arguments, and documents host 
 it('runs Promise.all calls in parallel', async () => {
   const { server } = await fixture()
   // The marker files live in a scratch directory, not in the project root the tools run in.
-  const scratch = await mkdtemp(join(tmpdir(), 'ultimate-codemode-'))
+  const scratch = await temp('ultimate-codemode-')
   const result = await run(
     server,
     `return await Promise.all([tools.bash({command:'cd ${scratch} && touch one; for i in $(seq 1 50); do test -f two && { echo one; exit 0; }; sleep 0.02; done; exit 1'}),tools.bash({command:'cd ${scratch} && touch two; for i in $(seq 1 50); do test -f one && { echo two; exit 0; }; sleep 0.02; done; exit 1'})]);`,

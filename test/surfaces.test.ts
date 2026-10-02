@@ -1,14 +1,16 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { chromium } from 'playwright-core'
 import type { Browser } from 'playwright-core'
 import { afterEach, expect, it } from 'vitest'
 import type { TestContext } from 'vitest'
-import { browserBinary } from '../extensions/browser/server.ts'
+import {
+  skipWithoutChromium,
+  fauxServer as createServer,
+  temp as tempDirectory,
+} from './helpers.ts'
 import { context } from '../server/harness.ts'
-import { createServer } from '../server/main.ts'
 
 const directories: string[] = []
 const servers: Awaited<ReturnType<typeof createServer>>[] = []
@@ -21,7 +23,7 @@ afterEach(async () => {
 })
 const timeout = { timeout: 15000 }
 async function temp() {
-  const path = await mkdtemp(join(tmpdir(), 'ultimate-surfaces-'))
+  const path = await tempDirectory('ultimate-surfaces-')
   directories.push(path)
   return path
 }
@@ -78,13 +80,8 @@ export default defineWebExtension({
 
 /** A faux server for `projectRoot` and a headless page; skips the test when no browser is installed. */
 async function launch(test: TestContext, projectRoot: string) {
-  let executablePath: string
-  try {
-    executablePath = await browserBinary()
-  } catch (error) {
-    console.warn(`Skipping browser integration: ${String(error)}`)
-    return test.skip()
-  }
+  const executablePath = await skipWithoutChromium(test)
+  if (!executablePath) return test.skip()
   const userHome = await temp()
   const server = await createServer({
     ultimateRoot: resolve('.'),

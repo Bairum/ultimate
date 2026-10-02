@@ -13,7 +13,7 @@ import type { ChildMessage, SupervisorMessage } from './supervisor-protocol.ts'
 
 import { alive } from './lock.ts'
 import { homedir } from 'node:os'
-import { resolveProject } from './project.ts'
+import { realpath } from 'node:fs/promises'
 import { extensionModules } from './vite-extensions.ts'
 import { loopbackAuthority, loopbackOrigin } from './request-security.ts'
 
@@ -26,7 +26,7 @@ export interface ServerOptions extends HostOptions {
 export async function prepareServer(options: Partial<ServerOptions> = {}) {
   const ultimateRoot =
     options.ultimateRoot ?? resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
-  const projectRoot = await resolveProject(
+  const projectRoot = await realpath(
     options.projectRoot ?? process.env.ULTIMATE_PROJECT ?? options.ultimateRoot ?? process.cwd(),
   )
   const events = new Events()
@@ -102,6 +102,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
   }
   let system: Awaited<ReturnType<typeof createSystem>> | undefined
   let opened: OpenHost | undefined
+  const processInfo: { activationError?: string } = {}
   const extensions = await loadExtensions(
     vite,
     host,
@@ -135,6 +136,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     extensions.info,
     (info) => events.emit('system', info),
     (message) => events.emit('notice', { level: 'error', message }),
+    processInfo,
   )
   return {
     http,
@@ -151,14 +153,10 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       await opened?.close()
       opened = undefined
     },
-    async go() {
+    async go(activationError?: string) {
+      processInfo.activationError = activationError
       opened = await host.open(false)
       await system.changed()
-      if (
-        process.env.ULTIMATE_FAIL_GO_GENERATION &&
-        process.env.ULTIMATE_FAIL_GO_GENERATION === process.env.ULTIMATE_GENERATION
-      )
-        throw new Error('Injected activation failure')
       api = await createApi(host, opened, events, system, extensions)
       opened.harness.resume()
       return { ...opened, api, system }
@@ -205,14 +203,11 @@ if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.met
   })
   if (process.env.ULTIMATE_SUPERVISED === '1' && process.send) {
     try {
-      if (process.env.ULTIMATE_FAIL_PREPARE_GENERATION === process.env.ULTIMATE_GENERATION)
-        throw new Error('Injected preparation failure')
       server = await prepareServer({ port: 0, publicUrl: process.env.ULTIMATE_PUBLIC_URL })
       process.on('message', (message: SupervisorMessage) => {
         void (async () => {
           if (message.type === 'go' || message.type === 'reacquire') {
-            if (message.type === 'reacquire') process.env.ULTIMATE_ACTIVATION_ERROR = message.error
-            await server!.go()
+            await server!.go(message.type === 'reacquire' ? message.error : undefined)
             send({ type: 'ready' })
           }
           if (message.type === 'release') {

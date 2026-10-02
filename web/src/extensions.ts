@@ -1,7 +1,6 @@
 // Discovers and hot-reloads the web facets of extensions/*. The registry (sdk/registry.ts) does the bookkeeping.
 import { registry } from './sdk/client.ts'
 import { loaders as facets } from 'virtual:ultimate/web-facets'
-export { sources } from 'virtual:ultimate/web-facets'
 import { extensionName } from './sdk/registry.ts'
 import type { ExtensionLoader } from './sdk/registry.ts'
 

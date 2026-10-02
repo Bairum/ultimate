@@ -1,23 +1,27 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join, resolve as resolvePath } from 'node:path'
-import { applyImmutable } from '@earendil-works/chord/delta'
-import type { Op } from '@earendil-works/chord/delta'
+import { readFile, rm, writeFile } from 'node:fs/promises'
+import {
+  temp as mkdtemp,
+  sourceCopy,
+  cleanEnv,
+  until,
+  post,
+  attach as attachStream,
+} from './helpers.ts'
+import { join } from 'node:path'
 import type { ConversationView } from '@earendil-works/pi-durable'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { SystemInfo } from '../shared/protocol.ts'
 
 it('starts past stale lock sidecars without killing an unrelated live pid', async () => {
-  const home = await mkdtemp(join(tmpdir(), 'ultimate-stale-supervisor-'))
+  const home = await mkdtemp('ultimate-stale-supervisor-')
   homes.push(home)
   const unrelated = spawn('sleep', ['60'])
   children.push(unrelated)
   await writeFile(join(home, 'ultimate.lock'), JSON.stringify({ pid: 2147483647 }))
   await writeFile(join(home, 'storage.lock'), JSON.stringify({ pid: unrelated.pid }))
-  const running = launch(home)
+  const running = await launch(home)
   await until(() => running.output().includes('Ultimate: http://'))
   expect(unrelated.exitCode).toBeNull()
   expect(unrelated.signalCode).toBeNull()
@@ -38,26 +42,26 @@ afterEach(async () => {
   for (const home of homes.splice(0))
     await rm(home, { recursive: true, force: true, maxRetries: 5 })
 })
-async function until(test: () => boolean | Promise<boolean>) {
-  const deadline = Date.now() + 30000
-  while (!(await test())) {
-    if (Date.now() > deadline) throw new Error('Timed out')
-    await new Promise((resolve) => setTimeout(resolve, 30))
-  }
-}
-function launch(home: string, extra: Record<string, string> = {}) {
-  const child = spawn(process.execPath, [resolvePath('bin/ultimate.ts'), '--no-open'], {
-    env: {
-      ...process.env,
-      HOME: home,
-      ULTIMATE_HOME: home,
-      ULTIMATE_PORT: '0',
-      ULTIMATE_FAUX: '1',
-      ULTIMATE_NO_OPEN: '1',
-      ...extra,
+const copies = new Map<string, string>()
+async function launch(home: string) {
+  const ultimateRoot = copies.get(home) ?? (await sourceCopy(home))
+  copies.set(home, ultimateRoot)
+  const child = spawn(
+    process.execPath,
+    [join(ultimateRoot, 'bin/ultimate.ts'), ultimateRoot, '--no-open'],
+    {
+      cwd: ultimateRoot,
+      env: {
+        ...cleanEnv(),
+        HOME: home,
+        ULTIMATE_HOME: home,
+        ULTIMATE_PORT: '0',
+        ULTIMATE_FAUX: '1',
+        ULTIMATE_NO_OPEN: '1',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
+  )
   children.push(child)
   let output = ''
   child.stdout.on('data', (chunk) => {
@@ -66,72 +70,34 @@ function launch(home: string, extra: Record<string, string> = {}) {
   child.stderr.on('data', (chunk) => {
     output += chunk
   })
-  return { child, output: () => output }
+  return { child, ultimateRoot, output: () => output }
 }
-async function fixture(extra: Record<string, string> = {}) {
-  const home = await mkdtemp(join(tmpdir(), 'ultimate-supervisor-'))
+async function fixture() {
+  const home = await mkdtemp('ultimate-supervisor-')
   homes.push(home)
-  const running = launch(home, extra)
+  const running = await launch(home)
   await until(() => running.output().includes('Ultimate: http://'))
   return { ...running, home, url: /Ultimate: (http:\/\/[^\s]+)/.exec(running.output())![1] }
 }
-async function post(url: string, path: string, data: unknown = {}) {
-  const response = await fetch(url + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Origin: url },
-    body: JSON.stringify(data),
-  })
-  return { status: response.status, data: (await response.json()) as Record<string, unknown> }
-}
 async function attach(url: string) {
-  const controller = new AbortController()
-  let system: SystemInfo | undefined
-  let view: ConversationView | undefined
-  let connections = 0
-  const task = (async () => {
-    while (!controller.signal.aborted) {
-      try {
-        const response = await fetch(url + '/api/events', { signal: controller.signal })
-        if (response.status !== 200) throw new Error(`SSE status ${response.status}`)
-        connections++
-        const reader = response.body!.getReader()
-        let wire = ''
-        while (!controller.signal.aborted) {
-          const result = await reader.read()
-          if (result.done) break
-          wire += new TextDecoder().decode(result.value)
-          let index: number
-          while ((index = wire.indexOf('\n\n')) !== -1) {
-            const block = wire.slice(0, index)
-            wire = wire.slice(index + 2)
-            const name = /^event: (.+)$/m.exec(block)?.[1]
-            const data = /^data: (.+)$/m.exec(block)?.[1]
-            if (!data) continue
-            if (name === 'system') system = JSON.parse(data)
-            if (name === 'view') view = JSON.parse(data)
-            if (name === 'ops' && view) view = applyImmutable(view, JSON.parse(data) as Op[])
-          }
-        }
-      } catch (error) {
-        if (controller.signal.aborted) break
-        if (!String(error).includes('fetch failed') && !String(error).includes('terminated'))
-          throw error
-      }
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    }
-  })()
-  const stream = {
-    system: () => system!,
-    view: () => view!,
-    connections: () => connections,
-    async close() {
-      controller.abort()
-      await task
-    },
-  }
+  const stream = await attachStream(url)
   streams.push(stream)
-  await until(() => !!view)
   return stream
+}
+async function activationFailure(root: string) {
+  const file = join(root, 'server/main.ts')
+  await writeFile(
+    join(root, 'server/activation.ts'),
+    "export async function activate(): Promise<void> { throw new Error('Injected activation failure') }\n",
+  )
+  await writeFile(
+    file,
+    "import { activate } from './activation.ts'\n" +
+      (await readFile(file, 'utf8')).replace(
+        'opened = await host.open(false)',
+        'opened = await host.open(false); await activate()',
+      ),
+  )
 }
 function transcript(view: ConversationView) {
   return JSON.stringify(view.entries)
@@ -140,7 +106,7 @@ function transcript(view: ConversationView) {
 describe('supervisor', () => {
   it('owns a random public port, refuses a second instance naming its pid, and accepts the public Origin', async () => {
     const first = await fixture()
-    const second = launch(first.home)
+    const second = await launch(first.home)
     const [code] = await once(second.child, 'exit')
     expect(code).not.toBe(0)
     expect(second.output()).toContain(
@@ -149,7 +115,7 @@ describe('supervisor', () => {
     expect(JSON.parse(await readFile(join(first.home, 'ultimate.lock'), 'utf8'))).toEqual({
       pid: first.child.pid,
       port: Number(new URL(first.url).port),
-      project: resolvePath('.'),
+      project: first.ultimateRoot,
     })
     const stream = await attach(first.url)
     expect(stream.system().process.url).toBe(first.url)
@@ -203,12 +169,16 @@ describe('supervisor', () => {
     ).not.toContain('interrupted')
   }, 60000)
   it('keeps generation 1 serving and returns a failed preparation to the tool', async () => {
-    const running = await fixture({ ULTIMATE_FAIL_PREPARE_GENERATION: '2' })
+    const running = await fixture()
+    await writeFile(
+      join(running.ultimateRoot, 'server/invalid.ts'),
+      'export const invalid: string = 7\n',
+    )
     const stream = await attach(running.url)
     await post(running.url, '/api/conversations/1/submit', { text: 'restart yourself' })
     await until(
       () =>
-        transcript(stream.view()).includes('Injected preparation failure') &&
+        transcript(stream.view()).includes('not assignable to type') &&
         stream.view().entries.filter((entry) => entry.kind === 'pi.assistant').length === 2,
     )
     expect(stream.system().process.generation).toBe(1)
@@ -217,9 +187,10 @@ describe('supervisor', () => {
     expect((await fetch(running.url + '/api/models')).status).toBe(200)
   }, 60000)
   it('rolls back failed activation and reports it from the replayed restart tool', async () => {
-    const running = await fixture({ ULTIMATE_FAIL_GO_GENERATION: '2' })
+    const running = await fixture()
     const stream = await attach(running.url)
     const pid = stream.system().process.pid
+    await activationFailure(running.ultimateRoot)
     await post(running.url, '/api/conversations/1/submit', { text: 'restart yourself' })
     await until(() =>
       transcript(stream.view()).includes(
@@ -239,21 +210,31 @@ describe('supervisor', () => {
       },
     })
     expect(stream.system().process.pid).toBe(pid)
+    expect(stream.system().process.activationError).toContain('Injected activation failure')
     expect(stream.system().process.generation).toBe(1)
     expect((await fetch(running.url + '/api/models')).status).toBe(200)
     const owner = JSON.parse(await readFile(join(running.home, 'storage.lock'), 'utf8'))
     expect(owner.pid).toBe(pid)
   }, 60000)
   it('rolls back an API activation failure and refuses standalone storage ownership', async () => {
-    const running = await fixture({ ULTIMATE_FAIL_GO_GENERATION: '2' })
+    const running = await fixture()
     const stream = await attach(running.url)
     const pid = stream.system().process.pid
+    await activationFailure(running.ultimateRoot)
     expect((await post(running.url, '/api/restart')).status).toBe(202)
-    await until(() => stream.connections() > 1)
+    await until(() => stream.connections() > 1 && !!stream.system().process.activationError)
+    expect(stream.system().process.activationError).toContain('Injected activation failure')
     expect(stream.system().process.generation).toBe(1)
     expect((await fetch(running.url + '/api/models')).status).toBe(200)
-    const standalone = spawn(process.execPath, [resolvePath('server/main.ts')], {
-      env: { ...process.env, ULTIMATE_HOME: running.home, ULTIMATE_PORT: '0', ULTIMATE_FAUX: '1' },
+    const standalone = spawn(process.execPath, [join(running.ultimateRoot, 'server/main.ts')], {
+      cwd: running.ultimateRoot,
+      env: cleanEnv({
+        HOME: running.home,
+        ULTIMATE_PROJECT: running.ultimateRoot,
+        ULTIMATE_HOME: running.home,
+        ULTIMATE_PORT: '0',
+        ULTIMATE_FAUX: '1',
+      }),
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     children.push(standalone)
@@ -273,7 +254,7 @@ describe('supervisor', () => {
     const exited = once(running.child, 'exit')
     running.child.kill('SIGKILL')
     await exited
-    const next = launch(running.home)
+    const next = await launch(running.home)
     await until(() => next.output().includes('Ultimate: http://'))
     const owner = JSON.parse(await readFile(join(running.home, 'storage.lock'), 'utf8'))
     expect(owner.pid).not.toBe(pid)
@@ -282,10 +263,19 @@ describe('supervisor', () => {
     expect((await fetch(url + '/api/models')).status).toBe(200)
   }, 60000)
   it('terminates a live detached core when taking over a stale supervisor lock', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'ultimate-orphan-'))
+    const home = await mkdtemp('ultimate-orphan-')
     homes.push(home)
-    const core = spawn(process.execPath, [resolvePath('server/main.ts')], {
-      env: { ...process.env, ULTIMATE_HOME: home, ULTIMATE_PORT: '0', ULTIMATE_FAUX: '1' },
+    const ultimateRoot = await sourceCopy(home)
+    copies.set(home, ultimateRoot)
+    const core = spawn(process.execPath, [join(ultimateRoot, 'server/main.ts')], {
+      cwd: ultimateRoot,
+      env: cleanEnv({
+        HOME: home,
+        ULTIMATE_PROJECT: ultimateRoot,
+        ULTIMATE_HOME: home,
+        ULTIMATE_PORT: '0',
+        ULTIMATE_FAUX: '1',
+      }),
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     children.push(core)
@@ -296,7 +286,7 @@ describe('supervisor', () => {
     await until(() => output.includes('Ultimate: http://'))
     await writeFile(join(home, 'ultimate.lock'), JSON.stringify({ pid: 2147483647, port: 4747 }))
     const exited = once(core, 'exit')
-    const supervisor = launch(home)
+    const supervisor = await launch(home)
     await until(() => supervisor.output().includes('Ultimate: http://'))
     await exited
     expect(core.exitCode).toBe(0)
@@ -319,15 +309,15 @@ describe('supervisor', () => {
     expect(await readFile(join(running.home, 'demo.txt'), 'utf8')).toBe('after\n')
   }, 60000)
   it('takes over a dead lock and recovers despite a test type error', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'ultimate-supervisor-'))
+    const home = await mkdtemp('ultimate-supervisor-')
     homes.push(home)
     await writeFile(join(home, 'ultimate.lock'), JSON.stringify({ pid: 2147483647, port: 4747 }))
-    const running = launch(home)
+    const running = await launch(home)
     await until(() => running.output().includes('Ultimate: http://'))
     const url = /Ultimate: (http:\/\/[^\s]+)/.exec(running.output())![1]
     const stream = await attach(url)
-    const file = resolvePath('test/ultimate-recovery-test.ts')
-    const extensionFile = resolvePath('extensions/ultimate-swap-test.ts')
+    const file = join(running.ultimateRoot, 'test/ultimate-recovery-test.ts')
+    const extensionFile = join(running.ultimateRoot, 'extensions/ultimate-swap-test.ts')
     try {
       await writeFile(file, 'export const invalid: string = 7\n')
       await writeFile(extensionFile, 'export const invalid: string = 7\n')
@@ -344,7 +334,7 @@ describe('supervisor', () => {
   it('accepts an API swap and rejects a type error without releasing the active owner', async () => {
     const running = await fixture()
     const stream = await attach(running.url)
-    const file = resolvePath('server/ultimate-typecheck-test.ts')
+    const file = join(running.ultimateRoot, 'server/ultimate-typecheck-test.ts')
     try {
       await writeFile(file, 'const invalid: string = 7; export { invalid }\n')
       await until(() => stream.system().code.coreStale === true)

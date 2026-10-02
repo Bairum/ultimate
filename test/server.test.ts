@@ -1,15 +1,24 @@
 import { spawn } from 'node:child_process'
 import { request } from 'node:http'
 import { once } from 'node:events'
-import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
-import { homedir, tmpdir } from 'node:os'
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
 import type { ConversationView } from '@earendil-works/pi-durable'
 import { defineExtension, InboxDoc, LiveDoc } from '@earendil-works/pi-durable'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createServer, prepareServer } from '../server/main.ts'
+import {
+  fauxServer as createServer,
+  prepareFauxServer as prepareServer,
+  until,
+  post,
+  attach,
+  cleanEnv,
+  temp,
+  linkDependencies,
+} from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { UiState } from '../server/ui-state.ts'
 import type { AuthFlowEvent, ServerEvents } from '../shared/protocol.ts'
@@ -26,7 +35,7 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
 })
 async function fixture(extra = false, agents = false, sources?: Record<string, string>) {
-  const directory = await mkdtemp(join(tmpdir(), 'ultimate-test-'))
+  const directory = await temp()
   directories.push(directory)
   const ultimateRoot = join(directory, 'repo')
   await mkdir(join(ultimateRoot, 'extensions', 'prompt'), { recursive: true })
@@ -34,10 +43,10 @@ async function fixture(extra = false, agents = false, sources?: Record<string, s
     recursive: true,
   })
   await mkdir(join(ultimateRoot, 'web'), { recursive: true })
-  await symlink(resolvePath('node_modules'), join(ultimateRoot, 'node_modules'), 'dir')
+  await linkDependencies(ultimateRoot)
   await writeFile(
     join(ultimateRoot, 'vite.config.ts'),
-    "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', optimizeDeps: { noDiscovery: true } })",
+    "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', cacheDir: '.vite-cache', optimizeDeps: { noDiscovery: true } })",
   )
   await writeFile(
     join(ultimateRoot, 'web', 'index.html'),
@@ -47,8 +56,8 @@ async function fixture(extra = false, agents = false, sources?: Record<string, s
     join(ultimateRoot, 'extensions', 'prompt', 'server.ts'),
     await readFile(resolvePath('extensions/prompt/server.ts'), 'utf8'),
   )
-  await mkdir(join(ultimateRoot, 'server'), { recursive: true })
-  await cp(resolvePath('server/skills.ts'), join(ultimateRoot, 'server/skills.ts'))
+  await cp(resolvePath('server'), join(ultimateRoot, 'server'), { recursive: true })
+  await cp(resolvePath('shared'), join(ultimateRoot, 'shared'), { recursive: true })
   if (extra) {
     await mkdir(join(ultimateRoot, 'extensions', 'counter'), { recursive: true })
     await writeFile(
@@ -108,58 +117,6 @@ import { value } from './value.ts'
 export const Counter = defineDoc({ kind: 'test.counter', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', initial: () => ({ count: 0 }) })
 export const docs = [Counter]
 export default defineExtension({ name: 'counter', sections: [section('counter', () => value)], tools: [defineTool({ name: 'increment', description: 'Increment', parameters: Type.Object({}), execute: async (_args, api, context) => { await api.commit(async tx => { (await tx.doc(Counter, api.conversationId)).count++ }, context); return {} } })] })`
-async function post(
-  server: Awaited<ReturnType<typeof createServer>>,
-  path: string,
-  data: unknown = {},
-) {
-  const response = await fetch(server.url + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-  return { status: response.status, data: (await response.json()) as Record<string, unknown> }
-}
-async function until(test: () => boolean | Promise<boolean>) {
-  const deadline = Date.now() + 10000
-  while (!(await test())) {
-    if (Date.now() > deadline) throw new Error('Timed out')
-    await new Promise((resolve) => setTimeout(resolve, 30))
-  }
-}
-async function attach(server: Awaited<ReturnType<typeof createServer>>, query = '') {
-  const controller = new AbortController()
-  const response = await fetch(server.url + '/api/events' + query, { signal: controller.signal })
-  expect(response.status).toBe(200)
-  const events: { name: keyof ServerEvents; data: unknown }[] = []
-  const reader = response.body!.getReader()
-  let pending = ''
-  const task = (async () => {
-    while (true) {
-      const result = await reader.read()
-      if (result.done) break
-      pending += new TextDecoder().decode(result.value)
-      let index: number
-      while ((index = pending.indexOf('\n\n')) >= 0) {
-        const block = pending.slice(0, index)
-        pending = pending.slice(index + 2)
-        const name = /^event: (.+)$/m.exec(block)?.[1]
-        const data = /^data: (.+)$/m.exec(block)?.[1]
-        if (name && data) events.push({ name: name as keyof ServerEvents, data: JSON.parse(data) })
-      }
-    }
-  })().catch((error) => {
-    if (!controller.signal.aborted) throw error
-  })
-  await until(() => events.some((event) => event.name === 'view'))
-  return {
-    events,
-    async close() {
-      controller.abort()
-      await task
-    },
-  }
-}
 
 const orderedSource = (name: string, order = 0) => `
 import { Type } from '@earendil-works/pi-ai'
@@ -713,9 +670,13 @@ describe('server', () => {
       [
         '--input-type=module',
         '-e',
-        `import { createServer } from ${JSON.stringify(resolvePath('server/main.ts'))}; const server = await createServer(${JSON.stringify(options)}); console.log('READY ' + server.url)`,
+        `import { createServer } from ${JSON.stringify(join(options.ultimateRoot, 'server/main.ts'))}; const server = await createServer(${JSON.stringify(options)}); console.log('READY ' + server.url)`,
       ],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
+      {
+        cwd: options.ultimateRoot,
+        env: cleanEnv({ HOME: options.userHome }),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
     )
     let output = ''
     child.stdout.on('data', (chunk) => {

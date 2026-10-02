@@ -2,21 +2,24 @@ import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, writeFile, rename, symlink } from 'node:fs/promises'
-import { DatabaseSync } from 'node:sqlite'
-import { tmpdir } from 'node:os'
+import { mkdir, realpath, readFile, rm, writeFile, rename, symlink } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { createServer } from '../server/main.ts'
-import { context, prepareHarness } from '../server/harness.ts'
-import { Metadata } from '../server/metadata.ts'
-import { migrateProject, projectHome, resolveProject } from '../server/project.ts'
+import {
+  fauxServer as createServer,
+  temp as tempDirectory,
+  until,
+  post as requestPost,
+  sourceCopy,
+  cleanEnv,
+  skipWithoutChromium,
+} from './helpers.ts'
+import { context } from '../server/harness.ts'
+import { projectHome } from '../server/project.ts'
 import { actionExec } from '../server/actions.ts'
 import type { SystemInfo } from '../shared/protocol.ts'
-import { acquireLock } from '../server/lock.ts'
 import { defineExtension } from '@earendil-works/pi-durable'
 import { chromium } from 'playwright-core'
-import { browserBinary } from '../extensions/browser/server.ts'
 
 const directories: string[] = []
 const servers: Awaited<ReturnType<typeof createServer>>[] = []
@@ -33,24 +36,12 @@ afterEach(async () => {
     await rm(path, { recursive: true, force: true, maxRetries: 5 })
 })
 async function temp() {
-  const path = await mkdtemp(join(tmpdir(), 'ultimate-project-'))
+  const path = await tempDirectory('ultimate-project-')
   directories.push(path)
   return path
 }
-async function until(check: () => boolean | Promise<boolean>) {
-  const deadline = Date.now() + 30000
-  while (!(await check())) {
-    if (Date.now() > deadline) throw new Error('Timed out')
-    await new Promise((finish) => setTimeout(finish, 30))
-  }
-}
 async function post(url: string, path: string, args: unknown = null) {
-  const response = await fetch(url + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Origin: url },
-    body: JSON.stringify({ args }),
-  })
-  return { status: response.status, data: await response.json() }
+  return requestPost(url, path, { args })
 }
 const source = (name: string) => `import { defineExtension } from '@earendil-works/pi-durable'
 import { value } from './value.ts'
@@ -74,10 +65,18 @@ async function extension(root: string, name: string, value: string) {
 }
 
 it('prints a single-line error for a missing project', async () => {
-  const missing = join(await temp(), 'missing')
-  const child = spawn(process.execPath, [resolve('bin/ultimate.ts'), missing, '--no-open'], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
+  const userHome = await temp()
+  const ultimateRoot = await sourceCopy(userHome)
+  const missing = join(userHome, 'missing')
+  const child = spawn(
+    process.execPath,
+    [join(ultimateRoot, 'bin/ultimate.ts'), missing, '--no-open'],
+    {
+      cwd: ultimateRoot,
+      env: cleanEnv({ HOME: userHome, ULTIMATE_HOME: join(userHome, 'state') }),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  )
   children.push(child)
   let error = ''
   child.stderr.on('data', (chunk) => {
@@ -88,36 +87,9 @@ it('prints a single-line error for a missing project', async () => {
   expect(error.trim().split('\n')).toEqual([`Cannot open project ${missing}: ENOENT`])
 })
 
-it('retires an orphaned legacy core before migration', async () => {
-  const userHome = await temp()
-  const root = await temp()
-  const legacy = join(userHome, '.ultimate')
-  const child = spawn(process.execPath, [resolve('server/main.ts')], {
-    env: {
-      ...process.env,
-      HOME: userHome,
-      ULTIMATE_HOME: legacy,
-      ULTIMATE_FAUX: '1',
-      ULTIMATE_PORT: '0',
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  children.push(child)
-  let output = ''
-  child.stdout.on('data', (chunk) => {
-    output += chunk
-  })
-  await until(() => output.includes('Ultimate: http://'))
-  const exited = once(child, 'exit')
-  expect(await migrateProject(root, root, userHome)).toBe(true)
-  await exited
-  expect(child.exitCode !== null || child.signalCode !== null).toBe(true)
-  expect(existsSync(join(projectHome(root, userHome), 'state.sqlite'))).toBe(true)
-})
-
 it('derives project storage from canonical roots and an injected user home', async () => {
   const home = await temp()
-  const project = await resolveProject(await temp())
+  const project = await realpath(await temp())
   const expected = join(
     home,
     '.ultimate/projects',
@@ -127,88 +99,6 @@ it('derives project storage from canonical roots and an injected user home', asy
   )
   expect(projectHome(project, home)).toBe(expected)
   expect(projectHome(project + '/other', home)).not.toBe(expected)
-})
-
-it('migrates the legacy database once with its conversation and leaves user config alone', async () => {
-  const userHome = await temp()
-  const ultimateRoot = await temp()
-  const legacy = join(userHome, '.ultimate')
-  const prepared = await prepareHarness({ ultimateRoot, userHome, home: legacy, faux: true })
-  const opened = await prepared.open()
-  await opened.root.commit(async (tx) => {
-    ;(await tx.doc(Metadata, opened.root.id)).title = 'Intact conversation'
-  }, context)
-  const id = opened.root.id
-  await opened.close()
-  await mkdir(join(legacy, 'screenshots'))
-  await writeFile(join(legacy, 'screenshots/example.png'), 'image')
-  await mkdir(join(legacy, 'agents'))
-  await writeFile(join(legacy, 'agents/keep.md'), 'user config')
-  expect(await migrateProject(ultimateRoot, ultimateRoot, userHome)).toBe(true)
-  expect(await migrateProject(ultimateRoot, ultimateRoot, userHome)).toBe(false)
-  expect(existsSync(join(legacy, 'state.sqlite'))).toBe(false)
-  const home = projectHome(ultimateRoot, userHome)
-  expect(await readFile(join(home, 'screenshots/example.png'), 'utf8')).toBe('image')
-  expect(await readFile(join(legacy, 'agents/keep.md'), 'utf8')).toBe('user config')
-  const next = await prepareHarness({ ultimateRoot, userHome, home, faux: true })
-  const resumed = await next.open()
-  try {
-    expect(resumed.root.id).toBe(id)
-    expect((await resumed.harness.snapshot(Metadata, id, context))?.title).toBe(
-      'Intact conversation',
-    )
-  } finally {
-    await resumed.close()
-  }
-})
-
-it('refuses to migrate an actively owned legacy database', async () => {
-  const userHome = await temp()
-  const root = await temp()
-  const legacy = join(userHome, '.ultimate')
-  await mkdir(legacy)
-  await writeFile(join(legacy, 'state.sqlite'), 'do not move')
-  const owner = await acquireLock(join(legacy, 'storage.lock'), { pid: process.pid })
-  try {
-    await expect(migrateProject(root, root, userHome)).rejects.toThrow('not an Ultimate core')
-    expect(await readFile(join(legacy, 'state.sqlite'), 'utf8')).toBe('do not move')
-  } finally {
-    await owner.close()
-  }
-})
-
-it('checkpoints committed WAL data and resumes an interrupted migration', async () => {
-  const userHome = await temp()
-  const root = await temp()
-  const legacy = join(userHome, '.ultimate')
-  await mkdir(legacy)
-  const database = new DatabaseSync(join(legacy, 'state.sqlite'))
-  database.exec(
-    'PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE items(value); INSERT INTO items VALUES (42)',
-  )
-  expect((await readFile(join(legacy, 'state.sqlite-wal'))).length).toBeGreaterThan(0)
-  await mkdir(join(legacy, 'screenshots'))
-  await writeFile(join(legacy, 'screenshots/image.png'), 'image')
-  // An existing destination forces an interruption after the database move.
-  const home = projectHome(root, userHome)
-  await mkdir(join(home, 'screenshots'), { recursive: true })
-  await writeFile(join(home, 'screenshots/block'), '')
-  try {
-    await expect(migrateProject(root, root, userHome)).rejects.toThrow('ENOTEMPTY')
-  } finally {
-    database.close()
-  }
-  expect(existsSync(join(home, 'migration.pending'))).toBe(true)
-  await rm(join(home, 'screenshots'), { recursive: true })
-  expect(await migrateProject(root, root, userHome)).toBe(true)
-  const migrated = new DatabaseSync(join(home, 'state.sqlite'))
-  try {
-    expect(migrated.prepare('SELECT value FROM items').get()?.value).toBe(42)
-  } finally {
-    migrated.close()
-  }
-  expect(await readFile(join(home, 'screenshots/image.png'), 'utf8')).toBe('image')
-  expect(await migrateProject(root, root, userHome)).toBe(false)
 })
 
 it('survives invalid settings at boot and mid-run and clears errors after repair', async () => {
@@ -335,19 +225,24 @@ it('loads external project facets over user and built-in names, actions and tran
   )
   const virtual = await server.vite.ssrLoadModule('virtual:ultimate/web-facets')
   expect(typeof virtual.loaders[join(path, 'web.tsx')]).toBe('function')
-  expect(typeof virtual.loaders[resolve('extensions/status-line/web.tsx')]).toBe('function')
-  expect(virtual.sources['coding-tools']).toEqual({ source: 'project', path })
+  expect(
+    typeof virtual.loaders[join(server.host.ultimateRoot, 'extensions/status-line/web.tsx')],
+  ).toBe('function')
   const added = join(projectRoot, '.ultimate/extensions/added')
   await mkdir(added, { recursive: true })
   await writeFile(join(added, 'web.tsx'), 'export default {}')
   await until(
     async () =>
-      (await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).sources.added?.source ===
-      'project',
+      !!(await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders[
+        join(added, 'web.tsx')
+      ],
   )
   await rm(added, { recursive: true })
   await until(
-    async () => !(await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).sources.added,
+    async () =>
+      !(await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders[
+        join(added, 'web.tsx')
+      ],
   )
   const browser = await fetch(server.url + '/@fs/' + join(path, 'web.tsx'))
   expect(browser.status).toBe(200)
@@ -383,7 +278,12 @@ it('loads external project facets over user and built-in names, actions and tran
   ).toBe(403)
   const loaded = record().server!.loadedAt
   await writeFile(join(path, 'value.ts'), "export const value = 'edited'")
-  await until(() => record().server!.loadedAt !== loaded)
+  await until(
+    async () =>
+      record().server!.loadedAt !== loaded &&
+      (await post(server.url, '/api/extensions/coding-tools/actions/hello')).data.result.value ===
+        'edited',
+  )
   expect(
     (await post(server.url, '/api/extensions/coding-tools/actions/hello')).data.result.value,
   ).toBe('edited')
@@ -394,7 +294,9 @@ it('loads external project facets over user and built-in names, actions and tran
   ).toBe('user')
 })
 
-it('renders built-in and project status-line facets in an outside project', async () => {
+it('renders built-in and project status-line facets in an outside project', async (test) => {
+  const executablePath = await skipWithoutChromium(test)
+  if (!executablePath) return
   const projectRoot = await temp()
   const userHome = await temp()
   const path = await extension(join(projectRoot, '.ultimate'), 'hello', 'browser')
@@ -413,7 +315,7 @@ export default defineWebExtension({ slots: { 'statusline.left': [Hello] } })`,
     port: 0,
   })
   servers.push(server)
-  const browser = await chromium.launch({ executablePath: await browserBinary(), headless: true })
+  const browser = await chromium.launch({ executablePath, headless: true })
   try {
     const page = await browser.newPage()
     await page.goto(server.url)
@@ -496,12 +398,13 @@ it('exec times out, caps output and defaults to the project without a shell', as
 
 it('starts two project supervisors concurrently on distinct free ports and storage, serving hello live', async () => {
   const userHome = await temp()
+  const ultimateRoot = await sourceCopy(userHome)
   const projects = [await temp(), await temp()]
   await extension(join(projects[0], '.ultimate'), 'hello', 'live')
   const launch = (project: string) => {
     const home = projectHome(project, userHome)
     const env: NodeJS.ProcessEnv = {
-      ...process.env,
+      ...cleanEnv(),
       HOME: userHome,
       ULTIMATE_HOME: home,
       ULTIMATE_FAUX: '1',
@@ -509,7 +412,7 @@ it('starts two project supervisors concurrently on distinct free ports and stora
     delete env.ULTIMATE_PORT
     const child = spawn(
       process.execPath,
-      [resolve('bin/ultimate.ts'), project, '--no-open', '--port', '0'],
+      [join(ultimateRoot, 'bin/ultimate.ts'), project, '--no-open', '--port', '0'],
       {
         env,
         stdio: ['ignore', 'pipe', 'pipe'],

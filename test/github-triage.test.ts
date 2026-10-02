@@ -1,10 +1,9 @@
 import { spawnSync } from 'node:child_process'
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expect, it } from 'vitest'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { createServer } from '../server/main.ts'
+import { fauxServer as createServer, temp } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { actions } from '../.ultimate/extensions/github-triage/server.ts'
 import type { ActionContext } from '../server/actions.ts'
@@ -14,7 +13,7 @@ const message =
   "Blocked: Ultimate's agent does not write to GitHub. Propose with triage_propose; the user applies it in the Triage surface."
 
 it('guards argv and ordinary shell indirection without executing any real GitHub command', async () => {
-  const home = await mkdtemp(join(tmpdir(), 'triage-shim-'))
+  const home = await temp('triage-shim-')
   const log = join(home, 'argv')
   await writeFile(
     join(home, 'gh'),
@@ -113,7 +112,7 @@ it('guards argv and ordinary shell indirection without executing any real GitHub
 })
 
 it('refuses unlisted repositories before exec, rejects dot segments, and preserves label arrays while refusing unknown names', async () => {
-  const home = await mkdtemp(join(tmpdir(), 'triage-actions-'))
+  const home = await temp('triage-actions-')
   let calls = 0
   const ctx = {
     host: { projectRoot: home },
@@ -156,7 +155,7 @@ it('refuses unlisted repositories before exec, rejects dot segments, and preserv
 })
 
 it('loads the bash wrap into agent.tools and requires browser headers on actions', async () => {
-  const home = await mkdtemp(join(tmpdir(), 'triage-server-'))
+  const home = await temp('triage-server-')
   await writeFile(join(home, 'gh'), '#!/bin/sh\necho FAKE_GH\n')
   await chmod(join(home, 'gh'), 0o755)
   const oldPath = process.env.PATH

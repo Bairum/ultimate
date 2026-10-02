@@ -2,9 +2,9 @@
 import { fork, spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, realpath } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
-import { migrateProject, projectHome, resolveProject } from '../server/project.ts'
+import { projectHome } from '../server/project.ts'
 import { acquireLock, retireStorageOwner, pause } from '../server/lock.ts'
 import { watch, existsSync } from 'node:fs'
 import { watchRoots } from '../server/watch-roots.ts'
@@ -21,15 +21,13 @@ const { values, positionals } = parseArgs({
   allowPositionals: true,
 })
 if (positionals.length > 1) throw new Error('Usage: ultimate [dir] [--port N] [--no-open]')
-const projectRoot = await resolveProject(positionals[0] ?? process.cwd()).catch((error) => {
+const projectRoot = await realpath(positionals[0] ?? process.cwd()).catch((error) => {
   console.error(
     `Cannot open project ${positionals[0] ?? process.cwd()}: ${error.code ?? error.message}`,
   )
   process.exit(1)
 })
 const home = process.env.ULTIMATE_HOME ?? projectHome(projectRoot)
-if (!process.env.ULTIMATE_HOME && (await migrateProject(ultimateRoot, projectRoot)))
-  console.log(`Migrated Ultimate state to ${home}`)
 const requestedPort = values.port ?? process.env.ULTIMATE_PORT
 let port = Number(requestedPort ?? 4747)
 if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid port')

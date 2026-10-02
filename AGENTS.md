@@ -50,12 +50,12 @@ The host owns `ultimate.ui` on the root conversation, persisted in SQLite and co
 - Call `restart` after editing `server/` or `shared/`, never for `web/`, `extensions/`, or `agents/`. `POST /api/restart` accepts the same swap; reconnect to events to observe the new generation. The supervisor type-checks and prepares a new child without storage, then waits for the old harness to close before opening the new one and resuming work. Failed checks/preparation keep the old child serving.
 - A crashed child restarts with backoff. After three failed boots the supervisor serves diagnostics and retries on changes in `server/`, `shared/`, or `extensions/`.
 - Binds only `127.0.0.1`; `--port` or `ULTIMATE_PORT` overrides selection, otherwise the supervisor chooses the first free port from `4747`.
-- `ULTIMATE_HOME` overrides state storage; the default is `~/.ultimate/projects/<basename>-<sha256(projectRoot) first 8 hex>/`. Different projects can run concurrently. The clone's first project start migrates the old database and screenshots once, leaving user config untouched. Never run two storage owners on the same home.
+- `ULTIMATE_HOME` overrides state storage; the default is `~/.ultimate/projects/<basename>-<sha256(projectRoot) first 8 hex>/`. Different projects can run concurrently. Never run two storage owners on the same home.
 - `ULTIMATE_GENERATION` defaults to `1` and labels the process in system info.
 - `ULTIMATE_FAUX=1` uses a looping demo provider without tokens; its tools edit only a scratch file in the home.
 - Pi's models, settings, auth, skills, and context loaders are shared with `~/.pi/agent`.
 - `pnpm check` checks format/lint/types; `pnpm test` runs faux integration tests with temporary homes.
-- `tsconfig.server.json` is the server-only type-check gate for swaps.
+- `tsconfig.swap.json` is the server-only type-check gate for swaps.
 - `tsconfig.json` (server, tests, tooling) references `tsconfig.web.json` (browser: `web/src`, `extensions/**/*.tsx`).
   `pnpm check` type-checks both; with plain `tsc`, run `tsc -b`.
 - The standalone server shuts down on SIGINT/SIGTERM; reopening resumes durable work.

@@ -1,15 +1,20 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { expect, it, vi } from 'vitest'
+import { expect, it } from 'vitest'
 import type { ConversationId, JsonObject } from '@earendil-works/pi-durable'
-import { createServer } from '../server/main.ts'
+import {
+  fauxServer as createServer,
+  sourceCopy,
+  cleanEnv,
+  skipWithoutChromium,
+  temp,
+} from './helpers.ts'
 import { context } from '../server/harness.ts'
 import type { Browser } from 'playwright-core'
-import browserExtension, { browserBinary } from '../extensions/browser/server.ts'
+import browserExtension from '../extensions/browser/server.ts'
 
 async function run(
   server: Awaited<ReturnType<typeof createServer>>,
@@ -34,14 +39,8 @@ async function run(
 }
 
 it('stores screenshot images and PNGs, drives the UI, and forwards nested images through codemode', async (test) => {
-  try {
-    await browserBinary()
-  } catch (error) {
-    console.warn(`Skipping browser integration: ${String(error)}`)
-    test.skip()
-    return
-  }
-  const home = await mkdtemp(join(tmpdir(), 'ultimate-browser-test-'))
+  if (!(await skipWithoutChromium(test))) return
+  const home = await temp('ultimate-browser-test-')
   const server = await createServer({
     ultimateRoot: resolve('.'),
     userHome: home,
@@ -109,17 +108,17 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
 }, 60000)
 
 it('discovers and starts agents from the user config root', async () => {
-  const home = await mkdtemp(join(tmpdir(), 'ultimate-agent-home-'))
+  const home = await temp('ultimate-agent-home-')
   await mkdir(join(home, '.ultimate/agents'), { recursive: true })
   const path = join(home, '.ultimate/agents/instance-home-agent.md')
   await writeFile(
     path,
     '---\nname: instance-home-agent\ndescription: Custom home agent\n---\nUse the custom home instructions.\n',
   )
-  vi.stubEnv('ULTIMATE_HOME', home)
   const server = await createServer({
     ultimateRoot: resolve('.'),
     userHome: home,
+    home,
     faux: true,
     port: 0,
   })
@@ -141,20 +140,20 @@ it('discovers and starts agents from the user config root', async () => {
     expect((await child!.agent(context)).instructions).toBe('Use the custom home instructions.')
   } finally {
     await server.close()
-    vi.unstubAllEnvs()
     await rm(home, { recursive: true, force: true })
   }
 })
 
 it('terminates an isolated instance after its owner is SIGKILLed', async () => {
-  const home = await mkdtemp(join(tmpdir(), 'ultimate-owner-test-'))
+  const home = await temp('ultimate-owner-test-')
+  const ultimateRoot = await sourceCopy(home)
   const resultPath = join(home, 'instance.json')
   const code = `
     import {createServer} from './server/main.ts';
     import {context} from './server/harness.ts';
     import {fauxAssistantMessage,fauxToolCall} from '@earendil-works/pi-ai/providers/faux';
     import {writeFile} from 'node:fs/promises';
-    const server = await createServer({ultimateRoot:process.cwd(),userHome:${JSON.stringify(home)},home:${JSON.stringify(home)},faux:true,port:0});
+    const server = await createServer({ultimateRoot:process.cwd(),projectRoot:process.cwd(),userHome:${JSON.stringify(home)},home:${JSON.stringify(home)},faux:true,port:0});
     server.host.faux.setResponses([fauxAssistantMessage([fauxToolCall('instance',{action:'start',faux:true})],{stopReason:'toolUse'}),fauxAssistantMessage('Complete')]);
     await (await server.root.submit({type:'input',content:'start'},context)).wait(context);
     const view = await server.root.viewState(context);
@@ -162,8 +161,9 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
     await writeFile(${JSON.stringify(resultPath)}, result.content.find(p => p.type === 'text').text);
   `
   const owner = spawn(process.execPath, ['--input-type=module', '-e', code], {
+    cwd: ultimateRoot,
     env: {
-      ...process.env,
+      ...cleanEnv({ HOME: home }),
       ULTIMATE_HOME: home,
       ULTIMATE_PORT: '12345',
       ULTIMATE_PUBLIC_URL: 'http://parent.invalid',
@@ -174,7 +174,6 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
       ULTIMATE_CHROMIUM: '/instance-test/chromium',
       ULTIMATE_SUPERVISED: '1',
       ULTIMATE_PREVIOUS_BUILD: 'null',
-      ULTIMATE_FAIL_PREPARE_GENERATION: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -200,7 +199,6 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
     expect(environment).not.toContain('ULTIMATE_PUBLIC_URL=')
     expect(environment).not.toContain('ULTIMATE_GENERATION=')
     expect(environment).not.toContain('ULTIMATE_PREVIOUS_BUILD=')
-    expect(environment).not.toContain('ULTIMATE_FAIL_')
     const env = Object.fromEntries(
       environment
         .split('\0')
@@ -254,7 +252,7 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
 }, 90000)
 
 it('starts an isolated standalone instance, reads logs and stops it', async () => {
-  const home = await mkdtemp(join(tmpdir(), 'ultimate-instance-test-'))
+  const home = await temp('ultimate-instance-test-')
   const childHome = join(home, 'child')
   const server = await createServer({
     ultimateRoot: resolve('.'),

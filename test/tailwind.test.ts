@@ -1,22 +1,15 @@
-import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { chromium, type Browser } from 'playwright-core'
 import { createServer, type ViteDevServer } from 'vite-plus'
 import { expect, it } from 'vitest'
-import { browserBinary } from '../extensions/browser/server.ts'
+import { skipWithoutChromium, temp, linkDependencies } from './helpers.ts'
 import { extensionModules } from '../server/vite-extensions.ts'
 
 it('hot-reloads Tailwind utilities when an extension facet is created, edited and removed', async (test) => {
-  let executablePath: string
-  try {
-    executablePath = await browserBinary()
-  } catch (error) {
-    console.warn(`Skipping browser integration: ${String(error)}`)
-    test.skip()
-    return
-  }
-  const repo = await mkdtemp(join(tmpdir(), 'ultimate-tailwind-test-'))
+  const executablePath = await skipWithoutChromium(test)
+  if (!executablePath) return
+  const repo = await temp('ultimate-tailwind-test-')
   let server: ViteDevServer | undefined
   let browser: Browser | undefined
   try {
@@ -24,7 +17,7 @@ it('hot-reloads Tailwind utilities when an extension facet is created, edited an
     await mkdir(extensions)
     await mkdir(join(repo, 'web/src'), { recursive: true })
     await copyFile(resolve('vite.config.ts'), join(repo, 'vite.config.ts'))
-    await symlink(resolve('node_modules'), join(repo, 'node_modules'), 'dir')
+    await linkDependencies(repo)
     await writeFile(join(repo, 'package.json'), '{"type":"module"}')
     await writeFile(
       join(repo, 'web/src/index.css'),
@@ -153,15 +146,9 @@ it.for(['user', 'project'] as const)(
   'scans and hot-reloads new %s facets through the virtual module',
   { timeout: 60000 },
   async (source, test) => {
-    let executablePath: string
-    try {
-      executablePath = await browserBinary()
-    } catch (error) {
-      console.warn(`Skipping browser integration: ${String(error)}`)
-      test.skip()
-      return
-    }
-    const base = await mkdtemp(join(tmpdir(), 'ultimate-external-tailwind-'))
+    const executablePath = await skipWithoutChromium(test)
+    if (!executablePath) return
+    const base = await temp('ultimate-external-tailwind-')
     const ultimate = join(base, 'ultimate')
     const project = join(base, 'project')
     const user = join(base, 'user')
@@ -173,7 +160,7 @@ it.for(['user', 'project'] as const)(
       await mkdir(extensions, { recursive: true })
       await mkdir(project, { recursive: true })
       await copyFile(resolve('vite.config.ts'), join(ultimate, 'vite.config.ts'))
-      await symlink(resolve('node_modules'), join(ultimate, 'node_modules'), 'dir')
+      await linkDependencies(ultimate)
       await writeFile(join(ultimate, 'package.json'), '{"type":"module"}')
       await writeFile(join(ultimate, 'web/src/index.css'), '@import "tailwindcss";\n')
       await writeFile(
