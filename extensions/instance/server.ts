@@ -112,19 +112,17 @@ export default function instanceExtension(host: ExtensionHost) {
               const url = `http://127.0.0.1:${port}`
               const env: NodeJS.ProcessEnv = {
                 ...Object.fromEntries(
-                  [
-                    'PATH',
-                    'HOME',
-                    'USER',
-                    'LANG',
-                    'LC_ALL',
-                    'TMPDIR',
-                    'XDG_CONFIG_HOME',
-                    'XDG_DATA_HOME',
-                    'XDG_CACHE_HOME',
-                    'PI_CODING_AGENT_DIR',
-                  ].flatMap((key) =>
-                    process.env[key] === undefined ? [] : [[key, process.env[key]]],
+                  Object.entries(process.env).filter(
+                    ([key]) =>
+                      ![
+                        'ULTIMATE_SUPERVISED',
+                        'ULTIMATE_PUBLIC_URL',
+                        'ULTIMATE_GENERATION',
+                        'ULTIMATE_PREVIOUS_BUILD',
+                        'ULTIMATE_HOME',
+                        'ULTIMATE_PORT',
+                        'ULTIMATE_FAUX',
+                      ].includes(key) && !key.startsWith('ULTIMATE_FAIL_'),
                   ),
                 ),
                 ULTIMATE_HOME: home,

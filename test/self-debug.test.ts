@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { expect, it } from 'vitest'
-import type { JsonObject } from '@earendil-works/pi-durable'
+import { expect, it, vi } from 'vitest'
+import type { ConversationId, JsonObject } from '@earendil-works/pi-durable'
 import { createServer } from '../server/main.ts'
 import { context } from '../server/harness.ts'
 import type { Browser } from 'playwright-core'
@@ -97,6 +97,39 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
   }
 }, 60000)
 
+it('discovers and starts agents from ULTIMATE_HOME', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'ultimate-agent-home-'))
+  await mkdir(join(home, 'agents'))
+  const path = join(home, 'agents/instance-home-agent.md')
+  await writeFile(
+    path,
+    '---\nname: instance-home-agent\ndescription: Custom home agent\n---\nUse the custom home instructions.\n',
+  )
+  vi.stubEnv('ULTIMATE_HOME', home)
+  const server = await createServer({ repoRoot: resolve('.'), faux: true, port: 0 })
+  try {
+    expect(server.system.current().agents).toContainEqual(
+      expect.objectContaining({ name: 'instance-home-agent', path }),
+    )
+    const result = await run(server, 'subagent', {
+      action: 'start',
+      agent: 'instance-home-agent',
+      task: 'Check custom home',
+      background: true,
+    })
+    expect(result.isError).not.toBe(true)
+    const child = await server.harness.conversation(
+      (result.details as { conversationId: ConversationId }).conversationId,
+      context,
+    )
+    expect((await child!.agent(context)).instructions).toBe('Use the custom home instructions.')
+  } finally {
+    await server.close()
+    vi.unstubAllEnvs()
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
 it('terminates an isolated instance after its owner is SIGKILLed', async () => {
   const home = await mkdtemp(join(tmpdir(), 'ultimate-owner-test-'))
   const resultPath = join(home, 'instance.json')
@@ -115,7 +148,14 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
   const owner = spawn(process.execPath, ['--input-type=module', '-e', code], {
     env: {
       ...process.env,
+      ULTIMATE_HOME: home,
+      ULTIMATE_PORT: '12345',
+      ULTIMATE_PUBLIC_URL: 'http://parent.invalid',
       ULTIMATE_GENERATION: '99',
+      ANTHROPIC_API_KEY: 'instance-test-key',
+      HTTPS_PROXY: 'http://proxy.invalid:8080',
+      NODE_EXTRA_CA_CERTS: '/etc/ssl/certs/ca-certificates.crt',
+      ULTIMATE_CHROMIUM: '/instance-test/chromium',
       ULTIMATE_SUPERVISED: '1',
       ULTIMATE_PREVIOUS_BUILD: 'null',
       ULTIMATE_FAIL_PREPARE_GENERATION: '1',
@@ -145,6 +185,26 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
     expect(environment).not.toContain('ULTIMATE_GENERATION=')
     expect(environment).not.toContain('ULTIMATE_PREVIOUS_BUILD=')
     expect(environment).not.toContain('ULTIMATE_FAIL_')
+    const env = Object.fromEntries(
+      environment
+        .split('\0')
+        .filter(Boolean)
+        .map((entry) => {
+          const separator = entry.indexOf('=')
+          return [entry.slice(0, separator), entry.slice(separator + 1)]
+        }),
+    )
+    expect(env).toMatchObject({
+      ULTIMATE_HOME: instance!.home,
+      ULTIMATE_PORT: new URL(instance!.url).port,
+      ULTIMATE_NO_OPEN: '1',
+      ULTIMATE_FAUX: '1',
+      ULTIMATE_INSTANCE_OWNER: String(owner.pid),
+      ANTHROPIC_API_KEY: 'instance-test-key',
+      HTTPS_PROXY: 'http://proxy.invalid:8080',
+      NODE_EXTRA_CA_CERTS: '/etc/ssl/certs/ca-certificates.crt',
+      ULTIMATE_CHROMIUM: '/instance-test/chromium',
+    })
     const exited = once(owner, 'exit')
     owner.kill('SIGKILL')
     await exited

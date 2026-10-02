@@ -1,5 +1,4 @@
 import { readdir, readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 
@@ -94,7 +93,7 @@ export function parseDefinition(text: string, path: string): AgentDefinition {
 export async function discoverAgents(
   repoRoot: string,
   cwd: string,
-  home = join(homedir(), '.ultimate'),
+  home: string,
 ): Promise<AgentDiscovery> {
   const definitions = new Map<string, AgentDefinition>()
   const errors: AgentDiscovery['errors'] = []

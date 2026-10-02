@@ -107,16 +107,18 @@ export async function createSystem(
       contextFiles: loadProjectContextFiles({ cwd: host.repoRoot, agentDir }).map(
         (file) => file.path,
       ),
-      agents: await discoverAgents(host.repoRoot, host.repoRoot).then(({ definitions, errors }) => [
-        ...definitions.map(({ name, description, path, model, thinking }) => ({
-          name,
-          description,
-          path,
-          ...(model ? { model } : {}),
-          ...(thinking ? { thinking } : {}),
-        })),
-        ...errors,
-      ]),
+      agents: await discoverAgents(host.repoRoot, host.repoRoot, host.home).then(
+        ({ definitions, errors }) => [
+          ...definitions.map(({ name, description, path, model, thinking }) => ({
+            name,
+            description,
+            path,
+            ...(model ? { model } : {}),
+            ...(thinking ? { thinking } : {}),
+          })),
+          ...errors,
+        ],
+      ),
     }
     const json = JSON.stringify(value)
     if (json !== previous) {
