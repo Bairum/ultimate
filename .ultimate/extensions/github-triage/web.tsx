@@ -53,8 +53,8 @@ const tasks = {
   labels: {
     label: 'Suggest labels',
     icon: TagIcon,
-    ask: () =>
-      `Suggest labels for it. Read the repository's labels with \`gh label list\` and pick only from those, then call triage_propose with addLabels (and removeLabels for wrong ones) and a one-line reason.`,
+    ask: (repo: string) =>
+      `Suggest labels for it. Read the repository's labels with \`gh label list -R ${repo} --limit 200\` and pick only from those, then call triage_propose with addLabels (and removeLabels for wrong ones) and a one-line reason.`,
   },
   reply: {
     label: 'Draft a reply',
@@ -82,7 +82,7 @@ function Ask({ repo, item }: { repo: string; item: DetailData }) {
               [
                 `GitHub ${noun} ${repo}#${item.number}: "${item.title}" by ${item.author}${item.labels.length ? `, labelled ${item.labels.map((label) => label.name).join(', ')}` : ', no labels'}.`,
                 `Read it with \`gh ${item.kind} view ${item.number} -R ${repo} --comments\`${item.kind === 'pr' ? ` (and \`gh pr diff ${item.number} -R ${repo}\` if the change matters)` : ''}.`,
-                task.ask(),
+                task.ask(repo),
               ].join(' '),
               'followUp',
             )

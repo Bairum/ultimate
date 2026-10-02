@@ -3,9 +3,10 @@ import { useState } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { Tool, ToolContent, ToolHeader, ToolOutput, ToolSection } from '@/components/ai/tool'
 import { Button } from '@/components/ui/button'
-import { api, cn, useExtensionUiState } from '@/sdk'
+import { api, cn, useAction, useExtensionUiState } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import { changed } from './types.tsx'
+import type { Label } from './types.tsx'
 
 interface Args {
   repo?: string
@@ -20,7 +21,11 @@ interface Args {
 /** What became of each half of a proposal; durable, so a reload still shows it applied. */
 type Outcome = {
   labels?: 'applied' | 'discarded'
+  /** The label names as applied, spelled as the repository spells them. */
+  applied?: string[]
   reply?: 'posted' | 'discarded'
+  /** The reply as posted, after the user's edits. */
+  text?: string
   url?: string
 }
 
@@ -46,10 +51,30 @@ export function Proposal({ call }: { call: ToolCallView }) {
   const [busy, setBusy] = useState<'labels' | 'reply' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const target = `${args.repo ?? ''}#${args.number ?? ''}`
-  const add = args.addLabels ?? []
-  const remove = args.removeLabels ?? []
-  const reply = outcome.reply ? (args.reply ?? '') : (editing ?? args.reply ?? '')
   const ready = call.status === 'done'
+  // GitHub creates a label it does not know, so only names the repository has are written (matched like GitHub, ignoring case).
+  const labels = useAction<Label[]>(
+    'github-triage',
+    'labels',
+    { repo: args.repo ?? '' },
+    {
+      enabled: ready && !outcome.labels && !!args.repo,
+    },
+  )
+  const known = new Map(labels.data?.map((label) => [label.name.toLowerCase(), label.name]))
+  const exists = (name: string) =>
+    outcome.applied
+      ? outcome.applied.some((applied) => applied.toLowerCase() === name.toLowerCase())
+      : !labels.data || known.has(name.toLowerCase())
+  // Written as the repository spells them.
+  const canonical = (names: string[]) =>
+    names.flatMap((name) => known.get(name.toLowerCase()) ?? [])
+  const add = canonical(args.addLabels ?? [])
+  const remove = canonical(args.removeLabels ?? [])
+  const unknown = [...(args.addLabels ?? []), ...(args.removeLabels ?? [])].filter(
+    (name) => !exists(name),
+  )
+  const reply = outcome.text ?? editing ?? args.reply ?? ''
 
   const write = async (part: 'labels' | 'reply') => {
     setBusy(part)
@@ -64,8 +89,13 @@ export function Proposal({ call }: { call: ToolCallView }) {
       else {
         setOutcome((previous) =>
           part === 'labels'
-            ? { ...previous, labels: 'applied' }
-            : { ...previous, reply: 'posted', ...(result.url ? { url: result.url } : {}) },
+            ? { ...previous, labels: 'applied', applied: [...add, ...remove] }
+            : {
+                ...previous,
+                reply: 'posted',
+                text: reply,
+                ...(result.url ? { url: result.url } : {}),
+              },
         )
         setEditing(null)
         changed.dispatchEvent(new Event('change'))
@@ -88,26 +118,48 @@ export function Proposal({ call }: { call: ToolCallView }) {
                 <p className="font-sans text-[12.5px] text-muted-foreground">{args.reason}</p>
               </ToolSection>
             )}
-            {(add.length > 0 || remove.length > 0) && (
+            {(args.addLabels ?? []).length + (args.removeLabels ?? []).length > 0 && (
               <ToolSection label="labels">
                 <div className="flex flex-wrap gap-1">
-                  {add.map((name) => (
-                    <span className="rounded-sm bg-diff-add/10 px-1 text-diff-add" key={name}>
-                      +{name}
-                    </span>
-                  ))}
-                  {remove.map((name) => (
-                    <span className="rounded-sm bg-diff-del/10 px-1 text-diff-del" key={name}>
-                      −{name}
+                  {[
+                    ...(args.addLabels ?? []).map((name) => ({ name, sign: '+' })),
+                    ...(args.removeLabels ?? []).map((name) => ({ name, sign: '−' })),
+                  ].map(({ name, sign }) => (
+                    <span
+                      className={cn(
+                        'rounded-sm px-1',
+                        !exists(name)
+                          ? 'bg-muted text-muted-foreground/60 line-through'
+                          : sign === '+'
+                            ? 'bg-diff-add/10 text-diff-add'
+                            : 'bg-diff-del/10 text-diff-del',
+                      )}
+                      key={sign + name}
+                      title={exists(name) ? undefined : `No label "${name}" in ${args.repo}`}
+                    >
+                      {sign}
+                      {name}
                     </span>
                   ))}
                 </div>
+                {ready && !outcome.labels && unknown.length > 0 && (
+                  <p className="text-[11.5px] text-muted-foreground">
+                    {labels.data?.length === 0 ? (
+                      `Could not read the labels of ${args.repo}; nothing to apply.`
+                    ) : (
+                      <>
+                        {unknown.length === 1 ? 'This label does' : 'These labels do'} not exist in{' '}
+                        {args.repo} and {unknown.length === 1 ? 'is' : 'are'} skipped.
+                      </>
+                    )}
+                  </p>
+                )}
                 {outcome.labels === 'applied' && <Done>applied on GitHub</Done>}
                 {outcome.labels === 'discarded' && <Done>discarded</Done>}
                 {ready && !outcome.labels && (
-                  <div className="flex gap-1.5 pt-1">
+                  <div className="flex flex-wrap gap-1.5 pt-1">
                     <Button
-                      disabled={busy !== null}
+                      disabled={busy !== null || !labels.data || add.length + remove.length === 0}
                       onClick={() => void write('labels')}
                       size="xs"
                       variant="outline"
@@ -152,7 +204,7 @@ export function Proposal({ call }: { call: ToolCallView }) {
                 )}
                 {outcome.reply === 'discarded' && <Done>discarded</Done>}
                 {ready && !outcome.reply && (
-                  <div className="flex gap-1.5 pt-1">
+                  <div className="flex flex-wrap gap-1.5 pt-1">
                     <Button
                       disabled={busy !== null || !reply.trim()}
                       onClick={() => void write('reply')}
