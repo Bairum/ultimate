@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
+import { formatDimensionNote, resizeImage } from '@earendil-works/pi-coding-agent'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import { chromium, type Browser, type Page } from 'playwright-core'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -42,23 +43,15 @@ async function capture(page: Page, home: string, selector?: string, fullPage = f
     type: 'png',
     ...(selector ? {} : { fullPage }),
   })
-  const resize = await page.context().newPage()
-  try {
-    await resize.setContent('<canvas></canvas>')
-    const data = await resize.evaluate(async (base64) => {
-      const image = new Image()
-      image.src = `data:image/png;base64,${base64}`
-      await image.decode()
-      const scale = Math.min(1, 1600 / Math.max(image.width, image.height))
-      const canvas = document.querySelector('canvas')!
-      canvas.width = Math.round(image.width * scale)
-      canvas.height = Math.round(image.height * scale)
-      canvas.getContext('2d')!.drawImage(image, 0, 0, canvas.width, canvas.height)
-      return canvas.toDataURL('image/jpeg', 0.75).split(',')[1]
-    }, png.toString('base64'))
-    return { image: { type: 'image' as const, mimeType: 'image/jpeg', data }, file }
-  } finally {
-    await resize.close()
+  const resized = await resizeImage(png, 'image/png', { maxWidth: 1600, maxHeight: 1600 })
+  return {
+    file,
+    image: resized
+      ? { type: 'image' as const, mimeType: resized.mimeType, data: resized.data }
+      : undefined,
+    note: resized
+      ? formatDimensionNote(resized)
+      : '[Image omitted: could not be resized below the inline image size limit.]',
   }
 }
 
@@ -84,7 +77,7 @@ export default function browserExtension(host: ExtensionHost) {
       defineTool({
         name: 'screenshot',
         description:
-          'Look at a browser page; save a full-resolution PNG and return a compact JPEG with loading errors.',
+          'Look at a browser page; save a full-resolution PNG and return a compact image with loading errors.',
         replay: 'safe',
         parameters: Type.Object({
           ...base,
@@ -167,7 +160,12 @@ export default function browserExtension(host: ExtensionHost) {
       page: Page,
       outcomes: string[],
     ) => Promise<
-      { image: { type: 'image'; mimeType: string; data: string }; file: string } | undefined
+      | {
+          image?: { type: 'image'; mimeType: string; data: string }
+          file: string
+          note?: string
+        }
+      | undefined
     >,
   ) {
     const outcomes: string[] = []
@@ -218,12 +216,18 @@ export default function browserExtension(host: ExtensionHost) {
         structuredContent: {
           title,
           ...(result
-            ? { image: `data:image/jpeg;base64,${result.image.data}`, file: result.file }
+            ? {
+                ...(result.image
+                  ? { image: `data:${result.image.mimeType};base64,${result.image.data}` }
+                  : {}),
+                file: result.file,
+              }
             : {}),
           outcomes,
         },
         content: [
-          ...(result ? [result.image] : []),
+          ...(result?.note ? [{ type: 'text' as const, text: result.note }] : []),
+          ...(result?.image ? [result.image] : []),
           {
             type: 'text' as const,
             text: [`Title: ${title}`, ...(result ? [`PNG: ${result.file}`] : []), ...outcomes].join(

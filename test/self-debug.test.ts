@@ -65,11 +65,21 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
         metadata: Metadata,
       }),
     )
-    const result = await run(server, 'screenshot', { url: server.url, waitMs: 0 })
+    const result = await run(server, 'screenshot', {
+      url: server.url,
+      width: 2000,
+      height: 1000,
+      waitMs: 0,
+    })
     expect(result.isError).not.toBe(true)
     expect(
-      result.content.some((block) => block.type === 'image' && block.mimeType === 'image/jpeg'),
+      result.content.some(
+        (block) => block.type === 'image' && ['image/png', 'image/jpeg'].includes(block.mimeType),
+      ),
     ).toBe(true)
+    expect(JSON.stringify(result.content)).toContain(
+      '[Image: original 2000x1000, displayed at 1600x800. Multiply coordinates by 1.25 to map to original image.]',
+    )
     const files = await readdir(join(home, 'screenshots'))
     expect(files).toHaveLength(1)
     expect((await readFile(join(home, 'screenshots', files[0]))).subarray(1, 4).toString()).toBe(
