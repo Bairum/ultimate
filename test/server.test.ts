@@ -22,7 +22,7 @@ afterEach(async () => {
   for (const directory of directories.splice(0))
     await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
 })
-async function fixture(extra = false, agents = false) {
+async function fixture(extra = false, agents = false, sources?: Record<string, string>) {
   const directory = await mkdtemp(join(tmpdir(), 'ultimate-test-'))
   directories.push(directory)
   const repoRoot = join(directory, 'repo')
@@ -70,6 +70,13 @@ async function fixture(extra = false, agents = false) {
     })
     await cp(resolvePath('agents'), join(repoRoot, 'agents'), { recursive: true })
     await writeFile(join(repoRoot, 'agents/broken.md'), 'not frontmatter')
+  }
+  if (sources) {
+    await rm(join(repoRoot, 'extensions/coding-tools'), { recursive: true })
+    for (const [name, source] of Object.entries(sources)) {
+      await mkdir(join(repoRoot, 'extensions', name), { recursive: true })
+      await writeFile(join(repoRoot, 'extensions', name, 'server.ts'), source)
+    }
   }
   const options = { repoRoot, home: join(directory, 'home'), faux: true, port: 0 }
   const server = await createServer(options)
@@ -135,7 +142,62 @@ async function attach(server: Awaited<ReturnType<typeof createServer>>, query = 
   }
 }
 
+const orderedSource = (name: string, order = 0) => `
+import { Type } from '@earendil-works/pi-ai'
+import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
+export const order = ${order}
+export default defineExtension({ name: '${name}', sections: [section('${name === '0-new' ? 'new' : name}', () => '${name}')], tools: [defineTool({ name: '${name === '0-new' ? 'new' : name}', description: '${name}', parameters: Type.Object({}), execute: async () => ({}) })] })`
+
 describe('server', () => {
+  it('orders live-added sections and tools deterministically across reopen', async () => {
+    const { server, options } = await fixture(false, false, {
+      a: orderedSource('a'),
+      prompt: orderedSource('prompt', -100),
+    })
+    // This demo finishes without requiring the fixture to expose coding tools.
+    await post(server, '/api/conversations/1/submit', { text: 'Return the word SCOUT.' })
+    await server.harness.waitForIdle(context)
+    const folder = join(options.repoRoot, 'extensions/0-new')
+    await mkdir(folder)
+    await writeFile(join(folder, 'server.ts'), orderedSource('0-new'))
+    await until(() => !!server.extensions.info().find((item) => item.name === '0-new')?.server)
+    expect(
+      server.extensions.info().find((item) => item.name === '0-new')?.server?.error,
+    ).toBeUndefined()
+    await post(server, '/api/conversations/1/submit', { text: 'Return the word SCOUT.' })
+    await server.harness.waitForIdle(context)
+    const view = await server.root.viewState(context)
+    const systems = view.value.entries.filter((entry) => entry.kind === 'pi.system')
+    const message = systems.at(-1)!.model![0]
+    expect(message.role).toBe('system')
+    if (message.role !== 'system') throw new Error('Expected system message')
+    expect(Object.keys(message.sections!)).toEqual(['prompt', 'new', 'a'])
+    expect(message.toolsAdded!.map((tool) => tool.name)).toEqual(['prompt', 'new', 'a'])
+    const lastId = systems.at(-1)!.id
+    view.dispose()
+    await server.close()
+    servers.splice(servers.indexOf(server), 1)
+    const reopened = await createServer(options)
+    servers.push(reopened)
+    await post(reopened, '/api/conversations/1/submit', { text: 'Return the word SCOUT.' })
+    await reopened.harness.waitForIdle(context)
+    const next = await reopened.root.viewState(context)
+    expect(
+      next.value.entries.filter((entry) => entry.kind === 'pi.system' && entry.id > lastId),
+    ).toEqual([])
+    next.dispose()
+  })
+
+  it('puts identity first in the faux server system prompt', async () => {
+    const { server } = await fixture()
+    await post(server, '/api/conversations/1/submit', { text: 'Return the word SCOUT.' })
+    await server.harness.waitForIdle(context)
+    const view = await server.root.viewState(context)
+    const message = view.value.entries.find((entry) => entry.kind === 'pi.system')!.model![0]
+    if (message.role !== 'system') throw new Error('Expected system message')
+    expect(Object.keys(message.sections!)[0]).toBe('identity')
+    view.dispose()
+  })
   it('shares root UI snapshots and set/delete deltas across conversations and reopen', async () => {
     const { server, options } = await fixture()
     const created = await post(server, '/api/conversations')

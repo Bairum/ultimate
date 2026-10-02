@@ -16,7 +16,12 @@ import { ModelRuntime, SettingsManager } from '@earendil-works/pi-coding-agent'
 import { createRegistry, Harness } from '@earendil-works/pi-durable'
 import type { Context } from '@earendil-works/chord'
 import { UiState } from './ui-state.ts'
-import type { ConversationId, EnvTarget, HarnessSettings } from '@earendil-works/pi-durable'
+import type {
+  ConversationId,
+  EnvTarget,
+  Extension,
+  HarnessSettings,
+} from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { createBuild } from './build.ts'
@@ -24,8 +29,14 @@ import { applyHttpProxySettings, configureHttpDispatcher } from './http.ts'
 import type { Notice } from '../shared/protocol.ts'
 
 export { context }
-export function createHarnessSettings(settings: SettingsManager): HarnessSettings {
+export function createHarnessSettings(
+  settings: SettingsManager,
+  extensions: () => Extension[],
+): HarnessSettings {
   return {
+    get extensions() {
+      return extensions()
+    },
     get stream() {
       const provider = settings.getProviderRetrySettings()
       const idle = settings.getHttpIdleTimeoutMs()
@@ -66,6 +77,7 @@ export async function prepareHarness(options: HostOptions) {
   applyHttpProxySettings(settings.getGlobalSettings().httpProxy)
   configureHttpDispatcher(settings.getHttpIdleTimeoutMs())
   const registry = createRegistry()
+  const extensionOrders = new Map<string, number>()
   const envs = new Map<string, NodeExecutionEnv>()
   const env = ({ cwd = repoRoot }: EnvTarget) => {
     let found = envs.get(cwd)
@@ -185,6 +197,7 @@ export async function prepareHarness(options: HostOptions) {
     modelRuntime,
     settings,
     registry,
+    extensionOrders,
     faux: fauxHandle,
     async open(resume = true) {
       const owner = await acquireLock(
@@ -201,7 +214,16 @@ export async function prepareHarness(options: HostOptions) {
           {
             models,
             registry,
-            settings: createHarnessSettings(settings),
+            settings: createHarnessSettings(settings, () =>
+              registry
+                .snapshot()
+                .installed()
+                .toSorted(
+                  (a, b) =>
+                    (extensionOrders.get(a.name) ?? 0) - (extensionOrders.get(b.name) ?? 0) ||
+                    (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+                ),
+            ),
             env,
             onReport: (error) => options.report?.({ level: 'error', message: String(error) }),
           },

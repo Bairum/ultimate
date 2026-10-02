@@ -7,6 +7,8 @@ import {
 import { defineExtension, section } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 
+export const order = -100
+
 export default function prompt(host: ExtensionHost) {
   const resources = (cwd: string) => ({
     context: loadProjectContextFiles({ cwd, agentDir: getAgentDir() }),

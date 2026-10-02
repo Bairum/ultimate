@@ -43,7 +43,7 @@ export async function loadExtensions(
     extensions: () => [...records.values()],
     doc: (kind) => [...documents.values()].flat().find((doc) => doc.definition.kind === kind),
   }
-  const installed = new Set<string>()
+  const installed = host.extensionOrders
   let chain = Promise.resolve()
   let closed = false
   async function reload(selected?: Set<string>, servers = selected) {
@@ -79,7 +79,7 @@ export async function loadExtensions(
           if (!Array.isArray(docs) || docs.some((doc) => doc.definition.scope !== 'conversation'))
             throw new Error('docs must contain conversation document tokens')
           host.registry.install(extension)
-          installed.add(name)
+          installed.set(name, module.order ?? 0)
           documents.set(name, docs)
           record.server = {
             loadedAt: new Date().toISOString(),

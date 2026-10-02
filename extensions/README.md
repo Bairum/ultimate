@@ -183,4 +183,5 @@ Keep UI state that should survive a reload in `useExtensionUiState`; keep throwa
 - One feature per folder; the folder name is the extension name; a README is required. Keep it small.
 - Do not import another extension's files; share through documents, commands, or the SDK.
 - Server facets: see `prompt/` for prompt sections and `coding-tools/server.ts` for tools; the root `AGENTS.md` explains
-  reloads and durability.
+  reloads and durability. Server facets may `export const order = -100`: lower values come first, with the default 0
+  keeping folder-name order; changing it reorders the prompt and tools once.
