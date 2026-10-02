@@ -8,7 +8,8 @@ import { afterEach, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
-import subagents, { Subagents } from '../extensions/subagents/server.ts'
+import type { ActionContext } from '../server/actions.ts'
+import subagents, { actions, Subagents } from '../extensions/subagents/server.ts'
 import { create, git } from '../extensions/subagents/isolates/worktree.ts'
 import { temp, until } from './helpers.ts'
 
@@ -213,4 +214,29 @@ it('runs setup once with source env and removes a failed worktree', async () => 
   const before = await git(f.project, 'worktree', 'list', '--porcelain')
   await expect(create(f.project, f.home, 'worker', 'failed')).rejects.toThrow('setup-broken')
   expect(await git(f.project, 'worktree', 'list', '--porcelain')).toBe(before)
+})
+it('reads an isolate with its commits ahead of the parent for the Agents tab', async () => {
+  const f = await fixture()
+  await f.call({ action: 'start', agent: 'worker', task: 'write' })
+  await f.call({ action: 'start', agent: 'worker', task: 'inspect', isolate: 'none' })
+  const [child, plain] = await f.children()
+  const parent = f.opened.root.id
+  const ctx = {
+    host: { projectRoot: f.project, ultimateRoot: f.project, harness: () => f.opened.harness },
+  } as unknown as ActionContext
+  const read = () => actions.isolate({ parent, id: child.conversationId }, ctx)
+  expect(await actions.isolate({ parent, id: plain.conversationId }, ctx)).toBeNull()
+  await expect(actions.isolate({ id: child.conversationId }, ctx)).rejects.toThrow('required')
+  expect(await read()).toEqual({ ...child.isolate, ahead: 0 })
+  await git(child.isolate!.path, 'add', '.')
+  await git(child.isolate!.path, 'commit', '-m', 'child change')
+  expect(await read()).toEqual({ ...child.isolate, ahead: 1 })
+  const landed = await actions.land(
+    { id: child.conversationId },
+    { ...ctx, conversationId: parent },
+  )
+  expect(await read()).toEqual({ ...child.isolate, landed: landed.landed, ahead: 0 })
+  await actions.discard({ id: child.conversationId }, { ...ctx, conversationId: parent })
+  await git(f.project, 'branch', '-D', child.isolate!.branch)
+  expect(await read()).toMatchObject({ state: 'discarded', ahead: null })
 })

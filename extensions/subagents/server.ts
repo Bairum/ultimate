@@ -192,6 +192,25 @@ export const actions = {
   async discard(args: JsonValue, { host, conversationId }: ActionContext) {
     return operate(host, conversationId as ConversationId, childId(args, conversationId), 'discard')
   },
+  /** `{parent, id}`: the child's isolate and its commits ahead of the parent checkout, or null without one. */
+  async isolate(args: JsonValue, { host }: ActionContext) {
+    // The Agents tab may show another conversation, so the parent comes with the args.
+    const parent = (args as { parent?: JsonValue } | null)?.parent
+    const id = childId(args, typeof parent === 'number' ? parent : undefined)
+    const harness = host.harness()
+    const conversationId = parent as ConversationId
+    const isolate = (await harness.snapshot(Subagents, conversationId, BACKGROUND_CONTEXT))?.agents[
+      String(id)
+    ]?.isolate
+    if (!isolate) return null
+    const conversation = (await harness.conversation(conversationId, BACKGROUND_CONTEXT))!
+    const cwd = (await conversation.agent(BACKGROUND_CONTEXT)).cwd ?? host.projectRoot
+    // A kept branch may have been deleted since.
+    const ahead = await worktree
+      .git(cwd, 'rev-list', '--count', `HEAD..${isolate.branch}`)
+      .then(Number, () => null)
+    return { ...isolate, ahead }
+  },
   async definitions(_args: JsonValue, { host }: ActionContext) {
     const { definitions, errors } = await discoverAgents(
       host.ultimateRoot,

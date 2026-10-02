@@ -1,5 +1,13 @@
-import { BotIcon, MessageSquareIcon, NetworkIcon, SquareArrowOutUpRightIcon } from 'lucide-react'
-import { useEffect } from 'react'
+import {
+  BotIcon,
+  GitBranchIcon,
+  GitMergeIcon,
+  MessageSquareIcon,
+  NetworkIcon,
+  SquareArrowOutUpRightIcon,
+  Trash2Icon,
+} from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Message, MessageResponse } from '@/components/ai/message'
 import { Shimmer } from '@/components/ai/shimmer'
@@ -13,10 +21,12 @@ import {
 } from '@/components/ai/tool'
 import { Button } from '@/components/ui/button'
 import {
+  api,
   cn,
   defineWebExtension,
   useAction,
   useConversations,
+  useDoc,
   useTasks,
   useToolDuration,
   useUltimate,
@@ -41,6 +51,57 @@ function Tag({ children, className }: { children: ReactNode; className?: string 
 function BusyDot({ className }: { className?: string }) {
   return (
     <span className={cn('size-1.5 shrink-0 animate-pulse-dot rounded-full bg-brand', className)} />
+  )
+}
+
+/** Where a child works, as the parent's `ultimate.subagents` document records it. */
+type Isolate = {
+  kind: 'worktree'
+  path: string
+  branch: string
+  base: string
+  state: 'active' | 'discarded'
+  landed?: string
+}
+type Index = { agents: Record<string, { isolate?: Isolate }> }
+
+const isolateState = (isolate: Isolate) =>
+  isolate.state === 'discarded'
+    ? 'discarded'
+    : isolate.landed
+      ? `landed ${isolate.landed.slice(0, 7)}`
+      : 'active'
+
+function StateTag({ isolate }: { isolate: Isolate }) {
+  return (
+    <Tag
+      className={cn(
+        'font-mono',
+        isolate.state === 'discarded'
+          ? 'text-muted-foreground/70'
+          : isolate.landed
+            ? 'border-success/40 text-success'
+            : 'border-brand/40 text-brand',
+      )}
+    >
+      {isolateState(isolate)}
+    </Tag>
+  )
+}
+
+/** The call card's compact isolate: branch and state. The card renders in the parent, whose document has it. */
+function IsolateBadge({ childId }: { childId: number }) {
+  const isolate = useDoc<Index>('ultimate.subagents')?.agents[String(childId)]?.isolate
+  if (!isolate) return null
+  return (
+    <span
+      className="flex items-center gap-1 font-mono"
+      title={`${isolate.branch}\n${isolate.path}`}
+    >
+      <GitBranchIcon className="size-3 shrink-0" />
+      <span className="max-w-40 truncate">{isolate.branch}</span>
+      <StateTag isolate={isolate} />
+    </span>
   )
 }
 
@@ -79,6 +140,7 @@ function SubagentCall({ call }: { call: ToolCallView }) {
           className="min-w-0 flex-1"
           meta={
             <>
+              {childId !== undefined && <IsolateBadge childId={childId} />}
               {background && <Tag>bg</Tag>}
               {working && (
                 <span className="flex items-center gap-1.5 text-brand">
@@ -164,14 +226,179 @@ function ChildList({ output }: { output: string }) {
   )
 }
 
-function Node({
-  conversation,
-  children,
+/** Calls `refetch` when the window regains focus and when `key` changes after mount. */
+function useRefresh(refetch: () => unknown, key?: string) {
+  const last = useRef(key)
+  useEffect(() => {
+    if (last.current === key) return
+    last.current = key
+    void refetch()
+  }, [key, refetch])
+  useEffect(() => {
+    const refresh = () => void refetch()
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [refetch])
+}
+
+/** What `land` returns; `discard` returns only `text`. */
+interface Outcome {
+  text: string
+  landed?: string
+  paths?: string[]
+  needsRestart?: boolean
+}
+/** The `isolate` action: the record and the branch's commits ahead of the parent checkout (null once deleted). */
+type IsolateView = Isolate & { ahead: number | null }
+
+/** Below a child's row: its branch, and Land and Discard, which act for the parent. Results stay inline. */
+function IsolateActions({
+  child,
+  parent,
+  isolate,
+  refetch,
   depth,
 }: {
-  conversation: ConversationSummary
-  children: Map<number, ConversationSummary[]>
+  child: ConversationSummary
+  parent: ConversationSummary
+  isolate: IsolateView
+  refetch: () => unknown
   depth: number
+}) {
+  const [pending, setPending] = useState<'land' | 'discard'>()
+  const [confirming, setConfirming] = useState(false)
+  const [outcome, setOutcome] = useState<{ tone: 'error' | 'info' | 'warning'; text: string }[]>()
+  const act = async (action: 'land' | 'discard') => {
+    setConfirming(false)
+    setPending(action)
+    setOutcome(undefined)
+    try {
+      const result = await api.action<Outcome>(
+        'subagents',
+        action,
+        { id: child.id },
+        { conversationId: parent.id },
+      )
+      setOutcome(
+        action === 'discard'
+          ? undefined
+          : [
+              {
+                tone: 'info',
+                text: result.paths
+                  ? `Landed ${result.paths.length} changed path${result.paths.length === 1 ? '' : 's'}.`
+                  : result.text,
+              },
+              ...(result.needsRestart
+                ? [
+                    {
+                      tone: 'warning' as const,
+                      text: 'Changed server/ or shared/: restart to apply.',
+                    },
+                  ]
+                : []),
+            ],
+      )
+    } catch (error) {
+      setOutcome([{ tone: 'error', text: error instanceof Error ? error.message : String(error) }])
+    } finally {
+      setPending(undefined)
+      await refetch()
+    }
+  }
+  const disabled = child.busy || pending !== undefined
+  const reason = child.busy ? 'The child is running: wait or stop it first' : undefined
+  // Under the row's icon.
+  const indent = { paddingLeft: `${1.3 + depth}rem` }
+  return (
+    <div className="pb-1 font-mono text-[11px] text-muted-foreground">
+      <div className="flex h-6 min-w-0 items-center gap-1.5 pr-2" style={indent}>
+        <GitBranchIcon className="size-3 shrink-0" />
+        <span className="min-w-0 truncate" title={`${isolate.branch}\n${isolate.path}`}>
+          {isolate.branch}
+        </span>
+        {isolate.state === 'discarded' && (
+          <span className="shrink-0 text-muted-foreground/60">kept</span>
+        )}
+        {isolate.state === 'active' && !confirming && (
+          <span className="ml-auto flex shrink-0 items-center gap-0.5 pl-1">
+            <Button
+              className="h-5 gap-1 px-1.5 text-[11px]"
+              disabled={disabled}
+              onClick={() => void act('land')}
+              size="xs"
+              title={reason ?? 'Rebase its commits onto the parent checkout and fast-forward'}
+              variant="ghost"
+            >
+              <GitMergeIcon className="size-3" />
+              {pending === 'land' ? 'Landing…' : 'Land'}
+            </Button>
+            <Button
+              className="h-5 gap-1 px-1.5 text-[11px] hover:text-error"
+              disabled={disabled}
+              onClick={() => setConfirming(true)}
+              size="xs"
+              title={reason ?? 'Remove the worktree; the branch is kept'}
+              variant="ghost"
+            >
+              <Trash2Icon className="size-3" />
+              {pending === 'discard' ? 'Discarding…' : 'Discard'}
+            </Button>
+          </span>
+        )}
+      </div>
+      {confirming && (
+        <div className="flex min-w-0 items-center gap-1.5 pr-2" style={indent}>
+          <span className="min-w-0 font-sans text-[12px] leading-snug text-foreground/85">
+            Remove the worktree? The branch is kept.
+          </span>
+          <span className="ml-auto flex shrink-0 items-center gap-0.5 pl-1">
+            <Button
+              className="h-5 px-1.5 text-[11px] text-error hover:bg-error/10 hover:text-error"
+              disabled={child.busy}
+              onClick={() => void act('discard')}
+              size="xs"
+              variant="ghost"
+            >
+              Discard
+            </Button>
+            <Button
+              className="h-5 px-1.5 text-[11px]"
+              onClick={() => setConfirming(false)}
+              size="xs"
+              variant="ghost"
+            >
+              Cancel
+            </Button>
+          </span>
+        </div>
+      )}
+      {outcome?.map((line) => (
+        <p
+          className={cn(
+            'pr-3 leading-snug break-words whitespace-pre-wrap',
+            line.tone === 'error' && 'text-error',
+            line.tone === 'warning' && 'text-warning',
+          )}
+          key={line.text}
+          style={indent}
+        >
+          {line.text}
+        </p>
+      ))}
+    </div>
+  )
+}
+
+/** One conversation in the tree; click it to show it. `meta` goes before its marks. */
+function Row({
+  conversation,
+  depth,
+  meta,
+}: {
+  conversation: ConversationSummary
+  depth: number
+  meta?: ReactNode
 }) {
   const { conversationId, switchConversation } = useUltimate()
   const graph = useTasks()
@@ -183,39 +410,118 @@ function Node({
   const main = conversation.parentConversationId === undefined
   const Icon = main ? MessageSquareIcon : BotIcon
   return (
+    <button
+      className={cn(
+        'flex h-7 w-full min-w-0 items-center gap-1.5 pr-3 text-left font-mono text-[11.5px] transition-colors hover:bg-accent/50',
+        shown && 'bg-accent/70',
+      )}
+      onClick={() => switchConversation(conversation.id)}
+      style={{ paddingLeft: `${0.75 + depth * 1}rem` }}
+      type="button"
+    >
+      {depth > 0 && <span className="-ml-2 shrink-0 text-muted-foreground/40">└</span>}
+      <Icon className={cn('size-3.5 shrink-0', shown ? 'text-brand' : 'text-muted-foreground')} />
+      <span className={cn('shrink-0', shown ? 'text-foreground' : 'text-foreground/85')}>
+        {conversation.id === 1
+          ? 'main'
+          : (conversation.label ?? (main ? 'conversation' : 'subagent'))}
+      </span>
+      <span className="shrink-0 text-muted-foreground/60">#{conversation.id}</span>
+      {conversation.title && conversation.id !== 1 && (
+        <span
+          className="min-w-0 truncate font-sans text-[12px] text-muted-foreground"
+          title={conversation.title}
+        >
+          {conversation.title}
+        </span>
+      )}
+      <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
+        {meta}
+        {background && <Tag>bg</Tag>}
+        {conversation.busy && <BusyDot />}
+      </span>
+    </button>
+  )
+}
+
+/**
+ * A subagent's row, with its isolate's state and commits ahead in it and the branch and actions below. Refetched
+ * when the child or its parent settles, since either may have committed or landed.
+ */
+function Child({
+  conversation,
+  parent,
+  depth,
+}: {
+  conversation: ConversationSummary
+  parent: ConversationSummary
+  depth: number
+}) {
+  const { data: isolate, refetch } = useAction<IsolateView | null>('subagents', 'isolate', {
+    parent: parent.id,
+    id: conversation.id,
+  })
+  useRefresh(refetch, `${conversation.busy} ${parent.busy}`)
+  return (
     <>
-      <button
-        className={cn(
-          'flex h-7 w-full min-w-0 items-center gap-1.5 pr-3 text-left font-mono text-[11.5px] transition-colors hover:bg-accent/50',
-          shown && 'bg-accent/70',
-        )}
-        onClick={() => switchConversation(conversation.id)}
-        style={{ paddingLeft: `${0.75 + depth * 1}rem` }}
-        type="button"
-      >
-        {depth > 0 && <span className="-ml-2 shrink-0 text-muted-foreground/40">└</span>}
-        <Icon className={cn('size-3.5 shrink-0', shown ? 'text-brand' : 'text-muted-foreground')} />
-        <span className={cn('shrink-0', shown ? 'text-foreground' : 'text-foreground/85')}>
-          {conversation.id === 1
-            ? 'main'
-            : (conversation.label ?? (main ? 'conversation' : 'subagent'))}
-        </span>
-        <span className="shrink-0 text-muted-foreground/60">#{conversation.id}</span>
-        {conversation.title && conversation.id !== 1 && (
-          <span
-            className="min-w-0 truncate font-sans text-[12px] text-muted-foreground"
-            title={conversation.title}
-          >
-            {conversation.title}
-          </span>
-        )}
-        <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
-          {background && <Tag>bg</Tag>}
-          {conversation.busy && <BusyDot />}
-        </span>
-      </button>
+      <Row
+        conversation={conversation}
+        depth={depth}
+        meta={
+          isolate && (
+            <>
+              <StateTag isolate={isolate} />
+              {isolate.ahead !== null && (
+                <span
+                  className="text-[10.5px] text-muted-foreground/80"
+                  title={`${isolate.ahead} commit${isolate.ahead === 1 ? '' : 's'} on the branch that the parent checkout does not have`}
+                >
+                  ↑{isolate.ahead}
+                </span>
+              )}
+            </>
+          )
+        }
+      />
+      {isolate && (
+        <IsolateActions
+          child={conversation}
+          depth={depth}
+          isolate={isolate}
+          parent={parent}
+          refetch={refetch}
+        />
+      )}
+    </>
+  )
+}
+
+function Node({
+  conversation,
+  parent,
+  children,
+  depth,
+}: {
+  conversation: ConversationSummary
+  parent?: ConversationSummary
+  children: Map<number, ConversationSummary[]>
+  depth: number
+}) {
+  return (
+    <>
+      {parent ? (
+        <Child conversation={conversation} depth={depth} parent={parent} />
+      ) : (
+        <Row conversation={conversation} depth={depth} />
+      )}
       {(children.get(conversation.id) ?? []).map((child) => (
-        <Node children={children} conversation={child} depth={depth + 1} key={child.id} />
+        <Node
+          children={children}
+          conversation={child}
+          depth={depth + 1}
+          key={child.id}
+          parent={conversation}
+        />
       ))}
     </>
   )
@@ -248,11 +554,7 @@ function Heading({ children, meta }: { children: ReactNode; meta: ReactNode }) {
 /** Definitions are reread at every start; the list refetches when the window regains focus, as after an edit. */
 function Definitions() {
   const { data, refetch } = useAction<Discovery>('subagents', 'definitions')
-  useEffect(() => {
-    const refresh = () => void refetch()
-    window.addEventListener('focus', refresh)
-    return () => window.removeEventListener('focus', refresh)
-  }, [refetch])
+  useRefresh(refetch)
   if (!data) return null
   const { definitions, errors } = data
   return (
