@@ -57,7 +57,8 @@ Files ending in `.ts` belong to the server facet, files ending in `.tsx` to the 
 more `.tsx` files in the same folder (see `coding-tools/diff.tsx`). The folder name is the extension name; a
 `server.ts` extension must use it as its `name`.
 
-Each web facet loads on its own. If it fails to compile or throws, an error card names it and the rest of the UI keeps
+Each web facet loads on its own. If it fails to compile, throws, or exports a contribution of the wrong shape (such as
+`surfaces: {}` instead of an array, or a command without `run`), an error card names it and the rest of the UI keeps
 running; its previous version stays installed until the fix lands. Every contribution renders inside its own error
 boundary, so a crashing component shows a compact card where it was.
 
@@ -185,10 +186,17 @@ to have a failure reported as a notice. `when(context)` hides the command when i
 reports a notice naming your extension. Commands run outside React: read the current state with `getConversation()`
 and `getState()`, not hooks.
 
-Plain keys and Shift+letter never fire while the user types; chords with `mod`, `alt`, or `ctrl` do, and so do Escape
-and Shift+Tab (Pi's thinking toggle) outside dialogs. To let a command open UI an extension renders, such as a
-popover, use a dialog id: the command calls `context.open(id)` and the component reads `useDialog(id)` as its open
-state (see `models`).
+Plain keys and Shift+letter never fire while the user types; chords with `mod`, `alt`, or `ctrl` do. A plain key that
+must work in the composer too sets `whileTyping: true`, as Escape (`agent.stop`) and Shift+Tab
+(`model.thinking.cycle`) do; it still leaves the key to an open dialog, which closes or moves focus with it. To let a
+command open UI an extension renders, such as a popover, use a dialog id: the command calls `context.open(id)` and the
+component reads `useDialog(id)` as its open state (see `models`).
+
+Command ids are global and resolve like surface ids: a later facet in folder-name order wins an id, in the place of the
+command it replaces. The shell itself has only the palette (`ultimate.palette`), the panel and sidebar toggles
+(`ultimate.panel`, `ultimate.sidebar`), and a `ultimate.surface.<id>` switch per surface; the conversation commands
+(stop, compact, focus the composer, show the main conversation) come from `agent`, the theme toggle from `theme`. To
+replace one, declare its id; to drop it, replace or delete its extension.
 
 ## Actions
 
@@ -543,7 +551,7 @@ server code is reached through [actions](#actions). The surface primitives are i
 | `useDoc(kind)`                                                            | An extension document of the shown conversation (`export const docs` in `server.ts`); `undefined` until the stream delivers it (subscribing creates it with its initial value)                                          |
 | `useUiState(key, initial)`                                                | Durable UI state, stored with the main conversation: survives reloads and restarts, shared by every tab. `[value, set]`, JSON values only                                                                               |
 | `useExtensionUiState(key, initial)`                                       | `useUiState` under `ext.<your extension>.<key>`; use it for your own UI state                                                                                                                                           |
-| `useUltimate()`                                                           | `conversationId`, `surface`, and actions: `switchConversation`, `showSurface`, `openPanel`, `closePanel`, `togglePanel`, `toggleSidebar`, `runCommand`, `open(dialog)`, `close(dialog)`, `openPalette`, `focusComposer` |
+| `useUltimate()`                                                           | `conversationId`, `surface`, actions (`switchConversation`, `showSurface`, `openPanel`, `closePanel`, `togglePanel`, `toggleSidebar`, `runCommand`, `open`/`close(dialog)`, `openPalette`, `focusComposer`, `setTheme`) |
 | `useAction(extension, name, args?, options?)`                             | A server action's result, called on mount and when its args change: `{ data, error, loading, refetch }` (see [Actions](#actions))                                                                                       |
 | `useDialog(id)`                                                           | `[open, setOpen]` for a dialog an `overlay` component renders; `useUltimate().open(id)` opens it anywhere                                                                                                               |
 | `useConnection()`                                                         | Stream status: `connecting`, `open`, `reconnecting`                                                                                                                                                                     |
@@ -558,8 +566,9 @@ server code is reached through [actions](#actions). The surface primitives are i
 
 `api.cancelSubmission(submissionId, conversationId?)` withdraws one queued input without stopping the run.
 
-Helpers: `cn()` for class names, `formatTokens`, `formatBytes`, `formatDuration`, `shortenPath`, `elidePath`, `homeOf`,
-`formatKeys`. Types for everything above are exported too (`EntryRecord`, `AssistantMessage`, `SystemInfo`, …).
+Helpers: `cn()` for class names, `formatTokens`, `formatBytes`, `formatDuration`, `shortenPath(path, { cwd, home })`
+(`home` is `useSystem().machine.home`), `elidePath`, `formatKeys`. Types for everything above are exported too
+(`EntryRecord`, `AssistantMessage`, `SystemInfo`, …).
 
 Keep UI state that should survive a reload in `useExtensionUiState`; keep throwaway state (hover, an open menu) in
 `useState`. The shell keeps its own layout there too (`shell.conversation`, `shell.surface`, `shell.shownSurface`,
@@ -567,11 +576,10 @@ Keep UI state that should survive a reload in `useExtensionUiState`; keep throwa
 
 ## Styling
 
-- Use the components first: `@/components/ui/*` (shadcn: button, badge, collapsible, command, dialog,
-  dropdown-menu, kbd, popover, separator, tabs, tooltip) and `@/components/ai/*` (code block, conversation, message,
-  reasoning, shimmer, tool, prompt input).
-  Need another shadcn component? `pnpm dlx shadcn@latest add <component>` writes it to `web/src/components/ui`; then
-  import `cn` from `'cn'` in it, as the others do (there is no `@/lib/utils`).
+- Use the components first: `@/components/ui/*` (shadcn: button, collapsible, command, dialog, dropdown-menu, kbd,
+  popover, tooltip) and `@/components/ai/*` (code block, conversation, message, reasoning, shimmer, tool, prompt
+  input). Need another shadcn component? `pnpm dlx shadcn@latest add <component>` writes it to
+  `web/src/components/ui`.
 - Style with Tailwind utilities and the theme tokens: `bg-background`, `bg-card`, `bg-muted`, `bg-terminal`,
   `text-foreground`, `text-muted-foreground`, `border-border`, `text-brand` (the one accent), `text-success`,
   `text-warning`, `text-error`, `text-diff-add`, `text-diff-del`. Opacity modifiers work: `bg-error/10`. They follow

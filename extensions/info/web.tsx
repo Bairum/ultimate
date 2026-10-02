@@ -38,7 +38,7 @@ function uptime(ms: number) {
 /** `~/…` paths, elided in the middle to fit the panel. */
 function usePath(system: SystemInfo) {
   return (path: string, max = 34) =>
-    elidePath(shortenPath(path, { user: system.machine.user }), max)
+    elidePath(shortenPath(path, { home: system.machine.home }), max)
 }
 
 function Machine({ system }: { system: SystemInfo }) {

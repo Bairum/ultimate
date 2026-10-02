@@ -130,6 +130,95 @@ describe('web extension registry', () => {
     expect(registry.getSnapshot().map((record) => record.name)).toEqual(['kept'])
   })
 
+  it('rejects malformed contributions at install, keeping the last good version', async () => {
+    const Good = component('good')
+    const good: WebExtension = {
+      slots: { overlay: Good, sidebar: [{ component: Good, order: -1 }] },
+      panels: [{ id: 'hello', title: 'Hello', component: Good }],
+      surfaces: [{ id: 'hello', title: 'Hello', icon: Good, component: Good }],
+      tools: { hello: Object.assign(Object.create(null), { $$typeof: Symbol.for('react.memo') }) },
+      entries: { 'hello.entry': Good },
+      commands: [{ id: 'hello.run', title: 'Run', keys: 'escape', whileTyping: true, run() {} }],
+    }
+    const registry = createRegistry()
+    await registry.setLoaders({ [path('hello')]: async () => module(good) })
+    const [installed] = registry.getSnapshot()
+    expect(installed.extension).toBe(good)
+    expect(installed.error).toBeUndefined()
+
+    const malformed: [unknown, RegExp][] = [
+      [{ surfaces: {} }, /^surfaces must be an array of \{ id, title, icon,/],
+      [{ panels: {} }, /^panels must be an array/],
+      [{ surfaces: [{ id: 'x', title: 'X', component: Good }] }, /^surfaces must/],
+      [
+        { commands: [{ id: 'x', title: 'X' }] },
+        /^commands must be an array of \{ id, title, keys\?/,
+      ],
+      [{ commands: [{ id: 'x', title: 'X', keys: ['escape'], run() {} }] }, /^commands must/],
+      [{ slots: [Good] }, /^slots must be an object/],
+      [{ slots: { overlay: { order: 1 } } }, /^slots must/],
+      [{ tools: { bash: 'Bash' } }, /^tools must be an object/],
+      [{ entries: [Good] }, /^entries must be an object/],
+    ]
+    for (const [extension, error] of malformed) {
+      registry.replace('hello', { default: extension })
+      const records = registry.getSnapshot()
+      expect(records[0].error).toMatch(error)
+      expect(records[0].extension).toBe(good)
+      expect(surfaceItems(records).map((surface) => surface.id)).toEqual(['hello'])
+      expect(panelItems(records).map((panel) => panel.id)).toEqual(['hello'])
+      expect(commandItems(records).map((command) => command.id)).toEqual(['hello.run'])
+      expect(slotItems(records, 'sidebar')).toHaveLength(1)
+    }
+
+    // A malformed first load installs nothing, and the shell's selectors still work.
+    const fresh = createRegistry()
+    await fresh.setLoaders({
+      [path('broken')]: async () => ({ default: { surfaces: {}, panels: {} } }),
+    })
+    const records = fresh.getSnapshot()
+    expect(records[0].extension).toBeUndefined()
+    expect(records[0].error).toMatch(/^panels must/)
+    expect(surfaceItems(records)).toEqual([])
+    expect(panelItems(records)).toEqual([])
+  })
+
+  it('resolves command ids like surface ids: a later facet wins, in the place of the first', async () => {
+    const registry = createRegistry()
+    await registry.setLoaders({
+      [path('agent')]: async () =>
+        module({
+          commands: [
+            { id: 'agent.compact', title: 'Compact', run() {} },
+            { id: 'agent.stop', title: 'Stop', run() {} },
+          ],
+        }),
+      [path('mine')]: async () =>
+        module({
+          commands: [
+            { id: 'agent.compact', title: 'Compact mine', run() {} },
+            { id: 'ultimate.panel', title: 'My panel', run() {} },
+            { id: 'mine.own', title: 'Own', run() {} },
+          ],
+        }),
+    })
+    const base = [
+      { id: 'ultimate.palette', title: 'Command palette', extension: 'core', run() {} },
+      { id: 'ultimate.panel', title: 'Toggle the right panel', extension: 'core', run() {} },
+    ]
+    expect(
+      commandItems(registry.getSnapshot(), base).map(
+        (command) => `${command.extension}:${command.id}:${command.title}`,
+      ),
+    ).toEqual([
+      'core:ultimate.palette:Command palette',
+      'mine:ultimate.panel:My panel',
+      'mine:agent.compact:Compact mine',
+      'agent:agent.stop:Stop',
+      'mine:mine.own:Own',
+    ])
+  })
+
   it('reloads only facets whose module changed', async () => {
     const extension: WebExtension = { slots: { sidebar: component('side') } }
     const registry = createRegistry()

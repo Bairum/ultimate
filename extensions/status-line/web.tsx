@@ -5,7 +5,7 @@ import {
   defineWebExtension,
   elidePath,
   formatTokens,
-  homeOf,
+  shortenPath,
   useCommands,
   useConnection,
   useConversation,
@@ -57,8 +57,7 @@ function Cwd() {
   const { agent } = useConversation()
   if (!system) return null
   const cwd = agent.cwd ?? system.execution.defaultCwd
-  const home = homeOf(cwd, system.machine.user)
-  const shown = home ? '~' + cwd.slice(home.length) : cwd
+  const shown = shortenPath(cwd, { home: system.machine.home })
   const { branch, dirty, sha } = system.code
   const inRepo = cwd === system.code.ultimateRoot
   return (

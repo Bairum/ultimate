@@ -68,7 +68,7 @@ function EmptyState() {
     [
       'repo',
       <>
-        {elidePath(shortenPath(cwd, { user: system?.machine.user }), 44)}
+        {elidePath(shortenPath(cwd, { home: system?.machine.home }), 44)}
         {system?.code.branch && cwd === system.code.ultimateRoot && (
           <span className="text-muted-foreground"> ({system.code.branch})</span>
         )}

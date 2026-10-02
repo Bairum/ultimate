@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { actions, allCommands, applies, currentContext } from '../sdk/actions.ts'
 import { store } from '../sdk/client.ts'
 import { chordOf, parseKeys } from '../sdk/keys.ts'
+import type { CommandItem } from '../sdk/registry.ts'
 
 function editable(target: EventTarget | null) {
   return (
@@ -13,8 +14,8 @@ function editable(target: EventTarget | null) {
 /**
  * Runs command shortcuts, including sequences such as `mod+k m`: a sequence's first chord runs its own command (the
  * palette) and, for a second, waits for the next key. Plain keys never fire while typing, except as the second key of a
- * sequence typed into the still-empty palette. Escape and Shift+Tab (Pi's thinking toggle) fire while typing, but not
- * in a dialog, where they close it and move focus.
+ * sequence typed into the still-empty palette, or for a command marked `whileTyping` (such as Escape or Shift+Tab);
+ * those do not fire in a dialog, where the keys close it and move focus.
  */
 export function useShortcuts() {
   useEffect(() => {
@@ -37,10 +38,11 @@ export function useShortcuts() {
         event.target instanceof HTMLInputElement &&
         event.target.value === ''
       const dialogOpen = !!document.querySelector('[role="dialog"]')
-      const allowed = (keys: string[]) => {
+      const allowed = ({ command, keys }: { command: CommandItem; keys: string[] }) => {
         if (pending.length > 0) return !typing || emptyPalette
-        if (chord === 'escape' || chord === 'shift+tab') return !dialogOpen
-        return !typing || /\b(mod|alt|ctrl)\+/.test(keys[0] ?? '')
+        if (/\b(mod|alt|ctrl)\+/.test(keys[0] ?? '')) return true
+        if (command.whileTyping) return !dialogOpen
+        return !typing
       }
       const exact = candidates.find(
         ({ keys }) =>
@@ -51,7 +53,7 @@ export function useShortcuts() {
       )
       clearTimeout(timer)
       pending = []
-      if (exact && allowed(exact.keys)) {
+      if (exact && allowed(exact)) {
         event.preventDefault()
         if (sequence.length > 1) store.setUi({ paletteOpen: false })
         actions.runCommand(exact.command.id)

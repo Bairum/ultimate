@@ -5,3 +5,7 @@ It is composed only of the primitives from `@/sdk` (`Header`, `Sidebar`, `Conver
 it doubles as the smallest example of a surface. To change it for yourself or one project, copy this folder to
 `~/.ultimate/extensions/agent/` or `<project>/.ultimate/extensions/agent/`; the copy wins by name. If the Agent surface
 fails to load, the host still shows a bare header, conversation, and status line, so you can always ask for a fix.
+
+It also brings the conversation's commands, on every surface: stop the run (`agent.stop`, Escape, even while typing),
+compact the context (`agent.compact`), focus the composer (`agent.composer`), and show the main conversation
+(`agent.main`).

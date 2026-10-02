@@ -1,13 +1,11 @@
 // Adapted from vercel/ai-elements packages/elements/src/code-block.tsx (Apache-2.0, see LICENSE).
 // Changes: highlights through Streamdown's shared Shiki plugin, adds `startLine` and `languageFromPath`, drops the
-// language selector.
+// language selector, header, and copy button.
 import { createCodePlugin } from '@streamdown/code'
 import type { HighlightOptions, HighlightResult } from '@streamdown/code'
 import { cn } from 'cn'
-import { CheckIcon, CopyIcon } from 'lucide-react'
-import type { ComponentProps, CSSProperties, HTMLAttributes } from 'react'
-import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { Button } from '@/components/ui/button'
+import type { CSSProperties, HTMLAttributes } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 
 /** One highlighter for Streamdown and every code block. */
 export const codePlugin = createCodePlugin({ themes: ['vitesse-light', 'vitesse-dark'] })
@@ -69,8 +67,6 @@ function useTokens(code: string, language: BundledLanguage): Line[] {
   return plain(code)
 }
 
-const CodeBlockContext = createContext({ code: '' })
-
 export type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   code: string
   language: BundledLanguage
@@ -79,7 +75,7 @@ export type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   startLine?: number
 }
 
-export const CodeBlockContent = memo(
+const CodeBlockContent = memo(
   ({
     code,
     language,
@@ -140,80 +136,18 @@ export const CodeBlock = ({
   className,
   children,
   ...props
-}: CodeBlockProps) => {
-  const value = useMemo(() => ({ code }), [code])
-  return (
-    <CodeBlockContext.Provider value={value}>
-      <div
-        className={cn(
-          'group relative w-full overflow-hidden rounded-md border bg-terminal',
-          className,
-        )}
-        data-language={language}
-        {...props}
-      >
-        {children}
-        <CodeBlockContent
-          code={code}
-          language={language}
-          showLineNumbers={showLineNumbers}
-          startLine={startLine}
-        />
-      </div>
-    </CodeBlockContext.Provider>
-  )
-}
-
-export const CodeBlockHeader = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
+}: CodeBlockProps) => (
   <div
-    className={cn(
-      'flex items-center justify-between gap-2 border-b px-3 py-1.5 font-mono text-[11px] text-muted-foreground',
-      className,
-    )}
+    className={cn('group relative w-full overflow-hidden rounded-md border bg-terminal', className)}
+    data-language={language}
     {...props}
-  />
+  >
+    {children}
+    <CodeBlockContent
+      code={code}
+      language={language}
+      showLineNumbers={showLineNumbers}
+      startLine={startLine}
+    />
+  </div>
 )
-
-export const CodeBlockTitle = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('flex min-w-0 items-center gap-2', className)} {...props} />
-)
-
-export const CodeBlockFilename = ({ className, ...props }: HTMLAttributes<HTMLSpanElement>) => (
-  <span className={cn('truncate font-mono', className)} {...props} />
-)
-
-export const CodeBlockActions = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('-my-1 -mr-1 flex items-center gap-1', className)} {...props} />
-)
-
-export type CodeBlockCopyButtonProps = ComponentProps<typeof Button> & { timeout?: number }
-
-export const CodeBlockCopyButton = ({
-  timeout = 1500,
-  children,
-  className,
-  ...props
-}: CodeBlockCopyButtonProps) => {
-  const [copied, setCopied] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
-  const { code } = useContext(CodeBlockContext)
-  useEffect(() => () => clearTimeout(timer.current), [])
-  const copy = async () => {
-    await navigator.clipboard.writeText(code)
-    setCopied(true)
-    timer.current = setTimeout(() => setCopied(false), timeout)
-  }
-  const Icon = copied ? CheckIcon : CopyIcon
-  return (
-    <Button
-      className={cn('size-6 shrink-0', className)}
-      onClick={() => void copy()}
-      size="icon"
-      variant="ghost"
-      aria-label="Copy"
-      {...props}
-    >
-      {children ?? <Icon className="size-3" />}
-    </Button>
-  )
-}

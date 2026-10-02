@@ -126,10 +126,6 @@ export function Slot({
   ))
 }
 
-export function useSlotEmpty(name: SlotName): boolean {
-  return slotItems(useExtensions(), name).length === 0
-}
-
 /** Extensions whose web facet failed to load, until it loads again. */
 export function ExtensionErrors() {
   const failed = useExtensions().filter((record) => record.error !== undefined)
@@ -141,7 +137,7 @@ export function ExtensionErrors() {
     if (!info) return `extensions/${name}/web.tsx`
     return shortenPath(`${info.path}/web.tsx`, {
       cwd: info.source === 'builtin' ? system?.code.ultimateRoot : system?.project.root,
-      user: system?.machine.user,
+      home: system?.machine.home,
     })
   }
   return (

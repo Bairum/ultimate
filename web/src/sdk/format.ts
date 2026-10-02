@@ -21,21 +21,13 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
 }
 
-/** The home directory of `user` as it prefixes `path`, if it does: /home/<user> or /Users/<user>. */
-export function homeOf(path: string, user: string | undefined): string | undefined {
-  if (!user) return undefined
-  return [`/home/${user}`, `/Users/${user}`].find(
-    (home) => path === home || path.startsWith(home + '/'),
-  )
-}
-
-/** Show `path` relative to `cwd` when inside it, else with `~` for the home directory. */
-export function shortenPath(path: string, options: { cwd?: string; user?: string } = {}): string {
-  const { cwd, user } = options
+/** Show `path` relative to `cwd` when inside it, else with `~` for `home` (`system.machine.home`). */
+export function shortenPath(path: string, options: { cwd?: string; home?: string } = {}): string {
+  const { cwd, home } = options
   if (cwd && path.startsWith(cwd.replace(/\/$/, '') + '/'))
     return path.slice(cwd.replace(/\/$/, '').length + 1)
-  const home = homeOf(path, user)
-  return home ? '~' + path.slice(home.length) : path
+  if (home && (path === home || path.startsWith(home + '/'))) return '~' + path.slice(home.length)
+  return path
 }
 
 /** Elide the middle of a path to at most `max` characters, keeping its first and last segments. */

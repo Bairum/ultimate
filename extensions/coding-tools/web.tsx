@@ -29,7 +29,7 @@ function usePath(path: string) {
   const { agent } = useConversation()
   return shortenPath(path, {
     cwd: agent.cwd ?? system?.execution.defaultCwd,
-    user: system?.machine.user,
+    home: system?.machine.home,
   })
 }
 

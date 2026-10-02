@@ -1,4 +1,4 @@
-import { api, registry, store, uiState } from './client.ts'
+import { registry, store, uiState } from './client.ts'
 import {
   HOME,
   commandApplies,
@@ -95,6 +95,7 @@ export const actions: UltimateActions = {
   close: (dialog) => store.setUi({ dialogs: { ...store.getState().ui.dialogs, [dialog]: false } }),
   openPalette: () => store.setUi({ paletteOpen: true }),
   focusComposer: () => document.getElementById('composer-input')?.focus(),
+  setTheme: (theme) => store.setUi({ theme }),
 }
 
 export function currentContext(): UltimateContext {
@@ -118,38 +119,13 @@ export function applies(command: CommandItem, context: UltimateContext = current
   })
 }
 
-const busy = () => !!store.getState().view?.docs['pi.live']?.run
-
-/** The shell's own commands, listed with extension commands in the palette. */
+/** The shell's own commands: the palette and its regions. Feature commands come from their extensions. */
 const core: CommandContribution[] = [
   {
     id: 'ultimate.palette',
     title: 'Command palette',
     keys: 'mod+k',
     run: (context) => context.openPalette(),
-  },
-  {
-    id: 'ultimate.abort',
-    title: 'Stop the run',
-    keys: 'escape',
-    when: busy,
-    run: () => api.abort(),
-  },
-  {
-    id: 'ultimate.compact',
-    title: 'Compact the context',
-    run: () => api.compact(),
-  },
-  {
-    id: 'ultimate.composer',
-    title: 'Focus the composer',
-    run: (context) => context.focusComposer(),
-  },
-  {
-    id: 'ultimate.root',
-    title: 'Show the main conversation',
-    when: (context) => context.conversationId !== 1,
-    run: (context) => context.switchConversation(1),
   },
   {
     id: 'ultimate.panel',
@@ -165,11 +141,6 @@ const core: CommandContribution[] = [
     when: () => layout.has('sidebar') && slotItems(registry.getSnapshot(), 'sidebar').length > 0,
     run: (context) => context.toggleSidebar(),
   },
-  {
-    id: 'ultimate.theme',
-    title: 'Toggle light and dark theme',
-    run: () => store.setUi({ theme: store.getState().ui.theme === 'dark' ? 'light' : 'dark' }),
-  },
 ]
 export const coreCommands: CommandItem[] = core.map((command) => ({
   ...command,
@@ -177,10 +148,10 @@ export const coreCommands: CommandItem[] = core.map((command) => ({
   extension: 'core',
 }))
 
-/** Core commands, a command per surface (`mod+1…9` for the first nine), and extension commands. */
+/** Core commands, a switch per surface (`mod+1…9` for the first nine), then extension commands; later wins an id. */
 export function allCommands(): CommandItem[] {
   const records = registry.getSnapshot()
-  return [
+  return commandItems(records, [
     ...coreCommands,
     ...surfaceItems(records).map((surface, index) => ({
       id: `ultimate.surface.${surface.id}`,
@@ -190,6 +161,5 @@ export function allCommands(): CommandItem[] {
       extension: surface.extension,
       run: () => actions.showSurface(surface.id),
     })),
-    ...commandItems(records),
-  ]
+  ])
 }

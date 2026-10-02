@@ -1,5 +1,15 @@
 import { MessagesSquareIcon } from 'lucide-react'
-import { Conversation, Header, Panels, Sidebar, StatusLine, defineWebExtension } from '@/sdk'
+import {
+  Conversation,
+  Header,
+  Panels,
+  Sidebar,
+  StatusLine,
+  api,
+  defineWebExtension,
+  getConversation,
+} from '@/sdk'
+import type { CommandContribution } from '@/sdk'
 
 /** The conversation in a centred column, with the sidebar and the right panel beside it. */
 function Agent() {
@@ -18,6 +28,34 @@ function Agent() {
   )
 }
 
+/** Commands for the shown conversation, on every surface; the palette lists them under Ultimate, with the shell's. */
+const commands: CommandContribution[] = [
+  {
+    id: 'agent.stop',
+    title: 'Stop the run',
+    keys: 'escape',
+    whileTyping: true,
+    when: () => getConversation().busy,
+    run: () => api.abort(),
+  },
+  {
+    id: 'agent.compact',
+    title: 'Compact the context',
+    run: () => api.compact(),
+  },
+  {
+    id: 'agent.composer',
+    title: 'Focus the composer',
+    run: (context) => context.focusComposer(),
+  },
+  {
+    id: 'agent.main',
+    title: 'Show the main conversation',
+    when: (context) => context.conversationId !== 1,
+    run: (context) => context.switchConversation(1),
+  },
+]
+
 export default defineWebExtension({
   surfaces: [
     {
@@ -28,4 +66,5 @@ export default defineWebExtension({
       component: Agent,
     },
   ],
+  commands: commands.map((command) => ({ group: 'Ultimate', ...command })),
 })

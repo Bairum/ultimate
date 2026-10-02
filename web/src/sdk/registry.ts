@@ -52,11 +52,87 @@ function message(error: unknown): string {
   return String(error)
 }
 
+type Check = (value: unknown) => boolean
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+const isString: Check = (value) => typeof value === 'string'
+const isNumber: Check = (value) => typeof value === 'number'
+const isFunction: Check = (value) => typeof value === 'function'
+/** A function or class component, or an exotic one such as `memo(…)`. */
+const isComponent: Check = (value) => isFunction(value) || (isObject(value) && '$$typeof' in value)
+const optional =
+  (check: Check): Check =>
+  (value) =>
+    value === undefined || check(value)
+const fields =
+  (checks: Record<string, Check>): Check =>
+  (value) =>
+    isObject(value) && Object.entries(checks).every(([key, check]) => check(value[key]))
+const arrayOf =
+  (item: Check): Check =>
+  (value) =>
+    Array.isArray(value) && value.every(item)
+const objectOf =
+  (item: Check): Check =>
+  (value) =>
+    isObject(value) && !Array.isArray(value) && Object.values(value).every(item)
+const isContribution: Check = (value) =>
+  isFunction(value) || fields({ component: isComponent, order: optional(isNumber) })(value)
+
+/** What each contribution must look like; a facet that does not match keeps its previous version installed. */
+const shapes: Record<keyof WebExtension, [Check, string]> = {
+  slots: [
+    objectOf((value) => isContribution(value) || arrayOf(isContribution)(value)),
+    'an object of slot name → a component, { component, order? }, or an array of them',
+  ],
+  panels: [
+    arrayOf(
+      fields({
+        id: isString,
+        title: isString,
+        icon: optional(isComponent),
+        component: isComponent,
+        order: optional(isNumber),
+      }),
+    ),
+    'an array of { id, title, icon?, component, order? }',
+  ],
+  surfaces: [
+    arrayOf(
+      fields({
+        id: isString,
+        title: isString,
+        icon: isComponent,
+        description: optional(isString),
+        order: optional(isNumber),
+        component: isComponent,
+      }),
+    ),
+    'an array of { id, title, icon, description?, order?, component }',
+  ],
+  tools: [objectOf(isComponent), 'an object of tool name → component'],
+  entries: [objectOf(isComponent), 'an object of entry kind → component'],
+  commands: [
+    arrayOf(
+      fields({
+        id: isString,
+        title: isString,
+        keys: optional(isString),
+        group: optional(isString),
+        whileTyping: optional((value) => typeof value === 'boolean'),
+        when: optional(isFunction),
+        run: isFunction,
+      }),
+    ),
+    'an array of { id, title, keys?, group?, whileTyping?, when?, run }',
+  ],
+}
+
 function validate(module: unknown): WebExtension {
-  const extension =
-    module && typeof module === 'object' && 'default' in module ? module.default : undefined
-  if (!extension || typeof extension !== 'object')
-    throw new Error('web.tsx must default-export defineWebExtension({ … })')
+  const extension = isObject(module) && 'default' in module ? module.default : undefined
+  if (!isObject(extension)) throw new Error('web.tsx must default-export defineWebExtension({ … })')
+  for (const [key, [check, shape]] of Object.entries(shapes))
+    if (!optional(check)(extension[key])) throw new Error(`${key} must be ${shape}`)
   return extension
 }
 
@@ -220,10 +296,19 @@ export function commandApplies(
   }
 }
 
-export function commandItems(records: readonly ExtensionRecord[]): CommandItem[] {
-  return records.flatMap(({ name, extension }) =>
-    (extension?.commands ?? []).map((command) => ({ ...command, extension: name })),
-  )
+/**
+ * The shell's own commands (`base`), then every extension's. A later one wins an id, like surfaces: it takes the place
+ * of the command it replaces.
+ */
+export function commandItems(
+  records: readonly ExtensionRecord[],
+  base: readonly CommandItem[] = [],
+): CommandItem[] {
+  const byId = new Map(base.map((command) => [command.id, command]))
+  for (const { name, extension } of records)
+    for (const command of extension?.commands ?? [])
+      byId.set(command.id, { ...command, extension: name })
+  return [...byId.values()]
 }
 
 /** The renderer for a tool or entry kind; the last extension in folder order wins. */

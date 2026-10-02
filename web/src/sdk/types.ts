@@ -86,6 +86,8 @@ export interface UltimateActions {
   close: (dialog: string) => void
   openPalette: () => void
   focusComposer: () => void
+  /** Switch this browser to the light or dark theme; `getState().ui.theme` is the current one. */
+  setTheme: (theme: 'dark' | 'light') => void
 }
 export interface UltimateContext extends UltimateActions {
   /** The shown conversation, once known. */
@@ -101,6 +103,8 @@ export interface CommandContribution {
   keys?: string
   /** Palette group; defaults to the extension name. */
   group?: string
+  /** Fire a plain-key shortcut (`escape`, `shift+tab`) even while the user types, though not while a dialog is open. */
+  whileTyping?: boolean
   /** Hide the command when this returns false. */
   when?(context: UltimateContext): boolean
   /** Return a promise to have its failure reported. */

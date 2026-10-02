@@ -28,21 +28,13 @@ interface RestartDetails {
   error?: string
 }
 
-/** What a finished `restart` reports: its `details` when the tool sends them, else what its text says. */
-function outcome(call: ToolCallView): RestartDetails {
-  const details = (call.details ?? {}) as RestartDetails
-  if (details.toGeneration !== undefined || details.rolledBack || details.error) return details
-  const done = /generation (\d+) \(pid \d+\), build (\S+) → (\S+?)\.?$/.exec(call.output)
-  if (done) return { toGeneration: Number(done[1]), fromBuild: done[2], toBuild: done[3] }
-  const rolledBack = /rolled back to generation (\d+)/.exec(call.output)
-  if (rolledBack) return { rolledBack: true, toGeneration: Number(rolledBack[1]) }
-  return {}
-}
-
-/** The `restart` tool: the swap's generations and builds, or the boot error that kept the old core serving. */
+/**
+ * The `restart` tool: the swap's generations and builds from its `details`, or the boot error that kept the old core
+ * serving. A record without details reads as a plain core swap.
+ */
 function RestartCall({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
-  const result = outcome(call)
+  const result = (call.details ?? {}) as RestartDetails
   const failed = call.status === 'error'
   const generations =
     result.fromGeneration !== undefined

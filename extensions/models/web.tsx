@@ -33,7 +33,7 @@ function ModelButton() {
     <button
       className={toolbarButton}
       onClick={() => actions.open(dialogs.picker)}
-      title="Pick a model (Ctrl+K M)"
+      title="Pick a model"
       type="button"
     >
       <CpuIcon className="size-3.5 shrink-0" />
@@ -117,6 +117,7 @@ export default defineWebExtension({
       id: 'model.thinking.cycle',
       title: 'Cycle the thinking level',
       keys: 'shift+tab',
+      whileTyping: true,
       run: () => {
         const { agent } = getConversation()
         const model = getState().models?.models.find(

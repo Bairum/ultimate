@@ -55,14 +55,7 @@ export {
 } from './hooks.ts'
 export type { ActionState, ConversationState, Restart } from './hooks.ts'
 export type { AuthFlow, Connection, State } from './store.ts'
-export {
-  elidePath,
-  formatBytes,
-  formatDuration,
-  formatTokens,
-  homeOf,
-  shortenPath,
-} from './format.ts'
+export { elidePath, formatBytes, formatDuration, formatTokens, shortenPath } from './format.ts'
 /** Class names joined, Tailwind conflicts resolved: `cn('px-2', active && 'bg-accent')`. */
 export { cn } from 'cn'
 export { formatKeys } from './keys.ts'

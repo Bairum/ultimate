@@ -41,7 +41,7 @@ function Card({ instance, status }: { instance: Instance; status: string }) {
       </div>
       <div className="flex gap-3 text-[11px] text-muted-foreground/70">
         <span className="truncate" title={instance.home}>
-          home {shortenPath(instance.home, { user: system?.machine.user })}
+          home {shortenPath(instance.home, { home: system?.machine.home })}
         </span>
         <span className="ml-auto shrink-0" title={instance.id}>
           {instance.id.slice(0, 8)}

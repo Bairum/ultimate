@@ -15,15 +15,8 @@ describe('ANSI output rendering', () => {
     )
   })
 
-  it('renders existing ESC-less numeric SGR identically to intact escapes', () => {
-    const output = '\x1b[1m\x1b[94mHeading\x1b[0m\n\x1b[2;32mdim green\x1b[0m'
-    expect(render(output.replaceAll('\x1b', ''))).toBe(render(output))
-    expect(render('[38;5;196mred[0m')).toBe(render('\x1b[38;5;196mred\x1b[0m'))
-    expect(render('[48;2;1;2;3mbg[0m')).toBe(render('\x1b[48;2;1;2;3mbg\x1b[0m'))
-  })
-
-  it('leaves normal brackets and nonnumeric / non-SGR tokens untouched', () => {
-    const output = '[hello] [1,2] [1] [;m [31:m [warnm [2K [?25l [1;]'
+  it('leaves brackets untouched, including text that reads like SGR without ESC', () => {
+    const output = '[hello] [1,2] [1] [;m [31:m [warnm [2K [?25l [1;] [31m [1;94m'
     expect(render(output)).toBe(`<span>${output}</span>`)
   })
 
@@ -43,9 +36,9 @@ describe('ANSI output rendering', () => {
     expect(render('safe\x1b[31;')).toBe(render('safe'))
   })
 
-  it('escapes HTML with or without ANSI / legacy formatting', () => {
+  it('escapes HTML with or without ANSI formatting', () => {
     const output = '<img src=x onerror="alert(1)"> & <script>alert(2)</script>'
-    const html = render(`[1;31m${output}[0m`)
+    const html = render(`\x1b[1;31m${output}\x1b[0m`)
     expect(html).toContain('&lt;img src=x onerror=&quot;alert(1)&quot;&gt; &amp; &lt;script&gt;')
     expect(html).not.toContain('<img')
     expect(html).not.toContain('<script')
@@ -65,7 +58,7 @@ describe('ANSI output rendering', () => {
   })
 
   it('uses the ANSI renderer in shared ToolOutput, including errors', () => {
-    const output = '[1;31mfailed[0m <script> &'
+    const output = '\x1b[1;31mfailed\x1b[0m <script> &'
     const html = renderToStaticMarkup(createElement(ToolOutput, { output, isError: true }))
     expect(html).toContain('Error')
     expect(html).toContain(render(output))
