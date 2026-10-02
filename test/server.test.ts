@@ -91,6 +91,8 @@ async function fixture(extra = false, agents = false, sources?: Record<string, s
   }
   const options = {
     ultimateRoot,
+    // Explicit, so an inherited ULTIMATE_PROJECT (tests run from inside Ultimate) cannot add its project's extensions.
+    projectRoot: ultimateRoot,
     userHome: directory,
     home: join(directory, 'home'),
     faux: true,
