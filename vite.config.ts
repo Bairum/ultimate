@@ -17,5 +17,5 @@ export default defineConfig({
     options: { denyWarnings: true, typeAware: true, typeCheck: true },
   },
   fmt: { semi: false, singleQuote: true },
-  test: { root: '.', include: ['test/**/*.test.ts'], testTimeout: 30000 },
+  test: { root: '.', include: ['test/**/*.test.ts'], testTimeout: 30000, maxWorkers: 4 },
 })

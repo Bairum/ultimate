@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { JsonValue } from '@earendil-works/chord'
 import { createUiState, WRITE_MARKER } from '../../web/src/sdk/ui-state.ts'
 import type { UiUpdateRequest } from '../../shared/protocol.ts'
@@ -39,7 +39,9 @@ function setup() {
     start: (set: Record<string, JsonValue>) => state.receive(apply(set)),
   }
 }
-const wait = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms))
+beforeEach(() => vi.useFakeTimers())
+afterEach(() => vi.useRealTimers())
+const wait = (ms = 20) => vi.advanceTimersByTimeAsync(ms)
 const marker = (batch: number) => ({ [WRITE_MARKER]: `me:${batch}` })
 
 describe('durable UI state', () => {
@@ -76,21 +78,6 @@ describe('durable UI state', () => {
     state.receive(other({ 'shell.panelOpen': false }))
     expect(state.get('shell.panelOpen')).toBe(false)
     expect(state.get('shell.panel')).toBe('info')
-  })
-
-  it('skips writes that change nothing and drops a write the server refused', async () => {
-    const errors: unknown[] = []
-    const state = createUiState(async () => Promise.reject(new Error('Invalid UI key')), {
-      delayMs: 5,
-      onError: (error) => errors.push(error),
-    })
-    state.receive({ 'shell.surface': 'board' })
-    state.set('shell.surface', 'board')
-    state.set('bad key', 1)
-    expect(state.get('bad key')).toBe(1)
-    await wait()
-    expect(state.get('bad key')).toBeUndefined()
-    expect(errors).toHaveLength(1)
   })
 
   it('sends one batch at a time, so the server commits writes in order', async () => {
@@ -160,7 +147,20 @@ describe('durable UI state', () => {
     expect(state.get('panel')).toBe('mine')
   })
 
-  it('keeps a newer write when an older batch fails', async () => {
+  it('skips no-op writes, drops refused writes, and keeps a newer write when an older batch fails', async () => {
+    const refused = setup()
+    refused.start({ panel: 'start' })
+    refused.state.set('panel', 'start')
+    await wait()
+    expect(refused.requests).toHaveLength(0)
+    refused.state.set('bad key', 1)
+    expect(refused.state.get('bad key')).toBe(1)
+    await wait()
+    refused.requests[0].fail(new Error('Invalid UI key'))
+    await wait()
+    expect(refused.state.get('bad key')).toBeUndefined()
+    expect(refused.errors).toHaveLength(1)
+
     const { state, requests, errors, start } = setup()
     start({ panel: 'start' })
     state.set('panel', 'first')

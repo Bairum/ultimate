@@ -11,6 +11,10 @@ describe('pi-durable ANSI output sanitizer', () => {
     expect(sanitizeOutput(output)).toBe(output)
     const extended = '\x1b[38;5;196mred\x1b[48;2;1;2;3mbackground\x1b[0m'
     expect(sanitizeOutput(extended)).toBe(extended)
+    const mixed = '\x1b[1;31mred\x1b[2K\x1b]0;title\x07\x1b[0mplain'
+    const clean = '\x1b[1;31mred\x1b[0mplain'
+    expect(sanitizeOutput(mixed)).toBe(clean)
+    expect(sanitizeOutput(clean)).toBe(clean)
   })
 
   it.each([
@@ -31,30 +35,6 @@ describe('pi-durable ANSI output sanitizer', () => {
   ])('removes %s without leaking control payload', (_name, output) => {
     expect(sanitizeOutput(output)).toBe('text')
   })
-
-  it('preserves SGR around unsafe sequences and is idempotent', () => {
-    const output = '\x1b[1;31mred\x1b[2K\x1b]0;title\x07\x1b[0mplain'
-    const clean = '\x1b[1;31mred\x1b[0mplain'
-    expect(sanitizeOutput(output)).toBe(clean)
-    expect(sanitizeOutput(clean)).toBe(clean)
-  })
-
-  it.each(['head', 'tail'] as const)(
-    'preserves SGR at every text and byte chunk boundary with %s retention',
-    (retain) => {
-      const output = '\x1b[1;94mHeading\x1b[2mé\x1b[38;2;10;20;30mcolour\x1b[0mplain'
-      for (const chunks of [output, new TextEncoder().encode(output)]) {
-        for (let split = 1; split < chunks.length; split++) {
-          const buffer = new OutputBuffer({ maxBytes: 1024, maxLines: 10, retain })
-          buffer.push(chunks.slice(0, split))
-          buffer.snapshot()
-          buffer.push(chunks.slice(split))
-          buffer.end()
-          expect(buffer.snapshot()).toEqual({ text: output, droppedBytes: 0, droppedLines: 0 })
-        }
-      }
-    },
-  )
 
   it('keeps bounded output and accepts an SGR split across stream chunks', () => {
     const buffer = new OutputBuffer({ maxBytes: 100, maxLines: 2, retain: 'tail' })

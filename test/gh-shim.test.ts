@@ -1,6 +1,6 @@
-import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, rm, writeFile } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
-import { tmpdir } from 'node:os'
+import { temp } from './helpers.ts'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
@@ -10,7 +10,7 @@ const shim = join(import.meta.dirname, '../.ultimate/extensions/github-triage/bi
 
 // Two copies of the shim on PATH used to call each other forever; on 2026-10-02 that fork bomb OOM-killed the host.
 it('runs the real gh once when two copies of the shim are on PATH', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ultimate-gh-shim-'))
+  const root = await temp('ultimate-gh-shim-')
   try {
     for (const name of ['a', 'b', 'real']) await mkdir(join(root, name))
     await copyFile(shim, join(root, 'a', 'gh'))
@@ -24,6 +24,6 @@ it('runs the real gh once when two copies of the shim are on PATH', async () => 
     })
     expect(stdout.trim()).toBe('real --version')
   } finally {
-    await rm(root, { recursive: true, force: true })
+    await rm(root, { recursive: true, force: true, maxRetries: 5 })
   }
 })

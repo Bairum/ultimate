@@ -338,7 +338,14 @@ describe('supervisor', () => {
     try {
       await writeFile(file, 'const invalid: string = 7; export { invalid }\n')
       await until(() => stream.system().code.coreStale === true)
-      const failed = await post(running.url, '/api/restart')
+      const [failed, concurrent] = await Promise.all([
+        post(running.url, '/api/restart'),
+        post(running.url, '/api/restart'),
+      ])
+      expect(concurrent).toEqual({
+        status: 500,
+        data: { ok: false, error: 'A core swap is already in progress.' },
+      })
       expect(failed.status).toBe(500)
       expect(failed.data.error).toContain('not assignable to type')
       expect(stream.system().process.generation).toBe(1)

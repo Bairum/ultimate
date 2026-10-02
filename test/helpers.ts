@@ -75,7 +75,13 @@ async function isolated(options: FixtureOptions) {
   }
 }
 export async function fauxServer(options: FixtureOptions) {
-  return createServer(await isolated(options))
+  const server = await createServer(await isolated(options))
+  const close = server.close.bind(server)
+  server.close = async () => {
+    await server.vite.watcher.close()
+    await close()
+  }
+  return server
 }
 export async function prepareFauxServer(options: FixtureOptions) {
   return prepareServer(await isolated(options))

@@ -1,15 +1,15 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { readFile, readdir, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { expect, it, vi } from 'vitest'
-import type { ConversationId, JsonObject } from '@earendil-works/pi-durable'
+import type { JsonObject } from '@earendil-works/pi-durable'
 import {
   fauxServer as createServer,
   sourceCopy,
   cleanEnv,
-  post,
+  until,
   skipWithoutChromium,
   temp,
 } from './helpers.ts'
@@ -65,7 +65,7 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
         metadata: Metadata,
       }),
     )
-    const result = await run(server, 'screenshot', { url: server.url, waitMs: 500 })
+    const result = await run(server, 'screenshot', { url: server.url, waitMs: 0 })
     expect(result.isError).not.toBe(true)
     expect(
       result.content.some((block) => block.type === 'image' && block.mimeType === 'image/jpeg'),
@@ -83,6 +83,13 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
       isolated.on('page', (page) => {
         const screenshot = page.screenshot.bind(page)
         vi.spyOn(page, 'screenshot').mockImplementation(async (captureOptions) => {
+          await page.waitForFunction(() => {
+            const preference = localStorage.getItem('ultimate.theme')
+            return (
+              preference !== null &&
+              document.documentElement.classList.contains('dark') === (preference === 'dark')
+            )
+          })
           themes.push(
             await page.evaluate(() => ({
               preference: localStorage.getItem('ultimate.theme'),
@@ -96,7 +103,7 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
     })
     const ui = await server.host.uiState(context)
     for (const theme of ['light', 'dark']) {
-      const shot = await run(server, 'screenshot', { theme, waitMs: 500 })
+      const shot = await run(server, 'screenshot', { theme, waitMs: 0 })
       expect(shot.isError).not.toBe(true)
     }
     expect(themes).toEqual([
@@ -137,47 +144,9 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
     await (await browserState.launched)?.close()
     await server.vite.watcher.close()
     await server.close()
-    await rm(home, { recursive: true, force: true })
-  }
-}, 60000)
-
-it('discovers and starts agents from the user config root', async () => {
-  const home = await temp('ultimate-agent-home-')
-  await mkdir(join(home, '.ultimate/agents'), { recursive: true })
-  const path = join(home, '.ultimate/agents/instance-home-agent.md')
-  await writeFile(
-    path,
-    '---\nname: instance-home-agent\ndescription: Custom home agent\n---\nUse the custom home instructions.\n',
-  )
-  const server = await createServer({
-    ultimateRoot: resolve('.'),
-    userHome: home,
-    home,
-    faux: true,
-    port: 0,
-  })
-  try {
-    expect(
-      (await post(server, '/api/extensions/subagents/actions/definitions', { args: null })).data
-        .result.definitions,
-    ).toContainEqual(expect.objectContaining({ name: 'instance-home-agent', path }))
-    const result = await run(server, 'subagent', {
-      action: 'start',
-      agent: 'instance-home-agent',
-      task: 'Check custom home',
-      background: true,
-    })
-    expect(result.isError).not.toBe(true)
-    const child = await server.harness.conversation(
-      (result.details as { conversationId: ConversationId }).conversationId,
-      context,
-    )
-    expect((await child!.agent(context)).instructions).toBe('Use the custom home instructions.')
-  } finally {
-    await server.close()
     await rm(home, { recursive: true, force: true, maxRetries: 5 })
   }
-})
+}, 60000)
 
 it('terminates an isolated instance after its owner is SIGKILLed', async () => {
   const home = await temp('ultimate-owner-test-')
@@ -218,16 +187,15 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
   })
   let instance: { pid: number; home: string; url: string } | undefined
   try {
-    const deadline = Date.now() + 60000
-    while (!instance && Date.now() < deadline) {
+    await until(async () => {
       try {
         instance = JSON.parse(await readFile(resultPath, 'utf8'))
       } catch {
         /* booting */
       }
       if (owner.exitCode !== null) throw new Error(output)
-      await new Promise((done) => setTimeout(done, 100))
-    }
+      return !!instance
+    }, 60000)
     expect(instance?.pid).toBeGreaterThan(0)
     const environment = await readFile(`/proc/${instance!.pid}/environ`, 'utf8')
     expect(environment).not.toContain('ULTIMATE_SUPERVISED=')
@@ -257,17 +225,13 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
     const exited = once(owner, 'exit')
     owner.kill('SIGKILL')
     await exited
-    const deathDeadline = Date.now() + 5000
-    let dead = false
-    while (!dead && Date.now() < deathDeadline) {
+    await until(async () => {
       try {
-        dead = /\) Z /.test(await readFile(`/proc/${instance!.pid}/stat`, 'utf8'))
+        return /\) Z /.test(await readFile(`/proc/${instance!.pid}/stat`, 'utf8'))
       } catch {
-        dead = true
+        return true
       }
-      await new Promise((done) => setTimeout(done, 100))
-    }
-    expect(dead).toBe(true)
+    }, 5000)
   } finally {
     if (owner.exitCode === null && owner.signalCode === null) {
       const exited = once(owner, 'exit')
@@ -280,9 +244,9 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
       } catch {
         /* already exited */
       }
-      await rm(instance.home, { recursive: true, force: true })
+      await rm(instance.home, { recursive: true, force: true, maxRetries: 5 })
     }
-    await rm(home, { recursive: true, force: true })
+    await rm(home, { recursive: true, force: true, maxRetries: 5 })
   }
 }, 90000)
 
@@ -320,6 +284,6 @@ it('starts an isolated standalone instance, reads logs and stops it', async () =
   } finally {
     await server.vite.watcher.close()
     await server.close()
-    await rm(home, { recursive: true, force: true })
+    await rm(home, { recursive: true, force: true, maxRetries: 5 })
   }
 }, 90000)

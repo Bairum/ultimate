@@ -1,6 +1,8 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { defineExtension, defineTool, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { Type } from '@earendil-works/pi-ai'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { chromium } from 'playwright-core'
 import type { Browser } from 'playwright-core'
 import { afterEach, expect, it } from 'vitest'
@@ -38,7 +40,6 @@ async function fixture(projectRoot: string) {
 export default defineExtension({ name: 'fixture' })
 export const actions = {
   items: async (args) => {
-    await new Promise((done) => setTimeout(done, 600))
     return Array.from({ length: args.count }, (_, index) => 'item ' + (index + 1))
   },
   broken: async () => {
@@ -137,19 +138,59 @@ it('switches surfaces without interrupting the conversation, and tells the agent
       title: 'Agent',
     })
 
-  // A run started on Agent keeps going while the user switches to the fixture surface.
-  await page.locator('#composer-input').fill('hello surfaces')
-  await page.keyboard.press('Enter')
-  await expect.poll(() => page.title(), timeout).toMatch(/^●/)
-  await page.keyboard.press('Control+2')
-  await expect.poll(() => page.getByTestId('fixture').count(), timeout).toBe(1)
-  expect(await page.title()).toMatch(/Fixture · Ultimate$/)
+  let releaseRun!: () => void
+  const runGate = new Promise<void>((done) => {
+    releaseRun = done
+  })
+  server.host.registry.install(
+    defineExtension({
+      name: 'surface-test',
+      tools: [
+        defineTool({
+          name: 'hold_surface_run',
+          description: 'Hold the run until the surface switches',
+          parameters: Type.Object({}),
+          execute: async () => {
+            await runGate
+            return {}
+          },
+        }),
+      ],
+    }),
+  )
+  server.host.faux!.setResponses([
+    fauxAssistantMessage([fauxToolCall('hold_surface_run', {})], { stopReason: 'toolUse' }),
+    fauxAssistantMessage('Surface run completed.'),
+  ])
+  // Wait for submit acknowledgement before unmounting the composer; keep the run busy separately.
+  try {
+    await page.locator('#composer-input').fill('hello surfaces')
+    await page.keyboard.press('Enter')
+    await expect.poll(() => page.locator('#composer-input').inputValue(), timeout).toBe('')
+    await expect.poll(() => page.title(), timeout).toMatch(/^●/)
+    await page.keyboard.press('Control+2')
+    await expect.poll(() => page.getByTestId('fixture').count(), timeout).toBe(1)
+    expect(await page.title()).toMatch(/Fixture · Ultimate$/)
+    await expect.poll(ui, timeout).toMatchObject({
+      'shell.surface': 'fixture',
+      'shell.shownSurface': { id: 'fixture', title: 'Fixture' },
+    })
+  } finally {
+    releaseRun()
+  }
   await idle()
   const dock = page.locator('aside:has([role=separator])')
   await expect.poll(() => dock.getByText('hello surfaces').count(), timeout).toBe(1)
-  await expect.poll(() => dock.getByText('The scratch file was updated.').count(), timeout).toBe(1)
+  expect(await dock.locator('#composer-input').inputValue()).toBe('')
+  const submitted = await server.root.viewState(context)
+  try {
+    expect(submitted.value.entries.filter((entry) => entry.kind === 'pi.user')).toHaveLength(1)
+  } finally {
+    submitted.dispose()
+  }
+  await expect.poll(() => dock.getByText('Surface run completed.').count(), timeout).toBe(1)
 
-  // useAction: loading, then data; a failing action has an error and a notice.
+  // Server actions render through the surface, including failure notices.
   await expect
     .poll(() => page.getByTestId('item').allTextContents(), timeout)
     .toEqual(['item 1', 'item 2', 'item 3'])
@@ -158,11 +199,7 @@ it('switches surfaces without interrupting the conversation, and tells the agent
     .poll(() => page.getByRole('status').textContent(), timeout)
     .toContain('fixture/broken: deliberate')
 
-  // The choice is durable, and the agent's prompt names the surface.
-  expect(await ui()).toMatchObject({
-    'shell.surface': 'fixture',
-    'shell.shownSurface': { id: 'fixture', title: 'Fixture' },
-  })
+  // The agent's prompt names the persisted surface.
   const render = surfaceSection(server)
   expect(await render(ROOT_CONVERSATION_ID)).toBe(
     'The user is looking at the Fixture surface (fixture).',
@@ -173,12 +210,29 @@ it('switches surfaces without interrupting the conversation, and tells the agent
     'The user is looking at the Fixture surface (fixture).',
   ])
 
-  await page.reload()
-  await expect.poll(() => page.getByTestId('fixture').count(), timeout).toBe(1)
-  await expect.poll(() => page.getByTestId('loading').count(), timeout).toBe(1)
+  let release!: () => void
+  const gate = new Promise<void>((done) => {
+    release = done
+  })
+  await page.route(
+    '**/api/extensions/fixture/actions/items',
+    async (route) => {
+      await gate
+      await route.continue()
+    },
+    { times: 1 },
+  )
+  try {
+    await page.reload()
+    await expect.poll(() => page.getByTestId('fixture').count(), timeout).toBe(1)
+    await expect.poll(() => page.getByTestId('loading').count(), timeout).toBe(1)
+  } finally {
+    release()
+  }
   await expect.poll(() => page.getByTestId('item').count(), timeout).toBe(3)
 
   // Another run on the same surface leaves the prompt's surface line alone.
+  server.host.faux!.setResponses([fauxAssistantMessage('Another answer.')])
   await page.locator('#composer-input').fill('second run')
   await page.keyboard.press('Enter')
   await expect.poll(() => dock.getByText('second run').count(), timeout).toBe(1)
@@ -236,11 +290,8 @@ export const actions = {
     const log = join(ctx.host.projectRoot, 'slow.log')
     await appendFile(log, 'started\\n')
     await new Promise((done) => {
-      const timer = setTimeout(done, 5000)
-      ctx.signal.addEventListener('abort', () => {
-        clearTimeout(timer)
-        done()
-      })
+      if (ctx.signal.aborted) done()
+      else ctx.signal.addEventListener('abort', () => done(), { once: true })
     })
     await appendFile(log, ctx.signal.aborted ? 'aborted\\n' : 'finished\\n')
     return 'late'

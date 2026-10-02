@@ -31,6 +31,7 @@ async function directory() {
 }
 async function fixture(extension?: Extension) {
   const ultimateRoot = await directory()
+  const userHome = await directory()
   await mkdir(join(ultimateRoot, 'agents'))
   await writeFile(
     join(ultimateRoot, 'agents/scout.md'),
@@ -38,7 +39,7 @@ async function fixture(extension?: Extension) {
   )
   const prepared = await prepareHarness({
     ultimateRoot,
-    userHome: ultimateRoot,
+    userHome,
     home: join(ultimateRoot, 'home'),
     faux: true,
   })
@@ -93,7 +94,7 @@ async function fixture(extension?: Extension) {
   prepared.faux!.setResponses([route])
   opened = await prepared.open()
   hosts.push(opened)
-  return { prepared, opened, ultimateRoot }
+  return { prepared, opened, ultimateRoot, userHome }
 }
 async function call(opened: OpenHost, args: Record<string, unknown>) {
   await (
@@ -228,7 +229,7 @@ describe('subagents', () => {
       expect(() => parseDefinition(definition().replace(from, to), 'test')).toThrow(error)
   })
   it('foreground returns the answer, exposes child details, inherits the parent and rereads scout on next start', async () => {
-    const { opened, ultimateRoot } = await fixture()
+    const { opened, ultimateRoot, userHome } = await fixture()
     const result = await call(opened, { action: 'start', agent: 'scout', task: 'facts' })
     expect(result.text).toBe('Child: facts')
     const [first] = await children(opened)
@@ -272,6 +273,19 @@ describe('subagents', () => {
     const listed = JSON.parse((await call(opened, { action: 'list' })).text)
     expect(listed).toHaveLength(2)
     expect(listed[0]).toMatchObject({ conversationId: first.conversationId, busy: false })
+    await mkdir(join(userHome, '.ultimate/agents'), { recursive: true })
+    await writeFile(
+      join(userHome, '.ultimate/agents/home-agent.md'),
+      definition('User instructions').replace('name: scout', 'name: home-agent'),
+    )
+    expect((await call(opened, { action: 'start', agent: 'home-agent', task: 'home' })).text).toBe(
+      'Child: home',
+    )
+    const homeAgent = (await children(opened)).at(-1)!
+    expect(
+      (await (await opened.harness.conversation(homeAgent.conversationId, context))!.agent(context))
+        .instructions,
+    ).toBe('User instructions')
   })
   it('background returns immediately, survives parent abort and restart, and reports exactly once', async () => {
     const { prepared, opened } = await fixture()

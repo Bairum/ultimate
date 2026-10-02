@@ -27,13 +27,10 @@ function deferred<T>() {
 }
 
 describe('web extension registry', () => {
-  it('names facets by folder', () => {
+  it('loads each facet lazily and on its own, isolating a broken one', async () => {
     expect(extensionName('/@fs/repo/extensions/status-line/web.tsx?t=1')).toBe('status-line')
     expect(extensionName(path('hello'))).toBe('hello')
     expect(extensionName('/repo/web/src/main.tsx')).toBeUndefined()
-  })
-
-  it('loads each facet lazily and on its own, isolating a broken one', async () => {
     const slow = deferred<unknown>()
     const Late = component('late')
     const Early = component('early')
@@ -94,11 +91,12 @@ describe('web extension registry', () => {
     const registry = createRegistry()
     const listener = vi.fn<() => void>()
     registry.subscribe(listener)
-    await registry.setLoaders({
-      [path('hello')]: async () => module({ slots: { overlay: First } }),
-    })
+    const extension: WebExtension = { slots: { overlay: First } }
+    await registry.setLoaders({ [path('hello')]: async () => module(extension) })
     const installed = registry.getSnapshot()[0]
     expect(installed.version).toBe(1)
+    await registry.setLoaders({ [path('hello')]: async () => module(extension) })
+    expect(registry.getSnapshot()[0]).toBe(installed)
 
     registry.fail('hello', new Error('Transform failed'))
     const failed = registry.getSnapshot()[0]
@@ -217,15 +215,6 @@ describe('web extension registry', () => {
       'agent:agent.stop:Stop',
       'mine:mine.own:Own',
     ])
-  })
-
-  it('reloads only facets whose module changed', async () => {
-    const extension: WebExtension = { slots: { sidebar: component('side') } }
-    const registry = createRegistry()
-    await registry.setLoaders({ [path('same')]: async () => module(extension) })
-    const before = registry.getSnapshot()[0]
-    await registry.setLoaders({ [path('same')]: async () => module(extension) })
-    expect(registry.getSnapshot()[0]).toBe(before)
   })
 
   it('resolves renderers and panels across facets', async () => {

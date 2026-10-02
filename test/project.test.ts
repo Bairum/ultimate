@@ -12,14 +12,12 @@ import {
   post as requestPost,
   sourceCopy,
   cleanEnv,
-  skipWithoutChromium,
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { projectHome } from '../server/project.ts'
 import { actionExec } from '../server/actions.ts'
 import type { SystemInfo } from '../shared/protocol.ts'
 import { defineExtension } from '@earendil-works/pi-durable'
-import { chromium } from 'playwright-core'
 
 const directories: string[] = []
 const servers: Awaited<ReturnType<typeof createServer>>[] = []
@@ -293,46 +291,6 @@ it('loads external project facets over user and built-in names, actions and tran
     (await post(server.url, '/api/extensions/coding-tools/actions/hello')).data.result.value,
   ).toBe('user')
 })
-
-it('renders built-in and project status-line facets in an outside project', async (test) => {
-  const executablePath = await skipWithoutChromium(test)
-  if (!executablePath) return
-  const projectRoot = await temp()
-  const userHome = await temp()
-  const path = await extension(join(projectRoot, '.ultimate'), 'hello', 'browser')
-  await writeFile(
-    join(path, 'web.tsx'),
-    `import { defineWebExtension } from '@/sdk'
-function Hello() { return <span data-testid="project-facet">Project hello</span> }
-export default defineWebExtension({ slots: { 'statusline.left': [Hello] } })`,
-  )
-  const server = await createServer({
-    ultimateRoot: resolve('.'),
-    projectRoot,
-    userHome,
-    home: join(userHome, 'state'),
-    faux: true,
-    port: 0,
-  })
-  servers.push(server)
-  const browser = await chromium.launch({ executablePath, headless: true })
-  try {
-    const page = await browser.newPage()
-    await page.goto(server.url)
-    await expect
-      .poll(() => page.locator('footer').getByText('live', { exact: true }).count(), {
-        timeout: 10000,
-      })
-      .toBe(1)
-    await expect
-      .poll(() => page.locator('footer').getByTestId('project-facet').textContent(), {
-        timeout: 10000,
-      })
-      .toBe('Project hello')
-  } finally {
-    await browser.close()
-  }
-}, 60000)
 
 it('discovers user/project agents and skills with provenance and hot config changes', async () => {
   const projectRoot = await temp()

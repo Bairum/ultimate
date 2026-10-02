@@ -1,6 +1,6 @@
 import type { Op } from '@earendil-works/chord/delta'
 import type { ConversationView } from '@earendil-works/pi-durable'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createStore } from '../../web/src/sdk/store.ts'
 import type { EventSourceLike } from '../../web/src/sdk/store.ts'
 import type { ServerEvents } from '../../shared/protocol.ts'
@@ -67,7 +67,9 @@ const view = (
   entries: ReturnType<typeof user>[],
   docs: ConversationView['docs'] = {},
 ): ConversationView => ({ conversation: { id: 1 }, entries, docs }) as unknown as ConversationView
-const tick = () => new Promise((resolve) => setTimeout(resolve, 10))
+beforeEach(() => vi.useFakeTimers())
+afterEach(() => vi.useRealTimers())
+const tick = () => vi.advanceTimersByTimeAsync(10)
 
 describe('web replica store', () => {
   it('applies ops to the snapshot and starts over from a fresh snapshot after a reconnect', () => {

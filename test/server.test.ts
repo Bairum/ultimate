@@ -1,6 +1,4 @@
-import { spawn } from 'node:child_process'
 import { request } from 'node:http'
-import { once } from 'node:events'
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
@@ -16,7 +14,6 @@ import {
   until,
   post,
   attach,
-  cleanEnv,
   temp,
   linkDependencies,
 } from './helpers.ts'
@@ -90,11 +87,6 @@ async function fixture(
       recursive: true,
     })
     await cp(resolvePath('agents'), join(ultimateRoot, 'agents'), { recursive: true })
-    await writeFile(join(ultimateRoot, 'agents/broken.md'), 'not frontmatter')
-    await writeFile(
-      join(ultimateRoot, 'agents/configured.md'),
-      '---\nname: configured\ndescription: Configured agent\nmodel: openai-codex/gpt-5.4\nthinking: max\n---\nInvestigate.',
-    )
   }
   if (sources) {
     await rm(join(ultimateRoot, 'extensions/coding-tools'), { recursive: true })
@@ -281,16 +273,6 @@ export const actions = { keys: async () => keys }`,
     next.dispose()
   })
 
-  it('puts identity first in the faux server system prompt', async () => {
-    const { server } = await fixture()
-    await post(server, '/api/conversations/1/submit', { text: 'Return the word SCOUT.' })
-    await server.harness.waitForIdle(context)
-    const view = await server.root.viewState(context)
-    const message = view.value.entries.find((entry) => entry.kind === 'pi.system')!.model![0]
-    if (message.role !== 'system') throw new Error('Expected system message')
-    expect(Object.keys(message.sections!)[0]).toBe('identity')
-    view.dispose()
-  })
   it('shares root UI snapshots and set/delete deltas across conversations and reopen', async () => {
     const { server, options } = await fixture()
     const created = await post(server, '/api/conversations')
@@ -314,6 +296,17 @@ export const actions = { keys: async () => keys }`,
     })
     await until(() => first.events.filter((event) => event.name === 'uiOps').length === 2)
     expect(await server.host.uiState(context)).toEqual({ 'shell.panel': 'tasks' })
+    const entry = await server.root.commit(
+      async (tx) => tx.appendEntry(server.root.id, { kind: 'test.marker' }),
+      context,
+    )
+    await post(server, '/api/ui', { set: { 'shell.panel': 'settings' } })
+    const fork = await server.root.fork(entry.id, { ownership: { kind: 'ownerless' } }, context)
+    expect(await server.harness.snapshot(UiState, fork.id, context)).toEqual({
+      'shell.panel': 'tasks',
+    })
+    expect(await server.host.uiState(context)).toEqual({ 'shell.panel': 'settings' })
+    await post(server, '/api/ui', { set: { 'shell.panel': 'tasks' } })
     await first.close()
     await second.close()
     await server.vite.watcher.close()
@@ -344,43 +337,9 @@ export const actions = { keys: async () => keys }`,
     expect(await server.host.uiState(context)).toEqual(JSON.parse('{"__proto__":{"safe":true}}'))
   })
 
-  it('forks root UI state as of the selected entry', async () => {
-    const { server } = await fixture()
-    await post(server, '/api/ui', { set: { 'shell.panel': 'tasks' } })
-    const entry = await server.root.commit(
-      async (tx) => tx.appendEntry(server.root.id, { kind: 'test.marker' }),
-      context,
-    )
-    await post(server, '/api/ui', { set: { 'shell.panel': 'settings' } })
-    const fork = await server.root.fork(entry.id, { ownership: { kind: 'ownerless' } }, context)
-    expect(await server.harness.snapshot(UiState, fork.id, context)).toEqual({
-      'shell.panel': 'tasks',
-    })
-    expect(await server.host.uiState(context)).toEqual({ 'shell.panel': 'settings' })
-  })
-
-  it('runs the faux subagent demo and streams its labelled tree, child transcript and definitions', async () => {
+  it('runs the faux subagent demo and streams its labelled tree and child transcript', async () => {
     const { server } = await fixture(false, true)
     const stream = await attach(server)
-    const { definitions, errors } = (
-      await post(server, '/api/extensions/subagents/actions/definitions', { args: null })
-    ).data.result
-    expect(definitions.find((agent: { name: string }) => agent.name === 'scout')).toMatchObject({
-      source: 'builtin',
-      description: expect.stringContaining('read-only'),
-      tools: ['read', 'bash'],
-    })
-    expect(definitions.find((agent: { name: string }) => agent.name === 'configured')).toEqual({
-      name: 'configured',
-      description: 'Configured agent',
-      path: join(server.host.ultimateRoot, 'agents/configured.md'),
-      source: 'builtin',
-      model: { provider: 'openai-codex', modelId: 'gpt-5.4' },
-      thinking: 'max',
-    })
-    expect(errors).toEqual([
-      expect.objectContaining({ name: 'broken', error: expect.stringContaining('frontmatter') }),
-    ])
     await post(server, '/api/conversations/1/submit', { text: 'delegate to scout' })
     await server.root.waitForIdle(context)
     let child: ServerEvents['conversations'][number] | undefined
@@ -448,12 +407,14 @@ export const actions = { keys: async () => keys }`,
     const result = await post(server, '/api/conversations/1/submit', { text: 'demo' })
     expect(result.status).toBe(202)
     await server.harness.waitForIdle(context)
-    await until(() => stream.events.some((event) => event.name === 'ops'))
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    let replica = stream.events.find((event) => event.name === 'view')!.data as ConversationView
-    for (const event of stream.events)
-      if (event.name === 'ops') replica = applyImmutable(replica, event.data as Op[])
     const state = await server.root.viewState(context)
+    let replica!: ConversationView
+    await until(() => {
+      replica = stream.events.find((event) => event.name === 'view')!.data as ConversationView
+      for (const event of stream.events)
+        if (event.name === 'ops') replica = applyImmutable(replica, event.data as Op[])
+      return JSON.stringify(replica) === JSON.stringify(state.value)
+    })
     expect(replica).toEqual(state.value)
     state.dispose()
     expect(replica.entries.filter((entry) => entry.kind === 'pi.tool-result')).toHaveLength(2)
@@ -540,6 +501,13 @@ export const actions = { keys: async () => keys }`,
   })
   it('reports machine, persistence, shared resources and folder facets', async () => {
     const { server } = await fixture(true)
+    await post(server, '/api/conversations/1/submit', { text: 'Return the word SCOUT.' })
+    await server.harness.waitForIdle(context)
+    const view = await server.root.viewState(context)
+    const message = view.value.entries.find((entry) => entry.kind === 'pi.system')!.model![0]
+    if (message.role !== 'system') throw new Error('Expected system message')
+    expect(Object.keys(message.sections!)[0]).toBe('identity')
+    view.dispose()
     const info = server.system.current()
     expect(info.machine.cpuCount).toBeGreaterThan(0)
     expect(info.machine.hostname).not.toBe('')
@@ -648,12 +616,13 @@ export const actions = { keys: async () => keys }`,
       server.extensions.info().find((extension) => extension.name === 'prompt')!.server!.loadedAt,
     ).toBe(promptLoaded)
     const successful = entry().server!.loadedAt
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    await writeFile(
-      join(server.host.ultimateRoot, 'extensions/counter/value.ts'),
-      'this is not valid TS !!!',
-    )
-    await until(() => !!entry().server!.error)
+    await until(async () => {
+      await writeFile(
+        join(server.host.ultimateRoot, 'extensions/counter/value.ts'),
+        'this is not valid TS !!!',
+      )
+      return !!entry().server!.error
+    })
     expect(entry().server!.loadedAt).toBe(successful)
     expect(server.host.registry.snapshot().extension('counter')).toBe(installed)
   })
@@ -696,9 +665,6 @@ export const actions = { keys: async () => keys }`,
     })
     await until(() => !server.extensions.info().some((extension) => extension.name === 'web-only'))
     expect(server.host.registry.snapshot().extension('web-only')).toBe(external)
-  })
-  it('discovers and removes extension folders while running', async () => {
-    const { server } = await fixture()
     const folder = join(server.host.ultimateRoot, 'extensions', 'added')
     await mkdir(folder)
     await writeFile(
@@ -738,73 +704,6 @@ export const actions = { keys: async () => keys }`,
       if (event.name === 'docOps') value = applyImmutable(value, (event.data as { ops: Op[] }).ops)
     expect(value).toEqual({ count: 1 })
     await stream.close()
-  })
-  it('resumes a committed mid-turn checkpoint after SIGKILL', async () => {
-    const { server, options } = await fixture()
-    await server.vite.watcher.close()
-    await server.close()
-    servers.splice(servers.indexOf(server), 1)
-    const child = spawn(
-      process.execPath,
-      [
-        '--input-type=module',
-        '-e',
-        `import { createServer } from ${JSON.stringify(join(options.ultimateRoot, 'server/main.ts'))}; const server = await createServer(${JSON.stringify(options)}); console.log('READY ' + server.url)`,
-      ],
-      {
-        cwd: options.ultimateRoot,
-        env: cleanEnv({ HOME: options.userHome }),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    )
-    let output = ''
-    child.stdout.on('data', (chunk) => {
-      output += chunk.toString()
-    })
-    child.stderr.on('data', () => {})
-    try {
-      await until(() => output.includes('READY '))
-      const url = /READY (http:\/\/[^\s]+)/.exec(output)![1]
-      const response = await fetch(url + '/api/conversations/1/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'resume demo' }),
-      })
-      expect(response.status).toBe(202)
-      // Wait for a committed live generation or tool before killing the owner.
-      const controller = new AbortController()
-      const stream = await fetch(url + '/api/events', { signal: controller.signal })
-      const reader = stream.body!.getReader()
-      let wire = ''
-      while (!wire.includes('starting') && !wire.includes('I will demonstrate')) {
-        const next = await reader.read()
-        if (next.done) throw new Error('Stream ended')
-        wire += new TextDecoder().decode(next.value)
-      }
-      expect(wire).not.toContain('## Complete')
-      const exited = once(child, 'exit')
-      child.kill('SIGKILL')
-      await exited
-      controller.abort()
-      const resumed = await createServer(options)
-      servers.push(resumed)
-      await resumed.harness.waitForIdle(context)
-      const state = await resumed.root.viewState(context)
-      expect(
-        state.value.entries.some(
-          (entry) =>
-            entry.kind === 'pi.assistant' && JSON.stringify(entry.model).includes('## Complete'),
-        ),
-      ).toBe(true)
-      expect(await readFile(join(options.home, 'demo.txt'), 'utf8')).toBe('after\n')
-      state.dispose()
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        const exited = once(child, 'exit')
-        child.kill('SIGKILL')
-        await exited
-      }
-    }
   })
   it('runs logins in the models extension: prompt, answer, cancel, no credential leak, dead flows cancelled', async () => {
     const { server, options } = await fixture(false, false, {

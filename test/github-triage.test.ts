@@ -108,7 +108,7 @@ it('guards argv and ordinary shell indirection without executing any real GitHub
     ])
     await expect(readFile(log)).rejects.toThrow('ENOENT')
   } finally {
-    await rm(home, { recursive: true, force: true })
+    await rm(home, { recursive: true, force: true, maxRetries: 5 })
   }
 })
 
@@ -151,7 +151,7 @@ it('refuses unlisted repositories before exec, rejects dot segments, and preserv
     }
     expect(await actions.labels({ repo: 'private/repo' }, ctx)).toEqual([])
   } finally {
-    await rm(home, { recursive: true, force: true })
+    await rm(home, { recursive: true, force: true, maxRetries: 5 })
   }
 })
 
@@ -200,7 +200,7 @@ it('loads the bash wrap into agent.tools and requires browser headers on actions
   } finally {
     await server.close()
     process.env.PATH = oldPath
-    await rm(home, { recursive: true, force: true })
+    await rm(home, { recursive: true, force: true, maxRetries: 5 })
   }
 })
 
@@ -295,6 +295,6 @@ else setTimeout(() => console.log('https://github.com/HazAT/ultimate/issues/1#c'
     await server.close()
     process.env.PATH = oldPath
     delete process.env.RECORD
-    await rm(home, { recursive: true, force: true })
+    await rm(home, { recursive: true, force: true, maxRetries: 5 })
   }
 })
