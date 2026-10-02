@@ -1,14 +1,36 @@
 import type { JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
-import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { defineExtension, defineTool, section, wrapTool } from '@earendil-works/pi-durable'
+import { createBashTool } from '@earendil-works/pi-durable/tools'
 import type { ActionContext } from '../../../server/actions.ts'
 
 /**
  * The agent never writes to GitHub: it proposes labels or a reply with `triage_propose`, the Triage surface shows the
  * proposal with Apply and Discard, and only the user's confirmed click calls the write actions below.
  */
+/** gh commands that change something on GitHub. The agent proposes; only the user's click in the UI writes. */
+const GITHUB_WRITES = [
+  /\bgh\s+(?:issue|pr)\s+(?:comment|edit|close|reopen|create|merge|review|lock|unlock|delete|transfer|pin|unpin|ready)\b/,
+  /\bgh\s+label\s+(?:create|edit|delete|clone)\b/,
+  /\bgh\s+api\b[^\n]*(?:(?:-X|--method)\s*['"]?(?:POST|PATCH|PUT|DELETE)\b|\s(?:-f|-F|--field|--raw-field|--input)\b)/i,
+]
+
 export default defineExtension({
   name: 'github-triage',
+  wraps: [
+    wrapTool(createBashTool(), (bash) => ({
+      ...bash,
+      execute: (args, api, context) => {
+        if (GITHUB_WRITES.some((pattern) => pattern.test(args.command)))
+          throw new Error(
+            'Blocked by github-triage: the agent never writes to GitHub. Propose labels or a reply with triage_propose; the user applies it in the Triage surface.',
+          )
+        return bash.execute(args, api, context)
+      },
+    })),
+  ],
   sections: [
     section(
       'github_triage',
@@ -115,6 +137,26 @@ interface Label {
 }
 
 const labelOf = ({ name, color }: Label) => ({ name, color })
+
+/** Repositories the UI may write to, from `githubTriage.writableRepos` in the project's `.ultimate/settings.json`. */
+async function writable(ctx: ActionContext, repo: string) {
+  try {
+    const settings = JSON.parse(
+      await readFile(join(ctx.host.projectRoot, '.ultimate', 'settings.json'), 'utf8'),
+    )
+    const repos: unknown = settings?.githubTriage?.writableRepos
+    return (
+      Array.isArray(repos) &&
+      repos.some((name) => String(name).toLowerCase() === repo.toLowerCase())
+    )
+  } catch {
+    return false
+  }
+}
+const readOnly = (repo: string) => ({
+  status: 'error',
+  message: `Writes to ${repo} are off. To allow them, add "${repo}" to githubTriage.writableRepos in .ultimate/settings.json.`,
+})
 
 /** The UI calls these with `useAction('github-triage', name, args)`; each returns JSON. */
 export const actions = {
@@ -234,6 +276,7 @@ export const actions = {
   /** Adds and removes labels; the UI calls it only after the user confirmed. Issues and pull requests share the API. */
   async label(args: JsonValue, ctx: ActionContext) {
     const repo = repoArg(args)
+    if (!(await writable(ctx, repo))) return readOnly(repo)
     const number = numberArg(args)
     const add = namesArg(args, 'add')
     const remove = namesArg(args, 'remove')
@@ -258,6 +301,7 @@ export const actions = {
   /** Posts a comment; the UI calls it only after the user confirmed. Returns the new comment's URL. */
   async comment(args: JsonValue, ctx: ActionContext) {
     const repo = repoArg(args)
+    if (!(await writable(ctx, repo))) return readOnly(repo)
     const number = numberArg(args)
     const body = textArg(args, 'body', 65536)
     if (!body) throw new Error('Expected a body')
