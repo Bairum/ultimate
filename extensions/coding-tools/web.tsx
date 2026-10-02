@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { AnsiOutput } from '@/components/ai/ansi-output'
 import { CodeBlock, languageFromPath } from '@/components/ai/code-block'
 import {
   Tool,
@@ -188,15 +189,11 @@ function exitOf(call: ToolCallView): { label: string; ok: boolean } | undefined 
   return { label: 'failed', ok: false }
 }
 
-// Terminal colours are not rendered yet; strip their escape codes.
-// oxlint-disable-next-line no-control-regex -- matching ANSI escapes is the point
-const ansi = /\u001B\[[0-9;?]*[ -/]*[@-~]/g
-
 function Bash({ call }: { call: ToolCallView }) {
   const command = text(call.args.command)
   const duration = useToolDuration(call)
   const exit = exitOf(call)
-  const output = call.output.replace(ansi, '')
+  const output = call.output
   const running = call.status === 'running'
   const scroller = useRef<HTMLPreElement>(null)
   useEffect(() => {
@@ -229,7 +226,7 @@ function Bash({ call }: { call: ToolCallView }) {
                 … {call.dropped.lines.toLocaleString()} earlier lines dropped
               </div>
             )}
-            {output}
+            <AnsiOutput output={output} />
             {running && (
               <span className="ml-px inline-block h-3.5 w-1.5 animate-pulse-dot bg-brand align-middle" />
             )}

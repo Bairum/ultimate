@@ -12,6 +12,7 @@ import {
 import type { ComponentProps, ReactNode } from 'react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { AnsiOutput } from './ansi-output.tsx'
 import { CodeBlock } from './code-block.tsx'
 
 export type ToolState = 'streaming' | 'pending' | 'running' | 'done' | 'error' | 'interrupted'
@@ -115,7 +116,7 @@ export const ToolOutput = ({
           isError ? 'text-error' : 'text-foreground/90',
         )}
       >
-        {output}
+        <AnsiOutput output={output} />
       </pre>
     </ToolSection>
   ) : null

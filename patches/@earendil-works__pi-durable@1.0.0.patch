@@ -1,0 +1,20 @@
+diff --git a/dist/harness/output.js b/dist/harness/output.js
+index ad7d1c16799a6b2f71141db57ef891af1b1081f0..d57f2045c05a46b8d486788b46057b5955d8f2ca 100644
+--- a/dist/harness/output.js
++++ b/dist/harness/output.js
+@@ -1,11 +1,12 @@
+ import { utf8ByteLength } from "../truncate.js";
+ const NEWLINE = 0x0a;
+-const INVALID_OUTPUT = /[\x00-\x08\x0b-\x1f\ufff9-\ufffb]/g;
++// Consume whole CSI, OSC and control strings before individual controls; otherwise their payload leaks into text.
++const OUTPUT_CONTROLS = /(?:\x1b\[|\x9b)[0-?]*[ -/]*(?:[@-~]|$)|(?:\x1b\]|\x9d)[\s\S]*?(?:\x07|\x1b\\|\x9c|$)|(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[\s\S]*?(?:\x1b\\|\x9c|$)|\x1b[ -/]*[0-~]|[\x00-\x08\x0b-\x1f\x7f-\x9f\ufff9-\ufffb]/g;
+ const encoder = new TextEncoder();
+ const decoder = new TextDecoder();
+-/** Remove control characters that break display and transcripts; tabs and newlines stay. */
++/** Keep numeric ANSI SGR, tabs and newlines; remove other terminal sequences and controls in full. */
+ export function sanitizeOutput(text) {
+-    return text.replace(INVALID_OUTPUT, "");
++    return text.replace(OUTPUT_CONTROLS, (sequence) => /^\x1b\[[0-9;]*m$/.test(sequence) ? sequence : "");
+ }
+ /**
+  * Bound `text` to whole lines within the limits: the first lines for `head`, the last lines for `tail`. The result is an

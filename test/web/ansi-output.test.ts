@@ -1,0 +1,75 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
+import { AnsiOutput } from '../../web/src/components/ai/ansi-output.tsx'
+import { ToolOutput } from '../../web/src/components/ai/tool.tsx'
+
+const render = (output: string) => renderToStaticMarkup(createElement(AnsiOutput, { output }))
+
+describe('ANSI output rendering', () => {
+  it('renders colour, bold, dim and reset without visible SGR tokens', () => {
+    expect(render('\x1b[1;94mHeading\x1b[2mdim\x1b[22mblue\x1b[0mnormal')).toBe(
+      '<span><span style="font-weight:bold;color:rgb(85,85,255)">Heading</span>' +
+        '<span style="font-weight:bold;opacity:0.7;color:rgb(85,85,255)">dim</span>' +
+        '<span style="color:rgb(85,85,255)">blue</span>normal</span>',
+    )
+  })
+
+  it('renders existing ESC-less numeric SGR identically to intact escapes', () => {
+    const output = '\x1b[1m\x1b[94mHeading\x1b[0m\n\x1b[2;32mdim green\x1b[0m'
+    expect(render(output.replaceAll('\x1b', ''))).toBe(render(output))
+    expect(render('[38;5;196mred[0m')).toBe(render('\x1b[38;5;196mred\x1b[0m'))
+    expect(render('[48;2;1;2;3mbg[0m')).toBe(render('\x1b[48;2;1;2;3mbg\x1b[0m'))
+  })
+
+  it('leaves normal brackets and nonnumeric / non-SGR tokens untouched', () => {
+    const output = '[hello] [1,2] [1] [;m [31:m [warnm [2K [?25l [1;]'
+    expect(render(output)).toBe(`<span>${output}</span>`)
+  })
+
+  it('supports palette / truecolour and foreground / background resets', () => {
+    expect(render('\x1b[38;5;196mred\x1b[48;2;1;2;3mbg\x1b[39mdefault\x1b[49mplain')).toBe(
+      '<span><span style="color:rgb(255,0,0)">red</span>' +
+        '<span style="color:rgb(255,0,0);background-color:rgb(1,2,3)">bg</span>' +
+        '<span style="background-color:rgb(1,2,3)">default</span>plain</span>',
+    )
+  })
+
+  it('removes unsafe sequences, including their payload, before rendering', () => {
+    expect(render('\x1b]52;c;secret\x07\x1b[2K\x1b[?25l\x1bPsecret\x1b\\safe\x00\x7f')).toBe(
+      render('safe'),
+    )
+    expect(render('\x1b]8;;javascript:alert(1)\x1b\\label\x1b]8;;\x1b\\')).toBe(render('label'))
+    expect(render('safe\x1b[31;')).toBe(render('safe'))
+  })
+
+  it('escapes HTML with or without ANSI / legacy formatting', () => {
+    const output = '<img src=x onerror="alert(1)"> & <script>alert(2)</script>'
+    const html = render(`[1;31m${output}[0m`)
+    expect(html).toContain('&lt;img src=x onerror=&quot;alert(1)&quot;&gt; &amp; &lt;script&gt;')
+    expect(html).not.toContain('<img')
+    expect(html).not.toContain('<script')
+    expect(render(output)).toContain('&lt;img')
+  })
+
+  it('does not carry styles from one output into another', () => {
+    expect(render('\x1b[1;31mred')).toContain('font-weight:bold')
+    expect(render('plain')).toBe('<span>plain</span>')
+  })
+
+  it('resets bold and dim after repeated SGR codes', () => {
+    expect(render('\x1b[1;2ma\x1b[1;2mb\x1b[22mplain')).toBe(
+      '<span><span style="font-weight:bold;opacity:0.7">a</span>' +
+        '<span style="font-weight:bold;opacity:0.7">b</span>plain</span>',
+    )
+  })
+
+  it('uses the ANSI renderer in shared ToolOutput, including errors', () => {
+    const output = '[1;31mfailed[0m <script> &'
+    const html = renderToStaticMarkup(createElement(ToolOutput, { output, isError: true }))
+    expect(html).toContain('Error')
+    expect(html).toContain(render(output))
+    expect(html).not.toContain('[1;31m')
+    expect(html).not.toContain('<script>')
+  })
+})
