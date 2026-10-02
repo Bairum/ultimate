@@ -22,7 +22,7 @@ import { actions, allCommands, shellKeys, shownSurface } from './actions.ts'
 import { actionMessage } from './api.ts'
 import type { ActionError } from './api.ts'
 import { api, registry, store, uiState } from './client.ts'
-import { HOME } from './registry.ts'
+import { HOME, documentItems } from './registry.ts'
 import type { State } from './store.ts'
 import { formatDuration } from './format.ts'
 import type { ToolCallView, UltimateContext } from './types.ts'
@@ -179,6 +179,11 @@ export function useDialog(id: string): [boolean, (open: boolean) => void] {
 /** Installed web facets, in folder order. */
 export function useExtensions() {
   return useSyncExternalStore(registry.subscribe, registry.getSnapshot)
+}
+/** Document renderers by kind (`documents` contributions); the Documents tab shows the rest as JSON. */
+export function useDocumentRenderers() {
+  const records = useExtensions()
+  return useMemo(() => documentItems(records), [records])
 }
 /** Core and extension commands. */
 export function useCommands() {

@@ -3,6 +3,7 @@ import {
   commandApplies,
   commandItems,
   createRegistry,
+  documentItems,
   extensionName,
   panelItems,
   rendererFor,
@@ -136,6 +137,7 @@ describe('web extension registry', () => {
       surfaces: [{ id: 'hello', title: 'Hello', icon: Good, component: Good }],
       tools: { hello: Object.assign(Object.create(null), { $$typeof: Symbol.for('react.memo') }) },
       entries: { 'hello.entry': Good },
+      documents: [{ kind: 'hello.doc', title: 'Hello', icon: Good, component: Good }],
       commands: [{ id: 'hello.run', title: 'Run', keys: 'escape', whileTyping: true, run() {} }],
     }
     const registry = createRegistry()
@@ -157,6 +159,9 @@ describe('web extension registry', () => {
       [{ slots: { overlay: { order: 1 } } }, /^slots must/],
       [{ tools: { bash: 'Bash' } }, /^tools must be an object/],
       [{ entries: [Good] }, /^entries must be an object/],
+      [{ documents: {} }, /^documents must be an array of \{ kind, title, icon\?, component \}/],
+      [{ documents: [{ kind: 'x', title: 'X' }] }, /^documents must/],
+      [{ documents: [{ kind: 1, title: 'X', component: Good }] }, /^documents must/],
     ]
     for (const [extension, error] of malformed) {
       registry.replace('hello', { default: extension })
@@ -167,6 +172,7 @@ describe('web extension registry', () => {
       expect(panelItems(records).map((panel) => panel.id)).toEqual(['hello'])
       expect(commandItems(records).map((command) => command.id)).toEqual(['hello.run'])
       expect(slotItems(records, 'sidebar')).toHaveLength(1)
+      expect([...documentItems(records).keys()]).toEqual(['hello.doc'])
     }
 
     // A malformed first load installs nothing, and the shell's selectors still work.
@@ -226,12 +232,17 @@ describe('web extension registry', () => {
         module({
           tools: { bash: First },
           panels: [{ id: 'info', title: 'Info', component: First, order: 2 }],
+          documents: [
+            { kind: 'ultimate.plan', title: 'Plan', component: First },
+            { kind: 'a.notes', title: 'Notes', component: First },
+          ],
         }),
       [path('b')]: async () =>
         module({
           tools: { bash: Second },
           entries: { 'pi.compaction': Second },
           panels: [{ id: 'tasks', title: 'Tasks', component: Second, order: 1 }],
+          documents: [{ kind: 'ultimate.plan', title: 'My plan', component: Second }],
         }),
     })
     const records = registry.getSnapshot()
@@ -239,6 +250,11 @@ describe('web extension registry', () => {
     expect(rendererFor(records, 'entries', 'pi.compaction')?.component).toBe(Second)
     expect(rendererFor(records, 'tools', 'read')).toBeUndefined()
     expect(panelItems(records).map((panel) => panel.id)).toEqual(['tasks', 'info'])
+    const documents = documentItems(records)
+    expect(documents.get('ultimate.plan')).toMatchObject({ extension: 'b', title: 'My plan' })
+    expect(documents.get('ultimate.plan')?.component).toBe(Second)
+    expect(documents.get('a.notes')?.extension).toBe('a')
+    expect(documents.has('codemode.store')).toBe(false)
   })
 
   it('lists surfaces with Agent first, then by order and title, a later facet winning an id', async () => {

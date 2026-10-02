@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from 'react'
 import type { ImageContent, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai'
-import type { EntryRecord, ToolDiagnostic } from '@earendil-works/pi-durable'
+import type { EntryRecord, JsonObject, ToolDiagnostic } from '@earendil-works/pi-durable'
 
 /** Named places in the shell that extensions fill with components. */
 export type SlotName =
@@ -70,6 +70,22 @@ export type ToolRenderer = ComponentType<{ call: ToolCallView }>
 /** `core` is the core's rendering of the entry: return it for entries you leave alone, or wrap it. */
 export type EntryRenderer = ComponentType<{ entry: EntryRecord; core: ReactNode }>
 
+/** What a document renderer receives: the shown conversation's document of its kind, live. */
+export interface DocumentProps {
+  value: Readonly<JsonObject>
+  conversationId: number
+}
+/**
+ * How the Documents tab shows one kind of extension document, a server facet's `docs` export (`ultimate.plan`).
+ * Kinds without one show as a JSON tree.
+ */
+export interface DocumentContribution {
+  kind: string
+  title: string
+  icon?: ComponentType<{ className?: string }>
+  component: ComponentType<DocumentProps>
+}
+
 /** Navigation and shell actions, passed to commands and returned by `useUltimate()`. */
 export interface UltimateActions {
   switchConversation: (id: number) => void
@@ -120,6 +136,8 @@ export interface WebExtension {
   tools?: Readonly<Record<string, ToolRenderer>>
   /** Entry renderers by entry kind; they also replace the core renderer of a `pi.*` kind. */
   entries?: Readonly<Record<string, EntryRenderer>>
+  /** Document renderers; a later facet wins a kind. */
+  documents?: readonly DocumentContribution[]
   commands?: readonly CommandContribution[]
 }
 

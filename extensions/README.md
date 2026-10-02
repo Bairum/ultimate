@@ -17,6 +17,7 @@ existing extension and change it:
 | Toolbar buttons, dialogs, commands, a popover     | `models`                                            |
 | A header badge, an entry renderer that wraps core | `self`                                              |
 | An extension document in the UI (`useDoc`)        | `codemode`, `models` (login flows)                  |
+| A renderer for your document (Documents tab)      | `plan` (see [Documents](#documents))                |
 | A prompt section from durable UI state            | `surfaces`                                          |
 | Toasts or other global overlays                   | `notices`                                           |
 
@@ -101,7 +102,7 @@ Save it and the item appears in the status line. No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, entries, commands })`; every key is optional. Extensions load in
+`defineWebExtension({ slots, panels, surfaces, tools, entries, documents, commands })`; every key is optional. Extensions load in
 folder-name order; give a slot item `{ component, order }` to move it (default order 0, lower first).
 
 ### Slots
@@ -185,6 +186,39 @@ entries: { 'notes.pinned': ({ entry }) => <div className="text-muted-foreground"
 A renderer also gets `core`, the core's rendering of the same entry: return it for the entries you leave alone, wrap
 it, or return `null` to hide the entry. `self` renders `pi.system` entries that change the build section as a reload
 marker and returns `core` for the rest.
+
+### Documents
+
+Extension documents are durable state on a conversation: a ledger, a store, login flows. The Documents tab
+(`extensions/documents`) lists every kind the server facets export for the shown conversation and shows each through
+the renderer a web facet registers for it, or as a JSON tree without one. To give yours a view:
+
+1. Export the document from `server.ts`: `export const docs = [Plan]`, conversation-scoped tokens from `defineDoc`.
+   The Info panel then lists the kind under the extension.
+2. Register a renderer in `web.tsx`. It receives the live `value` and the shown `conversationId`; cast the value to
+   your document's shape.
+
+```tsx
+import { ClipboardListIcon } from 'lucide-react'
+import { defineWebExtension } from '@/sdk'
+import type { DocumentProps } from '@/sdk'
+
+function PlanDocument({ value }: DocumentProps) {
+  const plan = value as unknown as { epics: Record<string, { title: string }> }
+  return Object.values(plan.epics).map((epic) => <p key={epic.title}>{epic.title}</p>)
+}
+
+export default defineWebExtension({
+  documents: [
+    { kind: 'ultimate.plan', title: 'Plan', icon: ClipboardListIcon, component: PlanDocument },
+  ],
+})
+```
+
+A later facet in folder-name order wins a kind. A renderer that throws shows an error card with the JSON tree below it;
+the other documents keep working. To render another extension's component yourself, wrap it in `ExtensionBoundary`
+from `@/sdk`, as the Documents tab does, and look renderers up with `useDocumentRenderers()`. Opening the tab streams
+every exported kind, which creates a missing document with its initial value, as `useDoc` does.
 
 ### Commands
 
@@ -555,7 +589,7 @@ Keep in mind:
 
 ## SDK (`@/sdk`)
 
-Import only from `@/sdk`, `@/components/ui/*`, `@/components/ai/*`, `react`, and `lucide-react`. Never call `fetch` or
+Import only from `@/sdk`, `@/components/ui/*`, `@/components/ai/*`, `@/components/json-tree`, `react`, and `lucide-react`. Never call `fetch` or
 open an `EventSource` yourself: the SDK keeps one live stream per shown conversation and replays its changes, and your
 server code is reached through [actions](#actions). The surface primitives are in [Surfaces](#primitives).
 
@@ -576,6 +610,7 @@ server code is reached through [actions](#actions). The surface primitives are i
 | `useRestart()`                                                            | `api.restart()` with its outcome: `run`, `busy`, `pending` generation, and `error` when a check or boot failed or an activation was rolled back                                                                         |
 | `getConversation()`, `getState()`                                         | The same data now, outside React: in commands and callbacks. Components use the hooks.                                                                                                                                  |
 | `useNotices()`, `useCommands()`, `useExtensions()`, `useNow(ms, active?)` | Server and client notices, all commands, installed web facets, a clock ticking every `ms` while `active`                                                                                                                |
+| `useDocumentRenderers()`                                                  | Registered document renderers by kind (see [Documents](#documents))                                                                                                                                                     |
 | `useStore(select)`                                                        | Any slice of the client state (`State`), re-rendering when it changes                                                                                                                                                   |
 
 `api` sends commands: `submit(text, whenBusy?)`, `abort()`, `configure({ model, thinkingLevel })`, `compact()`,

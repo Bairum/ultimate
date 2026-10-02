@@ -1,6 +1,6 @@
 import { ChevronRightIcon } from 'lucide-react'
 import { useState } from 'react'
-import { cn } from '@/sdk'
+import { cn } from 'cn'
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json }
 

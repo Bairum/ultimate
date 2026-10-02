@@ -1,10 +1,10 @@
 import { ChevronRightIcon, DatabaseIcon } from 'lucide-react'
 import { CodeBlock } from '@/components/ai/code-block'
 import { Tool, ToolContent, ToolHeader, ToolImages, ToolSection } from '@/components/ai/tool'
+import { JsonTree } from '@/components/json-tree'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { cn, defineWebExtension, useDoc, useToolDuration } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
-import { JsonTree } from './json-tree.tsx'
 
 interface NestedCall {
   name: string

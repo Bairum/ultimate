@@ -6,6 +6,8 @@ export { defineWebExtension } from './types.ts'
 export type {
   CommandContribution,
   Contribution,
+  DocumentContribution,
+  DocumentProps,
   EntryRenderer,
   PanelContribution,
   SlotName,
@@ -26,6 +28,8 @@ export {
   Slot,
   StatusLine,
 } from '../app/primitives.tsx'
+/** Isolates another extension's component you render, such as a document renderer: it throws into an error card. */
+export { ExtensionBoundary } from '../app/boundary.tsx'
 export { api } from './client.ts'
 export { ActionError } from './api.ts'
 export type { Api } from './api.ts'
@@ -40,6 +44,7 @@ export {
   useConversations,
   useDialog,
   useDoc,
+  useDocumentRenderers,
   useExtensionUiState,
   useExtensions,
   useModels,
@@ -55,6 +60,7 @@ export {
 } from './hooks.ts'
 export type { ActionState, ConversationState, Restart } from './hooks.ts'
 export type { Connection, State } from './store.ts'
+export type { DocumentItem } from './registry.ts'
 export { elidePath, formatBytes, formatDuration, formatTokens, shortenPath } from './format.ts'
 /** Class names joined, Tailwind conflicts resolved: `cn('px-2', active && 'bg-accent')`. */
 export { cn } from 'cn'

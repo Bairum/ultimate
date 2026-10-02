@@ -2,6 +2,7 @@ import type { ComponentType } from 'react'
 import type {
   CommandContribution,
   Contribution,
+  DocumentContribution,
   EntryRenderer,
   PanelContribution,
   SlotName,
@@ -41,6 +42,10 @@ export interface SurfaceItem extends SurfaceContribution {
 }
 export interface CommandItem extends CommandContribution {
   extension: string
+}
+export interface DocumentItem extends DocumentContribution {
+  extension: string
+  version: number
 }
 
 export function extensionName(path: string): string | undefined {
@@ -112,6 +117,17 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   ],
   tools: [objectOf(isComponent), 'an object of tool name → component'],
   entries: [objectOf(isComponent), 'an object of entry kind → component'],
+  documents: [
+    arrayOf(
+      fields({
+        kind: isString,
+        title: isString,
+        icon: optional(isComponent),
+        component: isComponent,
+      }),
+    ),
+    'an array of { kind, title, icon?, component }',
+  ],
   commands: [
     arrayOf(
       fields({
@@ -309,6 +325,15 @@ export function commandItems(
     for (const command of extension?.commands ?? [])
       byId.set(command.id, { ...command, extension: name })
   return [...byId.values()]
+}
+
+/** Document renderers by kind; the last extension in folder order wins a kind. */
+export function documentItems(records: readonly ExtensionRecord[]): Map<string, DocumentItem> {
+  const byKind = new Map<string, DocumentItem>()
+  for (const { name, extension, version } of records)
+    for (const document of extension?.documents ?? [])
+      byKind.set(document.kind, { ...document, extension: name, version })
+  return byKind
 }
 
 /** The renderer for a tool or entry kind; the last extension in folder order wins. */
