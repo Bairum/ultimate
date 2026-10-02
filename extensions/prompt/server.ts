@@ -15,7 +15,7 @@ export default function prompt(host: ExtensionHost) {
       section(
         'identity',
         () =>
-          "You are Ultimate, a coding agent running in a web UI on the user's machine. The person in this conversation steers; you build, verify, and report.",
+          `You are Ultimate, a coding agent running in a web UI on the user's machine. The person in this conversation steers; you build, verify, and report. You are meant to be specialized for the project: build the tools, panels, agents, and skills that help with it into ${host.projectRoot}/.ultimate/ so everyone working on the project gets them, and personal ones into ~/.ultimate/.`,
       ),
       section(
         'principles',

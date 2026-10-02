@@ -1,30 +1,34 @@
 # Ultimate
 
-Your sidekick: a coding agent that can do anything a coding agent does, and that builds applications with you, live,
-in a web UI, while it learns everything about the application you are building together.
+A coding agent you specialize for the project you work on. Start it in your repository and it is Pi's coding agent in a
+web UI. Then build what this project needs into it, such as custom tools, panels, subagents, skills, or whole screens,
+and keep them in the project's `.ultimate/` folder. Everyone who works on the project boots the same specialized agent,
+and it still feels familiar in every project, because the core is always the same.
 
 Built on [Pi Durable](https://earendil.com/posts/pi-durable/): the conversation, every tool call, and every subagent are
 committed to SQLite before anything is shown, so Ultimate can rewrite its own UI, extensions, and core without losing its
 place.
 
-## Why
+## How to use it
 
-- **One sidekick, always there.** Ultimate is one long-running conversation, not a fresh session per task. Compaction
-  keeps it going, so it accumulates what it learns about your project and your application.
-- **Clone it and make it yours.** Everything except a small core is an extension: tools, prompt sections, the status
-  line, panels, whole app surfaces. Ultimate can read and change all of it, including itself, while it runs. Ask for a
-  change and watch it hot-reload in front of you.
-- **Run it in your project.** A `.ultimate/` folder in your project tailors Ultimate to it, like Pi's `.pi/`: project
-  extensions, subagents that know your codebase, skills, and surfaces.
-- **Build applications on the fly.** A surface is a full-screen composition of extensions: the agent interface you start
-  with is one; a GitHub triage app, a dashboard, or an internal tool can be another. Ultimate provides the primitives
-  (shadcn components, Tailwind, durable state, server actions, the docked agent), builds the surface with you, and you
-  switch to it while it is being built. Enable `surfaces` for the agent's surface awareness and `documents` for the
-  Documents tab when your app needs them. Or hook an agent interface tailored to your application into your existing
-  project.
-- **Lean and malleable.** Like Pi and Pi Durable, the core stays as small as possible and everything else is replaceable.
-
-You do not have to build your application inside Ultimate, but you can build a lot with it out of the box.
+- **Specialize it for your project.** Working on a web shop? Ask Ultimate for what makes work on that shop easier: a
+  tool that queries the staging catalog, a panel that shows the order pipeline, a reviewer that knows your checkout
+  rules, a skill for releases. It writes them as extensions, agents, and skills into `<project>/.ultimate/`, and they
+  hot-reload while you talk.
+- **Commit them with the project.** `.ultimate/` is part of the repository, so everyone who opens the project gets the
+  same specialized agent. Ultimate asks once before it uses a project's setup, because project extensions run code.
+- **One familiar core everywhere.** The conversation, Pi's tools, the model and login, and the way it works are the same
+  in every project; only the project's own pieces differ. Your personal additions live in `~/.ultimate/` and follow you
+  to every project.
+- **Start bare, add building blocks.** A fresh Ultimate is Pi's coding agent. Subagents, plans, documents, and the other
+  built-ins ship in the clone and are switched on per machine or per project (see "Building blocks" below).
+- **One long conversation per project.** Ultimate is a long-running conversation, not a fresh session per task.
+  Compaction keeps it going, so it accumulates what it learns about the project.
+- **You can build whole applications in it, too.** A surface is a full-screen app next to the docked agent; this
+  repository's GitHub triage app was built that way, by Ultimate itself. The agent is good at it, but it is not the
+  point. The point is an agent shaped for the project you work on.
+- **Lean and malleable.** Like Pi and Pi Durable, the core stays as small as possible and everything else is
+  replaceable, including Ultimate itself: it runs this repository and can change its own code while you talk.
 
 ## Start
 
