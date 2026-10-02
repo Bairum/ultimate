@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises'
+import { mkdir, readFile, readdir, writeFile, rename, rm } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
+import { loadSkillsFromDir, parseFrontmatter } from '@earendil-works/pi-coding-agent'
 import { defineExtension } from '@earendil-works/pi-durable'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
@@ -50,10 +51,43 @@ async function save(path: string, value: JsonObject) {
   }
 }
 
+/** Names of the project's own agents and skills, read but never loaded, so an undecided project can show them. */
+async function adds(projectRoot: string) {
+  const directory = join(projectRoot, '.ultimate/agents')
+  const files = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error
+    return []
+  })
+  const agents = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.md'))
+      .toSorted()
+      .map(async (file) => {
+        try {
+          const { name } = parseFrontmatter(
+            await readFile(join(directory, file), 'utf8'),
+          ).frontmatter
+          if (typeof name === 'string' && name.trim()) return name.trim()
+        } catch {
+          // An invalid definition still shows by its file name; the subagents extension reports the error.
+        }
+        return basename(file, '.md')
+      }),
+  )
+  const skills = loadSkillsFromDir({
+    dir: join(projectRoot, '.ultimate/skills'),
+    source: 'project',
+  })
+    .skills.map((skill) => skill.name)
+    .toSorted()
+  return { agents, skills }
+}
+
 export const actions = {
   status: async (_args, { host }) => ({
     firstRun: !existsSync(join(host.userHome, '.ultimate/onboarding.json')),
     project: await host.projectSetup(),
+    adds: await adds(host.projectRoot),
   }),
   firstRunDone: async (_args, { host }) => {
     await save(join(host.userHome, '.ultimate/onboarding.json'), { firstRunDone: true })

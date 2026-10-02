@@ -73,7 +73,10 @@ it('gates project resources, remembers choices, and applies onboarding settings 
     const web = async () =>
       Object.keys((await server!.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders)
     const tools = async () => (await server!.root.agent(context)).tools.map((tool) => tool.name)
-    expect((await action('status')).firstRun).toBe(true)
+    expect(await action('status')).toMatchObject({
+      firstRun: true,
+      adds: { agents: ['y'], skills: ['local-skill'] },
+    })
     expect(server.system.current().project).toMatchObject({
       config: true,
       decision: null,

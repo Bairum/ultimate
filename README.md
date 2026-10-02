@@ -44,6 +44,11 @@ cd ~/Projects/app && ultimate
 
 - No `pi` login yet? Open the command palette (`Ctrl+K`, `⌘K` on macOS) → "Log in to a provider". Logins are shared
   with `pi`, and so is logging out.
+- **First start** on a machine shows a welcome: what Ultimate is, what is on, and the login if you have none.
+- **A folder with its own `.ultimate/`** asks once: its setup or your global one. Its extensions, agents, and skills
+  stay off until you choose it; in this repository the question comes with an explainer of the suggested setup.
+- **The Extensions panel** (right panel, or `Ctrl+K` → "Extensions…") lists every extension and turns it on or off
+  live, for this project or everywhere, and can change the project choice.
 - On another machine: `ssh -L 4747:127.0.0.1:4747 <host>`, then open `http://127.0.0.1:4747`. Ultimate only listens on
   loopback.
 
@@ -63,7 +68,7 @@ source stays in the clone; the tools and the conversation work in your project.
 ## Building blocks
 
 Built-ins live in the clone's `extensions/`. Enabled by default: `agent`, `coding-tools`, `prompt`, `models`,
-`status-line`, `notices`, `theme`, `faux` (inert outside demo mode), `codemode`, and `browser`.
+`status-line`, `notices`, `theme`, `faux` (inert outside demo mode), `codemode`, `browser`, and `onboarding`.
 Available but off: `clock`, `documents`, `exclusive-commands`, `info`, `instance`, `plan`, `self`, `subagents`,
 `surfaces`, and `tasks`. Each folder's README describes the building block.
 
@@ -76,7 +81,7 @@ Enable them in `~/.ultimate/settings.json` for this machine or `<project>/.ultim
 Settings layer defaults → machine → project; later layers win. `extensions.disable` can turn off any extension.
 Changes apply live, with no restart. User and project extension folders are enabled by default: adding the folder
 is the opt-in. This repository's [.ultimate/settings.json](.ultimate/settings.json) is the suggested full setup;
-it enables all the building blocks, which is why `pnpm start` in the clone gives you everything.
+it enables all the building blocks, so `pnpm start` in the clone gives you everything once you choose its setup.
 
 ## Surfaces
 

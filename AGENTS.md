@@ -31,12 +31,20 @@ Local imported modules reload with the facet. Failed loads leave the previous ve
 
 Discovery is clone built-ins, then `~/.ultimate/`, then `<project>/.ultimate/`; later names replace earlier ones.
 The default set is `agent`, `coding-tools`, `prompt`, `models`, `status-line`, `notices`, `theme`, `faux` (inert unless
-`ULTIMATE_FAUX=1`), `codemode`, and `browser`. Other built-ins are opt-in building blocks. Settings layer defaults,
-`~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`: `extensions.enable` and `extensions.disable`
-are name arrays, later layers win, and changes apply live without a restart. User/project extension folders are
-on by default; `disable` can turn off those or defaults too. Unknown names produce a notice. User config is independent
-of `ULTIMATE_HOME`. This repository's `.ultimate/settings.json` enables the suggested full setup. Enable `self` for
-its guidance and `restart` tool, `surfaces` for surface awareness, and `documents` for the Documents tab.
+`ULTIMATE_FAUX=1`), `codemode`, `browser`, and `onboarding`. Other built-ins are opt-in building blocks. Settings
+layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`: `extensions.enable` and
+`extensions.disable` are name arrays, later layers win, and changes apply live without a restart. User/project
+extension folders are on by default; `disable` can turn off those or defaults too. Unknown names produce a notice.
+User config is independent of `ULTIMATE_HOME`. This repository's `.ultimate/settings.json` enables the suggested full
+setup. Enable `self` for its guidance and `restart` tool, `surfaces` for surface awareness, and `documents` for the
+Documents tab.
+
+A project's `.ultimate/` applies only once it is chosen: its `extensions/`, the project `extensions` settings layer,
+`agents/`, and `skills/` load only when the project decision is local. Decisions are kept per project path with Pi's
+`ProjectTrustStore` in `~/.ultimate/trust.json`; undecided behaves like global and is reported in system info
+(`project.decision`), and the other `.ultimate/settings.json` keys (`defaultSurface`, `isolates`, …) are read either
+way. The `onboarding` extension asks once and its Extensions panel changes the choice live. Resources you add to a
+project's `.ultimate/` stay unloaded until that project is local; tests seed the decision in their temporary home.
 
 ## Inspecting yourself
 
