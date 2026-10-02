@@ -37,7 +37,7 @@ export const actions = {
     const id = await topLevelId(host, args)
     const title = (args as { title?: JsonValue }).title
     if (typeof title !== 'string') throw new Error('Expected a title')
-    await setTitle(host, id, title.trim().slice(0, 160) || undefined)
+    await setTitle(host, id, title.replace(/\s+/g, ' ').trim().slice(0, 160) || undefined)
     return { ok: true }
   },
   /** `{id}`: starts a new context, keeping the conversation's title. */
@@ -65,14 +65,20 @@ export const actions = {
 }
 
 /** Tells each top-level conversation which other conversations work in this project. */
-export default (host: ExtensionHost) =>
-  defineExtension({
+export default (host: ExtensionHost) => {
+  /** Whether each conversation is top-level, read once: `owner` and `parent` never change after creation. */
+  const topLevel = new Map<ConversationId, boolean>()
+  return defineExtension({
     name: 'conversations',
     sections: [
       section('conversations', async (input, caller) => {
         // Summaries can lag behind a new conversation, so its record decides; subagents and forks get nothing.
-        const own = await record(host, input.conversationId, caller)
-        if (!own || own.owner || own.parent) return undefined
+        if (!topLevel.has(input.conversationId)) {
+          const own = await record(host, input.conversationId, caller)
+          if (!own) return undefined
+          topLevel.set(input.conversationId, !own.owner && !own.parent)
+        }
+        if (!topLevel.get(input.conversationId)) return undefined
         const archived = (await host.uiState(caller))['ext.conversations.archived']
         // Only membership, titles and cwds go in, so the text changes rarely and prompt caches stay warm.
         const others = host
@@ -101,3 +107,4 @@ export default (host: ExtensionHost) =>
       }),
     ],
   })
+}

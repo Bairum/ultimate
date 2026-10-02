@@ -95,15 +95,18 @@ function focusWhenShown(actions: UltimateActions, id: number, deadline = Date.no
 }
 
 /**
- * Show an empty conversation on the Agent surface with the shown one's model and thinking level, the composer
- * focused: the shown draft, else an empty, untitled, idle one nobody archived, else a new one.
+ * Show an empty conversation on the Agent surface, the composer focused: the shown draft, else an empty, untitled,
+ * idle one nobody archived, else a new one. It takes the shown conversation's model and thinking level, not a
+ * subagent's.
  */
 async function newConversation(actions: UltimateActions) {
   const { conversations, shared, models } = getState()
   const shown = getConversation()
   actions.showSurface('agent')
   const current = conversations.find((conversation) => conversation.id === shown.id)
-  if (current && current.parentConversationId === undefined && current.inputAt === undefined) {
+  const topLevel = current !== undefined && current.parentConversationId === undefined
+  // The replica, not the lagging summary: right after a first send, the shown conversation is no draft any longer.
+  if (topLevel && shown.entries.length === 0) {
     focusWhenShown(actions, current.id)
     return
   }
@@ -124,7 +127,7 @@ async function newConversation(actions: UltimateActions) {
   const levels = models?.models.find(
     (candidate) => candidate.provider === model?.provider && candidate.id === model.modelId,
   )?.thinkingLevels
-  if (model)
+  if (topLevel && model)
     await api
       .configure(
         { model, ...(thinkingLevel && levels?.includes(thinkingLevel) && { thinkingLevel }) },
@@ -196,6 +199,8 @@ function Row({
   const actions = useUltimate()
   const [editing, setEditing] = useState(false)
   const cancelled = useRef(false)
+  /** Whether the row button takes focus back once the field closes: after Enter or Escape, not a click elsewhere. */
+  const refocus = useRef(false)
   /** What a menu item does once the menu has closed, so focus lands where it should. */
   const afterMenu = useRef<() => void>(undefined)
   const name = conversation.title ?? (draft ? 'New conversation' : `#${conversation.id}`)
@@ -246,9 +251,13 @@ function Row({
             onBlur={(event) => save(event.currentTarget.value)}
             onFocus={(event) => event.currentTarget.select()}
             onKeyDown={(event) => {
-              if (event.key === 'Enter') event.currentTarget.blur()
+              if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                refocus.current = true
+                event.currentTarget.blur()
+              }
               if (event.key === 'Escape') {
                 cancelled.current = true
+                refocus.current = true
                 event.currentTarget.blur()
               }
             }}
@@ -259,6 +268,11 @@ function Row({
           aria-current={shown ? 'true' : undefined}
           className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md pr-2 pl-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
           onClick={() => actions.switchConversation(conversation.id)}
+          ref={(element) => {
+            if (!element || !refocus.current) return
+            refocus.current = false
+            element.focus()
+          }}
           type="button"
         >
           <Mark unseen={unseen} working={working} />
@@ -301,7 +315,7 @@ function Row({
             </DropdownMenuItem>
             <DropdownMenuItem
               className="text-[12.5px]"
-              disabled={working !== undefined}
+              disabled={conversation.busy}
               onSelect={() => (afterMenu.current = () => openReset(actions, conversation.id))}
             >
               <EraserIcon />
@@ -422,12 +436,15 @@ function Conversations() {
   )
 }
 
-/** Records the answer the user has seen: the shown conversation's latest, once it is idle. */
+/** Records the answer the user has seen: the shown top-level conversation's latest, once it is idle. */
 function Seen() {
   const id = useShownId()
   const summary = useConversations().find((conversation) => conversation.id === id)
   const [seen, setSeen] = useExtensionUiState<Record<string, number>>('seen', {})
-  const answerAt = summary && !summary.busy ? (summary.answerAt ?? 0) : undefined
+  const answerAt =
+    summary && summary.parentConversationId === undefined && !summary.busy
+      ? (summary.answerAt ?? 0)
+      : undefined
   useEffect(() => {
     if (id === undefined || answerAt === undefined || seen[id] === answerAt) return
     setSeen((previous) => ({ ...previous, [id]: answerAt }))

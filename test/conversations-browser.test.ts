@@ -6,6 +6,7 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import { chromium } from 'playwright-core'
 import { expect, it } from 'vitest'
 import { fauxServer, skipWithoutChromium, temp } from './helpers.ts'
+import { context } from '../server/harness.ts'
 
 const timeout = { timeout: 15000 }
 
@@ -51,6 +52,10 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
       const action = /\/api\/extensions\/conversations\/actions\/(\w+)$/.exec(request.url())?.[1]
       if (action) calls.push(action)
     })
+    const configured: unknown[] = []
+    page.on('request', (request) => {
+      if (request.url().endsWith('/configure')) configured.push(request.postDataJSON())
+    })
     const failed: string[] = []
     page.on('response', (response) => {
       if (response.url().endsWith('/configure') && response.status() >= 400)
@@ -75,15 +80,14 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
     await send('first message')
     await expect.poll(titles, timeout).toEqual(['first message'])
 
-    // New conversation shows an empty draft with the shown one's model, listed first, with the composer focused.
-    const model = page.locator('button[title="Pick a model"]')
-    const mainModel = await model.textContent()
+    // New conversation shows an empty draft, configured with the shown one's model, listed first, the composer focused.
+    const { model } = await server.root.agent(context)
     await page.getByRole('button', { name: 'New conversation' }).click()
     await expect.poll(titles, timeout).toEqual(['New conversation', 'first message'])
     await expect.poll(shown, timeout).not.toBe('1')
     const draft = await shown()
     await expect.poll(focused, timeout).toBe('composer-input')
-    await expect.poll(() => model.textContent(), timeout).toBe(mainModel)
+    await expect.poll(() => configured, timeout).toEqual([expect.objectContaining({ model })])
     expect(failed).toEqual([])
 
     // From the main conversation, the shortcut reuses that draft instead of creating another.
@@ -150,12 +154,19 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
     await expect.poll(titles, timeout).toEqual(['Sidebar work'])
     const trail = page.locator('header').getByText('Sidebar work', { exact: true })
     await expect.poll(() => trail.count(), timeout).toBe(1)
+    const rowFocused = () =>
+      renamed
+        .locator('> button')
+        .first()
+        .evaluate((element) => element === document.activeElement)
+    await expect.poll(rowFocused, timeout).toBe(true)
 
-    // A double-click edits too; Escape cancels without a request.
+    // A double-click edits too; Escape cancels without a request, and focus returns to the row.
     await renamed.locator('.truncate').dblclick()
     await input.fill('Discarded')
     await page.keyboard.press('Escape')
     await expect.poll(() => input.count(), timeout).toBe(0)
+    await expect.poll(rowFocused, timeout).toBe(true)
     expect(await titles()).toEqual(['Sidebar work'])
 
     // Clear context asks first; the transcript then shows the reset, and the row keeps its title and place.

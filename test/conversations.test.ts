@@ -182,6 +182,8 @@ it('renames and clears top-level conversations', async () => {
     data: { result: { ok: true } },
   })
   await until(() => summary(id)?.title === 'Parser work')
+  await action('rename', { id, title: ' Parser\n\twork\r\n  again ' })
+  await until(() => summary(id)?.title === 'Parser work again')
   await action('rename', { id, title: 'x'.repeat(200) })
   await until(() => summary(id)?.title === 'x'.repeat(160))
   await action('rename', { id, title: '   ' })
