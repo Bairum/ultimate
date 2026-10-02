@@ -1,13 +1,17 @@
-import { ROOT_CONVERSATION_ID, defineExtension, section } from '@earendil-works/pi-durable'
+import { defineExtension, section } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 
-/** Names the surface on screen, as the web host records it in `shell.shownSurface`, in the main conversation's prompt. */
+/** Names the surface on screen, as the web host records it in `shell.shownSurface`, in each top-level conversation's prompt. */
 export default (host: ExtensionHost) =>
   defineExtension({
     name: 'surfaces',
     sections: [
       section('surface', async (input, context) => {
-        if (input.conversationId !== ROOT_CONVERSATION_ID) return undefined
+        // Top-level conversations are neither owned (subagents) nor forked.
+        const record = await host
+          .harness()
+          .commit((tx) => tx.conversation(input.conversationId), context)
+        if (!record || record.owner || record.parent) return undefined
         const shown = (await host.uiState(context))['shell.shownSurface']
         const { id, title } =
           shown && typeof shown === 'object' && !Array.isArray(shown) ? shown : {}

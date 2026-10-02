@@ -106,7 +106,7 @@ async function launch(test: TestContext, projectRoot: string) {
   return { server, page, errors, ui: () => server.host.uiState(context) }
 }
 
-/** The prompt's surface line for the main conversation, as the agent would see it now. */
+/** The prompt's surface line for a top-level conversation (the main one by default), as the agent would see it now. */
 function surfaceSection(server: Awaited<ReturnType<typeof createServer>>) {
   const section = server.host.registry.snapshot().extension('surfaces')!.sections![0]
   return (conversationId: number = ROOT_CONVERSATION_ID) =>
@@ -209,7 +209,6 @@ it('switches surfaces without interrupting the conversation, and tells the agent
   expect(await render(ROOT_CONVERSATION_ID)).toBe(
     'The user is looking at the Fixture surface (fixture).',
   )
-  expect(await render(ROOT_CONVERSATION_ID + 1)).toBeUndefined()
   expect(await surfaceLines()).toEqual([
     'The user is looking at the Agent surface (agent).',
     'The user is looking at the Fixture surface (fixture).',

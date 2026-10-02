@@ -30,11 +30,12 @@ Local imported modules reload with the facet. Failed loads leave the previous ve
 ## Discovery and settings
 
 Discovery is clone built-ins, then `~/.ultimate/`, then `<project>/.ultimate/`; later names replace earlier ones.
-The default set is `agent`, `coding-tools`, `prompt`, `models`, `status-line`, `notices`, `theme`, `faux` (inert unless
-`ULTIMATE_FAUX=1`), `codemode`, `browser`, and `onboarding`. Other built-ins are opt-in building blocks. Settings
-layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`: `extensions.enable` and
-`extensions.disable` are name arrays, later layers win, and changes apply live without a restart. User/project
-extension folders are on by default; `disable` can turn off those or defaults too. Unknown names produce a notice.
+The default set is `agent`, `conversations`, `coding-tools`, `prompt`, `models`, `status-line`, `notices`, `theme`,
+`faux` (inert unless `ULTIMATE_FAUX=1`), `codemode`, `browser`, and `onboarding`. Other built-ins are opt-in building
+blocks. Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
+`extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
+restart. User/project extension folders are on by default; `disable` can turn off those or defaults too. Unknown names
+produce a notice.
 User config is independent of `ULTIMATE_HOME`. This repository's `.ultimate/settings.json` enables the suggested full
 setup. Enable `self` for its guidance and `restart` tool, `surfaces` for surface awareness, and `documents` for the
 Documents tab.

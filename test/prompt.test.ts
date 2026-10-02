@@ -22,7 +22,9 @@ it('renders only enabled guidance, lists off building blocks, and adds self guid
       for (const extension of server.host.registry.snapshot().installed()) {
         for (const section of extension.sections ?? []) {
           const value = await section.render(
-            { agent, env: { cwd: projectRoot } } as Parameters<typeof section.render>[0],
+            { conversationId: server.root.id, agent, env: { cwd: projectRoot } } as Parameters<
+              typeof section.render
+            >[0],
             context,
           )
           if (value) sections[section.key] = value

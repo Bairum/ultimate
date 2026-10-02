@@ -71,8 +71,8 @@ source stays in the clone; the tools and the conversation work in your project.
 
 ## Building blocks
 
-Built-ins live in the clone's `extensions/`. Enabled by default: `agent`, `coding-tools`, `prompt`, `models`,
-`status-line`, `notices`, `theme`, `faux` (inert outside demo mode), `codemode`, `browser`, and `onboarding`.
+Built-ins live in the clone's `extensions/`. Enabled by default: `agent`, `conversations`, `coding-tools`, `prompt`,
+`models`, `status-line`, `notices`, `theme`, `faux` (inert outside demo mode), `codemode`, `browser`, and `onboarding`.
 Available but off: `clock`, `documents`, `exclusive-commands`, `info`, `instance`, `plan`, `self`, `subagents`,
 `surfaces`, and `tasks`. Each folder's README describes the building block.
 
