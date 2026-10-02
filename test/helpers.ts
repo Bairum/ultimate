@@ -1,10 +1,10 @@
-import { cp, mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
 import type { ConversationView } from '@earendil-works/pi-durable'
-import { beforeEach, afterEach, vi } from 'vitest'
+import { afterAll, beforeEach, afterEach, vi } from 'vitest'
 import type { TestContext } from 'vitest'
 import { browserBinary } from '../extensions/browser/server.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
@@ -26,8 +26,16 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllEnvs())
 
-export function temp(prefix = 'ultimate-test-') {
-  return mkdtemp(join(tmpdir(), prefix))
+// Every temp() directory is removed once the test file finishes, so runs do not fill the tmpfs.
+const temps: string[] = []
+afterAll(async () => {
+  for (const path of temps.splice(0))
+    await rm(path, { recursive: true, force: true, maxRetries: 5 })
+})
+export async function temp(prefix = 'ultimate-test-') {
+  const path = await mkdtemp(join(tmpdir(), prefix))
+  temps.push(path)
+  return path
 }
 export async function linkDependencies(root: string) {
   const target = join(root, 'node_modules')
