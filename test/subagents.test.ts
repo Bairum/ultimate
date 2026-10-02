@@ -1,3 +1,4 @@
+import { projectSettings } from '../server/project-setup.ts'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -53,7 +54,12 @@ async function fixture(
   if (extension) prepared.registry.install(extension)
   let opened: OpenHost | undefined
   prepared.registry.install(
-    subagents({ ...prepared, harness: () => opened!.harness, metadata: Metadata }),
+    subagents({
+      projectSettings: () => projectSettings(prepared.projectRoot, prepared.userHome),
+      ...prepared,
+      harness: () => opened!.harness,
+      metadata: Metadata,
+    }),
   )
   prepared.registry.install(
     codemode({
@@ -70,6 +76,8 @@ async function fixture(
       extensions: () => [],
       reloadExtensions: async () => {},
       projectSetup: async () => ({ config: false, decision: null }),
+      projectSettings: async () => ({}),
+      projectExtensions: async () => [],
       setProjectDecision: async () => {},
       doc: () => undefined,
       metadata: Metadata,

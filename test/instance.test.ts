@@ -8,6 +8,8 @@ import { Metadata } from '../server/metadata.ts'
 import instance from '../extensions/instance/server.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
 import { git } from '../extensions/subagents/isolates/worktree.ts'
+import { projectSettings } from '../server/project-setup.ts'
+import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { temp } from './helpers.ts'
 
 it('previews a worktree child on its own home and port and validates child inputs', async () => {
@@ -21,6 +23,7 @@ it('previews a worktree child on its own home and port and validates child input
       isolates: { worktree: { setup: [`ln -s '${join(checkout, 'node_modules')}' node_modules`] } },
     }),
   )
+  new ProjectTrustStore(join(root, '.ultimate')).set(source, true)
   const prepared = await prepareHarness({
     ultimateRoot: source,
     projectRoot: source,
@@ -33,6 +36,7 @@ it('previews a worktree child on its own home and port and validates child input
   const cleanups: (() => Promise<void>)[] = []
   const host = {
     ...prepared,
+    projectSettings: () => projectSettings(source, root),
     harness: () => opened.harness,
     metadata: Metadata,
     resource<T>(key: string, create: () => T): T {

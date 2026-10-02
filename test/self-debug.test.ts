@@ -63,6 +63,8 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
         extensions: () => server.extensions.info(),
         reloadExtensions: async () => {},
         projectSetup: async () => ({ config: false, decision: null }),
+        projectSettings: async () => ({}),
+        projectExtensions: async () => [],
         setProjectDecision: async () => {},
         doc: () => undefined,
         metadata: Metadata,

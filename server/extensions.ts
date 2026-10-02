@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { discoverExtensions } from './discovery.ts'
-import { projectSetup } from './project-setup.ts'
+import { projectSetup, projectSettings, projectDiagnostics } from './project-setup.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { discoveryRoots } from './project.ts'
 import { extensionSettingsFiles } from './extension-settings.ts'
@@ -45,6 +46,10 @@ export type ExtensionHost = Pick<
   extensions(): ExtensionInfo[]
   /** Project setup availability, exact-root decision, and capped README. */
   projectSetup(): ReturnType<typeof projectSetup>
+  /** Parsed project settings only after a local decision; otherwise empty. Invalid JSON reports a notice and returns empty. */
+  projectSettings(): Promise<JsonObject>
+  /** Read-only inventory of project folders, including replacements of active extensions. */
+  projectExtensions(): Promise<ExtensionInfo[]>
   /** Remember the local/global choice and apply it through the live settings reload path. */
   setProjectDecision(local: boolean): Promise<void>
   /** Apply settings writes to the registry, browser facets, and styles before returning. */
@@ -101,6 +106,32 @@ export async function loadExtensions(
     system: runtime.system,
     extensions: () => [...records.values()],
     projectSetup: () => projectSetup(host.projectRoot, host.userHome),
+    projectSettings: () => projectSettings(host.projectRoot, host.userHome, notice),
+    projectExtensions: async () => {
+      const available = await discoverExtensions(
+        host.ultimateRoot,
+        host.projectRoot,
+        host.userHome,
+        true,
+      )
+      return available
+        .filter((entry) => entry.source === 'project')
+        .map((entry) => ({
+          name: entry.name,
+          path: entry.path,
+          source: entry.source,
+          enabled: records.get(entry.name)?.path === entry.path && records.get(entry.name)!.enabled,
+          layer: available.settings.layers.get(entry.name) ?? 'folder',
+          actions: [],
+          facets: {
+            server: entry.files.includes('server.ts'),
+            web: entry.files.includes('web.tsx'),
+          },
+          ...(existsSync(join(host.ultimateRoot, 'extensions', entry.name))
+            ? { replaces: 'builtin' as const }
+            : {}),
+        }))
+    },
     setProjectDecision: async (local) => {
       new ProjectTrustStore(join(host.userHome, '.ultimate')).set(host.projectRoot, local)
       await extensionHost.reloadExtensions()
@@ -158,6 +189,7 @@ export async function loadExtensions(
     const settings = winners.settings
     diagnostics = [
       ...settings.notices,
+      ...projectDiagnostics(host.projectRoot, host.userHome),
       ...[...settings.overrides.keys()]
         .filter((name) => !folders.includes(name))
         .map((name) => `Unknown extension: ${name}`),
@@ -343,7 +375,11 @@ export async function loadExtensions(
     }
   })
   return {
-    info: Object.assign(() => [...records.values()], { diagnostics: () => diagnostics }),
+    info: Object.assign(() => [...records.values()], {
+      diagnostics: () => [
+        ...new Set([...diagnostics, ...projectDiagnostics(host.projectRoot, host.userHome)]),
+      ],
+    }),
     action(name: string, action: string) {
       const table = actions.get(name)
       return table && Object.hasOwn(table, action) ? table[action] : undefined

@@ -1,6 +1,5 @@
 import { execFile } from 'node:child_process'
-import { stat, readFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { watch } from 'node:fs'
 import {
   arch,
@@ -16,7 +15,7 @@ import {
 import { promisify } from 'node:util'
 import { relative, basename, join } from 'node:path'
 import { projectSkills } from './skills.ts'
-import { projectSetup } from './project-setup.ts'
+import { projectSetup, projectSettings } from './project-setup.ts'
 import { getAgentDir, loadProjectContextFiles } from '@earendil-works/pi-coding-agent'
 import type { ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { Watch } from './extensions.ts'
@@ -75,25 +74,18 @@ export async function createSystem(
       lastGit = Date.now()
     }
     const cpu = cpus()
-    const config = join(host.projectRoot, '.ultimate')
-    let settings: unknown = {}
     let settingsError: string | undefined
-    try {
-      settings = JSON.parse(await readFile(join(config, 'settings.json'), 'utf8'))
-      if (!settings || typeof settings !== 'object' || Array.isArray(settings))
-        throw new Error('Project settings must be a JSON object')
-    } catch (error) {
-      settings = {}
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') settingsError = String(error)
-    }
+    const settings = await projectSettings(host.projectRoot, host.userHome, (message) => {
+      settingsError = message
+      notice(message)
+    })
     value = {
       build: host.build(),
       project: {
         root: host.projectRoot,
         name: basename(host.projectRoot),
-        hasConfig: existsSync(config),
         ...(await projectSetup(host.projectRoot, host.userHome)),
-        settings: settings as SystemInfo['project']['settings'],
+        settings,
         ...(settingsError ? { settingsError } : {}),
       },
       machine: {

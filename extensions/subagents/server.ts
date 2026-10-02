@@ -258,7 +258,14 @@ function thinkingFor(
 export default function subagents(
   host: Pick<
     ExtensionHost,
-    'ultimateRoot' | 'projectRoot' | 'userHome' | 'harness' | 'metadata' | 'modelRuntime' | 'home'
+    | 'ultimateRoot'
+    | 'projectRoot'
+    | 'userHome'
+    | 'harness'
+    | 'metadata'
+    | 'modelRuntime'
+    | 'home'
+    | 'projectSettings'
   >,
 ) {
   return defineExtension({
@@ -420,7 +427,7 @@ Available definitions:
                     host.home,
                     definition.name,
                     api.callId,
-                    host.projectRoot,
+                    host.projectSettings,
                     context.abortSignal,
                   ),
                   context,

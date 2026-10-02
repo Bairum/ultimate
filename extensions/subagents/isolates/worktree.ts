@@ -4,6 +4,7 @@ import { mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promis
 import { basename, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 
+import type { ExtensionHost } from '../../../server/extensions.ts'
 import type { CreatedIsolate, Isolate } from './types.ts'
 const exec = promisify(execFile)
 export async function git(cwd: string, ...args: string[]) {
@@ -15,7 +16,7 @@ export async function create(
   home: string,
   agent: string,
   call: string,
-  project = parent,
+  projectSettings: ExtensionHost['projectSettings'] = async () => ({}),
   signal?: AbortSignal,
 ) {
   const key = createHash('sha256').update(call).digest('hex')
@@ -52,7 +53,7 @@ export async function create(
   }
   const record: Isolate = { kind: 'worktree', path, branch, base, state: 'active' }
   try {
-    await setupWorktree(project, parent, path, signal)
+    await setupWorktree(projectSettings, parent, path, signal)
     await writeFile(`${marker}.tmp`, JSON.stringify(record))
     await rename(`${marker}.tmp`, marker)
   } catch (error) {
@@ -61,15 +62,14 @@ export async function create(
   }
   return { cwd: path, record } satisfies CreatedIsolate
 }
-async function setupWorktree(project: string, parent: string, path: string, signal?: AbortSignal) {
+async function setupWorktree(
+  projectSettings: ExtensionHost['projectSettings'],
+  parent: string,
+  path: string,
+  signal?: AbortSignal,
+) {
   signal?.throwIfAborted()
-  let settings: { isolates?: { worktree?: { setup?: string[] } } }
-  try {
-    settings = JSON.parse(await readFile(join(project, '.ultimate/settings.json'), 'utf8'))
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
-    throw error
-  }
+  const settings = (await projectSettings()) as { isolates?: { worktree?: { setup?: string[] } } }
   const commands = settings.isolates?.worktree?.setup ?? []
   if (!Array.isArray(commands) || !commands.every((command) => typeof command === 'string'))
     throw new Error('isolates.worktree.setup must be an array of command strings')

@@ -210,7 +210,6 @@ it('loads external project facets over user and built-in names, actions and tran
   expect(server.system.current().project).toEqual({
     root: projectRoot,
     name: projectRoot.split('/').at(-1),
-    hasConfig: true,
     config: true,
     decision: true,
     settings: { defaultSurface: 'workbench', custom: 1 },

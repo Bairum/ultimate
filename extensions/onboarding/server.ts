@@ -51,6 +51,23 @@ async function save(path: string, value: JsonObject) {
   }
 }
 
+const writes = new Map<string, Promise<void>>()
+async function updateSettings(path: string, modify: (value: JsonObject) => void) {
+  const operation = (writes.get(path) ?? Promise.resolve())
+    .catch(() => {})
+    .then(async () => {
+      const value = await settings(path)
+      modify(value)
+      await save(path, value)
+    })
+  writes.set(path, operation)
+  try {
+    await operation
+  } finally {
+    if (writes.get(path) === operation) writes.delete(path)
+  }
+}
+
 /** Names of the project's own agents and skills, read but never loaded, so an undecided project can show them. */
 async function adds(projectRoot: string) {
   const directory = join(projectRoot, '.ultimate/agents')
@@ -87,7 +104,12 @@ export const actions = {
   status: async (_args, { host }) => ({
     firstRun: !existsSync(join(host.userHome, '.ultimate/onboarding.json')),
     project: await host.projectSetup(),
-    adds: await adds(host.projectRoot),
+    adds: {
+      ...(await adds(host.projectRoot)),
+      replaces: (await host.projectExtensions())
+        .filter((entry) => entry.replaces)
+        .map((entry) => entry.name),
+    },
   }),
   firstRunDone: async (_args, { host }) => {
     await save(join(host.userHome, '.ultimate/onboarding.json'), { firstRunDone: true })
@@ -116,29 +138,42 @@ export const actions = {
       args.scope === 'project' ? host.projectRoot : host.userHome,
       '.ultimate/settings.json',
     )
-    const value = await settings(path)
-    toggle(lists(value), args.name, args.enabled)
-    await save(path, value)
+    await updateSettings(path, (value) =>
+      toggle(lists(value), args.name as string, args.enabled as boolean),
+    )
     await host.reloadExtensions()
     return { ok: true }
   },
   adoptProjectSetup: async (_args, { host }) => {
-    const project = lists(await settings(join(host.projectRoot, '.ultimate/settings.json')))
+    if ((await host.projectSetup()).decision !== true)
+      throw new Error("Choose this project's local setup before adopting project extensions")
+    const project = lists(await host.projectSettings())
+    if (
+      !(project.enable as string[] | undefined)?.length &&
+      !(project.disable as string[] | undefined)?.length
+    )
+      return { ok: true }
     const path = join(host.userHome, '.ultimate/settings.json')
-    const value = await settings(path)
-    const extensions = lists(value)
-    for (const [key, enabled] of [
-      ['enable', true],
-      ['disable', false],
-    ] as const)
-      for (const name of (project[key] as string[]) ?? []) toggle(extensions, name, enabled)
-    await save(path, value)
+    await updateSettings(path, (value) => {
+      const extensions = lists(value)
+      for (const [key, enabled] of [
+        ['enable', true],
+        ['disable', false],
+      ] as const)
+        for (const name of (project[key] as string[]) ?? []) toggle(extensions, name, enabled)
+    })
     await host.reloadExtensions()
     return { ok: true }
   },
   extensions: async (_args, { host }) => {
+    const project = await host.projectExtensions()
     return Promise.all(
-      host.extensions().map(async (entry) => {
+      [
+        ...host
+          .extensions()
+          .filter((entry) => !project.some((folder) => folder.name === entry.name)),
+        ...project,
+      ].map(async (entry) => {
         const readme = await readFile(join(entry.path, 'README.md'), 'utf8').catch(
           (error: NodeJS.ErrnoException) => {
             if (error.code !== 'ENOENT') throw error
@@ -153,6 +188,7 @@ export const actions = {
         return {
           name: entry.name,
           source: entry.source,
+          ...(entry.replaces ? { replaces: entry.replaces } : {}),
           enabled: entry.enabled,
           layer: entry.layer,
           readme: paragraph.match(/^.*?[.!?](?:\s|$)/su)?.[0].trim() ?? paragraph,

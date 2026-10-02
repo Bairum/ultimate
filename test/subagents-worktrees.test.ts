@@ -1,3 +1,5 @@
+import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
+import { projectSettings } from '../server/project-setup.ts'
 import { mkdir, readFile, rm, writeFile, access, symlink, chmod } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -45,7 +47,12 @@ async function fixture() {
   prepared.registry.install(CodingTools)
   let opened: OpenHost
   prepared.registry.install(
-    subagents({ ...prepared, harness: () => opened.harness, metadata: Metadata }),
+    subagents({
+      projectSettings: () => projectSettings(project, root),
+      ...prepared,
+      harness: () => opened.harness,
+      metadata: Metadata,
+    }),
   )
   const route: FauxResponseFactory = (transcript) => {
     prepared.faux!.appendResponses([route])
@@ -206,16 +213,41 @@ it('runs setup once with source env and removes a failed worktree', async () => 
       },
     }),
   )
-  const { record: workspace } = await create(f.project, f.home, 'worker', 'setup')
+  const userHome = join(f.home, '..')
+  const readSettings = () => projectSettings(f.project, userHome)
+  await writeFile(settings, JSON.stringify({ isolates: { worktree: { setup: ['touch PWNED'] } } }))
+  const untrusted = await create(f.project, f.home, 'worker', 'untrusted', readSettings)
+  await expect(access(join(untrusted.cwd, 'PWNED'))).rejects.toThrow('ENOENT')
+  new ProjectTrustStore(join(userHome, '.ultimate')).set(f.project, true)
+  const trusted = await create(f.project, f.home, 'worker', 'trusted', readSettings)
+  await access(join(trusted.cwd, 'PWNED'))
+  await writeFile(
+    settings,
+    JSON.stringify({
+      isolates: {
+        worktree: {
+          setup: [
+            'printf "%s" "$ULTIMATE_SOURCE" > source.txt',
+            'echo run >> "$ULTIMATE_SOURCE/runs.txt"',
+          ],
+        },
+      },
+    }),
+  )
+  const { record: workspace } = await create(f.project, f.home, 'worker', 'setup', readSettings)
   expect(await readFile(join(workspace.path, 'source.txt'), 'utf8')).toBe(f.project)
-  expect((await create(f.project, f.home, 'worker', 'setup')).record).toEqual(workspace)
+  expect((await create(f.project, f.home, 'worker', 'setup', readSettings)).record).toEqual(
+    workspace,
+  )
   expect(await readFile(join(f.project, 'runs.txt'), 'utf8')).toBe('run\n')
   await writeFile(
     settings,
     JSON.stringify({ isolates: { worktree: { setup: ['echo setup-broken >&2; exit 1'] } } }),
   )
   const before = await git(f.project, 'worktree', 'list', '--porcelain')
-  await expect(create(f.project, f.home, 'worker', 'failed')).rejects.toThrow('setup-broken')
+  await expect(create(f.project, f.home, 'worker', 'failed', readSettings)).rejects.toThrow(
+    'setup-broken',
+  )
   expect(await git(f.project, 'worktree', 'list', '--porcelain')).toBe(before)
 })
 it('reads an isolate with its commits ahead of the parent for the Agents tab', async () => {

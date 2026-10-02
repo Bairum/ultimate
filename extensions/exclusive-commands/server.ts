@@ -1,5 +1,3 @@
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import { defineExtension, wrapTool } from '@earendil-works/pi-durable'
 import { createBashTool } from '@earendil-works/pi-durable/tools'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -49,11 +47,9 @@ export default function exclusiveCommands(host: ExtensionHost) {
           let sources: string[] = []
           const warnings: string[] = []
           try {
-            const settings = JSON.parse(
-              await readFile(join(host.projectRoot, '.ultimate/settings.json'), 'utf8'),
-            )
+            const settings = await host.projectSettings()
             const configured = settings.exclusiveCommands ?? []
-            if (Array.isArray(configured)) sources = configured
+            if (Array.isArray(configured)) sources = configured as string[]
             else warnings.push('Invalid exclusiveCommands ignored: expected an array of patterns\n')
           } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error

@@ -81,7 +81,7 @@ it('gates project resources, remembers choices, and applies onboarding settings 
     expect(server.system.current().project).toMatchObject({
       config: true,
       decision: null,
-      settings: { defaultSurface: 'workbench' },
+      settings: {},
     })
     expect(Buffer.byteLength(server.system.current().project.readme!)).toBe(16384)
     expect(enabled('x')).toBe(false)
@@ -129,9 +129,17 @@ it('gates project resources, remembers choices, and applies onboarding settings 
       extensions: { extra: 'keep', enable: ['subagents'], disable: ['clock'] },
     })
     expect((await readFile(projectFile, 'utf8')).endsWith('\n')).toBe(true)
+    await Promise.all(
+      ['info', 'documents'].map((name) =>
+        action('setExtension', { name, enabled: true, scope: 'user' }),
+      ),
+    )
+    expect(JSON.parse(await readFile(userFile, 'utf8')).extensions.enable).toEqual(
+      expect.arrayContaining(['info', 'documents']),
+    )
     await action('setExtension', { name: 'theme', enabled: false, scope: 'user' })
     expect(JSON.parse(await readFile(userFile, 'utf8'))).toEqual({
-      extensions: { disable: ['theme'] },
+      extensions: { enable: expect.arrayContaining(['info', 'documents']), disable: ['theme'] },
     })
     await writeFile(
       userFile + '.tmp',
@@ -160,7 +168,13 @@ it('gates project resources, remembers choices, and applies onboarding settings 
     expect(await tools()).not.toContain('subagent')
     expect((await web()).some((path) => path.endsWith('/x/web.tsx'))).toBe(false)
     expect(server.system.current().skills.some((skill) => skill.name === 'local-skill')).toBe(false)
+    const adoptDenied = await post(server, '/api/extensions/onboarding/actions/adoptProjectSetup', {
+      args: {},
+    })
+    expect(adoptDenied.status).toBe(500)
+    await action('decide', { local: true })
     await action('adoptProjectSetup')
+    await action('decide', { local: false })
     expect(enabled('subagents')).toBe(true)
     expect(JSON.parse(await readFile(userFile, 'utf8'))).toMatchObject({
       custom: 'user',
@@ -201,3 +215,51 @@ it('does not inherit a parent project choice', async () => {
     await rm(home, { recursive: true, force: true })
   }
 })
+
+it('boots with corrupt trust, discloses project replacements, and recovers after repair', async () => {
+  const home = await temp('ultimate-corrupt-trust-')
+  const project = join(home, 'project')
+  await mkdir(join(project, '.ultimate/extensions/codemode'), { recursive: true })
+  await mkdir(join(home, '.ultimate'), { recursive: true })
+  await writeFile(join(home, '.ultimate/trust.json'), '{bad')
+  await writeFile(join(project, '.ultimate/README.md'), 'x'.repeat(16383) + '😀')
+  let server: Awaited<ReturnType<typeof fauxServer>> | undefined
+  try {
+    server = await fauxServer({
+      ultimateRoot: resolve('.'),
+      projectRoot: project,
+      userHome: home,
+      home: join(home, 'state'),
+      localSetup: false,
+    })
+    expect(server.system.current().project.decision).toBe(null)
+    expect(server.system.current().extensionDiagnostics.join(' ')).toContain(
+      'Failed to read trust store',
+    )
+    expect(server.system.current().project.readme).toBe('x'.repeat(16383) + '😀')
+    const status = await post(server, '/api/extensions/onboarding/actions/status', { args: {} })
+    expect(status.data.result.adds.replaces).toEqual(['codemode'])
+    const rows = await post(server, '/api/extensions/onboarding/actions/extensions', { args: {} })
+    expect(rows.data.result.find((row: { name: string }) => row.name === 'codemode')).toMatchObject(
+      { source: 'project', replaces: 'builtin', enabled: false },
+    )
+    await writeFile(join(home, '.ultimate/trust.json'), '{}')
+    const choice = await post(server, '/api/extensions/onboarding/actions/decide', {
+      args: { local: true },
+    })
+    expect(choice.status).toBe(200)
+    const userFile = join(home, '.ultimate/settings.json')
+    await writeFile(userFile, '{"custom":1}')
+    const adopted = await post(server, '/api/extensions/onboarding/actions/adoptProjectSetup', {
+      args: {},
+    })
+    expect(adopted.status).toBe(200)
+    expect(await readFile(userFile, 'utf8')).toBe('{"custom":1}')
+    expect(server.system.current().extensionDiagnostics.join(' ')).not.toContain(
+      'Failed to read trust store',
+    )
+  } finally {
+    await server?.close()
+    await rm(home, { recursive: true, force: true })
+  }
+}, 60000)
