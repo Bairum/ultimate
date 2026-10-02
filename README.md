@@ -1,8 +1,29 @@
 # Ultimate
 
-A local coding agent with a web UI that builds itself while it runs. Built on
-[Pi Durable](https://earendil.com/posts/pi-durable/): the conversation, every tool call, and every subagent are committed
-to SQLite before anything is shown, so Ultimate can rewrite its own UI, extensions, and core without losing its place.
+Your sidekick: a coding agent that can do anything a coding agent does, and that builds applications with you, live,
+in a web UI, while it learns everything about the application you are building together.
+
+Built on [Pi Durable](https://earendil.com/posts/pi-durable/): the conversation, every tool call, and every subagent are
+committed to SQLite before anything is shown, so Ultimate can rewrite its own UI, extensions, and core without losing its
+place.
+
+## Why
+
+- **One sidekick, always there.** Ultimate is one long-running conversation, not a fresh session per task. Compaction
+  keeps it going, so it accumulates what it learns about your project and your application.
+- **Clone it and make it yours.** Everything except a small core is an extension: tools, prompt sections, the status
+  line, panels, whole app surfaces. Ultimate can read and change all of it, including itself, while it runs. Ask for a
+  change and watch it hot-reload in front of you.
+- **Run it in your project.** A `.ultimate/` folder in your project tailors Ultimate to it, like Pi's `.pi/`: project
+  extensions, subagents that know your codebase, skills, and surfaces.
+- **Build applications on the fly.** A surface is a full-screen composition of extensions: the agent interface you start
+  with is one; a GitHub triage app, a dashboard, or an internal tool can be another. Ultimate provides the primitives
+  (shadcn components, Tailwind, durable state, server actions, the docked agent), builds the surface with you, and you
+  switch to it while it is being built. Or hook an agent interface tailored to your application into your existing
+  project.
+- **Lean and malleable.** Like Pi and Pi Durable, the core stays as small as possible and everything else is replaceable.
+
+You do not have to build your application inside Ultimate, but you can build a lot with it out of the box.
 
 ## Start
 
@@ -50,3 +71,7 @@ ULTIMATE_FAUX=1 pnpm start        # a scripted demo model, no tokens
 pnpm check                        # format, lint, types
 pnpm test                         # integration tests with the faux model
 ```
+
+## License
+
+[MIT](LICENSE). The repository is private for now.
