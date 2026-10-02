@@ -3,10 +3,11 @@ import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expect, it } from 'vitest'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { fauxServer as createServer, temp } from './helpers.ts'
+import { fauxServer as createServer, post, temp } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { actions } from '../.ultimate/extensions/github-triage/server.ts'
 import type { ActionContext } from '../server/actions.ts'
+import type { Outcomes } from '../.ultimate/extensions/github-triage/server.ts'
 
 const shimDir = resolve('.ultimate/extensions/github-triage/bin')
 const message =
@@ -199,6 +200,101 @@ it('loads the bash wrap into agent.tools and requires browser headers on actions
   } finally {
     await server.close()
     process.env.PATH = oldPath
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+it('records proposal outcomes with the write, once, in the conversation document', async () => {
+  const home = await temp('triage-outcomes-')
+  const record = join(home, 'calls')
+  // Lists one label, posts after a pause (so two posts overlap), and refuses a body saying "refuse".
+  await writeFile(
+    join(home, 'gh'),
+    `#!/usr/bin/env node
+const fs = require('node:fs')
+const args = process.argv.slice(2)
+fs.appendFileSync(process.env.RECORD, JSON.stringify(args) + '\\n')
+if (args[0] === 'label') console.log('[{"name":"bug","color":"fff"}]')
+else if (args.includes('body=refuse')) { console.error('gh: Forbidden'); process.exit(1) }
+else setTimeout(() => console.log('https://github.com/HazAT/ultimate/issues/1#c'), 300)
+`,
+  )
+  await chmod(join(home, 'gh'), 0o755)
+  const oldPath = process.env.PATH
+  process.env.PATH = `${home}:${oldPath}`
+  process.env.RECORD = record
+  const server = await createServer({
+    ultimateRoot: resolve('.'),
+    projectRoot: resolve('.'),
+    userHome: home,
+    home,
+    faux: true,
+    port: 0,
+  })
+  const call = (action: string, args: object) =>
+    post(server, `/api/extensions/github-triage/actions/${action}`, { args, conversationId: 1 })
+  const writes = async () =>
+    (await readFile(record, 'utf8').catch(() => ''))
+      .split('\n')
+      .filter((line) => line.includes('"POST"') || line.includes('"DELETE"')).length
+  const outcomes = async () =>
+    (await server.harness.snapshot(
+      server.extensions.doc('github-triage.proposals')!,
+      1 as never,
+      context,
+    )) as Outcomes | undefined
+  try {
+    const item = { repo: 'HazAT/ultimate', number: 1 }
+    const [first, second] = await Promise.all([
+      call('comment', { ...item, callId: 'a', body: 'edited reply' }),
+      call('comment', { ...item, callId: 'a', body: 'edited reply' }),
+    ])
+    expect(
+      [first.data.result.status, second.data.result.status].toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(['error', 'ok'])
+    expect(
+      [first, second].find((response) => response.data.result.status === 'error')!.data.result
+        .message,
+    ).toBe('This proposal is already being written; check GitHub before proposing it again.')
+    expect(await writes()).toBe(1)
+    expect((await outcomes())?.a).toMatchObject({
+      reply: {
+        state: 'posted',
+        text: 'edited reply',
+        url: 'https://github.com/HazAT/ultimate/issues/1#c',
+      },
+    })
+    expect((await call('comment', { ...item, callId: 'a', body: 'again' })).data.result).toEqual({
+      status: 'error',
+      message: 'This proposal was already posted.',
+    })
+    expect((await call('discard', { callId: 'a', part: 'reply' })).data.result.status).toBe('error')
+
+    expect((await call('label', { ...item, callId: 'a', add: ['bug'] })).data.result.status).toBe(
+      'ok',
+    )
+    expect((await outcomes())?.a?.labels).toMatchObject({ state: 'applied', labels: ['bug'] })
+    expect((await call('label', { ...item, callId: 'a', add: ['bug'] })).data.result.status).toBe(
+      'error',
+    )
+    expect(await writes()).toBe(2)
+
+    // GitHub refused: the claim is released, so the user can try again.
+    expect((await call('comment', { ...item, callId: 'b', body: 'refuse' })).data.result).toEqual({
+      status: 'error',
+      message: 'gh: Forbidden',
+    })
+    expect((await outcomes())?.b?.reply).toBeUndefined()
+    expect((await call('discard', { callId: 'b', part: 'reply' })).data.result.status).toBe('ok')
+    expect((await outcomes())?.b?.reply).toMatchObject({ state: 'discarded' })
+    expect((await call('comment', { ...item, callId: 'b', body: 'late' })).data.result.status).toBe(
+      'error',
+    )
+    expect(await writes()).toBe(3)
+  } finally {
+    await server.close()
+    process.env.PATH = oldPath
+    delete process.env.RECORD
     await rm(home, { recursive: true, force: true })
   }
 })

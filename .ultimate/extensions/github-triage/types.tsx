@@ -62,3 +62,11 @@ export const inputClass =
 
 /** Fired after the user applied labels or posted a reply, so the surface reloads what changed. */
 export const changed = new EventTarget()
+
+/** One half of a proposal as `server.ts` records it in the `github-triage.proposals` document. */
+export type Outcome =
+  | { state: 'pending'; at: string }
+  | { state: 'applied'; at: string; labels: string[] }
+  | { state: 'posted'; at: string; text: string; url: string }
+  | { state: 'discarded'; at: string }
+export type Outcomes = { [callId: string]: { labels?: Outcome; reply?: Outcome } }

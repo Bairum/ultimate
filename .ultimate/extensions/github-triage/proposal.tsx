@@ -3,10 +3,10 @@ import { useState } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { Tool, ToolContent, ToolHeader, ToolOutput, ToolSection } from '@/components/ai/tool'
 import { Button } from '@/components/ui/button'
-import { api, cn, useAction, useExtensionUiState } from '@/sdk'
-import type { ToolCallView } from '@/sdk'
+import { api, cn, useAction, useDoc } from '@/sdk'
+import type { JsonObject, ToolCallView } from '@/sdk'
 import { changed } from './types.tsx'
-import type { Label } from './types.tsx'
+import type { Label, Outcome, Outcomes } from './types.tsx'
 
 interface Args {
   repo?: string
@@ -18,35 +18,37 @@ interface Args {
   reason?: string
 }
 
-/** What became of each half of a proposal; durable, so a reload still shows it applied. */
-type Outcome = {
-  labels?: 'applied' | 'discarded'
-  /** The label names as applied, spelled as the repository spells them. */
-  applied?: string[]
-  reply?: 'posted' | 'discarded'
-  /** The reply as posted, after the user's edits. */
-  text?: string
-  url?: string
-}
-
 type Written = { status: 'ok'; url?: string } | { status: 'error'; message: string }
 
-function Done({ children }: { children: string }) {
+/** What became of one half, as the server recorded it. */
+function Done({ outcome }: { outcome: Outcome }) {
+  const text =
+    outcome.state === 'pending'
+      ? 'being written…'
+      : outcome.state === 'applied'
+        ? 'applied on GitHub'
+        : outcome.state === 'posted'
+          ? `posted: ${outcome.url}`
+          : 'discarded'
   return (
-    <p className="flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
-      <CheckIcon className="size-3 text-success" />
-      {children}
+    <p className="flex items-center gap-1.5 text-[11.5px] break-all text-muted-foreground">
+      {outcome.state !== 'pending' && <CheckIcon className="size-3 shrink-0 text-success" />}
+      {text}
     </p>
   )
 }
 
 /**
  * A `triage_propose` call: the labels and the reply the agent suggests, each with its own button. Nothing is written
- * to GitHub until the user clicks one; the reply can be edited first.
+ * to GitHub until the user clicks one; the reply can be edited first. Outcomes live in the conversation's
+ * `github-triage.proposals` document, written by the server in the same action as the GitHub write.
  */
 export function Proposal({ call }: { call: ToolCallView }) {
   const args = call.args as Args
-  const [outcome, setOutcome] = useExtensionUiState<Outcome>(`proposal.${call.id}`, {})
+  const outcomes = useDoc<Outcomes>('github-triage.proposals')
+  const outcome = outcomes?.[call.id] ?? {}
+  const applied = outcome.labels?.state === 'applied' ? outcome.labels.labels : null
+  const posted = outcome.reply?.state === 'posted' ? outcome.reply.text : null
   const [editing, setEditing] = useState<string | null>(null)
   const [busy, setBusy] = useState<'labels' | 'reply' | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -58,13 +60,13 @@ export function Proposal({ call }: { call: ToolCallView }) {
     'labels',
     { repo: args.repo ?? '' },
     {
-      enabled: ready && !outcome.labels && !!args.repo,
+      enabled: ready && outcomes !== undefined && !outcome.labels && !!args.repo,
     },
   )
   const known = new Map(labels.data?.map((label) => [label.name.toLowerCase(), label.name]))
   const exists = (name: string) =>
-    outcome.applied
-      ? outcome.applied.some((applied) => applied.toLowerCase() === name.toLowerCase())
+    applied
+      ? applied.some((label) => label.toLowerCase() === name.toLowerCase())
       : !labels.data || known.has(name.toLowerCase())
   // Written as the repository spells them.
   const canonical = (names: string[]) =>
@@ -74,36 +76,29 @@ export function Proposal({ call }: { call: ToolCallView }) {
   const unknown = [...(args.addLabels ?? []), ...(args.removeLabels ?? [])].filter(
     (name) => !exists(name),
   )
-  const reply = outcome.text ?? editing ?? args.reply ?? ''
+  const reply = posted ?? editing ?? args.reply ?? ''
+  // Until the document arrives nothing is offered: the proposal may already have an outcome.
+  const open = (part: 'labels' | 'reply') => ready && outcomes !== undefined && !outcome[part]
 
-  const write = async (part: 'labels' | 'reply') => {
+  /** Every write names the proposal; the server refuses it when that half already has an outcome. */
+  const run = async (part: 'labels' | 'reply', action: string, input: JsonObject) => {
     setBusy(part)
     setError(null)
     try {
-      const item = { repo: args.repo ?? '', number: args.number ?? 0 }
-      const result =
-        part === 'labels'
-          ? await api.action<Written>('github-triage', 'label', { ...item, add, remove })
-          : await api.action<Written>('github-triage', 'comment', { ...item, body: reply })
+      const result = await api.action<Written>('github-triage', action, {
+        ...input,
+        callId: call.id,
+      })
       if (result.status === 'error') setError(result.message)
       else {
-        setOutcome((previous) =>
-          part === 'labels'
-            ? { ...previous, labels: 'applied', applied: [...add, ...remove] }
-            : {
-                ...previous,
-                reply: 'posted',
-                text: reply,
-                ...(result.url ? { url: result.url } : {}),
-              },
-        )
-        setEditing(null)
-        changed.dispatchEvent(new Event('change'))
+        if (part === 'reply') setEditing(null)
+        if (action !== 'discard') changed.dispatchEvent(new Event('change'))
       }
     } finally {
       setBusy(null)
     }
   }
+  const item = { repo: args.repo ?? '', number: args.number ?? 0 }
 
   return (
     <Tool defaultOpen>
@@ -142,7 +137,7 @@ export function Proposal({ call }: { call: ToolCallView }) {
                     </span>
                   ))}
                 </div>
-                {ready && !outcome.labels && unknown.length > 0 && (
+                {open('labels') && unknown.length > 0 && (
                   <p className="text-[11.5px] text-muted-foreground">
                     {labels.data?.length === 0 ? (
                       `Could not read the labels of ${args.repo}; nothing to apply.`
@@ -154,13 +149,12 @@ export function Proposal({ call }: { call: ToolCallView }) {
                     )}
                   </p>
                 )}
-                {outcome.labels === 'applied' && <Done>applied on GitHub</Done>}
-                {outcome.labels === 'discarded' && <Done>discarded</Done>}
-                {ready && !outcome.labels && (
+                {outcome.labels && <Done outcome={outcome.labels} />}
+                {open('labels') && (
                   <div className="flex flex-wrap gap-1.5 pt-1">
                     <Button
                       disabled={busy !== null || !labels.data || add.length + remove.length === 0}
-                      onClick={() => void write('labels')}
+                      onClick={() => void run('labels', 'label', { ...item, add, remove })}
                       size="xs"
                       variant="outline"
                     >
@@ -168,9 +162,7 @@ export function Proposal({ call }: { call: ToolCallView }) {
                     </Button>
                     <Button
                       disabled={busy !== null}
-                      onClick={() =>
-                        setOutcome((previous) => ({ ...previous, labels: 'discarded' }))
-                      }
+                      onClick={() => void run('labels', 'discard', { part: 'labels' })}
                       size="xs"
                       variant="ghost"
                     >
@@ -193,21 +185,18 @@ export function Proposal({ call }: { call: ToolCallView }) {
                   <div
                     className={cn(
                       'rounded-md border border-border/70 bg-background/60 px-3 py-2 font-sans',
-                      outcome.reply === 'discarded' && 'opacity-50',
+                      outcome.reply?.state === 'discarded' && 'opacity-50',
                     )}
                   >
                     <MessageResponse className="text-[13px]">{reply}</MessageResponse>
                   </div>
                 )}
-                {outcome.reply === 'posted' && (
-                  <Done>{outcome.url ? `posted: ${outcome.url}` : 'posted on GitHub'}</Done>
-                )}
-                {outcome.reply === 'discarded' && <Done>discarded</Done>}
-                {ready && !outcome.reply && (
+                {outcome.reply && <Done outcome={outcome.reply} />}
+                {open('reply') && (
                   <div className="flex flex-wrap gap-1.5 pt-1">
                     <Button
                       disabled={busy !== null || !reply.trim()}
-                      onClick={() => void write('reply')}
+                      onClick={() => void run('reply', 'comment', { ...item, body: reply })}
                       size="xs"
                       variant="outline"
                     >
@@ -226,9 +215,7 @@ export function Proposal({ call }: { call: ToolCallView }) {
                     )}
                     <Button
                       disabled={busy !== null}
-                      onClick={() =>
-                        setOutcome((previous) => ({ ...previous, reply: 'discarded' }))
-                      }
+                      onClick={() => void run('reply', 'discard', { part: 'reply' })}
                       size="xs"
                       variant="ghost"
                     >

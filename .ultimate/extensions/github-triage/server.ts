@@ -1,9 +1,17 @@
 import type { JsonValue } from '@earendil-works/chord'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { defineExtension, defineTool, section, wrapTool } from '@earendil-works/pi-durable'
+import {
+  defineDoc,
+  defineExtension,
+  defineTool,
+  section,
+  wrapTool,
+} from '@earendil-works/pi-durable'
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { createBashTool } from '@earendil-works/pi-durable/tools'
 import type { ActionContext } from '../../../server/actions.ts'
 
@@ -73,18 +81,117 @@ export default defineExtension({
   ],
 })
 
-type Gh = { ok: true; stdout: string } | { ok: false; missing: boolean; message: string }
+type Gh =
+  | { ok: true; stdout: string }
+  | { ok: false; missing: boolean; killed: boolean; message: string }
 
-/** Runs gh; a failure becomes its first stderr line (execFile puts stderr after "Command failed: …"). */
+/**
+ * Runs gh; a failure becomes its first stderr line (execFile puts stderr after "Command failed: …"). `killed` means
+ * gh was stopped by the timeout, so a write may or may not have reached GitHub.
+ */
 async function gh(ctx: ActionContext, args: string[]): Promise<Gh> {
   try {
     return { ok: true, stdout: (await ctx.exec('gh', args)).stdout }
   } catch (error) {
     if (ctx.signal.aborted) throw error
-    const { code, message } = error as NodeJS.ErrnoException
+    const { code, message, killed } = error as NodeJS.ErrnoException & { killed?: boolean }
     const detail = message.split('\n').slice(1).join('\n').trim() || message
-    return { ok: false, missing: code === 'ENOENT', message: detail.split('\n')[0] ?? detail }
+    return {
+      ok: false,
+      missing: code === 'ENOENT',
+      killed: killed === true,
+      message: detail.split('\n')[0] ?? detail,
+    }
   }
+}
+
+/**
+ * What became of each half of a proposal, by `triage_propose` tool call id, in the conversation that made it.
+ * `pending` is claimed before the GitHub write and replaced by its result in the same action, so a second tab, a
+ * second click, or a retry after a crash finds the proposal taken and cannot write twice.
+ */
+export type Outcome =
+  | { state: 'pending'; at: string }
+  | { state: 'applied'; at: string; labels: string[] }
+  | { state: 'posted'; at: string; text: string; url: string }
+  | { state: 'discarded'; at: string }
+export type Outcomes = { [callId: string]: { labels?: Outcome; reply?: Outcome } }
+export const Proposals = defineDoc<Outcomes>({
+  kind: 'github-triage.proposals',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  // A fork shows the same calls; they stay applied there too.
+  fork: 'current',
+  initial: () => ({}),
+})
+export const docs = [Proposals]
+
+type Part = 'labels' | 'reply'
+
+/** The proposal an action writes for: its tool call id in the calling conversation, and which half. */
+function proposalArg(args: JsonValue, ctx: ActionContext) {
+  const callId = field(args, 'callId')
+  if (typeof callId !== 'string' || !callId || callId.length > 256)
+    throw new Error('Expected callId')
+  if (ctx.conversationId === undefined) throw new Error('Expected a conversation')
+  return { callId, conversationId: ctx.conversationId as ConversationId }
+}
+
+/** Changes the proposals document of the proposal's conversation in one commit. */
+async function record<T>(
+  ctx: ActionContext,
+  { conversationId }: ReturnType<typeof proposalArg>,
+  change: (outcomes: Outcomes) => T,
+) {
+  const conversation = await ctx.host.harness().conversation(conversationId, BACKGROUND_CONTEXT)
+  if (!conversation) throw new Error('Unknown conversation')
+  return conversation.commit(
+    async (tx) => change(await tx.doc(Proposals, conversationId)),
+    BACKGROUND_CONTEXT,
+  )
+}
+
+/** Claims one half for a write in its own commit; a message when it already has an outcome. */
+function claim(ctx: ActionContext, proposal: ReturnType<typeof proposalArg>, part: Part) {
+  return record(ctx, proposal, (outcomes) => {
+    const outcome = outcomes[proposal.callId]?.[part]
+    if (outcome)
+      return outcome.state === 'pending'
+        ? 'This proposal is already being written; check GitHub before proposing it again.'
+        : `This proposal was already ${outcome.state}.`
+    outcomes[proposal.callId] = {
+      ...outcomes[proposal.callId],
+      [part]: { state: 'pending', at: new Date().toISOString() },
+    }
+    return null
+  })
+}
+
+/** Replaces the claim with the result, or releases it when GitHub surely refused the write. */
+function settle(
+  ctx: ActionContext,
+  proposal: ReturnType<typeof proposalArg>,
+  part: Part,
+  outcome: Outcome | null,
+) {
+  return record(ctx, proposal, (outcomes) => {
+    const entry = { ...outcomes[proposal.callId] }
+    if (outcome) entry[part] = outcome
+    else delete entry[part]
+    outcomes[proposal.callId] = entry
+  })
+}
+
+/** The result of a failed write: a timed-out gh keeps its claim, since the write may have landed. */
+async function failed(
+  ctx: ActionContext,
+  proposal: ReturnType<typeof proposalArg>,
+  part: Part,
+  result: Gh & { ok: false },
+) {
+  if (!result.killed) await settle(ctx, proposal, part, null)
+  return { status: 'error', message: result.message }
 }
 
 function field(args: JsonValue, name: string): JsonValue | undefined {
@@ -290,6 +397,9 @@ export const actions = {
     )
     if (unknown.length)
       return { status: 'error', message: `Unknown repository labels: ${unknown.join(', ')}` }
+    const proposal = proposalArg(args, ctx)
+    const taken = await claim(ctx, proposal, 'labels')
+    if (taken) return { status: 'error', message: taken }
     if (add.length) {
       const fields = add.flatMap((name) => ['-f', `labels[]=${name}`])
       const result = await gh(ctx, [
@@ -299,13 +409,15 @@ export const actions = {
         `repos/${repo}/issues/${number}/labels`,
         ...fields,
       ])
-      if (!result.ok) return { status: 'error', message: result.message }
+      if (!result.ok) return failed(ctx, proposal, 'labels', result)
     }
     for (const name of remove) {
       const path = `repos/${repo}/issues/${number}/labels/${encodeURIComponent(name)}`
       const result = await gh(ctx, ['api', '-X', 'DELETE', path])
-      if (!result.ok) return { status: 'error', message: result.message }
+      if (!result.ok) return failed(ctx, proposal, 'labels', result)
     }
+    const at = new Date().toISOString()
+    await settle(ctx, proposal, 'labels', { state: 'applied', at, labels: [...add, ...remove] })
     return { status: 'ok' }
   },
   /** Posts a comment; the UI calls it only after the user confirmed. Returns the new comment's URL. */
@@ -315,6 +427,9 @@ export const actions = {
     const number = numberArg(args)
     const body = textArg(args, 'body', 65536)
     if (!body) throw new Error('Expected a body')
+    const proposal = proposalArg(args, ctx)
+    const taken = await claim(ctx, proposal, 'reply')
+    if (taken) return { status: 'error', message: taken }
     const path = `repos/${repo}/issues/${number}/comments`
     const result = await gh(ctx, [
       'api',
@@ -326,8 +441,25 @@ export const actions = {
       '--jq',
       '.html_url',
     ])
-    if (!result.ok) return { status: 'error', message: result.message }
-    return { status: 'ok', url: result.stdout.trim() }
+    if (!result.ok) return failed(ctx, proposal, 'reply', result)
+    const url = result.stdout.trim()
+    await settle(ctx, proposal, 'reply', {
+      state: 'posted',
+      at: new Date().toISOString(),
+      text: body,
+      url,
+    })
+    return { status: 'ok', url }
+  },
+  /** Discards one half of a proposal, unless it already has an outcome. */
+  async discard(args: JsonValue, ctx: ActionContext) {
+    const part = field(args, 'part')
+    if (part !== 'labels' && part !== 'reply') throw new Error('Expected part labels or reply')
+    const proposal = proposalArg(args, ctx)
+    const taken = await claim(ctx, proposal, part)
+    if (taken) return { status: 'error', message: taken }
+    await settle(ctx, proposal, part, { state: 'discarded', at: new Date().toISOString() })
+    return { status: 'ok' }
   },
   /** The repository's labels, for the filter and for suggestions. */
   async labels(args: JsonValue, ctx: ActionContext) {
