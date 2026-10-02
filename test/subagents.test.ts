@@ -37,13 +37,18 @@ async function until(check: () => Promise<boolean>) {
   }
 }
 async function fixture(extension?: Extension) {
-  const repoRoot = await directory()
-  await mkdir(join(repoRoot, 'agents'))
+  const ultimateRoot = await directory()
+  await mkdir(join(ultimateRoot, 'agents'))
   await writeFile(
-    join(repoRoot, 'agents/scout.md'),
+    join(ultimateRoot, 'agents/scout.md'),
     extension ? definition().replace('tools: [read, bash]\n', '') : definition(),
   )
-  const prepared = await prepareHarness({ repoRoot, home: join(repoRoot, 'home'), faux: true })
+  const prepared = await prepareHarness({
+    ultimateRoot,
+    userHome: ultimateRoot,
+    home: join(ultimateRoot, 'home'),
+    faux: true,
+  })
   prepared.registry.install(CodingTools)
   if (extension) prepared.registry.install(extension)
   let opened: OpenHost | undefined
@@ -91,7 +96,7 @@ async function fixture(extension?: Extension) {
   prepared.faux!.setResponses([route])
   opened = await prepared.open()
   hosts.push(opened)
-  return { prepared, opened, repoRoot }
+  return { prepared, opened, ultimateRoot }
 }
 async function call(opened: OpenHost, args: Record<string, unknown>) {
   await (
@@ -168,17 +173,21 @@ describe('subagents', () => {
     const repo = await directory(),
       home = await directory(),
       cwd = await directory()
-    for (const path of [join(repo, 'agents'), join(home, 'agents'), join(cwd, '.ultimate/agents')])
+    for (const path of [
+      join(repo, 'agents'),
+      join(home, '.ultimate/agents'),
+      join(cwd, '.ultimate/agents'),
+    ])
       await mkdir(path, { recursive: true })
     await writeFile(join(repo, 'agents/scout.md'), definition('repo'))
-    await writeFile(join(home, 'agents/scout.md'), definition('home'))
+    await writeFile(join(home, '.ultimate/agents/scout.md'), definition('home'))
     await writeFile(join(cwd, '.ultimate/agents/scout.md'), definition('cwd'))
     await writeFile(
       join(repo, 'agents/worker.md'),
       definition('worker').replace('name: scout', 'name: worker'),
     )
     await writeFile(
-      join(home, 'agents/researcher.md'),
+      join(home, '.ultimate/agents/researcher.md'),
       definition('research').replace('name: scout', 'name: researcher'),
     )
     await writeFile(join(cwd, '.ultimate/agents/broken.md'), 'broken')
@@ -209,7 +218,7 @@ describe('subagents', () => {
     ).toThrow('description is required')
   })
   it('foreground returns the answer, exposes child details, inherits the parent and rereads scout on next start', async () => {
-    const { opened, repoRoot } = await fixture()
+    const { opened, ultimateRoot } = await fixture()
     const result = await call(opened, { action: 'start', agent: 'scout', task: 'facts' })
     expect(result.text).toBe('Child: facts')
     const [first] = await children(opened)
@@ -226,7 +235,7 @@ describe('subagents', () => {
     expect(agent.tools.map((tool) => tool.name)).toEqual(['read', 'bash'])
     expect(agent.model).toEqual((await opened.root.agent(context)).model)
     expect(agent.instructions).toBe('Original instructions')
-    await writeFile(join(repoRoot, 'agents/scout.md'), definition('Updated instructions'))
+    await writeFile(join(ultimateRoot, 'agents/scout.md'), definition('Updated instructions'))
     await call(opened, { action: 'start', agent: 'scout', task: 'more facts' })
     const second = (await children(opened))[1]
     expect(

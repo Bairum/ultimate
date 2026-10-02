@@ -28,64 +28,74 @@ afterEach(async () => {
 async function fixture(extra = false, agents = false, sources?: Record<string, string>) {
   const directory = await mkdtemp(join(tmpdir(), 'ultimate-test-'))
   directories.push(directory)
-  const repoRoot = join(directory, 'repo')
-  await mkdir(join(repoRoot, 'extensions', 'prompt'), { recursive: true })
-  await cp(resolvePath('extensions/coding-tools'), join(repoRoot, 'extensions/coding-tools'), {
+  const ultimateRoot = join(directory, 'repo')
+  await mkdir(join(ultimateRoot, 'extensions', 'prompt'), { recursive: true })
+  await cp(resolvePath('extensions/coding-tools'), join(ultimateRoot, 'extensions/coding-tools'), {
     recursive: true,
   })
-  await mkdir(join(repoRoot, 'web'), { recursive: true })
-  await symlink(resolvePath('node_modules'), join(repoRoot, 'node_modules'), 'dir')
+  await mkdir(join(ultimateRoot, 'web'), { recursive: true })
+  await symlink(resolvePath('node_modules'), join(ultimateRoot, 'node_modules'), 'dir')
   await writeFile(
-    join(repoRoot, 'vite.config.ts'),
+    join(ultimateRoot, 'vite.config.ts'),
     "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', optimizeDeps: { noDiscovery: true } })",
   )
   await writeFile(
-    join(repoRoot, 'web', 'index.html'),
+    join(ultimateRoot, 'web', 'index.html'),
     '<html><body>Ultimate server is running</body></html>',
   )
   await writeFile(
-    join(repoRoot, 'extensions', 'prompt', 'server.ts'),
+    join(ultimateRoot, 'extensions', 'prompt', 'server.ts'),
     await readFile(resolvePath('extensions/prompt/server.ts'), 'utf8'),
   )
+  await mkdir(join(ultimateRoot, 'server'), { recursive: true })
+  await cp(resolvePath('server/skills.ts'), join(ultimateRoot, 'server/skills.ts'))
   if (extra) {
-    await mkdir(join(repoRoot, 'extensions', 'counter'), { recursive: true })
+    await mkdir(join(ultimateRoot, 'extensions', 'counter'), { recursive: true })
     await writeFile(
-      join(repoRoot, 'extensions', 'counter', 'value.ts'),
+      join(ultimateRoot, 'extensions', 'counter', 'value.ts'),
       "export const value = 'one'",
     )
-    await writeFile(join(repoRoot, 'extensions', 'counter', 'server.ts'), counterSource)
-    await mkdir(join(repoRoot, 'extensions', 'web-only'), { recursive: true })
+    await writeFile(join(ultimateRoot, 'extensions', 'counter', 'server.ts'), counterSource)
+    await mkdir(join(ultimateRoot, 'extensions', 'web-only'), { recursive: true })
     await writeFile(
-      join(repoRoot, 'extensions', 'web-only', 'web.tsx'),
+      join(ultimateRoot, 'extensions', 'web-only', 'web.tsx'),
       'export default () => null',
     )
     await writeFile(
-      join(repoRoot, 'extensions', 'web-only', 'README.md'),
+      join(ultimateRoot, 'extensions', 'web-only', 'README.md'),
       'A browser-only extension.\n\nMore detail.',
     )
   }
   if (agents) {
-    await mkdir(join(repoRoot, 'server'), { recursive: true })
-    await cp(resolvePath('server/metadata.ts'), join(repoRoot, 'server/metadata.ts'))
-    await cp(resolvePath('server/agents.ts'), join(repoRoot, 'server/agents.ts'))
-    await cp(resolvePath('extensions/subagents'), join(repoRoot, 'extensions/subagents'), {
+    await mkdir(join(ultimateRoot, 'server'), { recursive: true })
+    await cp(resolvePath('server/metadata.ts'), join(ultimateRoot, 'server/metadata.ts'))
+    await cp(resolvePath('server/agents.ts'), join(ultimateRoot, 'server/agents.ts'))
+    await cp(resolvePath('server/project.ts'), join(ultimateRoot, 'server/project.ts'))
+    await cp(resolvePath('server/lock.ts'), join(ultimateRoot, 'server/lock.ts'))
+    await cp(resolvePath('extensions/subagents'), join(ultimateRoot, 'extensions/subagents'), {
       recursive: true,
     })
-    await cp(resolvePath('agents'), join(repoRoot, 'agents'), { recursive: true })
-    await writeFile(join(repoRoot, 'agents/broken.md'), 'not frontmatter')
+    await cp(resolvePath('agents'), join(ultimateRoot, 'agents'), { recursive: true })
+    await writeFile(join(ultimateRoot, 'agents/broken.md'), 'not frontmatter')
     await writeFile(
-      join(repoRoot, 'agents/configured.md'),
+      join(ultimateRoot, 'agents/configured.md'),
       '---\nname: configured\ndescription: Configured agent\nmodel: openai-codex/gpt-5.4\nthinking: max\n---\nInvestigate.',
     )
   }
   if (sources) {
-    await rm(join(repoRoot, 'extensions/coding-tools'), { recursive: true })
+    await rm(join(ultimateRoot, 'extensions/coding-tools'), { recursive: true })
     for (const [name, source] of Object.entries(sources)) {
-      await mkdir(join(repoRoot, 'extensions', name), { recursive: true })
-      await writeFile(join(repoRoot, 'extensions', name, 'server.ts'), source)
+      await mkdir(join(ultimateRoot, 'extensions', name), { recursive: true })
+      await writeFile(join(ultimateRoot, 'extensions', name, 'server.ts'), source)
     }
   }
-  const options = { repoRoot, home: join(directory, 'home'), faux: true, port: 0 }
+  const options = {
+    ultimateRoot,
+    userHome: directory,
+    home: join(directory, 'home'),
+    faux: true,
+    port: 0,
+  }
   const server = await createServer(options)
   servers.push(server)
   return { server, options }
@@ -215,7 +225,7 @@ describe('server', () => {
     // This demo finishes without requiring the fixture to expose coding tools.
     await post(server, '/api/conversations/1/submit', { text: 'Return the word SCOUT.' })
     await server.harness.waitForIdle(context)
-    const folder = join(options.repoRoot, 'extensions/0-new')
+    const folder = join(options.ultimateRoot, 'extensions/0-new')
     await mkdir(folder)
     await writeFile(join(folder, 'server.ts'), orderedSource('0-new'))
     await until(() => !!server.extensions.info().find((item) => item.name === '0-new')?.server)
@@ -452,7 +462,7 @@ describe('server', () => {
     ).toBe(400)
     const created = await post(server, '/api/conversations', {
       title: 'Another',
-      cwd: server.host.repoRoot,
+      cwd: server.host.projectRoot,
     })
     expect(created.status).toBe(201)
     const stream = await attach(server, '?conversation=' + created.data.id)
@@ -497,7 +507,7 @@ describe('server', () => {
     expect(info.process.url).toBe(server.url)
     expect(info.persistence.kind).toBe('sqlite')
     expect(info.persistence.sizeBytes).toBeGreaterThan(0)
-    expect(info.execution.defaultCwd).toBe(server.host.repoRoot)
+    expect(info.execution.defaultCwd).toBe(server.host.projectRoot)
     expect(info.extensions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -521,7 +531,7 @@ describe('server', () => {
     await post(server, '/api/conversations/1/submit', { text: 'before' })
     await server.harness.waitForIdle(context)
     await writeFile(
-      join(options.repoRoot, 'extensions/counter/value.ts'),
+      join(options.ultimateRoot, 'extensions/counter/value.ts'),
       "export const value = 'new'",
     )
     await until(() => server.host.build().id !== first.id)
@@ -542,7 +552,7 @@ describe('server', () => {
     expect(JSON.stringify(systems.at(-1))).toContain(`Ultimate build ${second.id}`)
     view.dispose()
     await writeFile(
-      join(options.repoRoot, 'extensions/web-only/web.tsx'),
+      join(options.ultimateRoot, 'extensions/web-only/web.tsx'),
       'export default () => "changed"',
     )
     await until(() => server.host.build().id !== second.id)
@@ -587,7 +597,7 @@ describe('server', () => {
     const promptLoaded = server.extensions.info().find((extension) => extension.name === 'prompt')!
       .server!.loadedAt
     await writeFile(
-      join(server.host.repoRoot, 'extensions/counter/value.ts'),
+      join(server.host.ultimateRoot, 'extensions/counter/value.ts'),
       "export const value = 'two'",
     )
     await until(() => entry().server!.loadedAt !== loaded)
@@ -600,7 +610,7 @@ describe('server', () => {
     const successful = entry().server!.loadedAt
     await new Promise((resolve) => setTimeout(resolve, 200))
     await writeFile(
-      join(server.host.repoRoot, 'extensions/counter/value.ts'),
+      join(server.host.ultimateRoot, 'extensions/counter/value.ts'),
       'this is not valid TS !!!',
     )
     await until(() => !!entry().server!.error)
@@ -610,13 +620,13 @@ describe('server', () => {
   it('keeps hot reloading extensions after a Vite config change restarts Vite', async () => {
     const { server } = await fixture(true)
     const entry = () => server.extensions.info().find((extension) => extension.name === 'counter')!
-    const config = join(server.host.repoRoot, 'vite.config.ts')
+    const config = join(server.host.ultimateRoot, 'vite.config.ts')
     const watcher = server.vite.watcher
     await writeFile(config, `${await readFile(config, 'utf8')}\n`)
     await until(() => server.vite.watcher !== watcher)
     const loaded = entry().server!.loadedAt
     await writeFile(
-      join(server.host.repoRoot, 'extensions/counter/value.ts'),
+      join(server.host.ultimateRoot, 'extensions/counter/value.ts'),
       "export const value = 'after restart'",
     )
     await until(() => entry().server!.loadedAt !== loaded)
@@ -630,7 +640,7 @@ describe('server', () => {
     const external = defineExtension({ name: 'web-only' })
     server.host.registry.install(external)
     await writeFile(
-      join(server.host.repoRoot, 'extensions/web-only/README.md'),
+      join(server.host.ultimateRoot, 'extensions/web-only/README.md'),
       'Changed browser facet',
     )
     await until(
@@ -639,7 +649,7 @@ describe('server', () => {
         'Changed browser facet',
     )
     expect(server.host.registry.snapshot().extension('web-only')).toBe(external)
-    await rm(join(server.host.repoRoot, 'extensions/web-only'), {
+    await rm(join(server.host.ultimateRoot, 'extensions/web-only'), {
       recursive: true,
       force: true,
       maxRetries: 5,
@@ -649,7 +659,7 @@ describe('server', () => {
   })
   it('discovers and removes extension folders while running', async () => {
     const { server } = await fixture()
-    const folder = join(server.host.repoRoot, 'extensions', 'added')
+    const folder = join(server.host.ultimateRoot, 'extensions', 'added')
     await mkdir(folder)
     await writeFile(
       join(folder, 'server.ts'),

@@ -294,6 +294,36 @@ export async function createApi(
         }
         if (request.method !== 'POST') throw new HttpError(404, 'Unknown endpoint')
         const data = await body(request)
+        const action = /^\/api\/extensions\/([^/]+)\/actions\/([^/]+)$/.exec(url.pathname)
+        if (action) {
+          const [, name, key] = action
+          if (!extensions.action(name, key)) throw new HttpError(404, 'Unknown extension action')
+          if (!Object.hasOwn(data, 'args')) throw new HttpError(400, 'Expected args')
+          const id = data.conversationId
+          if (id !== undefined && (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1))
+            throw new HttpError(400, 'Invalid conversation id')
+          const controller = new AbortController()
+          const cancel = () => {
+            if (!response.writableEnded) controller.abort()
+          }
+          response.once('close', cancel)
+          try {
+            const result = await extensions.invoke(
+              name,
+              key,
+              data.args as JsonValue,
+              controller.signal,
+              id,
+            )
+            json(200, { result })
+          } catch (error) {
+            console.error(`Extension action ${name}/${key}:`, error)
+            json(500, { error: 'Extension action failed' })
+          } finally {
+            response.off('close', cancel)
+          }
+          return true
+        }
         if (url.pathname === '/api/ui') {
           const set = data.set === undefined ? {} : data.set
           const remove = data.delete === undefined ? [] : data.delete
@@ -321,7 +351,7 @@ export async function createApi(
           return true
         }
         if (url.pathname === '/api/conversations') {
-          const cwd = data.cwd === undefined ? host.repoRoot : text(data.cwd, 'cwd')
+          const cwd = data.cwd === undefined ? host.projectRoot : text(data.cwd, 'cwd')
           const title = data.title === undefined ? undefined : text(data.title, 'title')
           const agent = await root.agent(context)
           const created = await harness.createConversation(

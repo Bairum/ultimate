@@ -33,14 +33,20 @@ screenshot and browser tools need a Chromium: `/usr/bin/chromium`, Google Chrome
 
 ```bash
 pnpm install
-pnpm start          # http://127.0.0.1:4747 opens in your browser
+pnpm start          # first free port from 4747 opens in your browser
+pnpm link --global  # once, in this clone
+cd ~/Projects/app && ultimate
 ```
 
 - No `pi` login yet? Open the command palette (`Ctrl+K`, `⌘K` on macOS) → "Log in to a provider". Logins are shared
   with `pi`, and so is logging out.
 - On another machine: `ssh -L 4747:127.0.0.1:4747 <host>`, then open `http://127.0.0.1:4747`. Ultimate only listens on
   loopback.
-- State lives in `~/.ultimate` (`ULTIMATE_HOME`); the port is `ULTIMATE_PORT`. One Ultimate per home.
+- `ultimate [dir] [--port N] [--no-open]` defaults to the current directory. Ultimate's source stays in the clone; tools and the root conversation work in the project.
+- State lives in `~/.ultimate/projects/<basename>-<sha256(projectRoot) first 8 hex>/`; `ULTIMATE_HOME` overrides it. One supervisor per project, so projects can run concurrently. `--port` or `ULTIMATE_PORT` wins; otherwise the first free port from 4747 is used.
+- Extensions and agents load from the clone, `~/.ultimate/`, and `<project>/.ultimate/` (later names win). Skills add user/project `.ultimate/skills` to Pi's loader. These config folders are independent of state storage. Optional `.ultimate/settings.json` passes through in system info; `defaultSurface` names the preferred surface.
+- The first start in the clone migrates the legacy `~/.ultimate/state.sqlite` and screenshots to its project state directory, without moving user config.
+- Extension server facets may export `actions = { name: async (args, ctx) => result }`. Call `POST /api/extensions/:name/actions/:action` with `{ args, conversationId? }` to get `{ result }`; `ctx` provides `host`, `signal`, and `exec(command, args, { cwd?, timeout? })` (project cwd, no shell, bounded output, 30 second maximum).
 
 ## What to try
 

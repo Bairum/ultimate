@@ -5,6 +5,7 @@ import { chromium, type Browser } from 'playwright-core'
 import { createServer, type ViteDevServer } from 'vite-plus'
 import { expect, it } from 'vitest'
 import { browserBinary } from '../extensions/browser/server.ts'
+import { extensionModules } from '../server/vite-extensions.ts'
 
 it('hot-reloads Tailwind utilities when an extension facet is created, edited and removed', async (test) => {
   let executablePath: string
@@ -146,3 +147,91 @@ if (import.meta.hot) import.meta.hot.accept()
     await rm(repo, { recursive: true, force: true })
   }
 }, 60000)
+
+it.for(['user', 'project'] as const)(
+  'scans and hot-reloads new %s facets through the virtual module',
+  { timeout: 60000 },
+  async (source, test) => {
+    let executablePath: string
+    try {
+      executablePath = await browserBinary()
+    } catch (error) {
+      console.warn(`Skipping browser integration: ${String(error)}`)
+      test.skip()
+      return
+    }
+    const base = await mkdtemp(join(tmpdir(), 'ultimate-external-tailwind-'))
+    const ultimate = join(base, 'ultimate')
+    const project = join(base, 'project')
+    const user = join(base, 'user')
+    const extensions = join(source === 'user' ? user : project, '.ultimate/extensions')
+    let server: ViteDevServer | undefined
+    let browser: Browser | undefined
+    try {
+      await mkdir(join(ultimate, 'web/src'), { recursive: true })
+      await mkdir(extensions, { recursive: true })
+      await mkdir(project, { recursive: true })
+      await copyFile(resolve('vite.config.ts'), join(ultimate, 'vite.config.ts'))
+      await symlink(resolve('node_modules'), join(ultimate, 'node_modules'), 'dir')
+      await writeFile(join(ultimate, 'package.json'), '{"type":"module"}')
+      await writeFile(join(ultimate, 'web/src/index.css'), '@import "tailwindcss";\n')
+      await writeFile(
+        join(ultimate, 'web/index.html'),
+        '<div id="app"></div><script type="module" src="/src/main.ts"></script>',
+      )
+      await writeFile(
+        join(ultimate, 'web/src/main.ts'),
+        `import './index.css'
+import { loaders } from 'virtual:ultimate/web-facets'
+async function render(map) {
+  const modules = await Promise.all(Object.values(map).map(load => load()))
+  const app = document.querySelector('#app')
+  app.replaceChildren()
+  for (const module of modules) {
+    const el = document.createElement('div')
+    el.id = 'facet'
+    el.className = module.default.className
+    app.append(el)
+  }
+}
+await render(loaders)
+if (import.meta.hot) import.meta.hot.accept('virtual:ultimate/web-facets', next => { if (next) void render(next.loaders) })
+`,
+      )
+      server = await createServer({
+        configFile: join(ultimate, 'vite.config.ts'),
+        configLoader: 'runner',
+        root: join(ultimate, 'web'),
+        cacheDir: join(base, '.vite'),
+        plugins: [extensionModules(ultimate, project, user)],
+        server: { host: '127.0.0.1', port: 0, fs: { allow: [base, resolve('node_modules')] } },
+      })
+      await server.listen()
+      browser = await chromium.launch({ executablePath, headless: true })
+      const page = await browser.newPage()
+      await page.goto(server.resolvedUrls!.local[0])
+      await page.evaluate(() => Reflect.set(window, '__externalHmrSentinel', 'alive'))
+      await mkdir(join(extensions, 'hello'))
+      const facet = join(extensions, 'hello/web.tsx')
+      await writeFile(facet, "export default { className: 'p-[127px]' }")
+      await expect
+        .poll(() => page.locator('#facet').evaluate((el) => getComputedStyle(el).padding), {
+          timeout: 10000,
+        })
+        .toBe('127px')
+      await writeFile(facet, "export default { className: 'p-[129px]' }")
+      await expect
+        .poll(() => page.locator('#facet').evaluate((el) => getComputedStyle(el).padding), {
+          timeout: 10000,
+        })
+        .toBe('129px')
+      await rm(facet)
+      await expect.poll(() => page.locator('#facet').count(), { timeout: 10000 }).toBe(0)
+      expect(await page.evaluate(() => Reflect.get(window, '__externalHmrSentinel'))).toBe('alive')
+    } finally {
+      await browser?.close()
+      await server?.close()
+      await rm(base, { recursive: true, force: true, maxRetries: 5 })
+    }
+  },
+)

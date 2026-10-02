@@ -127,17 +127,15 @@ const reply = (text: string, conversationId?: ConversationId) => ({
   ...(conversationId === undefined ? {} : { details: { conversationId } }),
 })
 
-export default function subagents(host: Pick<ExtensionHost, 'repoRoot' | 'home' | 'harness'>) {
+export default function subagents(
+  host: Pick<ExtensionHost, 'ultimateRoot' | 'projectRoot' | 'userHome' | 'harness'>,
+) {
   return defineExtension({
     name: 'subagents',
     tasks: [Anchor, Reporter],
     sections: [
-      section('subagents', async (input) => {
-        const discovered = await discoverAgents(
-          host.repoRoot,
-          input.env?.cwd ?? host.repoRoot,
-          host.home,
-        )
+      section('subagents', async () => {
+        const discovered = await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome)
         return (
           'You coordinate. Delegate bounded, self-contained research, reconnaissance, review, and isolated implementation to subagents. Run independent work in parallel in the background. Verify results before relying on them.\nAvailable definitions:\n' +
           discovered.definitions.map((agent) => `${agent.name}: ${agent.description}`).join('\n')
@@ -200,7 +198,7 @@ export default function subagents(host: Pick<ExtensionHost, 'repoRoot' | 'home' 
             const definition =
               args.action === 'start' && !existingAction
                 ? (
-                    await discoverAgents(host.repoRoot, parent.cwd ?? host.repoRoot, host.home)
+                    await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome)
                   ).definitions.find((agent) => agent.name === args.agent)
                 : undefined
             if (args.action === 'start' && !existingAction && !definition)

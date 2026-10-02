@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
+import { discoveryRoots, migrateProject, projectHome, resolveProject } from './project.ts'
 import { acquireLock } from './lock.ts'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
@@ -61,25 +62,38 @@ export function createHarnessSettings(
   }
 }
 export interface HostOptions {
-  repoRoot: string
+  ultimateRoot: string
+  projectRoot?: string
+  userHome?: string
   home?: string
   faux?: boolean
   report?: (notice: Notice) => void
 }
 export async function prepareHarness(options: HostOptions) {
-  const { repoRoot } = options
-  const builds = createBuild(repoRoot)
-  const home = options.home ?? process.env.ULTIMATE_HOME ?? join(homedir(), '.ultimate')
+  const { ultimateRoot } = options
+  const projectRoot = await resolveProject(options.projectRoot ?? ultimateRoot)
+  const userHome = options.userHome ?? homedir()
+  const builds = createBuild(
+    ultimateRoot,
+    discoveryRoots(ultimateRoot, projectRoot, userHome).map((root) => join(root.path, 'agents')),
+  )
+  const home = options.home ?? process.env.ULTIMATE_HOME ?? projectHome(projectRoot, userHome)
+  if (
+    !options.home &&
+    !process.env.ULTIMATE_HOME &&
+    (await migrateProject(ultimateRoot, projectRoot, userHome))
+  )
+    console.log(`Migrated Ultimate state to ${home}`)
   await mkdir(home, { recursive: true })
   const database = join(home, 'state.sqlite')
   const modelRuntime = await ModelRuntime.create()
-  const settings = SettingsManager.create(repoRoot)
+  const settings = SettingsManager.create(projectRoot)
   applyHttpProxySettings(settings.getGlobalSettings().httpProxy)
   configureHttpDispatcher(settings.getHttpIdleTimeoutMs())
   const registry = createRegistry()
   const extensionOrders = new Map<string, number>()
   const envs = new Map<string, NodeExecutionEnv>()
-  const env = ({ cwd = repoRoot }: EnvTarget) => {
+  const env = ({ cwd = projectRoot }: EnvTarget) => {
     let found = envs.get(cwd)
     if (!found) {
       found = new NodeExecutionEnv({ cwd })
@@ -189,7 +203,9 @@ export async function prepareHarness(options: HostOptions) {
       if (!active) throw new Error('Harness is not open')
       return (await active.harness.snapshot(UiState, active.root.id, caller)) ?? {}
     },
-    repoRoot,
+    ultimateRoot,
+    projectRoot,
+    userHome,
     builds,
     build: builds.current,
     home,
@@ -231,7 +247,7 @@ export async function prepareHarness(options: HostOptions) {
         )
         const root = await harness.root(context, {
           agent: {
-            cwd: repoRoot,
+            cwd: projectRoot,
             ...(fauxMode
               ? { model: { provider: 'faux', modelId: 'faux-1' } }
               : preferred

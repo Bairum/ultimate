@@ -1,6 +1,9 @@
 {
   "name": "ultimate",
   "private": true,
+  "bin": {
+    "ultimate": "bin/ultimate.ts"
+  },
   "type": "module",
   "scripts": {
     "dev": "node server/main.ts",

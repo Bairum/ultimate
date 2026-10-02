@@ -2,22 +2,17 @@ import {
   formatSkillsForPrompt,
   getAgentDir,
   loadProjectContextFiles,
-  loadSkills,
 } from '@earendil-works/pi-coding-agent'
 import { defineExtension, section } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { projectSkills } from '../../server/skills.ts'
 
 export const order = -100
 
 export default function prompt(host: ExtensionHost) {
   const resources = (cwd: string) => ({
     context: loadProjectContextFiles({ cwd, agentDir: getAgentDir() }),
-    skills: loadSkills({
-      cwd,
-      agentDir: getAgentDir(),
-      skillPaths: host.settings.getSkillPaths(),
-      includeDefaults: true,
-    }).skills,
+    skills: projectSkills(host, cwd),
   })
   return defineExtension({
     name: 'prompt',
@@ -72,7 +67,7 @@ export default function prompt(host: ExtensionHost) {
 - You talk to the person through a web UI that renders Markdown: short paragraphs, lists, fenced code with a language, and file paths in backticks.`,
       ),
       section('project_context', (input) =>
-        resources(input.env?.cwd ?? host.repoRoot)
+        resources(input.env?.cwd ?? host.projectRoot)
           .context.map(
             (file) =>
               `<project_instructions path="${file.path}">\n${file.content}\n</project_instructions>`,
@@ -80,15 +75,15 @@ export default function prompt(host: ExtensionHost) {
           .join('\n\n'),
       ),
       section('skills', (input) => {
-        const skills = resources(input.env?.cwd ?? host.repoRoot).skills
+        const skills = resources(input.env?.cwd ?? host.projectRoot).skills
         return formatSkillsForPrompt(skills)
       }),
       section(
         'self',
         () =>
-          `Repository: ${host.repoRoot}\nUI: ${host.system().process.url}\nBefore changing yourself, read ${host.repoRoot}/AGENTS.md (layers, reloads, durability) and, for any UI, ${host.repoRoot}/extensions/README.md (new UI is a new extension folder).\n| Path | Reload |\n| web/ | Vite HMR immediately |\n| extensions/ | Reinstalled on save; active calls finish on old code |\n| agents/ | Read at use |\n| server/, shared/ | Call restart after editing; a failed typecheck or boot keeps the old process running |\n| bin/ | Human restart |\nNever call restart for web/, extensions/, or agents/.`,
+          `Project (your work): ${host.projectRoot}\nUltimate (yourself): ${host.ultimateRoot}\n${host.projectRoot === host.ultimateRoot ? 'The project is Ultimate itself.\n' : ''}Project-specific extensions, agents, skills, and surfaces belong in ${host.projectRoot}/.ultimate/. Ultimate's core and built-ins live in its clone.\nUI: ${host.system().process.url}\nBefore changing yourself, read ${host.ultimateRoot}/AGENTS.md (layers, reloads, durability) and, for any UI, ${host.ultimateRoot}/extensions/README.md (new UI is a new extension folder).\n| Path in Ultimate | Reload |\n| web/ | Vite HMR immediately |\n| extensions/ | Reinstalled on save; active calls finish on old code |\n| agents/ | Read at use |\n| server/, shared/ | Call restart after editing; a failed typecheck or boot keeps the old process running |\n| bin/ | Human restart |\nNever call restart for web/, extensions/, or agents/.`,
       ),
-      section('cwd', (input) => input.env?.cwd ?? host.repoRoot),
+      section('cwd', (input) => input.env?.cwd ?? host.projectRoot),
       section('build', () => {
         const build = host.build()
         return (

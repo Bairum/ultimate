@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
-import { stat } from 'node:fs/promises'
+import { stat, readFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { watch } from 'node:fs'
 import {
   arch,
@@ -13,8 +14,9 @@ import {
   userInfo,
 } from 'node:os'
 import { promisify } from 'node:util'
-import { relative } from 'node:path'
-import { getAgentDir, loadProjectContextFiles, loadSkills } from '@earendil-works/pi-coding-agent'
+import { relative, basename, join } from 'node:path'
+import { projectSkills } from './skills.ts'
+import { getAgentDir, loadProjectContextFiles } from '@earendil-works/pi-coding-agent'
 import type { ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { Watch } from './extensions.ts'
 import type { PreparedHost } from './harness.ts'
@@ -38,7 +40,12 @@ export async function createSystem(
   const startedAt = new Date().toISOString()
   const agentDir = getAgentDir()
   let coreStale = false
-  let code: SystemInfo['code'] = { repoRoot: host.repoRoot, branch: '', sha: '', dirty: false }
+  let code: SystemInfo['code'] = {
+    ultimateRoot: host.ultimateRoot,
+    branch: '',
+    sha: '',
+    dirty: false,
+  }
   let value: SystemInfo
   let previous = ''
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -49,13 +56,13 @@ export async function createSystem(
     if (git) {
       const command = async (args: string[]) => {
         try {
-          return (await run('git', args, { cwd: host.repoRoot })).stdout.trim()
+          return (await run('git', args, { cwd: host.ultimateRoot })).stdout.trim()
         } catch {
           return ''
         }
       }
       code = {
-        repoRoot: host.repoRoot,
+        ultimateRoot: host.ultimateRoot,
         branch: await command(['branch', '--show-current']),
         sha: await command(['rev-parse', '--short', 'HEAD']),
         dirty: (await command(['status', '--porcelain'])).length > 0,
@@ -64,8 +71,23 @@ export async function createSystem(
       lastGit = Date.now()
     }
     const cpu = cpus()
+    const config = join(host.projectRoot, '.ultimate')
+    const settings = await readFile(join(config, 'settings.json'), 'utf8')
+      .then((text) => JSON.parse(text) as unknown)
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error
+        return {}
+      })
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings))
+      throw new Error('Project settings must be a JSON object')
     value = {
       build: host.build(),
+      project: {
+        root: host.projectRoot,
+        name: basename(host.projectRoot),
+        hasConfig: existsSync(config),
+        settings: settings as SystemInfo['project']['settings'],
+      },
       machine: {
         hostname: hostname(),
         home: homedir(),
@@ -91,25 +113,21 @@ export async function createSystem(
         sizeBytes: await bytes(host.database),
         walBytes: await bytes(host.database + '-wal'),
       },
-      execution: { kind: 'node-local', defaultCwd: host.repoRoot },
+      execution: { kind: 'node-local', defaultCwd: host.projectRoot },
       code,
       extensions: registry(),
-      skills: loadSkills({
-        cwd: host.repoRoot,
-        agentDir,
-        skillPaths: host.settings.getSkillPaths(),
-        includeDefaults: true,
-      }).skills.map((skill) => ({
+      skills: projectSkills(host).map((skill) => ({
         name: skill.name,
         description: skill.description,
         path: skill.filePath,
       })),
-      contextFiles: loadProjectContextFiles({ cwd: host.repoRoot, agentDir }).map(
+      contextFiles: loadProjectContextFiles({ cwd: host.projectRoot, agentDir }).map(
         (file) => file.path,
       ),
-      agents: await discoverAgents(host.repoRoot, host.repoRoot, host.home).then(
+      agents: await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome).then(
         ({ definitions, errors }) => [
-          ...definitions.map(({ name, description, path, model, thinking }) => ({
+          ...definitions.map(({ name, description, path, source, model, thinking }) => ({
+            source,
             name,
             description,
             path,
@@ -127,7 +145,7 @@ export async function createSystem(
     }
   }
   const schedule = (_event?: string, path?: string | null) => {
-    if (path && /^(server|shared)\//.test(relative(host.repoRoot, path))) {
+    if (path && /^(server|shared)\//.test(relative(host.ultimateRoot, path))) {
       coreStale = true
       code.coreStale = true
     }
@@ -142,7 +160,15 @@ export async function createSystem(
   }
   const storageWatcher = watch(host.home, schedule)
   const unwatch = watchRepo((watcher) => {
-    watcher.add(host.repoRoot)
+    watcher.add([
+      host.ultimateRoot,
+      join(host.projectRoot, '.ultimate'),
+      join(host.userHome, '.ultimate/extensions'),
+      join(host.userHome, '.ultimate/agents'),
+      join(host.userHome, '.ultimate/skills'),
+      join(agentDir, 'skills'),
+      join(host.projectRoot, '.pi/skills'),
+    ])
     watcher.on('all', schedule)
     return () => watcher.off('all', schedule)
   })

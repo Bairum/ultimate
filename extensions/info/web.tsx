@@ -183,7 +183,7 @@ function Code({ system }: { system: SystemInfo }) {
     >
       <Rows>
         <Row label="repo">
-          <Copy value={code.repoRoot}>{path(code.repoRoot)}</Copy>
+          <Copy value={code.ultimateRoot}>{path(code.ultimateRoot)}</Copy>
         </Row>
         <Row label="branch">
           <Copy value={code.branch}>{code.branch || '—'}</Copy>

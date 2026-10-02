@@ -57,8 +57,18 @@ export interface CreateConversationRequest {
 export interface CreateConversationResponse {
   id: number
 }
+export interface ExtensionActionRequest {
+  args: JsonValue
+  conversationId?: number
+}
+export interface ExtensionActionResponse {
+  result: JsonValue
+}
 export interface ExtensionInfo {
   name: string
+  source: 'builtin' | 'user' | 'project'
+  path: string
+  actions: string[]
   readme?: string
   facets: { server: boolean; web: boolean }
   server?: {
@@ -99,11 +109,13 @@ export interface SystemInfo {
   process: { pid: number; node: string; startedAt: string; generation: number; url: string }
   persistence: { kind: 'sqlite'; path: string; sizeBytes: number; walBytes: number }
   execution: { kind: 'node-local'; defaultCwd: string }
-  code: { repoRoot: string; branch: string; sha: string; dirty: boolean; coreStale?: boolean }
+  project: { root: string; name: string; hasConfig: boolean; settings: Record<string, JsonValue> }
+  code: { ultimateRoot: string; branch: string; sha: string; dirty: boolean; coreStale?: boolean }
   extensions: ExtensionInfo[]
   skills: { name: string; description: string; path: string }[]
   contextFiles: string[]
   agents: {
+    source: 'builtin' | 'user' | 'project'
     name: string
     description: string
     path: string

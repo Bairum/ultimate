@@ -1,5 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { discoveryRoots } from './project.ts'
+import type { Source } from './project.ts'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 
 export interface AgentDefinition {
@@ -12,8 +14,8 @@ export interface AgentDefinition {
   tools?: string[]
 }
 export interface AgentDiscovery {
-  definitions: AgentDefinition[]
-  errors: { name: string; description: string; path: string; error: string }[]
+  definitions: (AgentDefinition & { source: Source })[]
+  errors: { name: string; description: string; path: string; source: Source; error: string }[]
 }
 const levels = {
   off: true,
@@ -91,32 +93,41 @@ export function parseDefinition(text: string, path: string): AgentDefinition {
   }
 }
 export async function discoverAgents(
-  repoRoot: string,
-  cwd: string,
-  home: string,
+  ultimateRoot: string,
+  projectRoot: string,
+  userHome?: string,
 ): Promise<AgentDiscovery> {
-  const definitions = new Map<string, AgentDefinition>()
+  const definitions = new Map<string, AgentDefinition & { source: Source }>()
   const errors: AgentDiscovery['errors'] = []
-  for (const directory of new Set([
-    join(repoRoot, 'agents'),
-    join(home, 'agents'),
-    join(cwd, '.ultimate', 'agents'),
-  ])) {
+  for (const root of discoveryRoots(ultimateRoot, projectRoot, userHome)) {
+    const directory = join(root.path, 'agents')
     let files: string[]
     try {
       files = await readdir(directory)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
-      errors.push({ name: directory, description: '', path: directory, error: String(error) })
+      errors.push({
+        name: directory,
+        description: '',
+        path: directory,
+        source: root.source,
+        error: String(error),
+      })
       continue
     }
     for (const file of files.filter((entry) => entry.endsWith('.md')).toSorted()) {
       const path = join(directory, file)
       try {
         const definition = parseDefinition(await readFile(path, 'utf8'), path)
-        definitions.set(definition.name, definition)
+        definitions.set(definition.name, { ...definition, source: root.source })
       } catch (error) {
-        errors.push({ name: file.slice(0, -3), description: '', path, error: String(error) })
+        errors.push({
+          name: file.slice(0, -3),
+          description: '',
+          path,
+          source: root.source,
+          error: String(error),
+        })
       }
     }
   }

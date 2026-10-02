@@ -12,6 +12,9 @@ import { createSystem } from './system.ts'
 import type { ChildMessage, SupervisorMessage } from './supervisor-protocol.ts'
 
 import { alive } from './lock.ts'
+import { homedir } from 'node:os'
+import { resolveProject } from './project.ts'
+import { extensionModules } from './vite-extensions.ts'
 import { loopbackAuthority, loopbackOrigin } from './request-security.ts'
 
 const send = (message: ChildMessage) => process.send?.(message)
@@ -21,11 +24,16 @@ export interface ServerOptions extends HostOptions {
   publicUrl?: string
 }
 export async function prepareServer(options: Partial<ServerOptions> = {}) {
-  const repoRoot = options.repoRoot ?? resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
+  const ultimateRoot =
+    options.ultimateRoot ?? resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
+  const projectRoot = await resolveProject(
+    options.projectRoot ?? process.env.ULTIMATE_PROJECT ?? options.ultimateRoot ?? process.cwd(),
+  )
   const events = new Events()
   const host = await prepareHarness({
     ...options,
-    repoRoot,
+    ultimateRoot,
+    projectRoot,
     report: (notice) => events.emit('notice', notice),
   })
   let api: Awaited<ReturnType<typeof createApi>> | undefined
@@ -59,11 +67,19 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
   // A vite.config.ts change restarts Vite with a new watcher; listeners move to each new one.
   const restarted = new Set<(watcher: ViteDevServer['watcher']) => void>()
   const vite = await createViteServer({
-    configFile: resolvePath(repoRoot, 'vite.config.ts'),
-    root: resolvePath(repoRoot, 'web'),
-    server: { middlewareMode: true, hmr: { server: http }, fs: { allow: [repoRoot] } },
+    configFile: resolvePath(ultimateRoot, 'vite.config.ts'),
+    root: resolvePath(ultimateRoot, 'web'),
+    server: {
+      middlewareMode: true,
+      hmr: { server: http },
+      fs: {
+        allow: [ultimateRoot, projectRoot, resolvePath(options.userHome ?? homedir(), '.ultimate')],
+      },
+    },
     appType: 'spa',
+    resolve: { alias: { '@': resolvePath(ultimateRoot, 'web/src') } },
     plugins: [
+      extensionModules(ultimateRoot, projectRoot, host.userHome),
       {
         name: 'ultimate:watchers',
         configureServer: (server) => {

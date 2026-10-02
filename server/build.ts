@@ -19,7 +19,7 @@ function hash(root: string, paths: string[]) {
   }
   return digest.digest('hex')
 }
-export function createBuild(root: string) {
+export function createBuild(root: string, agentDirectories = [join(root, 'agents')]) {
   const core = hash(root, [
     ...files(root, 'server'),
     ...files(root, 'shared'),
@@ -34,15 +34,18 @@ export function createBuild(root: string) {
   const history: BuildInfo['history'] = []
   return {
     current: () => value,
-    extension(name: string) {
-      extensions[name] = hash(root, files(root, `extensions/${name}`))
+    extension(name: string, path = join(root, 'extensions', name)) {
+      extensions[name] = hash(path, files(path, '.'))
     },
     remove(name: string) {
       delete extensions[name]
     },
     refresh() {
-      const agents = existsSync(join(root, 'agents'))
-        ? hash(root, files(root, 'agents'))
+      const agentHashes = agentDirectories
+        .filter((path) => existsSync(path))
+        .map((path) => hash(path, files(path, '.')))
+      const agents = agentHashes.length
+        ? createHash('sha256').update(JSON.stringify(agentHashes)).digest('hex')
         : undefined
       const sorted = Object.fromEntries(
         Object.entries(extensions).toSorted(([a], [b]) => a.localeCompare(b)),

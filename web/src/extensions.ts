@@ -1,5 +1,7 @@
 // Discovers and hot-reloads the web facets of extensions/*. The registry (sdk/registry.ts) does the bookkeeping.
 import { registry } from './sdk/client.ts'
+import { loaders as facets } from 'virtual:ultimate/web-facets'
+export { sources } from 'virtual:ultimate/web-facets'
 import { extensionName } from './sdk/registry.ts'
 import type { ExtensionLoader } from './sdk/registry.ts'
 
@@ -10,9 +12,7 @@ declare global {
 }
 
 /** Every extensions/<name>/web.tsx, imported lazily. Vite regenerates this map when a folder appears or goes. */
-export const loaders: Record<string, ExtensionLoader> = import.meta.glob(
-  '../../extensions/*/web.tsx',
-)
+export const loaders: Record<string, ExtensionLoader> = facets
 
 /** Errors Vite reported for a facet, which say more than a failed dynamic import. */
 const viteErrors = new Map<string, string>()
@@ -45,6 +45,9 @@ export function loadExtensions(map: Record<string, ExtensionLoader> = loaders) {
 window.__getReactRefreshIgnoredExports = ({ id }) => (extensionName(id) ? ['default'] : [])
 
 if (import.meta.hot) {
+  import.meta.hot.accept('virtual:ultimate/web-facets', (next) => {
+    if (next) void loadExtensions(next.loaders)
+  })
   // A folder was added or removed, or a facet could not refresh in place: load the new map.
   import.meta.hot.accept((next) => {
     if (next) void loadExtensions(next.loaders as Record<string, ExtensionLoader>)

@@ -1,0 +1,389 @@
+import { spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
+import { once } from 'node:events'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { afterEach, expect, it } from 'vitest'
+import { createServer } from '../server/main.ts'
+import { context, prepareHarness } from '../server/harness.ts'
+import { Metadata } from '../server/metadata.ts'
+import { migrateProject, projectHome, resolveProject } from '../server/project.ts'
+import { actionExec } from '../server/actions.ts'
+import type { SystemInfo } from '../shared/protocol.ts'
+import { acquireLock } from '../server/lock.ts'
+import { defineExtension } from '@earendil-works/pi-durable'
+import { chromium } from 'playwright-core'
+import { browserBinary } from '../extensions/browser/server.ts'
+
+const directories: string[] = []
+const servers: Awaited<ReturnType<typeof createServer>>[] = []
+const children: ChildProcess[] = []
+afterEach(async () => {
+  for (const server of servers.splice(0)) await server.close()
+  for (const child of children.splice(0)) {
+    if (child.exitCode !== null || child.signalCode !== null) continue
+    const exited = once(child, 'exit')
+    child.kill('SIGTERM')
+    await exited
+  }
+  for (const path of directories.splice(0))
+    await rm(path, { recursive: true, force: true, maxRetries: 5 })
+})
+async function temp() {
+  const path = await mkdtemp(join(tmpdir(), 'ultimate-project-'))
+  directories.push(path)
+  return path
+}
+async function until(check: () => boolean | Promise<boolean>) {
+  const deadline = Date.now() + 30000
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error('Timed out')
+    await new Promise((finish) => setTimeout(finish, 30))
+  }
+}
+async function post(url: string, path: string, args: unknown = null) {
+  const response = await fetch(url + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: url },
+    body: JSON.stringify({ args }),
+  })
+  return { status: response.status, data: await response.json() }
+}
+const source = (name: string) => `import { defineExtension } from '@earendil-works/pi-durable'
+import { value } from './value.ts'
+export default defineExtension({ name: ${JSON.stringify(name)} })
+export const dependency = defineExtension
+export const actions = {
+  hello: async (args, ctx) => ({ args, value, cwd: (await ctx.exec(process.execPath, ['-e', 'process.stdout.write(process.cwd())'])).stdout }),
+  fail: async () => { throw new Error('deliberate failure') },
+  timeout: async (_args, ctx) => ctx.exec(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], { timeout: 20 })
+}`
+async function extension(root: string, name: string, value: string) {
+  const path = join(root, 'extensions', name)
+  await mkdir(path, { recursive: true })
+  await writeFile(join(path, 'value.ts'), `export const value = ${JSON.stringify(value)}`)
+  await writeFile(join(path, 'server.ts'), source(name))
+  await writeFile(
+    join(path, 'web.tsx'),
+    "import { defineWebExtension } from '@/sdk'; export default defineWebExtension({ name: 'hello' })",
+  )
+  return path
+}
+
+it('derives project storage from canonical roots and an injected user home', async () => {
+  const home = await temp()
+  const project = await resolveProject(await temp())
+  const expected = join(
+    home,
+    '.ultimate/projects',
+    project.split('/').at(-1)! +
+      '-' +
+      (await import('node:crypto')).createHash('sha256').update(project).digest('hex').slice(0, 8),
+  )
+  expect(projectHome(project, home)).toBe(expected)
+  expect(projectHome(project + '/other', home)).not.toBe(expected)
+})
+
+it('migrates the legacy database once with its conversation and leaves user config alone', async () => {
+  const userHome = await temp()
+  const ultimateRoot = await temp()
+  const legacy = join(userHome, '.ultimate')
+  const prepared = await prepareHarness({ ultimateRoot, userHome, home: legacy, faux: true })
+  const opened = await prepared.open()
+  await opened.root.commit(async (tx) => {
+    ;(await tx.doc(Metadata, opened.root.id)).title = 'Intact conversation'
+  }, context)
+  const id = opened.root.id
+  await opened.close()
+  await mkdir(join(legacy, 'screenshots'))
+  await writeFile(join(legacy, 'screenshots/example.png'), 'image')
+  await mkdir(join(legacy, 'agents'))
+  await writeFile(join(legacy, 'agents/keep.md'), 'user config')
+  expect(await migrateProject(ultimateRoot, ultimateRoot, userHome)).toBe(true)
+  expect(await migrateProject(ultimateRoot, ultimateRoot, userHome)).toBe(false)
+  expect(existsSync(join(legacy, 'state.sqlite'))).toBe(false)
+  const home = projectHome(ultimateRoot, userHome)
+  expect(await readFile(join(home, 'screenshots/example.png'), 'utf8')).toBe('image')
+  expect(await readFile(join(legacy, 'agents/keep.md'), 'utf8')).toBe('user config')
+  const next = await prepareHarness({ ultimateRoot, userHome, home, faux: true })
+  const resumed = await next.open()
+  try {
+    expect(resumed.root.id).toBe(id)
+    expect((await resumed.harness.snapshot(Metadata, id, context))?.title).toBe(
+      'Intact conversation',
+    )
+  } finally {
+    await resumed.close()
+  }
+})
+
+it('refuses to migrate an actively owned legacy database', async () => {
+  const userHome = await temp()
+  const root = await temp()
+  const legacy = join(userHome, '.ultimate')
+  await mkdir(legacy)
+  await writeFile(join(legacy, 'state.sqlite'), 'do not move')
+  const owner = await acquireLock(join(legacy, 'storage.lock'), { pid: process.pid })
+  try {
+    await expect(migrateProject(root, root, userHome)).rejects.toThrow('already owns this storage')
+    expect(await readFile(join(legacy, 'state.sqlite'), 'utf8')).toBe('do not move')
+  } finally {
+    await owner.close()
+  }
+})
+
+it('loads external project facets over user and built-in names, actions and transitive reloads', async () => {
+  const projectRoot = await temp()
+  const userHome = await temp()
+  await extension(join(userHome, '.ultimate'), 'coding-tools', 'user')
+  const path = await extension(join(projectRoot, '.ultimate'), 'coding-tools', 'project')
+  await writeFile(
+    join(projectRoot, '.ultimate/settings.json'),
+    JSON.stringify({ defaultSurface: 'workbench', custom: 1 }),
+  )
+  const server = await createServer({
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    userHome,
+    home: join(userHome, 'state'),
+    faux: true,
+    port: 0,
+  })
+  servers.push(server)
+  expect(server.system.current().project).toEqual({
+    root: projectRoot,
+    name: projectRoot.split('/').at(-1),
+    hasConfig: true,
+    settings: { defaultSurface: 'workbench', custom: 1 },
+  })
+  expect((await server.root.agent(context)).cwd).toBe(projectRoot)
+  const record = () => server.extensions.info().find((entry) => entry.name === 'coding-tools')!
+  expect(record()).toMatchObject({
+    source: 'project',
+    path,
+    actions: ['hello', 'fail', 'timeout'],
+    server: { tools: [] },
+  })
+  expect(record().server?.error).toBeUndefined()
+  expect((await server.vite.ssrLoadModule(join(path, 'server.ts'))).dependency).toBe(
+    defineExtension,
+  )
+  const virtual = await server.vite.ssrLoadModule('virtual:ultimate/web-facets')
+  expect(typeof virtual.loaders[join(path, 'web.tsx')]).toBe('function')
+  expect(typeof virtual.loaders[resolve('extensions/status-line/web.tsx')]).toBe('function')
+  expect(virtual.sources['coding-tools']).toEqual({ source: 'project', path })
+  const added = join(projectRoot, '.ultimate/extensions/added')
+  await mkdir(added, { recursive: true })
+  await writeFile(join(added, 'web.tsx'), 'export default {}')
+  await until(
+    async () =>
+      (await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).sources.added?.source ===
+      'project',
+  )
+  await rm(added, { recursive: true })
+  await until(
+    async () => !(await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).sources.added,
+  )
+  const browser = await fetch(server.url + '/@fs/' + join(path, 'web.tsx'))
+  expect(browser.status).toBe(200)
+  expect(await browser.text()).toContain('defineWebExtension')
+  expect(
+    await post(server.url, '/api/extensions/coding-tools/actions/hello', { ok: true }),
+  ).toEqual({
+    status: 200,
+    data: { result: { args: { ok: true }, value: 'project', cwd: projectRoot } },
+  })
+  expect((await post(server.url, '/api/extensions/coding-tools/actions/unknown')).status).toBe(404)
+  expect(await post(server.url, '/api/extensions/coding-tools/actions/fail')).toEqual({
+    status: 500,
+    data: { error: 'Extension action failed' },
+  })
+  expect((await post(server.url, '/api/extensions/coding-tools/actions/timeout')).status).toBe(500)
+  expect(
+    (
+      await fetch(server.url + '/api/extensions/coding-tools/actions/hello', {
+        method: 'POST',
+        body: '{bad',
+      })
+    ).status,
+  ).toBe(400)
+  expect(
+    (
+      await fetch(server.url + '/api/extensions/coding-tools/actions/hello', {
+        method: 'POST',
+        headers: { Origin: 'https://example.com' },
+        body: '{}',
+      })
+    ).status,
+  ).toBe(403)
+  const loaded = record().server!.loadedAt
+  await writeFile(join(path, 'value.ts'), "export const value = 'edited'")
+  await until(() => record().server!.loadedAt !== loaded)
+  expect(
+    (await post(server.url, '/api/extensions/coding-tools/actions/hello')).data.result.value,
+  ).toBe('edited')
+  await rm(path, { recursive: true })
+  await until(() => record().source === 'user')
+  expect(
+    (await post(server.url, '/api/extensions/coding-tools/actions/hello')).data.result.value,
+  ).toBe('user')
+})
+
+it('renders built-in and project status-line facets in an outside project', async () => {
+  const projectRoot = await temp()
+  const userHome = await temp()
+  const path = await extension(join(projectRoot, '.ultimate'), 'hello', 'browser')
+  await writeFile(
+    join(path, 'web.tsx'),
+    `import { defineWebExtension } from '@/sdk'
+function Hello() { return <span data-testid="project-facet">Project hello</span> }
+export default defineWebExtension({ slots: { 'statusline.left': [Hello] } })`,
+  )
+  const server = await createServer({
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    userHome,
+    home: join(userHome, 'state'),
+    faux: true,
+    port: 0,
+  })
+  servers.push(server)
+  const browser = await chromium.launch({ executablePath: await browserBinary(), headless: true })
+  try {
+    const page = await browser.newPage()
+    await page.goto(server.url)
+    await expect
+      .poll(() => page.locator('footer').getByText('live', { exact: true }).count(), {
+        timeout: 10000,
+      })
+      .toBe(1)
+    await expect
+      .poll(() => page.locator('footer').getByTestId('project-facet').textContent(), {
+        timeout: 10000,
+      })
+      .toBe('Project hello')
+  } finally {
+    await browser.close()
+  }
+}, 60000)
+
+it('discovers user/project agents and skills with provenance and hot config changes', async () => {
+  const projectRoot = await temp()
+  const userHome = await temp()
+  const user = join(userHome, '.ultimate')
+  const project = join(projectRoot, '.ultimate')
+  for (const root of [user, project]) {
+    await mkdir(join(root, 'agents'), { recursive: true })
+    await mkdir(join(root, 'skills/ult25-inspect'), { recursive: true })
+    await writeFile(
+      join(root, 'agents/scout.md'),
+      `---\nname: scout\ndescription: ${root === user ? 'User' : 'Project'} scout\n---\nInspect.`,
+    )
+    await writeFile(
+      join(root, 'skills/ult25-inspect/SKILL.md'),
+      `---\nname: ult25-inspect\ndescription: ${root === user ? 'User' : 'Project'} skill\n---\nInspect.`,
+    )
+  }
+  const server = await createServer({
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    userHome,
+    home: join(userHome, 'state'),
+    faux: true,
+    port: 0,
+  })
+  servers.push(server)
+  const agent = () => server.system.current().agents.find((entry) => entry.name === 'scout')!
+  const skill = () =>
+    server.system.current().skills.find((entry) => entry.name === 'ult25-inspect')!
+  expect(agent()).toMatchObject({
+    source: 'project',
+    description: 'Project scout',
+    path: join(project, 'agents/scout.md'),
+  })
+  expect(skill()).toMatchObject({
+    description: 'Project skill',
+    path: join(project, 'skills/ult25-inspect/SKILL.md'),
+  })
+  await writeFile(
+    join(project, 'agents/scout.md'),
+    '---\nname: scout\ndescription: Edited scout\n---\nInspect.',
+  )
+  await until(() => agent().description === 'Edited scout')
+  await rm(join(project, 'agents/scout.md'))
+  await rm(join(project, 'skills/ult25-inspect'), { recursive: true })
+  await until(() => agent().source === 'user' && skill().description === 'User skill')
+})
+
+it('exec times out, caps output and defaults to the project without a shell', async () => {
+  const root = await temp()
+  const exec = actionExec(root, new AbortController().signal)
+  expect((await exec(process.execPath, ['-e', 'process.stdout.write(process.cwd())'])).stdout).toBe(
+    root,
+  )
+  await expect(
+    exec(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], { timeout: 20 }),
+  ).rejects.toThrow('Command failed')
+  await expect(
+    exec(process.execPath, ['-e', "process.stdout.write('x'.repeat(2 * 1024 * 1024))"]),
+  ).rejects.toThrow('maxBuffer')
+})
+
+it('starts two project supervisors concurrently on distinct free ports and storage, serving hello live', async () => {
+  const userHome = await temp()
+  const projects = [await temp(), await temp()]
+  await extension(join(projects[0], '.ultimate'), 'hello', 'live')
+  const launch = (project: string) => {
+    const home = projectHome(project, userHome)
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: userHome,
+      ULTIMATE_HOME: home,
+      ULTIMATE_FAUX: '1',
+    }
+    delete env.ULTIMATE_PORT
+    const child = spawn(process.execPath, [resolve('bin/ultimate.ts'), project, '--no-open'], {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    children.push(child)
+    let output = ''
+    child.stdout.on('data', (data) => {
+      output += data
+    })
+    child.stderr.on('data', (data) => {
+      output += data
+    })
+    return { home, output: () => output }
+  }
+  const runs = projects.map(launch)
+  await until(() => runs.every((run) => run.output().includes('Ultimate: http://')))
+  const urls = runs.map((run) => /Ultimate: (http:\/\/[^\s]+)/.exec(run.output())![1])
+  expect(urls[0]).not.toBe(urls[1])
+  expect(runs[0].home).not.toBe(runs[1].home)
+  for (const [index, run] of runs.entries()) {
+    const owner = JSON.parse(await readFile(join(run.home, 'ultimate.lock'), 'utf8'))
+    expect(owner).toMatchObject({
+      project: projects[index],
+      port: Number(new URL(urls[index]).port),
+    })
+    expect(owner.port).toBeGreaterThanOrEqual(4747)
+    expect(existsSync(join(run.home, 'state.sqlite'))).toBe(true)
+    const controller = new AbortController()
+    const response = await fetch(urls[index] + '/api/events', { signal: controller.signal })
+    const reader = response.body!.getReader()
+    let wire = ''
+    while (!wire.includes('event: system\n'))
+      wire += new TextDecoder().decode((await reader.read()).value)
+    const system = JSON.parse(/event: system\ndata: (.+)/.exec(wire)![1]) as SystemInfo
+    controller.abort()
+    expect(system.project.root).toBe(projects[index])
+    expect(system.persistence.path).toBe(join(run.home, 'state.sqlite'))
+  }
+  expect(await post(urls[0], '/api/extensions/hello/actions/hello', 'hi')).toEqual({
+    status: 200,
+    data: { result: { args: 'hi', value: 'live', cwd: projects[0] } },
+  })
+}, 60000)

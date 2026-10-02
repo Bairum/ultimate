@@ -10,7 +10,13 @@ import { createServer } from '../server/main.ts'
 
 it('emits draft-2020-compatible browser fill schemas for Anthropic and OpenRouter', async () => {
   const home = await mkdtemp(join(tmpdir(), 'ultimate-browser-schema-'))
-  const server = await createServer({ repoRoot: resolve('.'), home, faux: true, port: 0 })
+  const server = await createServer({
+    ultimateRoot: resolve('.'),
+    userHome: home,
+    home,
+    faux: true,
+    port: 0,
+  })
   try {
     const tools = (await server.root.agent(context)).tools?.map(toToolDeclaration)
     const models = createModels()

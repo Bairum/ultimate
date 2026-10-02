@@ -42,7 +42,13 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
     return
   }
   const home = await mkdtemp(join(tmpdir(), 'ultimate-browser-test-'))
-  const server = await createServer({ repoRoot: resolve('.'), home, faux: true, port: 0 })
+  const server = await createServer({
+    ultimateRoot: resolve('.'),
+    userHome: home,
+    home,
+    faux: true,
+    port: 0,
+  })
   const browserState: { launched?: Promise<Browser> } = {}
   try {
     server.host.registry.install(
@@ -102,16 +108,21 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
   }
 }, 60000)
 
-it('discovers and starts agents from ULTIMATE_HOME', async () => {
+it('discovers and starts agents from the user config root', async () => {
   const home = await mkdtemp(join(tmpdir(), 'ultimate-agent-home-'))
-  await mkdir(join(home, 'agents'))
-  const path = join(home, 'agents/instance-home-agent.md')
+  await mkdir(join(home, '.ultimate/agents'), { recursive: true })
+  const path = join(home, '.ultimate/agents/instance-home-agent.md')
   await writeFile(
     path,
     '---\nname: instance-home-agent\ndescription: Custom home agent\n---\nUse the custom home instructions.\n',
   )
   vi.stubEnv('ULTIMATE_HOME', home)
-  const server = await createServer({ repoRoot: resolve('.'), faux: true, port: 0 })
+  const server = await createServer({
+    ultimateRoot: resolve('.'),
+    userHome: home,
+    faux: true,
+    port: 0,
+  })
   try {
     expect(server.system.current().agents).toContainEqual(
       expect.objectContaining({ name: 'instance-home-agent', path }),
@@ -143,7 +154,7 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
     import {context} from './server/harness.ts';
     import {fauxAssistantMessage,fauxToolCall} from '@earendil-works/pi-ai/providers/faux';
     import {writeFile} from 'node:fs/promises';
-    const server = await createServer({repoRoot:process.cwd(),home:${JSON.stringify(home)},faux:true,port:0});
+    const server = await createServer({ultimateRoot:process.cwd(),userHome:${JSON.stringify(home)},home:${JSON.stringify(home)},faux:true,port:0});
     server.host.faux.setResponses([fauxAssistantMessage([fauxToolCall('instance',{action:'start',faux:true})],{stopReason:'toolUse'}),fauxAssistantMessage('Complete')]);
     await (await server.root.submit({type:'input',content:'start'},context)).wait(context);
     const view = await server.root.viewState(context);
@@ -245,7 +256,13 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
 it('starts an isolated standalone instance, reads logs and stops it', async () => {
   const home = await mkdtemp(join(tmpdir(), 'ultimate-instance-test-'))
   const childHome = join(home, 'child')
-  const server = await createServer({ repoRoot: resolve('.'), home, faux: true, port: 0 })
+  const server = await createServer({
+    ultimateRoot: resolve('.'),
+    userHome: home,
+    home,
+    faux: true,
+    port: 0,
+  })
   try {
     const started = await run(server, 'instance', { action: 'start', faux: true, home: childHome })
     expect(started.isError).not.toBe(true)

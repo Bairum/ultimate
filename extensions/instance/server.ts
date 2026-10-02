@@ -126,13 +126,15 @@ export default function instanceExtension(host: ExtensionHost) {
                   ),
                 ),
                 ULTIMATE_HOME: home,
+                ULTIMATE_PROJECT: host.projectRoot,
+                HOME: host.userHome,
                 ULTIMATE_PORT: String(port),
                 ULTIMATE_NO_OPEN: '1',
                 ULTIMATE_INSTANCE_OWNER: String(process.pid),
               }
               if (args.faux) env.ULTIMATE_FAUX = '1'
               const child = spawn(process.execPath, ['server/main.ts'], {
-                cwd: host.repoRoot,
+                cwd: host.ultimateRoot,
                 env,
                 stdio: ['ignore', 'pipe', 'pipe'],
               })

@@ -1,10 +1,12 @@
+#!/usr/bin/env node
 import { fork, spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdir } from 'node:fs/promises'
+import { parseArgs } from 'node:util'
+import { migrateProject, projectHome, resolveProject } from '../server/project.ts'
 import { acquireLock, retireStorageOwner, pause } from '../server/lock.ts'
 import { watch } from 'node:fs'
-import { homedir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
 import { createServer, connect } from 'node:net'
 import type { Socket } from 'node:net'
@@ -12,13 +14,25 @@ import { fileURLToPath } from 'node:url'
 import type { BuildInfo } from '../shared/protocol.ts'
 import type { ChildMessage, SupervisorMessage } from '../server/supervisor-protocol.ts'
 
-const repo = resolvePath(fileURLToPath(new URL('..', import.meta.url)))
-const home = process.env.ULTIMATE_HOME ?? join(homedir(), '.ultimate')
+const ultimateRoot = resolvePath(fileURLToPath(new URL('..', import.meta.url)))
+const { values, positionals } = parseArgs({
+  options: { port: { type: 'string' }, 'no-open': { type: 'boolean' } },
+  allowPositionals: true,
+})
+if (positionals.length > 1) throw new Error('Usage: ultimate [dir] [--port N] [--no-open]')
+const projectRoot = await resolveProject(positionals[0] ?? process.cwd())
+const home = process.env.ULTIMATE_HOME ?? projectHome(projectRoot)
+if (!process.env.ULTIMATE_HOME && (await migrateProject(ultimateRoot, projectRoot)))
+  console.log(`Migrated Ultimate state to ${home}`)
+const requestedPort = values.port ?? process.env.ULTIMATE_PORT
+let port = Number(requestedPort ?? 4747)
+if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid port')
 const lockPath = join(home, 'ultimate.lock')
 await mkdir(home, { recursive: true })
 const lock = await acquireLock(lockPath, {
   pid: process.pid,
-  port: Number(process.env.ULTIMATE_PORT ?? 4747),
+  port,
+  project: projectRoot,
 }).catch((error) => {
   console.error(String(error))
   process.exit(1)
@@ -80,8 +94,20 @@ const proxy = createServer((socket) => {
 })
 try {
   await new Promise<void>((resolve, reject) => {
-    proxy.once('error', reject)
-    proxy.listen(Number(process.env.ULTIMATE_PORT ?? 4747), '127.0.0.1', resolve)
+    const listen = () => {
+      proxy.once('error', failed)
+      proxy.listen(port, '127.0.0.1', () => {
+        proxy.off('error', failed)
+        resolve()
+      })
+    }
+    const failed = (error: NodeJS.ErrnoException) => {
+      if (!requestedPort && error.code === 'EADDRINUSE' && port < 65535) {
+        port++
+        listen()
+      } else reject(error)
+    }
+    listen()
   })
 } catch (error) {
   await lock.close()
@@ -90,7 +116,7 @@ try {
 const address = proxy.address()
 if (!address || typeof address === 'string') throw new Error('No proxy address')
 const publicUrl = `http://127.0.0.1:${address.port}`
-await lock.update({ pid: process.pid, port: address.port })
+await lock.update({ pid: process.pid, port: address.port, project: projectRoot })
 
 type Core = {
   child: ChildProcess
@@ -158,11 +184,12 @@ async function exit(core: Core) {
   }
 }
 function boot(previousBuild?: BuildInfo): Core {
-  const child = fork(join(repo, 'server/main.ts'), [], {
-    cwd: repo,
+  const child = fork(join(ultimateRoot, 'server/main.ts'), [], {
+    cwd: projectRoot,
     env: {
       ...process.env,
       ULTIMATE_HOME: home,
+      ULTIMATE_PROJECT: projectRoot,
       ULTIMATE_SUPERVISED: '1',
       ULTIMATE_GENERATION: String(++generation),
       ULTIMATE_PUBLIC_URL: publicUrl,
@@ -197,9 +224,9 @@ function boot(previousBuild?: BuildInfo): Core {
 }
 async function checkTypes() {
   const child = spawn(
-    join(repo, 'node_modules/.bin/tsc'),
+    join(ultimateRoot, 'node_modules/.bin/tsc'),
     ['--noEmit', '-p', 'tsconfig.swap.json'],
-    { cwd: repo, stdio: ['ignore', 'pipe', 'pipe'] },
+    { cwd: ultimateRoot, stdio: ['ignore', 'pipe', 'pipe'] },
   )
   let output = ''
   child.stdout.on('data', (data) => {
@@ -229,7 +256,7 @@ async function start(core: Core) {
   if (!announced) {
     announced = true
     console.log(`Ultimate: ${publicUrl}`)
-    if (!process.argv.includes('--no-open') && process.env.ULTIMATE_NO_OPEN !== '1') {
+    if (!values['no-open'] && process.env.ULTIMATE_NO_OPEN !== '1') {
       const opener = spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [publicUrl], {
         detached: true,
         stdio: 'ignore',
@@ -320,7 +347,7 @@ async function recover() {
   }
 }
 const watchers = ['server', 'shared', 'extensions'].map((directory) =>
-  watch(join(repo, directory), { recursive: true }, () => {
+  watch(join(ultimateRoot, directory), { recursive: true }, () => {
     if (crashPage && !recovering && !stopping) {
       failures = 0
       crashPage = false

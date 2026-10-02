@@ -22,29 +22,35 @@ afterEach(async () => {
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'ultimate-codemode-'))
   directories.push(directory)
-  const repoRoot = join(directory, 'repo')
-  await mkdir(join(repoRoot, 'extensions/codemode'), { recursive: true })
-  await cp(resolve('extensions/coding-tools'), join(repoRoot, 'extensions/coding-tools'), {
+  const ultimateRoot = join(directory, 'repo')
+  await mkdir(join(ultimateRoot, 'extensions/codemode'), { recursive: true })
+  await cp(resolve('extensions/coding-tools'), join(ultimateRoot, 'extensions/coding-tools'), {
     recursive: true,
   })
-  await mkdir(join(repoRoot, 'web'), { recursive: true })
-  await symlink(resolve('node_modules'), join(repoRoot, 'node_modules'), 'dir')
+  await mkdir(join(ultimateRoot, 'web'), { recursive: true })
+  await symlink(resolve('node_modules'), join(ultimateRoot, 'node_modules'), 'dir')
   await writeFile(
-    join(repoRoot, 'vite.config.ts'),
+    join(ultimateRoot, 'vite.config.ts'),
     "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', optimizeDeps: { noDiscovery: true } })",
   )
-  await writeFile(join(repoRoot, 'web/index.html'), '<html>Codemode</html>')
+  await writeFile(join(ultimateRoot, 'web/index.html'), '<html>Codemode</html>')
   // Type-only server imports erase; auth.ts is a runtime import used by ultimate.models().
-  await mkdir(join(repoRoot, 'server'))
+  await mkdir(join(ultimateRoot, 'server'))
   await writeFile(
-    join(repoRoot, 'server/auth.ts'),
+    join(ultimateRoot, 'server/auth.ts'),
     await readFile(resolve('server/auth.ts'), 'utf8'),
   )
   await writeFile(
-    join(repoRoot, 'extensions/codemode/server.ts'),
+    join(ultimateRoot, 'extensions/codemode/server.ts'),
     await readFile(resolve('extensions/codemode/server.ts'), 'utf8'),
   )
-  const options = { repoRoot, home: join(directory, 'home'), faux: true, port: 0 }
+  const options = {
+    ultimateRoot,
+    userHome: directory,
+    home: join(directory, 'home'),
+    faux: true,
+    port: 0,
+  }
   const server = await createServer(options)
   servers.push(server)
   expect(

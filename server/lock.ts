@@ -45,7 +45,9 @@ export async function retireStorageOwner(path: string) {
   while (alive(owner.pid) && Date.now() < deadline) await pause(50)
   if (alive(owner.pid)) signal('SIGKILL')
 }
-export async function readOwner(path: string): Promise<{ pid: number; port?: number } | undefined> {
+export async function readOwner(
+  path: string,
+): Promise<{ pid: number; port?: number; project?: string } | undefined> {
   try {
     const owner = JSON.parse(await readFile(path, 'utf8'))
     if (!Number.isSafeInteger(owner.pid) || owner.pid < 1) throw new Error('Invalid pid')
@@ -55,7 +57,11 @@ export async function readOwner(path: string): Promise<{ pid: number; port?: num
     throw new Error(`Cannot parse Ultimate lock ${path}`, { cause: error })
   }
 }
-export async function acquireLock(path: string, value: { pid: number; port?: number }, waitMs = 0) {
+export async function acquireLock(
+  path: string,
+  value: { pid: number; port?: number; project?: string },
+  waitMs = 0,
+) {
   const deadline = Date.now() + waitMs
   const database = new DatabaseSync(path + '.db')
   database.exec('PRAGMA busy_timeout = 0')
@@ -85,7 +91,7 @@ export async function acquireLock(path: string, value: { pid: number; port?: num
         if (Date.now() >= deadline)
           throw new Error(
             path.endsWith('/ultimate.lock')
-              ? `Ultimate is already running (pid ${owner?.pid ?? 'unknown'}) at http://127.0.0.1:${owner?.port ?? 'unknown'}`
+              ? `Ultimate is already running (pid ${owner?.pid ?? 'unknown'}) at http://127.0.0.1:${owner?.port ?? 'unknown'}${owner?.project ? ` for project ${owner.project}` : ''}`
               : `Ultimate core already owns this storage (pid ${owner?.pid ?? 'unknown'})`,
             { cause: error },
           )

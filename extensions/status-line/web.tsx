@@ -60,7 +60,7 @@ function Cwd() {
   const home = homeOf(cwd, system.machine.user)
   const shown = home ? '~' + cwd.slice(home.length) : cwd
   const { branch, dirty, sha } = system.code
-  const inRepo = cwd === system.code.repoRoot
+  const inRepo = cwd === system.code.ultimateRoot
   return (
     <Item
       className="min-w-0 text-foreground/80"

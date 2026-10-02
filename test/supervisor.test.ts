@@ -49,6 +49,7 @@ function launch(home: string, extra: Record<string, string> = {}) {
   const child = spawn(process.execPath, [resolvePath('bin/ultimate.ts'), '--no-open'], {
     env: {
       ...process.env,
+      HOME: home,
       ULTIMATE_HOME: home,
       ULTIMATE_PORT: '0',
       ULTIMATE_FAUX: '1',
@@ -148,6 +149,7 @@ describe('supervisor', () => {
     expect(JSON.parse(await readFile(join(first.home, 'ultimate.lock'), 'utf8'))).toEqual({
       pid: first.child.pid,
       port: Number(new URL(first.url).port),
+      project: resolvePath('.'),
     })
     const stream = await attach(first.url)
     expect(stream.system().process.url).toBe(first.url)
