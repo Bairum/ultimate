@@ -12,11 +12,15 @@ afterEach(async () => {
   for (const server of servers.splice(0)) await server.close()
   for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true })
 })
-async function fixture() {
+async function fixture(settings?: string) {
   const home = await temp()
   homes.push(home)
   const projectRoot = join(home, 'project')
   await mkdir(projectRoot)
+  if (settings !== undefined) {
+    await mkdir(join(home, '.ultimate'))
+    await writeFile(join(home, '.ultimate/settings.json'), settings)
+  }
   const server = await fauxServer({
     ultimateRoot: resolve('.'),
     projectRoot,
@@ -146,6 +150,62 @@ it('layers settings live, installs and uninstalls tools and web facets, and noti
           JSON.stringify(entry.data).includes('Unknown extension: unknown'),
       ),
     ).toHaveLength(1)
+  } finally {
+    await connection.close()
+  }
+})
+
+it('retains valid enablement through invalid edits and delivers startup diagnostics to later clients', async () => {
+  const valid = { extensions: { enable: ['subagents', 'unknown-startup'] } }
+  const { home, server } = await fixture(JSON.stringify(valid))
+  const settings = join(home, '.ultimate/settings.json')
+  const connection = await attach(server)
+  try {
+    expect(connection.system().extensionDiagnostics).toEqual(['Unknown extension: unknown-startup'])
+    expect(await tools(server)).toContain('subagent')
+    const build = server.host.build().id
+    const loadedAt = server.extensions.info().find((entry) => entry.name === 'subagents')
+      ?.server?.loadedAt
+    for (const invalid of [
+      '{"extensions":',
+      '{"extensions":{"enable":"x"}}',
+      '{"extensions":{"enable":["plan"],"disable":"x"}}',
+    ]) {
+      await writeFile(settings, invalid)
+      server.vite.watcher.emit('change', settings)
+      await until(() =>
+        server.system
+          .current()
+          .extensionDiagnostics.some((message) => message.startsWith(settings + ':')),
+      )
+      expect(await tools(server)).toContain('subagent')
+      expect((await web(server)).some((path) => path.includes('/subagents/'))).toBe(true)
+      expect(server.host.build().id).toBe(build)
+      expect(
+        server.extensions.info().find((entry) => entry.name === 'subagents')?.server?.loadedAt,
+      ).toBe(loadedAt)
+      await writeFile(settings, JSON.stringify(valid))
+      server.vite.watcher.emit('change', settings)
+      await until(() => server.system.current().extensionDiagnostics.length === 1)
+    }
+    const notices = () =>
+      connection.events.filter(
+        (event) =>
+          event.name === 'notice' &&
+          JSON.stringify(event.data).includes('Unknown extension: unknown-startup'),
+      ).length
+    const before = notices()
+    await writeFile(settings, JSON.stringify({ ...valid, unrelated: 'ignored' }, null, 2))
+    server.vite.watcher.emit('change', settings)
+    await until(() => notices() > before)
+    expect(server.host.build().id).toBe(build)
+    await writeFile(settings, JSON.stringify({ extensions: { enable: ['plan'] } }))
+    server.vite.watcher.emit('change', settings)
+    await until(
+      async () =>
+        !(await tools(server)).includes('subagent') && (await tools(server)).includes('plan'),
+    )
+    expect(server.system.current().extensionDiagnostics).toEqual([])
   } finally {
     await connection.close()
   }

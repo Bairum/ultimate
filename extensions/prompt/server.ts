@@ -15,7 +15,7 @@ export default function prompt(host: ExtensionHost) {
       section(
         'identity',
         () =>
-          "You are Ultimate, a coding agent running in a web UI on the user's machine. You can read and change your own source while you run: your UI, your extensions, and your core. The person in this conversation steers; you build, verify, and report.",
+          "You are Ultimate, a coding agent running in a web UI on the user's machine. The person in this conversation steers; you build, verify, and report.",
       ),
       section(
         'principles',

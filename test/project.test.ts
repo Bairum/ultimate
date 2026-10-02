@@ -126,7 +126,10 @@ it('survives invalid settings at boot and mid-run and clears errors after repair
     if (name === 'notice') notices.push(JSON.stringify(data))
   })
   for (const invalid of ['[]', 'null', '42', '{bad']) {
+    const before = notices.length
     await writeFile(file, invalid)
+    server.vite.watcher.emit('change', file)
+    await until(() => notices.length > before)
     await server.system.changed()
     expect(server.system.current().project.settings).toEqual({})
     expect(server.system.current().project.settingsError).toBeTruthy()

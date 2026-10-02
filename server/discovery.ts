@@ -10,6 +10,7 @@ export async function discoverExtensions(
   projectRoot: string,
   userHome?: string,
   includeProject = false,
+  settings?: Awaited<ReturnType<typeof extensionSettings>>,
 ) {
   const winners = new Map<
     string,
@@ -47,8 +48,9 @@ export async function discoverExtensions(
       }
     }
   }
-  const { overrides } = await extensionSettings(projectRoot, userHome)
-  return [...winners.values()]
+  settings ??= await extensionSettings(projectRoot, userHome)
+  const { overrides } = settings
+  const entries = [...winners.values()]
     .map((entry) => ({
       ...entry,
       enabled:
@@ -56,4 +58,5 @@ export async function discoverExtensions(
         (entry.source !== 'builtin' || DEFAULT_EXTENSIONS.some((name) => name === entry.name)),
     }))
     .toSorted((a, b) => a.name.localeCompare(b.name))
+  return Object.assign(entries, { settings })
 }

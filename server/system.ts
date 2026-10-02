@@ -35,7 +35,7 @@ export async function createSystem(
   host: PreparedHost,
   watchRepo: Watch,
   url: string,
-  registry: () => ExtensionInfo[],
+  registry: (() => ExtensionInfo[]) & { diagnostics: () => string[] },
   emit: (info: SystemInfo) => void,
   notice: (message: string) => void = () => {},
   processInfo: { activationError?: string } = {},
@@ -55,7 +55,6 @@ export async function createSystem(
   let lastGit = 0
   let closed = false
   let chain = Promise.resolve()
-  let previousSettingsError: string | undefined
   const reportError = (error: unknown) => notice(`System refresh failed: ${String(error)}`)
   async function refresh(git = false) {
     if (git) {
@@ -87,9 +86,6 @@ export async function createSystem(
       settings = {}
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') settingsError = String(error)
     }
-    if (settingsError && settingsError !== previousSettingsError)
-      notice(`${join(config, 'settings.json')}: ${settingsError}`)
-    previousSettingsError = settingsError
     value = {
       build: host.build(),
       project: {
@@ -129,6 +125,7 @@ export async function createSystem(
       execution: { kind: 'node-local', defaultCwd: host.projectRoot },
       code,
       extensions: registry(),
+      extensionDiagnostics: registry.diagnostics(),
       skills: projectSkills(host).map((skill) => ({
         name: skill.name,
         description: skill.description,

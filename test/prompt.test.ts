@@ -57,10 +57,12 @@ it('renders only enabled guidance, lists off building blocks, and adds self guid
     expect(building_blocks).toContain('<project>/.ultimate/settings.json')
     expect(building_blocks).toContain('live with no restart')
     expect(sections.self).toBeUndefined()
+    expect(sections.identity).not.toContain('change your own source')
 
     await mkdir(join(projectRoot, '.ultimate'))
     const settings = join(projectRoot, '.ultimate/settings.json')
     await writeFile(settings, JSON.stringify({ extensions: { enable: ['self'] } }))
+    server.vite.watcher.emit('change', settings)
     await until(() => !!server.host.registry.snapshot().extension('self'))
     const withSelf = await render()
     expect(withSelf.self).toContain(`Project (your work): ${projectRoot}`)
@@ -78,6 +80,7 @@ it('renders only enabled guidance, lists off building blocks, and adds self guid
         extensions: { enable: server.extensions.info().map((entry) => entry.name) },
       }),
     )
+    server.vite.watcher.emit('change', settings)
     await until(() => server.extensions.info().every((entry) => entry.enabled))
     const agent = await server.root.agent(context)
     const blocks = agent.sections.find((section) => section.key === 'building_blocks')!
@@ -86,6 +89,6 @@ it('renders only enabled guidance, lists off building blocks, and adds self guid
     ).toBeUndefined()
   } finally {
     await server.close()
-    await rm(home, { recursive: true, force: true })
+    await rm(home, { recursive: true, force: true, maxRetries: 3 })
   }
 })

@@ -109,6 +109,7 @@ export interface SystemInfo {
     settingsError?: string
   }
   code: { ultimateRoot: string; branch: string; sha: string; dirty: boolean; coreStale?: boolean }
+  extensionDiagnostics: string[]
   extensions: ExtensionInfo[]
   skills: { name: string; description: string; path: string }[]
   contextFiles: string[]

@@ -3,7 +3,7 @@ import { discoverExtensions } from './discovery.ts'
 import { projectSetup } from './project-setup.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { discoveryRoots } from './project.ts'
-import { extensionSettings, extensionSettingsFiles } from './extension-settings.ts'
+import { extensionSettingsFiles } from './extension-settings.ts'
 import { watchRoots } from './watch-roots.ts'
 import { actionExec } from './actions.ts'
 import type { ExtensionAction } from './actions.ts'
@@ -130,6 +130,7 @@ export async function loadExtensions(
     join(host.userHome, '.ultimate/trust.json'),
   ]
   let previousSettings: string | undefined
+  let diagnostics: string[] = []
   async function discover() {
     const active = await discoverExtensions(host.ultimateRoot, host.projectRoot, host.userHome)
     const available = await discoverExtensions(
@@ -137,23 +138,33 @@ export async function loadExtensions(
       host.projectRoot,
       host.userHome,
       true,
+      active.settings,
     )
-    return [
+    const winners = [
       ...active,
       ...available
         .filter((entry) => !active.some((current) => current.name === entry.name))
         .map((entry) => ({ ...entry, enabled: false })),
     ].toSorted((a, b) => a.name.localeCompare(b.name))
+    return Object.assign(winners, { settings: active.settings })
   }
-  async function reload(selected?: Set<string>, servers = selected) {
-    const winners = await discover()
+  async function reload(
+    selected?: Set<string>,
+    servers = selected,
+    winners?: Awaited<ReturnType<typeof discover>>,
+  ) {
+    winners ??= await discover()
     const folders = winners.map((winner) => winner.name)
-    const settings = await extensionSettings(host.projectRoot, host.userHome)
-    const signature = JSON.stringify([settings.contents, folders])
+    const settings = winners.settings
+    diagnostics = [
+      ...settings.notices,
+      ...[...settings.overrides.keys()]
+        .filter((name) => !folders.includes(name))
+        .map((name) => `Unknown extension: ${name}`),
+    ]
+    const signature = JSON.stringify([settings.contents, folders, diagnostics])
     if (signature !== previousSettings) {
-      for (const message of settings.notices) notice(message)
-      for (const name of settings.overrides.keys())
-        if (!folders.includes(name)) notice(`Unknown extension: ${name}`)
+      for (const message of diagnostics) notice(message)
       previousSettings = signature
     }
     for (const { name, path, source, enabled, files, error: discoveryError } of winners) {
@@ -232,7 +243,7 @@ export async function loadExtensions(
         documents.delete(name)
       }
     }
-    host.builds.refresh(settings.contents)
+    host.builds.refresh(winners.map(({ name, enabled }) => [name, enabled]))
     await changed()
   }
   async function reloadSettings() {
@@ -246,6 +257,8 @@ export async function loadExtensions(
           })
           .map((entry) => entry.name),
       ),
+      undefined,
+      winners,
     )
   }
   await reload()
@@ -330,7 +343,7 @@ export async function loadExtensions(
     }
   })
   return {
-    info: () => [...records.values()],
+    info: Object.assign(() => [...records.values()], { diagnostics: () => diagnostics }),
     action(name: string, action: string) {
       const table = actions.get(name)
       return table && Object.hasOwn(table, action) ? table[action] : undefined
