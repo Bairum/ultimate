@@ -78,13 +78,17 @@ Definitions live in `agents/`, `~/.ultimate/agents/`, and the project root's `.u
 
 ## Borrowed from Pi
 
-- `server/http.ts` — adapted HTTP dispatcher, not exported; prevents early provider stream termination. `undici` in package.json exists only for this file. Drop when Pi exports configureHttpDispatcher and applyHttpProxySettings; keep the MIT notice until then.
-- `pnpm-workspace.yaml` — registers `patches/@earendil-works__pi-durable@1.0.0.patch`, patching sanitizeOutput to remove whole CSI/OSC/control strings while keeping numeric SGR. Drop when Pi ships equivalent sanitization; pnpm errors when the versioned patch no longer matches.
+- `server/http.ts` — adapted HTTP dispatcher, not exported; prevents early provider stream termination. undici in package.json exists only for this file. Drop when Pi exports configureHttpDispatcher and applyHttpProxySettings; keep the MIT notice until then.
+- `pnpm-workspace.yaml` — registers patches/@earendil-works__pi-durable@1.0.0.patch, patching sanitizeOutput to remove whole CSI/OSC/control strings while keeping numeric SGR. Drop when Pi ships equivalent sanitization; pnpm errors when the versioned patch no longer matches.
 - `test/ansi-output.test.ts` — internal import exercises the installed sanitizer patch. Drop when Pi exports the sanitizer and OutputBuffer or ships equivalent sanitizer tests.
 - `extensions/coding-tools/diff.tsx` — internal untyped details.patch/details.diff formats drive the diff renderer. Drop when Pi exports structured diff rows for rendering.
 - `extensions/prompt/server.ts` — tool guidance adapted from unexported prompt contributions, not Ultimate's personality. Drop when Pi exports buildSystemPromptSections and the per-tool system prompt contributions.
+- `web/src/app/model.ts` — internal trailing <harness> text block duplicates diagnostics and is stripped for display. Drop when Pi exports a diagnostic-free tool-result content accessor.
+- `web/src/sdk/format.ts` — copied formatTokens helper, not exported. Drop when Pi exports formatTokens.
+- `extensions/coding-tools/web.tsx` — internal bash error wording drives exitOf and untyped details.patch/details.diff drive Edit. Drop when Pi exports structured bash outcomes and structured diff rows for rendering.
+- `extensions/self/web.tsx` — internal remove-all pi.system entry immediately precedes a reordered re-add, hidden here. Drop when Pi exposes prompt reorder metadata instead of requiring entry-sequence inference.
 
-On a Pi upgrade, run `rg "Pi upstream:"` and recheck each marked item against the new version; `test/pi-upstream.test.ts` names tracked files whose marker version differs from the installed package or whose path is absent here.
+On a Pi upgrade, run `rg "Pi upstream:"` and recheck each marked item against the new version; test/pi-upstream.test.ts checks that every tracked marker matches the installed package version and its path appears in this list, and every backticked path in this list is tracked and contains a marker.
 Delete copies and patches that Pi now exports or fixes, then update the remaining markers and this list after verification.
 
 ## Reference
