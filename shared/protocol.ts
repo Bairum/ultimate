@@ -47,6 +47,7 @@ export interface ExtensionActionResponse {
 }
 export interface ExtensionInfo {
   name: string
+  enabled: boolean
   source: 'builtin' | 'user' | 'project'
   path: string
   actions: string[]

@@ -40,12 +40,12 @@ export function createBuild(root: string) {
     remove(name: string) {
       delete extensions[name]
     },
-    refresh() {
+    refresh(settings: (string | null)[] = []) {
       const sorted = Object.fromEntries(
         Object.entries(extensions).toSorted(([a], [b]) => a.localeCompare(b)),
       )
       const id = createHash('sha256')
-        .update(JSON.stringify([core, sorted]))
+        .update(JSON.stringify([core, sorted, settings]))
         .digest('hex')
         .slice(0, 12)
       if (value?.id === id) return

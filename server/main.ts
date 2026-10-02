@@ -120,6 +120,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       },
     },
     watch,
+    (message) => events.emit('notice', { level: 'warning', message }),
   )
   await new Promise<void>((resolve, reject) => {
     http.once('error', reject)

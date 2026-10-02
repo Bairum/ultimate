@@ -17,7 +17,10 @@ it('serializes matching commands across conversations without delaying other bas
     await mkdir(join(server.host.projectRoot, '.ultimate'), { recursive: true })
     await writeFile(
       join(server.host.projectRoot, '.ultimate/settings.json'),
-      JSON.stringify({ exclusiveCommands: ['# heavy', '['] }),
+      JSON.stringify({
+        extensions: { enable: ['exclusive-commands'] },
+        exclusiveCommands: ['# heavy', '['],
+      }),
     )
     const log = join(directory, 'executions')
     const route: FauxResponseFactory = (transcript) => {
@@ -90,7 +93,10 @@ it('serializes matching commands across conversations without delaying other bas
     }
     await writeFile(
       join(server.host.projectRoot, '.ultimate/settings.json'),
-      JSON.stringify({ exclusiveCommands: '# heavy' }),
+      JSON.stringify({
+        extensions: { enable: ['exclusive-commands'] },
+        exclusiveCommands: '# heavy',
+      }),
     )
     await (
       await server.root.submit({ type: 'input', content: 'echo valid' }, context)

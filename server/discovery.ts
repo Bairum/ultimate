@@ -2,6 +2,7 @@ import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { discoveryRoots } from './project.ts'
 import type { Source } from './project.ts'
+import { DEFAULT_EXTENSIONS, extensionSettings } from './extension-settings.ts'
 
 export async function discoverExtensions(
   ultimateRoot: string,
@@ -42,5 +43,13 @@ export async function discoverExtensions(
       }
     }
   }
-  return [...winners.values()].toSorted((a, b) => a.name.localeCompare(b.name))
+  const { overrides } = await extensionSettings(projectRoot, userHome)
+  return [...winners.values()]
+    .map((entry) => ({
+      ...entry,
+      enabled:
+        overrides.get(entry.name) ??
+        (entry.source !== 'builtin' || DEFAULT_EXTENSIONS.some((name) => name === entry.name)),
+    }))
+    .toSorted((a, b) => a.name.localeCompare(b.name))
 }

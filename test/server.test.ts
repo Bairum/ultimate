@@ -99,6 +99,22 @@ async function fixture(
     await rm(join(ultimateRoot, 'extensions'), { recursive: true })
     await mkdir(join(ultimateRoot, 'extensions'))
   }
+  await mkdir(join(ultimateRoot, '.ultimate'), { recursive: true })
+  await writeFile(
+    join(ultimateRoot, '.ultimate/settings.json'),
+    JSON.stringify({
+      extensions: {
+        enable: [
+          'counter',
+          'web-only',
+          'subagents',
+          'added',
+          '0-new',
+          ...Object.keys(sources ?? {}),
+        ],
+      },
+    }),
+  )
   const options = {
     ultimateRoot,
     // Explicit, so an inherited ULTIMATE_PROJECT (tests run from inside Ultimate) cannot add its project's extensions.

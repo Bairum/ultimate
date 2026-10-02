@@ -4,6 +4,7 @@ import type { Plugin } from 'vite-plus'
 import { discoverExtensions } from './discovery.ts'
 import { discoveryRoots } from './project.ts'
 import { watchRoots } from './watch-roots.ts'
+import { extensionSettingsFiles } from './extension-settings.ts'
 
 const virtual = 'virtual:ultimate/web-facets'
 const resolved = '\0' + virtual
@@ -15,6 +16,7 @@ export function extensionModules(
   const roots = discoveryRoots(ultimateRoot, projectRoot, userHome).map((root) =>
     join(root.path, 'extensions'),
   )
+  const settingsFiles = extensionSettingsFiles(projectRoot, userHome)
   let stopWatching: (() => void) | undefined
   return {
     name: 'ultimate:extension-modules',
@@ -70,7 +72,7 @@ export function extensionModules(
         )
       if (id !== resolved) return undefined
       const facets = (await discoverExtensions(ultimateRoot, projectRoot, userHome)).filter(
-        (entry) => entry.files.includes('web.tsx'),
+        (entry) => entry.enabled && entry.files.includes('web.tsx'),
       )
       const entries = facets.map(
         (entry) =>
@@ -91,23 +93,32 @@ export function extensionModules(
       return styles && !modules.includes(styles) ? [...modules, styles] : undefined
     },
     configureServer(server) {
-      server.watcher.add(roots)
+      server.watcher.add([...roots, ...settingsFiles])
       const structure = (file: string) => {
-        if (!roots.some((root) => file === root || file.startsWith(root + '/'))) return
+        if (
+          !settingsFiles.includes(file) &&
+          !roots.some((root) => file === root || file.startsWith(root + '/'))
+        )
+          return
         const module = server.moduleGraph.getModuleById(resolved)
         if (module) {
           server.moduleGraph.invalidateModule(module)
           void server.reloadModule(module)
         }
       }
-      const stopRoots = watchRoots(roots, (root) => {
+      const stopRoots = watchRoots([...roots, ...settingsFiles], (root) => {
         server.watcher.add(root)
         structure(root)
       })
+      const settingsChanged = (file: string) => {
+        if (settingsFiles.includes(file)) structure(file)
+      }
+      server.watcher.on('change', settingsChanged)
       for (const event of ['add', 'unlink', 'addDir', 'unlinkDir'] as const)
         server.watcher.on(event, structure)
       stopWatching = () => {
         stopRoots()
+        server.watcher.off('change', settingsChanged)
         for (const event of ['add', 'unlink', 'addDir', 'unlinkDir'] as const)
           server.watcher.off(event, structure)
       }

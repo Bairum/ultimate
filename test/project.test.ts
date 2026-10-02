@@ -318,6 +318,13 @@ it('discovers user/project agents and skills with provenance and hot config chan
     port: 0,
   })
   servers.push(server)
+  await writeFile(
+    join(project, 'settings.json'),
+    JSON.stringify({ extensions: { enable: ['subagents'] } }),
+  )
+  await until(
+    () => !!server.extensions.info().find((entry) => entry.name === 'subagents')?.server?.loadedAt,
+  )
   // The subagents extension rereads definitions on every call; skills come with system info.
   const agent = async () =>
     (

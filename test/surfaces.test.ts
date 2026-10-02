@@ -84,6 +84,11 @@ async function launch(test: TestContext, projectRoot: string) {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return test.skip()
   const userHome = await temp()
+  await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
+  await writeFile(
+    join(projectRoot, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { enable: ['surfaces'] } }),
+  )
   const server = await createServer({
     ultimateRoot: resolve('.'),
     projectRoot,

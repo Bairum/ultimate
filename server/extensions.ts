@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { discoverExtensions } from './discovery.ts'
 import { discoveryRoots } from './project.ts'
+import { extensionSettings, extensionSettingsFiles } from './extension-settings.ts'
 import { watchRoots } from './watch-roots.ts'
 import { actionExec } from './actions.ts'
 import type { ExtensionAction } from './actions.ts'
@@ -52,6 +53,7 @@ export async function loadExtensions(
   changed: () => void,
   runtime: Pick<ExtensionHost, 'harness' | 'system'>,
   watch: Watch,
+  notice: (message: string) => void = () => {},
 ) {
   const roots = discoveryRoots(host.ultimateRoot, host.projectRoot, host.userHome)
   const directories = roots.map((root) => join(root.path, 'extensions'))
@@ -95,10 +97,20 @@ export async function loadExtensions(
   const installed = host.extensionOrders
   let chain = Promise.resolve()
   let closed = false
+  const settingsFiles = extensionSettingsFiles(host.projectRoot, host.userHome)
+  let previousSettings: string | undefined
   async function reload(selected?: Set<string>, servers = selected) {
     const winners = await discoverExtensions(host.ultimateRoot, host.projectRoot, host.userHome)
     const folders = winners.map((winner) => winner.name)
-    for (const { name, path, source, files, error: discoveryError } of winners) {
+    const settings = await extensionSettings(host.projectRoot, host.userHome)
+    const signature = JSON.stringify([settings.contents, folders])
+    if (signature !== previousSettings) {
+      for (const message of settings.notices) notice(message)
+      for (const name of settings.overrides.keys())
+        if (!folders.includes(name)) notice(`Unknown extension: ${name}`)
+      previousSettings = signature
+    }
+    for (const { name, path, source, enabled, files, error: discoveryError } of winners) {
       if (selected && !selected.has(name)) continue
       const previous = records.get(name)
       let readme: string | undefined
@@ -108,12 +120,13 @@ export async function loadExtensions(
         name,
         path,
         source,
+        enabled,
         actions: Object.keys(actions.get(name) ?? {}),
         readme,
         facets: { server: files.includes('server.ts'), web: files.includes('web.tsx') },
         ...(previous?.server ? { server: previous.server } : {}),
       }
-      if (record.facets.server && (!servers || servers.has(name))) {
+      if (enabled && record.facets.server && (!servers || servers.has(name))) {
         try {
           const module = await vite.ssrLoadModule(join(path, 'server.ts'))
           const extension: Extension =
@@ -146,16 +159,17 @@ export async function loadExtensions(
             error: String(error),
           }
         }
-      } else if (!record.facets.server) {
+      } else if (!enabled || !record.facets.server) {
         if (installed.delete(name)) host.registry.uninstall({ name })
         documents.delete(name)
         actions.delete(name)
         record.actions = []
         delete record.server
       }
-      if (discoveryError)
+      if (enabled && discoveryError)
         record.server = { tools: [], sections: [], hooks: 0, docs: [], error: discoveryError }
-      if (!record.server?.error) host.builds.extension(name, path)
+      if (enabled && !record.server?.error) host.builds.extension(name, path)
+      if (!enabled) host.builds.remove(name)
       records.set(name, record)
     }
     for (const name of records.keys()) {
@@ -167,8 +181,21 @@ export async function loadExtensions(
         documents.delete(name)
       }
     }
-    host.builds.refresh()
+    host.builds.refresh(settings.contents)
     changed()
+  }
+  async function reloadSettings() {
+    const winners = await discoverExtensions(host.ultimateRoot, host.projectRoot, host.userHome)
+    await reload(
+      new Set(
+        winners
+          .filter((entry) => {
+            const previous = records.get(entry.name)
+            return !previous || previous.enabled !== entry.enabled || previous.path !== entry.path
+          })
+          .map((entry) => entry.name),
+      ),
+    )
   }
   await reload()
   // A restarted Vite starts with an empty module graph, so the next change reloads every extension.
@@ -183,6 +210,10 @@ export async function loadExtensions(
       file.includes('/node_modules/')
     )
       return
+    if (settingsFiles.includes(resolve(file))) {
+      chain = chain.then(() => reloadSettings()).catch(() => changed())
+      return
+    }
     const directory = directories.find((root) => file.startsWith(root + '/'))
     if (!directory && !/\.[cm]?[jt]s$/.test(file)) return
     if (graphLost) {
@@ -229,12 +260,15 @@ export async function loadExtensions(
     attached = true
     const watchedRoots = [
       ...directories,
+      ...settingsFiles,
       ...roots.slice(1).map((root) => join(root.path, 'skills')),
     ]
     watcher.add(watchedRoots)
     const stopRoots = watchRoots(watchedRoots, (root) => {
       watcher.add(root)
-      chain = chain.then(() => reload()).catch(() => changed())
+      chain = chain
+        .then(() => (settingsFiles.includes(root) ? reloadSettings() : reload()))
+        .catch(() => changed())
     })
     watcher.on('change', onChange)
     for (const event of structure) watcher.on(event, onStructure)

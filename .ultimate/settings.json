@@ -1,4 +1,18 @@
 {
+  "extensions": {
+    "enable": [
+      "clock",
+      "documents",
+      "exclusive-commands",
+      "info",
+      "instance",
+      "plan",
+      "self",
+      "subagents",
+      "surfaces",
+      "tasks"
+    ]
+  },
   "exclusiveCommands": ["\\bpnpm( run)? test\\b", "\\bvp test\\b"],
   "isolates": {
     "worktree": {
