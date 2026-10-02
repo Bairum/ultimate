@@ -18,7 +18,7 @@ const [command, subcommand] = args
 let allowed = command === '--version' && args.length === 1
 if (command === 'search') allowed = true
 const reads = {
-  auth: ['status'],
+  auth: ['status', 'git-credential'], // git push uses gh as its credential helper
   issue: ['list', 'view', 'diff', 'checks', 'status'],
   pr: ['list', 'view', 'diff', 'checks', 'status'],
   label: ['list'],
