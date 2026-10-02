@@ -24,7 +24,7 @@ Commands run in order with `sh -c`, closed stdin and a two-minute timeout per co
 
 Verify the child's commits, then `land {id}`: refuses a running child or dirty worktree, rebases onto the parent HEAD and merges fast-forward only. Conflicts abort the rebase and name files to resolve by messaging the child. Repeated landing is a no-op. Results list commits and paths, and flag Ultimate core changes that need restart. Lands into one parent checkout are serialized in-process. `discard {id}` refuses a running child, removes the worktree even if dirty, and keeps its branch and commits. Both operations are also extension actions for the UI, acting for the conversation the call names; `list` includes isolate records. The read action `isolate {parent, id}` returns a child's record with `ahead`, its branch's commits missing from the parent checkout (null once the branch is deleted), or null without an isolate.
 
-Isolation is by working directory, not a sandbox: absolute paths can still reach other checkouts. Children are instructed to work only in their workspace, commit clearly, and never push. There are no remote operations, preview instances, or cross-process landing locks.
+Isolation is by working directory, not a sandbox: absolute paths can still reach other checkouts. Children are instructed to work only in their isolate, commit clearly, and never push. There are no remote operations, preview instances, or cross-process landing locks.
 
 The shipped definitions inherit the active provider/model. No universally cheaper model is known across providers, so no model is hardcoded. Override locally to select an available fast model.
 

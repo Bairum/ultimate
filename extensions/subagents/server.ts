@@ -184,7 +184,7 @@ function childId(args: JsonValue, conversationId?: number) {
     throw new Error('conversationId and child id are required')
   return args.id as ConversationId
 }
-/** Workspace operations and definitions for the Agents tab. */
+/** Isolate operations and definitions for the Agents tab. */
 export const actions = {
   async land(args: JsonValue, { host, conversationId }: ActionContext) {
     return operate(host, conversationId as ConversationId, childId(args, conversationId), 'land')
