@@ -46,7 +46,8 @@ async function fixture(extension?: Extension) {
   const prepared = await prepareHarness({ repoRoot, home: join(repoRoot, 'home'), faux: true })
   prepared.registry.install(CodingTools)
   if (extension) prepared.registry.install(extension)
-  prepared.registry.install(subagents(prepared))
+  let opened: OpenHost | undefined
+  prepared.registry.install(subagents({ ...prepared, harness: () => opened!.harness }))
   prepared.registry.install(
     codemode({
       ...prepared,
@@ -88,7 +89,7 @@ async function fixture(extension?: Extension) {
     ])
   }
   prepared.faux!.setResponses([route])
-  const opened = await prepared.open()
+  opened = await prepared.open()
   hosts.push(opened)
   return { prepared, opened, repoRoot }
 }
@@ -351,6 +352,77 @@ describe('subagents', () => {
       releaseParent()
       await opened.root.waitForIdle(context)
       expect(await reports(opened)).toHaveLength(1)
+    } finally {
+      releaseChild()
+      releaseParent()
+    }
+  })
+  it('withdraws a queued background report when wait returns the same answer', async () => {
+    let releaseParent!: () => void
+    let releaseChild!: () => void
+    const parentGate = new Promise<void>((resolve) => {
+      releaseParent = resolve
+    })
+    const childGate = new Promise<void>((resolve) => {
+      releaseChild = resolve
+    })
+    let parentHolding = false
+    let childHolding = false
+    const { opened } = await fixture(
+      defineExtension({
+        name: 'hold',
+        tools: [
+          defineTool({
+            name: 'hold',
+            description: 'Hold the current tool round',
+            parameters: Type.Object({}),
+            execute: async (_args, api) => {
+              if (api.conversationId === 1) {
+                parentHolding = true
+                await parentGate
+              } else {
+                childHolding = true
+                await childGate
+              }
+              return { content: [{ type: 'text', text: 'released' }] }
+            },
+          }),
+        ],
+      }),
+    )
+    try {
+      await call(opened, { action: 'start', agent: 'scout', task: 'HOLD', background: true })
+      const [child] = await children(opened)
+      await until(async () => childHolding)
+      await opened.root.submit({ type: 'input', content: 'HOLD' }, context)
+      await until(async () => parentHolding)
+      // One steer is placed per boundary, so the report stays queued while the parent waits.
+      await opened.root.submit(
+        {
+          type: 'input',
+          content: `CALL ${JSON.stringify({ action: 'wait', id: child.conversationId })}`,
+          whenBusy: 'steer',
+        },
+        context,
+      )
+      releaseChild()
+      await until(
+        async () =>
+          (await opened.harness.snapshot(InboxDoc, opened.root.id, context))?.items.length === 2,
+      )
+      releaseParent()
+      await opened.root.waitForIdle(context)
+      const view = await opened.root.viewState(context)
+      const results = view.value.entries.flatMap((entry) => {
+        const message = entry.model?.[0]
+        return message?.role === 'toolResult' && message.toolName === 'subagent'
+          ? message.content.flatMap((part) => (part.type === 'text' ? [part.text] : []))
+          : []
+      })
+      view.dispose()
+      expect(results.at(-1)).toBe('Result: released')
+      expect(await reports(opened)).toHaveLength(0)
+      expect((await opened.harness.snapshot(InboxDoc, opened.root.id, context))?.items).toEqual([])
     } finally {
       releaseChild()
       releaseParent()

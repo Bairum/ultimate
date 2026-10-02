@@ -45,7 +45,7 @@ export default function prompt(host: ExtensionHost) {
           '- This is one long-running conversation, not a fresh session per task. Compaction keeps it going; earlier work is part of your history.',
           '- Your context window is finite. When it fills up, older turns are summarized by compaction and you see a summary instead; the full history stays in storage.' +
             (has('codemode') ? ' Search it with `ultimate.search()` in codemode.' : ''),
-          '- Messages can arrive while you work: a steering message joins your current run after the current tool round; a follow-up starts your next run. Take them into account immediately.',
+          '- Messages can arrive while you work: a steering message joins your current run after the current tool round; a follow-up starts your next run. Take them into account immediately. Inputs still queued in `pi.inbox` are not delivered yet: do not act on them early, or they arrive again after you handled them.',
           '- Every step you take is a durable task. If the process restarts or crashes, your run resumes from its last checkpoint. A tool that reports "interrupted" may or may not have finished: check before retrying.',
           ...(has('subagent')
             ? [

@@ -52,9 +52,11 @@ const Anchor = defineTask<null, { phase: 'done' }, null>({
 })
 const textOf = (message: AssistantMessage | undefined) =>
   (message?.content ?? []).flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
+// A report is keyed by the answer it carries, so `wait` can withdraw it once it returns that answer itself.
+const answerRequest = (answer: EntryId) => `subagent-answer:${answer}`
 const Reporter = defineTask<
   { conversationId: ConversationId; text: string; steer: boolean },
-  { phase: 'deliver' } | { phase: 'report'; report?: string },
+  { phase: 'deliver' } | { phase: 'report'; report?: string; answer?: EntryId },
   null
 >({
   name: 'ultimate.subagent-reporter',
@@ -75,34 +77,37 @@ const Reporter = defineTask<
         )
       ).wait(context)
       await runtime.commit(async (tx) => {
-        let report: string | undefined
         const agent = (await tx.doc(Subagents, runtime.conversationId)).agents[String(child.id)]
         if (settled.status === 'done' && settled.type === 'input') {
-          if (!agent.reported.includes(settled.answer)) {
-            agent.reported.push(settled.answer)
-            const answer = (await tx.entry(AssistantEntry, settled.answer))?.model?.[0] as
-              | AssistantMessage
-              | undefined
-            report = `[subagent ${child.id} (${agent.agent}) answered] ${textOf(answer)}`
+          if (agent.reported.includes(settled.answer))
+            return { status: 'running', checkpoint: { phase: 'report' } }
+          agent.reported.push(settled.answer)
+          const answer = (await tx.entry(AssistantEntry, settled.answer))?.model?.[0] as
+            | AssistantMessage
+            | undefined
+          const report = `[subagent ${child.id} (${agent.agent}) answered] ${textOf(answer)}`
+          return {
+            status: 'running',
+            checkpoint: { phase: 'report', report, answer: settled.answer },
           }
-        } else if (settled.status === 'unanswered' && settled.reason !== 'aborted') {
-          report = `[subagent ${child.id} failed: ${settled.reason}]`
         }
-        return {
-          status: 'running',
-          checkpoint: { phase: 'report', ...(report === undefined ? {} : { report }) },
+        if (settled.status === 'unanswered' && settled.reason !== 'aborted') {
+          const report = `[subagent ${child.id} failed: ${settled.reason}]`
+          return { status: 'running', checkpoint: { phase: 'report', report } }
         }
+        return { status: 'running', checkpoint: { phase: 'report' } }
       }, context)
     },
     report: async (task, runtime, context) => {
-      if (task.state.checkpoint.report !== undefined) {
+      const { report, answer } = task.state.checkpoint
+      if (report !== undefined) {
         const parent = (await runtime.conversation(runtime.conversationId, context))!
         await parent.submit(
           {
             type: 'input',
-            content: task.state.checkpoint.report,
+            content: report,
             whenBusy: 'steer',
-            requestId: `subagent-report:${task.id}`,
+            requestId: answer === undefined ? `subagent-report:${task.id}` : answerRequest(answer),
           },
           context,
         )
@@ -122,7 +127,7 @@ const reply = (text: string, conversationId?: ConversationId) => ({
   ...(conversationId === undefined ? {} : { details: { conversationId } }),
 })
 
-export default function subagents(host: Pick<ExtensionHost, 'repoRoot' | 'home'>) {
+export default function subagents(host: Pick<ExtensionHost, 'repoRoot' | 'home' | 'harness'>) {
   return defineExtension({
     name: 'subagents',
     tasks: [Anchor, Reporter],
@@ -311,8 +316,12 @@ export default function subagents(host: Pick<ExtensionHost, 'repoRoot' | 'home'>
               await child.abort(context)
             return finish(`Stopped ${id}.`, id)
           }
+          // Reporters claim answers before they submit them; once they finish, a queued report can be found.
+          for (const action of Object.values(index.actions))
+            if (action.conversationId === id && action.reporter !== undefined)
+              await api.waitForTask(action.reporter, context)
           await child.waitForIdle(context)
-          const answer = await api.commit(async (tx) => {
+          const { answer, report } = await api.commit(async (tx) => {
             let cursor: Cursor | undefined
             let latest: EntryRecord | undefined
             do {
@@ -321,12 +330,18 @@ export default function subagents(host: Pick<ExtensionHost, 'repoRoot' | 'home'>
                 if (entry.kind === 'pi.assistant' && latest === undefined) latest = entry
               cursor = page.next
             } while (cursor !== undefined)
-            if (latest) {
-              const agent = (await tx.doc(Subagents, api.conversationId)).agents[String(id)]
-              if (!agent.reported.includes(latest.id)) agent.reported.push(latest.id)
-            }
-            return latest
+            if (!latest) return { answer: undefined, report: undefined }
+            const submission = await tx.submissionByRequest(
+              api.conversationId,
+              answerRequest(latest.id),
+            )
+            const agent = (await tx.doc(Subagents, api.conversationId)).agents[String(id)]
+            if (!agent.reported.includes(latest.id)) agent.reported.push(latest.id)
+            return { answer: latest, report: submission?.id }
           }, context)
+          // This result delivers the answer; a report still waiting in the inbox would repeat it.
+          if (report !== undefined)
+            await host.harness().abortSubmission(report, context, api.conversationId)
           return finish(textOf(answer?.model?.[0] as AssistantMessage | undefined), id)
         },
       }),
