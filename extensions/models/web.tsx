@@ -13,14 +13,7 @@ import {
 } from '@/sdk'
 import { LoginDialog } from './login.tsx'
 import { ModelPicker } from './picker.tsx'
-import {
-  clampThinking,
-  dialogs,
-  levelsOf,
-  nextThinking,
-  openLogin,
-  useCurrentModel,
-} from './state.tsx'
+import { dialogs, nextThinking, openLogin, useCurrentModel } from './state.tsx'
 import type { ThinkingLevel } from './state.tsx'
 
 const toolbarButton =
@@ -50,8 +43,8 @@ function ThinkingButton() {
   const [open, setOpen] = useDialog(dialogs.thinking)
   const [error, setError] = useState<string>()
   if (!model?.reasoning) return null
-  const levels = levelsOf(model)
-  const current = clampThinking(thinking, levels)
+  const levels = model.thinkingLevels
+  const current = thinking ?? 'off'
   const choose = (level: ThinkingLevel) => {
     setError(undefined)
     api.configure({ thinkingLevel: level }).then(

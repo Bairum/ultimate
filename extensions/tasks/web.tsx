@@ -139,17 +139,12 @@ function ConversationRow({ id, tree, depth }: { id: number; tree: Tree; depth: n
           className={cn('size-3 shrink-0', shown ? 'text-brand' : 'text-muted-foreground')}
         />
         <span className="shrink-0 text-foreground">
-          {id === 1 ? 'main' : (summary?.agent ?? 'conversation')}
+          {id === 1 ? 'main' : (summary?.label ?? 'conversation')}
         </span>
         <span className="shrink-0 text-muted-foreground/60">#{id}</span>
         {summary?.title && id !== 1 && (
           <span className="min-w-0 truncate font-sans text-[12px] text-muted-foreground">
             {summary.title}
-          </span>
-        )}
-        {summary?.background && (
-          <span className="shrink-0 rounded-sm border border-border/80 px-1 text-[10px] text-muted-foreground">
-            bg
           </span>
         )}
       </button>

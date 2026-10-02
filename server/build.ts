@@ -19,7 +19,7 @@ function hash(root: string, paths: string[]) {
   }
   return digest.digest('hex')
 }
-export function createBuild(root: string, agentDirectories = [join(root, 'agents')]) {
+export function createBuild(root: string) {
   const core = hash(root, [
     ...files(root, 'server'),
     ...files(root, 'shared'),
@@ -41,17 +41,11 @@ export function createBuild(root: string, agentDirectories = [join(root, 'agents
       delete extensions[name]
     },
     refresh() {
-      const agentHashes = agentDirectories
-        .filter((path) => existsSync(path))
-        .map((path) => hash(path, files(path, '.')))
-      const agents = agentHashes.length
-        ? createHash('sha256').update(JSON.stringify(agentHashes)).digest('hex')
-        : undefined
       const sorted = Object.fromEntries(
         Object.entries(extensions).toSorted(([a], [b]) => a.localeCompare(b)),
       )
       const id = createHash('sha256')
-        .update(JSON.stringify([core, sorted, agents ?? null]))
+        .update(JSON.stringify([core, sorted]))
         .digest('hex')
         .slice(0, 12)
       if (value?.id === id) return
@@ -62,7 +56,6 @@ export function createBuild(root: string, agentDirectories = [join(root, 'agents
           ...new Set([...Object.keys(previous.extensions), ...Object.keys(sorted)]),
         ].toSorted())
           if (previous.extensions[name] !== sorted[name]) changed.push(`extensions/${name}`)
-        if (previous.agents !== agents) changed.push('agents')
       }
       const entry = { id, at: new Date().toISOString(), generation, changed }
       history.push(entry)
@@ -71,7 +64,6 @@ export function createBuild(root: string, agentDirectories = [join(root, 'agents
         ...entry,
         core,
         extensions: sorted,
-        ...(agents === undefined ? {} : { agents }),
         history: [...history],
       }
       previous = value

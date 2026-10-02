@@ -9,13 +9,13 @@ afterEach(() => {
   vi.unstubAllEnvs()
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
-it('freezes core at boot, compares generations, watches agents and caps history', () => {
+it('freezes core at boot, compares generations, tracks extensions and caps history', () => {
   vi.stubEnv('ULTIMATE_PREVIOUS_BUILD', undefined)
   vi.stubEnv('ULTIMATE_GENERATION', '1')
   const root = mkdtempSync(join(tmpdir(), 'ultimate-build-'))
   roots.push(root)
   mkdirSync(join(root, 'server'))
-  mkdirSync(join(root, 'agents'))
+  mkdirSync(join(root, 'extensions/hello'), { recursive: true })
   writeFileSync(join(root, 'server/main.ts'), 'one')
   const first = createBuild(root)
   first.refresh()
@@ -31,9 +31,10 @@ it('freezes core at boot, compares generations, watches agents and caps history'
   expect(next.current().changed).toEqual(['core'])
   expect(next.current().generation).toBe(2)
   for (let index = 0; index < 25; index++) {
-    writeFileSync(join(root, 'agents/reviewer.md'), String(index))
+    writeFileSync(join(root, 'extensions/hello/server.ts'), String(index))
+    next.extension('hello')
     next.refresh()
-    expect(next.current().changed).toEqual(['agents'])
+    expect(next.current().changed).toEqual(['extensions/hello'])
   }
   expect(next.current().history).toHaveLength(20)
 })

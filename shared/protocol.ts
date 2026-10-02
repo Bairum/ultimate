@@ -28,8 +28,8 @@ export interface ConversationSummary {
   id: number
   parentConversationId?: number
   ownerTaskId?: number
-  agent?: string
-  background?: boolean
+  /** A short name its creator gave it, shown before its title. */
+  label?: string
   title?: string
   cwd?: string
   busy: boolean
@@ -73,7 +73,6 @@ export interface BuildEntry {
 export interface BuildInfo extends BuildEntry {
   core: string
   extensions: Record<string, string>
-  agents?: string
   history: BuildEntry[]
 }
 export interface SystemInfo {
@@ -111,15 +110,6 @@ export interface SystemInfo {
   extensions: ExtensionInfo[]
   skills: { name: string; description: string; path: string }[]
   contextFiles: string[]
-  agents: {
-    source: 'builtin' | 'user' | 'project'
-    name: string
-    description: string
-    path: string
-    model?: ModelRef
-    thinking?: ModelThinkingLevel
-    error?: string
-  }[]
 }
 type WirePrompt<T> = T extends AuthPrompt ? Omit<T, 'signal'> : never
 export type BrowserAuthPrompt = WirePrompt<AuthPrompt>

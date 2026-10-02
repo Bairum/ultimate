@@ -55,6 +55,8 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 - `faux`: Pi's faux provider handle in dev mode, otherwise undefined. Demo scripting belongs to the `faux` extension.
 - `build()`, `system()`, `extensions()`: current build, system and extension inspection.
 - `harness()`, `uiState(context)`, `doc(kind)`: durable harness, root UI snapshot and exported conversation document token.
+- `metadata`: the core's `ultimate.metadata` conversation document, `{ title?, label? }`; the shell names a conversation
+  by them, so set them on conversations you create (`subagents` labels each child with its definition).
 - `resource(key, create)`, `onClose(cleanup)`: shared reload-stable resources and async shutdown cleanup.
 
 Core runtime modules must not be imported by extensions; use host capabilities instead.
@@ -559,8 +561,8 @@ server code is reached through [actions](#actions). The surface primitives are i
 | Hook                                                                      | Returns                                                                                                                                                                                                                 |
 | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `useConversation()`                                                       | The shown conversation: `id`, `entries`, `agent` (`pi.agent`), `usage`, `live` (`pi.live`), `inbox`, `busy`, `loading`                                                                                                  |
-| `useSystem()`                                                             | Build identity, machine, process (pid, generation, url), persistence, code (branch, sha, dirty, coreStale), extensions, skills, context files, agents                                                                   |
-| `useConversations()`                                                      | Summaries of every conversation: id, parent, owner task, agent and background (subagents), title, cwd, busy                                                                                                             |
+| `useSystem()`                                                             | Build identity, machine, process (pid, generation, url), persistence, code (branch, sha, dirty, coreStale), extensions, skills, context files                                                                           |
+| `useConversations()`                                                      | Summaries of every conversation: id, parent, owner task, label (what its creator calls it, such as a subagent's definition), title, cwd, busy                                                                           |
 | `useTasks()`                                                              | The live task graph                                                                                                                                                                                                     |
 | `useModels()`                                                             | `GET /api/models`: providers with auth status, models with context window, reasoning, cost                                                                                                                              |
 | `useAuthFlows()`                                                          | Login flows by id: status, the pending prompt, events                                                                                                                                                                   |

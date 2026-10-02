@@ -1,3 +1,4 @@
+import type { JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import {
@@ -17,10 +18,10 @@ import type {
   EntryRecord,
   TaskId,
 } from '@earendil-works/pi-durable'
+import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { discoverAgents } from '../../server/agents.ts'
+import { discoverAgents } from './agents.ts'
 
-import { Metadata } from '../../server/metadata.ts'
 export const Subagents = defineDoc<{
   agents: Record<
     string,
@@ -122,13 +123,33 @@ const Reporter = defineTask<
     runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), context),
 })
 
-const reply = (text: string, conversationId?: ConversationId) => ({
+/** Details name the child and whether it answers in the background, for the call's renderer. */
+const details = (conversationId: ConversationId, background: boolean) => ({
+  conversationId,
+  ...(background ? { background } : {}),
+})
+const reply = (text: string, info?: ReturnType<typeof details>) => ({
   content: [{ type: 'text' as const, text }],
-  ...(conversationId === undefined ? {} : { details: { conversationId } }),
+  ...(info === undefined ? {} : { details: info }),
 })
 
+/** Definitions and invalid files for the Agents tab, without their instructions. */
+export const actions = {
+  async definitions(_args: JsonValue, { host }: ActionContext) {
+    const { definitions, errors } = await discoverAgents(
+      host.ultimateRoot,
+      host.projectRoot,
+      host.userHome,
+    )
+    return {
+      definitions: definitions.map(({ instructions: _instructions, ...definition }) => definition),
+      errors,
+    }
+  },
+}
+
 export default function subagents(
-  host: Pick<ExtensionHost, 'ultimateRoot' | 'projectRoot' | 'userHome' | 'harness'>,
+  host: Pick<ExtensionHost, 'ultimateRoot' | 'projectRoot' | 'userHome' | 'harness' | 'metadata'>,
 ) {
   return defineExtension({
     name: 'subagents',
@@ -166,8 +187,8 @@ export default function subagents(
         execute: async (args, api, context) => {
           const cached = await api.memo<ReturnType<typeof reply>>('result', context)
           if (cached) return cached
-          const finish = (text: string, id?: ConversationId) =>
-            api.memo('result', reply(text, id), context)
+          const finish = (text: string, info?: ReturnType<typeof details>) =>
+            api.memo('result', reply(text, info), context)
           const index = (await api.snapshot(Subagents, api.conversationId, context)) ?? {
             agents: {},
             actions: {},
@@ -239,10 +260,9 @@ export default function subagents(
                   ...(definition.model ? { model: definition.model } : {}),
                   ...(definition.thinking ? { thinkingLevel: definition.thinking } : {}),
                 })
-                Object.assign(await tx.doc(Metadata, child.id), {
-                  agent: definition.name,
+                Object.assign(await tx.doc(host.metadata, child.id), {
+                  label: definition.name,
                   title: text,
-                  background: args.background === true,
                 })
                 state.agents[String(child.id)] = {
                   conversationId,
@@ -266,11 +286,12 @@ export default function subagents(
               state.actions[api.callId] = createdAction
               return createdAction
             }, context)
-            await api.details({ conversationId: action.conversationId }, context)
+            const info = details(action.conversationId, action.reporter !== undefined)
+            await api.details(info, context)
             if (action.reporter !== undefined)
               return finish(
                 `Started ${args.action === 'message' ? 'message to' : 'subagent'} ${action.conversationId}.`,
-                action.conversationId,
+                info,
               )
             const child = (await api.conversation(action.conversationId, context))!
             const settled = await (
@@ -285,20 +306,16 @@ export default function subagents(
               )
             ).wait(context)
             if (settled.status !== 'done' || settled.type !== 'input')
-              return finish(
-                `Subagent ${action.conversationId}: ${settled.status}`,
-                action.conversationId,
-              )
+              return finish(`Subagent ${action.conversationId}: ${settled.status}`, info)
             const answer = await api.commit(
               (tx) => tx.entry(AssistantEntry, settled.answer),
               context,
             )
-            return finish(
-              textOf(answer?.model?.[0] as AssistantMessage | undefined),
-              action.conversationId,
-            )
+            return finish(textOf(answer?.model?.[0] as AssistantMessage | undefined), info)
           }
           const id = args.id as ConversationId
+          const info = details(id, index.agents[String(id)].background)
+          await api.details(info, context)
           const child = (await api.conversation(id, context))!
           if (args.action === 'stop') {
             // Remember the run, not just the child: replay must never stop a newer run.
@@ -312,7 +329,7 @@ export default function subagents(
               (await api.snapshot(LiveDoc, id, context))?.run?.taskId === target
             )
               await child.abort(context)
-            return finish(`Stopped ${id}.`, id)
+            return finish(`Stopped ${id}.`, info)
           }
           // Reporters claim answers before they submit them; once they finish, a queued report can be found.
           for (const action of Object.values(index.actions))
@@ -340,7 +357,7 @@ export default function subagents(
           // This result delivers the answer; a report still waiting in the inbox would repeat it.
           if (report !== undefined)
             await host.harness().abortSubmission(report, context, api.conversationId)
-          return finish(textOf(answer?.model?.[0] as AssistantMessage | undefined), id)
+          return finish(textOf(answer?.model?.[0] as AssistantMessage | undefined), info)
         },
       }),
     ],

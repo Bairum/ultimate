@@ -15,6 +15,7 @@ import type {
 import type { ViteDevServer } from 'vite-plus'
 import type { ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { PreparedHost } from './harness.ts'
+import { Metadata } from './metadata.ts'
 
 export type ExtensionHost = Pick<
   PreparedHost,
@@ -37,6 +38,7 @@ export type ExtensionHost = Pick<
   system(): SystemInfo
   extensions(): ExtensionInfo[]
   doc(kind: string): ConversationDocToken<JsonObject> | undefined
+  metadata: typeof Metadata
 }
 /** Attach listeners to Vite's current watcher and to each replacement; `attach` returns their removal. */
 export type Watch = (attach: (watcher: ViteDevServer['watcher']) => () => void) => () => void
@@ -49,7 +51,6 @@ export async function loadExtensions(
 ) {
   const roots = discoveryRoots(host.ultimateRoot, host.projectRoot, host.userHome)
   const directories = roots.map((root) => join(root.path, 'extensions'))
-  const agentDirectories = roots.map((root) => join(root.path, 'agents'))
   const actions = new Map<string, Record<string, ExtensionAction>>()
   const records = new Map<string, ExtensionInfo>()
   const documents = new Map<string, ConversationDocToken<JsonObject>[]>()
@@ -79,6 +80,7 @@ export async function loadExtensions(
     system: runtime.system,
     extensions: () => [...records.values()],
     doc: findDoc,
+    metadata: Metadata,
   }
   const installed = host.extensionOrders
   let chain = Promise.resolve()
@@ -171,15 +173,6 @@ export async function loadExtensions(
       file.includes('/node_modules/')
     )
       return
-    if (
-      agentDirectories.some((directory) => file.startsWith(directory + '/') || file === directory)
-    ) {
-      chain = chain.then(() => {
-        host.builds.refresh()
-        changed()
-      })
-      return
-    }
     const directory = directories.find((root) => file.startsWith(root + '/'))
     if (!directory && !/\.[cm]?[jt]s$/.test(file)) return
     if (graphLost) {
@@ -226,7 +219,6 @@ export async function loadExtensions(
     attached = true
     const watchedRoots = [
       ...directories,
-      ...agentDirectories,
       ...roots.slice(1).map((root) => join(root.path, 'skills')),
     ]
     watcher.add(watchedRoots)

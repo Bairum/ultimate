@@ -128,7 +128,7 @@ describe('supervisor', () => {
       ).status,
     ).toBe(403)
     expect(
-      (await post(first.url, '/api/conversations/1/configure', { thinkingLevel: 'high' })).status,
+      (await post(first.url, '/api/conversations/1/configure', { thinkingLevel: 'off' })).status,
     ).toBe(200)
   }, 60000)
   it('replays a memoed restart in generation 2 and reconnects SSE to the finished transcript', async () => {

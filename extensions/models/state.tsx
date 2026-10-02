@@ -13,23 +13,7 @@ export const dialogs = {
   login: 'models.login',
 } as const
 
-const order: readonly ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
-
-/** The supported level closest to `level`: the highest one not above it, else the lowest. */
-export function clampThinking(
-  level: ThinkingLevel | undefined,
-  supported: readonly ThinkingLevel[],
-) {
-  if (supported.length === 0) return 'off'
-  const wanted = order.indexOf(level ?? 'off')
-  const sorted = supported.toSorted((a, b) => order.indexOf(a) - order.indexOf(b))
-  return sorted.findLast((candidate) => order.indexOf(candidate) <= wanted) ?? sorted[0]
-}
-
-export const levelsOf = (model: ModelInfo | undefined): readonly ThinkingLevel[] =>
-  model?.reasoning ? model.thinkingLevels : ['off']
-
-/** The shown conversation's model, its catalogue entry, and the thinking level. */
+/** The shown conversation's model, its catalogue entry, and the thinking level the server configured. */
 export function useCurrentModel() {
   const { agent } = useConversation()
   const models = useModels()
@@ -40,19 +24,15 @@ export function useCurrentModel() {
   return { ref, model, thinking: agent.thinkingLevel, models }
 }
 
-/** Configure the shown conversation's model, clamping its thinking level to what the model supports. */
-export function selectModel(model: ModelInfo, thinking: ThinkingLevel | undefined) {
-  return api.configure({
-    model: { provider: model.provider, modelId: model.id },
-    thinkingLevel: clampThinking(thinking, levelsOf(model)),
-  })
+/** Configure the shown conversation's model; the server clamps its thinking level to the model as Pi does. */
+export function selectModel(model: ModelInfo) {
+  return api.configure({ model: { provider: model.provider, modelId: model.id } })
 }
 
-/** The next supported thinking level after `current`, wrapping around, as Pi's Shift+Tab does. */
-export function nextThinking(current: ThinkingLevel | undefined, model: ModelInfo | undefined) {
-  const levels = levelsOf(model)
-  const index = levels.indexOf(clampThinking(current, levels))
-  return levels[(index + 1) % levels.length]
+/** The supported level after `current` in Pi's order, wrapping around, as Pi's Shift+Tab does. */
+export function nextThinking(current: ThinkingLevel | undefined, model: ModelInfo) {
+  const levels = model.thinkingLevels
+  return levels[(levels.indexOf(current ?? 'off') + 1) % levels.length]
 }
 
 /** Which provider the login dialog should open on; set just before it opens. */

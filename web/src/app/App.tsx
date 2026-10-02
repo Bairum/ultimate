@@ -107,16 +107,16 @@ function Surfaces({ surfaces }: { surfaces: readonly SurfaceItem[] }) {
 /** The window title: the shown conversation on Agent, the surface elsewhere; a dot while the agent works. */
 function useDocumentTitle(surface: { id: string; title: string } | undefined) {
   const { id, busy } = useConversation()
-  const agent = useConversations().find((conversation) => conversation.id === id)?.agent
+  const label = useConversations().find((conversation) => conversation.id === id)?.label
   const app = surface && surface.id !== HOME ? surface.title : undefined
   useEffect(() => {
     const name = app
       ? `${app} · Ultimate`
       : id === ROOT || id === undefined
         ? 'Ultimate'
-        : `${agent ?? `#${id}`} · Ultimate`
+        : `${label ?? `#${id}`} · Ultimate`
     document.title = busy ? `● ${name}` : name
-  }, [app, agent, busy, id])
+  }, [app, label, busy, id])
 }
 
 /** The surface host: the shown surface fills the window; the palette, extension errors, and overlays sit above it. */

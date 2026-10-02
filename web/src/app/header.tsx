@@ -72,7 +72,7 @@ function ancestors(id: number | undefined, conversations: readonly ConversationS
 
 /** The root is named by role rather than by its first prompt. */
 const nameOf = (conversation: ConversationSummary) =>
-  conversation.id === ROOT ? 'main' : (conversation.agent ?? `#${conversation.id}`)
+  conversation.id === ROOT ? 'main' : (conversation.label ?? `#${conversation.id}`)
 
 /** Where the shown conversation sits: its ancestors, a busy dot, and its title. */
 function Trail() {
@@ -102,8 +102,8 @@ function Trail() {
         <span className="font-mono text-[12px] text-foreground/85">main</span>
       ) : (
         <>
-          {summary?.agent && (
-            <span className="shrink-0 font-mono text-[12px] text-brand">{summary.agent}</span>
+          {summary?.label && (
+            <span className="shrink-0 font-mono text-[12px] text-brand">{summary.label}</span>
           )}
           <span className="truncate text-[13px] font-medium" title={title}>
             {title}

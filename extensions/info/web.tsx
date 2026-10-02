@@ -445,29 +445,23 @@ function Described({
   name,
   description,
   path,
-  error,
-  extra,
 }: {
   name: string
   description: string
   path: string
-  error?: string
-  extra?: ReactNode
 }) {
   return (
     <div className="min-w-0 font-mono text-[11px]">
       <div className="flex min-w-0 items-center gap-1.5">
-        <Copy className={error ? 'text-error' : 'text-foreground/90'} value={path}>
+        <Copy className="text-foreground/90" value={path}>
           {name}
         </Copy>
-        {extra}
       </div>
       {description && (
         <p className="line-clamp-2 font-sans text-[11.5px] leading-snug text-muted-foreground">
           {description}
         </p>
       )}
-      {error && <ErrorText>{error}</ErrorText>}
     </div>
   )
 }
@@ -506,47 +500,6 @@ function ContextFiles({ system }: { system: SystemInfo }) {
   )
 }
 
-function Agents({ system }: { system: SystemInfo }) {
-  const errors = system.agents.filter((agent) => agent.error).length
-  return (
-    <Section
-      id="agents"
-      meta={
-        <>
-          {system.agents.length - errors}
-          {errors > 0 && <span className="text-error"> · {errors} invalid</span>}
-        </>
-      }
-      title="Subagent definitions"
-    >
-      <div className="flex flex-col gap-1.5">
-        {system.agents.map((agent) => {
-          const { model, thinking } = agent
-          const shown = model && `${model.provider}/${model.modelId}`
-          return (
-            <Described
-              description={agent.description}
-              error={agent.error}
-              extra={
-                !agent.error && (
-                  <span className="ml-auto truncate pl-2 text-[10.5px] text-muted-foreground/70">
-                    {shown ?? 'inherits model'}
-                    {thinking && ` · ${thinking}`}
-                  </span>
-                )
-              }
-              key={agent.path}
-              name={agent.name}
-              path={agent.path}
-            />
-          )
-        })}
-        {system.agents.length === 0 && <Empty>no definitions</Empty>}
-      </div>
-    </Section>
-  )
-}
-
 function Empty({ children }: { children: ReactNode }) {
   return <div className="font-mono text-[11px] text-muted-foreground/60">{children}</div>
 }
@@ -566,7 +519,6 @@ function InfoPanel() {
       <Extensions system={system} />
       <Skills system={system} />
       <ContextFiles system={system} />
-      <Agents system={system} />
     </div>
   )
 }

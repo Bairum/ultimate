@@ -74,7 +74,7 @@ The host owns `ultimate.ui` on the root conversation, persisted in SQLite and co
 
 Use `subagent` to delegate bounded research, recon, review, or isolated implementation; verify the results. Foreground calls return the child's answer. Background children survive the parent's stop; their answers steer the active run at its next tool-round boundary, or start a run when idle. Start, message/steer, wait, stop, and list all use child conversation IDs. No nested subagents.
 
-Definitions live in `agents/`, `~/.ultimate/agents/`, and `<project>/.ultimate/agents/` (later wins by name), and are reread at every start. See `extensions/subagents/README.md` for frontmatter. Shipped models inherit the parent's model.
+Definitions live in `agents/`, `~/.ultimate/agents/`, and the project root's `.ultimate/agents/` (later wins by name), and are reread at every start; the Agents tab lists them. See `extensions/subagents/README.md` for frontmatter. Shipped models inherit the parent's model.
 
 ## Reference
 

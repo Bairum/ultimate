@@ -12,7 +12,7 @@ import type { OpenHost } from '../server/harness.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
 import codemode from '../extensions/codemode/server.ts'
 import { Metadata } from '../server/metadata.ts'
-import { discoverAgents, parseDefinition } from '../server/agents.ts'
+import { discoverAgents, parseDefinition } from '../extensions/subagents/agents.ts'
 import { until, temp } from './helpers.ts'
 
 const directories: string[] = []
@@ -45,7 +45,9 @@ async function fixture(extension?: Extension) {
   prepared.registry.install(CodingTools)
   if (extension) prepared.registry.install(extension)
   let opened: OpenHost | undefined
-  prepared.registry.install(subagents({ ...prepared, harness: () => opened!.harness }))
+  prepared.registry.install(
+    subagents({ ...prepared, harness: () => opened!.harness, metadata: Metadata }),
+  )
   prepared.registry.install(
     codemode({
       ...prepared,
@@ -59,6 +61,7 @@ async function fixture(extension?: Extension) {
       },
       extensions: () => [],
       doc: () => undefined,
+      metadata: Metadata,
     }),
   )
   const route: FauxResponseFactory = (transcript) => {
@@ -154,14 +157,6 @@ describe('subagents', () => {
     expect(JSON.stringify(view.value.entries)).toContain('Child: follow-up')
     view.dispose()
   })
-  it('accepts max thinking in definitions', () => {
-    expect(
-      parseDefinition(
-        '---\nname: scout\ndescription: Search\nthinking: max\n---\nSearch',
-        'scout.md',
-      ).thinking,
-    ).toBe('max')
-  })
   it('discovers all three locations, overrides by name, reports malformed files and rereads edits', async () => {
     const repo = await directory(),
       home = await directory(),
@@ -200,15 +195,36 @@ describe('subagents', () => {
       (await discoverAgents(repo, cwd, home)).definitions.find((agent) => agent.name === 'scout')
         ?.instructions,
     ).toBe('edited')
+  })
+  it('parses definitions with Pi frontmatter and validates their fields', () => {
     expect(
       parseDefinition(
-        definition().replace('tools: [read, bash]', 'tools:\n  - read\n  - bash'),
-        'test',
-      ).tools,
-    ).toEqual(['read', 'bash'])
-    expect(() =>
-      parseDefinition(definition().replace('description: Search', 'thinking: nonsense'), 'test'),
-    ).toThrow('description is required')
+        '---\nname: scout\ndescription: >\n  A read-only scout\n  that searches.\nmodel: openai-codex/gpt-5.4\nthinking: max\ntools:\n  - read\n  - bash\n---\nSearch\n',
+        'scout.md',
+      ),
+    ).toEqual({
+      name: 'scout',
+      description: 'A read-only scout that searches.',
+      path: 'scout.md',
+      instructions: 'Search',
+      model: { provider: 'openai-codex', modelId: 'gpt-5.4' },
+      thinking: 'max',
+      tools: ['read', 'bash'],
+    })
+    for (const [from, to, error] of [
+      [
+        'tools: [read, bash]',
+        'tools: [read, bash]\nthinking: nonsense',
+        'thinking must be one of off, minimal, low, medium, high, xhigh, max',
+      ],
+      ['description: Search', 'description: " "', 'description is required'],
+      ['name: scout', 'name: a scout', 'name must be a nonempty identifier'],
+      ['tools: [read, bash]', 'tools: read', 'tools must be a list of tool names'],
+      ['tools: [read, bash]', 'model: gpt', 'model must be provider/modelId'],
+      ['tools: [read, bash]', 'tool: [read]', 'Unknown field: tool'],
+      ['Original instructions', '', 'Instructions are required'],
+    ])
+      expect(() => parseDefinition(definition().replace(from, to), 'test')).toThrow(error)
   })
   it('foreground returns the answer, exposes child details, inherits the parent and rereads scout on next start', async () => {
     const { opened, ultimateRoot } = await fixture()
@@ -235,10 +251,9 @@ describe('subagents', () => {
       (await (await opened.harness.conversation(second.conversationId, context))!.agent(context))
         .instructions,
     ).toBe('Updated instructions')
-    expect(await opened.harness.snapshot(Metadata, first.conversationId, context)).toMatchObject({
-      agent: 'scout',
+    expect(await opened.harness.snapshot(Metadata, first.conversationId, context)).toEqual({
+      label: 'scout',
       title: 'facts',
-      background: false,
     })
     expect(
       (
@@ -268,6 +283,9 @@ describe('subagents', () => {
     expect(await children(opened)).toHaveLength(1)
     const [child] = await children(opened)
     expect(result.text).toContain(String(child.conversationId))
+    expect(result.tool.model?.[0]).toMatchObject({
+      details: { conversationId: child.conversationId, background: true },
+    })
     expect((await opened.harness.snapshot(LiveDoc, opened.root.id, context))?.run).toBeUndefined()
     expect(
       (await opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,

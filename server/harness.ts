@@ -1,6 +1,6 @@
 import { mkdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { discoveryRoots, projectHome } from './project.ts'
+import { projectHome } from './project.ts'
 import { acquireLock } from './lock.ts'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
@@ -18,6 +18,7 @@ import type {
   EnvTarget,
   Extension,
   HarnessSettings,
+  ModelRef,
 } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
@@ -69,10 +70,7 @@ export async function prepareHarness(options: HostOptions) {
   const { ultimateRoot } = options
   const projectRoot = await realpath(options.projectRoot ?? ultimateRoot)
   const userHome = options.userHome ?? homedir()
-  const builds = createBuild(
-    ultimateRoot,
-    discoveryRoots(ultimateRoot, projectRoot, userHome).map((root) => join(root.path, 'agents')),
-  )
+  const builds = createBuild(ultimateRoot)
   const home = options.home ?? process.env.ULTIMATE_HOME ?? projectHome(projectRoot, userHome)
   await mkdir(home, { recursive: true })
   const database = join(home, 'state.sqlite')
@@ -113,6 +111,7 @@ export async function prepareHarness(options: HostOptions) {
       return (await active.harness.snapshot(UiState, active.root.id, caller)) ?? {}
     },
     models: async () => (await listModels(modelRuntime, fauxHandle)).models,
+    model: (ref: ModelRef) => models.getModel(ref.provider, ref.modelId),
     skills: (cwd: string) => projectSkills({ projectRoot, userHome, settings }, cwd),
     restart: (approved: (generation: number) => Promise<void>) =>
       requestSwap(approved, builds.current()),

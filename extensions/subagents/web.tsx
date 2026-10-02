@@ -1,4 +1,5 @@
 import { BotIcon, MessageSquareIcon, NetworkIcon, SquareArrowOutUpRightIcon } from 'lucide-react'
+import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { Message, MessageResponse } from '@/components/ai/message'
 import { Shimmer } from '@/components/ai/shimmer'
@@ -11,7 +12,15 @@ import {
   ToolSection,
 } from '@/components/ai/tool'
 import { Button } from '@/components/ui/button'
-import { cn, defineWebExtension, useConversations, useToolDuration, useUltimate } from '@/sdk'
+import {
+  cn,
+  defineWebExtension,
+  useAction,
+  useConversations,
+  useTasks,
+  useToolDuration,
+  useUltimate,
+} from '@/sdk'
 import type { ConversationSummary, ToolCallView } from '@/sdk'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
@@ -41,12 +50,12 @@ function SubagentCall({ call }: { call: ToolCallView }) {
   const { switchConversation } = useUltimate()
   const conversations = useConversations()
   const action = text(call.args.action) || 'start'
+  const details = call.details as { conversationId?: number; background?: boolean } | undefined
   const childId =
-    (call.details as { conversationId?: number } | undefined)?.conversationId ??
-    (typeof call.args.id === 'number' ? call.args.id : undefined)
+    details?.conversationId ?? (typeof call.args.id === 'number' ? call.args.id : undefined)
   const child = conversations.find((conversation) => conversation.id === childId)
-  const agent = text(call.args.agent) || child?.agent
-  const background = call.args.background === true || child?.background
+  const agent = text(call.args.agent) || child?.label
+  const background = call.args.background === true || details?.background === true
   const instruction = action === 'start' ? text(call.args.task) : text(call.args.text)
   const finished = call.status === 'done' || call.status === 'error'
   const working = child?.busy && (background || !finished)
@@ -165,6 +174,11 @@ function Node({
   depth: number
 }) {
   const { conversationId, switchConversation } = useUltimate()
+  const graph = useTasks()
+  // The graph holds only live tasks: a background child is marked while its owner, the anchor, lives.
+  const background =
+    conversation.ownerTaskId !== undefined &&
+    graph?.tasks[conversation.ownerTaskId]?.background === true
   const shown = conversation.id === conversationId
   const main = conversation.parentConversationId === undefined
   const Icon = main ? MessageSquareIcon : BotIcon
@@ -184,7 +198,7 @@ function Node({
         <span className={cn('shrink-0', shown ? 'text-foreground' : 'text-foreground/85')}>
           {conversation.id === 1
             ? 'main'
-            : (conversation.agent ?? (main ? 'conversation' : 'subagent'))}
+            : (conversation.label ?? (main ? 'conversation' : 'subagent'))}
         </span>
         <span className="shrink-0 text-muted-foreground/60">#{conversation.id}</span>
         {conversation.title && conversation.id !== 1 && (
@@ -196,7 +210,7 @@ function Node({
           </span>
         )}
         <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
-          {conversation.background && <Tag>bg</Tag>}
+          {background && <Tag>bg</Tag>}
           {conversation.busy && <BusyDot />}
         </span>
       </button>
@@ -207,7 +221,101 @@ function Node({
   )
 }
 
-/** Main and its subagents as a tree; click one to show it, and the composer talks to it. */
+type Source = 'builtin' | 'user' | 'project'
+/** The `definitions` action: what `start` can name, and the files that failed to parse. */
+interface Discovery {
+  definitions: {
+    name: string
+    description: string
+    path: string
+    source: Source
+    model?: { provider: string; modelId: string }
+    thinking?: string
+    tools?: string[]
+  }[]
+  errors: { name: string; path: string; source: Source; error: string }[]
+}
+
+function Heading({ children, meta }: { children: ReactNode; meta: ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 px-3 pb-2 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
+      {children}
+      <span className="ml-auto tracking-normal normal-case text-muted-foreground/70">{meta}</span>
+    </div>
+  )
+}
+
+/** Definitions are reread at every start; the list refetches when the window regains focus, as after an edit. */
+function Definitions() {
+  const { data, refetch } = useAction<Discovery>('subagents', 'definitions')
+  useEffect(() => {
+    const refresh = () => void refetch()
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [refetch])
+  if (!data) return null
+  const { definitions, errors } = data
+  return (
+    <div className="pt-4">
+      <Heading
+        meta={
+          <>
+            {definitions.length}
+            {errors.length > 0 && <span className="text-error"> · {errors.length} invalid</span>}
+          </>
+        }
+      >
+        Definitions
+      </Heading>
+      {definitions.map((definition) => (
+        <div
+          className="px-3 py-1"
+          key={definition.path}
+          title={[
+            definition.path,
+            definition.model && `model: ${definition.model.provider}/${definition.model.modelId}`,
+            `tools: ${definition.tools?.join(', ') ?? 'inherited'}`,
+          ]
+            .filter(Boolean)
+            .join('\n')}
+        >
+          <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11.5px]">
+            <BotIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="shrink-0 text-foreground/85">{definition.name}</span>
+            {definition.source !== 'builtin' && <Tag>{definition.source}</Tag>}
+            <span className="ml-auto truncate pl-2 text-[10.5px] text-muted-foreground/70">
+              {definition.model?.modelId ?? 'inherits model'}
+              {definition.thinking && ` · ${definition.thinking}`}
+            </span>
+          </div>
+          <p className="line-clamp-2 pl-5 font-sans text-[12px] leading-snug text-muted-foreground">
+            {definition.description}
+          </p>
+        </div>
+      ))}
+      {errors.map((error) => (
+        <div className="px-3 py-1" key={error.path} title={error.path}>
+          <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11.5px] text-error">
+            <BotIcon className="size-3.5 shrink-0" />
+            <span className="shrink-0">{error.name}</span>
+            <Tag>{error.source}</Tag>
+          </div>
+          <p className="line-clamp-3 pl-5 font-mono text-[11px] leading-snug break-words whitespace-pre-wrap text-error/80">
+            {error.error.replace(/^Error: /, '')}
+          </p>
+        </div>
+      ))}
+      {definitions.length === 0 && errors.length === 0 && (
+        <p className="px-3 font-sans text-[12px] leading-relaxed text-muted-foreground/70">
+          No definitions yet: add Markdown files to{' '}
+          <code className="font-mono">.ultimate/agents/</code>
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** Main and its subagents as a tree; click one to show it, and the composer talks to it. Below, the definitions. */
 function AgentsPanel() {
   const conversations = useConversations()
   const ids = new Set(conversations.map((conversation) => conversation.id))
@@ -223,13 +331,16 @@ function AgentsPanel() {
   const busy = conversations.filter((conversation) => conversation.busy).length
   return (
     <div className="py-2">
-      <div className="flex items-center gap-2 px-3 pb-2 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
+      <Heading
+        meta={
+          <>
+            {conversations.length}
+            {busy > 0 && ` · ${busy} working`}
+          </>
+        }
+      >
         Conversations
-        <span className="ml-auto tracking-normal normal-case text-muted-foreground/70">
-          {conversations.length}
-          {busy > 0 && ` · ${busy} working`}
-        </span>
-      </div>
+      </Heading>
       {roots.map((conversation) => (
         <Node children={children} conversation={conversation} depth={0} key={conversation.id} />
       ))}
@@ -240,6 +351,7 @@ function AgentsPanel() {
           steers it.
         </p>
       )}
+      <Definitions />
     </div>
   )
 }

@@ -79,7 +79,7 @@ function ModelRow({
 export function ModelPicker() {
   const [open, setOpen] = useDialog(dialogs.picker)
   const actions = useUltimate()
-  const { ref, models, thinking } = useCurrentModel()
+  const { ref, models } = useCurrentModel()
   const [query, setQuery] = useState('')
   const [error, setError] = useState<string>()
   const providers = useMemo(
@@ -111,7 +111,7 @@ export function ModelPicker() {
       return
     }
     setError(undefined)
-    selectModel(model, thinking).then(
+    selectModel(model).then(
       () => setOpen(false),
       (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)),
     )

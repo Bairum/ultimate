@@ -1,6 +1,7 @@
 import { defineDoc } from '@earendil-works/pi-durable'
 
-export const Metadata = defineDoc<{ title?: string; agent?: string; background?: boolean }>({
+/** What the shell calls a conversation: its title, and a short label its creator gives it. */
+export const Metadata = defineDoc<{ title?: string; label?: string }>({
   kind: 'ultimate.metadata',
   version: 1,
   scope: 'conversation',

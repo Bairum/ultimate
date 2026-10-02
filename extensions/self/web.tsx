@@ -201,12 +201,6 @@ function Build() {
           </span>
           <span className="opacity-60">core</span>
           <span>{build.core.slice(0, 12)}</span>
-          {build.agents && (
-            <>
-              <span className="opacity-60">agents</span>
-              <span>{build.agents.slice(0, 12)}</span>
-            </>
-          )}
           {Object.entries(build.extensions).map(([name, hash]) => (
             <span className="contents" key={name}>
               <span className="opacity-60">{name}</span>

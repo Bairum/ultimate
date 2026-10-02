@@ -20,7 +20,6 @@ import { getAgentDir, loadProjectContextFiles } from '@earendil-works/pi-coding-
 import type { ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { Watch } from './extensions.ts'
 import type { PreparedHost } from './harness.ts'
-import { discoverAgents } from './agents.ts'
 import { watchRoots } from './watch-roots.ts'
 
 const run = promisify(execFile)
@@ -136,19 +135,6 @@ export async function createSystem(
       contextFiles: loadProjectContextFiles({ cwd: host.projectRoot, agentDir }).map(
         (file) => file.path,
       ),
-      agents: await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome).then(
-        ({ definitions, errors }) => [
-          ...definitions.map(({ name, description, path, source, model, thinking }) => ({
-            source,
-            name,
-            description,
-            path,
-            ...(model ? { model } : {}),
-            ...(thinking ? { thinking } : {}),
-          })),
-          ...errors,
-        ],
-      ),
     }
     const json = JSON.stringify(value)
     if (json !== previous) {
@@ -176,7 +162,6 @@ export async function createSystem(
       host.ultimateRoot,
       join(host.projectRoot, '.ultimate'),
       join(host.userHome, '.ultimate/extensions'),
-      join(host.userHome, '.ultimate/agents'),
       join(host.userHome, '.ultimate/skills'),
       join(agentDir, 'skills'),
       join(host.projectRoot, '.pi/skills'),

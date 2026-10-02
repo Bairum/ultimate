@@ -85,11 +85,6 @@ async function fixture(
     )
   }
   if (agents) {
-    await mkdir(join(ultimateRoot, 'server'), { recursive: true })
-    await cp(resolvePath('server/metadata.ts'), join(ultimateRoot, 'server/metadata.ts'))
-    await cp(resolvePath('server/agents.ts'), join(ultimateRoot, 'server/agents.ts'))
-    await cp(resolvePath('server/project.ts'), join(ultimateRoot, 'server/project.ts'))
-    await cp(resolvePath('server/lock.ts'), join(ultimateRoot, 'server/lock.ts'))
     await cp(resolvePath('extensions/subagents'), join(ultimateRoot, 'extensions/subagents'), {
       recursive: true,
     })
@@ -177,6 +172,7 @@ export const actions = { keys: async () => keys }`,
         'faux',
         'harness',
         'home',
+        'metadata',
         'modelRuntime',
         'models',
         'onClose',
@@ -361,21 +357,28 @@ export const actions = { keys: async () => keys }`,
     expect(await server.host.uiState(context)).toEqual({ 'shell.panel': 'settings' })
   })
 
-  it('runs the faux subagent demo and streams its tree, child transcript and definition errors', async () => {
+  it('runs the faux subagent demo and streams its labelled tree, child transcript and definitions', async () => {
     const { server } = await fixture(false, true)
     const stream = await attach(server)
-    const system = stream.events.find((event) => event.name === 'system')!
-      .data as ServerEvents['system']
-    expect(system.agents.find((agent) => agent.name === 'scout')).toMatchObject({
+    const { definitions, errors } = (
+      await post(server, '/api/extensions/subagents/actions/definitions', { args: null })
+    ).data.result
+    expect(definitions.find((agent: { name: string }) => agent.name === 'scout')).toMatchObject({
+      source: 'builtin',
       description: expect.stringContaining('read-only'),
+      tools: ['read', 'bash'],
     })
-    expect(system.agents.find((agent) => agent.name === 'configured')).toMatchObject({
+    expect(definitions.find((agent: { name: string }) => agent.name === 'configured')).toEqual({
+      name: 'configured',
+      description: 'Configured agent',
+      path: join(server.host.ultimateRoot, 'agents/configured.md'),
+      source: 'builtin',
       model: { provider: 'openai-codex', modelId: 'gpt-5.4' },
       thinking: 'max',
     })
-    expect(system.agents.find((agent) => agent.name === 'broken')).toMatchObject({
-      error: expect.stringContaining('frontmatter'),
-    })
+    expect(errors).toEqual([
+      expect.objectContaining({ name: 'broken', error: expect.stringContaining('frontmatter') }),
+    ])
     await post(server, '/api/conversations/1/submit', { text: 'delegate to scout' })
     await server.root.waitForIdle(context)
     let child: ServerEvents['conversations'][number] | undefined
@@ -383,15 +386,19 @@ export const actions = { keys: async () => keys }`,
       for (const event of stream.events) {
         if (event.name === 'conversations')
           child =
-            (event.data as ServerEvents['conversations']).find((item) => item.agent === 'scout') ??
+            (event.data as ServerEvents['conversations']).find((item) => item.label === 'scout') ??
             child
       }
       return child?.title === 'Return the word SCOUT.' && !child.busy
     })
-    expect(child).toMatchObject({
+    expect(child).toEqual({
+      id: expect.any(Number),
       parentConversationId: server.root.id,
       ownerTaskId: expect.any(Number),
-      background: false,
+      label: 'scout',
+      title: 'Return the word SCOUT.',
+      cwd: server.host.projectRoot,
+      busy: false,
     })
     const childStream = await attach(server, `?conversation=${child!.id}`)
     const view = childStream.events.find((event) => event.name === 'view')!.data as ConversationView
@@ -453,19 +460,27 @@ export const actions = { keys: async () => keys }`,
   })
   it('accepts configure, submit, steering, follow-up and abort; validates errors and creates conversations', async () => {
     const { server } = await fixture()
+    // Pi's levels for this model: off, low, high.
+    Object.assign(server.host.faux!.models[0], {
+      reasoning: true,
+      thinkingLevelMap: { minimal: null, medium: null },
+    })
+    const configure = async (data: Record<string, unknown>) => {
+      const { status } = await post(server, '/api/conversations/1/configure', data)
+      return { status, thinkingLevel: (await server.root.agent(context)).thinkingLevel }
+    }
     expect(
-      (
-        await post(server, '/api/conversations/1/configure', {
-          model: { provider: 'faux', modelId: 'faux-1' },
-          thinkingLevel: 'high',
-        })
-      ).status,
-    ).toBe(200)
-    expect((await server.root.agent(context)).thinkingLevel).toBe('high')
-    expect(
-      (await post(server, '/api/conversations/1/configure', { thinkingLevel: 'max' })).status,
-    ).toBe(200)
-    expect((await server.root.agent(context)).thinkingLevel).toBe('max')
+      await configure({ model: { provider: 'faux', modelId: 'faux-1' }, thinkingLevel: 'high' }),
+    ).toEqual({ status: 200, thinkingLevel: 'high' })
+    for (const thinkingLevel of ['medium', 'max', 'bogus', 7])
+      expect(await configure({ thinkingLevel })).toEqual({ status: 400, thinkingLevel: 'high' })
+    // A new model keeps a supported level and clamps another as Pi does: medium becomes high, not low.
+    await server.root.configure({ thinkingLevel: 'medium' }, context)
+    expect(await configure({ model: { provider: 'faux', modelId: 'faux-1' } })).toEqual({
+      status: 200,
+      thinkingLevel: 'high',
+    })
+    expect(await configure({ thinkingLevel: 'low' })).toEqual({ status: 200, thinkingLevel: 'low' })
     expect((await post(server, '/api/conversations/1/submit', { text: 'start' })).status).toBe(202)
     expect(
       (await post(server, '/api/conversations/1/submit', { text: 'steer', whenBusy: 'steer' }))
@@ -483,9 +498,6 @@ export const actions = { keys: async () => keys }`,
     await server.harness.waitForIdle(context)
     expect((await post(server, '/api/conversations/1/submit', { text: 7 })).status).toBe(400)
     expect((await post(server, '/api/conversations/999/abort')).status).toBe(404)
-    expect(
-      (await post(server, '/api/conversations/1/configure', { thinkingLevel: 'bogus' })).status,
-    ).toBe(400)
     const created = await post(server, '/api/conversations', {
       title: 'Another',
       cwd: server.host.projectRoot,

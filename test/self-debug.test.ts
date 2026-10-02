@@ -9,10 +9,12 @@ import {
   fauxServer as createServer,
   sourceCopy,
   cleanEnv,
+  post,
   skipWithoutChromium,
   temp,
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
+import { Metadata } from '../server/metadata.ts'
 import type { Browser } from 'playwright-core'
 import browserExtension from '../extensions/browser/server.ts'
 
@@ -59,6 +61,7 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
         system: () => server.system.current(),
         extensions: () => server.extensions.info(),
         doc: () => undefined,
+        metadata: Metadata,
       }),
     )
     const result = await run(server, 'screenshot', { url: server.url, waitMs: 500 })
@@ -153,9 +156,10 @@ it('discovers and starts agents from the user config root', async () => {
     port: 0,
   })
   try {
-    expect(server.system.current().agents).toContainEqual(
-      expect.objectContaining({ name: 'instance-home-agent', path }),
-    )
+    expect(
+      (await post(server, '/api/extensions/subagents/actions/definitions', { args: null })).data
+        .result.definitions,
+    ).toContainEqual(expect.objectContaining({ name: 'instance-home-agent', path }))
     const result = await run(server, 'subagent', {
       action: 'start',
       agent: 'instance-home-agent',
@@ -170,7 +174,7 @@ it('discovers and starts agents from the user config root', async () => {
     expect((await child!.agent(context)).instructions).toBe('Use the custom home instructions.')
   } finally {
     await server.close()
-    await rm(home, { recursive: true, force: true })
+    await rm(home, { recursive: true, force: true, maxRetries: 5 })
   }
 })
 

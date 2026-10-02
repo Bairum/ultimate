@@ -15,8 +15,8 @@ import type { createSystem } from './system.ts'
 import { requestSwap } from './supervisor-protocol.ts'
 import { UiState } from './ui-state.ts'
 import type { JsonValue } from '@earendil-works/chord'
+import { clampThinkingLevel, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
 import { Metadata } from './metadata.ts'
-import { isThinkingLevel } from './agents.ts'
 import { loopbackOrigin } from './request-security.ts'
 
 class HttpError extends Error {
@@ -108,7 +108,7 @@ export async function createApi(
           ? { parentConversationId: record.owner?.conversationId ?? record.parent?.conversationId }
           : {}),
         ...(record.owner ? { ownerTaskId: record.owner.taskId } : {}),
-        ...(metadata?.agent ? { agent: metadata.agent, background: metadata.background } : {}),
+        ...(metadata?.label ? { label: metadata.label } : {}),
         ...(metadata?.title
           ? { title: metadata.title }
           : title
@@ -319,7 +319,9 @@ export async function createApi(
             )
             json(200, { result })
           } catch (error) {
-            console.error(`Extension action ${name}/${key}:`, error)
+            // An aborted action is the client leaving (a newer call, an unmount), not a fault.
+            if (!controller.signal.aborted && (error as Error)?.name !== 'AbortError')
+              console.error(`Extension action ${name}/${key}:`, error)
             // The message is the action author's; the UI shows it, so a setup problem can say what is missing.
             const message = error instanceof Error ? error.message : String(error)
             json(500, { error: message.slice(0, 500) })
@@ -423,8 +425,7 @@ export async function createApi(
               json(200, { ok: true })
               break
             case 'configure': {
-              if (data.thinkingLevel !== undefined && !isThinkingLevel(data.thinkingLevel))
-                throw new HttpError(400, 'Invalid thinking level')
+              const configure: ConfigureRequest = {}
               if (data.model !== undefined) {
                 if (!data.model || typeof data.model !== 'object')
                   throw new HttpError(400, 'Invalid model')
@@ -440,11 +441,27 @@ export async function createApi(
                   )
                 )
                   throw new HttpError(400, 'Model is not available')
+                configure.model = { provider, modelId }
               }
-              const configure: ConfigureRequest = {}
-              if (data.model !== undefined)
-                configure.model = data.model as ConfigureRequest['model']
-              if (data.thinkingLevel !== undefined) configure.thinkingLevel = data.thinkingLevel
+              // Pi's policy: a requested level must suit the model; a new model clamps the current one.
+              if (data.thinkingLevel !== undefined || configure.model) {
+                const agent = await conversation.agent(context)
+                const ref = configure.model ?? agent.model
+                const model = ref && host.model(ref)
+                if (!model) throw new HttpError(400, 'No model to set a thinking level for')
+                if (data.thinkingLevel === undefined)
+                  configure.thinkingLevel = clampThinkingLevel(model, agent.thinkingLevel)
+                else {
+                  configure.thinkingLevel = getSupportedThinkingLevels(model).find(
+                    (level) => level === data.thinkingLevel,
+                  )
+                  if (!configure.thinkingLevel)
+                    throw new HttpError(
+                      400,
+                      `${model.provider}/${model.id} does not support thinking level ${JSON.stringify(data.thinkingLevel)}`,
+                    )
+                }
+              }
               await conversation.configure(configure, context)
               json(200, { ok: true })
               break

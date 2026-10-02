@@ -360,10 +360,14 @@ it('discovers user/project agents and skills with provenance and hot config chan
     port: 0,
   })
   servers.push(server)
-  const agent = () => server.system.current().agents.find((entry) => entry.name === 'scout')!
+  // The subagents extension rereads definitions on every call; skills come with system info.
+  const agent = async () =>
+    (
+      await post(server.url, '/api/extensions/subagents/actions/definitions')
+    ).data.result.definitions.find((entry: { name: string }) => entry.name === 'scout')
   const skill = () =>
     server.system.current().skills.find((entry) => entry.name === 'ult25-inspect')!
-  expect(agent()).toMatchObject({
+  expect(await agent()).toMatchObject({
     source: 'project',
     description: 'Project scout',
     path: join(project, 'agents/scout.md'),
@@ -376,10 +380,11 @@ it('discovers user/project agents and skills with provenance and hot config chan
     join(project, 'agents/scout.md'),
     '---\nname: scout\ndescription: Edited scout\n---\nInspect.',
   )
-  await until(() => agent().description === 'Edited scout')
+  expect(await agent()).toMatchObject({ description: 'Edited scout' })
   await rm(join(project, 'agents/scout.md'))
   await rm(join(project, 'skills/ult25-inspect'), { recursive: true })
-  await until(() => agent().source === 'user' && skill().description === 'User skill')
+  expect(await agent()).toMatchObject({ source: 'user', description: 'User scout' })
+  await until(() => skill().description === 'User skill')
 })
 
 it('exec times out, caps output and defaults to the project without a shell', async () => {
