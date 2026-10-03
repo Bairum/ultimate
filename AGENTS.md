@@ -58,6 +58,8 @@ Conversations, tool calls, subagents, and documents are committed to SQLite (`$U
 `replay: "safe"` reruns after a crash; any other interrupted tool reports "interrupted" to the model. Make a tool
 replay-safe only if a rerun cannot do harm, and store decisions in `api.memo()`.
 
+Each folder keeps its own conversations in that central projects directory. Homes describe themselves with `project.json` and debounced `conversations.json`; `host.projects()` (or `ultimate.projects()` in codemode) lists these manifests and live supervisor URLs without opening another project's SQLite.
+
 The web SDK's `useUiState(key, initial)` stores shared durable UI state; scroll positions and drafts stay in the browser.
 The host owns `ultimate.ui` on the root conversation, persisted in SQLite and copied as of the fork entry.
 

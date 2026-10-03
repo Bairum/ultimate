@@ -93,7 +93,11 @@ export default (host: ExtensionHost) => {
           .toSorted((a, b) => b.inputAt! - a.inputAt!)
           .slice(0, 10)
           .toSorted((a, b) => a.id - b.id)
-        if (!others.length) return undefined
+        const projectCount = (await host.projects()).filter((project) => !project.current).length
+        const projectLine = projectCount
+          ? `${projectCount} other ${projectCount === 1 ? 'project exists' : 'projects exist'}; in codemode, \`ultimate.projects()\` lists them with their conversations and URL when running.`
+          : undefined
+        if (!others.length) return projectLine
         return [
           `You are conversation #${input.conversationId}. Other conversations in this project, each a separate agent with its own context:`,
           ...others.map(
@@ -103,6 +107,7 @@ export default (host: ExtensionHost) => {
           ),
           '',
           'They work in the same checkout unless a cwd says otherwise: check `git status` before broad changes, never revert or reformat changes you did not make, and coordinate through the user. In codemode, `ultimate.entries(id)` shows what another conversation did and `ultimate.taskGraph()` whether it is working.',
+          ...(projectLine ? ['', projectLine] : []),
         ].join('\n')
       }),
     ],

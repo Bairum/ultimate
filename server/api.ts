@@ -18,6 +18,7 @@ import type { JsonValue } from '@earendil-works/chord'
 import { clampThinkingLevel, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
 import { Metadata } from './metadata.ts'
 import { loopbackOrigin } from './request-security.ts'
+import { conversationIndex } from './project.ts'
 
 class HttpError extends Error {
   status: number
@@ -69,6 +70,11 @@ export async function createApi(
   let timer: ReturnType<typeof setTimeout> | undefined
   let closed = false
   let summaries: ConversationSummary[] = []
+  const projectIndex = conversationIndex(host.home)
+  const indexListener: Parameters<typeof events.listeners.add>[0] = (name, data) => {
+    if (name === 'conversations') projectIndex.update(data as ConversationSummary[])
+  }
+  events.listeners.add(indexListener)
   let refreshing = Promise.resolve()
   async function refreshConversations(ids?: Set<ConversationId>) {
     const records = await harness.commit(async (tx) => {
@@ -161,6 +167,7 @@ export async function createApi(
     }
   }
   await refreshConversations()
+  projectIndex.update(summaries)
   let lastGraph = JSON.stringify(graph.value)
   const unsubscribeGraph = graph.subscribe(() => {
     if (closed || timer) return
@@ -553,6 +560,8 @@ export async function createApi(
       clearTimeout(timer)
       await Promise.all([...streams].map((stop) => stop()))
       await refreshing
+      events.listeners.delete(indexListener)
+      await projectIndex.flush()
       graph.dispose()
     },
   }

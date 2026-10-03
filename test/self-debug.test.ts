@@ -61,6 +61,7 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
         harness: () => server.harness,
         system: () => server.system.current(),
         conversations: () => server.api.conversations(),
+        projects: async () => [],
         extensions: () => server.extensions.info(),
         reloadExtensions: async () => {},
         projectSetup: async () => ({ config: false, decision: null }),

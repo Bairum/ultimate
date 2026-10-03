@@ -13,6 +13,7 @@ The first line may be `// @options: {"timeout_ms":30000,"max_output_tokens":2000
 Only inside codemode (not standalone model tools):
 
 - `ultimate.system()` — machine, process, persistence, resources, build identity.
+- `ultimate.projects()` — project folders, their top-level conversation summaries, and URL when running (JSON manifests only, not other stores' SQLite).
 - `ultimate.uiState()` — durable root-conversation UI state, so you can see what the user is looking at.
 - `ultimate.extensions()` — folders, facets, tools, sections, documents, load errors.
 - `ultimate.conversations()` — all stored conversation identities and ownership edges.

@@ -65,7 +65,9 @@ source stays in the clone; the tools and the conversation work in your project.
   (`defaultSurface` picks the surface to open). Ultimate also reads your personal `~/.ultimate/` the same way. Lookup
   order is the clone, then `~/.ultimate/`, then the project; later names win.
 - **State** lives in `~/.ultimate/projects/<name>-<hash>/` (`ULTIMATE_HOME` overrides it), so each project keeps its
-  own conversation, and several projects can run at once on their own ports (the first free one from 4747).
+  own conversations, and several projects can run at once on their own ports (the first free one from 4747).
+  All project homes are in one central place, `~/.ultimate/projects/`; Ultimate can list other projects and their
+  conversations with `ultimate.projects()` in codemode, including their URL when running.
 - **Actions** let an extension's UI call its server code: `export const actions = { … }` in `server.ts`, then
   `useAction(extension, name, args)` in `web.tsx`. See [extensions/README.md](extensions/README.md).
 

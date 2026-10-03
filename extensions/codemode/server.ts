@@ -126,6 +126,12 @@ function globals(
       execute: () => host.system(),
     },
     {
+      name: 'projects',
+      description: 'Project folders, JSON conversation summaries and URLs of running instances.',
+      signature: '(): Promise<unknown[]>',
+      execute: () => host.projects(),
+    },
+    {
       name: 'uiState',
       description: 'Durable UI state of the root conversation: what the user is looking at.',
       signature: '(): Promise<unknown>',

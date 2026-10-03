@@ -16,6 +16,7 @@ import { homedir } from 'node:os'
 import { realpath } from 'node:fs/promises'
 import { extensionModules } from './vite-extensions.ts'
 import { loopbackAuthority, loopbackOrigin } from './request-security.ts'
+import { writeProject } from './project.ts'
 
 const send = (message: ChildMessage) => process.send?.(message)
 
@@ -161,6 +162,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     async go(activationError?: string) {
       processInfo.activationError = activationError
       opened = await host.open(false)
+      await writeProject(host.home, host.projectRoot)
       await extensions.opened()
       await system.changed()
       api = await createApi(host, opened, events, system, extensions)

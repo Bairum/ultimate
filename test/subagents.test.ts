@@ -74,6 +74,7 @@ async function fixture(
         throw new Error('Not used')
       },
       conversations: () => [],
+      projects: async () => [],
       extensions: () => [],
       reloadExtensions: async () => {},
       projectSetup: async () => ({ config: false, decision: null }),

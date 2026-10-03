@@ -3,7 +3,8 @@ import { existsSync } from 'node:fs'
 import { discoverExtensions } from './discovery.ts'
 import { projectSetup, projectSettings, projectDiagnostics } from './project-setup.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
-import { discoveryRoots } from './project.ts'
+import { discoveryRoots, projects } from './project.ts'
+import type { ProjectInfo } from './project.ts'
 import { extensionSettingsFiles } from './extension-settings.ts'
 import { watchRoots } from './watch-roots.ts'
 import { actionExec } from './actions.ts'
@@ -44,6 +45,8 @@ export type ExtensionHost = Pick<
   system(): SystemInfo
   /** Summaries of every conversation, as the web's conversation list shows them; empty until the harness is open. */
   conversations(): ConversationSummary[]
+  /** Read JSON manifests in the user's central project homes, never another project's SQLite; unknown roots remain absent. Includes this home and live supervisor URLs. */
+  projects(): Promise<ProjectInfo[]>
   /** Discovered extensions, including disabled project folders, with effective deciding layers. */
   extensions(): ExtensionInfo[]
   /** Project setup availability, exact-root decision, and capped README. */
@@ -107,6 +110,7 @@ export async function loadExtensions(
     harness: runtime.harness,
     system: runtime.system,
     conversations: runtime.conversations,
+    projects: () => projects(host.userHome, host.home),
     extensions: () => [...records.values()],
     projectSetup: () => projectSetup(host.projectRoot, host.userHome),
     projectSettings: () => projectSettings(host.projectRoot, host.userHome, notice),
