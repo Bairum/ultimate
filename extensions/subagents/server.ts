@@ -19,12 +19,17 @@ import type {
   EntryId,
   EntryRecord,
   TaskId,
+  Tx,
+  TaskOwnership,
+  TaskOutcome,
 } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { discoverAgents } from './agents.ts'
 import * as worktree from './isolates/worktree.ts'
 import type { Isolate, CreatedIsolate } from './isolates/types.ts'
+import { lifecycle, LifecycleQueue } from './isolates/lifecycle.ts'
+import type { LifecycleResult } from './isolates/lifecycle.ts'
 
 export const Subagents = defineDoc<{
   agents: Record<
@@ -46,7 +51,7 @@ export const Subagents = defineDoc<{
   fork: 'initial',
   initial: () => ({ agents: {}, actions: {} }),
 })
-export const docs = [Subagents]
+export const docs = [Subagents, LifecycleQueue]
 const Anchor = defineTask<null, { phase: 'done' }, null>({
   name: 'ultimate.subagent-anchor',
   version: 1,
@@ -79,7 +84,7 @@ const Reporter = defineTask<
       const indexed = (await runtime.snapshot(Subagents, runtime.conversationId, context))?.agents[
         String(child.id)
       ]
-      assertMessageable(child.id, indexed?.isolate)
+      await assertMessageable(child.id, indexed?.isolate, runtime, context)
       const settled = await (
         await child.submit(
           {
@@ -147,48 +152,66 @@ const reply = (text: string, info?: ReturnType<typeof details>) => ({
   ...(info === undefined ? {} : { details: info }),
 })
 
-const operating = new Set<ConversationId>()
-function assertMessageable(id: ConversationId, isolate?: Isolate) {
+async function assertMessageable(
+  id: ConversationId,
+  isolate: Isolate | undefined,
+  reader: Pick<ReturnType<ExtensionHost['harness']>, 'snapshot' | 'getTask'>,
+  context: Context,
+) {
   if (isolate?.state === 'discarded')
     throw new Error("Child's worktree was discarded; start a new child")
-  if (operating.has(id)) throw new Error('Child worktree lifecycle operation is in progress')
+  const queue = await reader.snapshot(LifecycleQueue, context)
+  for (const task of queue?.children[String(id)] ?? []) {
+    if ((await reader.getTask(task, context))?.state.status !== 'terminal')
+      throw new Error('Child worktree lifecycle operation is in progress')
+  }
 }
 
-async function operate(
+async function createLifecycle(
+  tx: Tx,
+  host: Pick<ExtensionHost, 'projectRoot' | 'ultimateRoot'>,
+  parent: ConversationId,
+  child: ConversationId,
+  operation: 'land' | 'discard',
+  ownership: TaskOwnership,
+  request?: string,
+) {
+  const queue = await tx.doc(LifecycleQueue)
+  if (request && queue.requests[request]) return queue.requests[request]
+  const tasks = queue.children[String(child)] ?? []
+  const live: TaskId[] = []
+  for (const id of tasks) if ((await tx.task(id))?.state.status !== 'terminal') live.push(id)
+  const task = await tx.createTask(
+    lifecycle(host),
+    { parent, child, operation },
+    {
+      conversationId: parent,
+      ownership,
+      ...(ownership.kind === 'conversation' ? { background: true } : {}),
+    },
+  )
+  queue.children[String(child)] = [...live, task]
+  if (request) queue.requests[request] = task
+  return task
+}
+function lifecycleResult(outcome: TaskOutcome<LifecycleResult>) {
+  if (outcome.status === 'completed') return outcome.result
+  if (outcome.status === 'failed' || outcome.status === 'faulted')
+    throw new Error(outcome.error.message)
+  throw new Error('Child worktree lifecycle operation was aborted')
+}
+async function runLifecycle(
   host: Pick<ExtensionHost, 'harness' | 'projectRoot' | 'ultimateRoot'>,
-  conversationId: ConversationId,
-  id: ConversationId,
-  action: 'land' | 'discard',
-  context: Context = BACKGROUND_CONTEXT,
+  parent: ConversationId,
+  child: ConversationId,
+  operation: 'land' | 'discard',
 ) {
   const harness = host.harness()
-  const parent = (await harness.conversation(conversationId, context))!
-  const cwd = (await parent.agent(context)).cwd ?? host.projectRoot
-  const result = await worktree.locked(cwd, async () => {
-    operating.add(id)
-    try {
-      const child = (await harness.snapshot(Subagents, conversationId, context))?.agents[String(id)]
-      if (!child?.isolate) throw new Error('id must identify a worktree child of this conversation')
-      if ((await harness.snapshot(LiveDoc, id, context))?.run)
-        throw new Error('Child is running; wait or stop it first')
-      const outcome = await worktree.operate(cwd, child.isolate, action)
-      await harness.commit(async (tx) => {
-        const isolate = (await tx.doc(Subagents, conversationId)).agents[String(id)].isolate!
-        if (outcome.state) isolate.state = outcome.state
-        if (outcome.landed) isolate.landed = outcome.landed
-      }, context)
-      return outcome
-    } finally {
-      operating.delete(id)
-    }
-  })
-  return {
-    ...result,
-    ...(host.projectRoot === host.ultimateRoot &&
-    result.paths?.some((path) => /^(server|shared)\//.test(path))
-      ? { needsRestart: true, text: `${result.text}\nNeeds restart.` }
-      : {}),
-  }
+  const task = await harness.commit(
+    (tx) => createLifecycle(tx, host, parent, child, operation, { kind: 'conversation' }),
+    BACKGROUND_CONTEXT,
+  )
+  return lifecycleResult((await harness.waitForTask(task, BACKGROUND_CONTEXT)).state.outcome)
 }
 function childId(args: JsonValue, conversationId?: number) {
   if (
@@ -204,10 +227,20 @@ function childId(args: JsonValue, conversationId?: number) {
 /** Isolate operations and definitions for the Agents tab. */
 export const actions = {
   async land(args: JsonValue, { host, conversationId }: ActionContext) {
-    return operate(host, conversationId as ConversationId, childId(args, conversationId), 'land')
+    return runLifecycle(
+      host,
+      conversationId as ConversationId,
+      childId(args, conversationId),
+      'land',
+    )
   },
   async discard(args: JsonValue, { host, conversationId }: ActionContext) {
-    return operate(host, conversationId as ConversationId, childId(args, conversationId), 'discard')
+    return runLifecycle(
+      host,
+      conversationId as ConversationId,
+      childId(args, conversationId),
+      'discard',
+    )
   },
   /** `{parent, id}`: the child's isolate and its commits ahead of the parent checkout, or null without one. */
   async isolate(args: JsonValue, { host }: ActionContext) {
@@ -270,7 +303,7 @@ export default function subagents(
 ) {
   return defineExtension({
     name: 'subagents',
-    tasks: [Anchor, Reporter],
+    tasks: [Anchor, Reporter, lifecycle(host)],
     sections: [
       section('subagents', async () => {
         const discovered = await discoverAgents(
@@ -370,18 +403,25 @@ Available definitions:
             (!args.id || !Object.hasOwn(index.agents, String(args.id)))
           )
             throw new Error('id must identify a child of this conversation')
-          if (args.action === 'land' || args.action === 'discard')
-            return finish(
-              JSON.stringify(
-                await operate(
+          if (args.action === 'land' || args.action === 'discard') {
+            const operation = args.action
+            const task = await api.commit(
+              (tx) =>
+                createLifecycle(
+                  tx,
                   host,
                   api.conversationId,
                   args.id as ConversationId,
-                  args.action,
-                  context,
+                  operation,
+                  { kind: 'task', taskId: api.taskId },
+                  api.callId,
                 ),
-              ),
+              context,
             )
+            return finish(
+              JSON.stringify(lifecycleResult((await api.waitForTask(task, context)).state.outcome)),
+            )
+          }
           if (args.action === 'start' || args.action === 'message') {
             const text = args.action === 'start' ? args.task : args.text
             if (!text?.trim())
@@ -389,7 +429,12 @@ Available definitions:
                 `${args.action} requires ${args.action === 'start' ? 'task' : 'text'}`,
               )
             if (args.action === 'message')
-              assertMessageable(args.id as ConversationId, index.agents[String(args.id)].isolate)
+              await assertMessageable(
+                args.id as ConversationId,
+                index.agents[String(args.id)].isolate,
+                api,
+                context,
+              )
             const parent = await api.agent(context)
             const existingAction = index.actions[api.callId]
             const definition =
@@ -507,8 +552,14 @@ Available definitions:
                   ...(isolate ? { isolate } : {}),
                 }
               }
-              if (args.action === 'message')
-                assertMessageable(conversationId, state.agents[String(conversationId)].isolate)
+              if (args.action === 'message') {
+                if (state.agents[String(conversationId)].isolate?.state === 'discarded')
+                  throw new Error("Child's worktree was discarded; start a new child")
+                const queue = await tx.doc(LifecycleQueue)
+                for (const id of queue.children[String(conversationId)] ?? [])
+                  if ((await tx.task(id))?.state.status !== 'terminal')
+                    throw new Error('Child worktree lifecycle operation is in progress')
+              }
               const background = state.agents[String(conversationId)].background
               const reporter = background
                 ? await tx.createTask(
@@ -533,9 +584,11 @@ Available definitions:
               )
             const child = (await api.conversation(action.conversationId, context))!
             const current = await api.snapshot(Subagents, api.conversationId, context)
-            assertMessageable(
+            await assertMessageable(
               action.conversationId,
               current?.agents[String(action.conversationId)]?.isolate,
+              api,
+              context,
             )
             const settled = await (
               await child.submit(

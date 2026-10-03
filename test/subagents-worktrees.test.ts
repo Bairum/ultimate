@@ -4,7 +4,9 @@ import { mkdir, readFile, rm, writeFile, access, symlink, chmod } from 'node:fs/
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { LiveDoc } from '@earendil-works/pi-durable'
+import { defineExtension, defineTask, LiveDoc } from '@earendil-works/pi-durable'
+import type { TaskId } from '@earendil-works/pi-durable'
+import { LifecycleQueue } from '../extensions/subagents/isolates/lifecycle.ts'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
 import { afterEach, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
@@ -15,6 +17,18 @@ import subagents, { actions, Subagents } from '../extensions/subagents/server.ts
 import { create, git, discard } from '../extensions/subagents/isolates/worktree.ts'
 import { temp, until } from './helpers.ts'
 
+const Gate = defineTask<null, { phase: 'hold' }, null>({
+  name: 'test.lifecycle-gate',
+  version: 1,
+  initial: () => ({ phase: 'hold' }),
+  phases: {
+    hold: async (_task, runtime, ctx) => {
+      await runtime.sleep(Date.now() + 60000, ctx)
+    },
+  },
+  abort: (_task, runtime, ctx) =>
+    runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+})
 const directories: string[] = []
 const hosts: OpenHost[] = []
 afterEach(async () => {
@@ -45,6 +59,7 @@ async function fixture() {
     faux: true,
   })
   prepared.registry.install(CodingTools)
+  prepared.registry.install(defineExtension({ name: 'lifecycle-test', tasks: [Gate] }))
   let opened: OpenHost
   prepared.registry.install(
     subagents({
@@ -326,6 +341,96 @@ it('rechecks queued lifecycle operations and refuses messages during land', asyn
   expect(await refused).toMatchObject({ message: 'Child is running; wait or stop it first' })
   await access(second.isolate!.path)
   await child.abort(context)
+})
+async function holdCheckout(f: Awaited<ReturnType<typeof fixture>>) {
+  return f.opened.harness.commit(async (tx) => {
+    const gate = await tx.createTask(Gate, null, {
+      conversationId: f.opened.root.id,
+      ownership: { kind: 'conversation' },
+      background: true,
+    })
+    ;(await tx.doc(LifecycleQueue)).checkouts[f.project] = gate
+    return gate
+  }, context)
+}
+function lifecycleContext(f: Awaited<ReturnType<typeof fixture>>) {
+  return {
+    host: { projectRoot: f.project, ultimateRoot: f.project, harness: () => f.opened.harness },
+    conversationId: f.opened.root.id,
+  } as unknown as ActionContext
+}
+it('resumes a queued land after closing the harness and reopening its store', async () => {
+  const f = await fixture()
+  await f.call({ action: 'start', agent: 'worker', task: 'write' })
+  const [child] = await f.children()
+  await git(child.isolate!.path, 'add', '.')
+  await git(child.isolate!.path, 'commit', '-m', 'durable child')
+  const tip = await git(child.isolate!.path, 'rev-parse', 'HEAD')
+  const gate = await holdCheckout(f)
+  const landing = actions
+    .land({ id: child.conversationId }, lifecycleContext(f))
+    .catch(() => undefined)
+  let task: TaskId = gate
+  await until(async () => {
+    task = (await f.opened.harness.snapshot(LifecycleQueue, context))!.checkouts[f.project]
+    return (
+      task !== gate && (await f.opened.harness.getTask(task, context))?.state.status === 'waiting'
+    )
+  })
+  await f.opened.close()
+  await landing
+  hosts.splice(hosts.indexOf(f.opened), 1)
+  f.opened = await f.prepared.open()
+  hosts.push(f.opened)
+  await f.opened.harness.abortTask(gate, context)
+  const outcome = (await f.opened.harness.waitForTask(task, context)).state.outcome
+  expect(outcome.status).toBe('completed')
+  expect(await git(f.project, 'rev-parse', 'HEAD')).toBe(tip)
+  expect((await f.children())[0].isolate?.landed).toBe(tip)
+})
+it('queues two lands on the same checkout with the second waiting on the first', async () => {
+  const f = await fixture()
+  await f.call({ action: 'start', agent: 'worker', task: 'inspect' })
+  await f.call({ action: 'start', agent: 'worker', task: 'inspect' })
+  const children = await f.children()
+  for (const [i, child] of children.entries()) {
+    await writeFile(join(child.isolate!.path, `land-${i}.txt`), `${i}`)
+    await git(child.isolate!.path, 'add', '.')
+    await git(child.isolate!.path, 'commit', '-m', `land ${i}`)
+  }
+  const gate = await holdCheckout(f)
+  const first = actions.land({ id: children[0].conversationId }, lifecycleContext(f))
+  let firstTask: TaskId = gate
+  await until(async () => {
+    firstTask = (await f.opened.harness.snapshot(LifecycleQueue, context))!.checkouts[f.project]
+    return (
+      firstTask !== gate &&
+      (await f.opened.harness.getTask(firstTask, context))?.state.status === 'waiting'
+    )
+  })
+  const second = actions.land({ id: children[1].conversationId }, lifecycleContext(f))
+  let secondTask: TaskId = gate
+  await until(async () => {
+    secondTask = (await f.opened.harness.snapshot(LifecycleQueue, context))!.checkouts[f.project]
+    return (
+      secondTask !== firstTask &&
+      secondTask !== gate &&
+      (await f.opened.harness.getTask(secondTask, context))?.state.status === 'waiting'
+    )
+  })
+  expect((await f.opened.harness.getTask(secondTask, context))?.state).toMatchObject({
+    on: [firstTask],
+    policy: 'allSettled',
+  })
+  expect(
+    await f.call({ action: 'message', id: children[1].conversationId, text: 'inspect' }),
+  ).toContain('lifecycle operation is in progress')
+  await f.opened.harness.abortTask(gate, context)
+  expect((await first).text).toContain('Landed commits')
+  expect((await second).text).toContain('Landed commits')
+  expect(await readFile(join(f.project, 'land-0.txt'), 'utf8')).toBe('0')
+  expect(await readFile(join(f.project, 'land-1.txt'), 'utf8')).toBe('1')
+  expect(await git(f.project, 'rev-parse', 'HEAD')).toBe((await f.children())[1].isolate?.landed)
 })
 it('creates, replays and discards through a symlinked home without marking an empty branch landed', async () => {
   const f = await fixture()

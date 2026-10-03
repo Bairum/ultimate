@@ -105,65 +105,14 @@ async function worktreePath(home: string, key: string) {
   await mkdir(directory, { recursive: true })
   return join(await realpath(directory), key)
 }
-const locks = new Map<string, Promise<unknown>>()
-export async function locked<T>(parent: string, run: () => Promise<T>) {
-  parent = await git(parent, 'rev-parse', '--show-toplevel')
-  const previous = locks.get(parent) ?? Promise.resolve()
-  const operation = previous.catch(() => {}).then(run)
-  locks.set(parent, operation)
-  try {
-    return await operation
-  } finally {
-    if (locks.get(parent) === operation) locks.delete(parent)
-  }
-}
-export const land = (parent: string, record: Isolate) =>
-  locked(parent, () => operate(parent, record, 'land'))
-export const discard = (parent: string, record: Isolate) =>
-  locked(parent, () => operate(parent, record, 'discard'))
-export async function operate(parent: string, isolate: Isolate, action: 'land' | 'discard') {
-  if (isolate.state === 'discarded') {
-    if (action === 'discard') return { text: `Already discarded; kept branch ${isolate.branch}.` }
-    throw new Error('Isolate is discarded')
-  }
-  if (action === 'discard') {
-    if (
-      (await git(parent, 'worktree', 'list', '--porcelain'))
-        .split('\n')
-        .includes(`worktree ${join(await realpath(dirname(isolate.path)), basename(isolate.path))}`)
-    )
-      await git(parent, 'worktree', 'remove', '--force', isolate.path)
-    return {
-      text: `Discarded isolate; kept branch ${isolate.branch}.`,
-      state: 'discarded' as const,
-    }
-  }
-  const head = await git(parent, 'rev-parse', 'HEAD')
-  const dirty = await git(isolate.path, 'status', '--porcelain')
-  if (dirty) throw new Error(`Worktree is dirty:\n${dirty}`)
-  if (!Number(await git(parent, 'rev-list', '--count', `${head}..${isolate.branch}`))) {
-    const tip = await git(parent, 'rev-parse', isolate.branch)
-    return { text: 'Nothing to land.', ...(tip === isolate.base ? {} : { landed: tip }) }
-  }
-  try {
-    await git(isolate.path, 'rebase', head)
-  } catch (error) {
-    const conflicts = await git(isolate.path, 'diff', '--name-only', '--diff-filter=U')
-    await git(isolate.path, 'rebase', '--abort').catch(() => {})
-    throw new Error(
-      `Rebase failed: ${conflicts || String(error)}. Message the child to rebase onto ${head} and resolve these files before landing.`,
-      { cause: error },
-    )
-  }
-  const commits = await git(isolate.path, 'log', '--oneline', `${head}..HEAD`)
-  const paths = (await git(isolate.path, 'diff', '--name-only', head, 'HEAD'))
-    .split('\n')
-    .filter(Boolean)
-  await git(parent, 'merge', '--ff-only', isolate.branch)
-  const landed = await git(parent, 'rev-parse', 'HEAD')
-  return {
-    text: `Landed commits:\n${commits}\nChanged paths:\n${paths.join('\n')}`,
-    landed,
-    paths,
-  }
+export async function discard(parent: string, isolate: Isolate) {
+  if (isolate.state === 'discarded')
+    return { text: `Already discarded; kept branch ${isolate.branch}.` }
+  if (
+    (await git(parent, 'worktree', 'list', '--porcelain'))
+      .split('\n')
+      .includes(`worktree ${join(await realpath(dirname(isolate.path)), basename(isolate.path))}`)
+  )
+    await git(parent, 'worktree', 'remove', '--force', isolate.path)
+  return { text: `Discarded isolate; kept branch ${isolate.branch}.`, state: 'discarded' as const }
 }
