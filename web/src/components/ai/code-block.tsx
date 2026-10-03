@@ -5,7 +5,7 @@ import { createCodePlugin } from '@streamdown/code'
 import type { HighlightOptions, HighlightResult } from '@streamdown/code'
 import { cn } from 'cn'
 import type { CSSProperties, HTMLAttributes } from 'react'
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 
 /** One highlighter for Streamdown and every code block. */
 export const codePlugin = createCodePlugin({ themes: ['vitesse-light', 'vitesse-dark'] })
@@ -45,26 +45,21 @@ type Line = HighlightResult['tokens'][number]
 const plain = (code: string): Line[] =>
   code.split('\n').map((content) => (content ? [{ content, offset: 0, color: 'inherit' }] : []))
 
-/** Tokens for `code`: plain lines first, highlighted ones once Shiki has loaded the language. */
+/** Keep the last same-language highlight visible while its replacement is being tokenized. */
 function useTokens(code: string, language: BundledLanguage): Line[] {
-  const [result, setResult] = useState<{ code: string; language: string; tokens: Line[] }>()
-  const sync = useMemo(
-    () => codePlugin.highlight({ code, language, themes })?.tokens,
-    [code, language],
-  )
+  const [result, setResult] = useState<{ language: string; tokens: Line[] }>()
   useEffect(() => {
-    if (sync) return undefined
     let cancelled = false
-    codePlugin.highlight({ code, language, themes }, (highlighted) => {
-      if (!cancelled) setResult({ code, language, tokens: highlighted.tokens })
-    })
+    const update = (highlighted: HighlightResult) => {
+      if (!cancelled) setResult({ language, tokens: highlighted.tokens })
+    }
+    const cached = codePlugin.highlight({ code, language, themes }, update)
+    if (cached) update(cached)
     return () => {
       cancelled = true
     }
-  }, [code, language, sync])
-  if (sync) return sync
-  if (result?.code === code && result.language === language) return result.tokens
-  return plain(code)
+  }, [code, language])
+  return result?.language === language ? result.tokens : plain(code)
 }
 
 export type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
