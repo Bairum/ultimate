@@ -4,17 +4,12 @@ import { ToolStatusIcon } from '@/components/ai/tool'
 import {
   cn,
   defineWebExtension,
-  formatDuration,
   useConversation,
   useConversations,
-  useNow,
   useTasks,
   useUltimate,
 } from '@/sdk'
 import type { ConversationSummary, TaskGraph, TaskGraphNode } from '@/sdk'
-
-/** When this page first saw each task, for its age. */
-const seen = new Map<number, number>()
 
 interface Tree {
   /** Live tasks by owner task id. */
@@ -28,8 +23,6 @@ interface Tree {
 
 function build(graph: TaskGraph | undefined, conversations: readonly ConversationSummary[]) {
   const tasks = Object.values(graph?.tasks ?? {}).toSorted((a, b) => a.id - b.id)
-  const now = Date.now()
-  for (const task of tasks) if (!seen.has(task.id)) seen.set(task.id, now)
   const children = new Map<number, TaskGraphNode[]>()
   const roots = new Map<number, TaskGraphNode[]>()
   for (const task of tasks) {
@@ -81,11 +74,9 @@ function status(task: TaskGraphNode): {
 }
 
 function TaskRow({ task, tree, depth }: { task: TaskGraphNode; tree: Tree; depth: number }) {
-  const now = useNow(1000)
   const { text, tone, icon } = status(task)
   const kind = task.kind.replace(/^pi\./, '')
   const tool = tree.tools.get(task.id)
-  const age = now - (seen.get(task.id) ?? now)
   return (
     <>
       <div
@@ -105,9 +96,6 @@ function TaskRow({ task, tree, depth }: { task: TaskGraphNode; tree: Tree; depth
         {task.abortRequested && (
           <span className="shrink-0 text-[10.5px] text-warning">aborting</span>
         )}
-        <span className="ml-auto shrink-0 pl-2 text-[10.5px] text-muted-foreground/50 tabular-nums">
-          {age >= 1000 ? formatDuration(age).replace(/\.\ds$/, 's') : ''}
-        </span>
       </div>
       {(tree.children.get(task.id) ?? []).map((child) => (
         <TaskRow depth={depth + 1} key={child.id} task={child} tree={tree} />
