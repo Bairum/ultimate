@@ -51,7 +51,7 @@ export const Subagents = defineDoc<{
   fork: 'initial',
   initial: () => ({ agents: {}, actions: {} }),
 })
-export const docs = [Subagents, LifecycleQueue]
+export const docs = [Subagents]
 const Anchor = defineTask<null, { phase: 'done' }, null>({
   name: 'ultimate.subagent-anchor',
   version: 1,
