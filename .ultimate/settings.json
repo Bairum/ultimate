@@ -1,6 +1,7 @@
 {
   "extensions": {
     "enable": [
+      "automations",
       "clock",
       "documents",
       "exclusive-commands",

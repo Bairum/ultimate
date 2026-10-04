@@ -62,6 +62,7 @@ it('starts bare with exactly the default extensions and tools, and exposes off b
   )
   const info = server.system.current().extensions
   expect(info.filter((entry) => !entry.enabled).map((entry) => entry.name)).toEqual([
+    'automations',
     'clock',
     'documents',
     'exclusive-commands',
@@ -236,6 +237,7 @@ it('enables the full repository set including github-triage', async () => {
   expect(discovered.map((entry) => entry.name)).toEqual(
     [
       ...DEFAULT_EXTENSIONS,
+      'automations',
       'clock',
       'documents',
       'exclusive-commands',

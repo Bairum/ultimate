@@ -1,6 +1,8 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { clampThinkingLevel } from '@earendil-works/pi-ai'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
+import type { Agent, AgentChange } from '@earendil-works/pi-durable'
 import { parseFrontmatter, resolveCliModel } from '@earendil-works/pi-coding-agent'
 import type { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import type { Source } from '../../server/project.ts'
@@ -16,6 +18,40 @@ export interface AgentDefinition {
   tools?: string[]
   isolate?: 'none' | 'worktree'
 }
+export function definitionAgent(
+  definition: AgentDefinition | undefined,
+  parent: Agent,
+  modelRuntime: ModelRuntime,
+  {
+    excludeTools = [],
+    excludeExtensions = [],
+    model: overrideModel,
+    thinking: overrideThinking,
+  }: {
+    excludeTools?: string[]
+    excludeExtensions?: string[]
+    model?: { provider: string; modelId: string }
+    thinking?: ModelThinkingLevel
+  } = {},
+): AgentChange {
+  const ref = overrideModel ?? definition?.model ?? parent.model
+  const model = ref && modelRuntime.getModel(ref.provider, ref.modelId)
+  const thinking = overrideThinking ?? definition?.thinking ?? parent.thinkingLevel
+  return {
+    tools: parent.tools.filter(
+      (tool) =>
+        !excludeTools.includes(tool.name) &&
+        (!definition?.tools || definition.tools.includes(tool.name)),
+    ),
+    extensions: parent.extensions.filter(
+      (extension) => !excludeExtensions.includes(extension.name),
+    ),
+    instructions: definition?.instructions ?? parent.instructions ?? null,
+    model: ref ?? null,
+    thinkingLevel: model ? clampThinkingLevel(model, thinking) : thinking,
+  }
+}
+
 export interface AgentDiscovery {
   definitions: (AgentDefinition & { source: Source })[]
   errors: { name: string; path: string; source: Source; error: string }[]
