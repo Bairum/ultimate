@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react'
+import { events } from './events.ts'
 import type {
   CommandContribution,
   Contribution,
@@ -158,6 +159,20 @@ function validate(module: unknown): WebExtension {
  */
 export function createRegistry() {
   let records: readonly ExtensionRecord[] = []
+  let readiness = { ready: false, failed: [] as string[] }
+  let started = false
+  let settled = false
+  let systemReceived = false
+  const refreshReady = () => {
+    const failed = records.filter((record) => record.error).map((record) => record.name)
+    const ready = readiness.ready || (settled && systemReceived)
+    const becameReady = ready && !readiness.ready
+    if (ready !== readiness.ready || failed.join('\0') !== readiness.failed.join('\0')) {
+      readiness = { ready, failed }
+      emit()
+    }
+    if (becameReady) events.emit('ultimate:ready', { failed })
+  }
   const tokens = new Map<string, object>()
   const listeners = new Set<() => void>()
   const emit = () => {
@@ -165,6 +180,7 @@ export function createRegistry() {
   }
   const update = (name: string, change: (record: ExtensionRecord) => ExtensionRecord) => {
     records = records.map((record) => (record.name === name ? change(record) : record))
+    refreshReady()
     emit()
   }
   const install = (name: string, module: unknown) => {
@@ -175,15 +191,25 @@ export function createRegistry() {
           ? record
           : { name, extension, loading: false, version: record.version + 1 },
       )
+      events.emit('ultimate:extension-loaded', { name })
     } catch (error) {
       fail(name, error)
     }
   }
-  const fail = (name: string, error: unknown) =>
-    update(name, (record) => ({ ...record, loading: false, error: message(error) }))
+  const fail = (name: string, error: unknown) => {
+    const text = message(error)
+    update(name, (record) => ({ ...record, loading: false, error: text }))
+    events.emit('ultimate:extension-failed', { name, error: text })
+  }
 
   return {
     getSnapshot: () => records,
+    getReady: () => readiness,
+    /** The stream's first system snapshot is the other half of page readiness. */
+    receiveSystem() {
+      systemReceived = true
+      refreshReady()
+    },
     subscribe: (listener: () => void) => {
       listeners.add(listener)
       return () => {
@@ -192,6 +218,8 @@ export function createRegistry() {
     },
     /** Load every facet in `loaders`, drop facets that are gone, and settle when all loads have. */
     async setLoaders(loaders: Readonly<Record<string, ExtensionLoader>>) {
+      const first = !started
+      started = true
       const entries = Object.entries(loaders)
         .flatMap(([path, loader]) => {
           const name = extensionName(path)
@@ -200,6 +228,7 @@ export function createRegistry() {
         .toSorted((a, b) => a.name.localeCompare(b.name))
       const previous = new Map(records.map((record) => [record.name, record]))
       records = entries.map(({ name }) => previous.get(name) ?? { name, loading: true, version: 0 })
+      refreshReady()
       emit()
       await Promise.allSettled(
         entries.map(async ({ name, loader }) => {
@@ -213,6 +242,10 @@ export function createRegistry() {
           }
         }),
       )
+      if (first) {
+        settled = true
+        refreshReady()
+      }
     },
     /** Install a facet that hot-reloaded on its own. */
     replace(name: string, module: unknown) {

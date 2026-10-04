@@ -27,6 +27,12 @@ subscribe with `/api/events?conversation=<id>&docs=<kind>,<kind>` for `doc` snap
 The Documents tab shows each exported kind through the renderer a web facet registers (`documents: [{ kind, title, component }]`), or as JSON.
 Local imported modules reload with the facet. Failed loads leave the previous version installed.
 
+Extensions coordinate ephemeral happenings with `host.events` (Pi's process-local bus) or browser `events`/`useEvent`
+from `@/sdk`; these are separate, unbridged buses. Use `<extension>:<event>` channels, reserve `ultimate:*` for core,
+and keep durable state in documents. `useReady()` becomes true once the initial facets settle and a system snapshot
+arrives, stays true across hot reloads, and exposes failed facet names. Overlays render as facets install, even while
+others load; see [Events](extensions/README.md#events).
+
 ## Discovery and settings
 
 Discovery is clone built-ins, then `~/.ultimate/`, then `<project>/.ultimate/`; later names replace earlier ones.
@@ -114,6 +120,7 @@ Definitions live in `agents/`, `~/.ultimate/agents/`, and the project root's `.u
 - `extensions/prompt/server.ts` — tool guidance adapted from unexported prompt contributions, not Ultimate's personality. Drop when Pi exports buildSystemPromptSections and the per-tool system prompt contributions.
 - `web/src/app/model.ts` — internal trailing <harness> text block duplicates diagnostics and is stripped for display. Drop when Pi exports a diagnostic-free tool-result content accessor.
 - `web/src/sdk/format.ts` — copied formatTokens helper, not exported. Drop when Pi exports formatTokens.
+- `web/src/sdk/events.ts` — adapted Pi event bus using browser-safe sets instead of node:events, with Pi's exported EventBus type and handler-error semantics. Drop when Pi ships a browser-safe bus.
 - `extensions/coding-tools/web.tsx` — internal bash error wording drives exitOf and untyped details.patch/details.diff drive Edit. Drop when Pi exports structured bash outcomes and structured diff rows for rendering.
 - `extensions/self/web.tsx` — internal remove-all pi.system entry immediately precedes a reordered re-add, hidden here. Drop when Pi exposes prompt reorder metadata instead of requiring entry-sequence inference.
 - `extensions/subagents/server.ts` — internal ToolTaskInput.assistant locates the calling assistant for history forks. Drop when ToolExecutionApi exposes the calling assistant entry ID.

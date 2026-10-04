@@ -2,7 +2,8 @@ import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { discoverExtensions } from './discovery.ts'
 import { projectSetup, projectSettings, projectDiagnostics } from './project-setup.ts'
-import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
+import { createEventBus, ProjectTrustStore } from '@earendil-works/pi-coding-agent'
+import type { EventBus } from '@earendil-works/pi-coding-agent'
 import { discoveryRoots, projects } from './project.ts'
 import type { ProjectInfo } from './project.ts'
 import { extensionSettingsFiles } from './extension-settings.ts'
@@ -37,6 +38,8 @@ export type ExtensionHost = Pick<
   | 'skills'
   | 'restart'
 > & {
+  /** Process-local Pi bus, shared across facets and reloads. Events are ephemeral, not bridged to the browser. */
+  events: EventBus
   resource<T>(key: string, create: () => T): T
   /** Run `callback` each time the harness opens, at once when it is open; the server serves once it settles. */
   onOpen(callback: () => Promise<void>): void
@@ -62,6 +65,7 @@ export type ExtensionHost = Pick<
   doc(kind: string): ConversationDocToken<JsonObject> | undefined
   metadata: typeof Metadata
 }
+const events = createEventBus()
 const runOpener = (callback: () => Promise<void>) =>
   callback().catch((error: unknown) => console.error('Extension onOpen:', error))
 /** Attach listeners to Vite's current watcher and to each replacement; `attach` returns their removal. */
@@ -86,6 +90,7 @@ export async function loadExtensions(
   const cleanups = new Set<() => Promise<void>>()
   const resources = new Map<string, unknown>()
   const extensionHost: ExtensionHost = {
+    events,
     resource: <T>(key: string, create: () => T) => {
       if (!resources.has(key)) resources.set(key, create())
       return resources.get(key) as T

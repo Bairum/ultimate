@@ -19,7 +19,8 @@ export const uiState = createUiState(api.updateUi, {
 export const registry = createRegistry()
 
 store.subscribe(() => {
-  const { shared, ui } = store.getState()
+  const { shared, ui, system } = store.getState()
+  if (system) registry.receiveSystem()
   if (shared) uiState.receive(shared)
   // The theme is a preference of this browser.
   localStorage.setItem('ultimate.theme', ui.theme)

@@ -7,7 +7,7 @@ import { defineExtension, defineTool, InboxDoc, LiveDoc } from '@earendil-works/
 import type { Extension } from '@earendil-works/pi-durable'
 import { Type } from '@earendil-works/pi-ai'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
-import { ModelRuntime } from '@earendil-works/pi-coding-agent'
+import { createEventBus, ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { afterEach, describe, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
@@ -64,6 +64,7 @@ async function fixture(
   prepared.registry.install(
     codemode({
       ...prepared,
+      events: createEventBus(),
       resource: (_key, create) => create(),
       onOpen: () => {},
       onClose: () => {},

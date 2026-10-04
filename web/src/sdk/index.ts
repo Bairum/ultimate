@@ -3,6 +3,7 @@
  * The guide is extensions/README.md.
  */
 export { defineWebExtension } from './types.ts'
+export { events, useEvent } from './events.ts'
 export type {
   CommandContribution,
   Contribution,
@@ -51,6 +52,7 @@ export {
   useNotices,
   useNow,
   useRestart,
+  useReady,
   useStore,
   useSystem,
   useTasks,

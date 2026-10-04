@@ -3,6 +3,7 @@ import { once } from 'node:events'
 import { readFile, readdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { createEventBus } from '@earendil-works/pi-coding-agent'
 import { expect, it, vi } from 'vitest'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import {
@@ -56,6 +57,7 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
     server.host.registry.install(
       browserExtension({
         ...server.host,
+        events: createEventBus(),
         resource: <T>(_key: string, _create: () => T) => browserState as T,
         onOpen: () => {},
         onClose: () => {},

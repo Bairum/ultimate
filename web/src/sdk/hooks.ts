@@ -27,6 +27,11 @@ import type { State } from './store.ts'
 import { formatDuration } from './format.ts'
 import type { ToolCallView, UltimateContext } from './types.ts'
 
+/** Page readiness is sticky; failed facet names remain available even before ready. */
+export function useReady(): { ready: boolean; failed: string[] } {
+  return useSyncExternalStore(registry.subscribe, registry.getReady)
+}
+
 /** Read a slice of the client state; re-renders when the selected value changes identity. */
 export function useStore<T>(select: (state: State) => T): T {
   return useSyncExternalStore(store.subscribe, () => select(store.getState()))

@@ -67,10 +67,45 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 - `harness()`, `uiState(context)`, `doc(kind)`: durable harness, root UI snapshot and exported conversation document token.
 - `metadata`: the core's `ultimate.metadata` conversation document, `{ title?, label? }`; the shell names a conversation
   by them, so set them on conversations you create (`subagents` labels each child with its definition).
+- `events`: Pi's ephemeral process-local event bus; see [Events](#events).
 - `resource(key, create)`, `onOpen(callback)`, `onClose(cleanup)`: shared reload-stable resources, async work each
   time the harness opens (at once if it is open; the server serves once it settles), and async shutdown cleanup.
 
 Core runtime modules must not be imported by extensions; use host capabilities instead.
+
+## Events
+
+Use events for “something happened” and Pi Durable documents for durable state. Server factories share
+`host.events`, Pi's process-local bus, across extension reloads. The browser has a separate `events` bus from
+`@/sdk`; neither bus bridges to the other, queues messages, nor replays them. Both catch and log handler errors
+with the channel while other handlers continue. `on(channel, handler)` returns an unsubscribe; clean it up when
+its owner is removed; server subscriptions can live in a reload-stable `host.resource`.
+
+Name channels `<extension>:<event>`; `ultimate:*` is reserved for the core. In a web component, use
+`useEvent(channel, handler)` to subscribe for its mount and always call the latest handler:
+
+```tsx
+import { events, useEvent, useReady } from '@/sdk'
+
+function Receiver() {
+  useEvent('hello:selected', (data) => console.log(data))
+  const { ready, failed } = useReady()
+  return (
+    <span>
+      {ready ? 'Ready' : 'Loading'} {failed.join(', ')}
+    </span>
+  )
+}
+// From another facet:
+events.emit('hello:selected', { name: 'example' })
+```
+
+The registry emits `ultimate:extension-loaded { name }` or `ultimate:extension-failed { name, error }` as each
+facet settles, including hot reloads. `ultimate:ready { failed }` fires once per page load after the first set of
+facet imports has settled (loaded or failed) and the first system snapshot has arrived. `useReady()` reads that
+sticky state even when mounted after the event; `failed` names current load failures, also before ready.
+Facets import in parallel and their contributions render as soon as they install. In particular, root overlays
+can render while another facet is still loading; they need not wait for ready.
 
 ## An extension's files
 
@@ -113,8 +148,8 @@ No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, entries, documents, commands })`; every key is optional. Extensions load in
-folder-name order; give a slot item `{ component, order }` to move it (default order 0, lower first).
+`defineWebExtension({ slots, panels, surfaces, tools, entries, documents, commands })`; every key is optional. Extensions load
+in parallel, installing independently; contributions sort by folder name. Give a slot item `{ component, order }` to move it (default order 0, lower first).
 
 ### Slots
 
