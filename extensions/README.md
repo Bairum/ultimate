@@ -111,8 +111,9 @@ an 8 s deadline from the first loader map. Superseded imports do not determine r
 `{ ready, timedOut, failed, pending }`, even for a subscriber mounted after the event. `ready` and `timedOut` stay
 sticky across hot reloads; `failed` names current load failures and `pending` names current unsettled imports.
 The deadline reveals even without a system snapshot; `timedOut` distinguishes that reveal from normal readiness.
-Facets import in parallel and their contributions render as soon as they install. In particular, root overlays
-can render while another facet is still loading; they need not wait for ready.
+Facets import in parallel and their contributions render as soon as they install, except the app itself: the shell
+shows the surface and starts its shortcuts only once ready. In particular, root overlays can render while another
+facet is still loading; they need not wait for ready.
 
 ## An extension's files
 

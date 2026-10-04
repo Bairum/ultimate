@@ -9,6 +9,7 @@ import {
   useConversation,
   useConversations,
   useExtensions,
+  useReady,
   useShownSurface,
   useStore,
 } from '../sdk/hooks.ts'
@@ -119,9 +120,20 @@ function useDocumentTitle(surface: { id: string; title: string } | undefined) {
   }, [app, label, busy, id])
 }
 
-/** The surface host: the shown surface fills the window; the palette, extension errors, and overlays sit above it. */
-export function App() {
+/** Command shortcuts, which start with the app. */
+function Shortcuts() {
   useShortcuts()
+  return null
+}
+
+/**
+ * The surface host: the shown surface fills the window; the palette, extension errors, and overlays sit above it.
+ * Overlays render as soon as they install, but the app (the surface and its shortcuts) waits until the page is ready,
+ * so it never shows half loaded: until then the background `index.html` paints shows beneath them. Starting the
+ * shortcuts then also lets an overlay that covers the page, such as the splash, take the keys before they do.
+ */
+export function App() {
+  const loaded = useReady().ready
   const records = useExtensions()
   const { surface, pending, missing } = useShownSurface()
   // Until the stream delivered the UI state and system info, the choice and the project default are unknown.
@@ -153,7 +165,10 @@ export function App() {
   )
   return (
     <TooltipProvider delayDuration={400}>
-      <div className="flex h-dvh flex-col">{!pending && <Surfaces surfaces={line} />}</div>
+      <div className="flex h-dvh flex-col">
+        {loaded && !pending && <Surfaces surfaces={line} />}
+      </div>
+      {loaded && <Shortcuts />}
       <CommandPalette />
       <ExtensionErrors />
       <Slot name="overlay" />

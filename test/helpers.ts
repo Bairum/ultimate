@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
 import type { ConversationView } from '@earendil-works/pi-durable'
+import type { Page } from 'playwright-core'
 import { afterAll, beforeEach, afterEach, vi } from 'vitest'
 import type { TestContext } from 'vitest'
 import { browserBinary } from '../extensions/browser/server.ts'
@@ -180,6 +181,15 @@ export async function attach(server: string | { url: string }, query = '') {
       await task
     },
   }
+}
+/**
+ * Once the app shows, waits until it takes input: the splash, which takes every key while it covers, has gone. The app
+ * shows only once ready, by when the splash is up if it shows at all.
+ */
+export async function untilInput(page: Page) {
+  await page
+    .locator('[aria-label="Loading Ultimate"]')
+    .waitFor({ state: 'detached', timeout: 15000 })
 }
 export async function skipWithoutChromium(test: TestContext) {
   try {

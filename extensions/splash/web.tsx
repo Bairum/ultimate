@@ -1,14 +1,8 @@
-import { cn } from 'cn'
 import { TriangleAlertIcon, XIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { WebExtension } from '@/sdk'
-// The SDK's modules the shell has loaded already, rather than `@/sdk`: every facet importing `@/sdk` waits for its entry
-// module, which only the facets load, while this one installs as soon as it arrives and so covers the page before the
-// others render. One module for the same reason: a local import would be another round trip.
-import { api } from '@/sdk/client.ts'
-import { useReady } from '@/sdk/hooks.ts'
+import { api, cn, defineWebExtension, useReady } from '@/sdk'
 
-/** Not ready by then: reveal the app anyway and name what is missing. */
+/** The core's readiness deadline: not ready by then, the app opens anyway and the notice names what is missing. */
 const timeout = 8000
 
 /**
@@ -36,10 +30,6 @@ const letters: readonly (readonly string[])[] = [
   ], // E
 ]
 const view = { x: 118, width: 13533, height: 1514 }
-/** The sheen's band, in font units; it starts left of the U and ends right of the E, skewed. */
-const band = 2400
-/** The sheen leans 20°, so its foot trails its head by this much. */
-const skew = Math.tan((20 * Math.PI) / 180) * view.height
 
 /** One contour's outline, or its pen. */
 const outline = (d: string, key: number, kind: 'trace' | 'pen') => (
@@ -63,7 +53,7 @@ const outline = (d: string, key: number, kind: 'trace' | 'pen') => (
 
 /**
  * The wordmark: per letter its fill, the outline that traces it, and the pen, a short bright dash at the head of the
- * outline. A blurred copy glows behind it and a sheen, clipped to the letters, sweeps across. `still` draws it settled.
+ * outline. A blurred copy glows behind it. `still` draws it settled.
  */
 function Wordmark({ still }: { still: boolean }) {
   return (
@@ -73,29 +63,10 @@ function Wordmark({ still }: { still: boolean }) {
       viewBox={`${view.x} 0 ${view.width} ${view.height}`}
     >
       <defs>
-        <clipPath id="ultimate-splash-letters">
-          {letters.map((contours, index) => (
-            <path d={contours.join('')} key={index} />
-          ))}
-        </clipPath>
         {/* Font units, like everything here, so the glow scales with the wordmark. */}
         <filter height="300%" id="ultimate-splash-glow" width="130%" x="-15%" y="-100%">
           <feGaussianBlur stdDeviation="260" />
         </filter>
-        <linearGradient id="ultimate-splash-sheen">
-          <stop
-            className="[stop-color:var(--brand-foreground)] [stop-opacity:0] dark:[stop-color:var(--foreground)]"
-            offset="0"
-          />
-          <stop
-            className="[stop-color:var(--brand-foreground)] [stop-opacity:0.7] dark:[stop-color:var(--foreground)] dark:[stop-opacity:0.6]"
-            offset="0.5"
-          />
-          <stop
-            className="[stop-color:var(--brand-foreground)] [stop-opacity:0] dark:[stop-color:var(--foreground)]"
-            offset="1"
-          />
-        </linearGradient>
       </defs>
       <g className="opacity-45 dark:opacity-90">
         <g data-glow="" filter="url(#ultimate-splash-glow)" opacity={still ? 0.5 : 0}>
@@ -114,26 +85,9 @@ function Wordmark({ still }: { still: boolean }) {
           {!still && contours.map((d, contour) => outline(d, contour, 'pen'))}
         </g>
       ))}
-      {!still && (
-        <g clipPath="url(#ultimate-splash-letters)">
-          <g transform="skewX(-20)">
-            <rect
-              data-sheen=""
-              fill="url(#ultimate-splash-sheen)"
-              height={view.height}
-              width={band}
-              x={view.x - band}
-              y={0}
-            />
-          </g>
-        </g>
-      )}
     </svg>
   )
 }
-
-/** How far the sheen travels: from left of the U to right of the E, skew included. */
-const sheenTravel = view.width + band + skew
 
 /** On screen at least this long, so a warm start does not flash. */
 const minimum = { motion: 700, still: 400 }
@@ -151,7 +105,7 @@ const finished = (animations: readonly Animation[]) =>
   Promise.allSettled(animations.map((animation) => animation.finished))
 
 interface Show {
-  /** Plays the first run's signature version: a slower intro and its sheen in full, the rule drawn beneath. */
+  /** Plays the first run's signature version: a slower intro and its glow in full, the rule drawn beneath. */
   signature(): void
   /** Settles the wordmark and fades the overlay into the app; true once it has gone, false when cancelled. */
   reveal(): Promise<boolean>
@@ -160,18 +114,18 @@ interface Show {
 
 /**
  * Animates the splash in `overlay` with the Web Animations API. Each letter's outline traces in behind a bright pen,
- * then fills; a glow blooms and a sheen sweeps across. Held longer, a rule draws out beneath and glints until the
- * reveal. `still` (reduced motion) shows the settled wordmark and only fades.
+ * then fills, and a glow blooms. Held longer, a rule draws out beneath and glints until the reveal. `still` (reduced
+ * motion) shows the settled wordmark and only fades. `release` hands input back to the app as the overlay fades.
  */
-function play(overlay: HTMLElement, still: boolean): Show {
+function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
   const started = performance.now()
   const find = (selector: string) => overlay.querySelector(selector)!
   /** The drawing: hurried along once the app is ready. */
   const intro: Animation[] = []
-  /** Glow, halo, sheen, and rule: not waited for, except the signature's sheen. */
+  /** Glow, halo, and rule: not waited for, except the signature's glow. */
   const flair: Animation[] = []
   const exit: Animation[] = []
-  let sheen: Animation | undefined
+  let glow: Animation | undefined
   let cancelled = false
   let signature = false
   let ruled = false
@@ -220,27 +174,23 @@ function play(overlay: HTMLElement, still: boolean): Show {
         }),
       )
     }
-    sheen = find('[data-sheen]').animate(
-      [{ transform: 'translateX(0)' }, { transform: `translateX(${sheenTravel}px)` }],
-      { delay: 1150, duration: 1200, easing: inOut, fill: 'both' },
+    glow = find('[data-glow]').animate(
+      [{ opacity: 0 }, { opacity: 1, offset: 0.35 }, { opacity: 0.5 }],
+      {
+        delay: 1000,
+        duration: 1300,
+        easing: 'ease-out',
+        fill: 'both',
+      },
     )
     flair.push(
-      find('[data-glow]').animate(
-        [{ opacity: 0 }, { opacity: 1, offset: 0.35 }, { opacity: 0.5 }],
-        {
-          delay: 1000,
-          duration: 1300,
-          easing: 'ease-out',
-          fill: 'both',
-        },
-      ),
+      glow,
       find('[data-halo]').animate([{ opacity: 0 }, { opacity: 1 }], {
         delay: 900,
         duration: 1200,
         easing: out,
         fill: 'both',
       }),
-      sheen,
     )
     // Still loading once all of it has played: the rule says so.
     void finished([...intro, ...flair]).then(() => {
@@ -299,14 +249,21 @@ function play(overlay: HTMLElement, still: boolean): Show {
         while (left() > 0) await wait(left())
         if (cancelled) return false
         committed = true
-        // The app takes input from here on.
-        overlay.dataset.revealing = ''
+        /** The app takes input from here on, as it comes up. */
+        const handOver = () => {
+          overlay.dataset.revealing = ''
+          release()
+        }
         // Nobody is watching: skip the show.
-        if (document.hidden) return true
-        if (signature) await finished(sheen ? [...intro, sheen] : intro)
+        if (document.hidden) {
+          handOver()
+          return true
+        }
+        if (signature) await finished(glow ? [...intro, glow] : intro)
         else hurry()
         await finished(intro)
         if (cancelled) return false
+        handOver()
         const mark = find('[data-mark]')
         const fade = [{ opacity: 1 }, { opacity: 0 }]
         if (still) exit.push(overlay.animate(fade, { duration: 180, fill: 'both' }))
@@ -342,6 +299,43 @@ function play(overlay: HTMLElement, still: boolean): Show {
   }
 }
 
+/** Keeps a key from everything after it, its default action included. */
+function swallow(event: KeyboardEvent) {
+  event.preventDefault()
+  event.stopImmediatePropagation()
+}
+
+/**
+ * Keeps input from the app beneath while `overlay` covers it, a dialog included: the overlay holds focus and takes every
+ * key before the app's own listeners (the shell starts its shortcuts after it, once ready). Focus the app asks for
+ * meanwhile, such as the composer or a dialog's first button, is remembered; the returned release hands it back.
+ */
+function shield(overlay: HTMLElement) {
+  let wanted = document.activeElement === document.body ? undefined : document.activeElement
+  let holding = false
+  const hold = (event: FocusEvent) => {
+    // A dialog's focus trap may pull focus straight back: it wins, and its keys still stop here.
+    if (holding || !(event.target instanceof Element) || overlay.contains(event.target)) return
+    wanted = event.target
+    holding = true
+    overlay.focus({ preventScroll: true })
+    holding = false
+  }
+  document.addEventListener('focusin', hold, true)
+  window.addEventListener('keydown', swallow, true)
+  window.addEventListener('keyup', swallow, true)
+  overlay.focus({ preventScroll: true })
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    document.removeEventListener('focusin', hold, true)
+    window.removeEventListener('keydown', swallow, true)
+    window.removeEventListener('keyup', swallow, true)
+    if (wanted instanceof HTMLElement && wanted.isConnected) wanted.focus({ preventScroll: true })
+  }
+}
+
 /** The ULTIMATE wordmark over the whole window until the page is ready, then the app. */
 function Splash() {
   const { ready, timedOut } = useReady()
@@ -353,7 +347,8 @@ function Splash() {
 
   useLayoutEffect(() => {
     if (!overlay.current) return undefined
-    const current = play(overlay.current, still)
+    const release = shield(overlay.current)
+    const current = play(overlay.current, still, release)
     show.current = current
     // The first run plays the signature version, then hands over to onboarding's welcome.
     let active = true
@@ -367,6 +362,7 @@ function Splash() {
     return () => {
       active = false
       current.cancel()
+      release()
     }
   }, [still])
 
@@ -383,9 +379,11 @@ function Splash() {
       aria-busy="true"
       aria-label="Loading Ultimate"
       aria-live="polite"
-      className="fixed inset-0 z-[60] grid place-items-center bg-background data-revealing:pointer-events-none"
+      // Takes the clicks itself, even under a modal dialog's `pointer-events: none` on the body.
+      className="pointer-events-auto fixed inset-0 z-[60] grid place-items-center bg-background outline-none data-revealing:pointer-events-none"
       ref={overlay}
       role="progressbar"
+      tabIndex={-1}
     >
       <div className="relative w-[min(72vw,40rem)]" data-mark="">
         {/* A soft light behind the name, eased so its edge does not show. */}
@@ -451,4 +449,4 @@ function Late() {
   )
 }
 
-export default { slots: { overlay: Splash } } satisfies WebExtension
+export default defineWebExtension({ slots: { overlay: Splash } })

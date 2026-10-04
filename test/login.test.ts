@@ -11,6 +11,7 @@ import {
   skipWithoutChromium,
   temp as tempDirectory,
   removeTemp,
+  untilInput,
 } from './helpers.ts'
 import { Logins } from '../extensions/models/server.ts'
 import { context } from '../server/harness.ts'
@@ -73,6 +74,7 @@ async function launch(test: TestContext) {
     page.on('pageerror', (error) => errors.push(error.message))
     await page.goto(server.url)
     await expect.poll(() => page.locator('main #composer-input').count(), timeout).toBe(1)
+    await untilInput(page)
     await page.keyboard.press('Control+k')
     await page.keyboard.type('Log in to a provider')
     await page.keyboard.press('Enter')

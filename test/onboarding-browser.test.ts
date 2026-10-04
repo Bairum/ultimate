@@ -2,7 +2,7 @@ import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { chromium } from 'playwright-core'
 import { expect, it } from 'vitest'
-import { fauxServer, skipWithoutChromium, temp } from './helpers.ts'
+import { fauxServer, skipWithoutChromium, temp, untilInput } from './helpers.ts'
 
 const timeout = { timeout: 15000 }
 
@@ -57,6 +57,7 @@ it('asks about the project and welcomes once, and a keyboard toggle keeps focus 
     // A reload asks neither again; a dialog would also block the panel below.
     await page.reload()
     await expect.poll(() => page.locator('main #composer-input').count(), timeout).toBe(1)
+    await untilInput(page)
     await page.keyboard.press('Control+k')
     await page.keyboard.type('Extensions…')
     await page.keyboard.press('Enter')

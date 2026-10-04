@@ -12,6 +12,7 @@ import {
   fauxServer as createServer,
   temp as tempDirectory,
   removeTemp,
+  untilInput,
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
 
@@ -136,6 +137,7 @@ it('switches surfaces without interrupting the conversation, and tells the agent
 
   await page.goto(server.url)
   await expect.poll(() => page.locator('main #composer-input').count(), timeout).toBe(1)
+  await untilInput(page)
   await expect
     .poll(async () => (await ui())['shell.shownSurface'], timeout)
     .toEqual({
@@ -234,6 +236,7 @@ it('switches surfaces without interrupting the conversation, and tells the agent
     release()
   }
   await expect.poll(() => page.getByTestId('item').count(), timeout).toBe(3)
+  await untilInput(page)
 
   // Another run on the same surface leaves the prompt's surface line alone.
   server.host.faux!.setResponses([fauxAssistantMessage('Another answer.')])
@@ -336,6 +339,7 @@ export default defineWebExtension({
 
   await page.goto(server.url)
   await expect.poll(() => page.locator('main #composer-input').count(), timeout).toBe(1)
+  await untilInput(page)
   // Agent, Broken, Manual: by title after Agent.
   await page.keyboard.press('Control+3')
   await expect.poll(() => page.getByTestId('manual').count(), timeout).toBe(1)

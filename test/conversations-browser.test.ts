@@ -5,7 +5,7 @@ import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { chromium } from 'playwright-core'
 import { expect, it } from 'vitest'
-import { fauxServer, skipWithoutChromium, temp } from './helpers.ts'
+import { fauxServer, skipWithoutChromium, temp, untilInput } from './helpers.ts'
 import { context } from '../server/harness.ts'
 
 const timeout = { timeout: 15000 }
@@ -76,6 +76,8 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
 
     // After a turn, the main conversation is listed under its first message.
     await page.goto(server.url)
+    await page.locator('#composer-input').waitFor(timeout)
+    await untilInput(page)
     server.host.faux!.setResponses([fauxAssistantMessage('First answer.')])
     await send('first message')
     await expect.poll(titles, timeout).toEqual(['first message'])
@@ -133,6 +135,7 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
     await expect.poll(() => archived.textContent(), timeout).toBe('Archived · 1')
     await page.reload()
     await expect.poll(() => archived.textContent(), timeout).toBe('Archived · 1')
+    await untilInput(page)
     expect(await titles()).toEqual(['second message'])
     await archived.click()
     await expect

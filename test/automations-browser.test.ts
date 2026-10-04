@@ -4,7 +4,7 @@ import { fauxAssistantMessage, fauxText } from '@earendil-works/pi-ai/providers/
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { chromium } from 'playwright-core'
 import { expect, it } from 'vitest'
-import { fauxServer, skipWithoutChromium, temp } from './helpers.ts'
+import { fauxServer, skipWithoutChromium, temp, untilInput } from './helpers.ts'
 
 const timeout = { timeout: 15000 }
 
@@ -37,6 +37,7 @@ it('creates an automation from the form, lists its runs live, opens one, and kee
     page.on('pageerror', (error) => errors.push(error.message))
     await page.goto(server.url)
     await page.locator('#composer-input').waitFor(timeout)
+    await untilInput(page)
     await page.keyboard.press('Control+k')
     await page.keyboard.type('Automations…')
     await page.keyboard.press('Enter')
