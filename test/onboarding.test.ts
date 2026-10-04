@@ -76,7 +76,8 @@ it('gates project resources, remembers choices, and applies onboarding settings 
     const tools = async () => (await server!.root.agent(context)).tools.map((tool) => tool.name)
     expect(await action('status')).toMatchObject({
       firstRun: true,
-      adds: { agents: ['y'], skills: ['local-skill'] },
+      // Undecided: the project's settings are not applied, but the page shows what they would enable.
+      adds: { agents: ['y'], skills: ['local-skill'], enable: ['subagents'], disable: [] },
     })
     expect(server.system.current().project).toMatchObject({
       config: true,

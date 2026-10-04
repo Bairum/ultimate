@@ -97,7 +97,25 @@ async function adds(projectRoot: string) {
   })
     .skills.map((skill) => skill.name)
     .toSorted()
-  return { agents, skills }
+  return { agents, skills, ...(await declared(projectRoot)) }
+}
+
+const names = (value: unknown) =>
+  Array.isArray(value) ? value.filter((name): name is string => typeof name === 'string') : []
+
+/**
+ * The extension names a project's settings would enable or disable, read only to show them: the project's settings
+ * apply once the project is chosen, so the host's gated settings are empty until then.
+ */
+async function declared(projectRoot: string) {
+  try {
+    const { extensions } = JSON.parse(
+      await readFile(join(projectRoot, '.ultimate/settings.json'), 'utf8'),
+    ) as { extensions?: { enable?: unknown; disable?: unknown } }
+    return { enable: names(extensions?.enable), disable: names(extensions?.disable) }
+  } catch {
+    return { enable: [], disable: [] }
+  }
 }
 
 export const actions = {

@@ -370,7 +370,8 @@ function Replaces({ names, line }: { names: readonly string[]; line: (name: stri
  */
 function Adds({ system, adds }: { system: SystemInfo; adds?: Status['adds'] }) {
   const { line } = useDescribed()
-  const { enable, disable } = projectLists(system)
+  // Before the project is chosen its settings are not applied, so the host's copy is empty; status reads the file.
+  const { enable, disable } = adds ?? projectLists(system)
   const replaces = adds?.replaces ?? []
   const own = system.extensions.filter(
     (extension) => extension.source === 'project' && !replaces.includes(extension.name),

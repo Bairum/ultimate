@@ -9,7 +9,13 @@ import type { ExtensionInfo, SystemInfo } from '@/sdk'
  */
 export interface Status {
   firstRun: boolean
-  adds: { agents: string[]; skills: string[]; replaces: string[] }
+  adds: {
+    agents: string[]
+    skills: string[]
+    replaces: string[]
+    enable: string[]
+    disable: string[]
+  }
 }
 /** One entry of the `extensions` action: the first sentence of its README is the line the UI shows. */
 interface Described {
