@@ -8,7 +8,7 @@ app comes up once the page is ready.
   then, so the overlay draws over the background `web/index.html` paints and nothing of the app flashes, however late
   the splash installs.
 - **The show** (Web Animations API): each letter's outline traces in behind a bright pen, stroke by stroke, then
-  fills in the brand colour, and a glow blooms. Still loading after that, a quiet rule draws out beneath the name.
+  fills in the brand colour. Still loading after that, a quiet rule draws out beneath the name.
   Once ready, a drawing still in progress finishes within a quarter second and the overlay fades into the app. It
   stays at least 0.7 s, so a warm start does not flash.
 - **First run** (onboarding's `status` action reports `firstRun`): the signature version plays slower and in full,
@@ -36,6 +36,6 @@ is `aria-hidden`.
 `web.tsx` holds the outlines of ULTIMATE as the header sets it, Inter SemiBold tracked 0.28em, taken from the
 display optical size (`opsz` 32, `wght` 600) of the Inter variable font that `@fontsource-variable/inter` ships, with
 overlaps removed and kerned by HarfBuzz. Its colours are theme tokens (`brand`, `foreground`), so it follows light and
-dark. Sizes inside the SVG, the stroke widths and the glow's blur, are in font units and scale with the wordmark.
+dark. Sizes inside the SVG, such as the stroke widths, are in font units and scale with the wordmark.
 
 Turn it off with `{ "extensions": { "disable": ["splash"] } }` in `~/.ultimate/settings.json`.

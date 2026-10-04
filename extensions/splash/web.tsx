@@ -1,6 +1,6 @@
 import { TriangleAlertIcon, XIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { api, cn, defineWebExtension, useReady } from '@/sdk'
+import { api, defineWebExtension, useReady } from '@/sdk'
 
 /** The core's readiness deadline: not ready by then, the app opens anyway and the notice names what is missing. */
 const timeout = 8000
@@ -53,7 +53,7 @@ const outline = (d: string, key: number, kind: 'trace' | 'pen') => (
 
 /**
  * The wordmark: per letter its fill, the outline that traces it, and the pen, a short bright dash at the head of the
- * outline. A blurred copy glows behind it. `still` draws it settled.
+ * outline. `still` draws it settled.
  */
 function Wordmark({ still }: { still: boolean }) {
   return (
@@ -62,17 +62,6 @@ function Wordmark({ still }: { still: boolean }) {
       className="block w-full overflow-visible"
       viewBox={`${view.x} 0 ${view.width} ${view.height}`}
     >
-      <defs>
-        {/* Font units, like everything here, so the glow scales with the wordmark. */}
-        <filter height="300%" id="ultimate-splash-glow" width="130%" x="-15%" y="-100%">
-          <feGaussianBlur stdDeviation="260" />
-        </filter>
-      </defs>
-      <g className="opacity-45 dark:opacity-90">
-        <g data-glow="" filter="url(#ultimate-splash-glow)" opacity={still ? 0.5 : 0}>
-          <path className="fill-brand" d={letters.flat().join('')} />
-        </g>
-      </g>
       {letters.map((contours, index) => (
         <g data-letter="" key={index}>
           <path
@@ -105,7 +94,7 @@ const finished = (animations: readonly Animation[]) =>
   Promise.allSettled(animations.map((animation) => animation.finished))
 
 interface Show {
-  /** Plays the first run's signature version: a slower intro and its glow in full, the rule drawn beneath. */
+  /** Plays the first run's signature version: a slower intro in full, the rule drawn beneath. */
   signature(): void
   /** Settles the wordmark and fades the overlay into the app; true once it has gone, false when cancelled. */
   reveal(): Promise<boolean>
@@ -114,7 +103,7 @@ interface Show {
 
 /**
  * Animates the splash in `overlay` with the Web Animations API. Each letter's outline traces in behind a bright pen,
- * then fills, and a glow blooms. Held longer, a rule draws out beneath until the reveal. `still` (reduced
+ * then fills. Held longer, a rule draws out beneath until the reveal. `still` (reduced
  * motion) shows the settled wordmark and only fades. `release` hands input back to the app as the overlay fades.
  */
 function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
@@ -122,10 +111,9 @@ function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
   const find = (selector: string) => overlay.querySelector(selector)!
   /** The drawing: hurried along once the app is ready. */
   const intro: Animation[] = []
-  /** Glow, halo, and rule: not waited for, except the signature's glow. */
+  /** The rule: not waited for. */
   const flair: Animation[] = []
   const exit: Animation[] = []
-  let glow: Animation | undefined
   let cancelled = false
   let signature = false
   let ruled = false
@@ -174,24 +162,6 @@ function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
         }),
       )
     }
-    glow = find('[data-glow]').animate(
-      [{ opacity: 0 }, { opacity: 1, offset: 0.35 }, { opacity: 0.5 }],
-      {
-        delay: 1000,
-        duration: 1300,
-        easing: 'ease-out',
-        fill: 'both',
-      },
-    )
-    flair.push(
-      glow,
-      find('[data-halo]').animate([{ opacity: 0 }, { opacity: 1 }], {
-        delay: 900,
-        duration: 1200,
-        easing: out,
-        fill: 'both',
-      }),
-    )
     // Still loading once all of it has played: the rule says so.
     void finished([...intro, ...flair]).then(() => {
       if (!committed) rule()
@@ -255,7 +225,7 @@ function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
           handOver()
           return true
         }
-        if (signature) await finished(glow ? [...intro, glow] : intro)
+        if (signature) await finished(intro)
         else hurry()
         await finished(intro)
         if (cancelled) return false
@@ -386,16 +356,6 @@ function Splash() {
       tabIndex={-1}
     >
       <div className="relative w-[min(72vw,40rem)]" data-mark="">
-        {/* A soft light behind the name, eased so its edge does not show. */}
-        <div className="pointer-events-none absolute -inset-x-1/4 -inset-y-[180%] opacity-60 dark:opacity-100">
-          <div
-            className={cn(
-              'size-full bg-[radial-gradient(closest-side,color-mix(in_oklab,var(--brand)_12%,transparent),color-mix(in_oklab,var(--brand)_6%,transparent)_35%,color-mix(in_oklab,var(--brand)_2%,transparent)_65%,transparent)]',
-              !still && 'opacity-0',
-            )}
-            data-halo=""
-          />
-        </div>
         <Wordmark still={still} />
         <div
           className="relative mx-auto mt-[7%] h-px w-1/4 overflow-hidden bg-foreground/10 opacity-0"
