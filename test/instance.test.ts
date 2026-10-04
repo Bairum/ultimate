@@ -1,4 +1,4 @@
-import { rm, writeFile } from 'node:fs/promises'
+import { writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
@@ -10,7 +10,7 @@ import subagents, { Subagents } from '../extensions/subagents/server.ts'
 import { git } from '../extensions/subagents/isolates/worktree.ts'
 import { projectSettings } from '../server/project-setup.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
-import { temp } from './helpers.ts'
+import { temp, removeTemp } from './helpers.ts'
 
 it('previews a worktree child on its own home and port and validates child inputs', async () => {
   const root = await temp('ultimate-preview-')
@@ -105,10 +105,10 @@ it('previews a worktree child on its own home and port and validates child input
       stopped: preview.id,
     })
     expect(JSON.parse(await call('instance', { action: 'list' }))).toEqual([])
-    await rm(preview.home, { recursive: true, force: true })
+    await removeTemp(preview.home)
   } finally {
     for (const cleanup of cleanups) await cleanup()
     await opened.close()
-    await rm(root, { recursive: true, force: true })
+    await removeTemp(root)
   }
 }, 120000)

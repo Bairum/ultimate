@@ -1,10 +1,10 @@
-import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
-import { fauxServer as createServer, until, temp, linkDependencies } from './helpers.ts'
+import { fauxServer as createServer, until, temp, removeTemp, linkDependencies } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { Store } from '../extensions/codemode/server.ts'
 
@@ -15,8 +15,7 @@ afterEach(async () => {
     await server.vite.watcher.close()
     await server.close()
   }
-  for (const directory of directories.splice(0))
-    await rm(directory, { recursive: true, force: true, maxRetries: 5 })
+  for (const directory of directories.splice(0)) await removeTemp(directory)
 })
 async function fixture() {
   const directory = await temp('ultimate-codemode-')

@@ -1,6 +1,6 @@
-import { chmod, copyFile, mkdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, writeFile } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
-import { temp } from './helpers.ts'
+import { temp, removeTemp } from './helpers.ts'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
@@ -24,6 +24,6 @@ it('runs the real gh once when two copies of the shim are on PATH', async () => 
     })
     expect(stdout.trim()).toBe('real --version')
   } finally {
-    await rm(root, { recursive: true, force: true, maxRetries: 5 })
+    await removeTemp(root)
   }
 })

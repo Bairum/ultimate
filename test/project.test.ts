@@ -8,6 +8,7 @@ import { afterEach, expect, it } from 'vitest'
 import {
   fauxServer as createServer,
   temp as tempDirectory,
+  removeTemp,
   until,
   post as requestPost,
   sourceCopy,
@@ -31,8 +32,7 @@ afterEach(async () => {
     child.kill('SIGTERM')
     await exited
   }
-  for (const path of directories.splice(0))
-    await rm(path, { recursive: true, force: true, maxRetries: 5 })
+  for (const path of directories.splice(0)) await removeTemp(path)
 })
 async function temp() {
   const path = await tempDirectory('ultimate-project-')

@@ -1,6 +1,6 @@
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { projectSettings } from '../server/project-setup.ts'
-import { mkdir, readFile, rm, writeFile, access, symlink, chmod } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, access, symlink, chmod } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
@@ -15,7 +15,7 @@ import { Metadata } from '../server/metadata.ts'
 import type { ActionContext } from '../server/actions.ts'
 import subagents, { actions, Subagents } from '../extensions/subagents/server.ts'
 import { create, git, discard } from '../extensions/subagents/isolates/worktree.ts'
-import { temp, until } from './helpers.ts'
+import { temp, removeTemp, until } from './helpers.ts'
 
 const Gate = defineTask<null, { phase: 'hold' }, null>({
   name: 'test.lifecycle-gate',
@@ -33,7 +33,7 @@ const directories: string[] = []
 const hosts: OpenHost[] = []
 afterEach(async () => {
   for (const host of hosts.splice(0)) await host.close()
-  for (const path of directories.splice(0)) await rm(path, { recursive: true, force: true })
+  for (const path of directories.splice(0)) await removeTemp(path)
 })
 async function fixture() {
   const root = await temp('ultimate-worktrees-')

@@ -1,5 +1,5 @@
 import { rm, writeFile } from 'node:fs/promises'
-import { temp } from './helpers.ts'
+import { temp, removeTemp } from './helpers.ts'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
@@ -10,8 +10,7 @@ const directories: string[] = []
 const locks: Awaited<ReturnType<typeof acquireLock>>[] = []
 afterEach(async () => {
   for (const lock of locks.splice(0)) await lock.close()
-  for (const directory of directories.splice(0))
-    await rm(directory, { recursive: true, force: true, maxRetries: 5 })
+  for (const directory of directories.splice(0)) await removeTemp(directory)
 })
 async function path() {
   const directory = await temp('ultimate-lock-')

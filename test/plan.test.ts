@@ -1,4 +1,3 @@
-import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { defineExtension } from '@earendil-works/pi-durable'
@@ -6,7 +5,7 @@ import type { JsonObject } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
 import plan, { Plan } from '../extensions/plan/server.ts'
 import { context, prepareHarness } from '../server/harness.ts'
-import { temp } from './helpers.ts'
+import { temp, removeTemp } from './helpers.ts'
 
 it('keeps the ledger across restart, replays add once, and lists open work', async () => {
   const directory = await temp('ultimate-plan-')
@@ -126,6 +125,6 @@ it('keeps the ledger across restart, replays add once, and lists open work', asy
     expect(prompt).not.toContain('<plan>')
   } finally {
     await opened.close()
-    await rm(directory, { recursive: true, force: true, maxRetries: 5 })
+    await removeTemp(directory)
   }
 })

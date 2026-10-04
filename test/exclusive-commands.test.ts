@@ -1,10 +1,10 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { expect, it } from 'vitest'
 import { context } from '../server/harness.ts'
-import { fauxServer, temp, until } from './helpers.ts'
+import { fauxServer, temp, removeTemp, until } from './helpers.ts'
 
 it('serializes matching commands across conversations without delaying other bash calls', async () => {
   const directory = await temp('ultimate-exclusive-')
@@ -110,6 +110,6 @@ it('serializes matching commands across conversations without delaying other bas
     }
   } finally {
     await server.close()
-    await rm(directory, { recursive: true, force: true })
+    await removeTemp(directory)
   }
 })

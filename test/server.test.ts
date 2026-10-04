@@ -15,6 +15,7 @@ import {
   post,
   attach,
   temp,
+  removeTemp,
   linkDependencies,
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
@@ -31,8 +32,7 @@ afterEach(async () => {
     await server.vite.watcher.close()
     await server.close()
   }
-  for (const directory of directories.splice(0))
-    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  for (const directory of directories.splice(0)) await removeTemp(directory)
 })
 async function fixture(
   extra = false,

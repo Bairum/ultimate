@@ -1,5 +1,5 @@
 import { projectSettings } from '../server/project-setup.ts'
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
@@ -18,14 +18,13 @@ import { Metadata } from '../server/metadata.ts'
 import { UiState } from '../server/ui-state.ts'
 import { discoverAgents, parseDefinition } from '../extensions/subagents/agents.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
-import { until, temp } from './helpers.ts'
+import { until, temp, removeTemp } from './helpers.ts'
 
 const directories: string[] = []
 const hosts: OpenHost[] = []
 afterEach(async () => {
   for (const host of hosts.splice(0)) await host.close()
-  for (const path of directories.splice(0))
-    await rm(path, { recursive: true, force: true, maxRetries: 5 })
+  for (const path of directories.splice(0)) await removeTemp(path)
 })
 const definition = (body = 'Original instructions') =>
   `---\nname: scout\ndescription: Search\ntools: [read, bash]\n---\n${body}\n`

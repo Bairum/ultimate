@@ -1,9 +1,9 @@
-import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises'
 import { watch } from 'node:fs'
 import type { FSWatcher } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { expect, it } from 'vitest'
-import { fauxServer, post, temp } from './helpers.ts'
+import { fauxServer, post, temp, removeTemp } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { projectDecision } from '../server/project-setup.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
@@ -200,7 +200,7 @@ it('gates project resources, remembers choices, and applies onboarding settings 
   } finally {
     for (const watcher of watchers) watcher.close()
     await server?.close()
-    await rm(home, { recursive: true, force: true })
+    await removeTemp(home)
   }
 }, 60000)
 
@@ -212,7 +212,7 @@ it('does not inherit a parent project choice', async () => {
     new ProjectTrustStore(join(home, '.ultimate')).set(join(home, 'parent'), true)
     expect(projectDecision(project, home)).toBe(null)
   } finally {
-    await rm(home, { recursive: true, force: true })
+    await removeTemp(home)
   }
 })
 
@@ -260,6 +260,6 @@ it('boots with corrupt trust, discloses project replacements, and recovers after
     )
   } finally {
     await server?.close()
-    await rm(home, { recursive: true, force: true })
+    await removeTemp(home)
   }
 }, 60000)

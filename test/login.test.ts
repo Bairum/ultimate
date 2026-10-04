@@ -1,4 +1,3 @@
-import { rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
@@ -6,7 +5,13 @@ import { chromium } from 'playwright-core'
 import type { Browser, Page } from 'playwright-core'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { TestContext } from 'vitest'
-import { fauxServer, post, skipWithoutChromium, temp as tempDirectory } from './helpers.ts'
+import {
+  fauxServer,
+  post,
+  skipWithoutChromium,
+  temp as tempDirectory,
+  removeTemp,
+} from './helpers.ts'
 import { Logins } from '../extensions/models/server.ts'
 import { context } from '../server/harness.ts'
 
@@ -16,8 +21,7 @@ const browsers: Browser[] = []
 afterEach(async () => {
   for (const browser of browsers.splice(0)) await browser.close()
   for (const server of servers.splice(0)) await server.close()
-  for (const path of directories.splice(0))
-    await rm(path, { recursive: true, force: true, maxRetries: 5 })
+  for (const path of directories.splice(0)) await removeTemp(path)
 })
 const timeout = { timeout: 15000 }
 

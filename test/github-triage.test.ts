@@ -3,7 +3,7 @@ import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expect, it } from 'vitest'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { fauxServer as createServer, post, temp } from './helpers.ts'
+import { fauxServer as createServer, post, temp, removeTemp } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { actions } from '../.ultimate/extensions/github-triage/server.ts'
 import type { ActionContext } from '../server/actions.ts'
@@ -108,7 +108,7 @@ it('guards argv and ordinary shell indirection without executing any real GitHub
     ])
     await expect(readFile(log)).rejects.toThrow('ENOENT')
   } finally {
-    await rm(home, { recursive: true, force: true, maxRetries: 5 })
+    await removeTemp(home)
   }
 })
 
@@ -151,7 +151,7 @@ it('refuses unlisted repositories before exec, rejects dot segments, and preserv
     }
     expect(await actions.labels({ repo: 'private/repo' }, ctx)).toEqual([])
   } finally {
-    await rm(home, { recursive: true, force: true, maxRetries: 5 })
+    await removeTemp(home)
   }
 })
 
@@ -200,7 +200,7 @@ it('loads the bash wrap into agent.tools and requires browser headers on actions
   } finally {
     await server.close()
     process.env.PATH = oldPath
-    await rm(home, { recursive: true, force: true, maxRetries: 5 })
+    await removeTemp(home)
   }
 })
 
@@ -309,6 +309,6 @@ else setTimeout(() => console.log('https://github.com/HazAT/ultimate/issues/1#c'
     await server.close()
     process.env.PATH = oldPath
     delete process.env.RECORD
-    await rm(home, { recursive: true, force: true, maxRetries: 5 })
+    await removeTemp(home)
   }
 })

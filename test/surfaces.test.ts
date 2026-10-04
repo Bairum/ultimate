@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { defineExtension, defineTool, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { Type } from '@earendil-works/pi-ai'
@@ -11,6 +11,7 @@ import {
   skipWithoutChromium,
   fauxServer as createServer,
   temp as tempDirectory,
+  removeTemp,
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
 
@@ -20,8 +21,7 @@ const browsers: Browser[] = []
 afterEach(async () => {
   for (const browser of browsers.splice(0)) await browser.close()
   for (const server of servers.splice(0)) await server.close()
-  for (const path of directories.splice(0))
-    await rm(path, { recursive: true, force: true, maxRetries: 5 })
+  for (const path of directories.splice(0)) await removeTemp(path)
 })
 const timeout = { timeout: 15000 }
 async function temp() {

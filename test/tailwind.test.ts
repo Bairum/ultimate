@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path'
 import { chromium, type Browser } from 'playwright-core'
 import { createServer, type ViteDevServer } from 'vite-plus'
 import { expect, it } from 'vitest'
-import { skipWithoutChromium, temp, linkDependencies } from './helpers.ts'
+import { skipWithoutChromium, temp, removeTemp, linkDependencies } from './helpers.ts'
 import { extensionModules } from '../server/vite-extensions.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 
@@ -113,7 +113,7 @@ ${source === 'builtin' ? `if (import.meta.hot) import.meta.hot.accept()` : `if (
     } finally {
       await browser?.close()
       await server?.close()
-      await rm(base, { recursive: true, force: true, maxRetries: 5 })
+      await removeTemp(base)
     }
   },
 )

@@ -3,7 +3,8 @@ import type { ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import {
-  temp as mkdtemp,
+  temp,
+  removeTemp,
   sourceCopy,
   cleanEnv,
   until,
@@ -15,7 +16,7 @@ import type { ConversationView } from '@earendil-works/pi-durable'
 import { afterEach, describe, expect, it } from 'vitest'
 
 it('starts past stale lock sidecars without killing an unrelated live pid', async () => {
-  const home = await mkdtemp('ultimate-stale-supervisor-')
+  const home = await temp('ultimate-stale-supervisor-')
   homes.push(home)
   const unrelated = spawn('sleep', ['60'])
   children.push(unrelated)
@@ -39,8 +40,7 @@ afterEach(async () => {
     child.kill('SIGTERM')
     await exited
   }
-  for (const home of homes.splice(0))
-    await rm(home, { recursive: true, force: true, maxRetries: 5 })
+  for (const home of homes.splice(0)) await removeTemp(home)
 })
 const copies = new Map<string, string>()
 async function launch(home: string) {
@@ -73,7 +73,7 @@ async function launch(home: string) {
   return { child, ultimateRoot, output: () => output }
 }
 async function fixture() {
-  const home = await mkdtemp('ultimate-supervisor-')
+  const home = await temp('ultimate-supervisor-')
   homes.push(home)
   const running = await launch(home)
   await until(() => running.output().includes('Ultimate: http://'))
@@ -263,7 +263,7 @@ describe('supervisor', () => {
     expect((await fetch(url + '/api/models')).status).toBe(200)
   }, 60000)
   it('terminates a live detached core when taking over a stale supervisor lock', async () => {
-    const home = await mkdtemp('ultimate-orphan-')
+    const home = await temp('ultimate-orphan-')
     homes.push(home)
     const ultimateRoot = await sourceCopy(home)
     copies.set(home, ultimateRoot)
@@ -309,7 +309,7 @@ describe('supervisor', () => {
     expect(await readFile(join(running.home, 'demo.txt'), 'utf8')).toBe('after\n')
   }, 60000)
   it('takes over a dead lock and recovers despite a test type error', async () => {
-    const home = await mkdtemp('ultimate-supervisor-')
+    const home = await temp('ultimate-supervisor-')
     homes.push(home)
     await writeFile(join(home, 'ultimate.lock'), JSON.stringify({ pid: 2147483647, port: 4747 }))
     const running = await launch(home)

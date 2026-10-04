@@ -1,19 +1,14 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { temp } from './helpers.ts'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createBuild } from '../server/build.ts'
 
-const roots: string[] = []
-afterEach(() => {
-  vi.unstubAllEnvs()
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
-})
-it('freezes core at boot, compares generations, tracks extensions and caps history', () => {
+afterEach(() => vi.unstubAllEnvs())
+it('freezes core at boot, compares generations, tracks extensions and caps history', async () => {
   vi.stubEnv('ULTIMATE_PREVIOUS_BUILD', undefined)
   vi.stubEnv('ULTIMATE_GENERATION', '1')
-  const root = mkdtempSync(join(tmpdir(), 'ultimate-build-'))
-  roots.push(root)
+  const root = await temp('ultimate-build-')
   mkdirSync(join(root, 'server'))
   mkdirSync(join(root, 'extensions/hello'), { recursive: true })
   writeFileSync(join(root, 'server/main.ts'), 'one')

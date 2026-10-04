@@ -29,14 +29,14 @@ afterEach(() => vi.unstubAllEnvs())
 // Every temp() directory is removed once the test file finishes, so runs do not fill the tmpfs.
 const temps: string[] = []
 afterAll(async () => {
-  // Best effort: a closing Vite optimizer can still be writing deps_temp, and cleanup must not fail a test.
-  for (const path of temps.splice(0))
-    await rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(
-      () => {},
-    )
+  for (const path of temps.splice(0)) await removeTemp(path)
 })
-export async function temp(prefix = 'ultimate-test-') {
-  const path = await mkdtemp(join(tmpdir(), prefix))
+export async function removeTemp(path: string) {
+  // Best effort: a closing Vite optimizer can still be writing deps_temp, and cleanup must not fail a test.
+  await rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => {})
+}
+export async function temp(prefix = 'ultimate-test-', parent = tmpdir()) {
+  const path = await mkdtemp(join(parent, prefix))
   temps.push(path)
   return path
 }
@@ -50,7 +50,7 @@ export async function linkDependencies(root: string) {
 }
 export async function sourceCopy(parent: string) {
   await mkdir(parent, { recursive: true })
-  const root = await mkdtemp(join(parent, 'source-'))
+  const root = await temp('source-', parent)
   await cp(resolve('.'), root, {
     recursive: true,
     filter: (path) =>

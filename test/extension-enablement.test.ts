@@ -1,3 +1,4 @@
+import { removeTemp } from './helpers.ts'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
@@ -10,7 +11,7 @@ const homes: string[] = []
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 afterEach(async () => {
   for (const server of servers.splice(0)) await server.close()
-  for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true })
+  for (const home of homes.splice(0)) await removeTemp(home)
 })
 async function fixture(settings?: string) {
   const home = await temp()

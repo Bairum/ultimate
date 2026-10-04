@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { readFile, readdir, rm } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { expect, it, vi } from 'vitest'
@@ -12,6 +12,7 @@ import {
   until,
   skipWithoutChromium,
   temp,
+  removeTemp,
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -161,7 +162,7 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
     await (await browserState.launched)?.close()
     await server.vite.watcher.close()
     await server.close()
-    await rm(home, { recursive: true, force: true, maxRetries: 5 })
+    await removeTemp(home)
   }
 }, 60000)
 
@@ -261,9 +262,9 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
       } catch {
         /* already exited */
       }
-      await rm(instance.home, { recursive: true, force: true, maxRetries: 5 })
+      await removeTemp(instance.home)
     }
-    await rm(home, { recursive: true, force: true, maxRetries: 5 })
+    await removeTemp(home)
   }
 }, 90000)
 
@@ -301,6 +302,6 @@ it('starts an isolated standalone instance, reads logs and stops it', async () =
   } finally {
     await server.vite.watcher.close()
     await server.close()
-    await rm(home, { recursive: true, force: true, maxRetries: 5 })
+    await removeTemp(home)
   }
 }, 90000)

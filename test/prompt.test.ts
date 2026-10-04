@@ -1,8 +1,8 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
-import { fauxServer, temp, until } from './helpers.ts'
+import { fauxServer, temp, removeTemp, until } from './helpers.ts'
 
 it('renders only enabled guidance, lists off building blocks, and adds self guidance live', async () => {
   const home = await temp()
@@ -91,6 +91,6 @@ it('renders only enabled guidance, lists off building blocks, and adds self guid
     ).toBeUndefined()
   } finally {
     await server.close()
-    await rm(home, { recursive: true, force: true, maxRetries: 3 })
+    await removeTemp(home)
   }
 })
