@@ -6,7 +6,7 @@ import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { defineExtension, defineTask, LiveDoc } from '@earendil-works/pi-durable'
 import type { TaskId } from '@earendil-works/pi-durable'
-import { LifecycleQueue } from '../extensions/subagents/isolates/lifecycle.ts'
+import { lifecycle, LifecycleQueue } from '../extensions/subagents/isolates/lifecycle.ts'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
 import { afterEach, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
@@ -445,4 +445,132 @@ it('creates, replays and discards through a symlinked home without marking an em
   const [child] = await f.children()
   expect(await f.call({ action: 'land', id: child.conversationId })).toContain('Nothing to land')
   expect((await f.children())[0].isolate?.landed).toBeUndefined()
+})
+
+it.each(['land', 'discard'] as const)(
+  'cancelling a queued %s preserves the active rebase and successor serialization',
+  async (operation) => {
+    const f = await fixture()
+    await f.call({ action: 'start', agent: 'worker', task: 'write' })
+    await f.call({ action: 'start', agent: 'worker', task: 'inspect' })
+    const [first, successor] = await f.children()
+    await git(first.isolate!.path, 'add', '.')
+    await git(first.isolate!.path, 'commit', '-m', 'active child')
+    await writeFile(join(successor.isolate!.path, 'successor.txt'), 'successor')
+    await git(successor.isolate!.path, 'add', '.')
+    await git(successor.isolate!.path, 'commit', '-m', 'successor child')
+    const successorTip = await git(successor.isolate!.path, 'rev-parse', 'HEAD')
+    await writeFile(join(f.project, 'parent.txt'), 'parent')
+    await git(f.project, 'add', '.')
+    await git(f.project, 'commit', '-m', 'parent change')
+    const head = await git(f.project, 'rev-parse', 'HEAD')
+    const hook = join(await git(f.project, 'rev-parse', '--absolute-git-dir'), 'hooks/post-rewrite')
+    const entered = join(f.home, 'rebase-entered')
+    const release = join(f.home, 'rebase-release')
+    await writeFile(
+      hook,
+      `#!/bin/sh\ntouch '${entered}'\nwhile [ ! -f '${release}' ]; do sleep 0.05; done\n`,
+    )
+    await chmod(hook, 0o755)
+    const active = actions.land({ id: first.conversationId }, lifecycleContext(f))
+    await until(async () =>
+      access(entered).then(
+        () => true,
+        () => false,
+      ),
+    )
+    const activeTask = (await f.opened.harness.snapshot(LifecycleQueue, context))!.checkouts[
+      f.project
+    ]
+    const rebase = join(
+      await git(first.isolate!.path, 'rev-parse', '--absolute-git-dir'),
+      'rebase-merge',
+    )
+    await access(rebase)
+    const cancelled = actions[operation]({ id: first.conversationId }, lifecycleContext(f)).catch(
+      (error: Error) => error,
+    )
+    const queued = async (previous: TaskId) => {
+      let id = previous
+      await until(async () => {
+        id = (await f.opened.harness.snapshot(LifecycleQueue, context))!.checkouts[f.project]
+        return (
+          id !== previous &&
+          (await f.opened.harness.getTask(id, context))?.state.status === 'waiting'
+        )
+      })
+      return id
+    }
+    const cancelledTask = await queued(activeTask)
+    const next = actions.land({ id: successor.conversationId }, lifecycleContext(f))
+    const nextTask = await queued(cancelledTask)
+    await f.opened.harness.abortTask(cancelledTask, context)
+    expect(await cancelled).toMatchObject({
+      message: 'Child worktree lifecycle operation was aborted',
+    })
+    await until(async () => {
+      const state = (await f.opened.harness.getTask(nextTask, context))?.state
+      return state?.status === 'waiting' && state.on[0] === activeTask
+    })
+    await access(rebase)
+    expect(await git(f.project, 'rev-parse', 'HEAD')).toBe(head)
+    expect(await git(successor.isolate!.path, 'rev-parse', 'HEAD')).toBe(successorTip)
+    await writeFile(release, '')
+    expect((await active).text).toContain('Landed commits')
+    expect((await next).text).toContain('Landed commits')
+    expect(await readFile(join(f.project, 'child.txt'), 'utf8')).toBe('child\n')
+    expect(await readFile(join(f.project, 'successor.txt'), 'utf8')).toBe('successor')
+  },
+)
+it('resumes after rebase has committed the merge checkpoint', async () => {
+  const f = await fixture()
+  await f.call({ action: 'start', agent: 'worker', task: 'write' })
+  const [child] = await f.children()
+  await git(child.isolate!.path, 'add', '.')
+  await git(child.isolate!.path, 'commit', '-m', 'durable child')
+  await writeFile(join(f.project, 'parent.txt'), 'parent')
+  await git(f.project, 'add', '.')
+  await git(f.project, 'commit', '-m', 'parent change')
+  const head = await git(f.project, 'rev-parse', 'HEAD')
+  const original = lifecycle({ projectRoot: f.project, ultimateRoot: f.project }).definition
+  let pause = true
+  let entered = false
+  const taskKind = defineTask({
+    ...original,
+    name: 'test.lifecycle-merge-restart',
+    phases: {
+      ...original.phases,
+      merge: async (task, runtime, ctx) => {
+        if (pause) {
+          entered = true
+          await runtime.sleep(Date.now() + 60000, ctx)
+        }
+        await original.phases.merge(task, runtime, ctx)
+      },
+    },
+  })
+  f.prepared.registry.install(defineExtension({ name: 'merge-restart-test', tasks: [taskKind] }))
+  const task = await f.opened.harness.commit(
+    (tx) =>
+      tx.createTask(
+        taskKind,
+        { parent: f.opened.root.id, child: child.conversationId, operation: 'land' as const },
+        { conversationId: f.opened.root.id, ownership: { kind: 'conversation' }, background: true },
+      ),
+    context,
+  )
+  await until(async () => entered)
+  const tip = await git(child.isolate!.path, 'rev-parse', 'HEAD')
+  expect(await git(f.project, 'rev-parse', 'HEAD')).toBe(head)
+  expect((await f.opened.harness.getTask(task, context))?.state.checkpoint).toMatchObject({
+    phase: 'merge',
+  })
+  await f.opened.close()
+  hosts.splice(hosts.indexOf(f.opened), 1)
+  pause = false
+  f.opened = await f.prepared.open()
+  hosts.push(f.opened)
+  expect((await f.opened.harness.waitForTask(task, context)).state.outcome.status).toBe('completed')
+  expect(await git(f.project, 'rev-parse', 'HEAD')).toBe(tip)
+  expect((await f.children())[0].isolate?.landed).toBe(tip)
 })

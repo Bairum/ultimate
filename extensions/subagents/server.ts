@@ -511,7 +511,7 @@ Available definitions:
                   args.id as ConversationId,
                   operation,
                   { kind: 'task', taskId: api.taskId },
-                  api.callId,
+                  String(api.taskId),
                 ),
               context,
             )

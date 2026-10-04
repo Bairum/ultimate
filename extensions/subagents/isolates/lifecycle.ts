@@ -114,7 +114,25 @@ export function lifecycle(host: Pick<ExtensionHost, 'projectRoot' | 'ultimateRoo
       }),
       check: guarded(async (task, runtime, context) => {
         const { cwd, previous } = task.state.checkpoint
-        if (previous) await runtime.outcomes([previous], context)
+        if (previous) {
+          let waiting = false
+          await runtime.commit(async (tx) => {
+            const queue = await tx.doc(LifecycleQueue)
+            let ancestor: TaskId | undefined = previous
+            while (ancestor && (await tx.task(ancestor))?.state.status === 'terminal')
+              ancestor = queue.predecessors[String(ancestor)]
+            waiting = !!ancestor
+            return ancestor
+              ? {
+                  status: 'waiting',
+                  on: [ancestor],
+                  policy: 'allSettled',
+                  checkpoint: { phase: 'check', cwd, previous: ancestor },
+                }
+              : undefined
+          }, context)
+          if (waiting) return
+        }
         const child = (await runtime.snapshot(Subagents, task.input.parent, context))?.agents[
           String(task.input.child)
         ]
@@ -240,7 +258,7 @@ export function lifecycle(host: Pick<ExtensionHost, 'projectRoot' | 'ultimateRoo
       const isolate = (await runtime.snapshot(Subagents, task.input.parent, context))?.agents[
         String(task.input.child)
       ]?.isolate
-      if (isolate) await abortRebase(isolate.path)
+      if (isolate && task.state.checkpoint.phase === 'rebase') await abortRebase(isolate.path)
       await runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), context)
     },
   })
