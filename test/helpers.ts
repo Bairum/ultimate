@@ -29,8 +29,11 @@ afterEach(() => vi.unstubAllEnvs())
 // Every temp() directory is removed once the test file finishes, so runs do not fill the tmpfs.
 const temps: string[] = []
 afterAll(async () => {
+  // Best effort: a closing Vite optimizer can still be writing deps_temp, and cleanup must not fail a test.
   for (const path of temps.splice(0))
-    await rm(path, { recursive: true, force: true, maxRetries: 5 })
+    await rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(
+      () => {},
+    )
 })
 export async function temp(prefix = 'ultimate-test-') {
   const path = await mkdtemp(join(tmpdir(), prefix))
