@@ -299,10 +299,14 @@ function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
   }
 }
 
-/** Keeps a key from everything after it, its default action included. */
+/** F5 and Ctrl/Cmd+R: reloading stays possible while the splash covers, for a load that hangs. */
+const reloads = (event: KeyboardEvent) =>
+  event.key === 'F5' || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'r')
+
+/** Keeps a key from everything after it, its default action included, except the browser's reload. */
 function swallow(event: KeyboardEvent) {
-  event.preventDefault()
   event.stopImmediatePropagation()
+  if (!reloads(event)) event.preventDefault()
 }
 
 /**
