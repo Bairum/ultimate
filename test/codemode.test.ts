@@ -34,9 +34,13 @@ async function fixture() {
     "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', cacheDir: '.vite-cache', optimizeDeps: { noDiscovery: true } })",
   )
   await writeFile(join(ultimateRoot, 'web/index.html'), '<html>Codemode</html>')
+  // The copy reaches the definitions module in the checkout, as `ultimate.agents()` reads them through it.
   await writeFile(
     join(ultimateRoot, 'extensions/codemode/server.ts'),
-    await readFile(resolve('extensions/codemode/server.ts'), 'utf8'),
+    (await readFile(resolve('extensions/codemode/server.ts'), 'utf8')).replace(
+      "'../subagents/agents.ts'",
+      JSON.stringify(resolve('extensions/subagents/agents.ts')),
+    ),
   )
   const options = {
     ultimateRoot,
@@ -170,8 +174,14 @@ it('composes read and bash with private nested results and final JSON details', 
   expect(failed.data.isError).toBe(true)
 })
 
-it('introspects extensions, documents, system, conversations, task graph, models, and pre-reset stored history', async () => {
-  const { server } = await fixture()
+it('introspects extensions, documents, system, conversations, task graph, models, agents, and pre-reset stored history', async () => {
+  const { server, options } = await fixture()
+  await mkdir(join(options.ultimateRoot, 'agents'))
+  await writeFile(
+    join(options.ultimateRoot, 'agents/scout.md'),
+    '---\nname: scout\ndescription: Search\ntools: [read]\n---\nLook\n',
+  )
+  await writeFile(join(options.ultimateRoot, 'agents/broken.md'), 'broken')
   await run(server, `store('saved', 7); return 1;`, 'history-needle')
   await server.root.reset(undefined, context)
   const response = await fetch(server.url + '/api/ui', {
@@ -187,7 +197,7 @@ it('introspects extensions, documents, system, conversations, task graph, models
   expect(ui.data.details.value).toEqual({ ui: { 'shell.activeView': 'tasks' }, live: true })
   const result = await run(
     server,
-    `const extensions = await ultimate.extensions(); const matches = await ultimate.search('history-needle'); const entries = await ultimate.entries(1, {kinds:['pi.user'], limit:1}); const old = await ultimate.entries(1, {before:entries[0].id}); return {extension:extensions.find(x=>x.name==='codemode'), matches:matches.length, old:old.length, doc:await ultimate.doc('codemode.store'), pid:(await ultimate.system()).process.pid, conversations:(await ultimate.conversations()).length, graph:!!(await ultimate.taskGraph()), models:Array.isArray(await ultimate.models())};`,
+    `const extensions = await ultimate.extensions(); const matches = await ultimate.search('history-needle'); const entries = await ultimate.entries(1, {kinds:['pi.user'], limit:1}); const old = await ultimate.entries(1, {before:entries[0].id}); return {extension:extensions.find(x=>x.name==='codemode'), matches:matches.length, old:old.length, doc:await ultimate.doc('codemode.store'), pid:(await ultimate.system()).process.pid, conversations:(await ultimate.conversations()).length, graph:!!(await ultimate.taskGraph()), models:Array.isArray(await ultimate.models()), agents:await ultimate.agents()};`,
   )
   expect(result.data.isError).toBe(false)
   expect(result.data.details.value).toMatchObject({
@@ -197,6 +207,21 @@ it('introspects extensions, documents, system, conversations, task graph, models
     graph: true,
     models: true,
     pid: process.pid,
+    agents: {
+      definitions: [
+        {
+          name: 'scout',
+          description: 'Search',
+          source: 'builtin',
+          path: join(options.ultimateRoot, 'agents/scout.md'),
+          tools: ['read'],
+          instructions: 'Look',
+        },
+      ],
+      errors: [
+        { name: 'broken', source: 'builtin', error: expect.stringContaining('frontmatter') },
+      ],
+    },
   })
   expect((result.data.details.value as { matches: number }).matches).toBeGreaterThan(0)
   expect((result.data.details.value as { old: number }).old).toBeGreaterThan(0)

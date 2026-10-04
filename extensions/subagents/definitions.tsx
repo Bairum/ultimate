@@ -1,0 +1,595 @@
+import { BotIcon, CopyIcon, PlusIcon, Trash2Icon, TriangleAlertIcon, XIcon } from 'lucide-react'
+import { useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import {
+  api,
+  cn,
+  shortenPath,
+  useAction,
+  useDialog,
+  useExtensionUiState,
+  useModels,
+  useSystem,
+  useUltimate,
+} from '@/sdk'
+import {
+  Field,
+  InstructionsEditor,
+  inputClass,
+  ModelField,
+  Segmented,
+  ToolsField,
+  thinkingLevels,
+} from './fields.tsx'
+import type { ModelRef } from './fields.tsx'
+import { Heading, Tag, useRefresh } from './parts.tsx'
+
+type Source = 'builtin' | 'user' | 'project'
+type Scope = 'user' | 'project'
+interface Definition {
+  name: string
+  description: string
+  path: string
+  source: Source
+  model?: ModelRef
+  thinking?: string
+  tools?: string[]
+  isolate?: 'none' | 'worktree'
+}
+interface Invalid {
+  name: string
+  path: string
+  source: Source
+  error: string
+}
+/** The `definitions` action: what `start` can name, the files that failed to parse, and what the form needs. */
+interface Discovery {
+  definitions: Definition[]
+  errors: Invalid[]
+  main: { model?: ModelRef; thinking?: string; tools: { name: string; description: string }[] }
+  scopes: Record<Scope, string>
+  projectLocal: boolean
+}
+/** The `definition` action: the definition that applies, a later file of its name that fails to parse, the raw file. */
+interface Shown {
+  definition?: Definition & { instructions: string }
+  invalid?: Invalid
+  source: Source
+  path: string
+  raw: string
+  files: Source[]
+}
+
+/**
+ * The config dialog's id, and the UI state naming the definition it shows ('' for a new one). Another extension opens
+ * a definition by setting `ext.subagents.definition` with `useUiState` and then opening the dialog.
+ */
+export const definitionDialog = 'subagents.definition'
+const shownKey = 'definition'
+
+export const sourceLabel: Record<Source, string> = {
+  builtin: 'built-in',
+  user: 'user',
+  project: 'project',
+}
+const parseError = (error: string) => error.replace(/^Error: /, '')
+const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+/** Opens the config dialog on a definition, or on a new one with `''`. */
+function useOpenDefinition() {
+  const { open } = useUltimate()
+  const [, setShown] = useExtensionUiState(shownKey, '')
+  return (name: string) => {
+    setShown(name)
+    open(definitionDialog)
+  }
+}
+
+/** Definitions are reread at every start; the list refetches on focus, as after an edit, and when the dialog closes. */
+export function Definitions() {
+  const { data, refetch } = useAction<Discovery>('subagents', 'definitions')
+  const [editing] = useDialog(definitionDialog)
+  useRefresh(refetch, String(editing))
+  const show = useOpenDefinition()
+  if (!data) return null
+  const { definitions, errors } = data
+  return (
+    <div className="pt-4">
+      <Heading
+        meta={
+          <>
+            <span>
+              {definitions.length}
+              {errors.length > 0 && <span className="text-error"> · {errors.length} invalid</span>}
+            </span>
+            <Button
+              className="h-5 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
+              onClick={() => show('')}
+              size="xs"
+              title="New agent definition"
+              variant="ghost"
+            >
+              <PlusIcon className="size-3" />
+              New
+            </Button>
+          </>
+        }
+      >
+        Definitions
+      </Heading>
+      {definitions.map((definition) => (
+        <button
+          className="block w-full px-3 py-1 text-left transition-colors hover:bg-accent/50"
+          key={definition.path}
+          onClick={() => show(definition.name)}
+          title={[
+            definition.path,
+            definition.model && `model: ${definition.model.provider}/${definition.model.modelId}`,
+            `tools: ${definition.tools?.join(', ') ?? 'inherited'}`,
+          ]
+            .filter(Boolean)
+            .join('\n')}
+          type="button"
+        >
+          <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11.5px]">
+            <BotIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="shrink-0 text-foreground/85">{definition.name}</span>
+            {definition.source !== 'builtin' && <Tag>{definition.source}</Tag>}
+            {definition.isolate === 'worktree' && <Tag>worktree</Tag>}
+            <span className="ml-auto truncate pl-2 text-[10.5px] text-muted-foreground/70">
+              {definition.model?.modelId ?? 'inherits model'}
+              {definition.thinking && ` · ${definition.thinking}`}
+            </span>
+          </div>
+          <p className="line-clamp-2 pl-5 font-sans text-[12px] leading-snug text-muted-foreground">
+            {definition.description}
+          </p>
+        </button>
+      ))}
+      {errors.map((error) => (
+        <button
+          className="block w-full px-3 py-1 text-left transition-colors hover:bg-accent/50"
+          key={error.path}
+          onClick={() => show(error.name)}
+          title={error.path}
+          type="button"
+        >
+          <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11.5px] text-error">
+            <BotIcon className="size-3.5 shrink-0" />
+            <span className="shrink-0">{error.name}</span>
+            <Tag>{error.source}</Tag>
+          </div>
+          <p className="line-clamp-3 pl-5 font-mono text-[11px] leading-snug break-words whitespace-pre-wrap text-error/80">
+            {parseError(error.error)}
+          </p>
+        </button>
+      ))}
+      {definitions.length === 0 && errors.length === 0 && (
+        <p className="px-3 font-sans text-[12px] leading-relaxed text-muted-foreground/70">
+          No definitions yet: add one with New, or Markdown files in{' '}
+          <code className="font-mono">.ultimate/agents/</code>
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** The config dialog, mounted in the overlay so other extensions can open it too. */
+export function DefinitionDialog() {
+  const [open, setOpen] = useDialog(definitionDialog)
+  const [shown, setShown] = useExtensionUiState(shownKey, '')
+  return (
+    <Dialog onOpenChange={setOpen} open={open}>
+      <DialogContent
+        className="flex h-[min(88vh,52rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl"
+        showCloseButton={false}
+      >
+        {open && <Loader close={() => setOpen(false)} key={shown} name={shown} show={setShown} />}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** Fetches what the form needs, and remounts it with fresh values after each save. */
+function Loader({
+  name,
+  show,
+  close,
+}: {
+  name: string
+  show: (name: string) => void
+  close: () => void
+}) {
+  const discovery = useAction<Discovery>('subagents', 'definitions')
+  // Shown inline, as the dialog's content, rather than as a notice.
+  const shown = useAction<Shown>(
+    'subagents',
+    'definition',
+    { name },
+    { enabled: name !== '', onError: () => {} },
+  )
+  const [revision, setRevision] = useState(0)
+  if (!discovery.data || (name && !shown.data))
+    return (
+      <>
+        <DialogTitle className="sr-only">Agent definition</DialogTitle>
+        <DialogDescription className="sr-only">Loading the definition</DialogDescription>
+        <p className="m-auto font-mono text-[12px] text-muted-foreground">
+          {shown.error ? message(shown.error) : 'Loading…'}
+        </p>
+      </>
+    )
+  return (
+    <Form
+      close={close}
+      discovery={discovery.data}
+      key={revision}
+      onChanged={async (saved) => {
+        if (saved && saved !== name) return show(saved)
+        if (saved === undefined && !name) return close()
+        const [next] = await Promise.all([name ? shown.refetch() : undefined, discovery.refetch()])
+        if (name && !next) return close()
+        setRevision((value) => value + 1)
+      }}
+      shown={name ? shown.data : undefined}
+    />
+  )
+}
+
+interface Draft {
+  name: string
+  description: string
+  model: ModelRef | null
+  thinking: string | null
+  tools: string[] | null
+  isolate: 'none' | 'worktree'
+  instructions: string
+}
+const draftOf = (definition?: Shown['definition'], name = ''): Draft => ({
+  name: definition?.name ?? name,
+  description: definition?.description ?? '',
+  model: definition?.model ?? null,
+  thinking: definition?.thinking ?? null,
+  tools: definition?.tools ?? null,
+  isolate: definition?.isolate ?? 'none',
+  instructions: definition?.instructions ?? '',
+})
+
+/** One definition's config; a new one when `shown` is undefined or after Duplicate. */
+function Form({
+  discovery,
+  shown,
+  close,
+  onChanged,
+}: {
+  discovery: Discovery
+  shown?: Shown
+  close: () => void
+  /** After a save (the saved name) or a delete (undefined). */
+  onChanged: (saved?: string) => Promise<unknown>
+}) {
+  const system = useSystem()
+  const initial = draftOf(shown?.definition, shown?.invalid?.name)
+  const [draft, setDraft] = useState(initial)
+  // A new definition: blank, duplicated, or replacing a file that fails to parse with nothing else applying.
+  const [creating, setCreating] = useState(!shown?.definition)
+  const source = creating ? undefined : shown?.source
+  const [scope, setScope] = useState<Scope>(
+    source === 'user' || (source !== 'project' && !discovery.projectLocal) ? 'user' : 'project',
+  )
+  const [pending, setPending] = useState<'save' | 'delete'>()
+  const [confirming, setConfirming] = useState(false)
+  const [error, setError] = useState<string>()
+  const models = useModels()
+  const levelsOf = (model: ModelRef | undefined) => thinkingLevels(models, model)
+  const levels = levelsOf(draft.model ?? discovery.main.model)
+  const set = (change: Partial<Draft>) => {
+    setDraft((previous) => ({ ...previous, ...change }))
+    setError(undefined)
+  }
+
+  const taken =
+    creating && discovery.definitions.some((definition) => definition.name === draft.name)
+  const nameError = !creating
+    ? undefined
+    : !draft.name
+      ? undefined
+      : !/^[a-zA-Z0-9_-]+$/.test(draft.name)
+        ? 'Letters, digits, - and _ only'
+        : taken
+          ? `${draft.name} exists already: open it to change it`
+          : undefined
+  const target = `${discovery.scopes[scope]}/${draft.name || '<name>'}.md`
+  const display = (path: string) =>
+    shortenPath(path, { cwd: system?.project.root, home: system?.machine.home })
+  const files = creating ? [] : (shown?.files ?? [])
+  const overrides = files.includes('builtin') && scope !== 'user' ? 'the built-in' : undefined
+  const shadowed = scope === 'user' && files.includes('project')
+  // Saving to a scope without the file, or over one that fails to parse, changes something too.
+  const dirty =
+    creating ||
+    JSON.stringify(draft) !== JSON.stringify(initial) ||
+    !files.includes(scope) ||
+    shown?.invalid?.source === scope
+  const removable = source === 'user' || source === 'project' ? source : undefined
+  // What applies once the file Delete removes is gone.
+  const fallback = removable && files.filter((file) => file !== removable).at(-1)
+
+  async function save() {
+    setPending('save')
+    setError(undefined)
+    try {
+      await api.action('subagents', 'saveDefinition', {
+        name: draft.name,
+        scope,
+        ...(creating ? { create: true } : {}),
+        frontmatter: {
+          description: draft.description,
+          ...(draft.model ? { model: `${draft.model.provider}/${draft.model.modelId}` } : {}),
+          ...(draft.thinking ? { thinking: draft.thinking } : {}),
+          ...(draft.tools ? { tools: draft.tools } : {}),
+          ...(draft.isolate === 'worktree' ? { isolate: 'worktree' } : {}),
+        },
+        instructions: draft.instructions,
+      })
+      await onChanged(draft.name)
+    } catch (failure) {
+      setError(message(failure))
+    } finally {
+      setPending(undefined)
+    }
+  }
+  async function remove(file: Scope) {
+    setPending('delete')
+    setConfirming(false)
+    try {
+      await api.action('subagents', 'deleteDefinition', { name: draft.name, scope: file })
+      await onChanged()
+    } catch (failure) {
+      setError(message(failure))
+    } finally {
+      setPending(undefined)
+    }
+  }
+
+  return (
+    <>
+      <header className="flex items-start gap-3 border-b border-border/70 px-5 py-3.5">
+        <BotIcon className="mt-0.5 size-4.5 shrink-0 text-brand" />
+        <div className="min-w-0 flex-1">
+          <DialogTitle className="flex items-center gap-2 font-mono text-[14px] font-medium">
+            {creating ? (draft.name ? draft.name : 'New definition') : draft.name}
+            {source && <Tag>{sourceLabel[source]}</Tag>}
+            {creating && <Tag className="border-brand/40 text-brand">new</Tag>}
+          </DialogTitle>
+          <DialogDescription className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+            {shown && !creating
+              ? display(shown.path)
+              : 'A profile subagents and automations run with: model, thinking, tools, isolate, and instructions.'}
+          </DialogDescription>
+        </div>
+        {shown?.definition && !creating && (
+          <Button
+            className="h-7 gap-1.5 px-2 font-mono text-[11.5px]"
+            onClick={() => {
+              setCreating(true)
+              set({ name: `${draft.name}-copy` })
+              if (!discovery.projectLocal) setScope('user')
+            }}
+            size="sm"
+            title="Start a new definition from this one"
+            variant="ghost"
+          >
+            <CopyIcon className="size-3.5" />
+            Duplicate
+          </Button>
+        )}
+        <Button
+          aria-label="Close"
+          className="size-7"
+          onClick={close}
+          size="icon-sm"
+          variant="ghost"
+        >
+          <XIcon className="size-4" />
+        </Button>
+      </header>
+      {shown?.invalid && (
+        <div className="flex items-start gap-2 border-b border-error/30 bg-error/8 px-5 py-2 text-[12px] text-error">
+          <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+          <p className="min-w-0 leading-snug">
+            <span className="font-mono">{display(shown.invalid.path)}</span> fails to parse:{' '}
+            <span className="font-mono">{parseError(shown.invalid.error)}</span>.
+            {shown.definition
+              ? ` The ${sourceLabel[shown.source]} definition applies instead.`
+              : ' Saving replaces it.'}
+          </p>
+        </div>
+      )}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5 md:flex-row md:overflow-hidden">
+        <div className="flex shrink-0 flex-col gap-4 md:w-[24rem] md:overflow-y-auto md:pr-1">
+          {creating && (
+            <Field
+              hint={nameError ? undefined : 'The name start and automations use.'}
+              label="Name"
+            >
+              <input
+                aria-invalid={nameError ? true : undefined}
+                aria-label="Name"
+                autoFocus
+                className={cn(inputClass, 'font-mono')}
+                onChange={(event) => set({ name: event.target.value.trim() })}
+                placeholder="reviewer-security"
+                spellCheck={false}
+                value={draft.name}
+              />
+              {nameError && <p className="text-[11.5px] text-error">{nameError}</p>}
+            </Field>
+          )}
+          <Field label="Description">
+            <textarea
+              aria-label="Description"
+              className={cn(inputClass, 'resize-none leading-snug')}
+              onChange={(event) => set({ description: event.target.value })}
+              placeholder="What it is for; the coordinator picks by this line."
+              rows={2}
+              value={draft.description}
+            />
+          </Field>
+          <Field label="Model">
+            <ModelField
+              inherited={discovery.main.model}
+              onChange={(model) => {
+                // A level the new model lacks would be clamped at start; inherit instead.
+                const unsupported =
+                  draft.thinking &&
+                  !levelsOf(model ?? discovery.main.model).includes(draft.thinking)
+                set({ model, ...(unsupported ? { thinking: null } : {}) })
+              }}
+              value={draft.model}
+            />
+          </Field>
+          <Field
+            hint={
+              draft.thinking
+                ? undefined
+                : `Inherits the main conversation's${discovery.main.thinking ? ` (${discovery.main.thinking})` : ''}, within what the model supports.`
+            }
+            label="Thinking"
+          >
+            <Segmented
+              label="Thinking"
+              onChange={(value) => set({ thinking: value === 'inherit' ? null : value })}
+              options={[
+                { value: 'inherit', label: 'inherit' },
+                ...levels.map((level) => ({ value: level, label: level })),
+              ]}
+              value={draft.thinking ?? 'inherit'}
+            />
+          </Field>
+          <Field
+            hint={
+              draft.isolate === 'worktree'
+                ? 'Works on its own branch in a git worktree; land brings its commits back.'
+                : 'Works in the parent checkout. A start may still ask for a worktree.'
+            }
+            label="Isolate"
+          >
+            <Segmented
+              label="Isolate"
+              onChange={(isolate) => set({ isolate })}
+              options={[
+                { value: 'none', label: 'none' },
+                { value: 'worktree', label: 'worktree' },
+              ]}
+              value={draft.isolate}
+            />
+          </Field>
+          <ToolsField
+            onChange={(tools) => set({ tools })}
+            tools={discovery.main.tools}
+            value={draft.tools}
+          />
+        </div>
+        <div className="flex min-h-[20rem] min-w-0 flex-1 flex-col gap-1.5">
+          <div className="font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
+            Instructions
+          </div>
+          <InstructionsEditor
+            file={shown && (!creating || !shown.definition) ? shown.raw : undefined}
+            onChange={(instructions) => set({ instructions })}
+            value={draft.instructions}
+          />
+        </div>
+      </div>
+      <footer className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border/70 px-5 py-3">
+        <span className="font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
+          Save to
+        </span>
+        <div className="w-36">
+          <Segmented
+            label="Save to"
+            onChange={(next) => {
+              if (next === 'project' && !discovery.projectLocal) return
+              setScope(next)
+            }}
+            options={[
+              {
+                value: 'project',
+                label: 'project',
+                title: discovery.projectLocal
+                  ? "This project's .ultimate/agents, shared with its team"
+                  : "Choose this project's local setup first (Extensions panel)",
+              },
+              { value: 'user', label: 'user', title: 'Your ~/.ultimate/agents, in every project' },
+            ]}
+            value={scope}
+          />
+        </div>
+        <span
+          className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground"
+          title={target}
+        >
+          {display(target)}
+          {overrides && <span className="text-muted-foreground/70"> · overrides {overrides}</span>}
+          {shadowed && (
+            <span className="text-warning"> · the project definition of this name applies</span>
+          )}
+        </span>
+        {removable &&
+          (confirming ? (
+            <span className="flex items-center gap-1 text-[12px]">
+              {fallback
+                ? `Delete it? The ${sourceLabel[fallback]} one applies again.`
+                : 'Delete it?'}
+              <Button
+                className="h-7 px-2 text-error hover:bg-error/10 hover:text-error"
+                onClick={() => void remove(removable)}
+                size="sm"
+                variant="ghost"
+              >
+                Delete
+              </Button>
+              <Button
+                className="h-7 px-2"
+                onClick={() => setConfirming(false)}
+                size="sm"
+                variant="ghost"
+              >
+                Keep
+              </Button>
+            </span>
+          ) : (
+            <Button
+              className="h-7 gap-1.5 px-2 text-[12px] text-muted-foreground hover:text-error"
+              disabled={pending !== undefined}
+              onClick={() => setConfirming(true)}
+              size="sm"
+              title={`Delete ${display(shown!.path)}`}
+              variant="ghost"
+            >
+              <Trash2Icon className="size-3.5" />
+              {fallback ? `Revert to ${sourceLabel[fallback]}` : 'Delete'}
+            </Button>
+          ))}
+        <Button className="h-7 px-3 text-[12px]" onClick={close} size="sm" variant="ghost">
+          Cancel
+        </Button>
+        <Button
+          className="h-7 px-3 text-[12px]"
+          disabled={!dirty || !draft.name || nameError !== undefined || pending !== undefined}
+          onClick={() => void save()}
+          size="sm"
+        >
+          {pending === 'save' ? 'Saving…' : 'Save'}
+        </Button>
+        {error && (
+          <p className="basis-full font-mono text-[11.5px] leading-snug break-words text-error">
+            {error}
+          </p>
+        )}
+      </footer>
+    </>
+  )
+}

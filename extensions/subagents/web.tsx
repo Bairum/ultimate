@@ -7,7 +7,7 @@ import {
   SquareArrowOutUpRightIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Message, MessageResponse } from '@/components/ai/message'
 import { Shimmer } from '@/components/ai/shimmer'
@@ -32,21 +32,10 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { ConversationSummary, ToolCallView } from '@/sdk'
+import { DefinitionDialog, Definitions } from './definitions.tsx'
+import { Heading, Tag, useRefresh } from './parts.tsx'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
-
-function Tag({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <span
-      className={cn(
-        'shrink-0 rounded-sm border border-border/80 px-1 text-[10px] leading-4 text-muted-foreground',
-        className,
-      )}
-    >
-      {children}
-    </span>
-  )
-}
 
 function BusyDot({ className }: { className?: string }) {
   return (
@@ -224,21 +213,6 @@ function ChildList({ output }: { output: string }) {
       ))}
     </ToolSection>
   )
-}
-
-/** Calls `refetch` when the window regains focus and when `key` changes after mount. */
-function useRefresh(refetch: () => unknown, key?: string) {
-  const last = useRef(key)
-  useEffect(() => {
-    if (last.current === key) return
-    last.current = key
-    void refetch()
-  }, [key, refetch])
-  useEffect(() => {
-    const refresh = () => void refetch()
-    window.addEventListener('focus', refresh)
-    return () => window.removeEventListener('focus', refresh)
-  }, [refetch])
 }
 
 /** What `land` returns; `discard` returns only `text`. */
@@ -533,96 +507,6 @@ function Node({
   )
 }
 
-type Source = 'builtin' | 'user' | 'project'
-/** The `definitions` action: what `start` can name, and the files that failed to parse. */
-interface Discovery {
-  definitions: {
-    name: string
-    description: string
-    path: string
-    source: Source
-    model?: { provider: string; modelId: string }
-    thinking?: string
-    tools?: string[]
-  }[]
-  errors: { name: string; path: string; source: Source; error: string }[]
-}
-
-function Heading({ children, meta }: { children: ReactNode; meta: ReactNode }) {
-  return (
-    <div className="flex items-center gap-2 px-3 pb-2 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
-      {children}
-      <span className="ml-auto tracking-normal normal-case text-muted-foreground/70">{meta}</span>
-    </div>
-  )
-}
-
-/** Definitions are reread at every start; the list refetches when the window regains focus, as after an edit. */
-function Definitions() {
-  const { data, refetch } = useAction<Discovery>('subagents', 'definitions')
-  useRefresh(refetch)
-  if (!data) return null
-  const { definitions, errors } = data
-  return (
-    <div className="pt-4">
-      <Heading
-        meta={
-          <>
-            {definitions.length}
-            {errors.length > 0 && <span className="text-error"> · {errors.length} invalid</span>}
-          </>
-        }
-      >
-        Definitions
-      </Heading>
-      {definitions.map((definition) => (
-        <div
-          className="px-3 py-1"
-          key={definition.path}
-          title={[
-            definition.path,
-            definition.model && `model: ${definition.model.provider}/${definition.model.modelId}`,
-            `tools: ${definition.tools?.join(', ') ?? 'inherited'}`,
-          ]
-            .filter(Boolean)
-            .join('\n')}
-        >
-          <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11.5px]">
-            <BotIcon className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="shrink-0 text-foreground/85">{definition.name}</span>
-            {definition.source !== 'builtin' && <Tag>{definition.source}</Tag>}
-            <span className="ml-auto truncate pl-2 text-[10.5px] text-muted-foreground/70">
-              {definition.model?.modelId ?? 'inherits model'}
-              {definition.thinking && ` · ${definition.thinking}`}
-            </span>
-          </div>
-          <p className="line-clamp-2 pl-5 font-sans text-[12px] leading-snug text-muted-foreground">
-            {definition.description}
-          </p>
-        </div>
-      ))}
-      {errors.map((error) => (
-        <div className="px-3 py-1" key={error.path} title={error.path}>
-          <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11.5px] text-error">
-            <BotIcon className="size-3.5 shrink-0" />
-            <span className="shrink-0">{error.name}</span>
-            <Tag>{error.source}</Tag>
-          </div>
-          <p className="line-clamp-3 pl-5 font-mono text-[11px] leading-snug break-words whitespace-pre-wrap text-error/80">
-            {error.error.replace(/^Error: /, '')}
-          </p>
-        </div>
-      ))}
-      {definitions.length === 0 && errors.length === 0 && (
-        <p className="px-3 font-sans text-[12px] leading-relaxed text-muted-foreground/70">
-          No definitions yet: add Markdown files to{' '}
-          <code className="font-mono">.ultimate/agents/</code>
-        </p>
-      )}
-    </div>
-  )
-}
-
 /** Main and its subagents as a tree; click one to show it, and the composer talks to it. Below, the definitions. */
 function AgentsPanel() {
   const conversations = useConversations()
@@ -667,6 +551,7 @@ function AgentsPanel() {
 export default defineWebExtension({
   tools: { subagent: SubagentCall },
   panels: [{ id: 'agents', title: 'Agents', icon: NetworkIcon, component: AgentsPanel, order: -6 }],
+  slots: { overlay: [DefinitionDialog] },
   commands: [
     {
       id: 'subagents.open',

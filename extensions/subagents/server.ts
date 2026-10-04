@@ -1,16 +1,19 @@
+import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord'
 import type { JsonValue } from '@earendil-works/chord'
-import { clampThinkingLevel, Type } from '@earendil-works/pi-ai'
-import type { AssistantMessage, ModelThinkingLevel } from '@earendil-works/pi-ai'
+import { Type } from '@earendil-works/pi-ai'
+import type { AssistantMessage } from '@earendil-works/pi-ai'
 import {
   AssistantEntry,
-  configure,
   defineDoc,
   defineExtension,
   defineTask,
   defineTool,
   LiveDoc,
+  ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
 import type {
@@ -25,7 +28,9 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { discoverAgents } from './agents.ts'
+import type { Source } from '../../server/project.ts'
+import { agentRoots, deleteDefinition, discoverAgents, saveDefinition } from './agents.ts'
+import { createChild } from './children.ts'
 import * as worktree from './isolates/worktree.ts'
 import type { Isolate, CreatedIsolate } from './isolates/types.ts'
 import { lifecycle, LifecycleQueue } from './isolates/lifecycle.ts'
@@ -261,6 +266,11 @@ export const actions = {
       .then(Number, () => null)
     return { ...isolate, ahead }
   },
+  /**
+   * The definitions without their instructions and the files that failed to parse, and for the config view the main
+   * conversation's model and tools (a definition may list a subset), where each scope saves, and whether the
+   * project's setup is local, which the project scope needs.
+   */
   async definitions(_args: JsonValue, { host }: ActionContext) {
     const { definitions, errors } = await discoverAgents(
       host.ultimateRoot,
@@ -268,24 +278,111 @@ export const actions = {
       host.userHome,
       host.modelRuntime,
     )
+    const main = await (await host
+      .harness()
+      .conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT))!.agent(BACKGROUND_CONTEXT)
+    const local = agentRoots(host.ultimateRoot, host.projectRoot, host.userHome).some(
+      (root) => root.source === 'project',
+    )
     return {
       definitions: definitions.map(({ instructions: _instructions, ...definition }) => definition),
       errors,
+      main: {
+        ...(main.model ? { model: main.model } : {}),
+        ...(main.thinkingLevel ? { thinking: main.thinkingLevel } : {}),
+        tools: main.tools
+          .filter((tool) => tool.name !== 'subagent')
+          .map((tool) => ({ name: tool.name, description: tool.description })),
+      },
+      scopes: {
+        user: join(host.userHome, '.ultimate/agents'),
+        project: join(host.projectRoot, '.ultimate/agents'),
+      },
+      projectLocal: local,
     }
   },
-}
-
-/** A definition's thinking level, clamped to the child's model by Pi's rule (the HTTP configure path does the same). */
-function thinkingFor(
-  definition: { model?: { provider: string; modelId: string }; thinking?: ModelThinkingLevel },
-  parent: { model?: { provider: string; modelId: string } },
-  host: Pick<ExtensionHost, 'modelRuntime'>,
-) {
-  const ref = definition.model ?? parent.model
-  const model = ref && host.modelRuntime.getModel(ref.provider, ref.modelId)
-  return model && definition.thinking
-    ? clampThinkingLevel(model, definition.thinking)
-    : definition.thinking
+  /** `{name}`: the definition that applies, its source and path, the raw file, and the scopes with a file of that name. */
+  async definition(args: JsonValue, { host }: ActionContext) {
+    const name = (args as { name?: JsonValue } | null)?.name
+    if (typeof name !== 'string' || !name) throw new Error('name is required')
+    const { definitions, errors } = await discoverAgents(
+      host.ultimateRoot,
+      host.projectRoot,
+      host.userHome,
+      host.modelRuntime,
+    )
+    const definition = definitions.find((candidate) => candidate.name === name)
+    // A later file that fails to parse leaves an earlier one applying.
+    const invalid = errors.findLast((candidate) => candidate.name === name)
+    const shown = definition ?? invalid
+    if (!shown) throw new Error(`Unknown agent: ${name}`)
+    const files: Source[] = []
+    for (const root of agentRoots(host.ultimateRoot, host.projectRoot, host.userHome))
+      if (existsSync(join(root.path, `${name}.md`))) files.push(root.source)
+    return {
+      ...(definition ? { definition } : {}),
+      ...(invalid ? { invalid } : {}),
+      source: shown.source,
+      path: shown.path,
+      raw: await readFile(shown.path, 'utf8'),
+      files,
+    }
+  },
+  /** `{name, scope, frontmatter, instructions}`: write `<scope>/agents/<name>.md`; invalid input writes nothing. */
+  async saveDefinition(args: JsonValue, { host }: ActionContext) {
+    const { name, scope, frontmatter, instructions, create } = (args ?? {}) as Record<
+      string,
+      JsonValue
+    >
+    if (typeof name !== 'string') throw new Error('name is required')
+    if (scope !== 'user' && scope !== 'project') throw new Error('scope must be user or project')
+    if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter))
+      throw new Error('frontmatter must be an object')
+    if (typeof instructions !== 'string') throw new Error('instructions must be a string')
+    const { description, model, thinking, tools, isolate } = frontmatter
+    if (typeof description !== 'string') throw new Error('description is required')
+    if (model !== undefined && typeof model !== 'string') throw new Error('model must be a string')
+    if (thinking !== undefined && typeof thinking !== 'string')
+      throw new Error('thinking must be a string')
+    if (
+      tools !== undefined &&
+      (!Array.isArray(tools) || !tools.every((tool) => typeof tool === 'string'))
+    )
+      throw new Error('tools must be a list of tool names')
+    if (isolate !== undefined && isolate !== 'none' && isolate !== 'worktree')
+      throw new Error('isolate must be none or worktree')
+    if (create === true) {
+      const { definitions } = await discoverAgents(
+        host.ultimateRoot,
+        host.projectRoot,
+        host.userHome,
+        host.modelRuntime,
+      )
+      if (definitions.some((definition) => definition.name === name))
+        throw new Error(`A definition named ${name} exists already`)
+    }
+    return saveDefinition(
+      host,
+      host.modelRuntime,
+      scope,
+      name,
+      {
+        description,
+        ...(model ? { model } : {}),
+        ...(thinking ? { thinking } : {}),
+        ...(tools ? { tools } : {}),
+        ...(isolate ? { isolate } : {}),
+      },
+      instructions,
+    )
+  },
+  /** `{name, scope}`: remove a user or project definition; a built-in or user one of that name applies again. */
+  async deleteDefinition(args: JsonValue, { host }: ActionContext) {
+    const { name, scope } = (args ?? {}) as Record<string, JsonValue>
+    if (typeof name !== 'string') throw new Error('name is required')
+    if (scope !== 'user' && scope !== 'project') throw new Error('scope must be user or project')
+    return deleteDefinition(host, scope, name)
+  },
 }
 
 export default function subagents(
@@ -514,36 +611,27 @@ Available definitions:
                       background: true,
                     })
                   : api.taskId
-                const ownership = { kind: 'task' as const, taskId: owner }
-                const child =
-                  forkAt === undefined
-                    ? await tx.createConversation({ ownership })
-                    : await tx.forkConversation(api.conversationId, forkAt, { ownership })
-                conversationId = child.id
-                await configure(tx, child.id, {
-                  tools: parent.tools.filter(
-                    (tool) =>
-                      tool.name !== 'subagent' &&
-                      (!definition.tools || definition.tools.includes(tool.name)),
-                  ),
-                  extensions: parent.extensions.filter(
-                    (extension) => extension.name !== 'subagents',
-                  ),
-                  instructions:
-                    definition.instructions +
-                    (isolate
-                      ? `\nWork only in ${isolate.path} on ${isolate.branch}, cut from ${isolate.base}. Commit your work on this branch with clear messages. Never push and never touch other checkouts.`
-                      : ''),
-                  cwd: childCwd ?? parent.cwd ?? null,
-                  model: definition.model ?? parent.model ?? null,
-                  thinkingLevel: definition.thinking
-                    ? thinkingFor(definition, parent, host)
-                    : (parent.thinkingLevel ?? null),
-                })
-                Object.assign(await tx.doc(host.metadata, child.id), {
+                const child = await createChild(tx, {
+                  owner: { kind: 'task', taskId: owner },
+                  definition: isolate
+                    ? {
+                        ...definition,
+                        instructions: `${definition.instructions}\nWork only in ${isolate.path} on ${isolate.branch}, cut from ${isolate.base}. Commit your work on this branch with clear messages. Never push and never touch other checkouts.`,
+                      }
+                    : definition,
+                  parentAgent: parent,
+                  modelRuntime: host.modelRuntime,
+                  metadata: host.metadata,
                   label: definition.name,
                   title: text,
+                  excludeTools: ['subagent'],
+                  excludeExtensions: ['subagents'],
+                  ...(forkAt === undefined
+                    ? {}
+                    : { fork: { conversationId: api.conversationId, at: forkAt } }),
+                  ...(childCwd === undefined ? {} : { cwd: childCwd }),
                 })
+                conversationId = child.id
                 state.agents[String(child.id)] = {
                   conversationId,
                   agent: definition.name,

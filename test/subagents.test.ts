@@ -1,5 +1,5 @@
 import { projectSettings } from '../server/project-setup.ts'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
@@ -11,7 +11,8 @@ import { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { afterEach, describe, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
-import subagents, { Subagents } from '../extensions/subagents/server.ts'
+import subagents, { actions, Subagents } from '../extensions/subagents/server.ts'
+import type { ActionContext } from '../server/actions.ts'
 import codemode from '../extensions/codemode/server.ts'
 import { Metadata } from '../server/metadata.ts'
 import { UiState } from '../server/ui-state.ts'
@@ -340,6 +341,112 @@ describe('subagents', () => {
       ['Original instructions', '', 'Instructions are required'],
     ])
       expect(() => parseDefinition(definition().replace(from, to), 'test')).toThrow(error)
+  })
+  it('saves a definition as a project override that start uses, writes nothing when invalid, and deletes it', async () => {
+    const { prepared, opened, ultimateRoot, userHome } = await fixture()
+    const ctx = {
+      host: { ...prepared, harness: () => opened.harness },
+    } as unknown as ActionContext
+    const project = join(prepared.projectRoot, '.ultimate/agents')
+    const override = {
+      name: 'scout',
+      scope: 'project',
+      frontmatter: { description: 'Project scout: reads only', tools: ['read'], thinking: 'high' },
+      instructions: '# Project\n\nRead the code.\n',
+    }
+    await expect(actions.saveDefinition(override, ctx)).rejects.toThrow(
+      "Choose this project's local setup",
+    )
+    expect(await actions.definitions(null, ctx)).toMatchObject({ projectLocal: false })
+    new ProjectTrustStore(join(userHome, '.ultimate')).set(prepared.projectRoot, true)
+    const listed = await actions.definitions(null, ctx)
+    expect(listed).toMatchObject({
+      projectLocal: true,
+      scopes: { user: join(userHome, '.ultimate/agents'), project },
+      definitions: [{ name: 'scout', source: 'builtin' }],
+    })
+    expect(listed.main.tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(['read', 'bash', 'codemode']),
+    )
+    expect(listed.main.tools.map((tool) => tool.name)).not.toContain('subagent')
+    const builtin = await readFile(join(ultimateRoot, 'agents/scout.md'), 'utf8')
+    await actions.saveDefinition(override, ctx)
+    const raw = await readFile(join(project, 'scout.md'), 'utf8')
+    expect(raw).toBe(
+      '---\nname: scout\ndescription: "Project scout: reads only"\nthinking: high\ntools: [read]\n---\n\n# Project\n\nRead the code.\n',
+    )
+    expect(await readFile(join(ultimateRoot, 'agents/scout.md'), 'utf8')).toBe(builtin)
+    const found = await discoverAgents(
+      ultimateRoot,
+      prepared.projectRoot,
+      userHome,
+      prepared.modelRuntime,
+    )
+    expect(found.definitions.find((agent) => agent.name === 'scout')).toMatchObject({
+      source: 'project',
+      description: 'Project scout: reads only',
+      tools: ['read'],
+      thinking: 'high',
+      instructions: '# Project\n\nRead the code.',
+    })
+    expect(await actions.definition({ name: 'scout' }, ctx)).toMatchObject({
+      source: 'project',
+      path: join(project, 'scout.md'),
+      raw,
+      files: ['builtin', 'project'],
+      definition: { instructions: '# Project\n\nRead the code.' },
+    })
+    await call(opened, { action: 'start', agent: 'scout', task: 'facts' })
+    const child = (await children(opened)).at(-1)!
+    const agent = await (await opened.harness.conversation(child.conversationId, context))!.agent(
+      context,
+    )
+    expect(agent.tools.map((tool) => tool.name)).toEqual(['read'])
+    expect(agent.instructions).toBe('# Project\n\nRead the code.')
+    for (const [change, error] of [
+      [{ frontmatter: { ...override.frontmatter, description: ' ' } }, 'description is required'],
+      [{ frontmatter: { ...override.frontmatter, thinking: 'loud' } }, 'thinking must be one of'],
+      [{ frontmatter: { ...override.frontmatter, model: 'anthropic/nonexistent' } }, 'model:'],
+      [{ instructions: ' ' }, 'Instructions are required'],
+      [{ name: '../scout' }, 'name must be a nonempty identifier'],
+      [{ create: true }, 'A definition named scout exists already'],
+      [{ scope: 'builtin' }, 'scope must be user or project'],
+    ] as const)
+      await expect(actions.saveDefinition({ ...override, ...change }, ctx)).rejects.toThrow(error)
+    expect(await readFile(join(project, 'scout.md'), 'utf8')).toBe(raw)
+    expect(await readdir(project)).toEqual(['scout.md'])
+    await actions.saveDefinition(
+      {
+        name: 'builder',
+        scope: 'user',
+        create: true,
+        frontmatter: { description: 'Builds', isolate: 'worktree' },
+        instructions: 'Build it',
+      },
+      ctx,
+    )
+    expect(await actions.definition({ name: 'builder' }, ctx)).toMatchObject({
+      source: 'user',
+      files: ['user'],
+      definition: { isolate: 'worktree', instructions: 'Build it' },
+    })
+    await writeFile(join(project, 'builder.md'), 'broken')
+    expect(await actions.definition({ name: 'builder' }, ctx)).toMatchObject({
+      source: 'user',
+      files: ['user', 'project'],
+      invalid: { source: 'project', error: expect.stringContaining('frontmatter') },
+    })
+    await actions.deleteDefinition({ name: 'scout', scope: 'project' }, ctx)
+    expect(await actions.definition({ name: 'scout' }, ctx)).toMatchObject({
+      source: 'builtin',
+      files: ['builtin'],
+    })
+    await expect(
+      actions.deleteDefinition({ name: 'scout', scope: 'project' }, ctx),
+    ).rejects.toThrow('No project definition named scout')
+    await expect(
+      actions.deleteDefinition({ name: 'scout', scope: 'builtin' }, ctx),
+    ).rejects.toThrow('scope must be user or project')
   })
   it('foreground returns the answer, exposes child details, inherits the parent and rereads scout on next start', async () => {
     const { opened, ultimateRoot, userHome } = await fixture()

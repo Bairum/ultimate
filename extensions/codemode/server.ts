@@ -29,6 +29,7 @@ import type {
   ToolExecutionResult,
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { discoverAgents } from '../subagents/agents.ts'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 
 export const Store = defineDoc({
@@ -209,6 +210,14 @@ function globals(
       description: 'Model metadata (no credentials or provider headers).',
       signature: '(): Promise<unknown[]>',
       execute: () => host.models(),
+    },
+    {
+      name: 'agents',
+      description:
+        'Agent definitions for subagents and automations: source, path, fields and instructions, plus invalid files. To change one, edit its file.',
+      signature: '(): Promise<unknown>',
+      execute: () =>
+        discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime),
     },
     {
       name: 'doc',
