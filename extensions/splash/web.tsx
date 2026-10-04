@@ -114,7 +114,7 @@ interface Show {
 
 /**
  * Animates the splash in `overlay` with the Web Animations API. Each letter's outline traces in behind a bright pen,
- * then fills, and a glow blooms. Held longer, a rule draws out beneath and glints until the reveal. `still` (reduced
+ * then fills, and a glow blooms. Held longer, a rule draws out beneath until the reveal. `still` (reduced
  * motion) shows the settled wordmark and only fades. `release` hands input back to the app as the overlay fades.
  */
 function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
@@ -208,10 +208,6 @@ function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
           { opacity: 1, transform: 'scaleX(1)' },
         ],
         { duration: 800, easing: out, fill: 'both' },
-      ),
-      find('[data-glint]').animate(
-        [{ transform: 'translateX(-100%)' }, { transform: 'translateX(300%)' }],
-        { delay: 400, duration: 1600, easing: inOut, iterations: Infinity },
       ),
     )
   }
@@ -404,12 +400,7 @@ function Splash() {
         <div
           className="relative mx-auto mt-[7%] h-px w-1/4 overflow-hidden bg-foreground/10 opacity-0"
           data-rule=""
-        >
-          <div
-            className="absolute inset-y-0 left-0 w-1/3 bg-linear-to-r from-transparent via-brand to-transparent"
-            data-glint=""
-          />
-        </div>
+        ></div>
       </div>
     </div>
   )
