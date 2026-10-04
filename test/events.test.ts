@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { fauxServer, post, temp, until } from './helpers.ts'
@@ -14,23 +14,14 @@ it('shares Pi events between server extensions across reloads and isolates a thr
   const source = `
 import { defineExtension } from '@earendil-works/pi-durable'
 export default host => {
-  host.resource('receiver.bus', () => {
-    const values = []
-    const stops = [
-      host.events.on('receiver:message', () => { throw new Error('receiver broke') }),
-      host.events.on('receiver:message', data => values.push(data)),
-    ]
-    return { bus: host.events, values, stops }
-  })
+  const values = host.resource('receiver.values', () => [])
+  host.events.on('receiver:message', () => { throw new Error('receiver broke') })
+  host.events.on('receiver:message', data => values.push({ handler: 'first', data }))
   return defineExtension({ name: 'receiver' })
 }
 export const actions = {
   inspect: async (_, { host }) => {
-    const state = host.resource('receiver.bus', () => null)
-    return { values: state.values, sameBus: state.bus === host.events }
-  },
-  clear: async (_, { host }) => {
-    for (const stop of host.resource('receiver.bus', () => null).stops) stop()
+    return { values: host.resource('receiver.values', () => null) }
   },
 }
 `
@@ -40,7 +31,10 @@ export const actions = {
     `
 import { defineExtension } from '@earendil-works/pi-durable'
 export default defineExtension({ name: 'sender' })
-export const actions = { send: async (data, { host }) => host.events.emit('receiver:message', data) }
+export const actions = {
+  send: async (data, { host }) => host.events.emit('receiver:message', data),
+  inspect: async (_, { host }) => host.resource('receiver.values', () => null),
+}
 `,
   )
   const server = await fauxServer({
@@ -54,14 +48,17 @@ export const actions = { send: async (data, { host }) => host.events.emit('recei
     const send = await post(server, '/api/extensions/sender/actions/send', { args: { value: 1 } })
     expect(send.status).toBe(200)
     const inspect = await post(server, '/api/extensions/receiver/actions/inspect', { args: {} })
-    expect(inspect.data).toEqual({ result: { values: [{ value: 1 }], sameBus: true } })
+    expect(inspect.data).toEqual({ result: { values: [{ handler: 'first', data: { value: 1 } }] } })
     expect(log).toHaveBeenCalledWith(
       'Event handler error (receiver:message):',
       expect.objectContaining({ message: 'receiver broke' }),
     )
     const loaded = server.extensions.info().find((entry) => entry.name === 'receiver')
       ?.server?.loadedAt
-    await writeFile(join(receiver, 'server.ts'), source + '\n// reload\n')
+    await writeFile(
+      join(receiver, 'server.ts'),
+      source.replace("handler: 'first'", "handler: 'second'"),
+    )
     await until(
       () =>
         server.extensions.info().find((entry) => entry.name === 'receiver')?.server?.loadedAt !==
@@ -70,10 +67,21 @@ export const actions = { send: async (data, { host }) => host.events.emit('recei
     await post(server, '/api/extensions/sender/actions/send', { args: { value: 2 } })
     const reloaded = await post(server, '/api/extensions/receiver/actions/inspect', { args: {} })
     expect(reloaded.data).toEqual({
-      result: { values: [{ value: 1 }, { value: 2 }], sameBus: true },
+      result: {
+        values: [
+          { handler: 'first', data: { value: 1 } },
+          { handler: 'second', data: { value: 2 } },
+        ],
+      },
     })
+    await rm(receiver, { recursive: true })
+    await until(() => !server.extensions.info().some((entry) => entry.name === 'receiver'))
+    log.mockClear()
+    await post(server, '/api/extensions/sender/actions/send', { args: { value: 3 } })
+    expect(log).not.toHaveBeenCalled()
+    const removed = await post(server, '/api/extensions/sender/actions/inspect', { args: {} })
+    expect(removed.data).toEqual({ result: reloaded.data.result.values })
   } finally {
-    await post(server, '/api/extensions/receiver/actions/clear', { args: {} })
     log.mockRestore()
     await server.close()
   }

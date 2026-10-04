@@ -6,6 +6,7 @@ const stops: (() => void)[] = []
 afterEach(() => {
   for (const stop of stops.splice(0)) stop()
   vi.restoreAllMocks()
+  vi.useRealTimers()
 })
 const path = (name: string) => `/extensions/${name}/web.tsx`
 
@@ -67,13 +68,22 @@ it.each(['system-first', 'facets-first'])(
     expect(loaded).toHaveBeenCalledExactlyOnceWith({ name: 'slow' })
     expect(ready).toHaveBeenCalledTimes(order === 'system-first' ? 1 : 0)
     registry.receiveSystem()
-    expect(registry.getReady()).toEqual({ ready: true, failed: ['broken'] })
-    expect(ready).toHaveBeenCalledExactlyOnceWith({ failed: ['broken'] })
+    expect(registry.getReady()).toEqual({
+      ready: true,
+      timedOut: false,
+      failed: ['broken'],
+      pending: [],
+    })
+    expect(ready).toHaveBeenCalledExactlyOnceWith({
+      failed: ['broken'],
+      pending: [],
+      timedOut: false,
+    })
     registry.receiveSystem()
     registry.replace('broken', { default: {} })
     registry.fail('slow', 'reload error')
     await registry.setLoaders({ [path('slow')]: async () => ({ default: {} }) })
-    expect(registry.getReady()).toEqual({ ready: true, failed: [] })
+    expect(registry.getReady()).toEqual({ ready: true, timedOut: false, failed: [], pending: [] })
     expect(ready).toHaveBeenCalledTimes(1)
     expect(failed).toHaveBeenLastCalledWith({ name: 'slow', error: 'reload error' })
   },
@@ -84,5 +94,64 @@ it('settles an empty initial registry but still waits for system', async () => {
   await registry.setLoaders({})
   expect(registry.getReady().ready).toBe(false)
   registry.receiveSystem()
-  expect(registry.getReady()).toEqual({ ready: true, failed: [] })
+  expect(registry.getReady()).toEqual({ ready: true, timedOut: false, failed: [], pending: [] })
 })
+
+it('ignores superseded loaders and waits for the current generation', async () => {
+  const registry = createRegistry()
+  registry.receiveSystem()
+  let finishOld!: (value: unknown) => void
+  let finishNew!: (value: unknown) => void
+  const old = registry.setLoaders({
+    [path('old')]: () =>
+      new Promise((resolve) => {
+        finishOld = resolve
+      }),
+  })
+  const current = registry.setLoaders({
+    [path('new')]: () =>
+      new Promise((resolve) => {
+        finishNew = resolve
+      }),
+  })
+  finishOld({ default: {} })
+  await old
+  expect(registry.getReady()).toMatchObject({ ready: false, pending: ['new'] })
+  finishNew({ default: {} })
+  await current
+  expect(registry.getReady()).toMatchObject({ ready: true, pending: [] })
+})
+
+it('removing a hanging initial facet allows readiness', async () => {
+  const registry = createRegistry()
+  registry.receiveSystem()
+  void registry.setLoaders({ [path('hung')]: () => new Promise(() => {}) })
+  await registry.setLoaders({})
+  expect(registry.getReady()).toEqual({ ready: true, timedOut: false, failed: [], pending: [] })
+})
+
+it.each([true, false])(
+  'reveals at the deadline with pending facets (system received: %s)',
+  async (system) => {
+    vi.useFakeTimers()
+    const registry = createRegistry()
+    const ready = vi.fn<(data: unknown) => void>()
+    stops.push(events.on('ultimate:ready', ready))
+    if (system) registry.receiveSystem()
+    void registry.setLoaders({ [path('hung')]: () => new Promise(() => {}) })
+    await vi.advanceTimersByTimeAsync(7999)
+    expect(registry.getReady().ready).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(registry.getReady()).toEqual({
+      ready: true,
+      timedOut: true,
+      failed: [],
+      pending: ['hung'],
+    })
+    expect(ready).toHaveBeenCalledExactlyOnceWith({ timedOut: true, failed: [], pending: ['hung'] })
+    registry.receiveSystem()
+    await registry.setLoaders({})
+    expect(registry.getReady()).toEqual({ ready: true, timedOut: true, failed: [], pending: [] })
+    expect(ready).toHaveBeenCalledTimes(1)
+  },
+)

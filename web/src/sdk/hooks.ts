@@ -28,7 +28,12 @@ import { formatDuration } from './format.ts'
 import type { ToolCallView, UltimateContext } from './types.ts'
 
 /** Page readiness is sticky; failed facet names remain available even before ready. */
-export function useReady(): { ready: boolean; failed: string[] } {
+export function useReady(): {
+  ready: boolean
+  timedOut: boolean
+  failed: string[]
+  pending: string[]
+} {
   return useSyncExternalStore(registry.subscribe, registry.getReady)
 }
 

@@ -80,7 +80,9 @@ export default { slots: { overlay: () => null } }
     await splash.waitFor(timeout)
     await release()
     await splash.waitFor({ state: 'detached', timeout: 12000 })
-    expect(await ready()).toBe(false)
+    expect(
+      await page.evaluate("import('/src/sdk/client.ts').then((m) => m.registry.getReady())"),
+    ).toMatchObject({ ready: true, timedOut: true, pending: ['slowpoke'] })
     const notice = page.getByRole('alert').filter({ hasText: 'Not ready after 8 s' })
     await expect.poll(() => notice.textContent(), timeout).toContain('still loading: slowpoke')
     await composer.click(timeout)

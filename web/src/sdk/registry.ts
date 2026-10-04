@@ -159,19 +159,31 @@ function validate(module: unknown): WebExtension {
  */
 export function createRegistry() {
   let records: readonly ExtensionRecord[] = []
-  let readiness = { ready: false, failed: [] as string[] }
+  let readiness = { ready: false, timedOut: false, failed: [] as string[], pending: [] as string[] }
   let started = false
+  let generation = 0
+  let pending = new Set<string>()
   let settled = false
+  let deadline: ReturnType<typeof setTimeout> | undefined
   let systemReceived = false
-  const refreshReady = () => {
+  const refreshReady = (timedOut = readiness.timedOut) => {
     const failed = records.filter((record) => record.error).map((record) => record.name)
-    const ready = readiness.ready || (settled && systemReceived)
+    const loading = [...pending]
+    const ready = readiness.ready || timedOut || (settled && systemReceived)
     const becameReady = ready && !readiness.ready
-    if (ready !== readiness.ready || failed.join('\0') !== readiness.failed.join('\0')) {
-      readiness = { ready, failed }
+    if (
+      ready !== readiness.ready ||
+      timedOut !== readiness.timedOut ||
+      failed.join('\0') !== readiness.failed.join('\0') ||
+      loading.join('\0') !== readiness.pending.join('\0')
+    ) {
+      readiness = { ready, timedOut, failed, pending: loading }
       emit()
     }
-    if (becameReady) events.emit('ultimate:ready', { failed })
+    if (becameReady) {
+      clearTimeout(deadline)
+      events.emit('ultimate:ready', { failed, pending: loading, timedOut })
+    }
   }
   const tokens = new Map<string, object>()
   const listeners = new Set<() => void>()
@@ -218,14 +230,18 @@ export function createRegistry() {
     },
     /** Load every facet in `loaders`, drop facets that are gone, and settle when all loads have. */
     async setLoaders(loaders: Readonly<Record<string, ExtensionLoader>>) {
-      const first = !started
+      if (!started) deadline = setTimeout(() => refreshReady(true), 8000)
       started = true
+      const current = ++generation
+      settled = false
+      tokens.clear()
       const entries = Object.entries(loaders)
         .flatMap(([path, loader]) => {
           const name = extensionName(path)
           return name ? [{ name, loader }] : []
         })
         .toSorted((a, b) => a.name.localeCompare(b.name))
+      pending = new Set(entries.map(({ name }) => name))
       const previous = new Map(records.map((record) => [record.name, record]))
       records = entries.map(({ name }) => previous.get(name) ?? { name, loading: true, version: 0 })
       refreshReady()
@@ -236,13 +252,19 @@ export function createRegistry() {
           tokens.set(name, token)
           try {
             const module = await loader()
-            if (tokens.get(name) === token) install(name, module)
+            if (tokens.get(name) === token) {
+              pending.delete(name)
+              install(name, module)
+            }
           } catch (error) {
-            if (tokens.get(name) === token) fail(name, error)
+            if (tokens.get(name) === token) {
+              pending.delete(name)
+              fail(name, error)
+            }
           }
         }),
       )
-      if (first) {
+      if (current === generation) {
         settled = true
         refreshReady()
       }
@@ -250,6 +272,7 @@ export function createRegistry() {
     /** Install a facet that hot-reloaded on its own. */
     replace(name: string, module: unknown) {
       tokens.set(name, {})
+      pending.delete(name)
       install(name, module)
     },
     /** Record a failed hot reload; the previous version stays installed. */

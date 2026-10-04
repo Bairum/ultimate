@@ -38,8 +38,8 @@ function Sender() {
   return h('button', { id: 'send', onClick: () => events.emit('fixture:message', 'payload') }, 'Send')
 }
 function Readiness() {
-  const { ready } = useReady()
-  return h('output', { id: 'ready' }, String(ready))
+  const { ready, timedOut, pending } = useReady()
+  return h('output', { id: 'ready', 'data-timeout': String(timedOut), 'data-pending': pending.join(',') }, String(ready))
 }
 let finish
 const slow = new Promise(resolve => { finish = resolve })
@@ -55,6 +55,7 @@ window.fixture = {
   changeLabel: label => changeLabel(label),
   pending: () => registry.getSnapshot().find(record => record.name === 'slow').loading,
   finish: async () => { finish({ default: {} }); await settled; registry.receiveSystem() },
+  reload: () => { void registry.setLoaders({ '/extensions/reloading/web.tsx': () => new Promise(() => {}) }) },
   mountLate: () => root.render(h('div', null, h(App), h(Readiness))),
   unmount: () => root.unmount(),
   emit: () => events.emit('fixture:message', 'after-unmount'),
@@ -88,6 +89,12 @@ window.fixture = {
     await page.evaluate(() => Reflect.get(window, 'fixture').finish())
     await page.evaluate(() => Reflect.get(window, 'fixture').mountLate())
     await page.waitForFunction(() => document.querySelector('#ready')?.textContent === 'true')
+    await page.evaluate(() => Reflect.get(window, 'fixture').reload())
+    await page.waitForFunction(
+      () => document.querySelector('#ready')?.getAttribute('data-pending') === 'reloading',
+    )
+    expect(await page.locator('#ready').textContent()).toBe('true')
+    expect(await page.locator('#ready').getAttribute('data-timeout')).toBe('false')
     const messages = await page.evaluate(() => {
       const fixture = Reflect.get(window, 'fixture')
       fixture.unmount()

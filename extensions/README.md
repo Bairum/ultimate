@@ -79,7 +79,10 @@ Use events for “something happened” and Pi Durable documents for durable sta
 `host.events`, Pi's process-local bus, across extension reloads. The browser has a separate `events` bus from
 `@/sdk`; neither bus bridges to the other, queues messages, nor replays them. Both catch and log handler errors
 with the channel while other handlers continue. `on(channel, handler)` returns an unsubscribe; clean it up when
-its owner is removed; server subscriptions can live in a reload-stable `host.resource`.
+its owner is removed. Each server facet receives a scoped view: call `host.events.on` directly in the factory;
+subscriptions are automatically removed when that facet is successfully reinstalled, disabled, removed, or the
+server closes. A failed reload discards its new subscriptions and keeps the previous facet's handlers. Do not pin
+handlers in `host.resource`, which would keep stale code across saves.
 
 Name channels `<extension>:<event>`; `ultimate:*` is reserved for the core. In a web component, use
 `useEvent(channel, handler)` to subscribe for its mount and always call the latest handler:
@@ -89,10 +92,11 @@ import { events, useEvent, useReady } from '@/sdk'
 
 function Receiver() {
   useEvent('hello:selected', (data) => console.log(data))
-  const { ready, failed } = useReady()
+  const { ready, timedOut, failed, pending } = useReady()
   return (
     <span>
       {ready ? 'Ready' : 'Loading'} {failed.join(', ')}
+      {timedOut && `Still loading: ${pending.join(', ')}`}
     </span>
   )
 }
@@ -101,9 +105,12 @@ events.emit('hello:selected', { name: 'example' })
 ```
 
 The registry emits `ultimate:extension-loaded { name }` or `ultimate:extension-failed { name, error }` as each
-facet settles, including hot reloads. `ultimate:ready { failed }` fires once per page load after the first set of
-facet imports has settled (loaded or failed) and the first system snapshot has arrived. `useReady()` reads that
-sticky state even when mounted after the event; `failed` names current load failures, also before ready.
+facet settles, including hot reloads. `ultimate:ready { failed, pending, timedOut }` fires once per page load when
+the current loader generation has settled (loaded or failed) and the first system snapshot has arrived, or after
+an 8 s deadline from the first loader map. Superseded imports do not determine readiness. `useReady()` returns
+`{ ready, timedOut, failed, pending }`, even for a subscriber mounted after the event. `ready` and `timedOut` stay
+sticky across hot reloads; `failed` names current load failures and `pending` names current unsettled imports.
+The deadline reveals even without a system snapshot; `timedOut` distinguishes that reveal from normal readiness.
 Facets import in parallel and their contributions render as soon as they install. In particular, root overlays
 can render while another facet is still loading; they need not wait for ready.
 
@@ -637,7 +644,7 @@ Keep in mind:
 
 ## SDK (`@/sdk`)
 
-Import only from `@/sdk`, `@/components/ui/*`, `@/components/ai/*`, `@/components/json-tree`, `react`, and `lucide-react`. Never call `fetch` or
+`@/sdk/*` deep imports are core internals, not extension API. Import only from `@/sdk`, `@/components/ui/*`, `@/components/ai/*`, `@/components/json-tree`, `react`, and `lucide-react`. Never call `fetch` or
 open an `EventSource` yourself: the SDK keeps one live stream per shown conversation and replays its changes, and your
 server code is reached through [actions](#actions). The surface primitives are in [Surfaces](#primitives).
 

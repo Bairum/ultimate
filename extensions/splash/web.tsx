@@ -6,7 +6,7 @@ import type { WebExtension } from '@/sdk'
 // module, which only the facets load, while this one installs as soon as it arrives and so covers the page before the
 // others render. One module for the same reason: a local import would be another round trip.
 import { api } from '@/sdk/client.ts'
-import { useExtensions, useReady } from '@/sdk/hooks.ts'
+import { useReady } from '@/sdk/hooks.ts'
 
 /** Not ready by then: reveal the app anyway and name what is missing. */
 const timeout = 8000
@@ -344,10 +344,9 @@ function play(overlay: HTMLElement, still: boolean): Show {
 
 /** The ULTIMATE wordmark over the whole window until the page is ready, then the app. */
 function Splash() {
-  const { ready } = useReady()
+  const { ready, timedOut } = useReady()
   // Mounted once the page is ready, as on a very warm start or a hot reload: nothing to show.
   const [gone, setGone] = useState(ready)
-  const [late, setLate] = useState(false)
   const [still] = useState(() => matchMedia('(prefers-reduced-motion: reduce)').matches)
   const overlay = useRef<HTMLDivElement>(null)
   const show = useRef<Show>(undefined)
@@ -372,19 +371,13 @@ function Splash() {
   }, [still])
 
   useEffect(() => {
-    if (gone || ready) return undefined
-    const timer = setTimeout(() => setLate(true), timeout)
-    return () => clearTimeout(timer)
-  }, [gone, ready])
-
-  useEffect(() => {
-    if (gone || !(ready || late)) return
+    if (gone || !ready) return
     void show.current?.reveal().then((done) => {
       if (done) setGone(true)
     })
-  }, [gone, ready, late])
+  }, [gone, ready])
 
-  if (gone) return late ? <Late /> : null
+  if (gone) return timedOut ? <Late /> : null
   return (
     <div
       aria-busy="true"
@@ -430,12 +423,9 @@ const names = (list: readonly string[]) =>
 
 /** After the timeout: what had not loaded, until it has or the notice is dismissed. */
 function Late() {
-  const { ready, failed } = useReady()
-  const loading = useExtensions()
-    .filter((record) => record.loading)
-    .map((record) => record.name)
+  const { failed, pending } = useReady()
   const [dismissed, setDismissed] = useState(false)
-  if (dismissed || (ready && failed.length === 0)) return null
+  if (dismissed || (pending.length === 0 && failed.length === 0)) return null
   return (
     <div
       className="fixed top-12 left-1/2 z-40 flex w-96 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 items-start gap-2 rounded-md border border-border/80 bg-popover px-2.5 py-2 font-mono text-[11.5px] leading-snug shadow-lg"
@@ -445,9 +435,8 @@ function Late() {
       <div className="min-w-0 flex-1 text-foreground/90">
         <p>Not ready after {timeout / 1000} s, so it opened anyway.</p>
         <p className="mt-0.5 text-muted-foreground">
-          {loading.length > 0 && <>still loading: {names(loading)}. </>}
+          {pending.length > 0 && <>still loading: {names(pending)}. </>}
           {failed.length > 0 && <>failed: {names(failed)}. </>}
-          {loading.length === 0 && failed.length === 0 && 'Waiting for the server.'}
         </p>
       </div>
       <button

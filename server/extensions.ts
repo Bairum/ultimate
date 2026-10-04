@@ -80,6 +80,33 @@ export async function loadExtensions(
 ) {
   const roots = discoveryRoots(host.ultimateRoot, host.projectRoot, host.userHome)
   const directories = roots.map((root) => join(root.path, 'extensions'))
+  const facetHosts = new Map<string, ExtensionHost>()
+  const subscriptions = new Map<ExtensionHost, Set<() => void>>()
+  const dispose = (facetHost: ExtensionHost | undefined) => {
+    if (!facetHost) return
+    for (const stop of subscriptions.get(facetHost) ?? []) stop()
+    subscriptions.delete(facetHost)
+  }
+  const scope = (): ExtensionHost => {
+    const stops = new Set<() => void>()
+    const facetHost = {
+      ...extensionHost,
+      events: {
+        emit: (channel, data) => events.emit(channel, data),
+        on: (channel, handler) => {
+          const unsubscribe = events.on(channel, handler)
+          const stop = () => {
+            unsubscribe()
+            stops.delete(stop)
+          }
+          stops.add(stop)
+          return stop
+        },
+      },
+    } satisfies ExtensionHost
+    subscriptions.set(facetHost, stops)
+    return facetHost
+  }
   const actions = new Map<string, Record<string, ExtensionAction>>()
   const records = new Map<string, ExtensionInfo>()
   const documents = new Map<string, ConversationDocToken<JsonObject>[]>()
@@ -233,12 +260,11 @@ export async function loadExtensions(
         ...(previous?.server ? { server: previous.server } : {}),
       }
       if (enabled && record.facets.server && (!servers || servers.has(name))) {
+        const facetHost = scope()
         try {
           const module = await vite.ssrLoadModule(join(path, 'server.ts'))
           const extension: Extension =
-            typeof module.default === 'function'
-              ? await module.default(extensionHost)
-              : module.default
+            typeof module.default === 'function' ? await module.default(facetHost) : module.default
           if (!extension || extension.name !== name)
             throw new Error('Extension name must match its folder')
           const docs: ConversationDocToken<JsonObject>[] = module.docs ?? []
@@ -248,6 +274,8 @@ export async function loadExtensions(
           if (Object.values(exportedActions).some((action) => typeof action !== 'function'))
             throw new Error('actions must contain functions')
           host.registry.install(extension)
+          dispose(facetHosts.get(name))
+          facetHosts.set(name, facetHost)
           actions.set(name, exportedActions)
           record.actions = Object.keys(exportedActions)
           installed.set(name, module.order ?? 0)
@@ -260,12 +288,15 @@ export async function loadExtensions(
             docs: docs.map((doc) => doc.definition.kind),
           }
         } catch (error) {
+          dispose(facetHost)
           record.server = {
             ...(previous?.server ?? { tools: [], sections: [], hooks: 0, docs: [] }),
             error: String(error),
           }
         }
       } else if (!enabled || !record.facets.server) {
+        dispose(facetHosts.get(name))
+        facetHosts.delete(name)
         if (installed.delete(name)) host.registry.uninstall({ name })
         documents.delete(name)
         actions.delete(name)
@@ -280,6 +311,8 @@ export async function loadExtensions(
     }
     for (const name of records.keys()) {
       if (!folders.includes(name)) {
+        dispose(facetHosts.get(name))
+        facetHosts.delete(name)
         if (installed.delete(name)) host.registry.uninstall({ name })
         records.delete(name)
         actions.delete(name)
@@ -405,7 +438,7 @@ export async function loadExtensions(
     ) {
       const fn = actions.get(name)![action]
       return fn(args, {
-        host: extensionHost,
+        host: facetHosts.get(name)!,
         conversationId,
         signal,
         exec: actionExec(host.projectRoot, signal),
@@ -424,6 +457,7 @@ export async function loadExtensions(
       closed = true
       unwatch()
       await chain
+      for (const facetHost of subscriptions.keys()) dispose(facetHost)
       await Promise.all([...cleanups].map((cleanup) => cleanup()))
     },
   }
