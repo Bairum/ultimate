@@ -1,13 +1,15 @@
 import { BotIcon, CopyIcon, PlusIcon, Trash2Icon, TriangleAlertIcon, XIcon } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
   api,
   cn,
+  events,
   shortenPath,
   useAction,
   useDialog,
+  useEvent,
   useExtensionUiState,
   useModels,
   useSystem,
@@ -62,10 +64,11 @@ interface Shown {
 }
 
 /**
- * The config dialog's id, and the UI state naming the definition it shows ('' for a new one). Another extension opens
- * a definition by setting `ext.subagents.definition` with `useUiState` and then opening the dialog.
+ * The config dialog's id, and the UI state naming the definition it shows ('' for a new one); both are this extension's
+ * own. Another extension opens a definition over the bus: `subagents:open-definition { name }`, answered by
+ * `subagents:definition-closed { name }` once the dialog closes.
  */
-export const definitionDialog = 'subagents.definition'
+const definitionDialog = 'subagents.definition'
 const shownKey = 'definition'
 
 export const sourceLabel: Record<Source, string> = {
@@ -179,6 +182,16 @@ export function Definitions() {
 export function DefinitionDialog() {
   const [open, setOpen] = useDialog(definitionDialog)
   const [shown, setShown] = useExtensionUiState(shownKey, '')
+  const show = useOpenDefinition()
+  useEvent('subagents:open-definition', (data) => {
+    const name = (data as { name?: unknown } | undefined)?.name
+    if (typeof name === 'string') show(name)
+  })
+  const wasOpen = useRef(open)
+  useEffect(() => {
+    if (wasOpen.current && !open) events.emit('subagents:definition-closed', { name: shown })
+    wasOpen.current = open
+  }, [open, shown])
   return (
     <Dialog onOpenChange={setOpen} open={open}>
       <DialogContent

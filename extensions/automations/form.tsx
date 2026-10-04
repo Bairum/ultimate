@@ -18,7 +18,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { api, cn, formatKeys, useAction, useDialog, useNow, useUiState, useUltimate } from '@/sdk'
+import { api, cn, events, formatKeys, useAction, useEvent, useNow } from '@/sdk'
 import { clock, full, message, until, words } from './parts.tsx'
 import type { Automation, Described } from './parts.tsx'
 
@@ -45,13 +45,6 @@ interface Definitions {
   })[]
   main?: Model
 }
-/**
- * The `subagents` config dialog, and the UI state naming the definition it shows: the contract it documents for
- * opening a definition from another extension.
- */
-const definitionDialog = 'subagents.definition'
-const definitionKey = 'ext.subagents.definition'
-
 const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
 const zones = Intl.supportedValuesOf('timeZone')
 const pad = (value: number) => String(value).padStart(2, '0')
@@ -221,19 +214,16 @@ function AgentPicker({ value, onChange }: { value: string; onChange: (agent: str
   const { data, refetch } = useAction<Definitions>('subagents', 'definitions', null, {
     onError: () => {},
   })
-  const { open } = useUltimate()
-  const [, setShown] = useUiState(definitionKey, '')
   // A definition changed in its config dialog shows its new model here once the dialog closes, and focus comes back to
-  // Configure: opened by state, that dialog has no trigger of its own to return focus to.
-  const [configuring] = useDialog(definitionDialog)
+  // Configure: opened over the bus, that dialog has no trigger of its own to return focus to.
   const configure = useRef<HTMLButtonElement>(null)
   const opened = useRef(false)
-  useEffect(() => {
-    if (configuring || !opened.current) return
+  useEvent('subagents:definition-closed', () => {
+    if (!opened.current) return
     opened.current = false
     void refetch()
     requestAnimationFrame(() => configure.current?.focus())
-  }, [configuring, refetch])
+  })
   const definitions = data?.definitions ?? []
   const chosen = definitions.find((definition) => definition.name === value)
   const main = model(data?.main, "the main conversation's model")
@@ -310,8 +300,7 @@ function AgentPicker({ value, onChange }: { value: string; onChange: (agent: str
           className="h-8 shrink-0 gap-1.5 px-2.5 text-[12px]"
           onClick={() => {
             opened.current = true
-            setShown(chosen.name)
-            open(definitionDialog)
+            events.emit('subagents:open-definition', { name: chosen.name })
           }}
           ref={configure}
           size="sm"

@@ -74,9 +74,9 @@ source stays in the clone; the tools and the conversation work in your project.
 ## Building blocks
 
 Built-ins live in the clone's `extensions/`. Enabled by default: `agent`, `conversations`, `coding-tools`, `prompt`,
-`models`, `status-line`, `notices`, `theme`, `faux` (inert outside demo mode), `codemode`, `browser`, and `onboarding`.
-Available but off: `clock`, `documents`, `exclusive-commands`, `info`, `instance`, `plan`, `self`, `subagents`,
-`surfaces`, and `tasks`. Each folder's README describes the building block.
+`models`, `status-line`, `notices`, `theme`, `faux` (inert outside demo mode), `codemode`, `browser`, `onboarding`,
+and `splash`. Available but off: `clock`, `documents`, `exclusive-commands`, `info`, `instance`, `plan`, `self`,
+`subagents`, `surfaces`, and `tasks`. Each folder's README describes the building block.
 
 Enable them in `~/.ultimate/settings.json` for this machine or `<project>/.ultimate/settings.json` for this project:
 

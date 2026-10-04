@@ -16,6 +16,7 @@ export const DEFAULT_EXTENSIONS = [
   'codemode',
   'browser',
   'onboarding',
+  'splash',
 ] as const
 
 export function extensionSettingsFiles(projectRoot: string, userHome = homedir()) {
