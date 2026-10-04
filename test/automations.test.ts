@@ -3,10 +3,10 @@ import { awaitWithContext } from '@earendil-works/chord/context'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
-import type { ConversationId } from '@earendil-works/pi-durable'
+import type { ConversationId, TaskDefinition } from '@earendil-works/pi-durable'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -19,7 +19,7 @@ const hosts: OpenHost[] = []
 afterEach(async () => {
   for (const host of hosts.splice(0)) await host.close()
 })
-async function fixture() {
+async function fixture(failDelivery = false) {
   const root = await temp('ultimate-automations-')
   const userHome = await temp()
   await mkdir(join(root, 'agents'))
@@ -64,7 +64,22 @@ async function fixture() {
     metadata: Metadata,
     extensions: () => [{ name: 'subagents', enabled }],
   }
-  prepared.registry.install(automations(host as unknown as Parameters<typeof automations>[0]))
+  const extension = automations(host as unknown as Parameters<typeof automations>[0])
+  if (failDelivery) {
+    const phases = extension.tasks!.find((t) => t.definition.name === 'ultimate.automation-run')!
+      .definition.phases as TaskDefinition<
+      { automation: Automation; firedAt: number },
+      { phase: 'deliver'; conversationId: ConversationId },
+      null,
+      object
+    >['phases']
+    const deliver = phases.deliver
+    vi.spyOn(phases, 'deliver').mockImplementationOnce((task, runtime, ctx) => {
+      vi.spyOn(runtime, 'conversation').mockRejectedValueOnce(new Error('Delivery unavailable'))
+      return deliver(task, runtime, ctx)
+    })
+  }
+  prepared.registry.install(extension)
   const route: FauxResponseFactory = (transcript) => {
     prepared.faux!.appendResponses([route])
     const last = transcript.messages.findLast((m) => m.role !== 'system')!
@@ -251,4 +266,68 @@ it('fails removed profiles clearly and requires the subagents extension', async 
   await expect(f.action('list')).rejects.toThrow(
     'automations needs the subagents extension enabled',
   )
+})
+
+it('records a throwing delivery as failed and lets the next scheduled fire run', async () => {
+  const f = await fixture(true)
+  const a = (await f.action('create', {
+    name: 'Retry',
+    prompt: 'Hello',
+    schedule: 'every 1s',
+  })) as Automation
+  await until(async () => (await f.records())[0].runs[0]?.status === 'failed', 3000)
+  expect((await f.records())[0].runs[0].answer).toContain('Delivery unavailable')
+  await until(async () => (await f.records())[0].runs[1]?.status === 'done', 3000)
+  await f.action('pause', { id: a.id })
+})
+
+it('refuses resuming a spent one-shot through both action and tool', async () => {
+  const f = await fixture()
+  const a = (await f.action('create', {
+    name: 'Spent',
+    prompt: 'Hello',
+    schedule: 'in 1s',
+  })) as Automation
+  await until(async () => (await f.records())[0].runs[0]?.status === 'done', 3000)
+  await expect(f.action('resume', { id: a.id })).rejects.toThrow('update the time first')
+  await (
+    await f.opened.root.submit(
+      {
+        type: 'input',
+        content: 'CALL ' + JSON.stringify({ action: 'resume', id: a.id }),
+      },
+      context,
+    )
+  ).wait(context)
+  const view = await f.opened.root.viewState(context)
+  expect(JSON.stringify(view.value.entries)).toContain('update the time first')
+  view.dispose()
+  await delay(100)
+  expect((await f.records())[0].runs).toHaveLength(1)
+  expect((await f.records())[0].enabled).toBe(false)
+})
+
+it('preserves the next interval fire on rename, even when the same schedule is supplied', async () => {
+  const f = await fixture()
+  const a = (await f.action('create', {
+    name: 'Before',
+    prompt: 'Hello',
+    schedule: 'every 1d',
+  })) as Automation
+  await delay(50)
+  const renamed = (await f.action('update', {
+    id: a.id,
+    name: 'After',
+    schedule: 'every 1d',
+  })) as Automation
+  expect(renamed.nextAt).toBe(a.nextAt)
+  const reordered = (await f.action('update', {
+    id: a.id,
+    prompt: 'Updated',
+    schedule: { ms: 86400000, kind: 'every' },
+  })) as Automation
+  expect(reordered.nextAt).toBe(a.nextAt)
+  const changed = (await f.action('update', { id: a.id, schedule: 'every 2d' })) as Automation
+  expect(changed.nextAt).toBeGreaterThan(a.nextAt!)
+  await f.action('pause', { id: a.id })
 })

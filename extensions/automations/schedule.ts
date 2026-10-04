@@ -40,22 +40,32 @@ function cron(expr: string, tz: string) {
     day: 'numeric',
     month: 'numeric',
     weekday: 'short',
+    year: 'numeric',
     hourCycle: 'h23',
   })
-  return (time: number) => {
+  const local = (time: number) => {
     const p = Object.fromEntries(
       formatter.formatToParts(time).map((part) => [part.type, part.value]),
     )
     const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.weekday)
     const day = fields[2].has(Number(p.day))
     const week = fields[4].has(dow)
-    return (
-      fields[0].has(Number(p.minute)) &&
-      fields[1].has(Number(p.hour)) &&
-      fields[3].has(Number(p.month)) &&
-      (parts[2].startsWith('*') || parts[4].startsWith('*') ? day && week : day || week)
-    )
+    return {
+      wall: Date.UTC(
+        Number(p.year),
+        Number(p.month) - 1,
+        Number(p.day),
+        Number(p.hour),
+        Number(p.minute),
+      ),
+      minute: Number(p.minute),
+      hour: Number(p.hour),
+      dateMatches:
+        fields[3].has(Number(p.month)) &&
+        (parts[2].startsWith('*') || parts[4].startsWith('*') ? day && week : day || week),
+    }
   }
+  return { local, fields }
 }
 
 export function parseSchedule(input: string | Schedule, now = Date.now()): Schedule {
@@ -88,14 +98,27 @@ export function parseSchedule(input: string | Schedule, now = Date.now()): Sched
   return schedule
 }
 
-export function nextAt(schedule: Schedule, after: number): number {
+export function nextAt(schedule: Schedule, after: number, previous = after): number {
   if (schedule.kind === 'at') return Date.parse(schedule.time)
   if (schedule.kind === 'every') return after + schedule.ms
-  const matches = cron(schedule.expr, schedule.tz)
+  const { local, fields } = cron(schedule.expr, schedule.tz)
+  const previousWall = local(previous).wall
   const start = Math.floor(after / 60000) * 60000 + 60000
-  for (let time = start; time <= start + 366 * 86400000; time += 60000)
-    if (matches(time)) return time
-  throw new Error('Cron has no fire within 366 days')
+  let time = start
+  while (time <= start + 8 * 366 * 86400000) {
+    const p = local(time)
+    if (!p.dateMatches) {
+      const minutes = 1440 - p.hour * 60 - p.minute
+      const target = p.wall + minutes * 60000
+      const candidate = time + minutes * 60000
+      // Correct the midnight jump for an offset change, without crossing a matching day.
+      time = Math.max(time + 60000, candidate + target - local(candidate).wall)
+    } else if (!fields[1].has(p.hour)) {
+      time += (60 - p.minute) * 60000
+    } else if (fields[0].has(p.minute) && p.wall !== previousWall) return time
+    else time += 60000
+  }
+  throw new Error('Cron has no fire within 8 years')
 }
 
 export function describeSchedule(schedule: Schedule): string {

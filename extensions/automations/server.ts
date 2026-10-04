@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
@@ -147,40 +148,54 @@ function backend(host: Host) {
         }
       },
       deliver: async (task, runtime, context) => {
-        const child = (await runtime.conversation(task.state.checkpoint.conversationId, context))!
-        const result = await (
-          await child.submit(
-            {
-              type: 'input',
-              content: task.input.automation.prompt,
-              requestId: `automation-run:${task.id}`,
-            },
-            context,
-          )
-        ).wait(context)
-        await runtime.commit(async (tx) => {
-          const entry =
-            result.status === 'done' && result.type === 'input'
-              ? await tx.entry(AssistantEntry, result.answer)
-              : undefined
-          const answer = entry?.model?.[0]
-          const text =
-            answer?.role === 'assistant'
-              ? answer.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
-              : undefined
-          finish(
-            await tx.doc(Automations),
-            task.input.automation.id,
-            String(task.id),
-            result.status === 'done'
-              ? 'done'
-              : result.status === 'unanswered' && result.reason === 'aborted'
-                ? 'aborted'
-                : 'failed',
-            text,
-          )
-          return terminal
-        }, context)
+        try {
+          const child = (await runtime.conversation(task.state.checkpoint.conversationId, context))!
+          const result = await (
+            await child.submit(
+              {
+                type: 'input',
+                content: task.input.automation.prompt,
+                requestId: `automation-run:${task.id}`,
+              },
+              context,
+            )
+          ).wait(context)
+          await runtime.commit(async (tx) => {
+            const entry =
+              result.status === 'done' && result.type === 'input'
+                ? await tx.entry(AssistantEntry, result.answer)
+                : undefined
+            const answer = entry?.model?.[0]
+            const text =
+              answer?.role === 'assistant'
+                ? answer.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
+                : undefined
+            finish(
+              await tx.doc(Automations),
+              task.input.automation.id,
+              String(task.id),
+              result.status === 'done'
+                ? 'done'
+                : result.status === 'unanswered' && result.reason === 'aborted'
+                  ? 'aborted'
+                  : 'failed',
+              text,
+            )
+            return terminal
+          }, context)
+        } catch (error) {
+          if (runtime.signal.aborted) throw error
+          await runtime.commit(async (tx) => {
+            finish(
+              await tx.doc(Automations),
+              task.input.automation.id,
+              String(task.id),
+              'failed',
+              String(error),
+            )
+            return terminal
+          }, context)
+        }
       },
     },
     abort: (task, runtime, context) =>
@@ -240,7 +255,11 @@ function backend(host: Host) {
           if (!a?.enabled || a.scheduler !== task.id) return terminal
           const until =
             a.nextAt ??
-            nextAt(a.schedule, Math.max(runtime.now(), a.runs.at(-1)?.firedAt ?? a.createdAt))
+            nextAt(
+              a.schedule,
+              Math.max(runtime.now(), a.runs.at(-1)?.firedAt ?? a.createdAt),
+              a.runs.at(-1)?.firedAt ?? a.createdAt,
+            )
           a.nextAt = until
           return { status: 'running', checkpoint: { phase: 'sleep', until } }
         }, context),
@@ -297,9 +316,16 @@ function backend(host: Host) {
       if (!run || run.status !== 'running') throw new Error('runId must identify a running run')
       return { result: { id: run.id }, abort: Number(run.id) as TaskId }
     }
+    if (
+      args.action === 'resume' &&
+      a.schedule.kind === 'at' &&
+      Date.parse(a.schedule.time) <= Date.now()
+    )
+      throw new Error('This one-shot time has passed; update the time first')
     const abort = a.scheduler
+    const oldSchedule = { ...a.schedule }
     delete a.scheduler
-    delete a.nextAt
+    if (args.action !== 'update') delete a.nextAt
     if (args.action === 'delete') {
       delete state.automations[a.id]
       return { result: { id: a.id }, ...(abort ? { abort } : {}) }
@@ -318,8 +344,9 @@ function backend(host: Host) {
     else if (args.action === 'resume') a.enabled = true
     else throw new Error(`Unknown action: ${args.action}`)
     a.updatedAt = Date.now()
+    if (!isDeepStrictEqual(a.schedule, oldSchedule)) delete a.nextAt
     if (a.enabled) {
-      a.nextAt = nextAt(a.schedule, Date.now())
+      a.nextAt ??= nextAt(a.schedule, Date.now(), a.runs.at(-1)?.firedAt ?? Date.now())
       a.scheduler = await tx.createTask(Scheduler, { id: a.id }, owner)
     }
     return { result: JSON.parse(JSON.stringify(a)) as JsonValue, ...(abort ? { abort } : {}) }
