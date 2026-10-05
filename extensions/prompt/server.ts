@@ -51,7 +51,7 @@ export default function prompt(host: ExtensionHost) {
             : []),
         ].join('\n')
       }),
-      // Pi upstream: @earendil-works/pi-coding-agent@1.0.0 src/core/system-prompt.ts and src/core/tools/*.ts — copied tool guidance adapted from unexported prompt contributions. Drop when Pi exports buildSystemPromptSections and the per-tool system prompt contributions.
+      // Pi upstream: @earendil-works/pi-coding-agent@1.0.3 src/core/system-prompt.ts and src/core/tools/*.ts — copied tool guidance adapted from unexported prompt contributions. Drop when Pi exports buildSystemPromptSections and the per-tool system prompt contributions.
       section('tools', (input) => {
         const guidance: Record<string, string> = {
           read: '- read: inspect files; use it instead of cat or sed, with offset/limit for large files.',

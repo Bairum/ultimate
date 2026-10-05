@@ -268,7 +268,7 @@ function Restarted({ from, to }: { from: number; to: number }) {
  * A `pi.system` entry that changes the build section is a hot reload: show it as one marker with what changed. A
  * remove-all entry that Pi Durable writes right before a reordered re-add belongs to that marker and shows nothing.
  */
-// Pi upstream: @earendil-works/pi-durable@1.0.0 src/harness/prompt.ts — internal remove-all pi.system entry immediately precedes a reordered re-add, hidden here. Drop when Pi exposes prompt reorder metadata instead of requiring entry-sequence inference.
+// Pi upstream: @earendil-works/pi-durable@1.0.3 src/harness/prompt.ts — internal remove-all pi.system entry immediately precedes a reordered re-add, hidden here. Drop when Pi exposes prompt reorder metadata instead of requiring entry-sequence inference.
 function SystemEntry({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   const { entries } = useConversation()
   const system = useSystem()

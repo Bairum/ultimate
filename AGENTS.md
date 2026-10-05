@@ -114,7 +114,7 @@ Definitions live in `agents/`, `~/.ultimate/agents/`, and the project root's `.u
 ## Borrowed from Pi
 
 - `server/http.ts` — adapted HTTP dispatcher, not exported; prevents early provider stream termination. undici in package.json exists only for this file. Drop when Pi exports configureHttpDispatcher and applyHttpProxySettings; keep the MIT notice until then.
-- `pnpm-workspace.yaml` — registers patches/@earendil-works__pi-durable@1.0.0.patch, patching sanitizeOutput to remove whole CSI/OSC/control strings while keeping numeric SGR. Drop when Pi ships equivalent sanitization; pnpm errors when the versioned patch no longer matches.
+- `pnpm-workspace.yaml` — registers patches/@earendil-works__pi-durable@1.0.3.patch, patching sanitizeOutput to remove whole CSI/OSC/control strings while keeping numeric SGR. Drop when Pi ships equivalent sanitization; pnpm errors when the versioned patch no longer matches.
 - `test/ansi-output.test.ts` — internal import exercises the installed sanitizer patch. Drop when Pi exports the sanitizer and OutputBuffer or ships equivalent sanitizer tests.
 - `extensions/coding-tools/diff.tsx` — internal untyped details.patch/details.diff formats drive the diff renderer. Drop when Pi exports structured diff rows for rendering.
 - `extensions/prompt/server.ts` — tool guidance adapted from unexported prompt contributions, not Ultimate's personality. Drop when Pi exports buildSystemPromptSections and the per-tool system prompt contributions.

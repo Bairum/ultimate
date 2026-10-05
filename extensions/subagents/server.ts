@@ -588,7 +588,7 @@ Available definitions:
             let forkAt: EntryId | undefined
             if (definition && args.fork) {
               const task = await api.getTask(api.taskId, context)
-              // Pi upstream: @earendil-works/pi-durable@1.0.0 src/harness/tool.ts — internal ToolTaskInput.assistant locates the calling assistant. Drop when ToolExecutionApi exposes the calling assistant entry ID.
+              // Pi upstream: @earendil-works/pi-durable@1.0.3 src/harness/tool.ts — internal ToolTaskInput.assistant locates the calling assistant. Drop when ToolExecutionApi exposes the calling assistant entry ID.
               const assistant = (task!.input as { assistant: EntryId }).assistant
               const conversation = (await host.harness().conversation(api.conversationId, context))!
               const view = await conversation.viewState(context)
