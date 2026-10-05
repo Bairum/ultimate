@@ -17,27 +17,5 @@ export default defineConfig({
     options: { denyWarnings: true, typeAware: true, typeCheck: true },
   },
   fmt: { semi: false, singleQuote: true },
-  test: {
-    root: '.',
-    // Only the named projects collect tests; avoid an additional root-project run.
-    include: [],
-    testTimeout: 30000,
-    maxWorkers: 8,
-    // Keep timing-sensitive harness reload tests out of parallel browser/bundler traffic.
-    projects: [
-      {
-        extends: true,
-        test: {
-          name: 'suite',
-          include: ['test/**/*.test.ts'],
-          exclude: ['test/server.test.ts'],
-          sequence: { groupOrder: 0 },
-        },
-      },
-      {
-        extends: true,
-        test: { name: 'server', include: ['test/server.test.ts'], sequence: { groupOrder: 1 } },
-      },
-    ],
-  },
+  test: { root: '.', include: ['test/**/*.test.ts'], testTimeout: 30000, maxWorkers: 8 },
 })
