@@ -13,6 +13,17 @@ Only `~/.ultimate/settings.json` can enable exposure:
 
 Omit `tailscale.allow` to allow only the machine owner's login (`Self.UserID` → `User.LoginName` in `tailscale status --json`). Project settings cannot enable exposure or change the allowlist. A project-only enable produces a notice and stays disabled. Install Tailscale, log in, enable HTTPS certificates in the admin console, and grant operator rights if needed with `sudo tailscale set --operator=$USER`.
 
+## UI
+
+The Tailscale panel (palette: `Tailscale…`) shows the `status` action, read when it opens and again when system info changes: a registered origin, a failure notice, or a reinstall.
+
+- **ready:** the URL with copy and open buttons, who may open it (`allow`), and that it is tailnet-only.
+- **Problems** (`not-installed`, `not-running`, `not-operator`, `https-disabled`, `port-conflict`, `error`): a short title and the hint; a command in the hint, such as `sudo tailscale set --operator=$USER`, becomes a chip that copies it. A fix applies when the extension reloads: on a settings change or a restart.
+- **disabled:** a switch that enables `tailscale` in `~/.ultimate/settings.json` through onboarding's `setExtension` action with user scope; it never offers project scope. The panel loads only with the extension, so this state shows when only a project enables it.
+- **starting:** a quiet spinner.
+
+While ready, the status line shows `● tailnet`; hover for the URL, click to open the panel.
+
 ## Stable ports, handoff, and recovery
 
 `~/.ultimate/tailscale.json` stores `{ "ports": { "<absolute project root>": { "port": 4747, "owner": "<pid>:<random token>" } } }`. A new project prefers its local supervisor port if free, otherwise the next free port from 4747. Port 443, existing Serve mappings, and other registry assignments are excluded. Registry entries remain after shutdown; prune unused entries by hand when their project is not running.
