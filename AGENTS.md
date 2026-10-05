@@ -38,7 +38,7 @@ others load; see [Events](extensions/README.md#events).
 Discovery is clone built-ins, then `~/.ultimate/`, then `<project>/.ultimate/`; later names replace earlier ones.
 The default set is `agent`, `conversations`, `coding-tools`, `prompt`, `models`, `status-line`, `notices`, `theme`,
 `faux` (inert unless `ULTIMATE_FAUX=1`), `codemode`, `browser`, `onboarding`, and `splash`. Other built-ins are opt-in
-building blocks. Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
+building blocks, including `tailscale` (remote access, user-level enablement only). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
 restart. User/project extension folders are on by default; `disable` can turn off those or defaults too. Unknown names
 produce a notice.

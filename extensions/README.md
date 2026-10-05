@@ -40,6 +40,8 @@ explicitly to `DEFAULT_EXTENSIONS` in `server/extension-settings.ts`. Enable one
 enabled by default: adding the folder is the opt-in. Settings changes apply live without a restart; unknown names
 produce a notice. The clone's `.ultimate/settings.json` is the suggested full setup.
 
+The `tailscale` built-in is opt-in **only in the user settings**; project settings cannot enable remote exposure. See [tailscale](tailscale/README.md) for stable project URLs and owner-login admission.
+
 The project is the directory Ultimate was started in (`ultimate [dir]`); the Info panel lists every extension with its
 source when `info` is enabled; the building-blocks prompt names the clone root. Put a project's app in its `.ultimate/extensions/<name>/`. When the
 project is Ultimate itself, that is `.ultimate/extensions/` in the clone, not `extensions/`, which holds the built-ins.
@@ -68,8 +70,12 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 - `metadata`: the core's `ultimate.metadata` conversation document, `{ title?, label? }`; the shell names a conversation
   by them, so set them on conversations you create (`subagents` labels each child with its definition).
 - `events`: Pi's ephemeral process-local event bus; see [Events](#events).
+- `access.allow({ origin, verify })`: register an HTTP origin with an identity verifier; returns a disposer and is automatically removed when the facet unloads or reloads. HTTP, API, and websocket upgrades use the same admission rules.
+- `notice(message)`: publish a warning notice and retain it in this facet's system diagnostics for later clients, until unload/reload.
 - `resource(key, create)`, `onOpen(callback)`, `onClose(cleanup)`: shared reload-stable resources, async work each
-  time the harness opens (at once if it is open; the server serves once it settles), and async shutdown cleanup.
+  time the harness opens (at once if it is open; the server serves once it settles), and async cleanup. Facet-level callbacks are removed on unload/reload, with cleanup run before the replacement opens. Callbacks registered inside a shared resource's creation belong to that reload-stable resource and survive until server shutdown.
+
+A server facet can export `reloadOnSettings = true` to reinstall on live settings changes even when its enablement is unchanged. Its scoped lifecycle callbacks and access registrations are cleaned up before its replacement opens.
 
 Core runtime modules must not be imported by extensions; use host capabilities instead.
 

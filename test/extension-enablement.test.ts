@@ -73,6 +73,7 @@ it('starts bare with exactly the default extensions and tools, and exposes off b
     'self',
     'subagents',
     'surfaces',
+    'tailscale',
     'tasks',
   ])
   expect((await web(server)).some((path) => path.includes('/subagents/'))).toBe(false)
@@ -225,17 +226,23 @@ it('enables the full repository set including github-triage', async () => {
     home: join(home, 'state'),
   })
   servers.push(server)
-  expect(server.extensions.info().every((entry) => entry.enabled && !entry.server?.error)).toBe(
-    true,
-  )
+  expect(server.extensions.info().find((entry) => entry.name === 'tailscale')?.enabled).toBe(false)
+  expect(
+    server.extensions
+      .info()
+      .filter((entry) => entry.name !== 'tailscale')
+      .every((entry) => entry.enabled && !entry.server?.error),
+  ).toBe(true)
   expect(
     server.host.registry
       .snapshot()
       .installed()
       .some((entry) => entry.name === 'github-triage'),
   ).toBe(true)
-  expect(discovered.every((entry) => entry.enabled)).toBe(true)
-  expect(discovered.map((entry) => entry.name)).toEqual(
+  expect(
+    discovered.filter((entry) => entry.name !== 'tailscale').every((entry) => entry.enabled),
+  ).toBe(true)
+  expect(discovered.filter((entry) => entry.enabled).map((entry) => entry.name)).toEqual(
     [
       ...DEFAULT_EXTENSIONS,
       'automations',
