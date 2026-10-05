@@ -534,7 +534,10 @@ export async function loadExtensions(
       unwatch()
       await chain
       for (const facetHost of subscriptions.keys()) await dispose(facetHost)
-      await Promise.all([...cleanups].map((cleanup) => cleanup()))
+      const results = await Promise.allSettled([...cleanups].map(async (cleanup) => cleanup()))
+      for (const result of results)
+        if (result.status === 'rejected')
+          notice(`Process resource cleanup failed: ${String(result.reason)}`)
     },
   }
 }

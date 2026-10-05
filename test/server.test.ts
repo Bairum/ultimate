@@ -375,6 +375,34 @@ export const actions={ late: async()=>{host.onOpen(async()=>{opened=true}); retu
     await stream.close()
   })
 
+  it('settles failing process resource cleanups and still closes the server', async () => {
+    const { server } = await fixture(false, false, {
+      resourcecleanup: `import { defineExtension } from '@earendil-works/pi-durable'
+import { writeFile } from 'node:fs/promises'
+export default host => { host.resource('cleanup.process',()=>{
+  host.onClose(()=>{throw new Error('sync process failure')})
+  host.onClose(async()=>{throw new Error('async process failure')})
+  host.onClose(async()=>{await writeFile(host.userHome+'/process-cleanup-ok','yes')})
+  return {}
+}); return defineExtension({name:'resourcecleanup'}) }`,
+    })
+    const emit = vi.spyOn(server.events, 'emit')
+    const systemClose = vi.spyOn(server.system, 'close')
+    const viteClose = vi.spyOn(server.vite, 'close')
+    await expect(server.close()).resolves.toBeUndefined()
+    servers.splice(servers.indexOf(server), 1)
+    expect(server.http.listening).toBe(false)
+    expect(systemClose).toHaveBeenCalledOnce()
+    expect(viteClose).toHaveBeenCalledOnce()
+    expect(await readFile(join(server.host.userHome, 'process-cleanup-ok'), 'utf8')).toBe('yes')
+    expect(
+      emit.mock.calls.filter(
+        ([name, value]) =>
+          name === 'notice' && JSON.stringify(value).includes('Process resource cleanup failed'),
+      ),
+    ).toHaveLength(2)
+  })
+
   it('serves and completes a faux submit with an empty extensions directory', async () => {
     const { server } = await fixture(false, false, undefined, true)
     expect((await fetch(server.url)).status).toBe(200)

@@ -75,7 +75,19 @@ export default function tailscale(host: ExtensionHost) {
     use: (value: { ports: Record<string, { port: number; owner: string }> }) => Promise<T>,
   ) {
     await mkdir(join(host.userHome, '.ultimate'), { recursive: true })
-    const lock = await acquireLock(registryPath + '.lock', { pid: process.pid }, 120000)
+    const lock = await acquireLock(registryPath + '.lock', { pid: process.pid }, 120000).catch(
+      (error) => {
+        if (
+          error instanceof Error &&
+          error.message.startsWith('Ultimate core already owns this storage')
+        )
+          throw new Error(
+            `Tailscale port registry is busy (${registryPath}); wait for the current instance to finish and retry. Dead owners are recovered automatically.`,
+            { cause: error },
+          )
+        throw error
+      },
+    )
     try {
       let value: { ports: Record<string, { port: number; owner: string }> } = { ports: {} }
       try {
@@ -179,7 +191,7 @@ export default function tailscale(host: ExtensionHost) {
         live.add(host.system().process.url)
         for (const entry of Object.values(registry.ports)) {
           const proxy = target(serve, dns, entry.port)
-          if (proxy && (!alive(Number(entry.owner.split(':')[0])) || !live.has(proxy))) {
+          if (proxy && !alive(Number(entry.owner.split(':')[0])) && !live.has(proxy)) {
             await command(['serve', `--https=${entry.port}`, 'off'])
             delete serve.Web?.[`${dns}:${entry.port}`]
             delete serve.TCP?.[String(entry.port)]

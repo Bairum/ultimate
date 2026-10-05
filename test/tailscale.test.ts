@@ -5,12 +5,14 @@ import tailscale, { actions } from '../extensions/tailscale/server.ts'
 import type { Status } from '../extensions/tailscale/server.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { createAccess } from '../server/request-security.ts'
+import * as locks from '../server/lock.ts'
 import { fauxServer, linkDependencies, post, temp, until } from './helpers.ts'
 
 const closes: (() => Promise<void>)[] = []
 afterEach(async () => {
   for (const close of closes.splice(0)) await close()
   vi.unstubAllEnvs()
+  vi.restoreAllMocks()
 })
 const node = {
   BackendState: 'Running',
@@ -330,6 +332,33 @@ it('recovers dead registry owners and leaves unowned mappings intact', async () 
   expect((await app.status()).state).toBe('ready')
   expect(await f.invocations()).toContainEqual(['serve', '--https=4748', 'off'])
   expect((await f.invocations()).filter((args) => args.includes('--https=4749'))).toEqual([])
+})
+it('keeps a live preview owner absent from the project supervisor list', async () => {
+  const f = await fixture(undefined, {
+    serve: {
+      Web: { 'rog.example.ts.net:4748': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4998' } } } },
+    },
+  })
+  await writeFile(
+    join(f.home, '.ultimate/tailscale.json'),
+    JSON.stringify({ ports: { '/preview': { port: 4748, owner: `${process.pid}:preview` } } }),
+  )
+  const app = await f.instance()
+  expect((await app.status()).state).toBe('ready')
+  expect((await f.invocations()).filter((args) => args.includes('--https=4748'))).toEqual([])
+})
+it('reports a registry-specific timeout and retry hint', async () => {
+  const f = await fixture()
+  vi.spyOn(locks, 'acquireLock').mockRejectedValueOnce(
+    new Error('Ultimate core already owns this storage (pid 123)'),
+  )
+  const app = await f.instance()
+  expect(await app.status()).toMatchObject({
+    state: 'error',
+    hint: expect.stringContaining('Tailscale port registry is busy'),
+  })
+  expect((await app.status()).hint).toContain('retry')
+  expect((await app.status()).hint).not.toContain('storage')
 })
 it('reports failed teardown without throwing and classifies filesystem failures as errors', async () => {
   const f = await fixture()

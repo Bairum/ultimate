@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { request } from 'node:http'
+import { connect } from 'node:net'
 import type { ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { readFile, rm, writeFile } from 'node:fs/promises'
@@ -145,6 +146,40 @@ describe('supervisor', () => {
       expect(response.status).toBe(503)
       expect(response.body).toBe('')
     }
+    const port = Number(new URL(url).port)
+    const idle = connect(port, '127.0.0.1')
+    await once(idle, 'connect')
+    idle.resume()
+    const started = Date.now()
+    await once(idle, 'close')
+    expect(Date.now() - started).toBeLessThan(8000)
+    const delayed = connect(port, '127.0.0.1')
+    await once(delayed, 'connect')
+    delayed.write('GET /api/models HTTP/1.1\r\n')
+    await writeFile(
+      join(root, 'server/main.ts'),
+      `import { createServer } from 'node:http'
+const server=createServer((_req,res)=>res.end('recovered'))
+server.listen(0,'127.0.0.1',()=>process.send?.({type:'prepared',port:(server.address() as import('node:net').AddressInfo).port}))
+process.on('message',(message:{type:string})=>{ if(message.type==='go')process.send?.({type:'ready'}); if(message.type==='release')process.send?.({type:'released'}); if(message.type==='exit')server.close(()=>process.exit(0)) })`,
+    )
+    await until(async () => {
+      try {
+        return (await fetch(url)).status === 200
+      } catch {
+        return false
+      }
+    })
+    const received = new Promise<string>((resolve, reject) => {
+      let wire = ''
+      delayed.on('data', (chunk) => {
+        wire += chunk
+      })
+      delayed.on('end', () => resolve(wire))
+      delayed.on('error', reject)
+    })
+    delayed.write(`Host: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`)
+    expect(await received).toContain('200 OK')
   }, 60000)
 
   it('owns a random public port, refuses a second instance naming its pid, and accepts the public Origin', async () => {

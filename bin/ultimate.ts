@@ -76,10 +76,23 @@ function route(socket: Socket) {
     socket.resume()
   } else if (crashPage) {
     let head = ''
+    const expired = () => socket.destroy()
+    socket.setTimeout(5000, expired)
     const receive = (chunk: Buffer) => {
       head += chunk.toString('latin1')
+      if (active || !crashPage) {
+        socket.pause()
+        socket.off('data', receive)
+        socket.off('timeout', expired)
+        socket.setTimeout(0)
+        socket.unshift(Buffer.from(head, 'latin1'))
+        route(socket)
+        return
+      }
       if (!head.includes('\r\n\r\n') && head.length < 16384) return
       socket.off('data', receive)
+      socket.off('timeout', expired)
+      socket.setTimeout(0)
       const headers: Record<string, string> = {}
       for (const line of head.split('\r\n').slice(1)) {
         if (!line) break
@@ -90,10 +103,7 @@ function route(socket: Socket) {
       const direct =
         head.length < 16384 &&
         !proxied(headers) &&
-        loopbackAuthority(
-          headers.host,
-          String((proxy.address() as import('node:net').AddressInfo).port),
-        )
+        loopbackAuthority(headers.host, String(publicPort))
       const html = direct
         ? `<h1>Ultimate core could not boot</h1><p>Waiting for changes in server/, shared/, extensions/</p><pre>${escape(stderr)}</pre>`
         : ''
@@ -144,7 +154,8 @@ try {
 }
 const address = proxy.address()
 if (!address || typeof address === 'string') throw new Error('No proxy address')
-const publicUrl = `http://127.0.0.1:${address.port}`
+const publicPort = address.port
+const publicUrl = `http://127.0.0.1:${publicPort}`
 await lock.update({ pid: process.pid, port: address.port, project: projectRoot })
 
 type Core = {
