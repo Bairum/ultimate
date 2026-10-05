@@ -9,63 +9,69 @@ import {
   useSystem,
   useUltimate,
 } from '@/sdk'
-import { ProjectPage, Welcome } from './pages.tsx'
+import { FirstRun, ProjectCard } from './pages.tsx'
 import { ExtensionsPanel } from './panel.tsx'
 import { projectDialog } from './parts.tsx'
 import type { Status } from './parts.tsx'
 
-/** Closing the project page without a choice defers it for this tab; a new tab or window asks again. */
+/** Closing the project question without a choice defers it for this tab; a new tab or window asks again. */
 const later = (root: string) => `ultimate.onboarding.later:${root}`
 
-/** The ask-once project page first, then the first-run welcome; each closes with Escape. */
+/**
+ * The first run's two pages, which also ask about an undecided project setup; afterwards, that question as a compact
+ * card. Each closes with Escape.
+ */
 function Onboarding() {
   const system = useSystem()
   const status = useAction<Status>('onboarding', 'status')
   const ui = useUltimate()
   const [reopened, setReopened] = useDialog(projectDialog)
-  const [welcomed, setWelcomed] = useState(false)
+  const [finished, setFinished] = useState(false)
   const [, deferred] = useReducer((count: number) => count + 1, 0)
-  // Where focus goes once the welcome has gone: the composer, unless it opened the Extensions panel.
-  const composer = useRef(true)
   const project = system?.project
+  // Until status answers, neither shows; without an answer there is no first run.
+  const settled = status.data !== undefined || status.error !== undefined
+  const firstRun = status.data?.firstRun === true && !finished
+  const undecided = project?.config === true && project.decision === null
   const asking =
-    project?.config === true &&
-    project.decision === null &&
-    sessionStorage.getItem(later(project.root)) === null
-  const projectOpen = reopened || asking
+    settled && !firstRun && undecided && sessionStorage.getItem(later(project.root)) === null
+  const cardOpen = !firstRun && (reopened || asking)
   // Each opening reads the setup again, so agents, skills, and folders added since show.
   const { refetch } = status
   const wasOpen = useRef(false)
   useEffect(() => {
-    if (projectOpen && !wasOpen.current) void refetch()
-    wasOpen.current = projectOpen
-  }, [projectOpen, refetch])
+    if (cardOpen && !wasOpen.current) void refetch()
+    wasOpen.current = cardOpen
+  }, [cardOpen, refetch])
   if (!project) return null
-  const welcoming = status.data?.firstRun === true && !welcomed
+  const defer = () => {
+    if (getState().system?.project.decision !== null) return
+    sessionStorage.setItem(later(project.root), '1')
+    deferred()
+  }
   return (
     <>
-      <ProjectPage
+      <FirstRun
+        adds={status.data?.adds}
+        askProject={undecided}
+        onClosed={() => ui.focusComposer()}
+        onDone={(skipped) => {
+          setFinished(true)
+          if (!skipped) return
+          // Skipped: the defaults stay, and the project question waits for another tab.
+          void api.action('onboarding', 'firstRunDone')
+          defer()
+        }}
+        open={firstRun}
+      />
+      <ProjectCard
         adds={status.data?.adds}
         onClose={() => {
           setReopened(false)
-          if (getState().system?.project.decision === null) {
-            sessionStorage.setItem(later(project.root), '1')
-            deferred()
-          }
+          defer()
         }}
-        // The welcome follows on a first run and takes focus itself.
-        onClosed={() => !welcoming && ui.focusComposer()}
-        open={projectOpen}
-      />
-      <Welcome
-        onClosed={() => composer.current && ui.focusComposer()}
-        onDone={(next) => {
-          composer.current = next !== 'extensions'
-          setWelcomed(true)
-          void api.action('onboarding', 'firstRunDone')
-          if (next === 'extensions') ui.openPanel('extensions')
-        }}
-        open={!projectOpen && welcoming}
+        onClosed={() => ui.focusComposer()}
+        open={cardOpen}
       />
     </>
   )

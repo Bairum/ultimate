@@ -220,7 +220,7 @@ it('holds the app until ready, so a splash that installs late never shows after 
   }
 }, 60000)
 
-it('keeps the first-run welcome from keys and clicks while it covers, then hands it focus', async (test) => {
+it('keeps the first-run page from keys and clicks while it covers, then hands it focus', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const { server, userHome } = await setup({ firstRun: true })
@@ -230,10 +230,11 @@ it('keeps the first-run welcome from keys and clicks while it covers, then hands
     const errors: string[] = []
     page.on('pageerror', (error) => errors.push(error.message))
     const keys = await recordKeys(page)
-    // By CSS: the modal welcome hides the rest of the page, the splash included, from role queries.
+    // By CSS: the modal page hides the rest of the page, the splash included, from role queries.
     const splash = page.locator('[aria-label="Loading Ultimate"]')
-    const welcome = page.getByRole('dialog').filter({ hasText: 'Welcome' })
-    const start = welcome.getByRole('button', { name: 'Start' })
+    const welcome = page.getByRole('dialog').filter({ hasText: 'Get ready' })
+    // Its close button skips the first run, so a click that reached it would close the page.
+    const skip = welcome.getByRole('button', { name: 'Skip setup' })
     const firstRunDone = () =>
       access(join(userHome, '.ultimate/onboarding.json')).then(
         () => true,
@@ -243,13 +244,13 @@ it('keeps the first-run welcome from keys and clicks while it covers, then hands
     // The welcome opens beneath the splash, which still takes the keys and clicks meant for it.
     await page.goto(server.url)
     await splash.waitFor(timeout)
-    await start.waitFor({ state: 'attached', ...timeout })
+    await skip.waitFor({ state: 'attached', ...timeout })
     await page.keyboard.press('Escape')
     await page.keyboard.press('Tab')
     await page.keyboard.press('Enter')
     await page.keyboard.press('Escape')
     expect(await welcome.count()).toBe(1)
-    const box = (await start.boundingBox())!
+    const box = (await skip.boundingBox())!
     const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
     expect(
       await page.evaluate(
@@ -261,12 +262,17 @@ it('keeps the first-run welcome from keys and clicks while it covers, then hands
     expect((await keys()).every((key) => key.covering)).toBe(true)
     expect(await welcome.count()).toBe(1)
 
-    // After the reveal it is still there, focused on Start, and nothing recorded the first run as done.
+    // After the reveal it is still there, focused on its next action (Connect without a login on this machine,
+    // else Continue), and nothing recorded the first run as done.
     await page.waitForFunction(() => Reflect.has(window, 'releaseSlowpoke'))
     await page.evaluate(() => Reflect.get(window, 'releaseSlowpoke')())
     await splash.waitFor({ state: 'detached', ...timeout })
     expect(await welcome.isVisible()).toBe(true)
-    expect(await start.evaluate((button) => button === document.activeElement)).toBe(true)
+    expect(
+      await welcome.evaluate((dialog) =>
+        dialog.contains(document.activeElement) ? document.activeElement?.textContent : null,
+      ),
+    ).toMatch(/^(Connect|Continue)$/)
     expect(await firstRunDone()).toBe(false)
 
     // Now its keys reach it: Escape closes it and records the first run.

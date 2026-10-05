@@ -1,52 +1,69 @@
 import {
+  ArrowLeftIcon,
   ArrowRightIcon,
-  BlocksIcon,
+  BotIcon,
   CheckIcon,
+  ChevronRightIcon,
+  CircleCheckIcon,
+  CircleIcon,
   FolderCogIcon,
-  KeyRoundIcon,
   LoaderCircleIcon,
-  MessageSquareTextIcon,
   ReplaceIcon,
+  SparklesIcon,
   XIcon,
 } from 'lucide-react'
-import { Fragment, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ComponentType, ReactNode, RefObject } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { Kbd, KbdGroup } from '@/components/ui/kbd'
+import { Kbd } from '@/components/ui/kbd'
 import {
   api,
   cn,
-  formatKeys,
+  elidePath,
   shortenPath,
   useCommands,
   useConversation,
   useModels,
+  useStore,
   useSystem,
   useUltimate,
 } from '@/sdk'
-import type { SystemInfo } from '@/sdk'
-import { Heading, Line, message, projectLists, useDescribed } from './parts.tsx'
+import { Checkbox, Switch, message } from './parts.tsx'
 import type { Status } from './parts.tsx'
 
 /**
+ * The extensions the first run recommends, all checked to start with; `needs` is checked along with it. The guide
+ * keeps each line to a few words.
+ */
+export const recommended: readonly { name: string; line: string; needs?: string }[] = [
+  { name: 'subagents', line: 'Hands bounded work to helper agents' },
+  { name: 'plan', line: 'Durable epics and tasks for long work' },
+  { name: 'automations', line: 'Prompts that run on a schedule', needs: 'subagents' },
+  { name: 'documents', line: 'Extension state in the right panel' },
+  { name: 'tasks', line: 'What runs right now, live' },
+  { name: 'info', line: 'Machine, code, and extensions at a glance' },
+]
+
+/**
  * One page over the surface: modal for focus, closed with Escape or its close button but not by a stray click
- * outside. `onClosed` runs once it has gone, to move focus.
+ * outside. It opens with focus on `focus`; `onClosed` runs once it has gone, to move focus.
  */
 function Page({
   open,
   onClose,
   onClosed,
   focus,
-  wide,
+  className,
   children,
 }: {
   open: boolean
   onClose: () => void
   onClosed: () => void
   focus: RefObject<HTMLElement | null>
-  wide?: boolean
+  className?: string
   children: ReactNode
 }) {
   return (
@@ -58,8 +75,8 @@ function Page({
     >
       <DialogContent
         className={cn(
-          'flex max-h-[min(56rem,calc(100dvh-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl',
-          wide && 'lg:max-w-5xl',
+          'flex max-h-[min(48rem,calc(100dvh-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl',
+          className,
         )}
         onCloseAutoFocus={(event) => {
           event.preventDefault()
@@ -93,350 +110,530 @@ function Close({ label, onClick }: { label: string; onClick: () => void }) {
   )
 }
 
-function Keys({ keys }: { keys: string }) {
+/** The wordmark, the page's title and its one sentence. */
+function Header({
+  title,
+  description,
+  onClose,
+}: {
+  title: string
+  description: string
+  onClose: () => void
+}) {
   return (
-    <KbdGroup>
-      {formatKeys(keys)[0]?.map((key) => (
-        <Kbd key={key}>{key}</Kbd>
-      ))}
-    </KbdGroup>
+    <header className="shrink-0 px-5 pt-5 sm:px-7 sm:pt-6">
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-[12px] font-semibold tracking-[0.3em] text-brand">
+          ULTIMATE
+        </span>
+        <Close label="Skip setup" onClick={onClose} />
+      </div>
+      <DialogTitle className="mt-5 text-[22px] font-semibold tracking-tight text-foreground">
+        {title}
+      </DialogTitle>
+      <DialogDescription className="mt-1.5 text-[14px] text-muted-foreground">
+        {description}
+      </DialogDescription>
+    </header>
   )
 }
 
-const code = 'font-mono text-[0.92em] text-foreground/80'
+/** Which of the two pages shows: two short bars, the current one in the brand colour. */
+function Progress({ page }: { page: 1 | 2 }) {
+  return (
+    <span aria-label={`Step ${page} of 2`} className="flex items-center gap-1.5" role="img">
+      {[1, 2].map((step) => (
+        <span
+          className={cn('h-1 w-4 rounded-full', step === page ? 'bg-brand' : 'bg-border')}
+          key={step}
+        />
+      ))}
+    </span>
+  )
+}
 
-/** Login state: the Pi login flow of `models` when no provider is configured, otherwise the current model. */
-function Login() {
+function Footer({ children }: { children: ReactNode }) {
+  return (
+    <footer className="flex shrink-0 items-center gap-2 border-t border-border/70 bg-sidebar px-5 py-3 sm:px-7">
+      {children}
+    </footer>
+  )
+}
+
+/** One checklist row: whether it is done, what it is, its state in one line, and its action. */
+function Step({
+  done,
+  checking,
+  title,
+  state,
+  children,
+}: {
+  done: boolean
+  checking: boolean
+  title: string
+  state: ReactNode
+  children?: ReactNode
+}) {
+  const Icon: ComponentType<{ className?: string }> = checking
+    ? LoaderCircleIcon
+    : done
+      ? CircleCheckIcon
+      : CircleIcon
+  return (
+    <li className="flex items-center gap-3 px-4 py-3">
+      <Icon
+        className={cn(
+          'size-5 shrink-0',
+          checking && 'animate-spin text-muted-foreground',
+          !checking && (done ? 'text-success' : 'text-muted-foreground/50'),
+        )}
+      />
+      <span className="sr-only">{checking ? 'Checking: ' : done ? 'Done: ' : 'To do: '}</span>
+      <div className="min-w-0 flex-1">
+        <p className="text-[13.5px] font-medium text-foreground">{title}</p>
+        <p className="mt-0.5 line-clamp-2 text-[12.5px] text-muted-foreground">{state}</p>
+      </div>
+      {children}
+    </li>
+  )
+}
+
+/**
+ * Page 1: the two things Ultimate needs, checked live: a logged-in provider (through the `models` login) and an
+ * available model for the conversation (through its picker). Continue waits for both.
+ */
+function GetReady({
+  primary,
+  onContinue,
+  onSkip,
+}: {
+  primary: RefObject<HTMLButtonElement | null>
+  onContinue: () => void
+  onSkip: () => void
+}) {
   const models = useModels()
-  const { agent } = useConversation()
+  const { agent, loading } = useConversation()
   const commands = useCommands()
   const ui = useUltimate()
   const has = (id: string) => commands.some((command) => command.id === id)
-  const model = agent.model && `${agent.model.provider}/${agent.model.modelId}`
-  // The faux demo provider (`ULTIMATE_FAUX=1`) is always there and is no login.
-  const configured =
+  // The faux demo provider (`ULTIMATE_FAUX=1`) is always there and is no login; its model still counts.
+  const connected =
     models?.providers.filter((provider) => provider.status.configured && provider.id !== 'faux') ??
     []
-  if (!models) return <div className="h-[4.25rem] rounded-lg border border-border/70 bg-card" />
-  if (configured.length > 0)
-    return (
-      <div className="flex items-center gap-3 rounded-lg border border-border/70 bg-card px-4 py-3">
-        <CheckIcon className="size-4 shrink-0 text-success" />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-[13px] text-foreground/90">
-            Logged in to {configured.map((provider) => provider.name).join(', ')}
-          </p>
-          <p className="truncate font-mono text-[11.5px] text-muted-foreground">
-            {model ? (
-              <>
-                model <span className="text-foreground/80">{model}</span>
-                {agent.thinkingLevel &&
-                  agent.thinkingLevel !== 'off' &&
-                  ` · ${agent.thinkingLevel}`}
-              </>
-            ) : (
-              <span className="text-warning">no model chosen yet</span>
-            )}
-          </p>
-        </div>
-        {has('model.pick') && (
-          <Button onClick={() => ui.runCommand('model.pick')} size="xs" variant="outline">
-            Change model
-          </Button>
-        )}
-      </div>
-    )
+  const ref = agent.model
+  const model = models?.models.find(
+    (candidate) => candidate.provider === ref?.provider && candidate.id === ref.modelId,
+  )
+  const thinking =
+    model?.reasoning && agent.thinkingLevel !== 'off' ? agent.thinkingLevel : undefined
+  const done = { provider: connected.length > 0, model: model?.available === true }
+  const next = !done.provider ? 'provider' : !done.model ? 'model' : 'continue'
+  // Focus goes to the next thing to do when the login or the picker closes (they return it to no trigger), and when
+  // a step gets done while focus is on this page.
+  const body = useRef<HTMLDivElement>(null)
+  const covered = useStore((state) => Object.values(state.ui.dialogs).some(Boolean))
+  const was = useRef({ covered, next })
+  useEffect(() => {
+    const before = was.current
+    was.current = { covered, next }
+    if (covered) return
+    const active = document.activeElement
+    const here = !active || active === document.body || body.current?.contains(active)
+    if (!before.covered && (before.next === next || !here)) return
+    // After the closing dialog has let go of focus.
+    setTimeout(() => primary.current?.focus())
+  }, [covered, next, primary])
+  const action = (step: 'provider' | 'model', label: string, command: string) =>
+    has(command) ? (
+      <Button
+        onClick={() => ui.runCommand(command)}
+        ref={next === step ? primary : undefined}
+        size="sm"
+        variant={next === step ? 'default' : 'outline'}
+      >
+        {label}
+      </Button>
+    ) : undefined
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-brand/30 bg-brand/5 px-4 py-3 sm:flex-row sm:items-center">
-      <div className="flex min-w-0 flex-1 items-start gap-3">
-        <KeyRoundIcon className="mt-0.5 size-4 shrink-0 text-brand" />
-        <div className="min-w-0">
-          <p className="text-[13px] font-medium text-foreground">Log in to a model provider</p>
-          <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">
-            A subscription or an API key, through Pi; the login is shared with Pi in{' '}
-            <code className={code}>~/.pi/agent</code>.
-            {model && (
-              <>
-                {' '}
-                For now it runs on <code className={code}>{model}</code>.
-              </>
-            )}
-          </p>
-        </div>
+    <div className="contents" ref={body}>
+      <Header
+        description="Two steps and Ultimate can start working in this folder."
+        onClose={onSkip}
+        title="Get ready"
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 pt-5 pb-6 sm:px-7">
+        <ul className="divide-y divide-border/70 rounded-lg border border-border/70 bg-card">
+          <Step
+            checking={!models}
+            done={done.provider}
+            state={
+              !models
+                ? 'Checking…'
+                : done.provider
+                  ? `Connected · ${connected.map((provider) => provider.name).join(', ')}`
+                  : has('auth.login')
+                    ? 'A subscription or API key, shared with Pi'
+                    : 'Turn on models to log in here'
+            }
+            title="Connect a model provider"
+          >
+            {action('provider', done.provider ? 'Manage' : 'Connect', 'auth.login')}
+          </Step>
+          <Step
+            checking={!models || loading}
+            done={done.model}
+            state={
+              !models || loading ? (
+                'Checking…'
+              ) : !ref ? (
+                'No model chosen yet'
+              ) : (
+                <>
+                  <span className="font-mono text-[12px] text-foreground/85">{ref.modelId}</span>
+                  {done.model ? (thinking ? ` · ${thinking}` : '') : ' · needs its provider'}
+                </>
+              )
+            }
+            title="Choose a model"
+          >
+            {action('model', done.model ? 'Change' : 'Choose', 'model.pick')}
+          </Step>
+        </ul>
       </div>
-      {has('auth.login') ? (
+      <Footer>
+        <Progress page={1} />
         <Button
-          className="self-end sm:self-auto"
-          onClick={() => ui.runCommand('auth.login')}
+          className="ml-auto"
+          disabled={next !== 'continue'}
+          onClick={onContinue}
+          ref={next === 'continue' ? primary : undefined}
           size="sm"
         >
-          Log in…
+          Continue
+          <ArrowRightIcon />
         </Button>
-      ) : (
-        <p className="text-[12px] text-muted-foreground sm:max-w-44">
-          Turn on <code className={code}>models</code> in the Extensions panel to log in here.
-        </p>
-      )}
+      </Footer>
     </div>
   )
 }
 
-function Card({
-  icon: Icon,
-  title,
+/** A small monospace tag; `tone` marks a project's own folder (brand) or one in place of a built-in (warning). */
+function Chip({
   children,
+  icon: Icon,
+  tone,
+  title,
+  className,
 }: {
-  icon: ComponentType<{ className?: string }>
-  title: string
   children: ReactNode
+  icon?: ComponentType<{ className?: string }>
+  tone?: 'brand' | 'warning'
+  title?: string
+  className?: string
 }) {
   return (
-    <div className="rounded-lg border border-border/70 px-4 py-3">
-      <div className="flex items-center gap-2 text-[13px] font-medium text-foreground">
-        <Icon className="size-4 text-muted-foreground" />
-        {title}
-      </div>
-      <div className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground">{children}</div>
-    </div>
-  )
-}
-
-/** What is on: the default set with its lines, then what settings or folders added on top, by name. */
-function OnNow({ system }: { system: SystemInfo }) {
-  const { line } = useDescribed()
-  const on = system.extensions.filter((extension) => extension.enabled)
-  const available = system.extensions.length - on.length
-  const defaults = on.filter((extension) => extension.layer === 'default')
-  const added = on.filter((extension) => extension.layer !== 'default')
-  const origins = [
-    ...new Set(
-      added.map((extension) =>
-        extension.layer === 'user'
-          ? 'your settings'
-          : extension.layer === 'project' || extension.source === 'project'
-            ? "this project's setup"
-            : 'your extensions',
-      ),
-    ),
-  ]
-  return (
-    <section className="px-5 pt-6 sm:px-7">
-      <Heading meta={`${on.length} on · ${available} available`}>On now</Heading>
-      <dl className="mt-2.5 grid grid-cols-[minmax(0,6.25rem)_minmax(0,1fr)] gap-x-3 gap-y-1 sm:grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] sm:gap-x-4">
-        {defaults.map((extension) => (
-          <Fragment key={extension.name}>
-            <dt className="truncate font-mono text-[12px] leading-5 text-foreground/85">
-              {extension.name}
-            </dt>
-            <dd className="truncate text-[12.5px] leading-5 text-muted-foreground">
-              <Line text={line(extension.name, extension.source)} />
-            </dd>
-          </Fragment>
-        ))}
-      </dl>
-      {added.length > 0 && (
-        <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
-          Also on, from {origins.join(' and ')}:{' '}
-          <span className="font-mono text-[12px] text-foreground/85">
-            {added.map((extension) => extension.name).join(' · ')}
-          </span>
-        </p>
+    <li
+      className={cn(
+        'inline-flex h-[22px] items-center gap-1 rounded-sm border px-1.5 font-mono text-[11px]',
+        tone === 'warning'
+          ? 'border-warning/40 bg-warning/8 text-warning'
+          : tone === 'brand'
+            ? 'border-brand/30 text-brand'
+            : 'border-border/80 text-foreground/80',
+        className,
       )}
-    </section>
+      title={title}
+    >
+      {Icon && <Icon className="size-3 shrink-0" />}
+      {children}
+    </li>
   )
 }
 
-/** The first-run welcome: what Ultimate is, what is on, login, and where to go next. */
-export function Welcome({
+/**
+ * What a project's setup brings, as chips: folders that replace a built-in, its own extensions, the built-ins its
+ * settings turn on and off, its agents, and its skills.
+ */
+function SetupChips({ adds }: { adds?: Status['adds'] }) {
+  if (!adds) return <div className="h-[22px]" />
+  const own = adds.extensions
+  const builtins = adds.enable.filter(
+    (name) => !own.includes(name) && !adds.replaces.includes(name),
+  )
+  const empty =
+    [own, builtins, adds.replaces, adds.disable, adds.agents, adds.skills].flat().length === 0
+  return (
+    <ul aria-label="What it brings" className="flex flex-wrap gap-1.5">
+      {adds.replaces.map((name) => (
+        <Chip
+          icon={ReplaceIcon}
+          key={`replaces:${name}`}
+          title={`Its own ${name} runs in place of the built-in`}
+          tone="warning"
+        >
+          {name}
+          <span className="font-sans text-[10.5px] opacity-80">replaces built-in</span>
+        </Chip>
+      ))}
+      {own.map((name) => (
+        <Chip key={`own:${name}`} title="Its own extension" tone="brand">
+          {name}
+        </Chip>
+      ))}
+      {builtins.map((name) => (
+        <Chip key={`on:${name}`} title="A built-in it turns on">
+          {name}
+        </Chip>
+      ))}
+      {adds.disable.map((name) => (
+        <Chip
+          className="text-muted-foreground line-through"
+          key={`off:${name}`}
+          title="A built-in it turns off"
+        >
+          {name}
+        </Chip>
+      ))}
+      {adds.agents.map((name) => (
+        <Chip icon={BotIcon} key={`agent:${name}`} title="Agent">
+          <span className="sr-only">agent </span>
+          {name}
+        </Chip>
+      ))}
+      {adds.skills.map((name) => (
+        <Chip icon={SparklesIcon} key={`skill:${name}`} title="Skill">
+          <span className="sr-only">skill </span>
+          {name}
+        </Chip>
+      ))}
+      {empty && <Chip className="text-muted-foreground">settings only</Chip>}
+    </ul>
+  )
+}
+
+/** The project's `.ultimate/README.md`, behind a disclosure. */
+function WhatsInIt({ readme }: { readme?: string }) {
+  if (!readme) return null
+  return (
+    <Collapsible>
+      <CollapsibleTrigger className="group flex items-center gap-1 rounded-sm text-[12.5px] text-brand outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">
+        <ChevronRightIcon className="size-3.5 transition-transform group-data-[state=open]:rotate-90" />
+        What's in it
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div
+          aria-label="This project's README"
+          className="mt-2 max-h-64 overflow-y-auto rounded-md border border-border/70 bg-background px-4 py-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          role="region"
+          tabIndex={0}
+        >
+          <MessageResponse className="text-[13px] leading-relaxed">{readme}</MessageResponse>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
+function FolderPath() {
+  const system = useSystem()
+  if (!system) return null
+  const path = shortenPath(system.project.root, { home: system.machine.home })
+  return (
+    <span className="flex min-w-0 items-center gap-1.5 font-mono text-[11.5px] text-muted-foreground">
+      <FolderCogIcon className="size-3.5 shrink-0 text-brand" />
+      <span className="truncate" title={path}>
+        {elidePath(path, 64)}
+      </span>
+    </span>
+  )
+}
+
+/** The hint on an extension that turns another on with it. */
+function Needs({ name, className }: { name: string; className?: string }) {
+  return (
+    <span className={cn('shrink-0 font-mono text-[10.5px] text-muted-foreground/70', className)}>
+      needs {name}
+    </span>
+  )
+}
+
+/**
+ * Page 2: the recommended extensions as checkboxes and, for a folder with an undecided setup, whether to use it.
+ * Continue applies it all at once with `applyFirstRun`; Skip keeps the defaults.
+ */
+function Recommended({
+  adds,
+  askProject,
+  primary,
+  onBack,
+  onSkip,
+  onDone,
+}: {
+  adds?: Status['adds']
+  askProject: boolean
+  primary: RefObject<HTMLButtonElement | null>
+  onBack: () => void
+  onSkip: () => void
+  onDone: () => void
+}) {
+  const system = useSystem()
+  const [checked, setChecked] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(recommended.map((entry) => [entry.name, true])),
+  )
+  // Kept as it was when the page opened, so the question stays while its answer applies.
+  const [asked] = useState(askProject)
+  const [local, setLocal] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const set = (name: string, on: boolean) =>
+    setChecked((previous) => {
+      const next = { ...previous, [name]: on }
+      for (const entry of recommended) {
+        if (on && entry.name === name && entry.needs) next[entry.needs] = true
+        if (!on && entry.needs === name) next[entry.name] = false
+      }
+      return next
+    })
+  const apply = async () => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      await api.action('onboarding', 'applyFirstRun', {
+        extensions: checked,
+        ...(asked ? { local } : {}),
+      })
+      onDone()
+    } catch (failure) {
+      setError(message(failure))
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <Header
+        description="Turn on what you want; change it any time under Extensions."
+        onClose={onSkip}
+        title="Recommended extensions"
+      />
+      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 pt-5 pb-6 sm:px-7">
+        <ul className="divide-y divide-border/70 rounded-lg border border-border/70 bg-card">
+          {recommended.map((entry) => (
+            <li key={entry.name}>
+              <label className="flex cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors hover:bg-accent/40">
+                <Checkbox
+                  checked={checked[entry.name] ?? false}
+                  label={entry.name}
+                  onChange={(on) => set(entry.name, on)}
+                />
+                {/* Narrow, the line goes under the name. */}
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-3">
+                  <span className="flex shrink-0 items-baseline gap-2 sm:w-24">
+                    <span className="font-mono text-[12.5px] text-foreground/90">{entry.name}</span>
+                    {entry.needs && <Needs className="sm:hidden" name={entry.needs} />}
+                  </span>
+                  <span className="min-w-0 truncate text-[12.5px] text-muted-foreground">
+                    {entry.line}
+                  </span>
+                </span>
+                {entry.needs && <Needs className="hidden sm:inline" name={entry.needs} />}
+              </label>
+            </li>
+          ))}
+        </ul>
+        {asked && system && (
+          <section
+            aria-label="This folder"
+            className="flex flex-col gap-3 rounded-lg border border-border/70 bg-card px-4 py-3"
+          >
+            <label className="flex cursor-pointer items-start gap-3">
+              <span className="flex min-w-0 flex-1 flex-col gap-1">
+                <span className="text-[13.5px] font-medium text-foreground">
+                  Use this project's setup
+                </span>
+                <FolderPath />
+              </span>
+              <Switch checked={local} label="Use this project's setup" onChange={setLocal} />
+            </label>
+            <SetupChips adds={adds} />
+            <WhatsInIt readme={system.project.readme} />
+          </section>
+        )}
+      </div>
+      <Footer>
+        <Progress page={2} />
+        {error && (
+          <span className="min-w-0 flex-1 truncate text-[12px] text-error" title={error}>
+            {error}
+          </span>
+        )}
+        <Button className="ml-auto" disabled={busy} onClick={onBack} size="sm" variant="ghost">
+          <ArrowLeftIcon />
+          Back
+        </Button>
+        <Button disabled={busy} onClick={onSkip} size="sm" variant="ghost">
+          Skip
+        </Button>
+        <Button disabled={busy} onClick={() => void apply()} ref={primary} size="sm">
+          {busy && <LoaderCircleIcon className="animate-spin" />}
+          Continue
+          {!busy && <ArrowRightIcon />}
+        </Button>
+      </Footer>
+    </>
+  )
+}
+
+/**
+ * The first run, two pages in one dialog: what Ultimate needs (page 1), then the recommended extensions (page 2).
+ * `onDone` reports whether it was skipped, by Escape, the close button, or Skip.
+ */
+export function FirstRun({
   open,
+  adds,
+  askProject,
   onDone,
   onClosed,
 }: {
   open: boolean
-  onDone: (next?: 'extensions') => void
+  adds?: Status['adds']
+  /** The folder has a setup and no decision yet: page 2 asks whether to use it. */
+  askProject: boolean
+  onDone: (skipped: boolean) => void
   onClosed: () => void
 }) {
-  const system = useSystem()
-  const start = useRef<HTMLButtonElement>(null)
-  if (!system) return null
-  const off = system.extensions.filter(
-    (extension) => !extension.enabled && extension.source === 'builtin',
-  )
-  const examples = ['plan', 'subagents', 'info'].filter((name) =>
-    off.some((extension) => extension.name === name),
-  )
+  const [page, setPage] = useState<1 | 2>(1)
+  // The page's next thing to do: the step to finish, or Continue.
+  const primary = useRef<HTMLButtonElement>(null)
+  const shown = useRef(page)
+  useEffect(() => {
+    if (shown.current === page) return
+    shown.current = page
+    primary.current?.focus()
+  }, [page])
+  const skip = () => onDone(true)
   return (
-    <Page focus={start} onClose={() => onDone()} onClosed={onClosed} open={open}>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <header className="px-5 pt-5 sm:px-7 sm:pt-6">
-          <div className="flex items-center justify-between">
-            <span className="font-mono text-[12px] font-semibold tracking-[0.3em] text-brand">
-              ULTIMATE
-            </span>
-            <Close label="Close the welcome" onClick={() => onDone()} />
-          </div>
-          <DialogTitle className="mt-5 text-[22px] font-semibold tracking-tight text-foreground">
-            Welcome
-          </DialogTitle>
-          <DialogDescription className="mt-2 max-w-[36rem] text-[14px] leading-relaxed text-muted-foreground">
-            Ultimate is a coding agent in your browser: tell it what you want, and it reads, edits,
-            and runs the code in this folder while you watch every step. Everything it is, from its
-            tools to this page, is an extension it can change while it runs.
-          </DialogDescription>
-        </header>
-        <div className="px-5 pt-5 sm:px-7">
-          <Login />
-        </div>
-        <OnNow system={system} />
-        <div className="grid gap-3 px-5 pt-6 pb-6 sm:grid-cols-2 sm:px-7">
-          <Card icon={MessageSquareTextIcon} title="Just ask">
-            Type a change, a question, or a bug into the composer. Ultimate works in this folder and
-            shows each step; <Kbd>Esc</Kbd> stops it.
-          </Card>
-          <Card icon={BlocksIcon} title="More building blocks">
-            {off.length > 0 ? (
-              <>
-                {off.length} more are built in and off
-                {examples.length > 0 && (
-                  <>
-                    , such as{' '}
-                    {examples.map((name, index) => (
-                      <Fragment key={name}>
-                        {index > 0 && (index === examples.length - 1 ? ' and ' : ', ')}
-                        <code className={code}>{name}</code>
-                      </Fragment>
-                    ))}
-                  </>
-                )}
-                . Mix and match in the Extensions panel, for this project or everywhere.
-              </>
-            ) : (
-              'Every built-in is on. Mix and match in the Extensions panel, for this project or everywhere.'
-            )}{' '}
-            <button
-              className="inline-flex items-center gap-1 text-brand outline-none hover:underline focus-visible:underline"
-              onClick={() => onDone('extensions')}
-              type="button"
-            >
-              Open Extensions
-              <ArrowRightIcon className="size-3" />
-            </button>
-          </Card>
-        </div>
-      </div>
-      <footer className="flex items-center gap-3 border-t border-border/70 bg-sidebar px-5 py-3 sm:px-7">
-        <span className="flex items-center gap-2 text-[12px] text-muted-foreground">
-          <Keys keys="mod+k" /> finds every command
-        </span>
-        <Button className="ml-auto" onClick={() => onDone()} ref={start} size="sm">
-          Start
-          <ArrowRightIcon />
-        </Button>
-      </footer>
+    <Page focus={primary} onClose={skip} onClosed={onClosed} open={open}>
+      {page === 1 ? (
+        <GetReady onContinue={() => setPage(2)} onSkip={skip} primary={primary} />
+      ) : (
+        <Recommended
+          adds={adds}
+          askProject={askProject}
+          onBack={() => setPage(1)}
+          onDone={() => onDone(false)}
+          onSkip={skip}
+          primary={primary}
+        />
+      )}
     </Page>
   )
 }
 
-/** A project's extension folders that run in place of built-ins of the same name, set apart as replaced trusted code. */
-function Replaces({ names, line }: { names: readonly string[]; line: (name: string) => string }) {
-  if (names.length === 0) return null
-  return (
-    <section className="rounded-md border border-warning/40 bg-warning/8 px-3 py-2.5">
-      <Heading className="text-warning" meta={names.length}>
-        <ReplaceIcon className="size-3" />
-        Replaces built-in
-      </Heading>
-      <ul className="mt-2 flex flex-col gap-2">
-        {names.map((name) => (
-          <li key={name}>
-            <div className="font-mono text-[12px] text-foreground/90">{name}</div>
-            <Line
-              className="line-clamp-2 text-[12px] leading-snug text-muted-foreground"
-              text={line(name)}
-            />
-          </li>
-        ))}
-      </ul>
-      <p className="mt-2 text-[12px] leading-snug text-foreground/80">
-        Its own code runs under the built-in's name, in place of the one that ships with Ultimate.
-      </p>
-    </section>
-  )
-}
-
 /**
- * What a project's setup brings: the built-ins its folders replace, the built-ins its settings turn on or off, its own
- * extensions with their lines, and its agents and skills by name.
+ * The project question outside the first run: one compact card with what the folder's setup brings and its README
+ * behind a disclosure. Closing it without a choice keeps the global setup; the Extensions panel can choose later.
  */
-function Adds({ system, adds }: { system: SystemInfo; adds?: Status['adds'] }) {
-  const { line } = useDescribed()
-  // Before the project is chosen its settings are not applied, so the host's copy is empty; status reads the file.
-  const { enable, disable } = adds ?? projectLists(system)
-  const replaces = adds?.replaces ?? []
-  const own = system.extensions.filter(
-    (extension) => extension.source === 'project' && !replaces.includes(extension.name),
-  )
-  const builtins = enable.filter(
-    (name) => !own.some((extension) => extension.name === name) && !replaces.includes(name),
-  )
-  const groups: [string, readonly string[]][] = [
-    ['Built-ins it turns on', builtins],
-    ['Its own extensions', own.map((extension) => extension.name)],
-  ]
-  const named: [string, readonly string[]][] = [
-    ['Turns off', disable],
-    ['Agents', adds?.agents ?? []],
-    ['Skills', adds?.skills ?? []],
-  ]
-  const empty =
-    replaces.length === 0 && [...groups, ...named].every(([, names]) => names.length === 0)
-  return (
-    <div className="flex flex-col gap-5">
-      <Replaces line={line} names={replaces} />
-      {groups.map(
-        ([title, names]) =>
-          names.length > 0 && (
-            <section key={title}>
-              <Heading meta={names.length}>{title}</Heading>
-              <ul className="mt-2 flex flex-col gap-2">
-                {names.map((name) => (
-                  <li key={name}>
-                    <div className="font-mono text-[12px] text-foreground/90">{name}</div>
-                    <Line
-                      className="line-clamp-2 text-[12px] leading-snug text-muted-foreground"
-                      text={line(name)}
-                    />
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ),
-      )}
-      {named.map(
-        ([title, names]) =>
-          names.length > 0 && (
-            <section key={title}>
-              <Heading meta={names.length}>{title}</Heading>
-              <p className="mt-2 font-mono text-[12px] leading-relaxed text-foreground/85">
-                {names.join(' · ')}
-              </p>
-            </section>
-          ),
-      )}
-      {empty && (
-        <p className="text-[12.5px] leading-relaxed text-muted-foreground">
-          No extensions, agents, or skills; only settings, read by the extensions that use them.
-        </p>
-      )}
-    </div>
-  )
-}
-
-/**
- * The ask-once project page: what the folder's setup adds, its `.ultimate/README.md` as the explainer, and the choice.
- * Closing it without a choice keeps the global setup; the Extensions panel can choose later.
- */
-export function ProjectPage({
+export function ProjectCard({
   open,
   adds,
   onClose,
@@ -448,7 +645,8 @@ export function ProjectPage({
   onClosed: () => void
 }) {
   const system = useSystem()
-  const focus = useRef<HTMLElement>(null)
+  // A neutral place to start, so a stray Enter chooses nothing.
+  const focus = useRef<HTMLDivElement>(null)
   const [busy, setBusy] = useState<boolean>()
   const [error, setError] = useState<string>()
   if (!system) return null
@@ -473,88 +671,54 @@ export function ProjectPage({
       project.decision === local && <CheckIcon />
     )
   return (
-    <Page
-      focus={focus}
-      onClose={onClose}
-      onClosed={onClosed}
-      open={open}
-      wide={Boolean(project.readme)}
-    >
-      {/* Narrow, the header scrolls with the rest; wide, the two columns scroll on their own. */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:overflow-hidden">
-        <header className="flex shrink-0 items-start gap-4 border-b border-border/70 px-5 pt-5 pb-4 sm:px-7 sm:pt-6 sm:pb-5">
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11.5px] text-muted-foreground">
-              <FolderCogIcon className="size-3.5 shrink-0 text-brand" />
-              <span className="truncate">
-                {shortenPath(project.root, { home: system.machine.home })}
-              </span>
-            </div>
-            <DialogTitle className="mt-3 text-[22px] leading-tight font-semibold tracking-tight text-foreground">
-              This folder has its own Ultimate setup
-            </DialogTitle>
-            <DialogDescription className="mt-2 max-w-[44rem] text-[13px] leading-relaxed text-muted-foreground sm:text-[14px]">
-              It brings extensions, settings, agents, or skills for working here. Its extensions run
-              code on this machine, so the setup stays off until you choose it; until then Ultimate
-              uses your global setup.
-            </DialogDescription>
-          </div>
-          <Close label="Decide later" onClick={onClose} />
-        </header>
-        <div className="flex flex-col lg:min-h-0 lg:flex-1 lg:flex-row">
-          {project.readme && (
-            <article
-              className="min-w-0 px-5 py-6 outline-none sm:px-7 lg:flex-1 lg:overflow-y-auto"
-              ref={(node) => {
-                focus.current = node
-              }}
-              tabIndex={-1}
-            >
-              <MessageResponse className="text-[13.5px] leading-relaxed">
-                {project.readme}
-              </MessageResponse>
-            </article>
-          )}
-          <aside
-            className={cn(
-              'px-5 py-5 outline-none sm:px-7',
-              project.readme &&
-                'order-first border-b border-border/70 bg-sidebar lg:order-none lg:w-80 lg:shrink-0 lg:overflow-y-auto lg:border-b-0 lg:border-l lg:px-5',
-            )}
-            ref={(node) => {
-              if (!project.readme) focus.current = node
-            }}
-            tabIndex={-1}
-          >
-            <h3 className="mb-3 text-[13px] font-medium text-foreground">What it adds</h3>
-            <Adds adds={adds} system={system} />
-          </aside>
+    <Page className="sm:max-w-md" focus={focus} onClose={onClose} onClosed={onClosed} open={open}>
+      <div
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 pt-4 pb-5 outline-none"
+        ref={focus}
+        tabIndex={-1}
+      >
+        <div className="flex items-center gap-3">
+          <FolderPath />
+          <span className="ml-auto">
+            <Close label="Decide later" onClick={onClose} />
+          </span>
         </div>
+        <DialogTitle className="text-[17px] font-semibold tracking-tight text-foreground">
+          Use this project's setup?
+        </DialogTitle>
+        <DialogDescription className="sr-only">
+          Its extensions run code on this machine, so it stays off until you choose it.
+        </DialogDescription>
+        <SetupChips adds={adds} />
+        <WhatsInIt readme={project.readme} />
       </div>
-      <footer className="flex flex-col gap-3 border-t border-border/70 bg-sidebar px-5 py-3.5 sm:flex-row sm:items-center sm:px-7">
-        <p className="min-w-0 flex-1 text-[12px] leading-snug text-muted-foreground">
-          {error ? (
-            <span className="text-error">{error}</span>
-          ) : (
-            'You can change this any time in the Extensions panel.'
-          )}
-        </p>
-        <div className="flex flex-col-reverse gap-2 sm:flex-row">
-          <Button
-            disabled={busy !== undefined}
-            onClick={() => void decide(false)}
-            size="sm"
-            variant="outline"
-          >
-            {choice(false)}
-            Use my global setup
-          </Button>
-          <Button disabled={busy !== undefined} onClick={() => void decide(true)} size="sm">
-            {choice(true)}
-            Use this project's setup
-          </Button>
-        </div>
-      </footer>
+      <Footer>
+        {error && (
+          <span className="min-w-0 flex-1 truncate text-[12px] text-error" title={error}>
+            {error}
+          </span>
+        )}
+        <Button
+          className="ml-auto"
+          disabled={busy !== undefined}
+          onClick={() => void decide(false)}
+          size="sm"
+          title="Keep your global setup"
+          variant="outline"
+        >
+          {choice(false)}
+          Not now
+        </Button>
+        <Button
+          disabled={busy !== undefined}
+          onClick={() => void decide(true)}
+          size="sm"
+          title="Its extensions run on this machine"
+        >
+          {choice(true)}
+          Use it
+        </Button>
+      </Footer>
     </Page>
   )
 }

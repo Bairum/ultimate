@@ -48,9 +48,10 @@ cd ~/Projects/app && ultimate
 
 - No `pi` login yet? Open the command palette (`Ctrl+K`, `⌘K` on macOS) → "Log in to a provider". Logins are shared
   with `pi`, and so is logging out.
-- **First start** on a machine shows a welcome: what Ultimate is, what is on, and the login if you have none.
+- **First start** on a machine shows two short pages: a live checklist (log in to a provider, choose a model), then
+  the recommended extensions as checkboxes.
 - **A folder with its own `.ultimate/`** asks once: its setup or your global one. Its extensions, agents, and skills
-  stay off until you choose it; in this repository the question comes with an explainer of the suggested setup.
+  stay off until you choose it; on the first start the question is part of the second page.
 - **The Extensions panel** (right panel, or `Ctrl+K` → "Extensions…") lists every extension and turns it on or off
   live, for this project or everywhere, and can change the project choice.
 - On another machine: `ssh -L 4747:127.0.0.1:4747 <host>`, then open `http://127.0.0.1:4747`. Ultimate only listens on

@@ -1,17 +1,20 @@
+import { CheckIcon } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import type { ReactNode, Ref } from 'react'
 import { cn, useAction, useSystem } from '@/sdk'
 import type { ExtensionInfo, SystemInfo } from '@/sdk'
 
 /**
- * What the `status` action returns: first-run state, the names of the project's own agents and skills, and its
- * extension folders that replace a built-in of the same name.
+ * What the `status` action returns: first-run state, and what the project's setup brings, read even while undecided:
+ * its own agents, skills, and extension folders, the folders that replace a built-in of the same name, and the names
+ * its settings turn on and off.
  */
 export interface Status {
   firstRun: boolean
   adds: {
     agents: string[]
     skills: string[]
+    extensions: string[]
     replaces: string[]
     enable: string[]
     disable: string[]
@@ -212,5 +215,32 @@ export function Segmented<T extends string>({
         </button>
       ))}
     </div>
+  )
+}
+
+/** A checkbox in the brand colour; inside a `<label>`, the whole row toggles it. */
+export function Checkbox({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean
+  onChange: (checked: boolean) => void
+  label?: string
+}) {
+  return (
+    <button
+      aria-checked={checked}
+      aria-label={label}
+      className={cn(
+        'grid size-4 shrink-0 place-items-center rounded-[4px] border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        checked ? 'border-brand bg-brand text-brand-foreground' : 'border-input bg-background',
+      )}
+      onClick={() => onChange(!checked)}
+      role="checkbox"
+      type="button"
+    >
+      {checked && <CheckIcon className="size-3" strokeWidth={3} />}
+    </button>
   )
 }

@@ -118,19 +118,52 @@ async function declared(projectRoot: string) {
   }
 }
 
+const marker = (userHome: string) => join(userHome, '.ultimate/onboarding.json')
+
 export const actions = {
-  status: async (_args, { host }) => ({
-    firstRun: !existsSync(join(host.userHome, '.ultimate/onboarding.json')),
-    project: await host.projectSetup(),
-    adds: {
-      ...(await adds(host.projectRoot)),
-      replaces: (await host.projectExtensions())
-        .filter((entry) => entry.replaces)
-        .map((entry) => entry.name),
-    },
-  }),
+  status: async (_args, { host }) => {
+    const folders = await host.projectExtensions()
+    return {
+      firstRun: !existsSync(marker(host.userHome)),
+      project: await host.projectSetup(),
+      adds: {
+        ...(await adds(host.projectRoot)),
+        extensions: folders.filter((entry) => !entry.replaces).map((entry) => entry.name),
+        replaces: folders.filter((entry) => entry.replaces).map((entry) => entry.name),
+      },
+    }
+  },
   firstRunDone: async (_args, { host }) => {
-    await save(join(host.userHome, '.ultimate/onboarding.json'), { firstRunDone: true })
+    await save(marker(host.userHome), { firstRunDone: true })
+    return { firstRun: false }
+  },
+  /**
+   * The first run's choices in one step: checked names join the user's `extensions.enable` (and leave `disable`),
+   * unchecked ones leave `enable`; `local`, when given, is the project decision. Records the first run, then applies
+   * it all with one reload.
+   */
+  applyFirstRun: async (args, { host }) => {
+    const choices =
+      args && typeof args === 'object' && !Array.isArray(args) ? args.extensions : undefined
+    if (
+      !choices ||
+      typeof choices !== 'object' ||
+      Array.isArray(choices) ||
+      Object.values(choices).some((enabled) => typeof enabled !== 'boolean') ||
+      ((args as JsonObject).local !== undefined && typeof (args as JsonObject).local !== 'boolean')
+    )
+      throw new Error('Expected extensions as names to booleans, and local as a boolean if given')
+    const { local } = args as { local?: boolean }
+    await updateSettings(join(host.userHome, '.ultimate/settings.json'), (value) => {
+      const extensions = lists(value)
+      for (const [name, enabled] of Object.entries(choices as Record<string, boolean>))
+        if (enabled) toggle(extensions, name, true)
+        else if (extensions.enable !== undefined)
+          extensions.enable = (extensions.enable as string[]).filter((entry) => entry !== name)
+    })
+    await save(marker(host.userHome), { firstRunDone: true })
+    if (local === undefined) await host.reloadExtensions()
+    else await host.setProjectDecision(local)
     return { firstRun: false }
   },
   decide: async (args, { host }) => {

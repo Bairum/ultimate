@@ -77,7 +77,14 @@ it('gates project resources, remembers choices, and applies onboarding settings 
     expect(await action('status')).toMatchObject({
       firstRun: true,
       // Undecided: the project's settings are not applied, but the page shows what they would enable.
-      adds: { agents: ['y'], skills: ['local-skill'], enable: ['subagents'], disable: [] },
+      adds: {
+        agents: ['y'],
+        skills: ['local-skill'],
+        extensions: ['x'],
+        replaces: [],
+        enable: ['subagents'],
+        disable: [],
+      },
     })
     expect(server.system.current().project).toMatchObject({
       config: true,
@@ -200,6 +207,61 @@ it('gates project resources, remembers choices, and applies onboarding settings 
     expect((await action('status')).firstRun).toBe(false)
   } finally {
     for (const watcher of watchers) watcher.close()
+    await server?.close()
+    await removeTemp(home)
+  }
+}, 60000)
+
+it('applies the first run in one action: the checked extensions, the project choice, and completion', async () => {
+  const home = await temp('ultimate-first-run-')
+  const project = join(home, 'project')
+  const userFile = join(home, '.ultimate/settings.json')
+  await mkdir(join(project, '.ultimate'), { recursive: true })
+  await writeFile(join(project, '.ultimate/settings.json'), '{"extensions":{"enable":["clock"]}}')
+  await mkdir(join(home, '.ultimate'), { recursive: true })
+  await writeFile(
+    userFile,
+    JSON.stringify({ custom: 1, extensions: { enable: ['info', 'theme'], disable: ['plan'] } }),
+  )
+  let server: Awaited<ReturnType<typeof fauxServer>> | undefined
+  try {
+    server = await fauxServer({
+      ultimateRoot: resolve('.'),
+      projectRoot: project,
+      userHome: home,
+      home: join(home, 'state'),
+      localSetup: false,
+      firstRun: true,
+    })
+    const enabled = (name: string) =>
+      server!.extensions.info().find((entry) => entry.name === name)?.enabled
+    const apply = (args: unknown) =>
+      post(server!, '/api/extensions/onboarding/actions/applyFirstRun', { args })
+    for (const args of [{}, { extensions: { plan: 'yes' } }, { extensions: {}, local: 1 }])
+      expect((await apply(args)).status).toBe(500)
+    expect(enabled('plan')).toBe(false)
+    expect(enabled('info')).toBe(true)
+    expect(enabled('clock')).toBe(false)
+
+    const applied = await apply({
+      extensions: { plan: true, tasks: true, info: false },
+      local: true,
+    })
+    expect(applied).toEqual({ status: 200, data: { result: { firstRun: false } } })
+    // Checked names join enable and leave disable; unchecked ones leave enable; other keys stay.
+    expect(JSON.parse(await readFile(userFile, 'utf8'))).toEqual({
+      custom: 1,
+      extensions: { enable: ['theme', 'plan', 'tasks'], disable: [] },
+    })
+    expect(projectDecision(project, home)).toBe(true)
+    // Live, without a restart: the user's choices and the project's setup.
+    expect(enabled('plan')).toBe(true)
+    expect(enabled('tasks')).toBe(true)
+    expect(enabled('info')).toBe(false)
+    expect(enabled('clock')).toBe(true)
+    const status = await post(server, '/api/extensions/onboarding/actions/status', { args: {} })
+    expect(status.data.result.firstRun).toBe(false)
+  } finally {
     await server?.close()
     await removeTemp(home)
   }
