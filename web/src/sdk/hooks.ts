@@ -24,7 +24,7 @@ import type { ActionError } from './api.ts'
 import { api, registry, store, uiState } from './client.ts'
 import { HOME, documentItems } from './registry.ts'
 import type { State } from './store.ts'
-import { formatDuration } from './format.ts'
+import { errorMessage, formatDuration } from './format.ts'
 import type { ToolCallView, UltimateContext } from './types.ts'
 
 /** Page readiness is sticky; failed facet names remain available even before ready. */
@@ -267,11 +267,7 @@ export function useRestart(timeoutMs = 120000): Restart {
           const target = (result as { generation?: number } | undefined)?.generation
           setState(target === undefined ? { phase: 'idle' } : { phase: 'swapping', target })
         },
-        (error: unknown) =>
-          setState({
-            phase: 'idle',
-            error: error instanceof Error ? error.message : String(error),
-          }),
+        (error: unknown) => setState({ phase: 'idle', error: errorMessage(error) }),
       )
     },
   }

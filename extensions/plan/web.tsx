@@ -29,6 +29,7 @@ import {
   api,
   cn,
   defineWebExtension,
+  errorMessage,
   useAction,
   useConversations,
   useToolDuration,
@@ -174,7 +175,7 @@ function IsolateRow({ child, parent }: { child: ConversationSummary; parent: num
           : []),
       ])
     } catch (error) {
-      setOutcome([{ tone: 'error', text: error instanceof Error ? error.message : String(error) }])
+      setOutcome([{ tone: 'error', text: errorMessage(error) }])
     } finally {
       setLanding(false)
       await refetch()

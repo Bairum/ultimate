@@ -1,4 +1,5 @@
 import { registry, store, uiState } from './client.ts'
+import { errorMessage } from './format.ts'
 import {
   HOME,
   commandApplies,
@@ -87,7 +88,7 @@ export const actions: UltimateActions = {
       .catch((error: unknown) =>
         store.notify({
           level: 'error',
-          message: `${command.title}${command.extension === 'core' ? '' : ` (${command.extension})`}: ${messageOf(error)}`,
+          message: `${command.title}${command.extension === 'core' ? '' : ` (${command.extension})`}: ${errorMessage(error)}`,
         }),
       )
   },
@@ -106,12 +107,11 @@ export function currentContext(): UltimateContext {
   }
 }
 
-const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
 const reported = new Set<string>()
 /** `commandApplies` that reports a broken `when` once as a notice naming its extension. */
 export function applies(command: CommandItem, context: UltimateContext = currentContext()) {
   return commandApplies(command, context, (item, error) => {
-    const message = `extension ${item.extension}: command ${item.id} is hidden, its when() threw: ${messageOf(error)}`
+    const message = `extension ${item.extension}: command ${item.id} is hidden, its when() threw: ${errorMessage(error)}`
     if (reported.has(message)) return
     reported.add(message)
     // Predicates run while React renders the palette; notify after that render.

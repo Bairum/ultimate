@@ -12,6 +12,7 @@ import {
 } from '@/components/ai/prompt-input'
 import { Kbd } from '@/components/ui/kbd'
 import { api } from '../sdk/client.ts'
+import { errorMessage } from '../sdk/format.ts'
 import { useConversation, useModels } from '../sdk/hooks.ts'
 import { isMac } from '../sdk/keys.ts'
 import type { ModelsResponse } from '../../../shared/protocol.ts'
@@ -50,7 +51,7 @@ function Inbox({ items }: { items: readonly InboxItem[] }) {
     try {
       await api.cancelSubmission(submissionId, id)
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure))
+      setError(errorMessage(failure))
     }
   }
   return (
@@ -113,7 +114,7 @@ export function Composer({ dock }: { dock?: boolean }) {
       await api.submit(text.trim(), busy ? (whenBusy ?? 'steer') : undefined)
       update('')
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure))
+      setError(errorMessage(failure))
     } finally {
       setSending(false)
     }

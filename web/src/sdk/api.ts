@@ -11,6 +11,7 @@ import type {
   SubmitResponse,
   UiUpdateRequest,
 } from '../../../shared/protocol.ts'
+import { errorMessage } from './format.ts'
 import type { Store } from './store.ts'
 
 /** The root conversation's id (`ROOT_CONVERSATION_ID` in Pi Durable): Ultimate's one ongoing conversation. */
@@ -117,7 +118,7 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
           extension,
           name,
           error instanceof HttpError ? error.status : 0,
-          error instanceof Error ? error.message : String(error),
+          errorMessage(error),
         )
       }
     },

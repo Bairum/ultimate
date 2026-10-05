@@ -16,13 +16,16 @@ import { useEffect, useId, useRef, useState } from 'react'
 import type { ComponentType, ReactNode, RefObject } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Kbd } from '@/components/ui/kbd'
+import { Switch } from '@/components/ui/switch'
 import {
   api,
   cn,
   elidePath,
+  errorMessage,
   shortenPath,
   useCommands,
   useConversation,
@@ -31,7 +34,6 @@ import {
   useSystem,
   useUltimate,
 } from '@/sdk'
-import { Checkbox, Switch, message } from './parts.tsx'
 import type { Status } from './parts.tsx'
 
 /** The extensions the first run recommends, a few words each; `needs` names one that must be on with it. */
@@ -491,8 +493,8 @@ function Choice({
         <Checkbox
           checked={locked ?? checked}
           disabled={locked !== undefined}
-          labelledBy={id}
-          onChange={onChange}
+          aria-labelledby={id}
+          onCheckedChange={(next) => onChange(next === true)}
         />
         {/* Narrow, the line goes under the name. */}
         <span className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-3">
@@ -580,7 +582,11 @@ function Recommended({
                   Runs its extensions on this machine
                 </span>
               </span>
-              <Switch checked={local} label="Use this project's setup" onChange={onLocal} />
+              <Switch
+                aria-label="Use this project's setup"
+                checked={local}
+                onCheckedChange={onLocal}
+              />
             </label>
             <SetupChips adds={adds} />
             <WhatsInIt readme={system.project.readme} />
@@ -664,7 +670,7 @@ export function FirstRun({
       })
       onDone(false)
     } catch (failure) {
-      setError(message(failure))
+      setError(errorMessage(failure))
       setBusy(false)
     }
   }
@@ -733,7 +739,7 @@ export function ProjectCard({
       await api.action('onboarding', 'decide', { local })
       onClose()
     } catch (failure) {
-      setError(message(failure))
+      setError(errorMessage(failure))
     } finally {
       setBusy(undefined)
     }

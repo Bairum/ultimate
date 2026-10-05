@@ -1,5 +1,5 @@
 import { CheckIcon, LoaderCircleIcon, MinusCircleIcon, SkipForwardIcon, XIcon } from 'lucide-react'
-import type { ReactNode, Ref } from 'react'
+import type { ReactNode } from 'react'
 import { cn } from '@/sdk'
 
 /** The shapes the server facet's actions return (`server.ts`, which the browser does not import). */
@@ -33,8 +33,6 @@ export interface Described {
   description: string
   next: number[]
 }
-
-export const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 /** A one-shot schedule whose time has passed: resuming it would fire at once, so its switch stays off. */
 export const spent = (automation: Automation, now: number) =>
@@ -147,52 +145,5 @@ export function Heading({
         </span>
       )}
     </div>
-  )
-}
-
-/** An on/off switch. While `busy` it ignores presses but keeps focus, which a disabled button would drop. */
-export function Switch({
-  checked,
-  onChange,
-  label,
-  disabled,
-  busy,
-  title,
-  ref,
-}: {
-  checked: boolean
-  onChange: (checked: boolean) => void
-  label: string
-  disabled?: boolean
-  busy?: boolean
-  title?: string
-  ref?: Ref<HTMLButtonElement>
-}) {
-  return (
-    <button
-      aria-busy={busy || undefined}
-      aria-checked={checked}
-      aria-label={label}
-      className={cn(
-        'relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40',
-        checked ? 'bg-brand' : 'bg-input',
-        busy && 'animate-pulse cursor-progress',
-      )}
-      disabled={disabled}
-      onClick={() => !busy && onChange(!checked)}
-      ref={ref}
-      role="switch"
-      title={title}
-      type="button"
-    >
-      <span
-        className={cn(
-          'block size-3 rounded-full shadow-sm transition-transform',
-          checked
-            ? 'translate-x-3.5 bg-brand-foreground'
-            : 'translate-x-0.5 bg-muted-foreground/80',
-        )}
-      />
-    </button>
   )
 }

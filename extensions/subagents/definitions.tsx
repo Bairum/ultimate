@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import {
   api,
   cn,
+  errorMessage,
   events,
   shortenPath,
   useAction,
@@ -77,8 +78,6 @@ export const sourceLabel: Record<Source, string> = {
   project: 'project',
 }
 const parseError = (error: string) => error.replace(/^Error: /, '')
-const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
-
 /** Opens the config dialog on a definition, or on a new one with `''`. */
 function useOpenDefinition() {
   const { open } = useUltimate()
@@ -229,7 +228,7 @@ function Loader({
         <DialogTitle className="sr-only">Agent definition</DialogTitle>
         <DialogDescription className="sr-only">Loading the definition</DialogDescription>
         <p className="m-auto font-mono text-[12px] text-muted-foreground">
-          {shown.error ? message(shown.error) : 'Loading…'}
+          {shown.error ? errorMessage(shown.error) : 'Loading…'}
         </p>
       </>
     )
@@ -348,7 +347,7 @@ function Form({
       })
       await onChanged(draft.name)
     } catch (failure) {
-      setError(message(failure))
+      setError(errorMessage(failure))
     } finally {
       setPending(undefined)
     }
@@ -360,7 +359,7 @@ function Form({
       await api.action('subagents', 'deleteDefinition', { name: draft.name, scope: file })
       await onChanged()
     } catch (failure) {
-      setError(message(failure))
+      setError(errorMessage(failure))
     } finally {
       setPending(undefined)
     }

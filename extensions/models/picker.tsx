@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Kbd } from '@/components/ui/kbd'
-import { cn, useDialog, useUltimate } from '@/sdk'
+import { cn, errorMessage, useDialog, useUltimate } from '@/sdk'
 import {
   authLabel,
   dialogs,
@@ -113,7 +113,7 @@ export function ModelPicker() {
     setError(undefined)
     selectModel(model).then(
       () => setOpen(false),
-      (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)),
+      (failure: unknown) => setError(errorMessage(failure)),
     )
   }
 

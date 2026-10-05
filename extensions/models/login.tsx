@@ -13,7 +13,17 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { api, cn, refreshModels, useDialog, useDoc, useModels, useNow, useUltimate } from '@/sdk'
+import {
+  api,
+  cn,
+  errorMessage,
+  refreshModels,
+  useDialog,
+  useDoc,
+  useModels,
+  useNow,
+  useUltimate,
+} from '@/sdk'
 import type { AuthEvent, AuthPrompt } from '@/sdk'
 import { authLabel, dialogs, useLoginProvider } from './state.tsx'
 import type { ProviderInfo } from './state.tsx'
@@ -42,7 +52,6 @@ interface Method {
   name: string
 }
 
-const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
 const typeLabel = (method: Method) => (method.type === 'api_key' ? 'API key' : 'OAuth')
 
 /** When this page first saw each flow event, for device-code countdowns. */
@@ -193,7 +202,7 @@ function PromptForm({ flowId, prompt }: { flowId: string; prompt: AuthPrompt }) 
       () => undefined,
       (failure: unknown) => {
         setSending(false)
-        setError(message(failure))
+        setError(errorMessage(failure))
       },
     )
   }
@@ -437,7 +446,7 @@ function Chooser({
       },
       (failure: unknown) => {
         setBusy(undefined)
-        setError(message(failure))
+        setError(errorMessage(failure))
       },
     )
   }
@@ -573,7 +582,7 @@ export function LoginDialog() {
       })
       .then(
         ({ flowId }) => setState({ method, flowId }),
-        (failure: unknown) => setState({ method, error: message(failure) }),
+        (failure: unknown) => setState({ method, error: errorMessage(failure) }),
       )
   }
   const close = () => {

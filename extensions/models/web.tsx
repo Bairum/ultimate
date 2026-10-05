@@ -6,6 +6,7 @@ import {
   api,
   cn,
   defineWebExtension,
+  errorMessage,
   getConversation,
   getState,
   useDialog,
@@ -49,7 +50,7 @@ function ThinkingButton() {
     setError(undefined)
     api.configure({ thinkingLevel: level }).then(
       () => setOpen(false),
-      (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)),
+      (failure: unknown) => setError(errorMessage(failure)),
     )
   }
   return (

@@ -1,6 +1,5 @@
-import { CheckIcon } from 'lucide-react'
 import { useEffect, useRef } from 'react'
-import type { ReactNode, Ref } from 'react'
+import type { ReactNode } from 'react'
 import { cn, useAction, useSystem } from '@/sdk'
 import type { ExtensionInfo, SystemInfo } from '@/sdk'
 
@@ -33,8 +32,6 @@ interface Described {
 
 /** The dialog id of the project card; the Extensions panel opens it again. */
 export const projectDialog = 'onboarding.project'
-
-export const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 export const sources: Record<ExtensionInfo['source'], string> = {
   builtin: 'built-in',
@@ -130,53 +127,6 @@ export function Heading({
   )
 }
 
-/** An on/off switch. While `busy` it ignores presses but keeps focus, which a disabled button would drop. */
-export function Switch({
-  checked,
-  onChange,
-  label,
-  disabled,
-  busy,
-  title,
-  ref,
-}: {
-  checked: boolean
-  onChange: (checked: boolean) => void
-  label: string
-  disabled?: boolean
-  busy?: boolean
-  title?: string
-  ref?: Ref<HTMLButtonElement>
-}) {
-  return (
-    <button
-      aria-busy={busy || undefined}
-      aria-checked={checked}
-      aria-label={label}
-      className={cn(
-        'relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40',
-        checked ? 'bg-brand' : 'bg-input',
-        busy && 'animate-pulse cursor-progress',
-      )}
-      disabled={disabled}
-      onClick={() => !busy && onChange(!checked)}
-      ref={ref}
-      role="switch"
-      title={title}
-      type="button"
-    >
-      <span
-        className={cn(
-          'block size-3 rounded-full shadow-sm transition-transform',
-          checked
-            ? 'translate-x-3.5 bg-brand-foreground'
-            : 'translate-x-0.5 bg-muted-foreground/80',
-        )}
-      />
-    </button>
-  )
-}
-
 /** Two or three exclusive choices as one control; `value` null selects none. */
 export function Segmented<T extends string>({
   value,
@@ -217,38 +167,5 @@ export function Segmented<T extends string>({
         </button>
       ))}
     </div>
-  )
-}
-
-/**
- * A checkbox in the brand colour, named by the element `labelledBy` names; inside a `<label>`, the whole row toggles
- * it.
- */
-export function Checkbox({
-  checked,
-  onChange,
-  labelledBy,
-  disabled,
-}: {
-  checked: boolean
-  onChange: (checked: boolean) => void
-  labelledBy: string
-  disabled?: boolean
-}) {
-  return (
-    <button
-      aria-checked={checked}
-      aria-labelledby={labelledBy}
-      className={cn(
-        'grid size-4 shrink-0 place-items-center rounded-[4px] border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50',
-        checked ? 'border-brand bg-brand text-brand-foreground' : 'border-input bg-background',
-      )}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      role="checkbox"
-      type="button"
-    >
-      {checked && <CheckIcon className="size-3" strokeWidth={3} />}
-    </button>
   )
 }

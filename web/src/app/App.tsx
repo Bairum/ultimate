@@ -4,6 +4,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { shellKeys } from '../sdk/actions.ts'
 import { ROOT } from '../sdk/api.ts'
 import { store, uiState } from '../sdk/client.ts'
+import { errorMessage } from '../sdk/format.ts'
 import {
   ExtensionNameContext,
   useConversation,
@@ -68,7 +69,7 @@ class SurfaceBoundary extends Component<
     const instead = surface.id === HOME ? 'a bare conversation shows' : 'Agent shows'
     store.notify({
       level: 'warning',
-      message: `The ${surface.title} surface (${surface.extension}) failed, so ${instead}: ${error instanceof Error ? error.message : String(error)}`,
+      message: `The ${surface.title} surface (${surface.extension}) failed, so ${instead}: ${errorMessage(error)}`,
     })
   }
   // A failed boundary renders the next in line, which reports itself instead.

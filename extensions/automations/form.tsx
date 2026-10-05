@@ -18,8 +18,8 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { api, cn, events, formatKeys, useAction, useEvent, useNow } from '@/sdk'
-import { clock, full, message, until, words } from './parts.tsx'
+import { api, cn, errorMessage, events, formatKeys, useAction, useEvent, useNow } from '@/sdk'
+import { clock, full, until, words } from './parts.tsx'
 import type { Automation, Described } from './parts.tsx'
 
 type Mode = 'cron' | 'at' | 'every'
@@ -361,7 +361,7 @@ export function AutomationForm({
       onSaved(saved)
       onOpenChange(false)
     } catch (failure) {
-      setError(message(failure).replace(/^automations\/\w+: /, ''))
+      setError(errorMessage(failure).replace(/^automations\/\w+: /, ''))
     } finally {
       setSaving(false)
     }

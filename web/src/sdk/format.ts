@@ -45,3 +45,8 @@ export function elidePath(path: string, max = 40): string {
   if (head.length + tail.length + 2 > max) head = head.slice(0, Math.max(1, max - tail.length - 2))
   return `${head}/…/${tail}`
 }
+
+/** What to show for a thrown value: an Error's message, anything else as a string. */
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}

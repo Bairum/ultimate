@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react'
 import { events } from './events.ts'
+import { errorMessage } from './format.ts'
 import type {
   CommandContribution,
   Contribution,
@@ -51,11 +52,6 @@ export interface DocumentItem extends DocumentContribution {
 
 export function extensionName(path: string): string | undefined {
   return /extensions\/([^/]+)\/web\.tsx(?:\?.*)?$/.exec(path)?.[1]
-}
-
-function message(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return String(error)
 }
 
 type Check = (value: unknown) => boolean
@@ -209,7 +205,7 @@ export function createRegistry() {
     }
   }
   const fail = (name: string, error: unknown) => {
-    const text = message(error)
+    const text = errorMessage(error)
     update(name, (record) => ({ ...record, loading: false, error: text }))
     events.emit('ultimate:extension-failed', { name, error: text })
   }

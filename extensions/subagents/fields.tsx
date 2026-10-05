@@ -11,6 +11,7 @@ import {
   CommandList,
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Switch } from '@/components/ui/switch'
 import { cn, useModels } from '@/sdk'
 import type { ModelsResponse } from '@/sdk'
 
@@ -78,40 +79,6 @@ export function Segmented<T extends string>({
         </button>
       ))}
     </div>
-  )
-}
-
-/** An on/off switch. */
-export function Switch({
-  checked,
-  onChange,
-  label,
-}: {
-  checked: boolean
-  onChange: (checked: boolean) => void
-  label: string
-}) {
-  return (
-    <button
-      aria-checked={checked}
-      aria-label={label}
-      className={cn(
-        'relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        checked ? 'bg-brand' : 'bg-input',
-      )}
-      onClick={() => onChange(!checked)}
-      role="switch"
-      type="button"
-    >
-      <span
-        className={cn(
-          'block size-3 rounded-full shadow-sm transition-transform',
-          checked
-            ? 'translate-x-3.5 bg-brand-foreground'
-            : 'translate-x-0.5 bg-muted-foreground/80',
-        )}
-      />
-    </button>
   )
 }
 
@@ -300,8 +267,8 @@ export function ToolsField({
           inherit all
           <Switch
             checked={value === null}
-            label="Inherit all tools"
-            onChange={(inherit) => onChange(inherit ? null : tools.map((tool) => tool.name))}
+            aria-label="Inherit all tools"
+            onCheckedChange={(inherit) => onChange(inherit ? null : tools.map((tool) => tool.name))}
           />
         </label>
       }

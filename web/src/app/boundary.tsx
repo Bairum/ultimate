@@ -2,7 +2,7 @@ import { cn } from 'cn'
 import { PuzzleIcon, TriangleAlertIcon } from 'lucide-react'
 import { Component, Fragment } from 'react'
 import type { ErrorInfo, ReactNode } from 'react'
-import { shortenPath } from '../sdk/format.ts'
+import { errorMessage, shortenPath } from '../sdk/format.ts'
 import { ExtensionNameContext, useExtensions, useSystem } from '../sdk/hooks.ts'
 import { slotItems } from '../sdk/registry.ts'
 import type { SlotName } from '../sdk/types.ts'
@@ -74,7 +74,7 @@ export class ExtensionBoundary extends Component<
 > {
   state: { error?: string; version: number } = { version: this.props.version }
   static getDerivedStateFromError(error: unknown) {
-    return { error: error instanceof Error ? error.message : String(error) }
+    return { error: errorMessage(error) }
   }
   static getDerivedStateFromProps(
     props: { version: number },

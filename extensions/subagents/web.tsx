@@ -24,6 +24,7 @@ import {
   api,
   cn,
   defineWebExtension,
+  errorMessage,
   useAction,
   useConversations,
   useDoc,
@@ -274,7 +275,7 @@ function IsolateActions({
             ],
       )
     } catch (error) {
-      setOutcome([{ tone: 'error', text: error instanceof Error ? error.message : String(error) }])
+      setOutcome([{ tone: 'error', text: errorMessage(error) }])
     } finally {
       setPending(undefined)
       await refetch()

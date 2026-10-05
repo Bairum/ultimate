@@ -676,8 +676,8 @@ conversation.
 `api.cancelSubmission(submissionId, conversationId?)` withdraws one queued input without stopping the run.
 
 Helpers: `cn()` for class names, `formatTokens`, `formatBytes`, `formatDuration`, `shortenPath(path, { cwd, home })`
-(`home` is `useSystem().machine.home`), `elidePath`, `formatKeys`. Types for everything above are exported too
-(`EntryRecord`, `AssistantMessage`, `SystemInfo`, …).
+(`home` is `useSystem().machine.home`), `elidePath`, `formatKeys`, and `errorMessage(error)` for a caught value. Types
+for everything above are exported too (`EntryRecord`, `AssistantMessage`, `SystemInfo`, …).
 
 Keep UI state that should survive a reload in `useExtensionUiState`; keep throwaway state (hover, an open menu) in
 `useState`. The shell keeps its own layout there too (`shell.conversation`, `shell.surface`, `shell.shownSurface`,
@@ -685,9 +685,9 @@ Keep UI state that should survive a reload in `useExtensionUiState`; keep throwa
 
 ## Styling
 
-- Use the components first: `@/components/ui/*` (shadcn: button, collapsible, command, dialog, dropdown-menu, kbd,
-  popover, tooltip) and `@/components/ai/*` (code block, conversation, message, reasoning, shimmer, tool, prompt
-  input). Need another shadcn component? `pnpm dlx shadcn@latest add <component>` writes it to
+- Use the components first: `@/components/ui/*` (shadcn: button, checkbox, collapsible, command, dialog,
+  dropdown-menu, kbd, popover, switch, tooltip) and `@/components/ai/*` (code block, conversation, message, reasoning,
+  shimmer, tool, prompt input). Need another shadcn component? `pnpm dlx shadcn@latest add <component>` writes it to
   `web/src/components/ui`.
 - Style with Tailwind utilities and the theme tokens: `bg-background`, `bg-card`, `bg-muted`, `bg-terminal`,
   `text-foreground`, `text-muted-foreground`, `border-border`, `text-brand` (the one accent), `text-success`,

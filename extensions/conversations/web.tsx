@@ -23,6 +23,7 @@ import {
   api,
   cn,
   defineWebExtension,
+  errorMessage,
   formatKeys,
   getConversation,
   getState,
@@ -37,8 +38,6 @@ import type { ConversationSummary, UltimateActions } from '@/sdk'
 
 const newKeys = 'mod+alt+n'
 const resetDialog = 'conversations.reset'
-
-const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 /** The shown conversation, also while its snapshot is still on the way. */
 const useShownId = () => useStore((state) => state.view?.conversation.id ?? state.requested)
@@ -471,7 +470,7 @@ function ResetDialog() {
       await api.action('conversations', 'reset', { id: resetTarget ?? null })
       close()
     } catch (failure) {
-      setError(message(failure))
+      setError(errorMessage(failure))
     } finally {
       setPending(false)
     }

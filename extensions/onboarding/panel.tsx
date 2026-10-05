@@ -8,14 +8,22 @@ import {
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { Ref } from 'react'
 import { Button } from '@/components/ui/button'
-import { api, cn, elidePath, shortenPath, useExtensions, useSystem, useUltimate } from '@/sdk'
+import { Switch } from '@/components/ui/switch'
+import {
+  api,
+  cn,
+  elidePath,
+  errorMessage,
+  shortenPath,
+  useExtensions,
+  useSystem,
+  useUltimate,
+} from '@/sdk'
 import type { ExtensionInfo, SystemInfo } from '@/sdk'
 import {
   Heading,
   Line,
   Segmented,
-  Switch,
-  message,
   projectDialog,
   projectLists,
   sources,
@@ -92,7 +100,7 @@ function ProjectSetup({ system }: { system: SystemInfo }) {
       await action()
       if (kind === 'adopt') setAdopted(true)
     } catch (failure) {
-      setError(message(failure))
+      setError(errorMessage(failure))
     } finally {
       setBusy(undefined)
     }
@@ -282,8 +290,10 @@ function Row({
             busy={pending !== undefined}
             checked={checked}
             disabled={unusable}
-            label={`${extension.name} ${scope === 'project' ? 'for this project' : 'everywhere'}`}
-            onChange={(next) => (!next && holds[extension.name] ? onConfirm(true) : onToggle(next))}
+            aria-label={`${extension.name} ${scope === 'project' ? 'for this project' : 'everywhere'}`}
+            onCheckedChange={(next) =>
+              !next && holds[extension.name] ? onConfirm(true) : onToggle(next)
+            }
             title={
               unusable
                 ? "Choose this project's setup to use it"
@@ -400,8 +410,8 @@ export function ExtensionsPanel() {
           `${name} is ${enabled ? 'on' : 'off'}, under ${enabled ? 'On' : 'Available'}`,
         )
     } catch (failure) {
-      setErrors((previous) => ({ ...previous, [name]: message(failure) }))
-      setAnnouncement(`${name} did not change: ${message(failure)}`)
+      setErrors((previous) => ({ ...previous, [name]: errorMessage(failure) }))
+      setAnnouncement(`${name} did not change: ${errorMessage(failure)}`)
       follow.current = undefined
     } finally {
       setPending(without(name))

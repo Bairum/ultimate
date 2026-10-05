@@ -63,7 +63,14 @@ export {
 export type { ActionState, ConversationState, Restart } from './hooks.ts'
 export type { Connection, State } from './store.ts'
 export type { DocumentItem } from './registry.ts'
-export { elidePath, formatBytes, formatDuration, formatTokens, shortenPath } from './format.ts'
+export {
+  elidePath,
+  errorMessage,
+  formatBytes,
+  formatDuration,
+  formatTokens,
+  shortenPath,
+} from './format.ts'
 /** Class names joined, Tailwind conflicts resolved: `cn('px-2', active && 'bg-accent')`. */
 export { cn } from 'cn'
 export { formatKeys } from './keys.ts'

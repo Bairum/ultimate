@@ -17,9 +17,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Switch } from '@/components/ui/switch'
 import {
   api,
   cn,
+  errorMessage,
   formatDuration,
   useAction,
   useCommands,
@@ -34,12 +36,10 @@ import {
   BusyDot,
   Heading,
   RunIcon,
-  Switch,
   Tag,
   ago,
   clock,
   full,
-  message,
   spent,
   statusLabel,
   until,
@@ -261,7 +261,7 @@ function AutomationRow({
     try {
       await work()
     } catch (failure) {
-      setError(message(failure).replace(/^automations\/\w+: /, ''))
+      setError(errorMessage(failure).replace(/^automations\/\w+: /, ''))
     }
     await refetch()
   }
@@ -321,8 +321,8 @@ function AutomationRow({
             busy={pending !== undefined}
             checked={checked}
             disabled={passed}
-            label={`Enable ${automation.name}`}
-            onChange={toggle}
+            aria-label={`Enable ${automation.name}`}
+            onCheckedChange={toggle}
             title={
               passed
                 ? 'Its one time has passed: edit the time, then switch it on'
