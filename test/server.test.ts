@@ -143,6 +143,148 @@ export const order = ${order}
 export default defineExtension({ name: '${name}', sections: [section('${name === '0-new' ? 'new' : name}', () => '${name}')], tools: [defineTool({ name: '${name === '0-new' ? 'new' : name}', description: '${name}', parameters: Type.Object({}), execute: async () => ({}) })] })`
 
 describe('server', () => {
+  it('admits registered identities for API, SSE, actions, assets and HMR, then revokes on disposal and unload', async () => {
+    const origin = 'https://rog.example.ts.net:5799'
+    const { server, options } = await fixture(false, false, {
+      access: `import { defineExtension } from '@earendil-works/pi-durable'
+let remove
+export default host => {
+  remove = host.access.allow({ origin: '${origin}', verify: async ({ headers }) => headers['tailscale-user-login'] === 'owner' ? { login: 'owner' } : undefined })
+  return defineExtension({ name: 'access' })
+}
+export const actions = { ping: async () => 'pong', revoke: async () => { remove(); return true } }`,
+    })
+    const wire = (
+      path: string,
+      login: string | null = 'owner',
+      extra: Record<string, string> = {},
+      method = 'GET',
+    ) =>
+      new Promise<number>((resolve, reject) => {
+        const req = request(
+          server.url + path,
+          {
+            method,
+            headers: {
+              host: new URL(origin).host,
+              origin,
+              ...(login ? { 'tailscale-user-login': login } : {}),
+              ...extra,
+            },
+          },
+          (response) => {
+            resolve(response.statusCode!)
+            response.destroy()
+          },
+        )
+        req.on('error', reject)
+        req.on('upgrade', (_response, socket) => {
+          resolve(101)
+          socket.destroy()
+        })
+        req.end(method === 'POST' ? '{"args":null}' : undefined)
+      })
+    for (const path of ['/', '/api/models', '/api/events', '/api/extensions/access/actions/ping']) {
+      const method = path.includes('actions') ? 'POST' : 'GET'
+      expect(await wire(path, 'owner', {}, method)).toBe(200)
+      expect(await wire(path, 'other', {}, method)).toBe(403)
+      expect(await wire(path, null, {}, method)).toBe(403)
+    }
+    expect(await wire('/api/models', 'owner', { host: 'unknown.example:5799' })).toBe(403)
+    expect(await wire('/api/models', 'owner', { origin: 'https://evil.example' })).toBe(403)
+    expect((await fetch(server.url + '/api/models')).status).toBe(200)
+    expect(
+      await wire(
+        '/api/extensions/access/actions/ping',
+        'owner',
+        { origin: '', 'sec-fetch-site': 'cross-site' },
+        'POST',
+      ),
+    ).toBe(403)
+    expect(
+      await wire(
+        '/api/extensions/access/actions/ping',
+        'owner',
+        { origin: '', 'sec-fetch-site': 'same-origin' },
+        'POST',
+      ),
+    ).toBe(200)
+    const upgrade = {
+      connection: 'Upgrade',
+      upgrade: 'websocket',
+      'sec-websocket-version': '13',
+      'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+      'sec-websocket-protocol': 'vite-hmr',
+    }
+    const wsPath = '/?token=' + server.vite.config.webSocketToken
+    expect(await wire(wsPath, 'owner', upgrade)).toBe(101)
+    expect(await wire(wsPath, 'other', upgrade)).toBe(403)
+    expect(await wire(wsPath, null, upgrade)).toBe(403)
+    expect(await wire(wsPath, 'owner', { ...upgrade, host: 'unknown.example:5799' })).toBe(403)
+    expect(
+      await wire(wsPath, null, { ...upgrade, host: new URL(server.url).host, origin: server.url }),
+    ).toBe(101)
+    const client = await (await fetch(server.url + '/@vite/client')).text()
+    expect(client).toContain('importMetaUrl.hostname')
+    expect(client).toContain('importMetaUrl.port')
+    expect(client).toContain('const hmrPort = null')
+    expect(client).toContain('const socketProtocol = null ||')
+    expect(client).toContain('null || importMetaUrl.hostname')
+    expect(server.vite.config.server.hmr).toMatchObject({ server: expect.anything() })
+    await until(() => server.system.current().access.origins.includes(origin))
+    expect(await wire('/api/extensions/access/actions/revoke', 'owner', {}, 'POST')).toBe(200)
+    expect(await wire('/api/models')).toBe(403)
+    expect(await wire(wsPath, 'owner', upgrade)).toBe(403)
+    // Reload the facet to create a new registration, then disable it.
+    await writeFile(
+      join(options.ultimateRoot, 'extensions/access/server.ts'),
+      (await readFile(join(options.ultimateRoot, 'extensions/access/server.ts'), 'utf8')) + '\n',
+    )
+    await until(async () => (await wire('/api/models')) === 200)
+    await writeFile(
+      join(options.ultimateRoot, '.ultimate/settings.json'),
+      '{"extensions":{"disable":["access"]}}',
+    )
+    await until(async () => (await wire('/api/models')) === 403)
+    expect(await wire(wsPath, 'owner', upgrade)).toBe(403)
+  })
+  it('cleans up facet lifecycles on reload but retains reload-stable resource lifecycles until shutdown', async () => {
+    const source = `import { defineExtension } from '@earendil-works/pi-durable'
+import { writeFile } from 'node:fs/promises'
+export let state
+export default host => {
+  state = host.resource('lifecycle.state', () => {
+    const value = { opens: 0, closes: 0, facetsClosed: 0 }
+    host.onOpen(async () => { value.opens++ })
+    host.onClose(async () => { value.closes++; await writeFile(host.userHome + '/closed.json', JSON.stringify(value)) })
+    return value
+  })
+  host.onClose(async () => { state.facetsClosed++ })
+  return defineExtension({ name: 'lifecycle' })
+}
+export const actions = { state: async () => state }`
+    const { server, options } = await fixture(false, false, { lifecycle: source })
+    const path = join(options.ultimateRoot, 'extensions/lifecycle/server.ts')
+    const initial = server.extensions.info().find((entry) => entry.name === 'lifecycle')!
+      .server!.loadedAt
+    await writeFile(path, source + '\n')
+    await until(
+      () =>
+        server.extensions.info().find((entry) => entry.name === 'lifecycle')!.server!.loadedAt !==
+        initial,
+    )
+    expect(
+      (await post(server, '/api/extensions/lifecycle/actions/state', { args: null })).data.result,
+    ).toEqual({ opens: 1, closes: 0, facetsClosed: 1 })
+    servers.splice(servers.indexOf(server), 1)
+    await server.close()
+    expect(JSON.parse(await readFile(join(options.userHome, 'closed.json'), 'utf8'))).toEqual({
+      opens: 1,
+      closes: 1,
+      facetsClosed: 2,
+    })
+  })
+
   it('serves and completes a faux submit with an empty extensions directory', async () => {
     const { server } = await fixture(false, false, undefined, true)
     expect((await fetch(server.url)).status).toBe(200)
@@ -176,6 +318,7 @@ export const actions = { keys: async () => keys }`,
     expect(response.status).toBe(200)
     expect(response.data.result).toEqual(
       [
+        'access',
         'build',
         'conversations',
         'doc',
@@ -187,6 +330,7 @@ export const actions = { keys: async () => keys }`,
         'metadata',
         'modelRuntime',
         'models',
+        'notice',
         'onClose',
         'onOpen',
         'projectExtensions',

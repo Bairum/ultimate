@@ -15,7 +15,7 @@ import { alive } from './lock.ts'
 import { homedir } from 'node:os'
 import { realpath } from 'node:fs/promises'
 import { extensionModules } from './vite-extensions.ts'
-import { loopbackAuthority, loopbackOrigin } from './request-security.ts'
+import { admit, createAccess } from './request-security.ts'
 import { writeProject } from './project.ts'
 
 const send = (message: ChildMessage) => process.send?.(message)
@@ -37,6 +37,10 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     projectRoot,
     report: (notice) => events.emit('notice', notice),
   })
+  let system: Awaited<ReturnType<typeof createSystem>> | undefined
+  const access = createAccess(() => {
+    void system?.changed()
+  })
   let api: Awaited<ReturnType<typeof createApi>> | undefined
   const http = createHttpServer((request, response) => {
     void (async () => {
@@ -45,10 +49,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
           options.publicUrl ??
             `http://127.0.0.1:${(http.address() as import('node:net').AddressInfo).port}`,
         ).port || '80'
-      if (
-        !loopbackAuthority(request.headers.host, port) ||
-        (request.headers.origin && !loopbackOrigin(request.headers.origin, port))
-      ) {
+      if (!(await admit(request, port, access.rules))) {
         response.writeHead(403)
         response.end('Forbidden')
         return
@@ -65,6 +66,20 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       response.end('Internal server error')
     })
   })
+  const hmr = createHttpServer()
+  http.on('upgrade', (request, socket, head) => {
+    const port =
+      new URL(
+        options.publicUrl ??
+          `http://127.0.0.1:${(http.address() as import('node:net').AddressInfo).port}`,
+      ).port || '80'
+    void admit(request, port, access.rules)
+      .then((allowed) => {
+        if (allowed) hmr.emit('upgrade', request, socket, head)
+        else socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
+      })
+      .catch(() => socket.destroy())
+  })
   // A vite.config.ts change restarts Vite with a new watcher; listeners move to each new one.
   const restarted = new Set<(watcher: ViteDevServer['watcher']) => void>()
   const vite = await createViteServer({
@@ -72,7 +87,8 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     root: resolvePath(ultimateRoot, 'web'),
     server: {
       middlewareMode: true,
-      hmr: { server: http },
+      allowedHosts: true,
+      hmr: { server: hmr },
       fs: {
         allow: [ultimateRoot, projectRoot, resolvePath(options.userHome ?? homedir(), '.ultimate')],
       },
@@ -103,7 +119,6 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       detach()
     }
   }
-  let system: Awaited<ReturnType<typeof createSystem>> | undefined
   let opened: OpenHost | undefined
   const processInfo: { activationError?: string } = {}
   const extensions = await loadExtensions(
@@ -111,6 +126,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     host,
     () => system?.changed(),
     {
+      access,
       harness: () => {
         if (!opened) throw new Error('Harness is not open')
         return opened.harness
@@ -142,6 +158,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     (info) => events.emit('system', info),
     (message) => events.emit('notice', { level: 'error', message }),
     processInfo,
+    access.origins,
   )
   return {
     http,
@@ -165,7 +182,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       await writeProject(host.home, host.projectRoot)
       await extensions.opened()
       await system.changed()
-      api = await createApi(host, opened, events, system, extensions)
+      api = await createApi(host, opened, events, system, extensions, access)
       opened.harness.resume()
       return { ...opened, api, system }
     },
@@ -185,7 +202,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
 }
 export async function createServer(options: Partial<ServerOptions> = {}) {
   const prepared = await prepareServer(options)
-  return { ...prepared, ...(await prepared.go()) }
+  return { ...prepared, ...(await prepared.go()), close: () => prepared.close() }
 }
 
 if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.meta.url)) {

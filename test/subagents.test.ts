@@ -65,6 +65,8 @@ async function fixture(
     codemode({
       ...prepared,
       events: createEventBus(),
+      access: { allow: () => () => {} },
+      notice: () => {},
       resource: (_key, create) => create(),
       onOpen: () => {},
       onClose: () => {},

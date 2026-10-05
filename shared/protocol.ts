@@ -101,6 +101,7 @@ export interface SystemInfo {
     url: string
     activationError?: string
   }
+  access: { origins: string[] }
   persistence: { kind: 'sqlite'; path: string; sizeBytes: number; walBytes: number }
   execution: { kind: 'node-local'; defaultCwd: string }
   project: {

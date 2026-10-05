@@ -1,3 +1,52 @@
+import type { IncomingHttpHeaders } from 'node:http'
+
+export interface AccessRule {
+  origin: string
+  verify(request: {
+    headers: IncomingHttpHeaders
+  }):
+    | { login: string; name?: string }
+    | undefined
+    | Promise<{ login: string; name?: string } | undefined>
+}
+
+export function createAccess(changed: () => void = () => {}) {
+  const rules = new Set<AccessRule>()
+  return {
+    rules,
+    origins: () => [...new Set([...rules].map((rule) => rule.origin))],
+    allow(rule: AccessRule) {
+      const url = new URL(rule.origin)
+      if (!['https:', 'http:'].includes(url.protocol) || url.origin !== rule.origin)
+        throw new Error('Access requires a full HTTP origin')
+      rules.add(rule)
+      changed()
+      return () => {
+        if (rules.delete(rule)) changed()
+      }
+    },
+  }
+}
+export type Access = ReturnType<typeof createAccess>
+
+export async function admit(
+  request: { headers: IncomingHttpHeaders },
+  port: string,
+  rules: Iterable<AccessRule>,
+) {
+  const { host, origin } = request.headers
+  if (loopbackAuthority(host, port) && (!origin || loopbackOrigin(origin, port))) return true
+  for (const rule of rules) {
+    if (host !== new URL(rule.origin).host || (origin && origin !== rule.origin)) continue
+    try {
+      if ((await rule.verify(request))?.login) return true
+    } catch {
+      // A failed identity provider cannot admit a request.
+    }
+  }
+  return false
+}
+
 export function loopbackAuthority(authority: string | undefined, port: string) {
   if (!authority) return false
   try {

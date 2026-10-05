@@ -17,7 +17,8 @@ import { UiState } from './ui-state.ts'
 import type { JsonValue } from '@earendil-works/chord'
 import { clampThinkingLevel, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
 import { Metadata } from './metadata.ts'
-import { loopbackOrigin } from './request-security.ts'
+import { admit } from './request-security.ts'
+import type { Access } from './request-security.ts'
 import { conversationIndex } from './project.ts'
 
 class HttpError extends Error {
@@ -63,6 +64,7 @@ export async function createApi(
   events: Events,
   system: Awaited<ReturnType<typeof createSystem>>,
   extensions: Extensions,
+  access: Access,
 ) {
   const { harness, root } = opened
   const streams = new Set<() => Promise<void>>()
@@ -331,8 +333,10 @@ export async function createApi(
       try {
         // Local-only does not mean safe from cross-origin browser requests.
         const origin = request.headers.origin
-        if (origin && !loopbackOrigin(origin, new URL(system.current().process.url).port || '80'))
-          throw new HttpError(403, 'Invalid origin')
+        if (
+          !(await admit(request, new URL(system.current().process.url).port || '80', access.rules))
+        )
+          throw new HttpError(403, 'Forbidden')
         if (request.method === 'GET' && url.pathname === '/api/events') {
           const selected = url.searchParams.get('conversation')
           const id = selected === null ? root.id : Number(selected)

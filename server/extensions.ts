@@ -22,6 +22,7 @@ import type { ViteDevServer } from 'vite-plus'
 import type { ConversationSummary, ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { PreparedHost } from './harness.ts'
 import { Metadata } from './metadata.ts'
+import type { Access } from './request-security.ts'
 
 export type ExtensionHost = Pick<
   PreparedHost,
@@ -40,6 +41,8 @@ export type ExtensionHost = Pick<
 > & {
   /** Process-local Pi bus, shared across facets and reloads. Events are ephemeral, not bridged to the browser. */
   events: EventBus
+  access: Pick<Access, 'allow'>
+  notice(message: string): void
   resource<T>(key: string, create: () => T): T
   /** Run `callback` each time the harness opens, at once when it is open; the server serves once it settles. */
   onOpen(callback: () => Promise<void>): void
@@ -74,7 +77,7 @@ export async function loadExtensions(
   vite: ViteDevServer,
   host: PreparedHost,
   changed: () => void | Promise<void>,
-  runtime: Pick<ExtensionHost, 'harness' | 'system' | 'conversations'>,
+  runtime: Pick<ExtensionHost, 'harness' | 'system' | 'conversations' | 'access'>,
   watch: Watch,
   notice: (message: string) => void = () => {},
 ) {
@@ -82,15 +85,61 @@ export async function loadExtensions(
   const directories = roots.map((root) => join(root.path, 'extensions'))
   const facetHosts = new Map<string, ExtensionHost>()
   const subscriptions = new Map<ExtensionHost, Set<() => void>>()
-  const dispose = (facetHost: ExtensionHost | undefined) => {
+  const facetOpeners = new Map<ExtensionHost, Set<() => Promise<void>>>()
+  const facetCleanups = new Map<ExtensionHost, Set<() => Promise<void>>>()
+  const facetNotices = new Map<ExtensionHost, Set<string>>()
+  const dispose = async (facetHost: ExtensionHost | undefined) => {
     if (!facetHost) return
     for (const stop of subscriptions.get(facetHost) ?? []) stop()
     subscriptions.delete(facetHost)
+    for (const callback of facetOpeners.get(facetHost) ?? []) openers.delete(callback)
+    facetOpeners.delete(facetHost)
+    for (const cleanup of facetCleanups.get(facetHost) ?? []) await cleanup()
+    facetCleanups.delete(facetHost)
+    facetNotices.delete(facetHost)
   }
   const scope = (): ExtensionHost => {
     const stops = new Set<() => void>()
+    let sharedResource = false
     const facetHost = {
       ...extensionHost,
+      notice: (message) => {
+        facetNotices.get(facetHost)!.add(message)
+        notice(message)
+        void changed()
+      },
+      resource: <T>(key: string, create: () => T) =>
+        extensionHost.resource(key, () => {
+          const previous = sharedResource
+          sharedResource = true
+          try {
+            return create()
+          } finally {
+            sharedResource = previous
+          }
+        }),
+      access: {
+        allow: (rule) => {
+          const remove = runtime.access.allow(rule)
+          const stop = () => {
+            remove()
+            stops.delete(stop)
+          }
+          stops.add(stop)
+          return stop
+        },
+      },
+      onOpen: (callback) => {
+        if (sharedResource) extensionHost.onOpen(callback)
+        else {
+          facetOpeners.get(facetHost)!.add(callback)
+          openers.add(callback)
+        }
+      },
+      onClose: (cleanup) => {
+        if (sharedResource) extensionHost.onClose(cleanup)
+        else facetCleanups.get(facetHost)!.add(cleanup)
+      },
       events: {
         emit: (channel, data) => events.emit(channel, data),
         on: (channel, handler) => {
@@ -105,9 +154,13 @@ export async function loadExtensions(
       },
     } satisfies ExtensionHost
     subscriptions.set(facetHost, stops)
+    facetOpeners.set(facetHost, new Set())
+    facetCleanups.set(facetHost, new Set())
+    facetNotices.set(facetHost, new Set())
     return facetHost
   }
   const actions = new Map<string, Record<string, ExtensionAction>>()
+  const settingsReloads = new Set<string>()
   const records = new Map<string, ExtensionInfo>()
   const documents = new Map<string, ConversationDocToken<JsonObject>[]>()
   const findDoc = (kind: string) =>
@@ -118,6 +171,8 @@ export async function loadExtensions(
   const resources = new Map<string, unknown>()
   const extensionHost: ExtensionHost = {
     events,
+    access: runtime.access,
+    notice,
     resource: <T>(key: string, create: () => T) => {
       if (!resources.has(key)) resources.set(key, create())
       return resources.get(key) as T
@@ -274,9 +329,12 @@ export async function loadExtensions(
           if (Object.values(exportedActions).some((action) => typeof action !== 'function'))
             throw new Error('actions must contain functions')
           host.registry.install(extension)
-          dispose(facetHosts.get(name))
+          await dispose(facetHosts.get(name))
           facetHosts.set(name, facetHost)
+          if (open) await Promise.all([...facetOpeners.get(facetHost)!].map(runOpener))
           actions.set(name, exportedActions)
+          if (module.reloadOnSettings === true) settingsReloads.add(name)
+          else settingsReloads.delete(name)
           record.actions = Object.keys(exportedActions)
           installed.set(name, module.order ?? 0)
           documents.set(name, docs)
@@ -288,18 +346,19 @@ export async function loadExtensions(
             docs: docs.map((doc) => doc.definition.kind),
           }
         } catch (error) {
-          dispose(facetHost)
+          await dispose(facetHost)
           record.server = {
             ...(previous?.server ?? { tools: [], sections: [], hooks: 0, docs: [] }),
             error: String(error),
           }
         }
       } else if (!enabled || !record.facets.server) {
-        dispose(facetHosts.get(name))
+        await dispose(facetHosts.get(name))
         facetHosts.delete(name)
         if (installed.delete(name)) host.registry.uninstall({ name })
         documents.delete(name)
         actions.delete(name)
+        settingsReloads.delete(name)
         record.actions = []
         delete record.server
       }
@@ -311,11 +370,12 @@ export async function loadExtensions(
     }
     for (const name of records.keys()) {
       if (!folders.includes(name)) {
-        dispose(facetHosts.get(name))
+        await dispose(facetHosts.get(name))
         facetHosts.delete(name)
         if (installed.delete(name)) host.registry.uninstall({ name })
         records.delete(name)
         actions.delete(name)
+        settingsReloads.delete(name)
         host.builds.remove(name)
         documents.delete(name)
       }
@@ -330,7 +390,12 @@ export async function loadExtensions(
         winners
           .filter((entry) => {
             const previous = records.get(entry.name)
-            return !previous || previous.enabled !== entry.enabled || previous.path !== entry.path
+            return (
+              !previous ||
+              previous.enabled !== entry.enabled ||
+              previous.path !== entry.path ||
+              settingsReloads.has(entry.name)
+            )
           })
           .map((entry) => entry.name),
       ),
@@ -422,7 +487,11 @@ export async function loadExtensions(
   return {
     info: Object.assign(() => [...records.values()], {
       diagnostics: () => [
-        ...new Set([...diagnostics, ...projectDiagnostics(host.projectRoot, host.userHome)]),
+        ...new Set([
+          ...diagnostics,
+          ...[...facetNotices.values()].flatMap((messages) => [...messages]),
+          ...projectDiagnostics(host.projectRoot, host.userHome),
+        ]),
       ],
     }),
     action(name: string, action: string) {
@@ -457,7 +526,7 @@ export async function loadExtensions(
       closed = true
       unwatch()
       await chain
-      for (const facetHost of subscriptions.keys()) dispose(facetHost)
+      for (const facetHost of subscriptions.keys()) await dispose(facetHost)
       await Promise.all([...cleanups].map((cleanup) => cleanup()))
     },
   }

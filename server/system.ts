@@ -38,6 +38,7 @@ export async function createSystem(
   emit: (info: SystemInfo) => void,
   notice: (message: string) => void = () => {},
   processInfo: { activationError?: string } = {},
+  origins: () => string[] = () => [],
 ) {
   const startedAt = new Date().toISOString()
   const agentDir = getAgentDir()
@@ -108,6 +109,7 @@ export async function createSystem(
         ...(processInfo.activationError ? { activationError: processInfo.activationError } : {}),
         url,
       },
+      access: { origins: origins() },
       persistence: {
         kind: 'sqlite',
         path: host.database,
