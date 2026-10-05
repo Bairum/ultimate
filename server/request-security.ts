@@ -32,19 +32,32 @@ export type Access = ReturnType<typeof createAccess>
 export async function admit(
   request: { headers: IncomingHttpHeaders },
   port: string,
-  rules: Iterable<AccessRule>,
+  rules: Set<AccessRule>,
 ) {
   const { host, origin } = request.headers
-  if (loopbackAuthority(host, port) && (!origin || loopbackOrigin(origin, port))) return true
+  if (
+    !proxied(request.headers) &&
+    loopbackAuthority(host, port) &&
+    (!origin || loopbackOrigin(origin, port))
+  )
+    return true
+  const site = request.headers['sec-fetch-site']
+  if (site !== undefined && site !== 'same-origin' && site !== 'none') return false
   for (const rule of rules) {
     if (host !== new URL(rule.origin).host || (origin && origin !== rule.origin)) continue
     try {
-      if ((await rule.verify(request))?.login) return true
+      if ((await rule.verify(request))?.login && rules.has(rule)) return true
     } catch {
       // A failed identity provider cannot admit a request.
     }
   }
   return false
+}
+
+export function proxied(headers: IncomingHttpHeaders) {
+  return ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded'].some(
+    (key) => headers[key] !== undefined,
+  )
 }
 
 export function loopbackAuthority(authority: string | undefined, port: string) {

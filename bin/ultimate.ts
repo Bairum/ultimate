@@ -14,6 +14,7 @@ import type { Socket } from 'node:net'
 import { fileURLToPath } from 'node:url'
 import type { BuildInfo } from '../shared/protocol.ts'
 import type { ChildMessage, SupervisorMessage } from '../server/supervisor-protocol.ts'
+import { loopbackAuthority, proxied } from '../server/request-security.ts'
 
 const ultimateRoot = resolvePath(fileURLToPath(new URL('..', import.meta.url)))
 const { values, positionals } = parseArgs({
@@ -74,10 +75,34 @@ function route(socket: Socket) {
     socket.pipe(upstream).pipe(socket)
     socket.resume()
   } else if (crashPage) {
-    const html = `<h1>Ultimate core could not boot</h1><p>Waiting for changes in server/, shared/, extensions/</p><pre>${escape(stderr)}</pre>`
-    socket.end(
-      `HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(html)}\r\nConnection: close\r\n\r\n${html}`,
-    )
+    let head = ''
+    const receive = (chunk: Buffer) => {
+      head += chunk.toString('latin1')
+      if (!head.includes('\r\n\r\n') && head.length < 16384) return
+      socket.off('data', receive)
+      const headers: Record<string, string> = {}
+      for (const line of head.split('\r\n').slice(1)) {
+        if (!line) break
+        const colon = line.indexOf(':')
+        if (colon > 0)
+          headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim()
+      }
+      const direct =
+        head.length < 16384 &&
+        !proxied(headers) &&
+        loopbackAuthority(
+          headers.host,
+          String((proxy.address() as import('node:net').AddressInfo).port),
+        )
+      const html = direct
+        ? `<h1>Ultimate core could not boot</h1><p>Waiting for changes in server/, shared/, extensions/</p><pre>${escape(stderr)}</pre>`
+        : ''
+      socket.end(
+        `HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(html)}\r\nConnection: close\r\n\r\n${html}`,
+      )
+    }
+    socket.on('data', receive)
+    socket.resume()
   } else {
     socket.pause()
     pending.add(socket)

@@ -217,6 +217,23 @@ export const actions = { ping: async () => 'pong', revoke: async () => { remove(
       'sec-websocket-protocol': 'vite-hmr',
     }
     const wsPath = '/?token=' + server.vite.config.webSocketToken
+    for (const forwarded of ['x-forwarded-for', 'x-forwarded-host', 'forwarded']) {
+      for (const login of [null, 'other', 'owner']) {
+        for (const originHeader of ['', server.url]) {
+          const headers = { host: new URL(server.url).host, origin: originHeader, [forwarded]: '' }
+          for (const path of ['/api/models', '/', '/api/extensions/access/actions/ping'])
+            expect(
+              await wire(path, login, headers, path.includes('actions') ? 'POST' : 'GET'),
+            ).toBe(403)
+          expect(await wire(wsPath, login, { ...upgrade, ...headers })).toBe(403)
+        }
+      }
+    }
+    for (const site of ['cross-site', 'same-site']) {
+      expect(await wire('/@vite/client', 'owner', { 'sec-fetch-site': site })).toBe(403)
+      expect(await wire(wsPath, 'owner', { ...upgrade, 'sec-fetch-site': site })).toBe(403)
+    }
+    expect(await wire('/api/models', 'owner', { 'sec-fetch-site': 'none' })).toBe(200)
     expect(await wire(wsPath, 'owner', upgrade)).toBe(101)
     expect(await wire(wsPath, 'other', upgrade)).toBe(403)
     expect(await wire(wsPath, null, upgrade)).toBe(403)
@@ -248,6 +265,54 @@ export const actions = { ping: async () => 'pong', revoke: async () => { remove(
     await until(async () => (await wire('/api/models')) === 403)
     expect(await wire(wsPath, 'owner', upgrade)).toBe(403)
   })
+  it('revokes a deferred verifier in flight for HTTP and upgrades', async () => {
+    const { server } = await fixture(false, false, {
+      deferred: `import { defineExtension } from '@earendil-works/pi-durable'
+let host, remove, resolve
+export default h => { host=h; return defineExtension({ name: 'deferred' }) }
+export const actions = {
+arm: async () => { resolve=undefined; remove=host.access.allow({ origin:'https://remote.example:5799', verify: () => new Promise(r => { resolve=r }) }); return true },
+waiting: async () => Boolean(resolve),
+finish: async () => { remove(); resolve({login:'owner'}); return true }
+}`,
+    })
+    for (const upgrade of [false, true]) {
+      await post(server, '/api/extensions/deferred/actions/arm', { args: null })
+      const pending = new Promise<number>((resolve, reject) => {
+        const req = request(
+          server.url + (upgrade ? '/?token=' + server.vite.config.webSocketToken : '/api/models'),
+          {
+            headers: {
+              host: 'remote.example:5799',
+              ...(upgrade
+                ? {
+                    connection: 'Upgrade',
+                    upgrade: 'websocket',
+                    'sec-websocket-version': '13',
+                    'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+                    'sec-websocket-protocol': 'vite-hmr',
+                  }
+                : {}),
+            },
+          },
+          (res) => {
+            resolve(res.statusCode!)
+            res.destroy()
+          },
+        )
+        req.on('error', reject)
+        req.end()
+      })
+      await until(
+        async () =>
+          (await post(server, '/api/extensions/deferred/actions/waiting', { args: null })).data
+            .result === true,
+      )
+      await post(server, '/api/extensions/deferred/actions/finish', { args: null })
+      expect(await pending).toBe(403)
+    }
+  })
+
   it('cleans up facet lifecycles on reload but retains reload-stable resource lifecycles until shutdown', async () => {
     const source = `import { defineExtension } from '@earendil-works/pi-durable'
 import { writeFile } from 'node:fs/promises'
@@ -283,6 +348,31 @@ export const actions = { state: async () => state }`
       closes: 1,
       facetsClosed: 2,
     })
+  })
+
+  it('runs late facet openers immediately and continues after throwing cleanups', async () => {
+    const { server } = await fixture(false, false, {
+      cleanup: `import { defineExtension } from '@earendil-works/pi-durable'
+import { writeFile } from 'node:fs/promises'
+let host, opened=false
+export default h => { host=h; h.onClose(async()=>{throw new Error('cleanup test failure')}); h.onClose(async()=>{await writeFile(h.userHome+'/cleanup-ok','yes')}); return defineExtension({name:'cleanup'}) }
+export const actions={ late: async()=>{host.onOpen(async()=>{opened=true}); return true}, opened:async()=>opened }`,
+    })
+    const stream = await attach(server)
+    await post(server, '/api/extensions/cleanup/actions/late', { args: null })
+    await until(
+      async () =>
+        (await post(server, '/api/extensions/cleanup/actions/opened', { args: null })).data
+          .result === true,
+    )
+    await server.extensions.close()
+    expect(await readFile(join(server.host.userHome, 'cleanup-ok'), 'utf8')).toBe('yes')
+    await until(() =>
+      stream.events.some(
+        (e) => e.name === 'notice' && JSON.stringify(e.data).includes('cleanup test failure'),
+      ),
+    )
+    await stream.close()
   })
 
   it('serves and completes a faux submit with an empty extensions directory', async () => {

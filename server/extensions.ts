@@ -94,7 +94,13 @@ export async function loadExtensions(
     subscriptions.delete(facetHost)
     for (const callback of facetOpeners.get(facetHost) ?? []) openers.delete(callback)
     facetOpeners.delete(facetHost)
-    for (const cleanup of facetCleanups.get(facetHost) ?? []) await cleanup()
+    for (const cleanup of facetCleanups.get(facetHost) ?? []) {
+      try {
+        await cleanup()
+      } catch (error) {
+        notice(`Extension cleanup failed: ${String(error)}`)
+      }
+    }
     facetCleanups.delete(facetHost)
     facetNotices.delete(facetHost)
   }
@@ -134,6 +140,7 @@ export async function loadExtensions(
         else {
           facetOpeners.get(facetHost)!.add(callback)
           openers.add(callback)
+          if (open && [...facetHosts.values()].includes(facetHost)) void runOpener(callback)
         }
       },
       onClose: (cleanup) => {

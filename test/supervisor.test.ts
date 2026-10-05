@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { request } from 'node:http'
 import type { ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { readFile, rm, writeFile } from 'node:fs/promises'
@@ -104,6 +105,48 @@ function transcript(view: ConversationView) {
 }
 
 describe('supervisor', () => {
+  it('keeps crash diagnostics private to direct loopback requests', async () => {
+    const home = await temp('ultimate-crash-page-')
+    homes.push(home)
+    const root = await sourceCopy(home)
+    copies.set(home, root)
+    await writeFile(join(root, 'server/main.ts'), "throw new Error('private stderr marker')\n")
+    await launch(home)
+    let url = ''
+    await until(async () => {
+      try {
+        const lock = JSON.parse(await readFile(join(home, 'ultimate.lock'), 'utf8'))
+        if (lock.port) url = `http://127.0.0.1:${lock.port}`
+        return Boolean(url)
+      } catch {
+        return false
+      }
+    })
+    const local = await fetch(url)
+    expect(local.status).toBe(503)
+    expect(await local.text()).toContain('private stderr marker')
+    for (const headers of [
+      { 'x-forwarded-for': '100.1.2.3' },
+      { 'x-forwarded-host': 'remote.example' },
+      { forwarded: '' },
+      { host: 'remote.example:4799' },
+    ]) {
+      const response = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const req = request(url, { headers }, (res) => {
+          let body = ''
+          res.on('data', (chunk) => {
+            body += chunk
+          })
+          res.on('end', () => resolve({ status: res.statusCode!, body }))
+        })
+        req.on('error', reject)
+        req.end()
+      })
+      expect(response.status).toBe(503)
+      expect(response.body).toBe('')
+    }
+  }, 60000)
+
   it('owns a random public port, refuses a second instance naming its pid, and accepts the public Origin', async () => {
     const first = await fixture()
     const second = await launch(first.home)
