@@ -19,11 +19,12 @@ export function extensionModules(
   )
   const trustFile = join(userHome, '.ultimate/trust.json')
   const settingsFiles = [...extensionSettingsFiles(projectRoot, userHome), trustFile]
-  let stopWatching: (() => void) | undefined
+  const watchers = new WeakMap<object, () => void>()
   return {
     name: 'ultimate:extension-modules',
     closeBundle() {
-      stopWatching?.()
+      watchers.get(this.environment)?.()
+      watchers.delete(this.environment)
     },
     enforce: 'pre',
     async config() {
@@ -126,12 +127,14 @@ export function extensionModules(
       server.watcher.on('change', settingsChanged)
       for (const event of ['add', 'unlink', 'addDir', 'unlinkDir'] as const)
         server.watcher.on(event, structure)
-      stopWatching = () => {
+      const stopWatching = () => {
         stopRoots()
         server.watcher.off('change', settingsChanged)
         for (const event of ['add', 'unlink', 'addDir', 'unlinkDir'] as const)
           server.watcher.off(event, structure)
       }
+      // During restart the replacement configures before the old environments close.
+      watchers.set(server.environments.client, stopWatching)
       server.httpServer?.once('close', stopWatching)
     },
   }

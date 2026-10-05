@@ -59,12 +59,18 @@ export async function sourceCopy(parent: string) {
   })
   await linkDependencies(root)
   const config = join(root, 'vite.config.ts')
+  // Optimize on page requests, not fixture boot; React's plugin otherwise eagerly includes deps.
   await writeFile(
     config,
-    (await readFile(config, 'utf8')).replace(
-      'export default defineConfig({',
-      "export default defineConfig({ cacheDir: '.vite-cache',",
-    ),
+    (await readFile(config, 'utf8'))
+      .replace(
+        'export default defineConfig({',
+        "export default defineConfig({ cacheDir: '.vite-cache', optimizeDeps: { entries: [] },",
+      )
+      .replace(
+        'plugins: [react(), tailwindcss()],',
+        "plugins: [react(), tailwindcss(), { name: 'test:lazy-deps', configResolved(config) { config.optimizeDeps.include = [] } }],",
+      ),
   )
   new ProjectTrustStore(join(parent, '.ultimate')).set(root, true)
   return root

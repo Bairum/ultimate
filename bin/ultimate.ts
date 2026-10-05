@@ -192,6 +192,7 @@ function boot(previousBuild?: BuildInfo): Core {
     cwd: projectRoot,
     env: {
       ...process.env,
+      MIMALLOC_ALLOW_THP: '0', // Avoid huge-page amplification in Rolldown's allocator.
       ULTIMATE_HOME: home,
       ULTIMATE_PROJECT: projectRoot,
       ULTIMATE_SUPERVISED: '1',
