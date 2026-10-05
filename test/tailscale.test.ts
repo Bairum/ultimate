@@ -278,6 +278,26 @@ it.each([
   await app.close()
   expect((await f.invocations()).filter((args) => args.includes('off'))).toEqual([])
 })
+it('retries a failed start on request, one start at a time, and does nothing once ready', async () => {
+  const f = await fixture(undefined, { node: { ...node, CertDomains: [] } })
+  const app = await f.instance()
+  expect((await app.status()).state).toBe('https-disabled')
+  const config = JSON.parse(await readFile(f.config, 'utf8'))
+  await writeFile(f.config, JSON.stringify({ ...config, node }))
+  const retry = async () =>
+    (await actions.retry(null, { host: app.host } as Parameters<typeof actions.retry>[1])) as Status
+  const [first, second] = await Promise.all([retry(), retry()])
+  expect(first).toEqual({
+    state: 'ready',
+    url: 'https://rog.example.ts.net:4747',
+    allow: ['owner@example.com'],
+  })
+  expect(second).toEqual(first)
+  expect((await f.invocations()).filter((args) => args.includes('--bg'))).toHaveLength(1)
+  const calls = (await f.invocations()).length
+  expect(await retry()).toEqual(first)
+  expect(await f.invocations()).toHaveLength(calls)
+})
 it('reports not installed without attempting Serve', async () => {
   const f = await fixture()
   vi.stubEnv('PATH', join(f.home, 'missing'))

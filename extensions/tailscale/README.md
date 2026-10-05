@@ -18,8 +18,8 @@ Omit `tailscale.allow` to allow only the machine owner's login (`Self.UserID` �
 The Tailscale panel (palette: `Tailscale…`) shows the `status` action, read when it opens and again when system info changes: a registered origin, a failure notice, or a reinstall.
 
 - **ready:** the URL with copy and open buttons, who may open it (`allow`), and that it is tailnet-only.
-- **Problems** (`not-installed`, `not-running`, `not-operator`, `https-disabled`, `port-conflict`, `error`): a short title and the hint; a command in the hint, such as `sudo tailscale set --operator=$USER`, becomes a chip that copies it. A fix applies when the extension reloads: on a settings change or a restart.
-- **disabled:** a switch that enables `tailscale` in `~/.ultimate/settings.json` through onboarding's `setExtension` action with user scope; it never offers project scope. The panel loads only with the extension, so this state shows when only a project enables it.
+- **Problems** (`not-installed`, `not-running`, `not-operator`, `https-disabled`, `port-conflict`, `error`): a short title and the hint; a command in the hint, such as `sudo tailscale set --operator=$USER`, becomes a chip that copies it. After a fix, **Check again** starts again in place; a settings change or a restart does too.
+- **disabled:** a switch that enables `tailscale` in `~/.ultimate/settings.json` through onboarding's `setExtension` action with user scope; it never offers project scope. The panel loads only with the extension, so this state shows when only a project enables it. **Check again** rereads the user settings.
 - **starting:** a quiet spinner.
 
 While ready, the status line shows `● tailnet`; hover for the URL, click to open the panel.
@@ -41,5 +41,7 @@ Requests with forwarding headers are never treated as local, even if a client su
 ## Status action
 
 `POST /api/extensions/tailscale/actions/status` with `{ "args": null }` returns `{ result: { state, url?: string, allow: string[], hint?: string } }`.
+
+`POST /api/extensions/tailscale/actions/retry` starts again unless ready or shutting down and returns the status it reached; a retry during a start waits for that start instead of running a second.
 
 States: `disabled`, `starting`, `ready`, `not-installed`, `not-running`, `not-operator`, `https-disabled`, `port-conflict`, `error`. `url` exists when ready. `hint` explains failures; `allow` lists effective logins, never credentials. System info publishes registered URLs in `access.origins`. Identity values are not logged.

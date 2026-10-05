@@ -47,7 +47,7 @@ else {
   return config
 }
 
-it('turns exposure on from the panel, shows the URL to copy, then a problem with its command', async (test) => {
+it('turns exposure on from the panel, shows the URL to copy, a problem with its command, and checks again', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const userHome = await temp('ultimate-tailscale-browser-')
@@ -88,6 +88,7 @@ it('turns exposure on from the panel, shows the URL to copy, then a problem with
     const toggle = panel.getByRole('switch', { name: 'Reach this Ultimate from your devices' })
     await expect.poll(() => toggle.count(), timeout).toBe(1)
     expect(await panel.getByText('projects cannot turn it on').count()).toBe(1)
+    expect(await panel.getByRole('button', { name: 'Check again' }).count()).toBe(1)
     expect(await indicator.count()).toBe(0)
     await toggle.click()
 
@@ -120,6 +121,22 @@ it('turns exposure on from the panel, shows the URL to copy, then a problem with
       .poll(() => page.evaluate(() => navigator.clipboard.readText()), timeout)
       .toBe(command)
     await expect.poll(() => indicator.count(), timeout).toBe(0)
+
+    // Once fixed, Check again reaches ready in place: no page reload, settings write, or reinstall.
+    await writeFile(config, JSON.stringify({ ...value, deny: false }))
+    const written = await readFile(settings, 'utf8')
+    const loadedAt = () =>
+      server.system.current().extensions.find((extension) => extension.name === 'tailscale')?.server
+        ?.loadedAt
+    const installed = loadedAt()
+    await page.evaluate(() => Reflect.set(window, 'samePage', true))
+    await panel.getByRole('button', { name: 'Check again' }).click()
+    await expect.poll(() => panel.getByText('reachable').count(), timeout).toBe(1)
+    expect(await panel.getByText(url, { exact: true }).count()).toBe(1)
+    await expect.poll(() => indicator.count(), timeout).toBe(1)
+    expect(await page.evaluate(() => Reflect.get(window, 'samePage'))).toBe(true)
+    expect(await readFile(settings, 'utf8')).toBe(written)
+    expect(loadedAt()).toBe(installed)
     expect(errors).toEqual([])
   } finally {
     await browser.close()

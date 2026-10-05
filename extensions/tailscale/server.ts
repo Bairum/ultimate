@@ -46,9 +46,15 @@ function target(serve: Serve, dns: string, port: number) {
 export const reloadOnSettings = true
 const run = promisify(execFile)
 const statuses = new WeakMap<ExtensionHost, Status>()
+const retries = new WeakMap<ExtensionHost, () => Promise<void>>()
 export const actions: Record<string, ExtensionAction> = {
   status: async (_args, { host }): Promise<Status> =>
     statuses.get(host) ?? { state: 'disabled', allow: [] },
+  /** Starts again unless ready, for example after fixing what a problem state names, and returns the new status. */
+  retry: async (_args, { host }): Promise<Status> => {
+    await retries.get(host)?.()
+    return statuses.get(host) ?? { state: 'disabled', allow: [] }
+  },
 }
 
 export default function tailscale(host: ExtensionHost) {
@@ -61,6 +67,7 @@ export default function tailscale(host: ExtensionHost) {
   const registryPath = join(host.userHome, '.ultimate/tailscale.json')
   let remove: (() => void) | undefined
   let opening: Promise<void> | undefined
+  let running: Promise<void> | undefined
   let closed = false
   const set = (next: Status) => {
     status = next
@@ -264,7 +271,13 @@ export default function tailscale(host: ExtensionHost) {
       else fail('error', message.slice(0, 500))
     }
   }
-  host.onOpen(() => (opening = start()))
+  // One start at a time: a retry during a start waits for it, and once ready or closed, start does nothing.
+  function begin() {
+    running ??= start().finally(() => (running = undefined))
+    return (opening = running)
+  }
+  host.onOpen(begin)
+  retries.set(host, begin)
   host.onClose(async () => {
     closed = true
     await opening

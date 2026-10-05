@@ -4,6 +4,7 @@ import {
   ExternalLinkIcon,
   LoaderCircleIcon,
   NetworkIcon,
+  RefreshCwIcon,
   ShieldCheckIcon,
   TriangleAlertIcon,
 } from 'lucide-react'
@@ -250,6 +251,43 @@ function TurnOn() {
   )
 }
 
+/** Runs the start again, as after fixing what a problem names, then reads the status it reached. */
+function CheckAgain({ onChecked }: { onChecked: () => Promise<unknown> }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const check = async () => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      await api.action('tailscale', 'retry')
+      await onChecked()
+    } catch (failure) {
+      setError(errorMessage(failure))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <Button
+        className="mt-3 h-7 gap-1.5 px-2 font-mono text-[11.5px]"
+        disabled={busy}
+        onClick={() => void check()}
+        size="sm"
+        variant="outline"
+      >
+        {busy ? (
+          <LoaderCircleIcon className="size-3.5 animate-spin" />
+        ) : (
+          <RefreshCwIcon className="size-3.5" />
+        )}
+        Check again
+      </Button>
+      {error && <p className="mt-2 font-mono text-[11px] leading-snug text-error">{error}</p>}
+    </>
+  )
+}
+
 const quiet = (label: string) => (
   <span className="flex items-center gap-1.5 text-muted-foreground">
     <LoaderCircleIcon className="size-3 animate-spin" />
@@ -258,7 +296,7 @@ const quiet = (label: string) => (
 )
 
 function TailscalePanel() {
-  const { data, error } = useStatus()
+  const { data, error, refetch } = useStatus()
   const state = data?.state
   const meta =
     state === 'ready' ? (
@@ -287,6 +325,7 @@ function TailscalePanel() {
       {state === 'ready' && data?.url && <Ready allow={data.allow} url={data.url} />}
       {state === 'disabled' && <TurnOn />}
       {state && state in problems && <Trouble hint={data?.hint} state={state as Problem} />}
+      {(state === 'disabled' || (state && state in problems)) && <CheckAgain onChecked={refetch} />}
     </section>
   )
 }
