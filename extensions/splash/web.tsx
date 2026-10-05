@@ -234,7 +234,7 @@ function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
         const fade = [{ opacity: 1 }, { opacity: 0 }]
         if (still) exit.push(overlay.animate(fade, { duration: 180, fill: 'both' }))
         else if (signature)
-          // Hands over to the welcome: the name lifts away as the page beneath comes up.
+          // Hands over to onboarding's first page: the name lifts away as the page beneath comes up.
           exit.push(
             mark.animate(
               [
@@ -320,7 +320,7 @@ function Splash() {
     const release = shield(overlay.current)
     const current = play(overlay.current, still, release)
     show.current = current
-    // The first run plays the signature version, then hands over to onboarding's welcome.
+    // The first run plays the signature version, then hands over to onboarding's first page.
     let active = true
     api.action<{ firstRun?: boolean }>('onboarding', 'status').then(
       (status) => {

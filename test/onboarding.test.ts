@@ -237,7 +237,17 @@ it('applies the first run in one action: the checked extensions, the project cho
       server!.extensions.info().find((entry) => entry.name === name)?.enabled
     const apply = (args: unknown) =>
       post(server!, '/api/extensions/onboarding/actions/applyFirstRun', { args })
-    for (const args of [{}, { extensions: { plan: 'yes' } }, { extensions: {}, local: 1 }])
+    expect(
+      (await post(server, '/api/extensions/onboarding/actions/status', { args: {} })).data.result
+        .user,
+    ).toEqual({ enable: ['info', 'theme'], disable: ['plan'] })
+    for (const args of [
+      {},
+      { extensions: { plan: 'yes' } },
+      { extensions: {}, local: 1 },
+      { extensions: { '': true } },
+      { extensions: { ' ': false } },
+    ])
       expect((await apply(args)).status).toBe(500)
     expect(enabled('plan')).toBe(false)
     expect(enabled('info')).toBe(true)

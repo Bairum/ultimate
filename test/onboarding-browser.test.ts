@@ -32,20 +32,11 @@ async function openExtensions(page: Page) {
   await page.keyboard.press('Enter')
 }
 
-it('first run: page 1 waits for a live login, page 2 applies the extensions and the project choice', async (test) => {
-  const executablePath = await skipWithoutChromium(test)
-  if (!executablePath) return
-  const userHome = await temp('ultimate-onboarding-browser-')
-  const project = await projectWithSetup(userHome)
-  const server = await fauxServer({
-    ultimateRoot: resolve('.'),
-    projectRoot: project,
-    userHome,
-    home: join(userHome, 'state'),
-    localSetup: false,
-    firstRun: true,
-  })
-  // No provider is logged in, whatever this machine's Pi has, until the stub's API-key login completes.
+/**
+ * No provider is logged in, whatever this machine's Pi has, until the stub's API-key login completes; `configured`
+ * tells whether it has.
+ */
+function stubLogins(server: Awaited<ReturnType<typeof fauxServer>>) {
   const runtime = server.host.modelRuntime
   const stub = {
     id: 'stub',
@@ -66,6 +57,23 @@ it('first run: page 1 waits for a live login, page 2 applies the extensions and 
     configured = true
     return { type: 'api_key', key }
   })
+  return { configured: () => configured }
+}
+
+it('first run: page 1 waits for a live login, page 2 applies the extensions and the project choice', async (test) => {
+  const executablePath = await skipWithoutChromium(test)
+  if (!executablePath) return
+  const userHome = await temp('ultimate-onboarding-browser-')
+  const project = await projectWithSetup(userHome)
+  const server = await fauxServer({
+    ultimateRoot: resolve('.'),
+    projectRoot: project,
+    userHome,
+    home: join(userHome, 'state'),
+    localSetup: false,
+    firstRun: true,
+  })
+  const logins = stubLogins(server)
   const browser = await chromium.launch({ executablePath, headless: true })
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
@@ -74,9 +82,16 @@ it('first run: page 1 waits for a live login, page 2 applies the extensions and 
     const dialog = page.getByRole('dialog')
     const onboarding = dialog.filter({ hasText: 'ULTIMATE' })
     const proceed = onboarding.getByRole('button', { name: 'Continue' })
+    // As on a machine without the demo provider: the faux model is not available until a login.
+    await page.route('**/api/models', async (route) => {
+      const response = await route.fetch()
+      const models = (await response.json()) as { models: { available: boolean }[] }
+      if (!logins.configured()) for (const model of models.models) model.available = false
+      await route.fulfill({ response, json: models })
+    })
     await page.goto(server.url)
 
-    // Page 1: the model is there (faux), no provider is, so Continue waits.
+    // Page 1: neither a provider nor an available model, so Continue waits.
     await expect.poll(() => onboarding.getByText('Get ready').count(), timeout).toBe(1)
     await untilInput(page)
     await expect
@@ -85,7 +100,7 @@ it('first run: page 1 waits for a live login, page 2 applies the extensions and 
         timeout,
       )
       .toBe(1)
-    expect(await onboarding.getByText('faux-1').count()).toBe(1)
+    expect(await onboarding.getByText('faux-1 · needs its provider').count()).toBe(1)
     expect(await proceed.isDisabled()).toBe(true)
 
     // Logging in through the models login dialog checks the row live, and focus moves on to Continue.
@@ -98,7 +113,9 @@ it('first run: page 1 waits for a live login, page 2 applies the extensions and 
     await expect.poll(() => page.getByText('Logged in to Stub').count(), timeout).toBe(1)
     // The login dialog hides the page from role queries while it is open.
     await page.getByRole('button', { name: 'Done' }).click()
+    // Both rows check live: the provider, and its model now available.
     await expect.poll(() => onboarding.getByText('Connected · Stub').count(), timeout).toBe(1)
+    await expect.poll(() => onboarding.getByText('needs its provider').count(), timeout).toBe(0)
     expect(await proceed.isDisabled()).toBe(false)
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.textContent), timeout)
@@ -107,7 +124,8 @@ it('first run: page 1 waits for a live login, page 2 applies the extensions and 
 
     // Page 2: the recommended set, checked, and the project's setup with its chips and README behind a disclosure.
     await expect.poll(() => onboarding.getByText('Recommended extensions').count(), timeout).toBe(1)
-    const box = (name: string) => onboarding.getByRole('checkbox', { name, exact: true })
+    const box = (name: string) =>
+      onboarding.getByRole('checkbox', { name: new RegExp(`^${name} `) })
     for (const name of ['subagents', 'plan', 'automations', 'documents', 'tasks', 'info'])
       expect(await box(name).getAttribute('aria-checked')).toBe('true')
     const chips = onboarding.getByRole('list', { name: 'What it brings' })
@@ -119,11 +137,11 @@ it('first run: page 1 waits for a live login, page 2 applies the extensions and 
     await expect
       .poll(() => onboarding.getByText('Project setup for the browser test.').count(), timeout)
       .toBe(1)
-    expect(
-      await onboarding
-        .getByRole('switch', { name: "Use this project's setup" })
-        .getAttribute('aria-checked'),
-    ).toBe('true')
+    // Off to start with outside Ultimate's own clone.
+    const toggle = onboarding.getByRole('switch', { name: "Use this project's setup" })
+    expect(await toggle.getAttribute('aria-checked')).toBe('false')
+    await toggle.click()
+    expect(await toggle.getAttribute('aria-checked')).toBe('true')
 
     // automations needs subagents: unchecking subagents unchecks it, checking it checks subagents again.
     await box('subagents').click()
@@ -190,6 +208,98 @@ it('first run: page 1 waits for a live login, page 2 applies the extensions and 
   }
 }, 120000)
 
+it("first run: faux finishes page 1, the project's settings lock their rows while in use, and Back keeps the choices", async (test) => {
+  const executablePath = await skipWithoutChromium(test)
+  if (!executablePath) return
+  const userHome = await temp('ultimate-onboarding-locks-')
+  const project = await projectWithSetup(userHome)
+  await writeFile(
+    join(project, '.ultimate/settings.json'),
+    '{"extensions":{"enable":["plan"],"disable":["info"]}}',
+  )
+  const userFile = join(userHome, '.ultimate/settings.json')
+  await mkdir(join(userHome, '.ultimate'), { recursive: true })
+  await writeFile(userFile, '{"extensions":{"disable":["documents"]}}')
+  const server = await fauxServer({
+    ultimateRoot: resolve('.'),
+    projectRoot: project,
+    userHome,
+    home: join(userHome, 'state'),
+    localSetup: false,
+    firstRun: true,
+  })
+  stubLogins(server)
+  const browser = await chromium.launch({ executablePath, headless: true })
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    const onboarding = page.getByRole('dialog').filter({ hasText: 'ULTIMATE' })
+    const proceed = onboarding.getByRole('button', { name: 'Continue' })
+    await page.goto(server.url)
+
+    // With no login, the demo provider and its model finish page 1.
+    await expect.poll(() => onboarding.getByText('Demo provider · faux').count(), timeout).toBe(1)
+    await untilInput(page)
+    expect(await proceed.isDisabled()).toBe(false)
+    await proceed.click()
+
+    // The user's settings disable documents, so it starts unchecked; the project's setup starts off here.
+    await expect.poll(() => onboarding.getByText('Recommended extensions').count(), timeout).toBe(1)
+    const box = (name: string) =>
+      onboarding.getByRole('checkbox', { name: new RegExp(`^${name} `) })
+    const state = async (name: string) =>
+      `${await box(name).getAttribute('aria-checked')}${(await box(name).isDisabled()) ? ' locked' : ''}`
+    const toggle = onboarding.getByRole('switch', { name: "Use this project's setup" })
+    expect(await toggle.getAttribute('aria-checked')).toBe('false')
+    expect(await state('documents')).toBe('false')
+    expect(await state('plan')).toBe('true')
+    await box('plan').click()
+    expect(await state('plan')).toBe('false')
+
+    // While it is on, the rows its settings decide show its choice, locked; off, the user's own again.
+    await toggle.click()
+    expect(await state('plan')).toBe('true locked')
+    expect(await state('info')).toBe('false locked')
+    expect(
+      await onboarding.getByRole('checkbox', { name: /^plan .*on in this project$/ }).count(),
+    ).toBe(1)
+    expect(
+      await onboarding.getByRole('checkbox', { name: /^info .*off in this project$/ }).count(),
+    ).toBe(1)
+    await toggle.click()
+    expect(await state('plan')).toBe('false')
+    expect(await state('info')).toBe('true')
+    await toggle.click()
+
+    // Back and Continue keep every choice.
+    await onboarding.getByRole('button', { name: 'Back' }).click()
+    await expect.poll(() => onboarding.getByText('Get ready').count(), timeout).toBe(1)
+    await proceed.click()
+    await expect.poll(() => onboarding.getByText('Recommended extensions').count(), timeout).toBe(1)
+    expect(await toggle.getAttribute('aria-checked')).toBe('true')
+    expect(await state('plan')).toBe('true locked')
+    expect(await state('documents')).toBe('false')
+
+    // Continue saves the user's own choices underneath; the project's setup decides plan and info.
+    await proceed.click()
+    await expect.poll(() => onboarding.count(), timeout).toBe(0)
+    expect(JSON.parse(await readFile(userFile, 'utf8')).extensions).toEqual({
+      enable: ['subagents', 'automations', 'tasks', 'info'],
+      disable: ['documents'],
+    })
+    expect(projectDecision(project, userHome)).toBe(true)
+    const enabled = (name: string) =>
+      server.extensions.info().find((entry) => entry.name === name)?.enabled
+    expect(['plan', 'info', 'documents', 'tasks'].map(enabled)).toEqual([true, false, false, true])
+    expect(errors).toEqual([])
+  } finally {
+    vi.restoreAllMocks()
+    await browser.close()
+    await server.close()
+  }
+}, 120000)
+
 it('outside the first run, an undecided project setup asks with one compact card', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
@@ -221,8 +331,10 @@ it('outside the first run, an undecided project setup asks with one compact card
       .poll(() => card.getByText('Project setup for the browser test.').count(), timeout)
       .toBe(1)
 
-    // Not now keeps the global setup, remembered, so a reload does not ask again.
-    await card.getByRole('button', { name: 'Not now' }).click()
+    expect(await card.getByText('Runs its extensions on this machine').isVisible()).toBe(true)
+
+    // Keep global keeps the global setup, remembered, so a reload does not ask again.
+    await card.getByRole('button', { name: 'Keep global' }).click()
     await expect.poll(() => card.count(), timeout).toBe(0)
     expect(projectDecision(project, userHome)).toBe(false)
     await page.reload()

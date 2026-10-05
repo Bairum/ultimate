@@ -262,8 +262,8 @@ it('keeps the first-run page from keys and clicks while it covers, then hands it
     expect((await keys()).every((key) => key.covering)).toBe(true)
     expect(await welcome.count()).toBe(1)
 
-    // After the reveal it is still there, focused on its next action (Connect without a login on this machine,
-    // else Continue), and nothing recorded the first run as done.
+    // After the reveal it is still there, focused on Continue (the faux demo provider finishes page 1), and nothing
+    // recorded the first run as done.
     await page.waitForFunction(() => Reflect.has(window, 'releaseSlowpoke'))
     await page.evaluate(() => Reflect.get(window, 'releaseSlowpoke')())
     await splash.waitFor({ state: 'detached', ...timeout })
@@ -272,7 +272,7 @@ it('keeps the first-run page from keys and clicks while it covers, then hands it
       await welcome.evaluate((dialog) =>
         dialog.contains(document.activeElement) ? document.activeElement?.textContent : null,
       ),
-    ).toMatch(/^(Connect|Continue)$/)
+    ).toBe('Continue')
     expect(await firstRunDone()).toBe(false)
 
     // Now its keys reach it: Escape closes it and records the first run.

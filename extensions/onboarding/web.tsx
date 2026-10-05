@@ -52,7 +52,6 @@ function Onboarding() {
   return (
     <>
       <FirstRun
-        adds={status.data?.adds}
         askProject={undecided}
         onClosed={() => ui.focusComposer()}
         onDone={(skipped) => {
@@ -63,6 +62,7 @@ function Onboarding() {
           defer()
         }}
         open={firstRun}
+        status={status.data}
       />
       <ProjectCard
         adds={status.data?.adds}

@@ -97,21 +97,21 @@ async function adds(projectRoot: string) {
   })
     .skills.map((skill) => skill.name)
     .toSorted()
-  return { agents, skills, ...(await declared(projectRoot)) }
+  return { agents, skills, ...(await declared(join(projectRoot, '.ultimate/settings.json'))) }
 }
 
 const names = (value: unknown) =>
   Array.isArray(value) ? value.filter((name): name is string => typeof name === 'string') : []
 
 /**
- * The extension names a project's settings would enable or disable, read only to show them: the project's settings
- * apply once the project is chosen, so the host's gated settings are empty until then.
+ * The extension names a settings file enables and disables, read only to show them: a project's settings apply once
+ * the project is chosen, so the host's gated settings are empty until then.
  */
-async function declared(projectRoot: string) {
+async function declared(path: string) {
   try {
-    const { extensions } = JSON.parse(
-      await readFile(join(projectRoot, '.ultimate/settings.json'), 'utf8'),
-    ) as { extensions?: { enable?: unknown; disable?: unknown } }
+    const { extensions } = JSON.parse(await readFile(path, 'utf8')) as {
+      extensions?: { enable?: unknown; disable?: unknown }
+    }
     return { enable: names(extensions?.enable), disable: names(extensions?.disable) }
   } catch {
     return { enable: [], disable: [] }
@@ -126,6 +126,8 @@ export const actions = {
     return {
       firstRun: !existsSync(marker(host.userHome)),
       project: await host.projectSetup(),
+      // The user's own lists, for the first run's checkboxes.
+      user: await declared(join(host.userHome, '.ultimate/settings.json')),
       adds: {
         ...(await adds(host.projectRoot)),
         extensions: folders.filter((entry) => !entry.replaces).map((entry) => entry.name),
@@ -149,10 +151,14 @@ export const actions = {
       !choices ||
       typeof choices !== 'object' ||
       Array.isArray(choices) ||
-      Object.values(choices).some((enabled) => typeof enabled !== 'boolean') ||
+      Object.entries(choices).some(
+        ([name, enabled]) => !name.trim() || typeof enabled !== 'boolean',
+      ) ||
       ((args as JsonObject).local !== undefined && typeof (args as JsonObject).local !== 'boolean')
     )
-      throw new Error('Expected extensions as names to booleans, and local as a boolean if given')
+      throw new Error(
+        'Expected extensions as non-empty names to booleans, and local as a boolean if given',
+      )
     const { local } = args as { local?: boolean }
     await updateSettings(join(host.userHome, '.ultimate/settings.json'), (value) => {
       const extensions = lists(value)

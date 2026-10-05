@@ -12,7 +12,7 @@ import {
   SparklesIcon,
   XIcon,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { ComponentType, ReactNode, RefObject } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
@@ -34,11 +34,8 @@ import {
 import { Checkbox, Switch, message } from './parts.tsx'
 import type { Status } from './parts.tsx'
 
-/**
- * The extensions the first run recommends, all checked to start with; `needs` is checked along with it. The guide
- * keeps each line to a few words.
- */
-export const recommended: readonly { name: string; line: string; needs?: string }[] = [
+/** The extensions the first run recommends, a few words each; `needs` names one that must be on with it. */
+const recommended: readonly { name: string; line: string; needs?: string }[] = [
   { name: 'subagents', line: 'Hands bounded work to helper agents' },
   { name: 'plan', line: 'Durable epics and tasks for long work' },
   { name: 'automations', line: 'Prompts that run on a schedule', needs: 'subagents' },
@@ -216,7 +213,8 @@ function GetReady({
   const commands = useCommands()
   const ui = useUltimate()
   const has = (id: string) => commands.some((command) => command.id === id)
-  // The faux demo provider (`ULTIMATE_FAUX=1`) is always there and is no login; its model still counts.
+  // The faux demo provider (`ULTIMATE_FAUX=1`) is always there and is no login; it counts only while its model is
+  // the conversation's.
   const connected =
     models?.providers.filter((provider) => provider.status.configured && provider.id !== 'faux') ??
     []
@@ -226,7 +224,8 @@ function GetReady({
   )
   const thinking =
     model?.reasoning && agent.thinkingLevel !== 'off' ? agent.thinkingLevel : undefined
-  const done = { provider: connected.length > 0, model: model?.available === true }
+  const demo = model?.available === true && model.provider === 'faux'
+  const done = { provider: connected.length > 0 || demo, model: model?.available === true }
   const next = !done.provider ? 'provider' : !done.model ? 'model' : 'continue'
   // Focus goes to the next thing to do when the login or the picker closes (they return it to no trigger), and when
   // a step gets done while focus is on this page.
@@ -262,22 +261,28 @@ function GetReady({
         title="Get ready"
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pt-5 pb-6 sm:px-7">
-        <ul className="divide-y divide-border/70 rounded-lg border border-border/70 bg-card">
+        {/* Live, so a finished login or a chosen model is announced. */}
+        <ul
+          aria-live="polite"
+          className="divide-y divide-border/70 rounded-lg border border-border/70 bg-card"
+        >
           <Step
             checking={!models}
             done={done.provider}
             state={
               !models
                 ? 'Checking…'
-                : done.provider
+                : connected.length > 0
                   ? `Connected · ${connected.map((provider) => provider.name).join(', ')}`
-                  : has('auth.login')
-                    ? 'A subscription or API key, shared with Pi'
-                    : 'Turn on models to log in here'
+                  : demo
+                    ? 'Demo provider · faux'
+                    : has('auth.login')
+                      ? 'A subscription or API key, shared with Pi'
+                      : 'Turn on models to log in here'
             }
             title="Connect a model provider"
           >
-            {action('provider', done.provider ? 'Manage' : 'Connect', 'auth.login')}
+            {action('provider', connected.length > 0 ? 'Manage' : 'Connect', 'auth.login')}
           </Step>
           <Step
             checking={!models || loading}
@@ -448,65 +453,99 @@ function FolderPath() {
   )
 }
 
-/** The hint on an extension that turns another on with it. */
-function Needs({ name, className }: { name: string; className?: string }) {
+/** A row's short note: what it needs, or that the project's setup decides it. */
+function Hint({ text, className }: { text: string; className?: string }) {
   return (
     <span className={cn('shrink-0 font-mono text-[10.5px] text-muted-foreground/70', className)}>
-      needs {name}
+      {text}
     </span>
   )
 }
 
+/** One recommended extension; `locked`, the project's setup's state for it, shows in place of the user's choice. */
+function Choice({
+  entry,
+  checked,
+  locked,
+  onChange,
+}: {
+  entry: (typeof recommended)[number]
+  checked: boolean
+  locked?: boolean
+  onChange: (checked: boolean) => void
+}) {
+  const id = useId()
+  const hint =
+    locked === undefined
+      ? entry.needs && `needs ${entry.needs}`
+      : `${locked ? 'on' : 'off'} in this project`
+  return (
+    <li>
+      <label
+        className={cn(
+          'flex items-center gap-3 px-4 py-2.5 transition-colors',
+          locked === undefined ? 'cursor-pointer hover:bg-accent/40' : 'cursor-default',
+        )}
+        id={id}
+      >
+        <Checkbox
+          checked={locked ?? checked}
+          disabled={locked !== undefined}
+          labelledBy={id}
+          onChange={onChange}
+        />
+        {/* Narrow, the line goes under the name. */}
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-3">
+          <span className="flex shrink-0 items-baseline gap-2 sm:w-24">
+            <span className="font-mono text-[12.5px] text-foreground/90">{entry.name}</span>
+            {hint && <Hint className="sm:hidden" text={hint} />}
+          </span>
+          <span className="min-w-0 truncate text-[12.5px] text-muted-foreground">{entry.line}</span>
+        </span>
+        {hint && <Hint className="hidden sm:inline" text={hint} />}
+      </label>
+    </li>
+  )
+}
+
 /**
- * Page 2: the recommended extensions as checkboxes and, for a folder with an undecided setup, whether to use it.
- * Continue applies it all at once with `applyFirstRun`; Skip keeps the defaults.
+ * Page 2: the recommended extensions as checkboxes and, for a folder with an undecided setup, whether to use it. While
+ * it is in use, the rows its settings decide show its choice, locked; the user's own stays underneath.
  */
 function Recommended({
   adds,
   askProject,
+  checked,
+  onCheck,
+  local,
+  onLocal,
+  busy,
+  error,
   primary,
   onBack,
   onSkip,
-  onDone,
+  onApply,
 }: {
   adds?: Status['adds']
   askProject: boolean
+  checked: Record<string, boolean>
+  onCheck: (name: string, checked: boolean) => void
+  local: boolean
+  onLocal: (local: boolean) => void
+  busy: boolean
+  error?: string
   primary: RefObject<HTMLButtonElement | null>
   onBack: () => void
   onSkip: () => void
-  onDone: () => void
+  onApply: () => void
 }) {
   const system = useSystem()
-  const [checked, setChecked] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(recommended.map((entry) => [entry.name, true])),
-  )
-  // Kept as it was when the page opened, so the question stays while its answer applies.
-  const [asked] = useState(askProject)
-  const [local, setLocal] = useState(true)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string>()
-  const set = (name: string, on: boolean) =>
-    setChecked((previous) => {
-      const next = { ...previous, [name]: on }
-      for (const entry of recommended) {
-        if (on && entry.name === name && entry.needs) next[entry.needs] = true
-        if (!on && entry.needs === name) next[entry.name] = false
-      }
-      return next
-    })
-  const apply = async () => {
-    setBusy(true)
-    setError(undefined)
-    try {
-      await api.action('onboarding', 'applyFirstRun', {
-        extensions: checked,
-        ...(asked ? { local } : {}),
-      })
-      onDone()
-    } catch (failure) {
-      setError(message(failure))
-      setBusy(false)
-    }
+  const locked = (name: string) => {
+    if (!askProject || !local || !adds) return undefined
+    if (adds.disable.includes(name)) return false
+    if ([adds.enable, adds.extensions, adds.replaces].some((names) => names.includes(name)))
+      return true
+    return undefined
   }
   return (
     <>
@@ -518,41 +557,30 @@ function Recommended({
       <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 pt-5 pb-6 sm:px-7">
         <ul className="divide-y divide-border/70 rounded-lg border border-border/70 bg-card">
           {recommended.map((entry) => (
-            <li key={entry.name}>
-              <label className="flex cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors hover:bg-accent/40">
-                <Checkbox
-                  checked={checked[entry.name] ?? false}
-                  label={entry.name}
-                  onChange={(on) => set(entry.name, on)}
-                />
-                {/* Narrow, the line goes under the name. */}
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-3">
-                  <span className="flex shrink-0 items-baseline gap-2 sm:w-24">
-                    <span className="font-mono text-[12.5px] text-foreground/90">{entry.name}</span>
-                    {entry.needs && <Needs className="sm:hidden" name={entry.needs} />}
-                  </span>
-                  <span className="min-w-0 truncate text-[12.5px] text-muted-foreground">
-                    {entry.line}
-                  </span>
-                </span>
-                {entry.needs && <Needs className="hidden sm:inline" name={entry.needs} />}
-              </label>
-            </li>
+            <Choice
+              checked={checked[entry.name] ?? false}
+              entry={entry}
+              key={entry.name}
+              locked={locked(entry.name)}
+              onChange={(on) => onCheck(entry.name, on)}
+            />
           ))}
         </ul>
-        {asked && system && (
+        {askProject && system && (
           <section
             aria-label="This folder"
             className="flex flex-col gap-3 rounded-lg border border-border/70 bg-card px-4 py-3"
           >
             <label className="flex cursor-pointer items-start gap-3">
-              <span className="flex min-w-0 flex-1 flex-col gap-1">
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="text-[13.5px] font-medium text-foreground">
                   Use this project's setup
                 </span>
-                <FolderPath />
+                <span className="text-[12px] text-muted-foreground">
+                  Runs its extensions on this machine
+                </span>
               </span>
-              <Switch checked={local} label="Use this project's setup" onChange={setLocal} />
+              <Switch checked={local} label="Use this project's setup" onChange={onLocal} />
             </label>
             <SetupChips adds={adds} />
             <WhatsInIt readme={system.project.readme} />
@@ -573,7 +601,7 @@ function Recommended({
         <Button disabled={busy} onClick={onSkip} size="sm" variant="ghost">
           Skip
         </Button>
-        <Button disabled={busy} onClick={() => void apply()} ref={primary} size="sm">
+        <Button disabled={busy} onClick={onApply} ref={primary} size="sm">
           {busy && <LoaderCircleIcon className="animate-spin" />}
           Continue
           {!busy && <ArrowRightIcon />}
@@ -585,23 +613,61 @@ function Recommended({
 
 /**
  * The first run, two pages in one dialog: what Ultimate needs (page 1), then the recommended extensions (page 2).
- * `onDone` reports whether it was skipped, by Escape, the close button, or Skip.
+ * Continue on page 2 applies its choices at once with `applyFirstRun`. `onDone` reports whether it was skipped, by
+ * Escape, the close button, or Skip; none of them interrupts Continue.
  */
 export function FirstRun({
   open,
-  adds,
+  status,
   askProject,
   onDone,
   onClosed,
 }: {
   open: boolean
-  adds?: Status['adds']
+  status?: Status
   /** The folder has a setup and no decision yet: page 2 asks whether to use it. */
   askProject: boolean
   onDone: (skipped: boolean) => void
   onClosed: () => void
 }) {
+  const system = useSystem()
   const [page, setPage] = useState<1 | 2>(1)
+  // Page 2's choices live here, so Back keeps them: the checkboxes the user changed, and the project toggle, on to
+  // start with only in Ultimate's own clone.
+  const [changed, setChanged] = useState<Record<string, boolean>>({})
+  const [local, setLocal] = useState(
+    () => system !== undefined && system.project.root === system.code.ultimateRoot,
+  )
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  // Each starts checked unless the user's settings turn it off.
+  const checked = Object.fromEntries(
+    recommended.map(({ name }) => [name, changed[name] ?? !status?.user.disable.includes(name)]),
+  )
+  const check = (name: string, on: boolean) => {
+    const next = { ...checked, [name]: on }
+    for (const entry of recommended) {
+      if (on && entry.name === name && entry.needs) next[entry.needs] = true
+      if (!on && entry.needs === name) next[entry.name] = false
+    }
+    setChanged(next)
+  }
+  // The question stays while its answer applies, after which the folder is no longer undecided.
+  const asking = askProject || busy
+  const apply = async () => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      await api.action('onboarding', 'applyFirstRun', {
+        extensions: checked,
+        ...(askProject ? { local } : {}),
+      })
+      onDone(false)
+    } catch (failure) {
+      setError(message(failure))
+      setBusy(false)
+    }
+  }
   // The page's next thing to do: the step to finish, or Continue.
   const primary = useRef<HTMLButtonElement>(null)
   const shown = useRef(page)
@@ -610,17 +676,25 @@ export function FirstRun({
     shown.current = page
     primary.current?.focus()
   }, [page])
-  const skip = () => onDone(true)
+  const skip = () => {
+    if (!busy) onDone(true)
+  }
   return (
     <Page focus={primary} onClose={skip} onClosed={onClosed} open={open}>
       {page === 1 ? (
         <GetReady onContinue={() => setPage(2)} onSkip={skip} primary={primary} />
       ) : (
         <Recommended
-          adds={adds}
-          askProject={askProject}
+          adds={status?.adds}
+          askProject={asking}
+          busy={busy}
+          checked={checked}
+          error={error}
+          local={local}
+          onApply={() => void apply()}
           onBack={() => setPage(1)}
-          onDone={() => onDone(false)}
+          onCheck={check}
+          onLocal={setLocal}
           onSkip={skip}
           primary={primary}
         />
@@ -686,8 +760,8 @@ export function ProjectCard({
         <DialogTitle className="text-[17px] font-semibold tracking-tight text-foreground">
           Use this project's setup?
         </DialogTitle>
-        <DialogDescription className="sr-only">
-          Its extensions run code on this machine, so it stays off until you choose it.
+        <DialogDescription className="-mt-2 text-[12.5px] text-muted-foreground">
+          Runs its extensions on this machine
         </DialogDescription>
         <SetupChips adds={adds} />
         <WhatsInIt readme={project.readme} />
@@ -707,14 +781,9 @@ export function ProjectCard({
           variant="outline"
         >
           {choice(false)}
-          Not now
+          Keep global
         </Button>
-        <Button
-          disabled={busy !== undefined}
-          onClick={() => void decide(true)}
-          size="sm"
-          title="Its extensions run on this machine"
-        >
+        <Button disabled={busy !== undefined} onClick={() => void decide(true)} size="sm">
           {choice(true)}
           Use it
         </Button>

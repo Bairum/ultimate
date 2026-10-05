@@ -11,6 +11,8 @@ import type { ExtensionInfo, SystemInfo } from '@/sdk'
  */
 export interface Status {
   firstRun: boolean
+  /** What `~/.ultimate/settings.json` enables and disables. */
+  user: { enable: string[]; disable: string[] }
   adds: {
     agents: string[]
     skills: string[]
@@ -29,7 +31,7 @@ interface Described {
   replaces?: 'builtin'
 }
 
-/** The dialog id of the project page; the Extensions panel opens it again. */
+/** The dialog id of the project card; the Extensions panel opens it again. */
 export const projectDialog = 'onboarding.project'
 
 export const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -218,24 +220,30 @@ export function Segmented<T extends string>({
   )
 }
 
-/** A checkbox in the brand colour; inside a `<label>`, the whole row toggles it. */
+/**
+ * A checkbox in the brand colour, named by the element `labelledBy` names; inside a `<label>`, the whole row toggles
+ * it.
+ */
 export function Checkbox({
   checked,
   onChange,
-  label,
+  labelledBy,
+  disabled,
 }: {
   checked: boolean
   onChange: (checked: boolean) => void
-  label?: string
+  labelledBy: string
+  disabled?: boolean
 }) {
   return (
     <button
       aria-checked={checked}
-      aria-label={label}
+      aria-labelledby={labelledBy}
       className={cn(
-        'grid size-4 shrink-0 place-items-center rounded-[4px] border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'grid size-4 shrink-0 place-items-center rounded-[4px] border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50',
         checked ? 'border-brand bg-brand text-brand-foreground' : 'border-input bg-background',
       )}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
       role="checkbox"
       type="button"

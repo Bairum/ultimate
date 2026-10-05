@@ -25,7 +25,7 @@ app comes up once the page is ready.
 While it covers, nothing reaches what is beneath, a dialog included. The overlay takes the clicks, even when a modal
 dialog sets `pointer-events: none` on the body. It holds focus and takes every key in the window's capture phase, ahead
 of a dialog's Escape and of the shell's shortcuts, which start with the app once ready, after the splash. Focus the
-app asks for meanwhile, such as the composer's or the first-run welcome's, is remembered and handed back as the
+app asks for meanwhile, such as the composer's or onboarding's first page's, is remembered and handed back as the
 overlay fades, when the app takes input again.
 
 The overlay is a `progressbar` labelled "Loading Ultimate", `aria-busy` and `aria-live="polite"`; the drawing itself
