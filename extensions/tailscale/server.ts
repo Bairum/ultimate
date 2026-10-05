@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { acquireLock, alive } from '../../server/lock.ts'
 import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { join } from 'node:path'
@@ -27,6 +29,20 @@ interface Serve {
   Web?: Record<string, { Handlers?: Record<string, { Proxy?: string }> }>
   AllowFunnel?: Record<string, boolean>
 }
+function target(serve: Serve, dns: string, port: number) {
+  const authority = `${dns}:${port}`
+  const handlers = serve.Web?.[authority]?.Handlers
+  const proxy = handlers?.['/']?.Proxy
+  if (
+    serve.AllowFunnel?.[authority] ||
+    Object.keys(handlers ?? {}).length !== 1 ||
+    Object.keys(serve.Web ?? {}).some(
+      (key) => key !== authority && Number(key.split(':').at(-1)) === port,
+    )
+  )
+    return undefined
+  return proxy && /^http:\/\/127\.0\.0\.1:\d+$/.test(proxy) ? proxy : undefined
+}
 export const reloadOnSettings = true
 const run = promisify(execFile)
 const statuses = new WeakMap<ExtensionHost, Status>()
@@ -39,6 +55,10 @@ export default function tailscale(host: ExtensionHost) {
   let status: Status = { state: 'disabled', allow: [] }
   let cli = 'tailscale'
   let ownedPort: number | undefined
+  let localTarget: string | undefined
+  let dnsName: string | undefined
+  const ownerToken = `${process.pid}:${randomUUID()}`
+  const registryPath = join(host.userHome, '.ultimate/tailscale.json')
   let remove: (() => void) | undefined
   let opening: Promise<void> | undefined
   let closed = false
@@ -50,6 +70,43 @@ export default function tailscale(host: ExtensionHost) {
   const fail = (state: Status['state'], hint: string) => {
     set({ state, allow: status.allow, hint })
     host.notice(`Tailscale: ${hint}`)
+  }
+  async function withRegistry<T>(
+    use: (value: { ports: Record<string, { port: number; owner: string }> }) => Promise<T>,
+  ) {
+    await mkdir(join(host.userHome, '.ultimate'), { recursive: true })
+    const lock = await acquireLock(registryPath + '.lock', { pid: process.pid }, 120000)
+    try {
+      let value: { ports: Record<string, { port: number; owner: string }> } = { ports: {} }
+      try {
+        value = JSON.parse(await readFile(registryPath, 'utf8'))
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+      if (
+        !value.ports ||
+        Object.values(value.ports).some(
+          (entry) =>
+            !Number.isInteger(entry.port) ||
+            entry.port < 1 ||
+            entry.port > 65535 ||
+            entry.port === 443 ||
+            !/^\d+:.+/.test(entry.owner),
+        )
+      )
+        throw new Error('Invalid ~/.ultimate/tailscale.json port registry')
+      const result = await use(value)
+      const temporary = `${registryPath}.${process.pid}.tmp`
+      try {
+        await writeFile(temporary, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 })
+        await rename(temporary, registryPath)
+      } finally {
+        await rm(temporary, { force: true })
+      }
+      return result
+    } finally {
+      await lock.close()
+    }
   }
   async function start() {
     if (ownedPort !== undefined || closed) return
@@ -112,54 +169,35 @@ export default function tailscale(host: ExtensionHost) {
         return
       }
       const localPort = Number(new URL(host.system().process.url).port || '80')
-      const directory = join(host.userHome, '.ultimate')
-      const registryPath = join(directory, 'tailscale.json')
-      const lock = registryPath + '.lock'
-      await mkdir(directory, { recursive: true })
-      const deadline = Date.now() + 10000
-      for (;;) {
-        try {
-          await mkdir(lock)
-          break
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-          if (Date.now() >= deadline)
-            throw new Error(`Port registry is busy; if no Ultimate is starting, remove ${lock}`, {
-              cause: error,
-            })
-          await new Promise((resolve) => setTimeout(resolve, 50))
-        }
-      }
-      try {
-        let registry: { ports: Record<string, number> } = { ports: {} }
-        try {
-          registry = JSON.parse(await readFile(registryPath, 'utf8'))
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-        }
-        if (
-          !registry.ports ||
-          Object.values(registry.ports).some(
-            (port) => !Number.isInteger(port) || port < 1 || port > 65535 || port === 443,
-          )
-        )
-          throw new Error('Invalid ~/.ultimate/tailscale.json port registry')
+      await withRegistry(async (registry) => {
         const serve = JSON.parse((await command(['serve', 'status', '--json'])).stdout) as Serve
+        const live = new Set(
+          (await host.projects()).flatMap((project) =>
+            project.running ? [project.running.url] : [],
+          ),
+        )
+        live.add(host.system().process.url)
+        for (const entry of Object.values(registry.ports)) {
+          const proxy = target(serve, dns, entry.port)
+          if (proxy && (!alive(Number(entry.owner.split(':')[0])) || !live.has(proxy))) {
+            await command(['serve', `--https=${entry.port}`, 'off'])
+            delete serve.Web?.[`${dns}:${entry.port}`]
+            delete serve.TCP?.[String(entry.port)]
+          }
+        }
         const used = new Set([
           443,
-          ...Object.values(registry.ports),
+          ...Object.values(registry.ports).map((entry) => entry.port),
           ...Object.keys(serve.TCP ?? {}).map(Number),
           ...Object.keys(serve.Web ?? {}).map((authority) => Number(authority.split(':').at(-1))),
         ])
-        let port = registry.ports[host.projectRoot]
+        let port = registry.ports[host.projectRoot]?.port
         if (port !== undefined) {
           const mapping = serve.Web?.[`${dns}:${port}`]
-          const handlers = mapping?.Handlers
-          const proxy = handlers?.['/']?.Proxy
-          const ownTarget = proxy && /^http:\/\/127\.0\.0\.1:\d+$/.test(proxy)
+          const ownTarget = target(serve, dns, port)
           if (
             Object.entries(registry.ports).some(
-              ([root, assigned]) => root !== host.projectRoot && assigned === port,
+              ([root, assigned]) => root !== host.projectRoot && assigned.port === port,
             ) ||
             Object.keys(serve.Web ?? {}).some(
               (authority) =>
@@ -167,7 +205,7 @@ export default function tailscale(host: ExtensionHost) {
             ) ||
             serve.AllowFunnel?.[`${dns}:${port}`] ||
             (serve.TCP?.[String(port)] && !mapping) ||
-            (mapping && (!ownTarget || Object.keys(handlers ?? {}).length !== 1))
+            (mapping && !ownTarget)
           ) {
             fail(
               'port-conflict',
@@ -182,14 +220,6 @@ export default function tailscale(host: ExtensionHost) {
             fail('port-conflict', 'No free HTTPS port; free an unused Serve port.')
             return
           }
-          registry.ports[host.projectRoot] = port
-          const temporary = `${registryPath}.${process.pid}.tmp`
-          try {
-            await writeFile(temporary, JSON.stringify(registry, null, 2) + '\n', { mode: 0o600 })
-            await rename(temporary, registryPath)
-          } finally {
-            await rm(temporary, { force: true })
-          }
         }
         await command([
           'serve',
@@ -198,7 +228,10 @@ export default function tailscale(host: ExtensionHost) {
           `--https=${port}`,
           `http://127.0.0.1:${localPort}`,
         ])
+        registry.ports[host.projectRoot] = { port, owner: ownerToken }
         ownedPort = port
+        localTarget = `http://127.0.0.1:${localPort}`
+        dnsName = dns
         const url = `https://${dns}:${port}`
         remove = host.access.allow({
           origin: url,
@@ -208,14 +241,13 @@ export default function tailscale(host: ExtensionHost) {
           },
         })
         set({ state: 'ready', url, allow })
-      } finally {
-        await rm(lock, { recursive: true, force: true })
-      }
+      })
     } catch (error) {
-      const message = String((error as { stderr?: string }).stderr || error)
-      if (/permission|access denied|not permitted|operator/i.test(message))
+      const stderr = (error as { stderr?: string }).stderr ?? ''
+      const message = String(stderr || error)
+      if (/permission|access denied|not permitted|operator/i.test(stderr))
         fail('not-operator', 'Grant operator rights: sudo tailscale set --operator=$USER')
-      else if (/not running|logged out|failed to connect|needslogin/i.test(message))
+      else if (/not running|logged out|failed to connect|needslogin/i.test(stderr))
         fail('not-running', 'Start Tailscale and log in (tailscale up).')
       else fail('error', message.slice(0, 500))
     }
@@ -226,7 +258,17 @@ export default function tailscale(host: ExtensionHost) {
     await opening
     remove?.()
     if (ownedPort !== undefined) {
-      await command(['serve', `--https=${ownedPort}`, 'off'])
+      try {
+        await withRegistry(async (value) => {
+          if (value.ports[host.projectRoot]?.owner !== ownerToken) return
+          const serve = JSON.parse((await command(['serve', 'status', '--json'])).stdout) as Serve
+          if (target(serve, dnsName!, ownedPort!) === localTarget)
+            await command(['serve', `--https=${ownedPort}`, 'off'])
+        })
+      } catch (error) {
+        fail('error', `Could not remove Serve mapping: ${String(error)}`)
+        return
+      }
       ownedPort = undefined
     }
     set({ state: 'disabled', allow: status.allow })

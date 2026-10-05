@@ -39,6 +39,14 @@ const config = JSON.parse(fs.readFileSync(${JSON.stringify(config)}, 'utf8'));
 if (config.error && (!config.errorOn || args.join(' ') === config.errorOn)) { console.error(config.error); process.exit(1); }
 if (args[0] === 'status') console.log(JSON.stringify(config.node));
 else if (args.join(' ') === 'serve status --json') console.log(JSON.stringify(config.serve));
+else if (args[0] === 'serve') {
+  const port = args.find(arg => arg.startsWith('--https=')).split('=')[1];
+  const authority = 'rog.example.ts.net:' + port;
+  config.serve.Web ??= {}; config.serve.TCP ??= {};
+  if (args.includes('off')) { delete config.serve.Web[authority]; delete config.serve.TCP[port]; }
+  else { config.serve.Web[authority] = { Handlers: { '/': { Proxy: args.at(-1) } } }; config.serve.TCP[port] = { HTTPS: true }; }
+  fs.writeFileSync(${JSON.stringify(config)}, JSON.stringify(config));
+}
 `,
   )
   await chmod(script, 0o755)
@@ -54,7 +62,10 @@ else if (args.join(' ') === 'serve status --json') console.log(JSON.stringify(co
       return []
     }
   }
+  const live = new Set<string>()
   async function instance(projectRoot = '/project/a', localPort = 4747) {
+    const url = `http://127.0.0.1:${localPort}`
+    live.add(url)
     const openers: (() => Promise<void>)[] = []
     const cleanups: (() => Promise<void>)[] = []
     const notices: string[] = []
@@ -62,6 +73,7 @@ else if (args.join(' ') === 'serve status --json') console.log(JSON.stringify(co
     const host = {
       userHome: home,
       projectRoot,
+      projects: async () => [...live].map((liveUrl) => ({ running: { url: liveUrl } })),
       access,
       notice: (message: string) => notices.push(message),
       system: () => ({ process: { url: `http://127.0.0.1:${localPort}` } }),
@@ -74,6 +86,7 @@ else if (args.join(' ') === 'serve status --json') console.log(JSON.stringify(co
       if (closed) return
       closed = true
       for (const fn of cleanups) await fn()
+      live.delete(url)
     }
     closes.push(close)
     await Promise.all(openers.map((fn) => fn()))
@@ -95,6 +108,8 @@ it('applies user-only settings through the real loader and tears down on live se
   await mkdir(join(repo, 'web'), { recursive: true })
   await mkdir(join(repo, '.ultimate'), { recursive: true })
   await cp(resolve('extensions/tailscale'), join(repo, 'extensions/tailscale'), { recursive: true })
+  await mkdir(join(repo, 'server'))
+  await cp(resolve('server/lock.ts'), join(repo, 'server/lock.ts'))
   await linkDependencies(repo)
   await writeFile(
     join(repo, 'vite.config.ts'),
@@ -175,7 +190,7 @@ it('serves, verifies the owner login by default, and tears down only its port', 
   expect(await f.invocations()).toContainEqual(['serve', '--https=4747', 'off'])
   expect(
     JSON.parse(await readFile(join(f.home, '.ultimate/tailscale.json'), 'utf8')).ports,
-  ).toEqual({ '/project/a': 4747 })
+  ).toEqual({ '/project/a': { port: 4747, owner: expect.stringMatching(/^\d+:/) } })
 })
 it('assigns distinct stable ports to two projects even when local ports change', async () => {
   const f = await fixture()
@@ -208,7 +223,7 @@ it('replaces a stale own loopback mapping and leaves foreign mappings untouched'
   const f = await fixture(undefined, { serve })
   await writeFile(
     join(f.home, '.ultimate/tailscale.json'),
-    JSON.stringify({ ports: { '/project/a': 4747 } }),
+    JSON.stringify({ ports: { '/project/a': { port: 4747, owner: `${process.pid}:previous` } } }),
   )
   const app = await f.instance('/project/a', 4750)
   expect((await app.status()).state).toBe('ready')
@@ -230,7 +245,7 @@ it('skips foreign ports for new projects and refuses foreign targets on existing
   await newApp.close()
   await writeFile(
     join(f.home, '.ultimate/tailscale.json'),
-    JSON.stringify({ ports: { '/project/a': 4747 } }),
+    JSON.stringify({ ports: { '/project/a': { port: 4747, owner: `${process.pid}:previous` } } }),
   )
   const app = await f.instance()
   expect(await app.status()).toMatchObject({
@@ -278,4 +293,57 @@ it('reads the explicit allowlist only from user settings', async () => {
   })
   const app = await f.instance()
   expect((await app.status()).allow).toEqual(['explicit@example.com'])
+})
+it('hands ownership to an overlapping successor and does not remove foreign replacements', async () => {
+  const f = await fixture()
+  const old = await f.instance('/project/a', 4747)
+  const next = await f.instance('/project/a', 4750)
+  await old.close()
+  expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(0)
+  const config = JSON.parse(await readFile(f.config, 'utf8'))
+  expect(config.serve.Web['rog.example.ts.net:4747'].Handlers['/'].Proxy).toBe(
+    'http://127.0.0.1:4750',
+  )
+  config.serve.Web['rog.example.ts.net:4747'].Handlers['/'].Proxy = 'http://foreign.example:9000'
+  await writeFile(f.config, JSON.stringify(config))
+  await next.close()
+  expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(0)
+})
+it('recovers dead registry owners and leaves unowned mappings intact', async () => {
+  const f = await fixture(undefined, {
+    serve: {
+      Web: {
+        'rog.example.ts.net:4748': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4998' } } },
+        'rog.example.ts.net:4749': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4999' } } },
+      },
+    },
+  })
+  await writeFile(
+    join(f.home, '.ultimate/tailscale.json'),
+    JSON.stringify({ ports: { '/dead': { port: 4748, owner: '2147483647:dead' } } }),
+  )
+  await writeFile(
+    join(f.home, '.ultimate/tailscale.json.lock'),
+    JSON.stringify({ pid: 2147483647 }),
+  )
+  const app = await f.instance()
+  expect((await app.status()).state).toBe('ready')
+  expect(await f.invocations()).toContainEqual(['serve', '--https=4748', 'off'])
+  expect((await f.invocations()).filter((args) => args.includes('--https=4749'))).toEqual([])
+})
+it('reports failed teardown without throwing and classifies filesystem failures as errors', async () => {
+  const f = await fixture()
+  const app = await f.instance()
+  const config = JSON.parse(await readFile(f.config, 'utf8'))
+  config.error = 'off failed'
+  config.errorOn = 'serve --https=4747 off'
+  await writeFile(f.config, JSON.stringify(config))
+  await expect(app.close()).resolves.toBeUndefined()
+  expect(await app.status()).toMatchObject({
+    state: 'error',
+    hint: expect.stringContaining('Could not remove'),
+  })
+  await writeFile(join(f.home, '.ultimate/tailscale.json'), '{permission denied')
+  const invalid = await f.instance('/new', 4751)
+  expect((await invalid.status()).state).toBe('error')
 })
