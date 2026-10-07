@@ -26,6 +26,7 @@ import {
   cn,
   elidePath,
   errorMessage,
+  events,
   shortenPath,
   useCommands,
   useConversation,
@@ -36,7 +37,10 @@ import {
 } from '@/sdk'
 import type { Status } from './parts.tsx'
 
-/** The extensions the first run recommends, a few words each; `needs` names one that must be on with it. */
+/**
+ * The extensions the first run recommends, a few words each; `needs` names one that must be on with it, turned on
+ * with it when it is not in the list itself.
+ */
 const recommended: readonly { name: string; line: string; needs?: string }[] = [
   { name: 'subagents', line: 'Hands bounded work to helper agents' },
   { name: 'plan', line: 'Durable epics and tasks for long work' },
@@ -44,6 +48,7 @@ const recommended: readonly { name: string; line: string; needs?: string }[] = [
   { name: 'documents', line: 'Extension state in the right panel' },
   { name: 'tasks', line: 'What runs right now, live' },
   { name: 'info', line: 'Machine, code, and extensions at a glance' },
+  { name: 'parallel', line: 'Web search and fetch (parallel.ai)', needs: 'secrets' },
 ]
 
 /**
@@ -637,6 +642,7 @@ export function FirstRun({
   onClosed: () => void
 }) {
   const system = useSystem()
+  const commands = useCommands()
   const [page, setPage] = useState<1 | 2>(1)
   // Page 2's choices live here, so Back keeps them: the checkboxes the user changed, and the project toggle, on to
   // start with only in Ultimate's own clone.
@@ -660,14 +666,36 @@ export function FirstRun({
   }
   // The question stays while its answer applies, after which the folder is no longer undecided.
   const asking = askProject || busy
+  // With web search on, its key comes next: once the page has gone and the Secrets panel has loaded, it opens at
+  // PARALLEL_API_KEY if that is declared (parallel runs, which the project's setup may prevent) and missing.
+  const [handoff, setHandoff] = useState<'applied' | 'closed'>()
+  const secrets = commands.some((command) => command.id === 'secrets.panel')
+  useEffect(() => {
+    if (handoff !== 'closed' || !secrets) return
+    setHandoff(undefined)
+    void api
+      .action('secrets', 'list')
+      .then((list) => {
+        const key = (list as { name: string; set: boolean }[]).find(
+          (secret) => secret.name === 'PARALLEL_API_KEY',
+        )
+        if (key && !key.set) events.emit('secrets:open', { name: 'PARALLEL_API_KEY' })
+      })
+      .catch(() => {})
+  }, [handoff, secrets])
   const apply = async () => {
     setBusy(true)
     setError(undefined)
+    const extensions: Record<string, boolean> = { ...checked }
+    for (const entry of recommended)
+      if (entry.needs && checked[entry.name] && !(entry.needs in checked))
+        extensions[entry.needs] = true
     try {
       await api.action('onboarding', 'applyFirstRun', {
-        extensions: checked,
+        extensions,
         ...(askProject ? { local } : {}),
       })
+      if (checked.parallel) setHandoff('applied')
       onDone(false)
     } catch (failure) {
       setError(errorMessage(failure))
@@ -686,7 +714,15 @@ export function FirstRun({
     if (!busy) onDone(true)
   }
   return (
-    <Page focus={primary} onClose={skip} onClosed={onClosed} open={open}>
+    <Page
+      focus={primary}
+      onClose={skip}
+      onClosed={() => {
+        onClosed()
+        setHandoff((step) => step && 'closed')
+      }}
+      open={open}
+    >
       {page === 1 ? (
         <GetReady onContinue={() => setPage(2)} onSkip={skip} primary={primary} />
       ) : (

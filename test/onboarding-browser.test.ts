@@ -126,7 +126,15 @@ it('first run: page 1 waits for a live login, page 2 applies the extensions and 
     await expect.poll(() => onboarding.getByText('Recommended extensions').count(), timeout).toBe(1)
     const box = (name: string) =>
       onboarding.getByRole('checkbox', { name: new RegExp(`^${name} `) })
-    for (const name of ['subagents', 'plan', 'automations', 'documents', 'tasks', 'info'])
+    for (const name of [
+      'subagents',
+      'plan',
+      'automations',
+      'documents',
+      'tasks',
+      'info',
+      'parallel',
+    ])
       expect(await box(name).getAttribute('aria-checked')).toBe('true')
     const chips = onboarding.getByRole('list', { name: 'What it brings' })
     await expect.poll(() => chips.getByText('replaces built-in').count(), timeout).toBe(1)
@@ -149,6 +157,8 @@ it('first run: page 1 waits for a live login, page 2 applies the extensions and 
     await box('automations').click()
     expect(await box('subagents').getAttribute('aria-checked')).toBe('true')
     await box('info').click()
+    // Without web search, neither it nor secrets turns on.
+    await box('parallel').click()
     await proceed.click()
     await expect.poll(() => dialog.count(), timeout).toBe(0)
     expect(
@@ -254,6 +264,11 @@ it("first run: faux finishes page 1, the project's settings lock their rows whil
     expect(await toggle.getAttribute('aria-checked')).toBe('false')
     expect(await state('documents')).toBe('false')
     expect(await state('plan')).toBe('true')
+    // Web search starts checked and names what it needs, which is not in the list.
+    expect(await state('parallel')).toBe('true')
+    expect(
+      await onboarding.getByRole('checkbox', { name: /^parallel .*needs secrets$/ }).count(),
+    ).toBe(1)
     await box('plan').click()
     expect(await state('plan')).toBe('false')
 
@@ -285,9 +300,15 @@ it("first run: faux finishes page 1, the project's settings lock their rows whil
     await proceed.click()
     await expect.poll(() => onboarding.count(), timeout).toBe(0)
     expect(JSON.parse(await readFile(userFile, 'utf8')).extensions).toEqual({
-      enable: ['subagents', 'automations', 'tasks', 'info'],
+      enable: ['subagents', 'automations', 'tasks', 'info', 'parallel', 'secrets'],
       disable: ['documents'],
     })
+    // Web search is on and its key is missing: the Secrets panel opens at it, ready for the value.
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.getAttribute('aria-label')), timeout)
+      .toBe('Value for PARALLEL_API_KEY')
+    const key = page.locator('aside').getByRole('listitem', { name: 'PARALLEL_API_KEY' })
+    expect(await key.getByText('needed by parallel').count()).toBe(1)
     expect(projectDecision(project, userHome)).toBe(true)
     const enabled = (name: string) =>
       server.extensions.info().find((entry) => entry.name === name)?.enabled

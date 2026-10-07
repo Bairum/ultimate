@@ -7,16 +7,17 @@ The two-page first run, the project question, and the Extensions panel that turn
   in, or while the conversation runs on the faux demo model, "Demo provider · faux"; Connect runs the `models` login,
   `auth.login`) and "Choose a model" (done once the conversation's model is available; Choose runs `model.pick`).
   Continue waits for both. When the login or the picker closes, or a step gets done, focus moves to the next action.
-- **First run, page 2 "Recommended extensions"**: `recommended` in `pages.tsx`, one entry per extension with a line of
-  a few words, as checkboxes, checked unless `~/.ultimate/settings.json` disables it; `needs` checks another with it
-  (`automations` needs `subagents`) and unchecking that one unchecks it. A folder with a `.ultimate/` and no decision
-  adds "Use this project's setup" (on to start with only in Ultimate's own clone), with what the setup brings as chips
-  (its own extensions, the built-ins its settings turn on and off, folders that replace a built-in, agents, skills) and
-  its `.ultimate/README.md` behind "What's in it". While it is on, the rows its settings decide show "on in this
-  project" or "off in this project", locked; the user's own choice stays underneath and is what Continue saves. Back
-  keeps the choices. Continue applies it all with `applyFirstRun`, and the app switches live. Skip, Escape, and the
-  close button (ignored while Continue applies) keep the defaults, record the first run, and defer the project
-  question for the tab.
+- **First run, page 2 "Recommended extensions"**: `recommended` in `pages.tsx`, one entry per extension with a line of a
+  few words, as checkboxes, checked unless `~/.ultimate/settings.json` disables it; `needs` checks another with it
+  (`automations` needs `subagents`) and unchecking that one unchecks it; a needed extension outside the list turns on
+  with it (`parallel`, web search, needs `secrets`). A folder with a `.ultimate/` and no decision adds "Use this
+  project's setup" (on to start with only in Ultimate's own clone), with what the setup brings as chips (its own
+  extensions, the built-ins its settings turn on and off, folders that replace a built-in, agents, skills) and its
+  `.ultimate/README.md` behind "What's in it". While it is on, the rows its settings decide show "on in this project" or
+  "off in this project", locked; the user's own choice stays underneath and is what Continue saves. Back keeps the
+  choices. Continue applies it all with `applyFirstRun`, and the app switches live; with `parallel` on and
+  `PARALLEL_API_KEY` missing, the Secrets panel then opens at that key. Skip, Escape, and the close button (ignored
+  while Continue applies) keep the defaults, record the first run, and defer the project question for the tab.
 - **Project card** (outside the first run, a project with `.ultimate/` and no decision): "Use this project's setup?"
   with the same chips and disclosure, and "Use it" or "Keep global", which both remember the choice. Escape and the
   close button ("Decide later") defer it for the tab; until a choice is made the global setup is in use. The
