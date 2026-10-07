@@ -28,7 +28,8 @@ async function fixture(enabled = true) {
   const api = { details, agent: async () => ({ model: { modelId: 'test-model' } }) }
   const run = async (name: string, args: unknown, signal?: AbortSignal) => {
     const tool = tools.find((candidate) => candidate.name === name)!
-    return tool.execute(args, api as never, { abortSignal: signal } as never)
+    const prepared = tool.prepareArguments ? tool.prepareArguments(args) : args
+    return tool.execute(prepared, api as never, { abortSignal: signal } as never)
   }
   return { root, run, details, notice }
 }
@@ -200,6 +201,105 @@ it.each([401, 403, 429, 500])(
     expect(f.details.mock.calls[0][0]).toHaveProperty('ref_id', 'ref-123')
   },
 )
+it.each(['quote"sentinel', 'escaped-sentinel'])(
+  'redacts decoded credentials (%s) from errors, references and successful payloads',
+  async (apiKey) => {
+    const f = await fixture()
+    await writeSecret(f.root, 'PARALLEL_API_KEY', apiKey)
+    let status = 500
+    await fake(() => {
+      const data =
+        status === 500
+          ? { error: { message: `echo ${apiKey}`, ref_id: `ref-${apiKey}` } }
+          : {
+              search_id: 's',
+              session_id: 'session',
+              results: [{ ...page, excerpts: [`echo ${apiKey}`] }],
+              warnings: [
+                {
+                  type: 'notice',
+                  message: `warning ${apiKey}`,
+                  detail: { nested: [{ [apiKey]: apiKey }] },
+                },
+              ],
+            }
+      const raw = JSON.stringify(data).replaceAll('escaped-sentinel', '\\u0065scaped-sentinel')
+      return { status, raw }
+    })
+    const error = await f.run('web_search', { query: 'test' })
+    expect(error).toHaveProperty('isError', true)
+    expect(JSON.stringify(error)).toContain('[redacted]')
+    expect(f.details.mock.calls[0][0]).toHaveProperty('ref_id', 'ref-[redacted]')
+    status = 200
+    const output = await f.run('web_search', { query: 'test' })
+    expect(JSON.stringify(output)).toContain('echo [redacted]')
+    expect(JSON.stringify([error, output, f.details.mock.calls])).not.toContain(apiKey)
+    const payload = await parallelRequest('/search', {}, undefined, apiKey)
+    expect(JSON.stringify(payload)).not.toContain(apiKey)
+    expect(payload).toHaveProperty('warnings.0.detail.nested.0', { '[redacted]': '[redacted]' })
+  },
+)
+it('never forwards a non-JSON HTTP error body', async () => {
+  const f = await fixture()
+  vi.stubEnv('PARALLEL_API_KEY', 'non-json-key')
+  await fake(() => ({ status: 502, raw: 'non-json-key raw confidential diagnostic' }))
+  const output = await f.run('web_search', { query: 'test' })
+  expect(JSON.stringify(output)).toContain('HTTP 502')
+  expect(JSON.stringify([output, f.details.mock.calls])).not.toMatch(/non-json-key|confidential/)
+})
+it('retains bounded diagnostics before truncated page text and adds full-content-only pages', async () => {
+  const f = await fixture()
+  vi.stubEnv('PARALLEL_API_KEY', 'env-key')
+  const fullContent = 'ü'.repeat(30000)
+  const warning = 'visible warning'
+  const failedUrl = 'https://failed.example/'
+  await fake((_body, path) => ({
+    data:
+      path === '/search'
+        ? {
+            search_id: 's',
+            session_id: 'session',
+            results: [{ ...page, excerpts: [fullContent] }],
+            warnings: [{ type: 'notice', message: warning }],
+          }
+        : {
+            extract_id: 'e',
+            session_id: 'session',
+            results: [{ ...page, excerpts: [], full_content: fullContent }],
+            errors: [{ url: failedUrl, error_type: 'blocked', http_status_code: 404 }],
+            warnings: [{ type: 'notice', message: warning }],
+          },
+  }))
+  const search = await f.run('web_search', { query: 'test' })
+  expect(JSON.stringify(search)).toContain(warning)
+  expect(JSON.stringify(search)).toContain('Output truncated')
+  const fetch = await f.run('web_fetch', { url: 'https://example.com' })
+  expect(fetch).toHaveProperty('isError', false)
+  expect(JSON.stringify(fetch)).toContain(failedUrl)
+  expect(JSON.stringify(fetch)).toContain(warning)
+  expect(JSON.stringify(fetch)).toContain('Output truncated')
+  const details = f.details.mock.calls.at(-1)?.[0]
+  expect(details).toHaveProperty('pages.0.content', fullContent.slice(0, 20000))
+  expect(details).toHaveProperty('pages.0.contentTruncated', true)
+  expect(details).toHaveProperty('results.0.excerpts', [])
+  expect(details).not.toHaveProperty('results.0.content')
+})
+it('repairs JSON-string URL arrays without mutating arguments and preserves excerpt fallback', async () => {
+  const f = await fixture()
+  vi.stubEnv('PARALLEL_API_KEY', 'env-key')
+  const requests: Record<string, unknown>[] = []
+  await fake((body) => {
+    requests.push(body)
+    return { data: { extract_id: 'e', session_id: 'session', results: [page], errors: [] } }
+  })
+  const input = { url: '["https://example.com","https://other.example"]', objective: 'focus' }
+  expect(await f.run('web_fetch', input)).toHaveProperty('isError', false)
+  expect(input.url).toBe('["https://example.com","https://other.example"]')
+  expect(requests[0].urls).toEqual(['https://example.com/', 'https://other.example/'])
+  expect(f.details.mock.calls[0][0]).toHaveProperty('pages.0.content', 'excerpt')
+  expect(f.details.mock.calls[0][0]).toHaveProperty('pages.0.contentTruncated', false)
+  expect(await f.run('web_fetch', { url: '[invalid' })).toHaveProperty('isError', true)
+})
 it('maps invalid JSON, empty and malformed responses, invalid URLs, and total extract failure', async () => {
   const f = await fixture()
   vi.stubEnv('PARALLEL_API_KEY', 'env-key')

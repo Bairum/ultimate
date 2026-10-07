@@ -61,12 +61,9 @@ export class ParallelApiError extends Error {
 export async function parallelRequest<T>(
   path: '/search' | '/extract',
   body: Record<string, unknown>,
-  signal?: AbortSignal,
-  configuredApiKey?: string,
+  signal: AbortSignal | undefined,
+  apiKey: string,
 ): Promise<T> {
-  const apiKey = configuredApiKey
-  if (!apiKey)
-    throw new Error('Missing PARALLEL_API_KEY. Add it in the Secrets panel (⌘K → Secrets).')
   const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
 
@@ -96,11 +93,10 @@ export async function parallelRequest<T>(
     if (timeoutSignal.aborted) throw new Error('Parallel API request timed out after 120 seconds.')
     throw new Error('Could not reach the Parallel API.')
   }
-  // An upstream may echo credentials in diagnostic payloads; never forward them.
-  raw = raw.replaceAll(apiKey, '[redacted]')
   let payload: unknown
   try {
-    payload = raw ? JSON.parse(raw) : undefined
+    // Decode first: JSON escaping must not defeat credential redaction.
+    payload = raw ? redact(JSON.parse(raw), apiKey) : undefined
   } catch {
     if (response.ok) {
       throw new ParallelApiError('Parallel API returned an invalid JSON response.', response.status)
@@ -108,7 +104,7 @@ export async function parallelRequest<T>(
   }
 
   if (!response.ok) {
-    throw createApiError(response.status, payload, raw)
+    throw createApiError(response.status, payload)
   }
 
   if (!payload || typeof payload !== 'object') {
@@ -118,9 +114,21 @@ export async function parallelRequest<T>(
   return payload as T
 }
 
-function createApiError(status: number, payload: unknown, raw: string): ParallelApiError {
+function redact(value: unknown, apiKey: string): unknown {
+  if (typeof value === 'string') return value.replaceAll(apiKey, '[redacted]')
+  if (Array.isArray(value)) return value.map((item) => redact(item, apiKey))
+  if (value && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key.replaceAll(apiKey, '[redacted]'),
+        redact(item, apiKey),
+      ]),
+    )
+  return value
+}
+function createApiError(status: number, payload: unknown): ParallelApiError {
   const error = getRecord(getRecord(payload)?.error)
-  const referenceId = typeof error?.ref_id === 'string' ? error.ref_id : undefined
+  const referenceId = typeof error?.ref_id === 'string' ? error.ref_id.slice(0, 200) : undefined
   const apiMessage = typeof error?.message === 'string' ? error.message.slice(0, 500) : undefined
 
   if (status === 401 || status === 403) {
@@ -139,8 +147,7 @@ function createApiError(status: number, payload: unknown, raw: string): Parallel
     )
   }
 
-  const fallback = raw.trim().slice(0, 500)
-  const message = apiMessage || fallback || `Parallel API request failed with HTTP ${status}.`
+  const message = apiMessage || `Parallel API request failed with HTTP ${status}.`
   const suffix = referenceId ? ` (reference: ${referenceId})` : ''
   return new ParallelApiError(`${message}${suffix}`, status, referenceId)
 }

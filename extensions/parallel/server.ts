@@ -115,13 +115,13 @@ export default function parallel(host: ExtensionHost) {
             await api.details(details, context)
             const text =
               `Found ${response.results.length} results for: ${args.query}\n\n` +
+              warningText(response.warnings) +
               response.results
                 .map(
                   (result, index) =>
                     `${index + 1}. ${result.title || 'Untitled page'}\nURL: ${result.url}${result.publish_date ? `\nPublished: ${result.publish_date}` : ''}\n${result.excerpts.join('\n\n')}`,
                 )
-                .join('\n\n---\n\n') +
-              warningText(response.warnings)
+                .join('\n\n---\n\n')
             return { content: [{ type: 'text', text: truncateToolOutput(text) }] }
           } catch (error) {
             const result = failure(error)
@@ -133,6 +133,17 @@ export default function parallel(host: ExtensionHost) {
       defineTool({
         name: 'web_fetch',
         replay: 'safe',
+        prepareArguments(args) {
+          const input = args as { url: unknown; objective?: string }
+          if (typeof input?.url === 'string' && input.url.trim().startsWith('[')) {
+            try {
+              return { ...input, url: JSON.parse(input.url) }
+            } catch {
+              /* Let validation report malformed URLs. */
+            }
+          }
+          return input
+        },
         description:
           "Fetch one or more known public webpages with Parallel's Extract API and return clean, LLM-optimized markdown. Handles JavaScript-rendered pages and PDFs. Use an objective to focus the returned excerpts. Do not use for raw files, APIs, JSON feeds, or localhost; fetch those directly with curl. Output is limited to 50KB or 2,000 lines.",
         parameters: Type.Object({
@@ -168,13 +179,22 @@ export default function parallel(host: ExtensionHost) {
               error_type: error.error_type.slice(0, 200),
               http_status_code: error.http_status_code ?? null,
             }))
-            const pages = summarize(response.results)
+            const results = summarize(response.results)
+            const pages = results.map((result, index) => {
+              const page = response.results[index]
+              const content = page.full_content || page.excerpts.join('\n\n')
+              return {
+                ...result,
+                content: content.slice(0, 20000),
+                contentTruncated: content.length > 20000,
+              }
+            })
             await api.details(
               {
                 status: response.errors.length ? 'partial' : 'success',
                 extractId: response.extract_id,
                 sessionId: response.session_id,
-                results: pages,
+                results,
                 pages,
                 errors,
                 warnings: warnings(response.warnings),
@@ -194,11 +214,11 @@ export default function parallel(host: ExtensionHost) {
                 {
                   type: 'text',
                   text: truncateToolOutput(
-                    text +
-                      (errors.length
-                        ? `\n\nFetch errors:\n${errors.map((error) => `- ${error.url} — ${error.error_type}${error.http_status_code ? ` (HTTP ${error.http_status_code})` : ''}`).join('\n')}`
-                        : '') +
-                      warningText(response.warnings),
+                    (errors.length
+                      ? `Fetch errors:\n${errors.map((error) => `- ${error.url} — ${error.error_type}${error.http_status_code ? ` (HTTP ${error.http_status_code})` : ''}`).join('\n')}\n\n`
+                      : '') +
+                      warningText(response.warnings) +
+                      text,
                   ),
                 },
               ],
@@ -232,9 +252,7 @@ function summarize(results: ParallelResultItem[]) {
     url: item.url.slice(0, 2048),
     title: item.title?.slice(0, 500) ?? null,
     publish_date: item.publish_date?.slice(0, 100) ?? null,
-    excerpts: item.excerpts
-      .slice(0, 10)
-      .map((excerpt) => truncateToolOutput(excerpt).slice(0, 2000)),
+    excerpts: item.excerpts.slice(0, 10).map((excerpt) => excerpt.slice(0, 2000)),
   }))
 }
 function warnings(items?: ParallelWarning[] | null) {
@@ -243,8 +261,9 @@ function warnings(items?: ParallelWarning[] | null) {
     .map((item) => ({ type: item.type.slice(0, 100), message: item.message.slice(0, 1000) }))
 }
 function warningText(items?: ParallelWarning[] | null) {
-  return items?.length
-    ? `\n\nWarnings:\n${items.map((item) => `- ${item.message}`).join('\n')}`
+  const summary = warnings(items)
+  return summary.length
+    ? `Warnings:\n${summary.map((item) => `- ${item.message}`).join('\n')}\n\n`
     : ''
 }
 export function normalizeUrls(value: unknown): string[] {
