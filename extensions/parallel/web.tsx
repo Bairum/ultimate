@@ -31,6 +31,8 @@ interface Page {
   excerpts: string[]
   /** web_fetch: the page's content as the model got it; without it, its excerpts. */
   content?: string | null
+  /** web_fetch: the content was cut to the server's bound. */
+  contentTruncated?: boolean
 }
 interface Warning {
   type: string
@@ -342,7 +344,7 @@ function FetchedPage({ page, open }: { page: Page; open: boolean }) {
           <CollapsibleTrigger className="group mt-1.5 flex items-center gap-1 rounded-sm text-[11px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
             <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]:rotate-90" />
             {page.content
-              ? `content · ${formatBytes(new TextEncoder().encode(page.content).length)}`
+              ? `content · ${formatBytes(new TextEncoder().encode(page.content).length)}${page.contentTruncated ? ' · truncated' : ''}`
               : plural(page.excerpts.length, 'excerpt')}
           </CollapsibleTrigger>
           <CollapsibleContent>

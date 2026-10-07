@@ -211,7 +211,7 @@ it('renders web_search and web_fetch results, and a missing key with Add key ope
     expect(await fetch.getByText('bad.example/page').count()).toBe(1)
     expect(await fetch.getByText('unavailable · HTTP 404').count()).toBe(1)
     // The disclosure folds the content away.
-    await pages.getByRole('button', { name: /excerpt/ }).click()
+    await pages.getByRole('button', { name: /^content/ }).click()
     await expect
       .poll(() => pages.getByRole('heading', { name: 'Checkpoints' }).count(), timeout)
       .toBe(0)
