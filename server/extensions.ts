@@ -335,6 +335,7 @@ export async function loadExtensions(
           const exportedActions: Record<string, ExtensionAction> = module.actions ?? {}
           if (Object.values(exportedActions).some((action) => typeof action !== 'function'))
             throw new Error('actions must contain functions')
+          const secrets = validateSecrets(module.secrets ?? [])
           host.registry.install(extension)
           await dispose(facetHosts.get(name))
           facetHosts.set(name, facetHost)
@@ -351,6 +352,7 @@ export async function loadExtensions(
             sections: extension.sections?.map((section) => section.key) ?? [],
             hooks: extension.hooks?.length ?? 0,
             docs: docs.map((doc) => doc.definition.kind),
+            secrets,
           }
         } catch (error) {
           await dispose(facetHost)
@@ -540,5 +542,36 @@ export async function loadExtensions(
           notice(`Process resource cleanup failed: ${String(result.reason)}`)
     },
   }
+}
+export function validateSecrets(
+  value: unknown,
+): NonNullable<NonNullable<ExtensionInfo['server']>['secrets']> {
+  if (!Array.isArray(value)) throw new Error('secrets must be an array of declarations')
+  return value.map((item) => {
+    if (
+      !item ||
+      typeof item.name !== 'string' ||
+      !/^[A-Z][A-Z0-9_]*$/.test(item.name) ||
+      typeof item.description !== 'string' ||
+      !item.description.trim()
+    )
+      throw new Error('secrets require an uppercase name and non-empty description')
+    if (item.url !== undefined) {
+      try {
+        if (
+          typeof item.url !== 'string' ||
+          !['http:', 'https:'].includes(new URL(item.url).protocol)
+        )
+          throw new Error()
+      } catch {
+        throw new Error('secret URLs must use http(s)')
+      }
+    }
+    return {
+      name: item.name,
+      description: item.description,
+      ...(item.url === undefined ? {} : { url: item.url }),
+    }
+  })
 }
 export type Extensions = Awaited<ReturnType<typeof loadExtensions>>

@@ -65,6 +65,7 @@ export interface ExtensionInfo {
     sections: string[]
     hooks: number
     docs: string[]
+    secrets?: { name: string; description: string; url?: string }[]
     error?: string
   }
 }
