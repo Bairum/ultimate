@@ -115,6 +115,11 @@ it('turns exposure on from the panel, shows the URL to copy, a problem with its 
     await expect.poll(() => panel.getByText('Not a Tailscale operator').count(), timeout).toBe(1)
     expect(await panel.getByText('needs a fix').count()).toBe(1)
     expect(await panel.getByText('Grant operator rights:', { exact: true }).count()).toBe(1)
+    // The notice says so too, beside the panel rather than over the command that fixes it.
+    const notice = page.getByRole('status').filter({ hasText: 'Tailscale: Grant operator rights' })
+    await expect.poll(() => notice.count(), timeout).toBe(1)
+    const [toast, aside] = await Promise.all([notice.boundingBox(), panel.boundingBox()])
+    expect(toast!.x + toast!.width).toBeLessThanOrEqual(aside!.x)
     const command = 'sudo tailscale set --operator=$USER'
     await panel.getByRole('button', { name: `Copy ${command}` }).click()
     await expect

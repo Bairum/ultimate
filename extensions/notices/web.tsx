@@ -11,7 +11,7 @@ const icons = {
   error: [CircleAlertIcon, 'text-error'],
 } as const
 
-/** Server and client notices as small toasts under the header. */
+/** Server and client notices as small toasts centred under the header, clear of the side panels. */
 function Toasts() {
   const notices = useNotices()
   const [dismissed, setDismissed] = useState<ReadonlySet<number>>(new Set())
@@ -27,7 +27,7 @@ function Toasts() {
   if (shown.length === 0) return null
   return (
     <div
-      className="fixed top-12 right-3 z-40 flex w-80 max-w-[calc(100vw-1.5rem)] flex-col divide-y divide-border/70 overflow-hidden rounded-md border border-border/80 bg-popover shadow-lg"
+      className="fixed top-12 left-1/2 z-40 flex w-80 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-col divide-y divide-border/70 overflow-hidden rounded-md border border-border/80 bg-popover shadow-lg"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       role="status"
