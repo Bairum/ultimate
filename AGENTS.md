@@ -36,6 +36,8 @@ others load; see [Events](extensions/README.md#events).
 ## Discovery and settings
 
 Discovery is clone built-ins, then `~/.ultimate/`, then `<project>/.ultimate/`; later names replace earlier ones.
+Skills load from clone `skills/`, then Pi's defaults, then `~/.ultimate/skills/`, then
+`<project>/.ultimate/skills/`, with later names winning.
 The default set is `agent`, `conversations`, `coding-tools`, `prompt`, `models`, `status-line`, `notices`, `theme`,
 `faux` (inert unless `ULTIMATE_FAUX=1`), `codemode`, `browser`, `onboarding`, and `splash`. Other built-ins are opt-in
 building blocks, including `secrets`, `parallel` (web tools; requires `secrets`), and `tailscale` (remote access, user-level enablement only). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:

@@ -54,7 +54,7 @@ Extensions outside the clone import exactly what built-ins import (`@/sdk`, `@/c
 `lucide-react`, any package installed in the clone): Ultimate resolves those from its clone, and Tailwind picks up their
 classes. In the clone, `pnpm check` type-checks and lints `extensions/` and `.ultimate/extensions/`; extensions of
 other projects are not checked by anything, so try them in the browser. Agents live in the same three places
-(`agents/`); skills come from Pi (`~/.pi/agent/skills/`, the project's `.pi/skills/`), then `~/.ultimate/skills/`, then
+(`agents/`); skills come from clone `skills/`, then Pi (`~/.pi/agent/skills/`, the project's `.pi/skills/`), then `~/.ultimate/skills/`, then
 `<project>/.ultimate/skills/`, later winning by name. A project's `.ultimate/settings.json` may set `defaultSurface` (see
 [Surfaces](#surfaces)).
 
@@ -65,7 +65,7 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 - `ultimateRoot`, `projectRoot`, `userHome`, `home`: source, work, user and instance-state roots.
 - `modelRuntime`, `settings`: Pi model/auth runtime and settings.
 - `models()`: model descriptors, including availability and the faux model when enabled.
-- `skills(cwd)`: merged Pi, user and project skills for a working directory.
+- `skills(cwd)`: merged clone, Pi, user and project skills for a working directory.
 - `restart(approved)`: request a verified core swap; the async callback records the approved generation before activation.
 - `faux`: Pi's faux provider handle in dev mode, otherwise undefined. Demo scripting belongs to the `faux` extension.
 - `build()`, `system()`, `extensions()`: current build, system and extension inspection.

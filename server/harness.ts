@@ -112,7 +112,7 @@ export async function prepareHarness(options: HostOptions) {
     },
     models: async () => (await listModels(modelRuntime, fauxHandle)).models,
     model: (ref: ModelRef) => models.getModel(ref.provider, ref.modelId),
-    skills: (cwd: string) => projectSkills({ projectRoot, userHome, settings }, cwd),
+    skills: (cwd: string) => projectSkills({ ultimateRoot, projectRoot, userHome, settings }, cwd),
     restart: (approved: (generation: number) => Promise<void>) =>
       requestSwap(approved, builds.current()),
     ultimateRoot,

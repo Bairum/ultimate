@@ -357,6 +357,44 @@ it('discovers user/project agents and skills with provenance and hot config chan
   await until(() => skill().description === 'User skill')
 })
 
+it('discovers clone skills live and lets project skills override them by name', async () => {
+  const projectRoot = await temp()
+  const userHome = await temp()
+  const ultimateRoot = await sourceCopy(userHome)
+  const server = await createServer({
+    ultimateRoot,
+    projectRoot,
+    userHome,
+    home: join(userHome, 'state'),
+    faux: true,
+    port: 0,
+  })
+  servers.push(server)
+  const skill = () =>
+    server.system.current().skills.find((entry) => entry.name === 'ult108-built-in')
+  const builtIn = join(ultimateRoot, 'skills/ult108-built-in')
+  await mkdir(builtIn, { recursive: true })
+  await writeFile(
+    join(builtIn, 'SKILL.md'),
+    '---\nname: ult108-built-in\ndescription: Clone skill\n---\nInspect.',
+  )
+  await until(() => skill()?.description === 'Clone skill')
+  expect(skill()?.path).toBe(join(builtIn, 'SKILL.md'))
+  const project = join(projectRoot, '.ultimate/skills/ult108-built-in')
+  await mkdir(project, { recursive: true })
+  await writeFile(
+    join(project, 'SKILL.md'),
+    '---\nname: ult108-built-in\ndescription: Project override\n---\nInspect.',
+  )
+  await until(() => skill()?.description === 'Project override')
+  expect(skill()?.path).toBe(join(project, 'SKILL.md'))
+  expect(
+    server.system.current().skills.filter((entry) => entry.name === 'ult108-built-in'),
+  ).toHaveLength(1)
+  await rm(project, { recursive: true })
+  await until(() => skill()?.description === 'Clone skill')
+})
+
 it('exec times out, caps output and defaults to the project without a shell', async () => {
   const root = await temp()
   const exec = actionExec(root, new AbortController().signal)
