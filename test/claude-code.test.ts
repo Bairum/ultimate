@@ -1092,29 +1092,35 @@ it('refuses a mismatched orphan, clears its pid, raises a notice, and proceeds w
   expect(() => process.kill(child.pid!, 0)).not.toThrow()
 })
 
-it('kills only a Claude-looking orphan with matching recorded session arguments', async () => {
-  const id = 'matching-session'
-  const child = spawn(process.execPath, [
-    '-e',
-    `process.title='claude --session-id ${id}';setInterval(()=>{},1000)`,
-  ])
-  try {
-    await until(() => {
-      const command = execFileSync('ps', ['-p', String(child.pid), '-o', 'command='], {
-        encoding: 'utf8',
+it.each([
+  ['the SDK form', (id: string) => `claude --session-id=${id}`],
+  ['separate arguments', (id: string) => `claude --resume ${id}`],
+])(
+  'kills only a Claude-looking orphan with matching recorded session arguments (%s)',
+  async (_form, title) => {
+    const id = 'matching-session'
+    const child = spawn(process.execPath, [
+      '-e',
+      `process.title=${JSON.stringify(title(id))};setInterval(()=>{},1000)`,
+    ])
+    try {
+      await until(() => {
+        const command = execFileSync('ps', ['-p', String(child.pid), '-o', 'command='], {
+          encoding: 'utf8',
+        })
+        return command.startsWith('claude --')
       })
-      return command.startsWith('claude --session-id')
-    })
-    expect(killOrphan(child.pid!, 'different-session')).toContain('Refusing to kill')
-    expect(() => process.kill(child.pid!, 0)).not.toThrow()
-    const exited = once(child, 'exit')
-    expect(killOrphan(child.pid!, id)).toBeUndefined()
-    await exited
-    expect(child.signalCode).toBe('SIGKILL')
-  } finally {
-    child.kill('SIGKILL')
-  }
-})
+      expect(killOrphan(child.pid!, 'different-session')).toContain('Refusing to kill')
+      expect(() => process.kill(child.pid!, 0)).not.toThrow()
+      const exited = once(child, 'exit')
+      expect(killOrphan(child.pid!, id)).toBeUndefined()
+      await exited
+      expect(child.signalCode).toBe('SIGKILL')
+    } finally {
+      child.kill('SIGKILL')
+    }
+  },
+)
 
 it('correlates identical concurrent MCP requests FIFO and purges skipped hook ids at message boundaries', async () => {
   const bridge = new ToolBridge([

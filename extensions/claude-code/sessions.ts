@@ -90,8 +90,11 @@ export function killOrphan(pid: number, sessionId: string): string | undefined {
     return `Could not inspect Claude Code pid ${pid}: ${String(error)}`
   }
   const args = command.trim().split(/\s+/)
-  const session = args.some(
-    (arg, index) => (arg === '--session-id' || arg === '--resume') && args[index + 1] === sessionId,
+  // The Agent SDK passes `--session-id=<id>` / `--resume=<id>`; accept the separate-argument form too.
+  const session = args.some((arg, index) =>
+    ['--session-id', '--resume'].some(
+      (flag) => arg === `${flag}=${sessionId}` || (arg === flag && args[index + 1] === sessionId),
+    ),
   )
   if (!session || !/(?:^|[\\/])claude(?:\.exe)?$/i.test(args[0] ?? ''))
     return `Refusing to kill pid ${pid}: not Claude Code session ${sessionId}`
