@@ -25,7 +25,15 @@ Models: `claude-code/opus`, `claude-code/sonnet`, `claude-code/haiku`, `claude-c
 
 Pi's durable conversation UUID is the Claude session id. The first turn starts it; later turns resume it. SQLite records the turn before spawning, mirrors SDK transcript entries (deduplicated by UUID), and retains completed results until Pi can commit them. After a crash the next generation checks the recorded pid with portable `ps`, kills only a Claude-named orphan, and resumes with a continue prompt rather than repeating the original input. Internal Claude tools have Claude Code's recovery semantics, not Pi's exactly-once tool guarantees.
 
-Tool steps and intermediate text appear as thinking progress; the final answer is text. Matching Bash commands acquire the same `exclusiveCommands` lock as Ultimate bash and release it on completion, failure or stop. There is no Ultimate MCP tool bridge in this extension yet; the runner exposes an MCP configuration seam.
+Tool steps and intermediate text appear as thinking progress; the final answer is text. Matching Bash commands acquire the same `exclusiveCommands` lock as Ultimate bash and release it on completion, failure or stop. Ultimate MCP calls appear as normal tool entries, through the existing tool renderers.
+
+## Durable Ultimate tools
+
+An in-process SDK MCP server exposes the child's selected Pi tools as `mcp__ultimate__<name>`, including `codemode` and `screenshot` when available. Definition `tools` restrictions (or inherited tools) apply. Claude-native read/write/edit/bash/grep/find/ls and web search/fetch variants, plus `subagent`, are excluded. The server passes Pi's TypeBox JSON Schema unchanged and marks screenshot read-only; Pi's tool contract has no general read-only metadata. Calls have a one-hour MCP timeout.
+
+The PreToolUse hook captures Claude's tool-use id. The MCP handler holds the request while the provider finishes its current generation with a real Pi tool call using that id. Pi Durable validates and executes it as an ordinary `pi.tool` task; the next generation resolves the held MCP request with the committed text/image result and error flag. The same query stays alive across these generations. No tool executes inside the MCP handler.
+
+After query loss (crash, core swap, or MCP cancellation/timeout), Pi still owns the tool task. The provider resumes the Claude session with “your call to <tool> was interrupted by a restart; its result was: …; continue”, rather than issuing another call or repeating the user turn. Normal Pi replay policy applies: interrupted replay-safe tools may rerun as the same task; unsafe tools report interruption instead of duplicating side effects. Tests cover real codemode execution, fake screenshots, cancellation, query loss, and core SIGKILL, using only the fake runner.
 
 ## Limits and guardrails
 

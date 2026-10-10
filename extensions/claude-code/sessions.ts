@@ -7,6 +7,7 @@ export interface SessionRecord {
   cwd: string
   handled: string[]
   turn?: { keys: string[]; prompt: string }
+  bridge?: import('./bridge.ts').BridgeCall[]
   pid?: number
   totalCost?: number
   result?: {

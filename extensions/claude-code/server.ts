@@ -12,7 +12,8 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/e
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Sessions, killOrphan } from './sessions.ts'
 import { sdkRunner } from './runner.ts'
-import type { Runner } from './runner.ts'
+import type { Runner, RunnerEvent } from './runner.ts'
+import { ToolBridge, bridgeTools } from './bridge.ts'
 import { exclusiveHooks, pluginDirectory, promptAppend } from './setup.ts'
 
 const aliases = ['opus', 'sonnet', 'haiku', 'fable']
@@ -58,6 +59,24 @@ export function createClaudeProvider(
   sessions: Sessions,
   runner: Runner,
 ): Provider {
+  const live = new Map<
+    string,
+    {
+      run: ReturnType<Runner>
+      bridge: ToolBridge
+      iterator: AsyncIterator<RunnerEvent>
+      next?: Promise<IteratorResult<RunnerEvent>>
+      call?: ReturnType<ToolBridge['next']>
+      locks: ReturnType<typeof exclusiveHooks>
+    }
+  >()
+  host.onClose?.(async () => {
+    for (const state of live.values()) {
+      state.run.kill()
+      state.locks.close()
+    }
+    live.clear()
+  })
   const stream = (model: Model<string>, context: TranscriptContext, options?: StreamOptions) => {
     const events = createAssistantMessageEventStream()
     const message: AssistantMessage = {
@@ -80,6 +99,8 @@ export function createClaudeProvider(
     void (async () => {
       let run: ReturnType<Runner> | undefined
       let locks: ReturnType<typeof exclusiveHooks> | undefined
+      let held = false
+      let sessionId: string | undefined
       const signal = options?.signal ?? new AbortController().signal
       const abort = () => {
         void run?.interrupt().catch(() => {})
@@ -89,6 +110,7 @@ export function createClaudeProvider(
         if (!options?.sessionId)
           throw new Error('Claude Code requires a durable conversation sessionId')
         const id = options.sessionId
+        sessionId = id
         const metadata = context.messages.findLast(
           (item) => item.role === 'system' && item.sections?.[marker],
         )
@@ -122,32 +144,76 @@ export function createClaudeProvider(
           events.end(message)
           return
         }
-        if (record.pid) {
+        let state = live.get(id)
+        if (state?.bridge.lost) {
+          state.run.kill()
+          state.locks.close()
+          live.delete(id)
+          state = undefined
+        }
+        const results = context.messages.filter((item) => item.role === 'toolResult')
+        const missing =
+          record.bridge?.filter(
+            (call) => !results.some((result) => result.toolCallId === call.id),
+          ) ?? []
+        if (missing.length) {
+          message.content = missing.map((call) => ({ type: 'toolCall', ...call }))
+          message.stopReason = 'toolUse'
+          events.push({ type: 'done', reason: 'toolUse', message })
+          events.end(message)
+          held = !!state
+          return
+        }
+        if (state) for (const result of results) state.bridge.resolve(result)
+        if (!state && record.pid) {
           killOrphan(record.pid)
           delete record.pid
         }
-        const prompt = recovering ? continuePrompt : fresh.map((turn) => turn.text).join('\n\n')
+        const recoveredResults = results.filter((result) =>
+          record.bridge?.some((call) => call.id === result.toolCallId),
+        )
+        const prompt = recovering
+          ? recoveredResults.length
+            ? recoveredResults
+                .map(
+                  (result) =>
+                    `Your call to ${result.toolName} was interrupted by a restart; its result was: ${JSON.stringify({ content: result.content, isError: result.isError })}; continue without repeating the call.`,
+                )
+                .join('\n')
+            : continuePrompt
+          : fresh.map((turn) => turn.text).join('\n\n')
         if (!prompt) throw new Error('Claude Code has no new user input')
         record.turn ??= { keys: fresh.map((turn) => turn.key), prompt }
         sessions.put(record)
-        locks = exclusiveHooks(host, signal)
-        signal.throwIfAborted()
-        run = runner({
-          prompt,
-          id,
-          resume: !!previous,
-          model: model.id,
-          cwd: target.cwd,
-          append: await promptAppend(target.cwd, target.instructions, target.conversation),
-          plugin: await pluginDirectory(host, target.cwd, id),
-          store: sessions.mirror,
-          signal,
-          hooks: locks.hooks,
-          onPid(pid) {
-            record.pid = pid
-            sessions.put(record)
-          },
-        })
+        if (!state) {
+          locks = exclusiveHooks(host, signal)
+          const bridge = new ToolBridge(bridgeTools(context), ['screenshot'])
+          signal.throwIfAborted()
+          run = runner({
+            prompt,
+            id,
+            resume: !!previous,
+            model: model.id,
+            cwd: target.cwd,
+            append: await promptAppend(target.cwd, target.instructions, target.conversation),
+            plugin: await pluginDirectory(host, target.cwd, id),
+            store: sessions.mirror,
+            signal,
+            hooks: {
+              ...locks.hooks,
+              PreToolUse: [...(locks.hooks.PreToolUse ?? []), ...(bridge.hooks.PreToolUse ?? [])],
+            },
+            mcpServers: { ultimate: bridge.server },
+            onPid(pid) {
+              record.pid = pid
+              sessions.put(record)
+            },
+          })
+          state = { run, bridge, iterator: run[Symbol.asyncIterator](), locks }
+          live.set(id, state)
+        }
+        run = state.run
+        locks = state.locks
         signal.addEventListener('abort', abort, { once: true })
         if (signal.aborted) abort()
         events.push({ type: 'start', partial: message })
@@ -155,8 +221,52 @@ export function createClaudeProvider(
         message.content.push(thinking)
         events.push({ type: 'thinking_start', contentIndex: 0, partial: message })
         let complete = false
-        for await (const event of run) {
+        while (true) {
+          state.next ??= state.iterator.next().then(
+            (value) => {
+              if (
+                state.bridge.pending.size &&
+                (value.done || value.value.type === 'result' || value.value.type === 'error')
+              )
+                state.bridge.lost = true
+              return value
+            },
+            (error: unknown) => {
+              state.bridge.lost = true
+              return { done: false, value: { type: 'error' as const, message: String(error) } }
+            },
+          )
+          state.call ??= state.bridge.next()
+          const item = await Promise.race([
+            state.next.then((value) => ({ type: 'event' as const, value })),
+            state.call.then((value) => ({ type: 'call' as const, value })),
+          ])
           signal.throwIfAborted()
+          if (item.type === 'call') {
+            state.call = undefined
+            const call = item.value
+            record.bridge ??= []
+            record.bridge.push(call)
+            sessions.put(record)
+            events.push({
+              type: 'thinking_end',
+              contentIndex: 0,
+              content: thinking.thinking,
+              partial: message,
+            })
+            const toolCall = { type: 'toolCall' as const, ...call }
+            message.content.push(toolCall)
+            events.push({ type: 'toolcall_start', contentIndex: 1, partial: message })
+            events.push({ type: 'toolcall_end', contentIndex: 1, toolCall, partial: message })
+            message.stopReason = 'toolUse'
+            events.push({ type: 'done', reason: 'toolUse', message })
+            events.end(message)
+            held = true
+            return
+          }
+          state.next = undefined
+          if (item.value.done) break
+          const event = item.value.value
           if (event.type === 'tool' || event.type === 'text') {
             const delta =
               event.type === 'tool' ? `${event.name}: ${JSON.stringify(event.input)}\n` : event.text
@@ -207,6 +317,7 @@ export function createClaudeProvider(
         if (!complete) throw new Error('Claude Code exited without a result')
         record.handled.push(...record.turn.keys)
         delete record.turn
+        delete record.bridge
         delete record.pid
         sessions.put(record)
         events.push({ type: 'done', reason: 'stop', message })
@@ -223,8 +334,11 @@ export function createClaudeProvider(
         events.end(message)
       } finally {
         signal.removeEventListener('abort', abort)
-        run?.kill()
-        locks?.close()
+        if (!held) {
+          run?.kill()
+          locks?.close()
+          if (sessionId) live.delete(sessionId)
+        }
       }
     })()
     return events

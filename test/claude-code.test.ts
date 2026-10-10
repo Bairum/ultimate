@@ -9,7 +9,13 @@ import {
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { normalizeContext } from '@earendil-works/pi-ai'
+import { normalizeContext, Type } from '@earendil-works/pi-ai'
+import { defineExtension, defineTool } from '@earendil-works/pi-durable'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
+import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk'
+import codemode from '../extensions/codemode/server.ts'
+import { ToolBridge, bridgeTools } from '../extensions/claude-code/bridge.ts'
 import type { Automation } from '../extensions/automations/server.ts'
 import { ProjectTrustStore, resolveCliModel } from '@earendil-works/pi-coding-agent'
 import {
@@ -469,4 +475,285 @@ it('passes the worktree cwd to a Claude child and its fake-runner commit is land
   expect(calls[0].cwd).not.toBe(f.root)
   expect(await f.call({ action: 'land', id: child.conversationId })).toContain('Landed commits')
   expect(await readFile(join(f.root, 'child.txt'), 'utf8')).toBe('child\n')
+})
+
+async function mcpClient(options: Pick<RunOptions, 'mcpServers'>) {
+  const server = options.mcpServers!.ultimate as McpSdkServerConfigWithInstance
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  await server.instance.connect(serverTransport)
+  const client = new Client({ name: 'fake-claude', version: '1.0.0' })
+  await client.connect(clientTransport)
+  return client
+}
+
+async function preCall(options: RunOptions, name: string, args: object, id: string) {
+  for (const group of options.hooks?.PreToolUse ?? [])
+    if (group.matcher === 'mcp__ultimate__.*')
+      for (const hook of group.hooks)
+        await hook(
+          {
+            hook_event_name: 'PreToolUse',
+            session_id: options.id,
+            transcript_path: '',
+            cwd: options.cwd,
+            tool_name: 'mcp__ultimate__' + name,
+            tool_input: args,
+            tool_use_id: id,
+          },
+          id,
+          { signal: options.signal },
+        )
+}
+
+it('round trips real codemode and screenshot Pi tool tasks through held MCP calls without restarting the query', async () => {
+  const received: unknown[] = []
+  let spawned = 0
+  const f = await fixture((options) => {
+    spawned++
+    return {
+      interrupt: async () => {},
+      kill: () => {},
+      async *[Symbol.asyncIterator]() {
+        const client = await mcpClient(options)
+        try {
+          const listed = await client.listTools()
+          expect(listed.tools.map((tool) => tool.name)).toEqual(
+            expect.arrayContaining(['codemode', 'screenshot']),
+          )
+          expect(
+            listed.tools.some((tool) =>
+              [
+                'read',
+                'write',
+                'edit',
+                'bash',
+                'grep',
+                'find',
+                'ls',
+                'subagent',
+                'web_search',
+                'web_fetch',
+              ].includes(tool.name),
+            ),
+          ).toBe(false)
+          expect(
+            listed.tools.find((tool) => tool.name === 'screenshot')?.annotations?.readOnlyHint,
+          ).toBe(true)
+          for (const [name, args] of [
+            ['codemode', { code: 'return 6 * 7' }],
+            ['screenshot', {}],
+          ] as const) {
+            await preCall(options, name, args, 'call-' + name)
+            received.push(await client.callTool({ name, arguments: args }))
+          }
+          yield { type: 'result', text: 'MCP FINISHED', usage }
+        } finally {
+          await client.close()
+        }
+      },
+    }
+  })
+  f.prepared.registry.install(codemode(f.host))
+  let screenshots = 0
+  f.prepared.registry.install(
+    defineExtension({
+      name: 'screenshot',
+      tools: [
+        defineTool({
+          name: 'screenshot',
+          description: 'Capture image',
+          parameters: Type.Object({}),
+          execute: async () => {
+            screenshots++
+            const graph = await f.opened.harness.taskGraph(context)
+            expect(JSON.stringify(graph.value)).toContain('pi.tool')
+            graph.dispose()
+            return { content: [{ type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' }] }
+          },
+        }),
+      ],
+    }),
+  )
+  expect(await f.call({ action: 'start', agent: 'claude-worker', task: 'bridge' })).toContain(
+    'MCP FINISHED',
+  )
+  expect(spawned).toBe(1)
+  expect(screenshots).toBe(1)
+  expect(JSON.stringify(received[0])).toContain('42')
+  expect(received[1]).toMatchObject({
+    content: [{ type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' }],
+    isError: false,
+  })
+  const child = (await f.children())[0]
+  const conversation = await f.opened.harness.conversation(child.conversationId, context)
+  const view = await conversation!.viewState(context)
+  const tools = view.value.entries.filter((entry) => entry.kind === 'pi.tool-result')
+  expect(tools).toHaveLength(2)
+  expect(JSON.stringify(tools)).toContain('call-codemode')
+  expect(JSON.stringify(tools)).toContain('call-screenshot')
+  view.dispose()
+})
+
+it('excludes native tool variants and subagent and preserves JSON Schema and selected tool removals', async () => {
+  const names = [
+    'read',
+    'write',
+    'edit',
+    'bash',
+    'grep',
+    'find',
+    'ls',
+    'WebSearch',
+    'WebFetch',
+    'web_search',
+    'web_fetch',
+    'subagent',
+    'codemode',
+    'removed',
+  ]
+  const parameters = Type.Object({
+    value: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+  })
+  const transcript = normalizeContext({
+    messages: [
+      {
+        role: 'system',
+        content: '',
+        timestamp: 1,
+        toolsAdded: names.map((name) => ({ name, description: name, parameters })),
+      },
+      { role: 'system', content: '', timestamp: 2, toolsRemoved: [{ name: 'removed' }] },
+    ],
+  })
+  expect(bridgeTools(transcript).map((tool) => tool.name)).toEqual(['codemode'])
+  const bridge = new ToolBridge(bridgeTools(transcript))
+  const client = await mcpClient({ mcpServers: { ultimate: bridge.server } })
+  try {
+    expect(bridge.server.timeout).toBe(3600000)
+    expect((await client.listTools()).tools[0].inputSchema).toEqual(
+      JSON.parse(JSON.stringify(parameters)),
+    )
+  } finally {
+    await client.close()
+  }
+})
+
+it.each(['swap', 'timeout'])(
+  'resumes a lost held MCP query after %s with the durable result as text and no duplicate execution',
+  async (loss) => {
+    const prompts: string[] = []
+    let executions = 0
+    let release: (() => void) | undefined
+    let cancel: (() => void) | undefined
+    let abandoned = false
+    const runner: Runner = (options) => {
+      prompts.push(options.prompt)
+      const controller = new AbortController()
+      cancel = () => controller.abort()
+      return {
+        interrupt: async () => {},
+        kill: () => controller.abort(),
+        async *[Symbol.asyncIterator]() {
+          if (!options.resume) {
+            const client = await mcpClient(options)
+            try {
+              await preCall(options, 'screenshot', {}, 'held-call')
+              await client.callTool({ name: 'screenshot', arguments: {} }, undefined, {
+                signal: controller.signal,
+                timeout: loss === 'timeout' ? 50 : 60000,
+              })
+            } catch {
+              abandoned = true
+              throw new Error('fake query lost')
+            } finally {
+              await client.close()
+            }
+          }
+          yield { type: 'result', text: 'RECOVERED BRIDGE RESULT', usage }
+        },
+      }
+    }
+    const f = await fixture(runner)
+    f.prepared.registry.install(
+      defineExtension({
+        name: 'screenshot',
+        tools: [
+          defineTool({
+            name: 'screenshot',
+            description: 'Read-only image',
+            parameters: Type.Object({}),
+            replay: 'safe',
+            execute: async () => {
+              executions++
+              await new Promise<void>((resolve) => {
+                release = resolve
+              })
+              return { content: [{ type: 'text', text: 'UNIQUE TOOL RESULT' }], isError: true }
+            },
+          }),
+        ],
+      }),
+    )
+    await f.call({ action: 'start', agent: 'claude-worker', task: 'ORIGINAL', background: true })
+    await until(() => !!release)
+    if (loss === 'swap') {
+      cancel!()
+      await until(() => abandoned)
+      f.prepared.registry.install(claudeCode(f.host, runner))
+    } else await until(() => abandoned)
+    release!()
+    await until(() => prompts.length === 2)
+    const child = (await f.children())[0]
+    const conversation = await f.opened.harness.conversation(child.conversationId, context)
+    await conversation!.waitForIdle(context)
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]).toContain('Your call to screenshot was interrupted by a restart')
+    expect(prompts[1]).toContain('UNIQUE TOOL RESULT')
+    expect(prompts[1]).toContain('"isError":true')
+    expect(prompts[1]).not.toContain('ORIGINAL')
+    expect(executions).toBe(1)
+    const view = await conversation!.viewState(context)
+    expect(JSON.stringify(view.value)).toContain('RECOVERED BRIDGE RESULT')
+    expect(view.value.entries.filter((entry) => entry.kind === 'pi.tool-result')).toHaveLength(1)
+    view.dispose()
+  },
+)
+
+it("offers only a definition's explicitly selected Pi tools to MCP", async () => {
+  let listed: string[] = []
+  const f = await fixture((options) => ({
+    interrupt: async () => {},
+    kill: () => {},
+    async *[Symbol.asyncIterator]() {
+      const client = await mcpClient(options)
+      try {
+        listed = (await client.listTools()).tools.map((tool) => tool.name)
+      } finally {
+        await client.close()
+      }
+      yield { type: 'result', text: 'SELECTED', usage }
+    },
+  }))
+  f.prepared.registry.install(codemode(f.host))
+  f.prepared.registry.install(
+    defineExtension({
+      name: 'screenshot',
+      tools: [
+        defineTool({
+          name: 'screenshot',
+          description: 'Read-only image',
+          parameters: Type.Object({}),
+          execute: async () => ({}),
+        }),
+      ],
+    }),
+  )
+  await writeFile(
+    join(f.root, 'agents/claude-worker.md'),
+    `---\nname: claude-worker\ndescription: Work\nmodel: claude-code/haiku\nisolate: none\ntools: [screenshot]\n---\nOnly screenshot.\n`,
+  )
+  expect(
+    await f.call({ action: 'start', agent: 'claude-worker', task: 'selected tools' }),
+  ).toContain('SELECTED')
+  expect(listed).toEqual(['screenshot'])
 })
