@@ -78,7 +78,8 @@ export const sdkRunner: Runner = (options) => {
       spawnClaudeCodeProcess: (spec) => {
         child = spawn(spec.command, spec.args, {
           cwd: spec.cwd,
-          env: childEnv(spec.env),
+          // The SDK builds spec.env from childEnv() above plus its own markers (such as the SDK entrypoint); keep those.
+          env: spec.env,
           signal: spec.signal,
           stdio: ['pipe', 'pipe', 'pipe'],
         })
