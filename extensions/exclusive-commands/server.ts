@@ -2,7 +2,7 @@ import { defineExtension, wrapTool } from '@earendil-works/pi-durable'
 import { createBashTool } from '@earendil-works/pi-durable/tools'
 import type { ExtensionHost } from '../../server/extensions.ts'
 
-class Slot {
+export class Slot {
   command?: string
   queue: { command: string; grant: () => void }[] = []
 
@@ -36,8 +36,12 @@ class Slot {
   }
 }
 
+export function exclusiveSlot(host: Pick<ExtensionHost, 'resource'>) {
+  return host.resource('exclusive-commands.slot', () => new Slot())
+}
+
 export default function exclusiveCommands(host: ExtensionHost) {
-  const slot = host.resource('exclusive-commands.slot', () => new Slot())
+  const slot = exclusiveSlot(host)
   return defineExtension({
     name: 'exclusive-commands',
     wraps: [

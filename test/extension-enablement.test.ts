@@ -64,6 +64,7 @@ it('starts bare with exactly the default extensions and tools, and exposes off b
   const info = server.system.current().extensions
   expect(info.filter((entry) => !entry.enabled).map((entry) => entry.name)).toEqual([
     'automations',
+    'claude-code',
     'clock',
     'documents',
     'exclusive-commands',
@@ -232,7 +233,7 @@ it('enables the full repository set including github-triage', async () => {
   expect(
     server.extensions
       .info()
-      .filter((entry) => !['tailscale', 'secrets', 'parallel'].includes(entry.name))
+      .filter((entry) => !['claude-code', 'tailscale', 'secrets', 'parallel'].includes(entry.name))
       .every((entry) => entry.enabled && !entry.server?.error),
   ).toBe(true)
   expect(
@@ -243,7 +244,7 @@ it('enables the full repository set including github-triage', async () => {
   ).toBe(true)
   expect(
     discovered
-      .filter((entry) => !['tailscale', 'secrets', 'parallel'].includes(entry.name))
+      .filter((entry) => !['claude-code', 'tailscale', 'secrets', 'parallel'].includes(entry.name))
       .every((entry) => entry.enabled),
   ).toBe(true)
   expect(discovered.filter((entry) => entry.enabled).map((entry) => entry.name)).toEqual(
