@@ -6,6 +6,7 @@ export interface SessionRecord {
   id: string
   cwd: string
   handled: string[]
+  started?: boolean
   turn?: { keys: string[]; prompt: string }
   bridge?: import('./bridge.ts').BridgeCall[]
   pid?: number
@@ -37,6 +38,13 @@ export class Sessions {
         try {
           for (const entry of entries)
             insert.run(keyId(key), entry.uuid ?? null, JSON.stringify(entry))
+          if (entries.length) {
+            const record = this.get(key.sessionId)
+            if (record) {
+              record.started = true
+              this.put(record)
+            }
+          }
           this.db.exec('COMMIT')
         } catch (error) {
           this.db.exec('ROLLBACK')
@@ -60,6 +68,7 @@ export class Sessions {
   }
 
   put(record: SessionRecord) {
+    record.started ||= this.get(record.id)?.started ?? false
     this.db
       .prepare(
         'INSERT INTO sessions (id, record) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET record = excluded.record',

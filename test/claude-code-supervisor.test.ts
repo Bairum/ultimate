@@ -24,6 +24,7 @@ export default function fakeClaude(host: ExtensionHost) {
   let child: ReturnType<typeof spawn> | undefined
   return { interrupt: async () => {}, kill: () => { child?.kill('SIGKILL') }, async *[Symbol.asyncIterator]() {
    if (!options.resume) {
+    await options.store.append({projectKey:options.cwd,sessionId:options.id},[{type:'user',uuid:'started'}])
     child=spawn(process.execPath,['-e',"process.title='claude --session-id "+options.id+"';setInterval(()=>{},1000)"],{stdio:'ignore'})
     options.onPid(child.pid!)
     appendFileSync(host.home+'/fake.pid', String(child.pid))

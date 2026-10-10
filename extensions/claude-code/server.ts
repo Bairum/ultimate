@@ -68,12 +68,14 @@ interface LiveQuery {
   controller: AbortController
   stopping?: Promise<void>
   watching?: boolean
+  stopped(): void
 }
 function stop(state: LiveQuery) {
   state.stopping ??= (async () => {
     void state.run.interrupt().catch(() => {})
     await setTimeout(3000)
-    state.run.kill()
+    await state.run.kill()
+    state.stopped()
     state.controller.abort()
     state.locks.close()
   })()
@@ -86,16 +88,19 @@ export function createClaudeProvider(
   runner: Runner,
 ): Provider {
   const live = new Map<string, LiveQuery>()
+  let closing = false
+  let unsubscribeClose: (() => void) | undefined
   const retire = (id: string) => {
     const record = sessions.get(id)
     if (!record) return
     record.handled = [...new Set([...record.handled, ...(record.turn?.keys ?? [])])]
     delete record.turn
     delete record.bridge
-    delete record.pid
     sessions.put(record)
   }
   host.onClose?.(async () => {
+    closing = true
+    unsubscribeClose?.()
     const states = [...live.values()]
     live.clear()
     await Promise.all(states.map(stop))
@@ -125,8 +130,6 @@ export function createClaudeProvider(
       let held = false
       let sessionId: string | undefined
       let stateRef: LiveQuery | undefined
-      let received = false
-      let hadSuccess = false
       const signal = options?.signal ?? new AbortController().signal
       const abort = () => {
         if (sessionId) retire(sessionId)
@@ -154,7 +157,6 @@ export function createClaudeProvider(
         }
         const previous = sessions.get(id)
         const fresh = userTurns(context).filter((turn) => !previous?.handled.includes(turn.key))
-        hadSuccess = !!previous?.result
         let record: SessionRecord = previous ?? { id, cwd: target.cwd, handled: [] }
         if (!fresh.length && !record.turn && record.result) {
           const result = record.result
@@ -190,9 +192,11 @@ export function createClaudeProvider(
           retire(id)
           record = sessions.get(id)!
         }
-        const recovering = !!record.turn
+        const recovering = !!record.turn && !!record.started
         const unhandled = userTurns(context).filter(
-          (turn) => !record.handled.includes(turn.key) && !record.turn?.keys.includes(turn.key),
+          (turn) =>
+            !record.handled.includes(turn.key) &&
+            !(recovering && record.turn?.keys.includes(turn.key)),
         )
         if (state?.bridge.lost) {
           await stop(state)
@@ -235,7 +239,7 @@ export function createClaudeProvider(
                 )
                 .join('\n')
             : continuePrompt
-          : unhandled.map((turn) => turn.text).join('\n\n')
+          : unhandled.map((turn) => turn.text).join('\n\n') || record.turn?.prompt || ''
         const input =
           recovering && unhandled.length
             ? prompt + '\n\nNew input:\n' + unhandled.map((turn) => turn.text).join('\n\n')
@@ -252,7 +256,7 @@ export function createClaudeProvider(
           run = runner({
             prompt: input,
             id,
-            resume: !!previous,
+            resume: !!record.started,
             model: model.id,
             cwd: target.cwd,
             append: await promptAppend(target.cwd, target.instructions, target.conversation),
@@ -277,7 +281,21 @@ export function createClaudeProvider(
               sessions.put(record)
             },
           })
-          state = { run, bridge, iterator: run[Symbol.asyncIterator](), locks, controller }
+          state = {
+            run,
+            bridge,
+            iterator: run[Symbol.asyncIterator](),
+            locks,
+            controller,
+            stopped() {
+              if (closing) return
+              const saved = sessions.get(id)
+              if (saved && saved.pid === record.pid) {
+                delete saved.pid
+                sessions.put(saved)
+              }
+            },
+          }
           live.set(id, state)
         }
         stateRef = state
@@ -332,6 +350,9 @@ export function createClaudeProvider(
             events.end(message)
             held = true
             if (!state.watching && target.conversationId !== undefined) {
+              unsubscribeClose ??= host.harness().subscribeClose(() => {
+                closing = true
+              })
               state.watching = true
               const retained = state
               void (async () => {
@@ -343,16 +364,15 @@ export function createClaudeProvider(
                 retire(id)
                 await stop(retained)
                 if (live.get(id) === retained) live.delete(id)
-              })().catch((error: unknown) =>
-                host.notice(`Claude Code run observation failed: ${String(error)}`),
-              )
+              })().catch((error: unknown) => {
+                if (!closing) host.notice(`Claude Code run observation failed: ${String(error)}`)
+              })
             }
             return
           }
           state.next = undefined
           if (item.value.done) break
           const event = item.value.value
-          received = true
           if (event.type === 'boundary') state.bridge.prune(event.ids)
           if (event.type === 'tool') {
             const delta = `${event.name}: ${JSON.stringify(event.input)}\n`
@@ -361,6 +381,7 @@ export function createClaudeProvider(
           }
           if (event.type === 'error') throw new Error(event.message)
           if (event.type === 'result') {
+            record.started = true
             state.bridge.prune()
             events.push({
               type: 'thinking_end',
@@ -413,7 +434,10 @@ export function createClaudeProvider(
         message.stopReason = signal.aborted ? 'aborted' : 'error'
         if (sessionId) {
           if (signal.aborted) retire(sessionId)
-          else if (!received && !hadSuccess) sessions.delete(sessionId)
+          else if (!sessions.get(sessionId)?.started && !sessions.get(sessionId)?.result) {
+            sessions.delete(sessionId)
+            if (live.get(sessionId) === stateRef) live.delete(sessionId)
+          }
         }
         const text = String(error)
         message.errorMessage = /not logged|authentication|login|401/i.test(text)
@@ -428,7 +452,7 @@ export function createClaudeProvider(
         if (!held) {
           if (stateRef?.stopping) await stateRef.stopping
           else {
-            run?.kill()
+            await run?.kill()
             stateRef?.controller.abort()
             locks?.close()
           }

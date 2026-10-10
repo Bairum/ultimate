@@ -27,6 +27,7 @@ export default function fakeClaude(host: ExtensionHost) {
   appendFileSync(host.home+'/calls.jsonl',JSON.stringify({id:options.id,resume:options.resume,prompt:options.prompt})+'\\n')
   return { interrupt:async()=>{}, kill:()=>{}, async *[Symbol.asyncIterator]() {
    if(!options.resume) {
+    await options.store.append({projectKey:options.cwd,sessionId:options.id},[{type:'user',uuid:'started'}])
     const server=options.mcpServers!.ultimate as any
     const [ct,st]=InMemoryTransport.createLinkedPair()
     await server.instance.connect(st)

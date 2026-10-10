@@ -25,7 +25,7 @@ import {
   userTurns,
 } from '../extensions/claude-code/server.ts'
 import { Sessions, killOrphan } from '../extensions/claude-code/sessions.ts'
-import { childEnv } from '../extensions/claude-code/runner.ts'
+import { assistantEvents, childEnv } from '../extensions/claude-code/runner.ts'
 import type { Runner, RunOptions } from '../extensions/claude-code/runner.ts'
 import { exclusiveHooks, pluginDirectory, promptAppend } from '../extensions/claude-code/setup.ts'
 import { exclusiveSlot } from '../extensions/exclusive-commands/server.ts'
@@ -123,10 +123,14 @@ async function fixture(runner: Runner = fake, isolate = false) {
   prepared.modelRuntime.registerNativeProvider(parent.provider)
   opened = await prepared.open()
   await opened.root.configure({ model: { provider: 'test-parent', modelId: 'parent' } }, context)
-  cleanups.push(async () => {
+  let closed = false
+  const close = async () => {
+    if (closed) return
+    closed = true
     await opened.close()
     for (const closer of closers) await closer()
-  })
+  }
+  cleanups.push(close)
   const call = async (args: object) => {
     await (
       await opened.root.submit({ type: 'input', content: `CALL ${JSON.stringify(args)}` }, context)
@@ -138,7 +142,7 @@ async function fixture(runner: Runner = fake, isolate = false) {
   }
   const children = async () =>
     Object.values((await opened.harness.snapshot(Subagents, opened.root.id, context))?.agents ?? {})
-  return { root, prepared, host, opened, call, children }
+  return { root, prepared, host, opened, call, children, close }
 }
 
 it('registers native aliases, resolves a definition, maps turns, progress, usage and resumes the same child session', async () => {
@@ -248,6 +252,7 @@ it('recovers an in-flight turn without repeating it and replays a completed resu
   })
   sessions.put({
     id: 'session',
+    started: true,
     cwd: root,
     handled: [],
     turn: { prompt: 'do not duplicate', keys: userTurns(transcript).map((turn) => turn.key) },
@@ -660,6 +665,9 @@ it.each(['swap', 'timeout'])(
         kill: () => controller.abort(),
         async *[Symbol.asyncIterator]() {
           if (!options.resume) {
+            await options.store.append({ projectKey: options.cwd, sessionId: options.id }, [
+              { uuid: 'started', type: 'user' },
+            ])
             const client = await mcpClient(options)
             try {
               await preCall(options, 'screenshot', {}, 'held-call')
@@ -768,8 +776,10 @@ it('stops a held MCP process within five seconds, interrupts before killing, and
   let executing = false
   const order: string[] = []
   const prompts: string[] = []
+  let sessionId = ''
   const f = await fixture((options) => {
     prompts.push(options.prompt)
+    sessionId = options.id
     if (options.resume)
       return {
         interrupt: async () => {},
@@ -784,11 +794,16 @@ it('stops a held MCP process within five seconds, interrupts before killing, and
       interrupt: async () => {
         order.push('interrupt')
       },
-      kill: () => {
+      kill: async () => {
         order.push('kill')
+        const exited = once(child!, 'exit')
         child!.kill('SIGKILL')
+        await exited
       },
       async *[Symbol.asyncIterator]() {
+        await options.store.append({ projectKey: options.cwd, sessionId: options.id }, [
+          { uuid: 'started', type: 'user' },
+        ])
         const client = await mcpClient(options)
         try {
           await preCall(options, 'screenshot', {}, 'stop-held')
@@ -834,11 +849,16 @@ it('stops a held MCP process within five seconds, interrupts before killing, and
   const exited = once(child!, 'exit')
   const started = Date.now()
   await f.call({ action: 'stop', id: agent.conversationId })
+  const sessions = f.host.resource<Sessions>('claude-code.sessions', () => {
+    throw new Error('missing sessions')
+  })
+  expect(sessions.get(sessionId)?.pid).toBe(child!.pid)
   await f.call({ action: 'message', id: agent.conversationId, text: 'do Y' })
   await exited
   expect(Date.now() - started).toBeLessThan(5000)
   expect(Date.now() - started).toBeGreaterThanOrEqual(2900)
   expect(order.slice(0, 2)).toEqual(['interrupt', 'kill'])
+  await until(() => sessions.get(sessionId)?.pid === undefined)
   await until(() => prompts.length === 2)
   expect(prompts).toEqual(['old canceled task', 'do Y'])
 })
@@ -881,6 +901,10 @@ it('retires an aborted active turn and delivers the new user message normally', 
       },
       async *[Symbol.asyncIterator]() {
         if (seen.length === 1)
+          await options.store.append({ projectKey: options.cwd, sessionId: options.id }, [
+            { uuid: 'started', type: 'user' },
+          ])
+        if (seen.length === 1)
           await new Promise<void>((resolve) => {
             end = resolve
           })
@@ -921,6 +945,7 @@ it('appends fresh input during crash recovery and marks both old and new turn ke
   })
   sessions.put({
     id: 'recovery',
+    started: true,
     cwd: f.root,
     handled: [],
     turn: {
@@ -1065,6 +1090,7 @@ it('refuses a mismatched orphan, clears its pid, raises a notice, and proceeds w
   f.host.notice = (text) => notices.push(text)
   sessions.put({
     id: 'wanted-session',
+    started: true,
     cwd: f.root,
     handled: [],
     pid: child.pid,
@@ -1247,3 +1273,176 @@ it.each([false, true])(
     )
   },
 )
+
+it.each(['iterator rejection', 'error result'])(
+  'starts a retry fresh after an unestablished SDK session fails via %s',
+  async (shape) => {
+    const f = await fixture()
+    const sessions = new Sessions(join(f.root, 'failure-shapes.sqlite'))
+    cleanups.push(async () => sessions.close())
+    const seen: RunOptions[] = []
+    const runner: Runner = (options) => {
+      seen.push(options)
+      return {
+        interrupt: async () => {},
+        kill: () => {},
+        async *[Symbol.asyncIterator]() {
+          if (seen.length === 1) {
+            if (shape === 'iterator rejection') throw new Error('ENOENT from child process error')
+            yield { type: 'error', message: 'not logged in' }
+            return
+          }
+          yield { type: 'result', text: 'RETRY SUCCESS', usage }
+        },
+      }
+    }
+    const provider = createClaudeProvider(f.host, sessions, runner)
+    const transcript = normalizeContext({
+      messages: [
+        { role: 'user', content: 'original prompt', timestamp: 1 },
+        {
+          role: 'system',
+          content: '',
+          timestamp: 2,
+          sections: {
+            'claude-code-context': JSON.stringify({
+              cwd: f.root,
+              instructions: '',
+              conversation: 1,
+            }),
+          },
+        },
+      ],
+    })
+    expect(
+      (
+        await provider
+          .streamSimple(provider.getModels()[0], transcript, { sessionId: 'failure' })
+          .result()
+      ).stopReason,
+    ).toBe('error')
+    expect(sessions.get('failure')).toBeUndefined()
+    expect(
+      (
+        await provider
+          .streamSimple(provider.getModels()[0], transcript, { sessionId: 'failure' })
+          .result()
+      ).stopReason,
+    ).toBe('stop')
+    expect(seen.map((options) => [options.resume, options.prompt])).toEqual([
+      [false, 'original prompt'],
+      [false, 'original prompt'],
+    ])
+    expect(sessions.get('failure')?.started).toBe(true)
+  },
+)
+
+it('records session establishment atomically with mirror entries and preserves it across stale provider writes', async () => {
+  const root = await temp()
+  const sessions = new Sessions(join(root, 'started.sqlite'))
+  const stale = { id: 'started', cwd: root, handled: [], started: false }
+  sessions.put(stale)
+  await sessions.mirror.append({ projectKey: root, sessionId: stale.id }, [
+    { uuid: 'ack', type: 'user' },
+  ])
+  expect(sessions.get(stale.id)?.started).toBe(true)
+  sessions.put(stale)
+  expect(sessions.get(stale.id)?.started).toBe(true)
+  sessions.close()
+  const reopened = new Sessions(join(root, 'started.sqlite'))
+  try {
+    expect(reopened.get(stale.id)?.started).toBe(true)
+  } finally {
+    reopened.close()
+  }
+})
+
+it('preserves a parent MCP id while a native Claude subagent assistant message arrives', async () => {
+  const bridge = new ToolBridge([
+    { name: 'screenshot', description: '', parameters: Type.Object({}) },
+  ])
+  const options = {
+    id: 'parent',
+    cwd: '.',
+    signal: new AbortController().signal,
+    hooks: bridge.hooks,
+    mcpServers: { ultimate: bridge.server },
+  }
+  const client = await mcpClient(options)
+  try {
+    await preCall(options, 'screenshot', {}, 'parent-call')
+    const nested = assistantEvents('native-agent-call', [
+      { type: 'tool_use', id: 'nested-bash', name: 'Bash', input: {} },
+    ])
+    expect(nested.some((event) => event.type === 'boundary')).toBe(false)
+    for (const event of nested) if (event.type === 'boundary') bridge.prune(event.ids)
+    expect(
+      assistantEvents(null, [
+        { type: 'tool_use', id: 'parent-call', name: 'mcp__ultimate__screenshot', input: {} },
+      ]),
+    ).toContainEqual({ type: 'boundary', ids: ['parent-call'] })
+    const result = client.callTool({ name: 'screenshot', arguments: {} })
+    const call = await bridge.next()
+    expect(call.id).toBe('parent-call')
+    bridge.resolve({
+      role: 'toolResult',
+      toolCallId: call.id,
+      toolName: call.name,
+      content: [],
+      isError: false,
+      timestamp: 1,
+    })
+    await result
+  } finally {
+    await client.close()
+  }
+})
+
+it('does not report a held-query idle observation failure during harness shutdown', async () => {
+  let executing = false
+  let client: Client | undefined
+  const notices: string[] = []
+  const f = await fixture((options) => ({
+    interrupt: async () => {},
+    kill: async () => {
+      await client?.close()
+    },
+    async *[Symbol.asyncIterator]() {
+      await options.store.append({ projectKey: options.cwd, sessionId: options.id }, [
+        { uuid: 'started', type: 'user' },
+      ])
+      client = await mcpClient(options)
+      await preCall(options, 'screenshot', {}, 'shutdown-held')
+      await client.callTool({ name: 'screenshot', arguments: {} })
+      yield { type: 'result', text: 'not reached', usage }
+    },
+  }))
+  f.host.notice = (text) => notices.push(text)
+  f.prepared.registry.install(
+    defineExtension({
+      name: 'screenshot',
+      tools: [
+        defineTool({
+          name: 'screenshot',
+          description: 'Hold',
+          parameters: Type.Object({}),
+          execute: async (_args, _api, taskContext) => {
+            executing = true
+            await new Promise<void>((_resolve, reject) =>
+              taskContext.abortSignal!.addEventListener(
+                'abort',
+                () => reject(taskContext.abortSignal!.reason),
+                { once: true },
+              ),
+            )
+            return {}
+          },
+        }),
+      ],
+    }),
+  )
+  await f.call({ action: 'start', agent: 'claude-worker', task: 'hold', background: true })
+  await until(() => executing)
+  await f.close()
+  expect(notices).toEqual([])
+})

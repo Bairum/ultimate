@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import type {
@@ -6,6 +7,7 @@ import type {
   HookEvent,
   Options,
   SessionStore,
+  SDKAssistantMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 
 export type RunnerEvent =
@@ -35,7 +37,7 @@ export interface RunOptions {
 }
 export interface Run extends AsyncIterable<RunnerEvent> {
   interrupt(): Promise<void>
-  kill(): void
+  kill(): void | Promise<void>
 }
 export type Runner = (options: RunOptions) => Run
 
@@ -53,6 +55,23 @@ export function childEnv(parent: NodeJS.ProcessEnv = process.env) {
     // https://code.claude.com/docs/en/env-vars#enable_claudeai_mcp_servers
     ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
   }
+}
+
+export function assistantEvents(
+  parentToolUseId: string | null,
+  content: SDKAssistantMessage['message']['content'],
+): RunnerEvent[] {
+  const events: RunnerEvent[] = content.flatMap((block) =>
+    block.type === 'tool_use'
+      ? [{ type: 'tool' as const, name: block.name, input: block.input }]
+      : [],
+  )
+  if (!parentToolUseId)
+    events.push({
+      type: 'boundary',
+      ids: content.flatMap((block) => (block.type === 'tool_use' ? [block.id] : [])),
+    })
+  return events
 }
 
 export const sdkRunner: Runner = (options) => {
@@ -93,8 +112,10 @@ export const sdkRunner: Runner = (options) => {
     interrupt: async () => {
       await run.interrupt()
     },
-    kill: () => {
-      if (child?.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    kill: async () => {
+      if (child?.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+        if (child.kill('SIGKILL')) await once(child, 'exit')
+      }
       controller.abort()
       run.close()
     },
@@ -106,17 +127,8 @@ export const sdkRunner: Runner = (options) => {
           message.event.delta.type === 'text_delta'
         )
           yield { type: 'text', text: message.event.delta.text }
-        if (message.type === 'assistant') {
-          for (const block of message.message.content)
-            if (block.type === 'tool_use')
-              yield { type: 'tool', name: block.name, input: block.input }
-          yield {
-            type: 'boundary',
-            ids: message.message.content.flatMap((block) =>
-              block.type === 'tool_use' ? [block.id] : [],
-            ),
-          }
-        }
+        if (message.type === 'assistant')
+          yield* assistantEvents(message.parent_tool_use_id, message.message.content)
         if (message.type === 'result') {
           if (message.subtype !== 'success' || message.is_error) {
             yield {
