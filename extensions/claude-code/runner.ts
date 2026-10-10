@@ -11,6 +11,7 @@ import type {
 export type RunnerEvent =
   | { type: 'text'; text: string }
   | { type: 'tool'; name: string; input: unknown }
+  | { type: 'boundary'; ids: string[] }
   | {
       type: 'result'
       text: string
@@ -91,10 +92,10 @@ export const sdkRunner: Runner = (options) => {
   return {
     interrupt: async () => {
       await run.interrupt()
-      controller.abort()
     },
     kill: () => {
-      child?.kill('SIGKILL')
+      if (child?.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      controller.abort()
       run.close()
     },
     async *[Symbol.asyncIterator]() {
@@ -105,10 +106,17 @@ export const sdkRunner: Runner = (options) => {
           message.event.delta.type === 'text_delta'
         )
           yield { type: 'text', text: message.event.delta.text }
-        if (message.type === 'assistant')
+        if (message.type === 'assistant') {
           for (const block of message.message.content)
             if (block.type === 'tool_use')
               yield { type: 'tool', name: block.name, input: block.input }
+          yield {
+            type: 'boundary',
+            ids: message.message.content.flatMap((block) =>
+              block.type === 'tool_use' ? [block.id] : [],
+            ),
+          }
+        }
         if (message.type === 'result') {
           if (message.subtype !== 'success' || message.is_error) {
             yield {

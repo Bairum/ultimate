@@ -26,14 +26,18 @@ const excluded = new Set([
   'fetch_web',
 ])
 
-export function bridgeTools(context: TranscriptContext) {
+export function bridgeTools(context: TranscriptContext, explicit: string[] = []) {
   const tools = new Map<string, Tool>()
   for (const message of context.messages) {
     if (message.role !== 'system') continue
     for (const tool of message.toolsAdded ?? []) tools.set(tool.name, tool)
     for (const tool of message.toolsRemoved ?? []) tools.delete(tool.name)
   }
-  return [...tools.values()].filter((tool) => !excluded.has(tool.name.toLowerCase()))
+  return [...tools.values()].filter(
+    (tool) =>
+      !excluded.has(tool.name.toLowerCase()) &&
+      (!['restart', 'land', 'discard'].includes(tool.name) || explicit.includes(tool.name)),
+  )
 }
 
 export function mcpResult(result: ToolResultMessage) {
@@ -55,7 +59,7 @@ export class ToolBridge {
     { resolve: (result: ReturnType<typeof mcpResult>) => void; cleanup: () => void }
   >()
   readonly resolved = new Set<string>()
-  private ids: BridgeCall[] = []
+  private ids = new Map<string, BridgeCall[]>()
   private queue: BridgeCall[] = []
   private wake?: (call: BridgeCall) => void
   lost = false
@@ -70,13 +74,38 @@ export class ToolBridge {
             async (input) => {
               if (input.hook_event_name === 'PreToolUse') {
                 const name = input.tool_name.replace(/^mcp__ultimate__/, '')
-                if (names.has(name))
-                  this.ids.push({
+                if (names.has(name)) {
+                  const queue = this.ids.get(name) ?? []
+                  queue.push({
                     id: input.tool_use_id,
                     name,
                     arguments: input.tool_input as ToolCall['arguments'],
                   })
+                  this.ids.set(name, queue)
+                }
               }
+              return {}
+            },
+          ],
+        },
+      ],
+      PostToolUse: [
+        {
+          matcher: 'mcp__ultimate__.*',
+          hooks: [
+            async (_input, id) => {
+              this.removeId(id)
+              return {}
+            },
+          ],
+        },
+      ],
+      PostToolUseFailure: [
+        {
+          matcher: 'mcp__ultimate__.*',
+          hooks: [
+            async (_input, id) => {
+              this.removeId(id)
               return {}
             },
           ],
@@ -101,11 +130,10 @@ export class ToolBridge {
     this.server.instance.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const name = request.params.name
       const args = request.params.arguments ?? {}
-      const index = this.ids.findIndex(
-        (call) => call.name === name && isDeepStrictEqual(call.arguments, args),
-      )
+      const ids = this.ids.get(name) ?? []
+      const index = ids.findIndex((call) => isDeepStrictEqual(call.arguments, args))
       if (index < 0) throw new Error(`Ultimate MCP call ${name} has no Claude tool-use id`)
-      const call = this.ids.splice(index, 1)[0]
+      const call = ids.splice(index, 1)[0]
       if (this.pending.has(call.id) || this.resolved.has(call.id))
         throw new Error(`Duplicate Ultimate MCP call ${call.id}`)
       return new Promise<ReturnType<typeof mcpResult>>((resolve, reject) => {
@@ -130,6 +158,22 @@ export class ToolBridge {
         } else this.queue.push(call)
       })
     })
+  }
+
+  prune(current: string[] = []) {
+    for (const [name, calls] of this.ids)
+      this.ids.set(
+        name,
+        calls.filter((call) => current.includes(call.id)),
+      )
+  }
+
+  private removeId(id: string | undefined) {
+    for (const [name, calls] of this.ids)
+      this.ids.set(
+        name,
+        calls.filter((call) => call.id !== id),
+      )
   }
 
   next(): Promise<BridgeCall> {

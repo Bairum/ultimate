@@ -67,12 +67,16 @@ export class Sessions {
       .run(record.id, JSON.stringify(record))
   }
 
+  delete(id: string) {
+    this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id)
+  }
+
   close() {
     this.db.close()
   }
 }
 
-export function killOrphan(pid: number) {
+export function killOrphan(pid: number, sessionId: string): string | undefined {
   let command: string
   try {
     process.kill(pid, 0)
@@ -82,10 +86,20 @@ export function killOrphan(pid: number) {
       ['ESRCH', 'ENOENT'].includes((error as NodeJS.ErrnoException).code ?? '') ||
       (error as { status?: number }).status === 1
     )
-      return
-    throw error
+      return undefined
+    return `Could not inspect Claude Code pid ${pid}: ${String(error)}`
   }
-  if (!command.toLowerCase().includes('claude'))
-    throw new Error(`Refusing to kill pid ${pid}: not a Claude process`)
-  process.kill(pid, 'SIGKILL')
+  const args = command.trim().split(/\s+/)
+  const session = args.some(
+    (arg, index) => (arg === '--session-id' || arg === '--resume') && args[index + 1] === sessionId,
+  )
+  if (!session || !/(?:^|[\\/])claude(?:\.exe)?$/i.test(args[0] ?? ''))
+    return `Refusing to kill pid ${pid}: not Claude Code session ${sessionId}`
+  try {
+    process.kill(pid, 'SIGKILL')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
+      return `Could not kill Claude Code pid ${pid}: ${String(error)}`
+  }
+  return undefined
 }

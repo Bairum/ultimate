@@ -1,6 +1,9 @@
 import { join } from 'node:path'
+import { setTimeout } from 'node:timers/promises'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { createHash } from 'node:crypto'
-import { defineExtension, GenerationTask, hook } from '@earendil-works/pi-durable'
+import { AgentDoc, defineExtension, GenerationTask, hook } from '@earendil-works/pi-durable'
 import type {
   AssistantMessage,
   Model,
@@ -11,6 +14,7 @@ import type { Provider } from '@earendil-works/pi-ai/models'
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Sessions, killOrphan } from './sessions.ts'
+import type { SessionRecord } from './sessions.ts'
 import { sdkRunner } from './runner.ts'
 import type { Runner, RunnerEvent } from './runner.ts'
 import { ToolBridge, bridgeTools } from './bridge.ts'
@@ -26,7 +30,7 @@ const models: Model<string>[] = aliases.map((id) => ({
   reasoning: true,
   input: ['text'],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 200000,
+  contextWindow: 0,
   maxTokens: 32000,
 }))
 const marker = 'claude-code-context'
@@ -54,28 +58,47 @@ export function userTurns(context: TranscriptContext) {
   })
 }
 
+interface LiveQuery {
+  run: ReturnType<Runner>
+  bridge: ToolBridge
+  iterator: AsyncIterator<RunnerEvent>
+  next?: Promise<IteratorResult<RunnerEvent>>
+  call?: ReturnType<ToolBridge['next']>
+  locks: ReturnType<typeof exclusiveHooks>
+  controller: AbortController
+  stopping?: Promise<void>
+  watching?: boolean
+}
+function stop(state: LiveQuery) {
+  state.stopping ??= (async () => {
+    void state.run.interrupt().catch(() => {})
+    await setTimeout(3000)
+    state.run.kill()
+    state.controller.abort()
+    state.locks.close()
+  })()
+  return state.stopping
+}
+
 export function createClaudeProvider(
   host: ExtensionHost,
   sessions: Sessions,
   runner: Runner,
 ): Provider {
-  const live = new Map<
-    string,
-    {
-      run: ReturnType<Runner>
-      bridge: ToolBridge
-      iterator: AsyncIterator<RunnerEvent>
-      next?: Promise<IteratorResult<RunnerEvent>>
-      call?: ReturnType<ToolBridge['next']>
-      locks: ReturnType<typeof exclusiveHooks>
-    }
-  >()
+  const live = new Map<string, LiveQuery>()
+  const retire = (id: string) => {
+    const record = sessions.get(id)
+    if (!record) return
+    record.handled = [...new Set([...record.handled, ...(record.turn?.keys ?? [])])]
+    delete record.turn
+    delete record.bridge
+    delete record.pid
+    sessions.put(record)
+  }
   host.onClose?.(async () => {
-    for (const state of live.values()) {
-      state.run.kill()
-      state.locks.close()
-    }
+    const states = [...live.values()]
     live.clear()
+    await Promise.all(states.map(stop))
   })
   const stream = (model: Model<string>, context: TranscriptContext, options?: StreamOptions) => {
     const events = createAssistantMessageEventStream()
@@ -101,10 +124,13 @@ export function createClaudeProvider(
       let locks: ReturnType<typeof exclusiveHooks> | undefined
       let held = false
       let sessionId: string | undefined
+      let stateRef: LiveQuery | undefined
+      let received = false
+      let hadSuccess = false
       const signal = options?.signal ?? new AbortController().signal
       const abort = () => {
-        void run?.interrupt().catch(() => {})
-        run?.kill()
+        if (sessionId) retire(sessionId)
+        if (stateRef) void stop(stateRef)
       }
       try {
         if (!options?.sessionId)
@@ -122,12 +148,15 @@ export function createClaudeProvider(
           cwd: string
           instructions: string
           conversation: number
+          conversationId?: number
+          aborted?: string[]
+          explicitTools?: string[]
         }
         const previous = sessions.get(id)
         const fresh = userTurns(context).filter((turn) => !previous?.handled.includes(turn.key))
-        const recovering = !!previous?.turn
-        const record = previous ?? { id, cwd: target.cwd, handled: [] }
-        if (!fresh.length && !recovering && record.result) {
+        hadSuccess = !!previous?.result
+        let record: SessionRecord = previous ?? { id, cwd: target.cwd, handled: [] }
+        if (!fresh.length && !record.turn && record.result) {
           const result = record.result
           message.content = [{ type: 'text', text: result.text }]
           message.usage = {
@@ -145,9 +174,33 @@ export function createClaudeProvider(
           return
         }
         let state = live.get(id)
+        if (state?.stopping) {
+          await state.stopping
+          if (live.get(id) === state) live.delete(id)
+          record = sessions.get(id) ?? record
+          state = undefined
+        }
+        const canceled = record.bridge?.some((call) => target.aborted?.includes(call.id))
+        if (canceled) {
+          if (state) {
+            await stop(state)
+            live.delete(id)
+            state = undefined
+          }
+          retire(id)
+          record = sessions.get(id)!
+        }
+        const recovering = !!record.turn
+        const unhandled = userTurns(context).filter(
+          (turn) => !record.handled.includes(turn.key) && !record.turn?.keys.includes(turn.key),
+        )
         if (state?.bridge.lost) {
-          state.run.kill()
-          state.locks.close()
+          await stop(state)
+          live.delete(id)
+          state = undefined
+        }
+        if (state && unhandled.length && recovering) {
+          await stop(state)
           live.delete(id)
           state = undefined
         }
@@ -166,7 +219,8 @@ export function createClaudeProvider(
         }
         if (state) for (const result of results) state.bridge.resolve(result)
         if (!state && record.pid) {
-          killOrphan(record.pid)
+          const warning = killOrphan(record.pid, id)
+          if (warning) host.notice(warning)
           delete record.pid
         }
         const recoveredResults = results.filter((result) =>
@@ -181,16 +235,22 @@ export function createClaudeProvider(
                 )
                 .join('\n')
             : continuePrompt
-          : fresh.map((turn) => turn.text).join('\n\n')
-        if (!prompt) throw new Error('Claude Code has no new user input')
-        record.turn ??= { keys: fresh.map((turn) => turn.key), prompt }
+          : unhandled.map((turn) => turn.text).join('\n\n')
+        const input =
+          recovering && unhandled.length
+            ? prompt + '\n\nNew input:\n' + unhandled.map((turn) => turn.text).join('\n\n')
+            : prompt
+        if (!input) throw new Error('Claude Code has no new user input')
+        record.turn ??= { keys: [], prompt: input }
+        record.turn.keys = [...new Set([...record.turn.keys, ...unhandled.map((turn) => turn.key)])]
         sessions.put(record)
         if (!state) {
-          locks = exclusiveHooks(host, signal)
-          const bridge = new ToolBridge(bridgeTools(context), ['screenshot'])
+          const controller = new AbortController()
+          locks = exclusiveHooks(host, controller.signal)
+          const bridge = new ToolBridge(bridgeTools(context, target.explicitTools), ['screenshot'])
           signal.throwIfAborted()
           run = runner({
-            prompt,
+            prompt: input,
             id,
             resume: !!previous,
             model: model.id,
@@ -198,10 +258,18 @@ export function createClaudeProvider(
             append: await promptAppend(target.cwd, target.instructions, target.conversation),
             plugin: await pluginDirectory(host, target.cwd, id),
             store: sessions.mirror,
-            signal,
+            signal: controller.signal,
             hooks: {
               ...locks.hooks,
               PreToolUse: [...(locks.hooks.PreToolUse ?? []), ...(bridge.hooks.PreToolUse ?? [])],
+              PostToolUse: [
+                ...(locks.hooks.PostToolUse ?? []),
+                ...(bridge.hooks.PostToolUse ?? []),
+              ],
+              PostToolUseFailure: [
+                ...(locks.hooks.PostToolUseFailure ?? []),
+                ...(bridge.hooks.PostToolUseFailure ?? []),
+              ],
             },
             mcpServers: { ultimate: bridge.server },
             onPid(pid) {
@@ -209,9 +277,10 @@ export function createClaudeProvider(
               sessions.put(record)
             },
           })
-          state = { run, bridge, iterator: run[Symbol.asyncIterator](), locks }
+          state = { run, bridge, iterator: run[Symbol.asyncIterator](), locks, controller }
           live.set(id, state)
         }
+        stateRef = state
         run = state.run
         locks = state.locks
         signal.addEventListener('abort', abort, { once: true })
@@ -262,19 +331,37 @@ export function createClaudeProvider(
             events.push({ type: 'done', reason: 'toolUse', message })
             events.end(message)
             held = true
+            if (!state.watching && target.conversationId !== undefined) {
+              state.watching = true
+              const retained = state
+              void (async () => {
+                const conversation = await host
+                  .harness()
+                  .conversation(target.conversationId as ConversationId, BACKGROUND_CONTEXT)
+                await conversation!.waitForIdle(BACKGROUND_CONTEXT)
+                if (live.get(id) !== retained) return
+                retire(id)
+                await stop(retained)
+                if (live.get(id) === retained) live.delete(id)
+              })().catch((error: unknown) =>
+                host.notice(`Claude Code run observation failed: ${String(error)}`),
+              )
+            }
             return
           }
           state.next = undefined
           if (item.value.done) break
           const event = item.value.value
-          if (event.type === 'tool' || event.type === 'text') {
-            const delta =
-              event.type === 'tool' ? `${event.name}: ${JSON.stringify(event.input)}\n` : event.text
+          received = true
+          if (event.type === 'boundary') state.bridge.prune(event.ids)
+          if (event.type === 'tool') {
+            const delta = `${event.name}: ${JSON.stringify(event.input)}\n`
             thinking.thinking += delta
             events.push({ type: 'thinking_delta', contentIndex: 0, delta, partial: message })
           }
           if (event.type === 'error') throw new Error(event.message)
           if (event.type === 'result') {
+            state.bridge.prune()
             events.push({
               type: 'thinking_end',
               contentIndex: 0,
@@ -324,6 +411,10 @@ export function createClaudeProvider(
         events.end(message)
       } catch (error) {
         message.stopReason = signal.aborted ? 'aborted' : 'error'
+        if (sessionId) {
+          if (signal.aborted) retire(sessionId)
+          else if (!received && !hadSuccess) sessions.delete(sessionId)
+        }
         const text = String(error)
         message.errorMessage = /not logged|authentication|login|401/i.test(text)
           ? 'Claude Code is not logged in: run `claude` and `/login` in a terminal'
@@ -335,9 +426,13 @@ export function createClaudeProvider(
       } finally {
         signal.removeEventListener('abort', abort)
         if (!held) {
-          run?.kill()
-          locks?.close()
-          if (sessionId) live.delete(sessionId)
+          if (stateRef?.stopping) await stateRef.stopping
+          else {
+            run?.kill()
+            stateRef?.controller.abort()
+            locks?.close()
+          }
+          if (sessionId && live.get(sessionId) === stateRef) live.delete(sessionId)
         }
       }
     })()
@@ -372,6 +467,7 @@ export function claudeCode(host: ExtensionHost, runner: Runner = sdkRunner) {
           const parent =
             host.conversations().find((item) => item.id === api.conversationId)
               ?.parentConversationId ?? api.conversationId
+          const configured = await host.harness().snapshot(AgentDoc, api.conversationId, context)
           return {
             messages: [
               ...messages,
@@ -384,6 +480,22 @@ export function claudeCode(host: ExtensionHost, runner: Runner = sdkRunner) {
                     cwd: agent.cwd ?? host.projectRoot,
                     instructions: agent.instructions ?? '',
                     conversation: parent,
+                    conversationId: api.conversationId,
+                    explicitTools: Array.isArray(configured?.tools) ? configured.tools : [],
+                    aborted: (await conversation!.context(context)).entries
+                      .filter(
+                        (entry) =>
+                          entry.kind === 'pi.tool-result' &&
+                          (
+                            entry.data as { diagnostics?: { code?: string }[] } | undefined
+                          )?.diagnostics?.some((diagnostic) => diagnostic.code === 'aborted'),
+                      )
+                      .flatMap(
+                        (entry) =>
+                          entry.model?.flatMap((message) =>
+                            message.role === 'toolResult' ? [message.toolCallId] : [],
+                          ) ?? [],
+                      ),
                   }),
                 },
               },

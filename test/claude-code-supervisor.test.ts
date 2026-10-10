@@ -24,7 +24,7 @@ export default function fakeClaude(host: ExtensionHost) {
   let child: ReturnType<typeof spawn> | undefined
   return { interrupt: async () => {}, kill: () => { child?.kill('SIGKILL') }, async *[Symbol.asyncIterator]() {
    if (!options.resume) {
-    child=spawn(process.execPath,['-e',"process.title='claude-fake';setInterval(()=>{},1000)"],{stdio:'ignore'})
+    child=spawn(process.execPath,['-e',"process.title='claude --session-id "+options.id+"';setInterval(()=>{},1000)"],{stdio:'ignore'})
     options.onPid(child.pid!)
     appendFileSync(host.home+'/fake.pid', String(child.pid))
     yield {type:'tool',name:'Bash',input:{command:'holding'}}
@@ -78,7 +78,7 @@ export default function fakeClaude(host: ExtensionHost) {
     orphan = Number(await readFile(join(home, 'fake.pid'), 'utf8'))
     await until(() =>
       execFileSync('ps', ['-p', String(orphan), '-o', 'command='], { encoding: 'utf8' }).includes(
-        'claude-fake',
+        'claude --session-id',
       ),
     )
     process.kill(stream.system().process.pid, 'SIGKILL')

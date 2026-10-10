@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdir, readFile, readlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -10,7 +10,7 @@ import {
 } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { normalizeContext, Type } from '@earendil-works/pi-ai'
-import { defineExtension, defineTool } from '@earendil-works/pi-durable'
+import { CompactionTask, defineExtension, defineTool, hook } from '@earendil-works/pi-durable'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk'
@@ -24,7 +24,7 @@ import {
   createClaudeProvider,
   userTurns,
 } from '../extensions/claude-code/server.ts'
-import { Sessions } from '../extensions/claude-code/sessions.ts'
+import { Sessions, killOrphan } from '../extensions/claude-code/sessions.ts'
 import { childEnv } from '../extensions/claude-code/runner.ts'
 import type { Runner, RunOptions } from '../extensions/claude-code/runner.ts'
 import { exclusiveHooks, pluginDirectory, promptAppend } from '../extensions/claude-code/setup.ts'
@@ -486,11 +486,16 @@ async function mcpClient(options: Pick<RunOptions, 'mcpServers'>) {
   return client
 }
 
-async function preCall(options: RunOptions, name: string, args: object, id: string) {
+async function preCall(
+  options: Pick<RunOptions, 'id' | 'cwd' | 'hooks' | 'signal'>,
+  name: string,
+  args: object,
+  id: string,
+) {
   for (const group of options.hooks?.PreToolUse ?? [])
     if (group.matcher === 'mcp__ultimate__.*')
-      for (const hook of group.hooks)
-        await hook(
+      for (const callback of group.hooks)
+        await callback(
           {
             hook_event_name: 'PreToolUse',
             session_id: options.id,
@@ -757,3 +762,482 @@ it("offers only a definition's explicitly selected Pi tools to MCP", async () =>
   ).toContain('SELECTED')
   expect(listed).toEqual(['screenshot'])
 })
+
+it('stops a held MCP process within five seconds, interrupts before killing, and sends the next message as new work', async () => {
+  let child: ReturnType<typeof spawn> | undefined
+  let executing = false
+  const order: string[] = []
+  const prompts: string[] = []
+  const f = await fixture((options) => {
+    prompts.push(options.prompt)
+    if (options.resume)
+      return {
+        interrupt: async () => {},
+        kill: () => {},
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'result', text: options.prompt, usage }
+        },
+      }
+    child = spawn(process.execPath, ['-e', "process.title='claude-fake';setInterval(()=>{},1000)"])
+    options.onPid(child.pid!)
+    return {
+      interrupt: async () => {
+        order.push('interrupt')
+      },
+      kill: () => {
+        order.push('kill')
+        child!.kill('SIGKILL')
+      },
+      async *[Symbol.asyncIterator]() {
+        const client = await mcpClient(options)
+        try {
+          await preCall(options, 'screenshot', {}, 'stop-held')
+          await client.callTool({ name: 'screenshot', arguments: {} })
+        } finally {
+          await client.close()
+        }
+        yield { type: 'result', text: 'SHOULD NOT COMPLETE', usage }
+      },
+    }
+  })
+  f.prepared.registry.install(
+    defineExtension({
+      name: 'screenshot',
+      tools: [
+        defineTool({
+          name: 'screenshot',
+          description: 'Hold',
+          parameters: Type.Object({}),
+          execute: async (_args, _api, taskContext) => {
+            executing = true
+            await new Promise<void>((_resolve, reject) =>
+              taskContext.abortSignal!.addEventListener(
+                'abort',
+                () => reject(taskContext.abortSignal!.reason),
+                { once: true },
+              ),
+            )
+            return {}
+          },
+        }),
+      ],
+    }),
+  )
+  await f.call({
+    action: 'start',
+    agent: 'claude-worker',
+    task: 'old canceled task',
+    background: true,
+  })
+  await until(() => executing)
+  const agent = (await f.children())[0]
+  const exited = once(child!, 'exit')
+  const started = Date.now()
+  await f.call({ action: 'stop', id: agent.conversationId })
+  await f.call({ action: 'message', id: agent.conversationId, text: 'do Y' })
+  await exited
+  expect(Date.now() - started).toBeLessThan(5000)
+  expect(Date.now() - started).toBeGreaterThanOrEqual(2900)
+  expect(order.slice(0, 2)).toEqual(['interrupt', 'kill'])
+  await until(() => prompts.length === 2)
+  expect(prompts).toEqual(['old canceled task', 'do Y'])
+})
+
+it('retries a failed first launch with sessionId instead of resuming a nonexistent session', async () => {
+  const optionsSeen: RunOptions[] = []
+  const f = await fixture((options) => {
+    optionsSeen.push(options)
+    if (optionsSeen.length === 1) throw new Error('ENOENT before spawn')
+    return {
+      interrupt: async () => {},
+      kill: () => {},
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'result', text: 'RETRY OK', usage }
+      },
+    }
+  })
+  await f.call({ action: 'start', agent: 'claude-worker', task: 'original instructions' })
+  const agent = (await f.children())[0]
+  expect(
+    await f.call({ action: 'message', id: agent.conversationId, text: 'retry now' }),
+  ).toContain('RETRY OK')
+  expect(optionsSeen.map((options) => options.resume)).toEqual([false, false])
+  expect(optionsSeen[1].prompt).toContain('original instructions')
+  expect(optionsSeen[1].prompt).toContain('retry now')
+  expect(optionsSeen[1].prompt).not.toContain(continuePrompt)
+})
+
+it('retires an aborted active turn and delivers the new user message normally', async () => {
+  const seen: string[] = []
+  const f = await fixture((options) => {
+    seen.push(options.prompt)
+    let end: (() => void) | undefined
+    return {
+      interrupt: async () => {
+        end?.()
+      },
+      kill: () => {
+        end?.()
+      },
+      async *[Symbol.asyncIterator]() {
+        if (seen.length === 1)
+          await new Promise<void>((resolve) => {
+            end = resolve
+          })
+        yield { type: 'result', text: options.prompt, usage }
+      },
+    }
+  })
+  await f.call({ action: 'start', agent: 'claude-worker', task: 'cancel me', background: true })
+  await until(() => seen.length === 1)
+  const agent = (await f.children())[0]
+  await f.call({ action: 'stop', id: agent.conversationId })
+  expect(
+    await f.call({ action: 'message', id: agent.conversationId, text: 'do something else' }),
+  ).toContain('do something else')
+  await until(() => seen.length === 2)
+  expect(seen).toEqual(['cancel me', 'do something else'])
+})
+
+it('appends fresh input during crash recovery and marks both old and new turn keys handled', async () => {
+  const f = await fixture()
+  const sessions = new Sessions(join(f.root, 'recovery.sqlite'))
+  cleanups.push(async () => sessions.close())
+  const old = { role: 'user' as const, content: 'old turn', timestamp: 1 }
+  const fresh = { role: 'user' as const, content: 'new recovery instruction', timestamp: 3 }
+  const transcript = normalizeContext({
+    messages: [
+      old,
+      fresh,
+      {
+        role: 'system',
+        content: '',
+        timestamp: 4,
+        sections: {
+          'claude-code-context': JSON.stringify({ cwd: f.root, instructions: '', conversation: 1 }),
+        },
+      },
+    ],
+  })
+  sessions.put({
+    id: 'recovery',
+    cwd: f.root,
+    handled: [],
+    turn: {
+      prompt: old.content,
+      keys: userTurns(normalizeContext({ messages: [old] })).map((turn) => turn.key),
+    },
+  })
+  const provider = createClaudeProvider(f.host, sessions, fake)
+  await provider
+    .streamSimple(provider.getModels()[0], transcript, { sessionId: 'recovery' })
+    .result()
+  expect(calls[0].prompt).toContain(continuePrompt)
+  expect(calls[0].prompt).toContain('new recovery instruction')
+  expect(sessions.get('recovery')?.handled).toEqual(userTurns(transcript).map((turn) => turn.key))
+})
+
+it('keeps the native Bash lock across MCP generations and a later exclusive Bash still waits', async () => {
+  let bridged = false
+  let acquiredSecond = false
+  let proceed: (() => void) | undefined
+  const f = await fixture((options) => ({
+    interrupt: async () => {},
+    kill: () => {},
+    async *[Symbol.asyncIterator]() {
+      const pre = options.hooks!.PreToolUse!.find((group) => group.matcher === 'Bash')!.hooks[0]
+      const post = options.hooks!.PostToolUse!.find((group) => group.matcher === 'Bash')!.hooks[0]
+      const bash = {
+        hook_event_name: 'PreToolUse' as const,
+        session_id: options.id,
+        transcript_path: '',
+        cwd: options.cwd,
+        tool_name: 'Bash',
+        tool_input: { command: 'heavy native' },
+        tool_use_id: 'native-a',
+      }
+      await pre(bash, 'native-a', { signal: options.signal })
+      const client = await mcpClient(options)
+      try {
+        await preCall(options, 'codemode', { code: 'return 42' }, 'lock-bridge')
+        await client.callTool({ name: 'codemode', arguments: { code: 'return 42' } })
+        expect(options.signal.aborted).toBe(false)
+        await post(
+          { ...bash, hook_event_name: 'PostToolUse', tool_response: {} },
+          'unrelated-bash',
+          { signal: options.signal },
+        )
+        expect(exclusiveSlot(f.host).command).toBe('heavy native')
+        bridged = true
+        await new Promise<void>((resolve) => {
+          proceed = resolve
+        })
+        await post({ ...bash, hook_event_name: 'PostToolUse', tool_response: {} }, 'native-a', {
+          signal: options.signal,
+        })
+        await pre(
+          { ...bash, tool_use_id: 'native-b', tool_input: { command: 'heavy second' } },
+          'native-b',
+          { signal: options.signal },
+        )
+        acquiredSecond = true
+        await post({ ...bash, hook_event_name: 'PostToolUse', tool_response: {} }, 'native-b', {
+          signal: options.signal,
+        })
+        yield { type: 'result', text: 'LOCK OK', usage }
+      } finally {
+        await client.close()
+      }
+    },
+  }))
+  f.host.projectSettings = async () => ({ exclusiveCommands: ['heavy'] })
+  f.prepared.registry.install(codemode(f.host))
+  await f.call({ action: 'start', agent: 'claude-worker', task: 'locks', background: true })
+  await until(() => bridged && !!proceed)
+  const slot = exclusiveSlot(f.host)
+  const external = slot.acquire('external heavy')
+  expect(slot.queue).toHaveLength(1)
+  proceed!()
+  await external
+  await until(() => slot.queue.length === 1)
+  expect(slot.command).toBe('external heavy')
+  expect(acquiredSecond).toBe(false)
+  slot.release()
+  const agent = (await f.children())[0]
+  const child = await f.opened.harness.conversation(agent.conversationId, context)
+  await child!.waitForIdle(context)
+  expect(acquiredSecond).toBe(true)
+  expect(slot.command).toBeUndefined()
+})
+
+it('does not threshold-compact Claude-managed context with very large aggregate usage', async () => {
+  let compactions = 0
+  const f = await fixture((options) => ({
+    interrupt: async () => {},
+    kill: () => {},
+    async *[Symbol.asyncIterator]() {
+      yield { type: 'tool', name: 'Bash', input: { command: 'x'.repeat(100000) } }
+      yield { type: 'result', text: options.prompt, usage: { ...usage, cacheRead: 5000000 } }
+    },
+  }))
+  f.prepared.registry.install(
+    defineExtension({
+      name: 'compaction-spy',
+      hooks: [
+        hook(CompactionTask, {
+          beforeCompact: () => {
+            compactions++
+            return undefined
+          },
+        }),
+      ],
+    }),
+  )
+  expect(f.prepared.modelRuntime.getModels('claude-code')[0].contextWindow).toBe(0)
+  await f.call({ action: 'start', agent: 'claude-worker', task: 'big context' })
+  const agent = (await f.children())[0]
+  expect(
+    await f.call({ action: 'message', id: agent.conversationId, text: 'next turn' }),
+  ).toContain('next turn')
+  expect(compactions).toBe(0)
+  const child = await f.opened.harness.conversation(agent.conversationId, context)
+  const view = await child!.viewState(context)
+  const last = view.value.entries.findLast((entry) => entry.kind === 'pi.assistant')!.model![0]
+  expect(last.role === 'assistant' && Number.isFinite(last.usage.totalTokens)).toBe(true)
+  view.dispose()
+})
+
+it('refuses a mismatched orphan, clears its pid, raises a notice, and proceeds with recovery', async () => {
+  const f = await fixture()
+  const child = spawn(process.execPath, [
+    '-e',
+    'setInterval(()=>{},1000)',
+    '/tmp/claude-notes.txt',
+    '--session-id',
+    'wanted-session',
+  ])
+  const sessions = new Sessions(join(f.root, 'orphan.sqlite'))
+  cleanups.push(async () => {
+    child.kill('SIGKILL')
+    sessions.close()
+  })
+  const notices: string[] = []
+  f.host.notice = (text) => notices.push(text)
+  sessions.put({
+    id: 'wanted-session',
+    cwd: f.root,
+    handled: [],
+    pid: child.pid,
+    turn: { keys: [], prompt: 'original' },
+  })
+  const provider = createClaudeProvider(f.host, sessions, fake)
+  const transcript = normalizeContext({
+    messages: [
+      {
+        role: 'system',
+        content: '',
+        timestamp: 1,
+        sections: {
+          'claude-code-context': JSON.stringify({ cwd: f.root, instructions: '', conversation: 1 }),
+        },
+      },
+    ],
+  })
+  const result = await provider
+    .streamSimple(provider.getModels()[0], transcript, { sessionId: 'wanted-session' })
+    .result()
+  expect(result.stopReason).toBe('stop')
+  expect(notices[0]).toContain('Refusing to kill')
+  expect(sessions.get('wanted-session')?.pid).toBeUndefined()
+  expect(() => process.kill(child.pid!, 0)).not.toThrow()
+})
+
+it('kills only a Claude-looking orphan with matching recorded session arguments', async () => {
+  const id = 'matching-session'
+  const child = spawn(process.execPath, [
+    '-e',
+    `process.title='claude --session-id ${id}';setInterval(()=>{},1000)`,
+  ])
+  try {
+    await until(() => {
+      const command = execFileSync('ps', ['-p', String(child.pid), '-o', 'command='], {
+        encoding: 'utf8',
+      })
+      return command.startsWith('claude --session-id')
+    })
+    expect(killOrphan(child.pid!, 'different-session')).toContain('Refusing to kill')
+    expect(() => process.kill(child.pid!, 0)).not.toThrow()
+    const exited = once(child, 'exit')
+    expect(killOrphan(child.pid!, id)).toBeUndefined()
+    await exited
+    expect(child.signalCode).toBe('SIGKILL')
+  } finally {
+    child.kill('SIGKILL')
+  }
+})
+
+it('correlates identical concurrent MCP requests FIFO and purges skipped hook ids at message boundaries', async () => {
+  const bridge = new ToolBridge([
+    { name: 'screenshot', description: '', parameters: Type.Object({}) },
+  ])
+  const options = {
+    id: 'fifo',
+    cwd: '.',
+    signal: new AbortController().signal,
+    hooks: bridge.hooks,
+    mcpServers: { ultimate: bridge.server },
+  }
+  const client = await mcpClient(options)
+  try {
+    await preCall(options, 'screenshot', {}, 'skipped')
+    bridge.prune(['first', 'second'])
+    await preCall(options, 'screenshot', {}, 'first')
+    await preCall(options, 'screenshot', {}, 'second')
+    const first = client.callTool({ name: 'screenshot', arguments: {} })
+    const second = client.callTool({ name: 'screenshot', arguments: {} })
+    const a = await bridge.next()
+    const b = await bridge.next()
+    expect([a.id, b.id]).toEqual(['first', 'second'])
+    for (const call of [b, a])
+      bridge.resolve({
+        role: 'toolResult',
+        toolCallId: call.id,
+        toolName: call.name,
+        content: [{ type: 'text', text: 'result-' + call.id }],
+        isError: false,
+        timestamp: 1,
+      })
+    expect(await first).toMatchObject({ content: [{ text: 'result-first' }] })
+    expect(await second).toMatchObject({ content: [{ text: 'result-second' }] })
+    await preCall(options, 'screenshot', {}, 'denied')
+    await bridge.hooks.PostToolUseFailure![0].hooks[0](
+      {
+        hook_event_name: 'PostToolUseFailure',
+        session_id: 'fifo',
+        transcript_path: '',
+        cwd: '.',
+        tool_name: 'mcp__ultimate__screenshot',
+        tool_input: {},
+        tool_use_id: 'denied',
+        error: 'denied',
+      },
+      'denied',
+      { signal: options.signal },
+    )
+    await preCall(options, 'screenshot', {}, 'after-denial')
+    const next = client.callTool({ name: 'screenshot', arguments: {} })
+    const call = await bridge.next()
+    expect(call.id).toBe('after-denial')
+    bridge.resolve({
+      role: 'toolResult',
+      toolCallId: call.id,
+      toolName: call.name,
+      content: [],
+      isError: false,
+      timestamp: 1,
+    })
+    await next
+  } finally {
+    await client.close()
+  }
+})
+
+it('renders the final answer once instead of also copying text deltas into thinking', async () => {
+  const f = await fixture(() => ({
+    interrupt: async () => {},
+    kill: () => {},
+    async *[Symbol.asyncIterator]() {
+      yield { type: 'text', text: 'UNIQUE FINAL ANSWER' }
+      yield { type: 'result', text: 'UNIQUE FINAL ANSWER', usage }
+    },
+  }))
+  await f.call({ action: 'start', agent: 'claude-worker', task: 'answer once' })
+  const agent = (await f.children())[0]
+  const child = await f.opened.harness.conversation(agent.conversationId, context)
+  const view = await child!.viewState(context)
+  const message = view.value.entries.findLast((entry) => entry.kind === 'pi.assistant')!.model![0]
+  expect(JSON.stringify(message).match(/UNIQUE FINAL ANSWER/g)).toHaveLength(1)
+  view.dispose()
+})
+
+it.each([false, true])(
+  'excludes dangerous inherited tools but allows an explicit definition opt-in (%s)',
+  async (explicit) => {
+    let names: string[] = []
+    const f = await fixture((options) => ({
+      interrupt: async () => {},
+      kill: () => {},
+      async *[Symbol.asyncIterator]() {
+        const client = await mcpClient(options)
+        try {
+          names = (await client.listTools()).tools.map((tool) => tool.name)
+        } finally {
+          await client.close()
+        }
+        yield { type: 'result', text: 'TOOLS CHECKED', usage }
+      },
+    }))
+    f.prepared.registry.install(
+      defineExtension({
+        name: 'dangerous',
+        tools: ['restart', 'land', 'discard'].map((name) =>
+          defineTool({
+            name,
+            description: name,
+            parameters: Type.Object({}),
+            execute: async () => ({}),
+          }),
+        ),
+      }),
+    )
+    if (explicit)
+      await writeFile(
+        join(f.root, 'agents/claude-worker.md'),
+        '---\nname: claude-worker\ndescription: Work\nmodel: claude-code/haiku\nisolate: none\ntools: [restart, land, discard]\n---\nOpt in.\n',
+      )
+    await f.call({ action: 'start', agent: 'claude-worker', task: 'tools' })
+    expect(names.filter((name) => ['restart', 'land', 'discard'].includes(name))).toEqual(
+      explicit ? ['restart', 'land', 'discard'] : [],
+    )
+  },
+)
