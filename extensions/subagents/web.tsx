@@ -101,7 +101,9 @@ function SubagentCall({ call }: { call: ToolCallView }) {
   const { switchConversation } = useUltimate()
   const conversations = useConversations()
   const action = text(call.args.action) || 'start'
-  const details = call.details as { conversationId?: number; background?: boolean } | undefined
+  const details = call.details as
+    | { conversationId?: number; background?: boolean; yielded?: boolean }
+    | undefined
   const childId =
     details?.conversationId ?? (typeof call.args.id === 'number' ? call.args.id : undefined)
   const child = conversations.find((conversation) => conversation.id === childId)
@@ -109,7 +111,8 @@ function SubagentCall({ call }: { call: ToolCallView }) {
   const background = call.args.background === true || details?.background === true
   const instruction = action === 'start' ? text(call.args.task) : text(call.args.text)
   const finished = call.status === 'done' || call.status === 'error'
-  const working = child?.busy && (background || !finished)
+  const yielded = details?.yielded === true
+  const working = child?.busy && (background || yielded || !finished)
   const title: ReactNode =
     action === 'start' ? (
       <>
@@ -132,6 +135,7 @@ function SubagentCall({ call }: { call: ToolCallView }) {
             <>
               {childId !== undefined && <IsolateBadge childId={childId} />}
               {background && <Tag>bg</Tag>}
+              {yielded && <Tag>wait yielded</Tag>}
               {working && (
                 <span className="flex items-center gap-1.5 text-brand">
                   <BusyDot /> working
@@ -175,7 +179,9 @@ function SubagentCall({ call }: { call: ToolCallView }) {
         {call.status === 'done' && action === 'list' ? (
           <ChildList output={call.output} />
         ) : call.status === 'done' && call.output ? (
-          <ToolSection label={background && action !== 'wait' ? 'Result' : 'Answer'}>
+          <ToolSection
+            label={yielded ? 'Wait status' : background && action !== 'wait' ? 'Result' : 'Answer'}
+          >
             <Message className="font-sans text-[13px]" from="assistant">
               <MessageResponse>{call.output}</MessageResponse>
             </Message>
