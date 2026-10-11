@@ -16,7 +16,7 @@ Example Opus review:
 
 ```json
 {
-  "prompt": "Review the current git diff for correctness. Do not modify files. Return findings with file paths and line numbers.",
+  "prompt": "Review .ultimate/extensions/claude-code/runner.ts for correctness. Do not modify files. Return findings with file paths and line numbers.",
   "model": "opus",
   "maxTurns": 5,
   "maxBudgetUsd": 1,
