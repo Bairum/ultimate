@@ -163,7 +163,6 @@ it('renders web_search and web_fetch results, and a missing key with Add key ope
     // Search, collapsed: the query, the top domains, how many results, and a warning count.
     const search = card(page, 'durable agents · example.com')
     await expect.poll(() => search.getByText('4 results').count(), timeout).toBe(1)
-    expect(api.keys).toEqual(['test-key', 'test-key'])
     expect(await search.getByText('· example.com, docs.pi.dev, blog.example.org +1').count()).toBe(
       1,
     )
@@ -191,6 +190,7 @@ it('renders web_search and web_fetch results, and a missing key with Add key ope
     // Fetch, collapsed: the domains, one page, and one failure.
     const fetch = card(page, 'example.com, bad.example')
     await expect.poll(() => fetch.getByText('1 page', { exact: true }).count(), timeout).toBe(1)
+    expect(api.keys).toEqual(['test-key', 'test-key'])
     expect(await fetch.getByText('1 failed').count()).toBe(1)
 
     // Expanded: the page's title and source link, its content as markdown (open for a single page), and the failure.
