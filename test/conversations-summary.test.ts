@@ -713,16 +713,62 @@ it('counts only completed inputs, not a yield continued by another hook', async 
     fauxAssistantMessage('Intermediate.'),
     fauxAssistantMessage('Final.'),
   ])
-  expect(
-    (
-      await (
-        await fixture.server.root.submit({ type: 'input', content: 'Work' }, context)
-      ).wait(context)
-    ).status,
-  ).toBe('done')
+  const submitted = await fixture.server.root.submit({ type: 'input', content: 'Work' }, context)
+  const settled = await submitted.wait(context)
+  expect(settled.status).toBe('done')
+  if (settled.status !== 'done' || settled.type !== 'input')
+    throw new Error('Expected a settled input')
   await until(async () => (await fixture.read())?.status === 'ready')
   expect((await fixture.read())?.exchanges).toBe(1)
   expect(fixture.generated).toHaveBeenCalledTimes(1)
+  const users = (await fixture.server.root.context(context)).entries.filter(
+    (entry) => entry.kind === 'pi.user',
+  )
+  expect(users).toHaveLength(2)
+  expect(users.at(-1)?.id).not.toBe(settled.entry)
+  const index = async () =>
+    (await fixture.server.harness.snapshot(Overview, fixture.server.root.id, context))
+      ?.conversations[fixture.server.root.id]
+  const assessment = { inputId: settled.entry, answerId: settled.answer, value: 'done' }
+  await until(async () => (await index())?.assessmentStatus === 'ready')
+  expect(await index()).toMatchObject({
+    runState: 'done',
+    inputId: settled.entry,
+    answerId: settled.answer,
+    assessment,
+  })
+  await fixture.reopen()
+  await until(async () => (await index())?.assessmentStatus === 'ready')
+  expect(await index()).toMatchObject({
+    runState: 'done',
+    inputId: settled.entry,
+    answerId: settled.answer,
+    assessment,
+  })
+  expect(fixture.generated).toHaveBeenCalledTimes(1)
+  // A newer transcript user entry must still invalidate the older reply, even without an input submission.
+  const newer = await (
+    await fixture.server.root.submit(
+      {
+        type: 'write',
+        entry: {
+          kind: 'pi.user',
+          model: [
+            {
+              role: 'user',
+              content: 'New context after the assessed reply.',
+              timestamp: Date.now(),
+            },
+          ],
+        },
+      },
+      context,
+    )
+  ).wait(context)
+  expect(newer.status).toBe('done')
+  await until(async () => (await index())?.runState === 'idle')
+  expect((await index())?.assessment).toBeUndefined()
+  expect((await index())?.inputId).toBe(newer.entry)
 }, 60000)
 
 it('selects Luna/medium with bounded text-only context and cancels oversized output', async () => {

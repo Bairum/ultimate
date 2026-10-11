@@ -109,8 +109,10 @@ when its child is selected.
 `parentId` (actual owner conversation, not history ancestry), `role` (metadata label), `runState`
 (`working | queued | idle | done | error`), active `inputId`/`answerId`, `summary`/`summaryStatus`, `activity`,
 `assessmentStatus`, and optional `assessment: { inputId, answerId, value: needs_input | done | neutral }`.
-`runState: done` is displayed as Replied; assessment Done is explicitly model opinion. Existing conversation summaries
-already supply titles, timestamps and owner task ids, so these are not duplicated in the index.
+`runState: done` is displayed as Replied; assessment Done is explicitly model opinion. A current assessment projects
+its settled submission's input entry id, not a synthetic continuation's transcript user entry. The latest transcript
+user still guards freshness, so new input invalidates old assessments. Existing conversation summaries already supply
+titles, timestamps and owner task ids, so these are not duplicated in the index.
 
 One root-document SSE serves every row, unchanged by expansion/selection; no per-row or selected-owner streams.
 On open/reload, the extension reads task receipts and each conversation's newest visible user entry to reconstruct

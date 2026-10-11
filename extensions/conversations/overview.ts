@@ -56,8 +56,8 @@ export function overviewBehavior(
         const live = await tx.doc(LiveDoc, id)
         const inbox = await tx.doc(InboxDoc, id)
         const head = await tx.latestHeadMarker(id)
-        const inputId = latestUser.get(id)
-        const active = inputId !== undefined && (!head || head.head <= inputId)
+        const userId = latestUser.get(id)
+        const active = userId !== undefined && (!head || head.head <= userId)
         const taskId = latestRun.get(id)
         const run = taskId === undefined ? undefined : await tx.task(taskId)
         const outcome = run?.state.status === 'terminal' ? run.state.outcome : undefined
@@ -69,7 +69,13 @@ export function overviewBehavior(
           typeof result.entryId === 'number'
             ? (result.entryId as EntryId)
             : undefined
-        const answered = active && answerId !== undefined && answerId > inputId
+        const answered = active && answerId !== undefined && answerId > userId
+        const assessment =
+          answered &&
+          state?.assessment?.answerId === answerId &&
+          (await currentAnswer(tx, id, answerId))
+            ? state.assessment
+            : undefined
         const row: OverviewRow = {
           ...(own.owner ? { parentId: own.owner.conversationId } : {}),
           ...(metadata.label ? { role: metadata.label } : {}),
@@ -82,20 +88,15 @@ export function overviewBehavior(
                 : active && outcome && ['failed', 'faulted', 'orphaned'].includes(outcome.status)
                   ? 'error'
                   : 'idle',
-          ...(active ? { inputId } : {}),
+          // Continuations add transcript users without submissions; retain the settled input identity.
+          ...(active ? { inputId: assessment?.inputId ?? userId } : {}),
           ...(answered ? { answerId } : {}),
           ...(state?.summary ? { summary: state.summary } : {}),
           ...(state?.status ? { summaryStatus: state.status } : {}),
           ...(state?.activity ? { activity: state.activity } : {}),
           ...(state?.assessmentStatus ? { assessmentStatus: state.assessmentStatus } : {}),
+          ...(assessment ? { assessment } : {}),
         }
-        if (
-          answered &&
-          state?.assessment?.answerId === answerId &&
-          state.assessment.inputId === inputId &&
-          (await currentAnswer(tx, id, answerId))
-        )
-          row.assessment = state.assessment
         if (JSON.stringify(index.conversations[id]) !== JSON.stringify(row))
           index.conversations[id] = row
       }
