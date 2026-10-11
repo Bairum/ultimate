@@ -1,3 +1,4 @@
+import { resolve } from 'node:path'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
@@ -9,20 +10,45 @@ export default (host: ExtensionHost) =>
   defineExtension({
     name: 'self',
     sections: [
-      section(
-        'self',
-        () =>
-          `Project (your work): ${host.projectRoot}\nUltimate (yourself): ${host.ultimateRoot}\n${host.projectRoot === host.ultimateRoot ? 'The project is Ultimate itself.\n' : ''}Project-specific extensions, agents, skills, and surfaces belong in ${host.projectRoot}/.ultimate/. Ultimate's core and built-ins live in its clone.\nBefore changing yourself, read ${host.ultimateRoot}/AGENTS.md (layers, reloads, durability) and ${host.ultimateRoot}/extensions/README.md (new UI is a new extension folder).\nUI and extension changes reload live. Call restart only after editing server/ or shared/, never for web/, extensions/, or agents/.`,
-      ),
+      section('self', (input) => {
+        const cwd = input.env?.cwd ?? input.agent.cwd ?? host.projectRoot
+        const isolated = resolve(cwd) !== resolve(host.projectRoot)
+        const sourceRoot =
+          isolated && host.projectRoot === host.ultimateRoot ? cwd : host.ultimateRoot
+        return [
+          `Project (your work): ${cwd}`,
+          `Host project: ${host.projectRoot}`,
+          `Ultimate (running host): ${host.ultimateRoot}`,
+          ...(host.projectRoot === host.ultimateRoot
+            ? ['The host project is Ultimate itself.']
+            : []),
+          `Direct project edits to ${cwd}; project-specific extensions, agents, skills, and surfaces belong in ${cwd}/.ultimate/.`,
+          `The running host loads project config and extensions from ${host.projectRoot}/.ultimate/ and built-ins from ${host.ultimateRoot}/extensions/. These are host-scoped, not switched by your work cwd.`,
+          `Before changing Ultimate, read ${sourceRoot}/AGENTS.md (layers, reloads, durability) and ${sourceRoot}/extensions/README.md (new UI is a new extension folder).`,
+          isolated
+            ? 'You are working in a separate checkout from the running host. Isolated edits do not hot-reload the host. Preview and verify this checkout separately; land changes for the host to pick them up. The restart tool is unavailable from this cwd.'
+            : 'UI and extension changes in the running host reload live. Call restart only after editing server/ or shared/, never for web/, extensions/, or agents/.',
+          'Restart swaps the shared Ultimate host for all conversations, not just your checkout. Landing changes does not automatically restart it; leave any required host restart to the coordinator or user.',
+        ].join('\n')
+      }),
     ],
     tools: [
       defineTool({
         name: 'restart',
         description:
-          'Apply changes to server/ or shared/ with a verified core swap. Not needed for web/, extensions/, or agents/.',
+          'Restart the shared Ultimate host for all conversations after changes to server/ or shared/. Only available from the host project cwd; not needed for web/, extensions/, or agents/.',
         parameters: Type.Object({}),
         replay: 'safe',
         async execute(_args, api, context): Promise<ToolExecutionResult> {
+          const cwd = api.env?.cwd ?? (await api.agent(context)).cwd ?? host.projectRoot
+          if (resolve(cwd) !== resolve(host.projectRoot)) {
+            const error = `Restart refused: your cwd (${cwd}) is not the host project (${host.projectRoot}). Restart affects the shared Ultimate host for all conversations, not this checkout. Preview and verify your checkout separately; leave any host restart after landing to the coordinator or user.`
+            return {
+              isError: true,
+              details: { refused: true, error },
+              content: [{ type: 'text', text: error }],
+            }
+          }
           const key = `restart:${api.taskId}`
           const done = await api.memo<{
             generation: number

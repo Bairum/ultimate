@@ -16,15 +16,17 @@ it('renders only enabled guidance, lists off building blocks, and adds self guid
     home: join(home, 'state'),
   })
   try {
-    async function render() {
+    async function render(cwd = projectRoot, useEnv = true) {
       const agent = await server.root.agent(context)
       const sections: Record<string, string> = {}
       for (const extension of server.host.registry.snapshot().installed()) {
         for (const section of extension.sections ?? []) {
           const value = await section.render(
-            { conversationId: server.root.id, agent, env: { cwd: projectRoot } } as Parameters<
-              typeof section.render
-            >[0],
+            {
+              conversationId: server.root.id,
+              agent: { ...agent, cwd },
+              env: useEnv ? { cwd } : undefined,
+            } as Parameters<typeof section.render>[0],
             context,
           )
           if (value) sections[section.key] = value
@@ -68,13 +70,41 @@ it('renders only enabled guidance, lists off building blocks, and adds self guid
     await until(() => !!server.host.registry.snapshot().extension('self'))
     const withSelf = await render()
     expect(withSelf.self).toContain(`Project (your work): ${projectRoot}`)
-    expect(withSelf.self).toContain('Ultimate (yourself):')
+    expect(withSelf.self).toContain('Ultimate (running host):')
     expect(withSelf.self).toContain('/AGENTS.md')
     expect(withSelf.self).toContain('/extensions/README.md')
     expect(withSelf.self).toContain('new UI is a new extension folder')
     expect(withSelf.self).toContain('Call restart only after editing server/ or shared/')
     expect(withSelf.codemode).toContain('Call restart only at top level.')
     expect(withSelf.building_blocks).not.toContain('- self:')
+
+    const checkout = join(home, 'isolated-work')
+    await mkdir(checkout)
+    await writeFile(join(checkout, 'AGENTS.md'), 'Isolated project instructions.')
+    const skills = vi.spyOn(server.host, 'skills')
+    for (const useEnv of [true, false]) {
+      const isolated = await render(checkout, useEnv)
+      expect(isolated.identity).toContain(`${checkout}/.ultimate/`)
+      expect(isolated.identity).not.toContain(`${projectRoot}/.ultimate/`)
+      expect(isolated.cwd).toBe(checkout)
+      expect(isolated.environment).toContain(`Work checkout (effective cwd): ${checkout}`)
+      expect(isolated.environment).toContain(`Host project: ${projectRoot}`)
+      expect(isolated.environment).toContain('Running Ultimate host:')
+      expect(isolated.environment).toContain('do not hot-reload the running host')
+      expect(isolated.project_context).toContain('Isolated project instructions.')
+      expect(skills).toHaveBeenLastCalledWith(checkout)
+      expect(isolated.building_blocks).toContain(`${projectRoot}/.ultimate/settings.json`)
+      expect(isolated.building_blocks).toContain(`${projectRoot}/.ultimate/extensions/`)
+      expect(isolated.self).toContain(`Project (your work): ${checkout}`)
+      expect(isolated.self).toContain(`Direct project edits to ${checkout}`)
+      expect(isolated.self).toContain('Isolated edits do not hot-reload the host')
+      expect(isolated.self).not.toContain(
+        'UI and extension changes in the running host reload live',
+      )
+      expect(isolated.self).toContain('restart tool is unavailable from this cwd')
+      expect(isolated.self).toContain('Landing changes does not automatically restart')
+    }
+    skills.mockRestore()
 
     await writeFile(
       settings,

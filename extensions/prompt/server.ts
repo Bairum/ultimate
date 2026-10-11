@@ -14,8 +14,8 @@ export default function prompt(host: ExtensionHost) {
     sections: [
       section(
         'identity',
-        () =>
-          `You are Ultimate, a coding agent running in a web UI on the user's machine. The person in this conversation steers; you build, verify, and report. You are meant to be specialized for the project: build the tools, panels, agents, and skills that help with it into ${host.projectRoot}/.ultimate/ so everyone working on the project gets them, and personal ones into ~/.ultimate/.`,
+        (input) =>
+          `You are Ultimate, a coding agent running in a web UI on the user's machine. The person in this conversation steers; you build, verify, and report. You are meant to be specialized for the project: build the tools, panels, agents, and skills that help with it into ${input.env?.cwd ?? input.agent.cwd ?? host.projectRoot}/.ultimate/ so everyone working on the project gets them, and personal ones into ~/.ultimate/.`,
       ),
       section(
         'principles',
@@ -68,7 +68,7 @@ export default function prompt(host: ExtensionHost) {
       }),
       section('project_context', (input) =>
         loadProjectContextFiles({
-          cwd: input.env?.cwd ?? host.projectRoot,
+          cwd: input.env?.cwd ?? input.agent.cwd ?? host.projectRoot,
           agentDir: getAgentDir(),
         })
           .map(
@@ -78,7 +78,7 @@ export default function prompt(host: ExtensionHost) {
           .join('\n\n'),
       ),
       section('skills', (input) => {
-        const skills = host.skills(input.env?.cwd ?? host.projectRoot)
+        const skills = host.skills(input.env?.cwd ?? input.agent.cwd ?? host.projectRoot)
         return formatSkillsForPrompt(skills)
       }),
       section('building_blocks', () => {
@@ -93,15 +93,16 @@ export default function prompt(host: ExtensionHost) {
               ?.replace(/\s+/g, ' ')
             return `- ${extension.name}: ${sentence ?? ''}`
           }),
-          'Enable names with "extensions": { "enable": [...] } in ~/.ultimate/settings.json (this machine) or <project>/.ultimate/settings.json (this project). Changes apply live with no restart.',
+          'Enable names with "extensions": { "enable": [...] } in ~/.ultimate/settings.json (this machine) or <project>/.ultimate/settings.json (the host project). Changes apply live with no restart.',
+          `The running host uses ${host.projectRoot}/.ultimate/settings.json and ${host.projectRoot}/.ultimate/extensions/; editing these in a separate work checkout does not change the host's configuration or hot-reload its extensions.`,
           `${host.ultimateRoot}/.ultimate/settings.json is the suggested full setup.`,
         ].join('\n')
       }),
-      section(
-        'environment',
-        () => `Project: ${host.projectRoot}\nUI: ${host.system().process.url}`,
-      ),
-      section('cwd', (input) => input.env?.cwd ?? host.projectRoot),
+      section('environment', (input) => {
+        const cwd = input.env?.cwd ?? input.agent.cwd ?? host.projectRoot
+        return `Work checkout (effective cwd): ${cwd}\nHost project: ${host.projectRoot}\nRunning Ultimate host: ${host.ultimateRoot}\nUI: ${host.system().process.url} (shared host)\nDirect project edits to the effective cwd. Host-scoped config and extensions remain loaded from the host project and Ultimate clone; edits in a separate checkout do not hot-reload the running host.`
+      }),
+      section('cwd', (input) => input.env?.cwd ?? input.agent.cwd ?? host.projectRoot),
       section('build', () => {
         const build = host.build()
         return (
