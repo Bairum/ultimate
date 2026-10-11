@@ -423,7 +423,7 @@ function LiveStatus({
   const retry = live.generation?.retry
   const running = (live.tools ?? []).some((slot) => slot.status !== 'done')
   const idle = busy && !shows(partial) && !running
-  const now = useNow(retry ? 250 : 1000, !!retry || idle)
+  const now = useNow(100, !!retry || idle)
   const lines: ReactNode[] = []
   if (retry)
     lines.push(

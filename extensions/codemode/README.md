@@ -4,9 +4,17 @@ Run an async JavaScript function body in a fresh QuickJS/WASM sandbox. Only inje
 
 `tools.screenshot` and `tools.browser` resolve to `{ title, image?, file?, outcomes }`. `image` is missing when the PNG cannot be resized under the inline image limit; only the saved `file` path comes back, and `image(undefined)` throws. Check it first: `if (shot.image) image(shot.image)`.
 
-`text(value)`, console methods, `image(data)`, and the return value produce model-visible output. Nested-call completion lines stream to `pi.live`; final details contain `{ calls: [{ name, args, status, ms }], value?, error? }`. Script failures preserve output and QuickJS's `codemode.js:<line>` stack. Interrupted scripts are not replayed: Durable returns an interrupted result with the committed partial log. Ordinary nested side effects are never rolled back.
+`text(value)`, console methods, `image(data)`, and the return value produce model-visible output. Nested-call completion lines stream to `pi.live`; final details contain `{ calls: [{ name, args, status, ms, conversationId?, background? }], value?, error?, subagentAnswers? }`. Script failures preserve output and QuickJS's `codemode.js:<line>` stack. Interrupted scripts are not replayed: Durable returns an interrupted result with the committed partial log. Ordinary nested side effects are never rolled back.
 
 The first line may be `// @options: {"timeout_ms":30000,"max_output_tokens":2000}`. Default timeout is 60 seconds, text output budget is 10,000 estimated tokens, and VM heap limit is 256 MiB. Conversation abort and sandbox deadlines cancel nested work through its context.
+
+## Yielding to steering
+
+When a nested `tools.subagent` result has `details.yielded: true`, codemode synchronously aborts only its sandbox, before returning any value or error to QuickJS. The installed pi-codemode runtime clears pending host replies and terminates the worker before resolving the abort. Script `catch`/`finally`, sequential statements, and `Promise.all` continuations cannot resume. In-flight nested work receives cancellation; child lifetimes and durable answer delivery remain the subagent backend's responsibility.
+
+The outer tool succeeds with the explicit message: **Script yielded to steering; subagents still running; remaining script not executed; prior side effects may have happened.** Details include `yielded: true` and `pendingSubagents: [{ conversationId, background? }]`, preserving the yielding child's ID and known IDs from other cancelled waits. The corresponding call status is `yielded`; other pending calls are `cancelled`. A cancelled start may not yet have returned its new child's ID; the backend must retain that ownership durably. Codemode neither aborts the parent invocation nor reads or consumes steering. Original conversation cancellation still cancels the script, rather than turning into a successful yield.
+
+Successful nested subagent results may carry `details.answerId` (a durable answer entry ID). Only a successful, non-yielded outer completion emits the deduplicated IDs as `details.subagentAnswers: number[]`. Yielded and failed results omit this receipt, even if an earlier child completed in the same script; interrupted tasks likewise do not acknowledge those answers. Nested answers remain private unless the script prints or returns them. The backend queues reports with stable answer IDs immediately, then its `afterTools` hook reads committed tool results and atomically withdraws reports acknowledged by these receipts before the Pi tool-round boundary. It does not wait for the outer task's terminal outcome to enqueue delivery. Codemode does not handle delivery, consume steering, or import the backend runtime.
 
 ## Read-only introspection
 
@@ -28,7 +36,7 @@ Entry/search limits default to 100 and must be 1–1000. Pagination of raw entri
 
 ## Durable store
 
-`store(key, value)` / `load(key)` use the conversation document `codemode.store` (rewindable, fork as-of). Values are loaded before every script. Only successful scripts apply their store writes. The document is exported in `docs` for SSE subscriptions.
+`store(key, value)` / `load(key)` use the conversation document `codemode.store` (rewindable, fork as-of). Values are loaded before every script. Only scripts that complete successfully apply their store writes; a yielded outer result is successful but discards all script store changes (including changes made before the yield). The document is exported in `docs` for SSE subscriptions.
 
 **Crash window:** Pi Durable 1.0 has no result-transaction callback. Store writes use a separate `api.commit()` immediately before returning success. A crash between that commit and durable tool settlement retains the writes while the model may be told the script was **interrupted**. Do not treat store updates as atomic receipts of external side effects.
 

@@ -24,6 +24,7 @@ interface RestartDetails {
   toGeneration?: number
   fromBuild?: string
   toBuild?: string
+  refused?: boolean
   rolledBack?: boolean
   error?: string
 }
@@ -56,6 +57,8 @@ function RestartCall({ call }: { call: ToolCallView }) {
         <span className="text-success">swapped</span> · {generations}
         {builds}
       </>
+    ) : failed && result.refused ? (
+      <span className="text-error">restart refused · shared host unchanged</span>
     ) : failed && result.rolledBack ? (
       <span className="text-error">
         activation failed · rolled back to gen {result.toGeneration ?? result.fromGeneration}
@@ -100,16 +103,16 @@ function CoreStale() {
       <Popover onOpenChange={(open) => !open && restart.clear()}>
         <PopoverTrigger asChild>
           <button
-            className="flex h-6 items-center gap-1.5 rounded-md border border-error/40 bg-error/10 px-2 font-mono text-[11px] text-error"
+            className="flex h-6 cursor-pointer items-center gap-1.5 rounded-md border border-error/40 bg-error/10 px-2 font-mono text-[11px] text-error"
             type="button"
           >
             <TriangleAlertIcon className="size-3" />
-            restart failed
+            host restart failed
           </button>
         </PopoverTrigger>
         <PopoverContent align="end" className="w-[32rem] p-0 font-mono">
           <div className="border-b border-border/70 px-3 py-2 text-[11.5px] text-muted-foreground">
-            The restart did not take.
+            The shared Ultimate host restart did not take.
           </div>
           <pre className="max-h-80 overflow-auto px-3 py-2 text-[11.5px] leading-[1.55] whitespace-pre-wrap text-error">
             {restart.error}
@@ -139,7 +142,7 @@ function CoreStale() {
       <TooltipTrigger asChild>
         <button
           className={cn(
-            'flex h-6 items-center gap-1.5 rounded-md border px-2 font-mono text-[11px] transition-colors',
+            'flex h-6 cursor-pointer items-center gap-1.5 rounded-md border px-2 font-mono text-[11px] transition-colors',
             restart.busy
               ? 'border-brand/40 bg-brand/10 text-brand'
               : 'border-warning/40 bg-warning/10 text-warning hover:bg-warning/20',
@@ -153,12 +156,14 @@ function CoreStale() {
             ? `swapping to gen ${restart.pending}…`
             : restart.busy
               ? 'checking…'
-              : 'core changed — restart'}
+              : 'core changed — restart host'}
         </button>
       </TooltipTrigger>
       <TooltipContent className="max-w-80 font-mono text-[11px]" side="bottom">
-        server/ or shared/ changed since generation {system?.process.generation} booted. Restart
-        type-checks and boots a new core next to this one; if it fails, this one keeps serving.
+        Restart the shared Ultimate host for all conversations, not an isolated checkout. server/ or
+        shared/ changed since generation {system?.process.generation} booted. This manual action
+        type-checks and boots a new core; if it fails, this one keeps serving. Landing changes does
+        not automatically restart the host.
       </TooltipContent>
     </Tooltip>
   )

@@ -250,6 +250,7 @@ it('enables the full repository set including github-triage', async () => {
     [
       ...DEFAULT_EXTENSIONS,
       'automations',
+      'claude-code',
       'clock',
       'documents',
       'exclusive-commands',
