@@ -433,6 +433,10 @@ export default function subagents(
     | 'workspaces'
   >,
 ) {
+  if (!host.workspaces)
+    throw new Error(
+      'subagents requires host.workspaces; upgrade and restart the Ultimate core before loading this facet',
+    )
   const Reporter = createReporter(host)
   return defineExtension({
     name: 'subagents',

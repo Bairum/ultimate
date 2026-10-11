@@ -530,17 +530,14 @@ export async function loadExtensions(
         host: facetHosts.get(name)!,
         conversationId,
         signal,
-        exec:
+        exec: (command, commandArgs, options) =>
           conversationId === undefined
-            ? actionExec(host.projectRoot, signal)
-            : async (command, arguments_, options) => {
-                const conversation = await runtime
-                  .harness()
-                  .conversation(conversationId as ConversationId, BACKGROUND_CONTEXT)
-                if (!conversation) throw new Error('Unknown conversation')
-                const cwd = (await conversation.agent(BACKGROUND_CONTEXT)).cwd ?? host.projectRoot
-                return actionExec(cwd, signal)(command, arguments_, options)
-              },
+            ? actionExec(host.projectRoot, signal)(command, commandArgs, options)
+            : host.workspaces.withAdmission(
+                conversationId as ConversationId,
+                (cwd) => actionExec(cwd, signal)(command, commandArgs, options),
+                BACKGROUND_CONTEXT,
+              ),
       })
     },
     doc: findDoc,

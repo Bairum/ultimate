@@ -17,6 +17,7 @@ it('previews a worktree child on its own home and port and validates child input
   const checkout = resolve('.')
   const source = join(root, 'source')
   await git(root, 'clone', '--no-hardlinks', checkout, source)
+  await git(source, 'switch', '-c', 'preview-source')
   await writeFile(
     join(source, '.ultimate/settings.json'),
     JSON.stringify({
@@ -82,12 +83,14 @@ it('previews a worktree child on its own home and port and validates child input
     expect(await call('instance', { action: 'start', subagent: 999999, faux: true })).toContain(
       'Unknown subagent',
     )
-    await call('subagent', {
-      action: 'start',
-      agent: 'worker',
-      task: 'Finish without tools',
-      isolate: 'worktree',
-    })
+    expect(
+      await call('subagent', {
+        action: 'start',
+        agent: 'worker',
+        task: 'Finish without tools',
+        isolate: 'worktree',
+      }),
+    ).toContain('Isolate:')
     const child = Object.values(
       (await opened.harness.snapshot(Subagents, opened.root.id, context))!.agents,
     )[0]

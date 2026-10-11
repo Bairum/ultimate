@@ -120,7 +120,7 @@ export interface SystemInfo {
   }
   access: { origins: string[] }
   persistence: { kind: 'sqlite'; path: string; sizeBytes: number; walBytes: number }
-  execution: { kind: 'node-local'; defaultCwd: string }
+  execution: { kind: 'node-local'; defaultCwd: string; workspaces?: true }
   project: {
     root: string
     name: string

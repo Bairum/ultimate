@@ -39,6 +39,7 @@ async function fixture(
   agents = false,
   sources?: Record<string, string>,
   empty = false,
+  workspaceCandidate?: 'subagents' | 'instance',
 ) {
   const directory = await temp()
   directories.push(directory)
@@ -95,6 +96,16 @@ async function fixture(
       await mkdir(join(ultimateRoot, 'extensions', name), { recursive: true })
       await writeFile(join(ultimateRoot, 'extensions', name, 'server.ts'), source)
     }
+  }
+  if (workspaceCandidate) {
+    const folder = join(ultimateRoot, 'extensions', workspaceCandidate)
+    await writeFile(
+      join(folder, 'candidate.ts'),
+      await readFile(resolvePath(`extensions/${workspaceCandidate}/server.ts`), 'utf8'),
+    )
+    if (workspaceCandidate === 'subagents')
+      for (const file of ['agents.ts', 'children.ts'])
+        await cp(resolvePath('extensions/subagents', file), join(folder, file))
   }
   if (empty) {
     await rm(join(ultimateRoot, 'extensions'), { recursive: true })
@@ -1029,6 +1040,61 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     expect(entry().server!.loadedAt).toBe(successful)
     expect(server.host.registry.snapshot().extension('counter')).toBe(installed)
   })
+  it.each(['subagents', 'instance'] as const)(
+    'retains the installed %s facet when its actual replacement requires an unavailable workspace core',
+    async (name) => {
+      const legacy = `import { defineDoc, defineExtension, section } from '@earendil-works/pi-durable'
+export const Doc = defineDoc({ kind: 'test.${name}-legacy', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', initial: () => ({ version: 'legacy' }) })
+export const docs = [Doc]
+export default host => {
+  const state = host.resource('${name}.legacy', () => ({ disposed: 0 }))
+  host.onClose(() => { state.disposed++ })
+  return defineExtension({ name: '${name}', sections: [section('${name}', () => 'legacy')] })
+}
+export const actions = { ping: async (_args, ctx) => ({ version: 'legacy', disposed: ctx.host.resource('${name}.legacy', () => { throw new Error('Legacy resource lost') }).disposed }) }`
+      const { server } = await fixture(false, name === 'instance', { [name]: legacy }, false, name)
+      const installed = server.host.registry.snapshot().extension(name)!
+      const loadedAt = server.extensions.info().find((entry) => entry.name === name)!
+        .server!.loadedAt
+      const doc = server.extensions.doc(`test.${name}-legacy`)
+      const path = join(server.host.ultimateRoot, 'extensions', name, 'server.ts')
+      await writeFile(
+        path,
+        `import candidate from './candidate.ts'
+export const actions = { replacement: async () => 'new' }
+export default host => { const { workspaces, ...oldCore } = host; return candidate(oldCore) }`,
+      )
+      await expect
+        .poll(() => server.extensions.info().find((entry) => entry.name === name)?.server?.error)
+        .toContain(`${name} requires host.workspaces`)
+      const record = server.extensions.info().find((entry) => entry.name === name)!
+      expect(record.server!.error).toContain(`${name} requires host.workspaces`)
+      expect(record.server!.loadedAt).toBe(loadedAt)
+      expect(server.host.registry.snapshot().extension(name)).toBe(installed)
+      expect(server.extensions.doc(`test.${name}-legacy`)).toBe(doc)
+      expect(server.extensions.action(name, 'replacement')).toBeUndefined()
+      expect(
+        (await post(server, `/api/extensions/${name}/actions/ping`, { args: null })).data.result,
+      ).toEqual({ version: 'legacy', disposed: 0 })
+      const section = installed.sections![0]
+      expect(await section.render({} as Parameters<typeof section.render>[0], context)).toBe(
+        'legacy',
+      )
+      await writeFile(path, `import candidate from './candidate.ts'; export default candidate`)
+      await expect
+        .poll(() => server.extensions.info().find((entry) => entry.name === name)?.server?.error, {
+          timeout: 5000,
+        })
+        .toBeUndefined()
+      expect(server.host.registry.snapshot().extension(name)).not.toBe(installed)
+      expect(
+        server.host.registry
+          .snapshot()
+          .extension(name)!
+          .tools?.map((tool) => tool.name),
+      ).toContain(name === 'subagents' ? 'subagent' : 'instance')
+    },
+  )
   it('keeps hot reloading extensions after a Vite config change restarts Vite', async () => {
     const { server } = await fixture(true)
     const entry = () => server.extensions.info().find((extension) => extension.name === 'counter')!

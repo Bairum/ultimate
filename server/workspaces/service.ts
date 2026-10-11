@@ -172,7 +172,7 @@ export function createWorkspaces(host: {
       if (!descendants.has(row.id) && cwd !== workspace.path && cwd !== workspace.source) continue
       if (holds.has(row.id)) throw new Error('Workspace has an active preview hold')
       if (admissions.has(row.id))
-        throw new Error('Workspace submit admission is in progress; retry')
+        throw new Error('Workspace execution admission is in progress; retry')
       const run = (await tx.doc(LiveDoc, row.id)).run
       if (run && !allowed.has(run.taskId))
         throw new Error('Child is running; wait or stop it first')
@@ -304,19 +304,33 @@ export function createWorkspaces(host: {
       return snapshot(id, context)
     },
     assertAdmission,
-    async submit(id: ConversationId, draft: SubmissionDraft, context: Context) {
+    async withAdmission<T>(
+      id: ConversationId,
+      operation: (cwd: string) => Promise<T>,
+      context: Context,
+    ): Promise<T> {
       const harness = host.harness()
-      await harness.commit(async (tx) => {
+      const cwd = await harness.commit(async (tx) => {
         await assertAdmission(tx, id)
+        const workspace = (await tx.doc(WorkspaceDoc, id)).workspace
+        const executionCwd = workspace?.path ?? (await tx.doc(AgentDoc, id)).cwd ?? host.projectRoot
         admissions.set(id, (admissions.get(id) ?? 0) + 1)
+        return executionCwd
       }, context)
       try {
-        return await (await harness.conversation(id, context))!.submit(draft, context)
+        return await operation(cwd)
       } finally {
         const count = admissions.get(id)! - 1
         if (count) admissions.set(id, count)
         else admissions.delete(id)
       }
+    },
+    async submit(id: ConversationId, draft: SubmissionDraft, context: Context) {
+      return this.withAdmission(
+        id,
+        async () => (await host.harness().conversation(id, context))!.submit(draft, context),
+        context,
+      )
     },
     async createLifecycle(
       tx: Tx,

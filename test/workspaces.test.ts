@@ -10,12 +10,14 @@ import {
   configure,
   AgentDoc,
 } from '@earendil-works/pi-durable'
-import type { ConversationId } from '@earendil-works/pi-durable'
+import type { ConversationId, EntryId, TaskId } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import { WorkspaceDoc, LifecycleQueue } from '../server/workspaces/doc.ts'
+import { Metadata } from '../server/metadata.ts'
+import subagents, { Subagents } from '../extensions/subagents/server.ts'
 import { git, create } from '../server/workspaces/worktree.ts'
-import { fauxServer, post, temp, removeTemp, until } from './helpers.ts'
+import { fauxServer, post, temp, removeTemp, until, attach } from './helpers.ts'
 
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => {
@@ -85,6 +87,9 @@ it('main isolated creation is opt-in, deduplicated and shares the core lifecycle
     ultimateRoot: resolve('.'),
   })
   cleanup.push(() => server.close())
+  const client = await attach(server)
+  expect(client.system().execution.workspaces).toBe(true)
+  await client.close()
   expect(
     (await post(server, '/api/extensions/exec-test/actions/pwd', { args: {} })).data.result,
   ).toBe(paths.projectRoot)
@@ -180,6 +185,100 @@ it('pending and failed preparation fail closed and survive restart without anoth
   expect(
     (await post(resumed, '/api/conversations', { isolate: 'worktree', requestId: 'fail' })).data.id,
   ).toBe(id)
+})
+it('admits action exec only at execution time, never falls back during preparation or after removal, and leases running commands', async () => {
+  const paths = await repository()
+  const extension = join(paths.projectRoot, '.ultimate/extensions/exec-test')
+  await mkdir(extension, { recursive: true })
+  await writeFile(
+    join(extension, 'server.ts'),
+    `export default { name: 'exec-test' }
+import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
+import { writeFile } from 'node:fs/promises'
+const write = ctx => ctx.exec(process.execPath, ['-e', "require('node:fs').writeFileSync('action.txt', process.cwd())"])
+export const actions = {
+  status: async (_args, ctx) => ctx.host.workspaces.snapshot(ctx.conversationId, context),
+  write: async (_args, ctx) => write(ctx),
+  afterReady: async (args, ctx) => { await writeFile(args.started, ''); await ctx.host.workspaces.ready(ctx.conversationId, context); return write(ctx) },
+  wait: async (args, ctx) => ctx.exec(process.execPath, ['--input-type=module', '-e', \`import { writeFileSync, existsSync } from 'node:fs'; writeFileSync(\${JSON.stringify(args.entered)}, ''); while (!existsSync(\${JSON.stringify(args.release)})) await new Promise(resolve => setTimeout(resolve, 20))\`]),
+  discard: async (_args, ctx) => ctx.host.workspaces.runLifecycle(ctx.conversationId, ctx.conversationId, 'discard', context)
+}`,
+  )
+  const releaseSetup = join(paths.directory, 'release-setup')
+  const failSetup = join(paths.directory, 'fail-setup')
+  await writeFile(
+    join(paths.projectRoot, '.ultimate/settings.json'),
+    JSON.stringify({
+      isolates: {
+        worktree: {
+          setup: [
+            `while [ ! -f '${releaseSetup}' ]; do sleep 0.05; done; if [ -f '${failSetup}' ]; then echo action-setup-failed >&2; exit 1; fi`,
+          ],
+        },
+      },
+    }),
+  )
+  const server = await fauxServer({
+    ...paths,
+    userHome: paths.directory,
+    ultimateRoot: resolve('.'),
+  })
+  cleanup.push(() => server.close())
+  const id = (
+    await post(server, '/api/conversations', { isolate: 'worktree', requestId: 'action-execution' })
+  ).data.id as ConversationId
+  const action = (name: string, conversationId = id, args: unknown = null) =>
+    post(server, `/api/extensions/exec-test/actions/${name}`, { args, conversationId })
+  expect((await action('status')).data.result.preparation).toBe('pending')
+  expect((await action('write')).data.error).toContain('preparation is pending')
+  await expect(access(join(paths.projectRoot, 'action.txt'))).rejects.toThrow('ENOENT')
+  // The action starts with source cwd, waits for setup, then must resolve its cwd afresh.
+  const started = join(paths.directory, 'action-started')
+  const delayed = action('afterReady', id, { started })
+  await until(async () =>
+    access(started).then(
+      () => true,
+      () => false,
+    ),
+  )
+  expect((await server.host.workspaces.snapshot(id, context))!.preparation).toBe('pending')
+  await writeFile(releaseSetup, '')
+  expect((await delayed).status).toBe(200)
+  const workspace = (await server.host.workspaces.snapshot(id, context))!
+  expect(await readFile(join(workspace.path, 'action.txt'), 'utf8')).toBe(workspace.path)
+  await expect(access(join(paths.projectRoot, 'action.txt'))).rejects.toThrow('ENOENT')
+  await git(workspace.path, 'add', '.')
+  await git(workspace.path, 'commit', '-m', 'isolated action output')
+  const entered = join(paths.directory, 'entered-action')
+  const release = join(paths.directory, 'release-action')
+  const running = action('wait', id, { entered, release })
+  try {
+    await until(async () =>
+      access(entered).then(
+        () => true,
+        () => false,
+      ),
+    )
+    await expect(
+      server.host.workspaces.runLifecycle(server.root.id, id, 'land', context),
+    ).rejects.toThrow('execution admission')
+  } finally {
+    await writeFile(release, '')
+  }
+  expect((await running).status).toBe(200)
+  expect((await action('discard')).status).toBe(200)
+  expect((await action('status')).data.result.state).toBe('discarded')
+  expect((await action('write')).data.error).toContain('discarded')
+  await expect(access(join(workspace.path, 'action.txt'))).rejects.toThrow('ENOENT')
+  await expect(access(join(paths.projectRoot, 'action.txt'))).rejects.toThrow('ENOENT')
+  await writeFile(failSetup, '')
+  const failed = (
+    await post(server, '/api/conversations', { isolate: 'worktree', requestId: 'action-error' })
+  ).data.id as ConversationId
+  await expect(server.host.workspaces.ready(failed, context)).rejects.toThrow('action-setup-failed')
+  expect((await action('status', failed)).data.result.preparation).toBe('error')
+  expect((await action('write', failed)).data.error).toContain('preparation is error')
+  await expect(access(join(paths.projectRoot, 'action.txt'))).rejects.toThrow('ENOENT')
 })
 it('preview leases block cleanup, cleanup refuses dirty output and retains the branch', async () => {
   const f = await fixture()
@@ -340,6 +439,210 @@ it('migrates actual persisted legacy isolates once before resume, retaining land
     old.record.base,
   )
 })
+it.each(['deliver', 'report'] as const)(
+  'adopts an active legacy workspace and resumes a background reporter from %s without duplicate delivery',
+  async (checkpoint) => {
+    const f = await fixture()
+    const old = await create(f.projectRoot, f.home, 'legacy', `legacy-background-${checkpoint}`)
+    const Legacy = defineDoc<{
+      agents: Record<
+        string,
+        {
+          conversationId: ConversationId
+          agent: string
+          background: boolean
+          reported: EntryId[]
+          anchor: TaskId
+          isolate?: Omit<
+            import('../shared/protocol.ts').Workspace,
+            'source' | 'targetBranch' | 'preparation'
+          >
+        }
+      >
+      actions: Record<string, { conversationId: ConversationId; reporter: TaskId }>
+    }>({
+      kind: 'ultimate.subagents',
+      version: 1,
+      scope: 'conversation',
+      history: 'latest',
+      fork: 'initial',
+      initial: () => ({ agents: {}, actions: {} }),
+    })
+    const Gate = defineTask<null, { phase: 'hold' }, null>({
+      name: 'test.legacy-background-gate',
+      version: 1,
+      initial: () => ({ phase: 'hold' }),
+      phases: {
+        hold: async (_task, runtime, ctx) => {
+          await runtime.sleep(Date.now() + 60000, ctx)
+        },
+      },
+      abort: (_task, runtime, ctx) =>
+        runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+    })
+    let gate: TaskId
+    type Input = { conversationId: ConversationId; text: string; steer: boolean }
+    type State = { phase: 'deliver' } | { phase: 'report'; report?: string; answer?: EntryId }
+    // The legacy input/checkpoint shapes are unchanged; neither contains a callId.
+    const Reporter = defineTask<Input, State, null>({
+      name: 'ultimate.subagent-reporter',
+      version: 1,
+      initial: () => ({ phase: 'deliver' }),
+      phases: {
+        deliver: async (task, runtime, ctx) => {
+          const child = (await runtime.conversation(task.input.conversationId, ctx))!
+          const settled = await (
+            await child.submit(
+              {
+                type: 'input',
+                content: task.input.text,
+                whenBusy: task.input.steer ? 'steer' : 'followUp',
+                requestId: `subagent:${task.id}`,
+              },
+              ctx,
+            )
+          ).wait(ctx)
+          if (settled.status !== 'done' || settled.type !== 'input')
+            throw new Error('Legacy child did not answer')
+          await runtime.commit(async (tx) => {
+            if (checkpoint === 'deliver')
+              return {
+                status: 'waiting',
+                on: [gate],
+                policy: 'allSettled',
+                checkpoint: { phase: 'deliver' },
+              }
+            ;(await tx.doc(Legacy, runtime.conversationId)).agents[String(child.id)].reported.push(
+              settled.answer,
+            )
+            return {
+              status: 'running',
+              checkpoint: {
+                phase: 'report',
+                report: `[subagent ${child.id} (legacy) answered] Legacy child answer`,
+                answer: settled.answer,
+              },
+            }
+          }, ctx)
+        },
+        report: async (task, runtime, ctx) => {
+          const parent = (await runtime.conversation(runtime.conversationId, ctx))!
+          await (
+            await parent.submit(
+              {
+                type: 'input',
+                content: task.state.checkpoint.report!,
+                whenBusy: 'steer',
+                requestId: `subagent-answer:${task.state.checkpoint.answer}`,
+              },
+              ctx,
+            )
+          ).wait(ctx)
+          await runtime.commit(
+            () => ({
+              status: 'waiting',
+              on: [gate],
+              policy: 'allSettled',
+              checkpoint: task.state.checkpoint,
+            }),
+            ctx,
+          )
+        },
+      },
+      abort: (_task, runtime, ctx) =>
+        runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+    })
+    f.prepared.registry.install(defineExtension({ name: 'legacy-background-gate', tasks: [Gate] }))
+    f.prepared.registry.install(defineExtension({ name: 'subagents', tasks: [Reporter] }))
+    f.prepared.faux!.setResponses([
+      fauxAssistantMessage([fauxText('Legacy child answer')]),
+      fauxAssistantMessage([fauxText('Report received')]),
+    ])
+    const rootAgent = await f.opened.root.agent(context)
+    const { child: childId, reporter: reporterId } = await f.opened.harness.commit(async (tx) => {
+      gate = await tx.createTask(Gate, null, {
+        conversationId: f.opened.root.id,
+        ownership: { kind: 'conversation' },
+        background: true,
+      })
+      const child = await tx.createConversation({ ownership: { kind: 'task', taskId: gate } })
+      await configure(tx, child.id, {
+        cwd: old.cwd,
+        model: rootAgent.model,
+        thinkingLevel: rootAgent.thinkingLevel,
+        tools: [],
+        extensions: [],
+      })
+      const state = await tx.doc(Legacy, f.opened.root.id)
+      const {
+        source: _source,
+        targetBranch: _targetBranch,
+        preparation: _preparation,
+        ...isolate
+      } = old.record
+      state.agents[String(child.id)] = {
+        conversationId: child.id,
+        anchor: gate,
+        agent: 'legacy',
+        background: true,
+        reported: [],
+        isolate,
+      }
+      const reporter = await tx.createTask(
+        Reporter,
+        { conversationId: child.id, text: 'legacy background input', steer: false },
+        { conversationId: f.opened.root.id, ownership: { kind: 'conversation' }, background: true },
+      )
+      state.actions['legacy-background-call'] = { conversationId: child.id, reporter }
+      return { child: child.id, reporter }
+    }, context)
+    await until(
+      async () => (await f.opened.harness.getTask(reporterId, context))?.state.status === 'waiting',
+    )
+    expect((await f.opened.harness.getTask(reporterId, context))!.input).toEqual({
+      conversationId: childId,
+      text: 'legacy background input',
+      steer: false,
+    })
+    f.prepared.registry.install(
+      subagents({
+        ...f.prepared,
+        projectSettings: async () => ({}),
+        harness: () => f.opened.harness,
+        metadata: Metadata,
+      }),
+    )
+    await f.reopen()
+    expect(await f.prepared.workspaces.snapshot(childId, context)).toEqual(old.record)
+    expect(
+      (await f.opened.harness.snapshot(Legacy, f.opened.root.id, context))!.agents[String(childId)]
+        .isolate,
+    ).toBeUndefined()
+    await f.opened.harness.abortTask(gate!, context)
+    expect((await f.opened.harness.waitForTask(reporterId, context)).state.outcome.status).toBe(
+      'completed',
+    )
+    await f.opened.root.waitForIdle(context)
+    await f.reopen()
+    expect((await f.opened.harness.getTask(reporterId, context))!.state.status).toBe('terminal')
+    const index = (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!
+    expect(index.actions['legacy-background-call'].reporter).toBe(reporterId)
+    expect(index.agents[String(childId)].reported).toHaveLength(1)
+    const childView = await (await f.opened.harness.conversation(childId, context))!.viewState(
+      context,
+    )
+    expect(childView.value.entries.filter((entry) => entry.kind === 'pi.user')).toHaveLength(1)
+    childView.dispose()
+    const parentView = await f.opened.root.viewState(context)
+    expect(
+      parentView.value.entries.filter(
+        (entry) =>
+          entry.kind === 'pi.user' && JSON.stringify(entry.model).includes(`[subagent ${childId}`),
+      ),
+    ).toHaveLength(1)
+    parentView.dispose()
+  },
+)
 it('lets the own-workspace orchestration tool finish child-to-workspace-to-original-checkout integration', async () => {
   const f = await fixture()
   const own = await f.spawn('own')

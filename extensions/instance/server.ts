@@ -23,6 +23,10 @@ export default function instanceExtension(
     'resource' | 'onClose' | 'home' | 'ultimateRoot' | 'projectRoot' | 'userHome' | 'workspaces'
   >,
 ) {
+  if (!host.workspaces)
+    throw new Error(
+      'instance requires host.workspaces; upgrade and restart the Ultimate core before loading this facet',
+    )
   const instances = host.resource('instance', () => {
     host.onClose(async () => {
       await Promise.all([...instances.keys()].map(stop))
