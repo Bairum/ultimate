@@ -23,7 +23,7 @@ export type ClaudeDetails = {
   subtype?: string
   permissionDenials?: number
 }
-const outputLimit = 1024 * 1024
+export const claudeCaptureLimit = 1024 * 1024
 
 export function claudeArgs(options: ClaudeOptions) {
   const args = [
@@ -119,7 +119,7 @@ export async function runClaude(
   )
   function withinLimit(chunk: string) {
     bytes += Buffer.byteLength(chunk)
-    if (bytes > outputLimit) fail('Claude Code output exceeded 1 MiB limit')
+    if (bytes > claudeCaptureLimit) fail('Claude Code output exceeded 1 MiB limit')
     return !failure
   }
   child.stderr.setEncoding('utf8')

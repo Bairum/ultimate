@@ -1,7 +1,7 @@
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../../server/extensions.ts'
-import { runClaude } from './runner.ts'
+import { claudeCaptureLimit, runClaude } from './runner.ts'
 
 export default function claudeCode(host: ExtensionHost) {
   const shutdown = new AbortController()
@@ -15,6 +15,11 @@ export default function claudeCode(host: ExtensionHost) {
     tools: [
       defineTool({
         name: 'claude_code',
+        // Keep captured text plus error-message overhead; even all-newline output must fit.
+        outputLimits: {
+          maxBytes: claudeCaptureLimit + 4096,
+          maxLines: claudeCaptureLimit + 4097,
+        },
         description:
           'Delegate a bounded foreground task to the installed, authenticated Claude Code CLI and wait for its Markdown answer. Defaults: opus, 10 turns, 300 seconds, read-only Read/Glob/Grep tools, dontAsk permissions. Uses your working directory. Settings/hooks still apply; not an OS sandbox. No session resume or permission bypass.',
         parameters: Type.Object({

@@ -3,10 +3,12 @@ import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { validateToolArguments } from '@earendil-works/pi-ai'
 import type { JsonObject } from '@earendil-works/pi-ai'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import claudeCode from '../.ultimate/extensions/claude-code/server.ts'
 import { claudeArgs, runClaude } from '../.ultimate/extensions/claude-code/runner.ts'
 import type { ClaudeDetails, ClaudeOptions } from '../.ultimate/extensions/claude-code/runner.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
+import { context, prepareHarness } from '../server/harness.ts'
 import { removeTemp, temp } from './helpers.ts'
 
 const cleanups: (() => Promise<void>)[] = []
@@ -89,6 +91,72 @@ it('passes defaults as separate argv, stdin prompt, caller cwd, and streams actu
     permissionDenials: 0,
   })
 })
+it.each(['answer', 'error overhead'])(
+  'retains complete %s through actual harness execution',
+  async (kind) => {
+    const answer = 'Complete answer line with Markdown.\n'.repeat(24000) + 'THE END'
+    const stderr = 'e'.repeat(1024 * 1024 - 16)
+    const event = { ...success, result: answer }
+    const wire = kind === 'answer' ? JSON.stringify(event) + '\n' : stderr
+    expect(Buffer.byteLength(wire)).toBeLessThan(1024 * 1024)
+    expect(Buffer.byteLength(answer)).toBeGreaterThan(50 * 1024)
+    expect(answer.split('\n').length).toBeGreaterThan(2000)
+    const errorText = `Claude Code exited with code 7\n\n${stderr}`
+    expect(Buffer.byteLength(errorText)).toBeGreaterThan(1024 * 1024)
+    const expected = kind === 'answer' ? answer : errorText
+    const f = await fake(`
+    fs.readFileSync(0,'utf8');
+    ${kind === 'answer' ? `emit(${JSON.stringify(event)});` : `fs.writeSync(2, ${JSON.stringify(stderr)}); process.exitCode = 7;`}
+  `)
+    vi.stubEnv('PI_CODING_AGENT_DIR', f.root)
+    const prepared = await prepareHarness({
+      ultimateRoot: f.root,
+      userHome: f.root,
+      home: join(f.root, 'home'),
+      faux: true,
+    })
+    // Exercise tool retention, not automatic compaction of the large result.
+    prepared.settings.setCompactionEnabled(false)
+    const closing: (() => Promise<void>)[] = []
+    prepared.registry.install(
+      claudeCode({
+        projectRoot: f.root,
+        onClose: (callback: () => Promise<void>) => closing.push(callback),
+      } as unknown as ExtensionHost),
+    )
+    let modelContent: unknown
+    prepared.faux!.setResponses([
+      fauxAssistantMessage([fauxToolCall('claude_code', { prompt: 'review' })], {
+        stopReason: 'toolUse',
+      }),
+      (request) => {
+        modelContent = request.messages.findLast(
+          (message) => message.role === 'toolResult',
+        )?.content
+        return fauxAssistantMessage('Complete')
+      },
+    ])
+    const opened = await prepared.open()
+    try {
+      await (await opened.root.submit({ type: 'input', content: 'Review' }, context)).wait(context)
+      await opened.harness.waitForIdle(context)
+      const view = await opened.root.viewState(context)
+      try {
+        const entry = view.value.entries.findLast((each) => each.kind === 'pi.tool-result')!
+        const result = entry.model![0]
+        expect(result).toMatchObject({ role: 'toolResult', isError: kind !== 'answer' })
+        expect(result.content).toEqual([{ type: 'text', text: expected }])
+        expect(entry.data).toMatchObject({ diagnostics: [] })
+        expect(modelContent).toEqual([{ type: 'text', text: expected }])
+      } finally {
+        view.dispose()
+      }
+    } finally {
+      for (const close of closing) await close()
+      await opened.close()
+    }
+  },
+)
 it('passes optional limits and controls without shell interpretation, returns Markdown', async () => {
   const f = await fake(`fs.readFileSync(0,'utf8'); emit(${JSON.stringify(success)});`)
   const options: ClaudeOptions = {
