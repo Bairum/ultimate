@@ -1,14 +1,113 @@
 import { mkdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { defineExtension, defineTool } from '@earendil-works/pi-durable'
+import { defineExtension, defineTask, defineTool } from '@earendil-works/pi-durable'
 import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { chromium } from 'playwright-core'
 import { expect, it } from 'vitest'
-import { fauxServer, skipWithoutChromium, temp, untilInput } from './helpers.ts'
+import { fauxServer, post, skipWithoutChromium, temp, untilInput } from './helpers.ts'
+import { Summaries } from '../extensions/conversations/summary.ts'
+import { Metadata } from '../server/metadata.ts'
 import { context } from '../server/harness.ts'
 
 const timeout = { timeout: 15000 }
+
+it('shows the selected summary and live owner summary while viewing a subagent', async (test) => {
+  const executablePath = await skipWithoutChromium(test)
+  if (!executablePath) return
+  const userHome = await temp('ultimate-summary-browser-')
+  const project = join(userHome, 'project')
+  await mkdir(project)
+  const server = await fauxServer({
+    ultimateRoot: resolve('.'),
+    projectRoot: project,
+    userHome,
+    home: join(userHome, 'state'),
+  })
+  const anchor = defineTask<null, { phase: 'done' }, null>({
+    name: 'summary-browser-anchor',
+    version: 1,
+    initial: () => ({ phase: 'done' }),
+    phases: {
+      done: async (_task, runtime, caller) => {
+        await runtime.commit(
+          () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
+          caller,
+        )
+      },
+    },
+    abort: async (_task, runtime, caller) => {
+      await runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), caller)
+    },
+  })
+  server.host.registry.install(defineExtension({ name: 'summary-browser-test', tasks: [anchor] }))
+  const other = await server.harness.createConversation(
+    { ownership: { kind: 'ownerless' } },
+    context,
+  )
+  const child = await server.harness.commit(async (tx) => {
+    const task = await tx.createTask(anchor, null, {
+      ownership: { kind: 'conversation' },
+      conversationId: server.root.id,
+      background: true,
+    })
+    const owned = await tx.createConversation({ ownership: { kind: 'task', taskId: task } })
+    for (const [id, title, summary] of [
+      [
+        server.root.id,
+        'Add conversation sidebar summaries',
+        'Implemented automatic titles and brief conversation summaries.',
+      ],
+      [other.id, 'Verify the parser change', 'The parser regression tests are passing.'],
+    ] as const) {
+      await tx.appendEntry(id, {
+        kind: 'pi.user',
+        model: [{ role: 'user', content: title, timestamp: Date.now() }],
+      })
+      ;(await tx.doc(Metadata, id)).title = title
+      const state = await tx.doc(Summaries, id)
+      state.summary = summary
+      state.status = 'ready'
+    }
+    return owned
+  }, context)
+  const browser = await chromium.launch({ executablePath, headless: true })
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    await page.goto(server.url)
+    await untilInput(page)
+    const summary = page.getByRole('region', { name: 'Conversation summary' })
+    await expect
+      .poll(() => summary.textContent(), timeout)
+      .toContain('Implemented automatic titles')
+    await page.locator(`[data-conversation="${other.id}"] > button`).first().click()
+    await expect.poll(() => summary.textContent(), timeout).toContain('parser regression tests')
+    await page.evaluate(
+      `import('/src/sdk/client.ts').then((m) => m.uiState.set('shell.conversation', ${child.id}))`,
+    )
+    await expect
+      .poll(() => summary.getAttribute('data-summary-conversation'), timeout)
+      .toBe(String(server.root.id))
+    await expect
+      .poll(() => summary.textContent(), timeout)
+      .toContain('Implemented automatic titles')
+    await server.harness.commit(async (tx) => {
+      ;(await tx.doc(Summaries, server.root.id)).summary =
+        'The owner summary updated while its child was selected.'
+    }, context)
+    await expect.poll(() => summary.textContent(), timeout).toContain('owner summary updated')
+    await page.locator(`[data-conversation="${other.id}"] > button`).first().click()
+    await expect.poll(() => summary.textContent(), timeout).toContain('parser regression tests')
+    await post(server, `/api/extensions/conversations/actions/reset`, { args: { id: other.id } })
+    await expect.poll(() => summary.count(), timeout).toBe(0)
+    expect(errors).toEqual([])
+  } finally {
+    await browser.close()
+    await server.close()
+  }
+}, 120000)
 
 it('lists, creates, marks, archives, renames and clears conversations in the sidebar', async (test) => {
   const executablePath = await skipWithoutChromium(test)

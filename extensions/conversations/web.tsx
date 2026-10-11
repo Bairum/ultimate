@@ -1,3 +1,5 @@
+import { applyImmutable } from '@earendil-works/chord/delta'
+import type { Op } from '@earendil-works/chord/delta'
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
@@ -29,6 +31,7 @@ import {
   getState,
   useConversations,
   useDialog,
+  useDoc,
   useExtensionUiState,
   useNow,
   useStore,
@@ -38,6 +41,33 @@ import type { ConversationSummary, UltimateActions } from '@/sdk'
 
 const newKeys = 'mod+alt+n'
 const resetDialog = 'conversations.reset'
+const summaryKind = 'ultimate.conversation-summaries'
+type SidebarSummary = { summary?: string; status?: string }
+
+/** useDoc follows the shown conversation; a child needs its owner's document instead. */
+function useTopSummary(topId: number | undefined, shownId: number | undefined) {
+  const current = useDoc<SidebarSummary>(summaryKind)
+  const [parent, setParent] = useState<{ id: number; value: SidebarSummary | null }>()
+  useEffect(() => {
+    if (topId === undefined || topId === shownId) return undefined
+    const stream = new EventSource(`/api/events?conversation=${topId}&docs=${summaryKind}`)
+    stream.addEventListener('doc', (event) => {
+      const data = JSON.parse(event.data) as { kind: string; value: SidebarSummary | null }
+      if (data.kind === summaryKind) setParent({ id: topId, value: data.value })
+    })
+    stream.addEventListener('docOps', (event) => {
+      const data = JSON.parse(event.data) as { kind: string; ops: Op[] }
+      if (data.kind === summaryKind)
+        setParent((previous) =>
+          previous?.id === topId && previous.value
+            ? { id: topId, value: applyImmutable(previous.value, data.ops) }
+            : previous,
+        )
+    })
+    return () => stream.close()
+  }, [topId, shownId])
+  return topId === shownId ? current : parent && parent.id === topId ? parent.value : undefined
+}
 
 /** The shown conversation, also while its snapshot is still on the way. */
 const useShownId = () => useStore((state) => state.view?.conversation.id ?? state.requested)
@@ -267,7 +297,7 @@ function Row({
       ) : (
         <button
           aria-current={shown ? 'true' : undefined}
-          className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md pr-2 pl-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+          className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md pr-2 pl-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
           onClick={() => actions.switchConversation(conversation.id)}
           ref={(element) => {
             if (!element || !refocus.current) return
@@ -345,6 +375,7 @@ function Conversations() {
   const [archived, setArchived] = useExtensionUiState<number[]>('archived', [])
   const [seen] = useExtensionUiState<Record<string, number>>('seen', {})
   const shownTop = topOf(shownId, conversations)
+  const summary = useTopSummary(shownTop?.id, shownId)
   const working = workingByTop(conversations)
   const topLevel = conversations.filter(
     (conversation) => conversation.parentConversationId === undefined,
@@ -418,6 +449,27 @@ function Conversations() {
       <nav aria-label="Conversations" className="flex flex-col gap-px">
         {listed.map(row)}
       </nav>
+      {(summary?.summary || summary?.status) && (
+        <section
+          aria-label="Conversation summary"
+          className="mx-4 mt-4 border-t border-border/60 pt-3"
+          data-summary-conversation={shownTop?.id}
+        >
+          <p className="text-xs leading-relaxed break-words text-muted-foreground">
+            {summary.summary}
+          </p>
+          {summary.status === 'pending' && (
+            <p className="mt-1 text-[10.5px] text-muted-foreground/70" role="status">
+              Updating summary…
+            </p>
+          )}
+          {summary.status === 'error' && (
+            <p className="mt-1 text-[10.5px] text-muted-foreground/70" role="status">
+              Summary unavailable · retries after 3 exchanges
+            </p>
+          )}
+        </section>
+      )}
       {hidden.length > 0 && (
         <Collapsible className="mt-auto pt-3">
           <CollapsibleTrigger className="group/archived flex w-full items-center gap-1 px-4 py-1 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase outline-none hover:text-foreground focus-visible:text-foreground">

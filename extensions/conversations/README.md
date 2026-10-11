@@ -1,5 +1,6 @@
 The project's conversations in the Agent surface's sidebar: list, create, switch, rename, clear, and archive them.
-Several run at once, each a separate agent, and each knows about the others.
+Several run at once, each a separate agent, and each knows about the others. GPT-6 Luna automatically gives top-level
+conversations concise titles and sidebar summaries.
 
 ## Sidebar
 
@@ -40,7 +41,37 @@ Actions, each on a top-level conversation; bad args, unknown conversations, suba
 
 - `rename {id, title}`: sets the `ultimate.metadata` title, with whitespace runs (newlines too) collapsed to one space,
   trimmed, and cut to at most 160 characters; a blank title removes it, so the first message names the conversation
-  again. Returns `{ ok: true }`.
+  again and re-enables automatic titles on the next scheduled summary. Nonblank renames take manual ownership, even
+  during generation. Returns `{ ok: true }`.
 - `reset {id}`: clears the conversation with a Durable reset (a `pi.reset` entry starts a new, empty context). It
   refuses while the conversation works. A conversation named by its first message keeps that name as its title.
   Returns `{ ok: true }`.
+
+## Automatic summaries
+
+After the first completed user/assistant exchange, then after each three further exchanges (1, 4, 7, …), a
+conversation-owned Pi background task requests `openai-codex/gpt-6-luna` with medium reasoning. It never changes the
+main agent's model, creates a child conversation, polls for idle time, or triggers on tools/stream chunks. The yield
+hook durably admits work, and the task waits for the final answer and a settled input before advancing the cadence.
+Owned children, forks and intermediate yields continued by another hook are excluded. Existing conversations start
+counting at their next completed exchange; there is no historical backfill.
+
+The request includes only recent user/assistant text (at most 2,400 characters per message and 12,000 total), plus the
+previous brief summary. Tools, images and thinking are omitted. The response is validated as JSON: a 3–7-word title
+(at most 80 characters) and a brief 1–2 sentence summary (at most 420 characters). Requests use a 2,048-token output
+option, cancel text output over 2,048 characters, and time out after 60 seconds. **Pi's Codex adapter does not forward
+`maxTokens` to the provider, so the option is not a provider-side reasoning-token ceiling.** There is no silent model
+substitution. Failed or malformed responses preserve the last good summary and show a quiet “Summary unavailable”
+status; the next three exchanges retry. There is no timer retry.
+
+`ultimate.conversation-summaries` is a conversation document holding the summary, generated-title provenance,
+manual ownership, completed-exchange count, last yield/answer, reset revision and pending task id. Its latest state
+survives facet reloads and process restarts; an unfinished durable task resumes, with a memoized response reused once
+stored. A crash before the response is memoized can repeat the request. Generated titles use `ultimate.metadata` and
+can update; preexisting metadata titles and explicit renames are never replaced. A blank rename removes metadata
+and restores automatic naming; until the next summary, the first-message title is shown.
+
+Clear context keeps the title, clears the summary and resets the cadence. A revision and pending-task check reject
+in-flight results from the old context or a superseded request. Background work does not hold up answers or ordinary
+idle/reset operations. The sidebar shows only the selected top-level summary, also when its child is selected; that
+child view subscribes to the owner's document and closes the subscription when selection changes.

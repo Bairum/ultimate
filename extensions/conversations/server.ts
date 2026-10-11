@@ -4,6 +4,9 @@ import { defineExtension, section } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { Summaries, summaryBehavior } from './summary.ts'
+
+export const docs = [Summaries]
 
 const record = (host: Pick<ExtensionHost, 'harness'>, id: ConversationId, caller: Context) =>
   host.harness().commit((tx) => tx.conversation(id), caller)
@@ -37,7 +40,15 @@ export const actions = {
     const id = await topLevelId(host, args)
     const title = (args as { title?: JsonValue }).title
     if (typeof title !== 'string') throw new Error('Expected a title')
-    await setTitle(host, id, title.replace(/\s+/g, ' ').trim().slice(0, 160) || undefined)
+    const normalized = title.replace(/\s+/g, ' ').trim().slice(0, 160)
+    await host.harness().commit(async (tx) => {
+      const state = await tx.doc(Summaries, id)
+      state.manual = !!normalized
+      delete state.generatedTitle
+      const metadata = await tx.doc(host.metadata, id)
+      if (normalized) metadata.title = normalized
+      else delete metadata.title
+    }, context)
     return { ok: true }
   },
   /** `{id}`: starts a new context, keeping the conversation's title. */
@@ -47,7 +58,6 @@ export const actions = {
     try {
       const summary = host.conversations().find((item) => item.id === id)
       if (
-        summary?.busy ||
         Object.values(graph.value.tasks).some(
           (task) => task.conversationId === id && !task.background,
         )
@@ -59,6 +69,16 @@ export const actions = {
     } finally {
       graph.dispose()
     }
+    await host.harness().commit(async (tx) => {
+      const state = await tx.doc(Summaries, id)
+      state.exchanges = 0
+      state.revision++
+      delete state.lastYield
+      delete state.lastAnswer
+      delete state.pending
+      delete state.summary
+      delete state.status
+    }, context)
     await (await host.harness().conversation(id, context))!.reset(undefined, context)
     return { ok: true }
   },
@@ -70,6 +90,7 @@ export default (host: ExtensionHost) => {
   const topLevel = new Map<ConversationId, boolean>()
   return defineExtension({
     name: 'conversations',
+    ...summaryBehavior(host),
     sections: [
       section('conversations', async (input, caller) => {
         // Summaries can lag behind a new conversation, so its record decides; subagents and forks get nothing.
