@@ -482,7 +482,10 @@ export async function createApi(
               )
                 await conversation.commit(async (tx) => {
                   const metadata = await tx.doc(Metadata, conversation.id)
-                  metadata.title ??= content.replace(/\s+/g, ' ').trim().slice(0, 160)
+                  if (metadata.title === undefined) {
+                    metadata.title = content.replace(/\s+/g, ' ').trim().slice(0, 160)
+                    metadata.titleSource = 'input'
+                  }
                 }, context)
               const submission = await conversation.submit(
                 { type: 'input', content, whenBusy: data.whenBusy },

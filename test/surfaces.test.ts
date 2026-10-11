@@ -203,7 +203,11 @@ it('switches surfaces without interrupting the conversation, and tells the agent
     .toEqual(['item 1', 'item 2', 'item 3'])
   await expect.poll(() => page.getByTestId('error').textContent(), timeout).toBe('deliberate')
   await expect
-    .poll(() => page.getByRole('status').textContent(), timeout)
+    .poll(
+      () =>
+        page.getByRole('status').filter({ hasText: 'fixture/broken: deliberate' }).textContent(),
+      timeout,
+    )
     .toContain('fixture/broken: deliberate')
 
   // The agent's prompt names the persisted surface.
@@ -276,7 +280,14 @@ it('switches surfaces without interrupting the conversation, and tells the agent
   })
   await expect.poll(() => page.locator('main #composer-input').count(), timeout).toBe(1)
   await expect
-    .poll(() => page.getByRole('status').textContent(), timeout)
+    .poll(
+      () =>
+        page
+          .getByRole('status')
+          .filter({ hasText: 'The gone surface is not installed, so Agent shows.' })
+          .textContent(),
+      timeout,
+    )
     .toContain('The gone surface is not installed, so Agent shows.')
   expect(errors).toEqual([])
 }, 120000)
@@ -358,7 +369,16 @@ export default defineWebExtension({
   await expect.poll(log, timeout).toBe('started\naborted\n')
   await expect.poll(() => page.locator('main #composer-input').count(), timeout).toBe(1)
   await expect
-    .poll(() => page.getByRole('status').textContent(), timeout)
+    .poll(
+      () =>
+        page
+          .getByRole('status')
+          .filter({
+            hasText: 'The Broken surface (probe) failed, so Agent shows: deliberate render failure',
+          })
+          .textContent(),
+      timeout,
+    )
     .toContain('The Broken surface (probe) failed, so Agent shows: deliberate render failure')
   await expect
     .poll(async () => (await ui())['shell.shownSurface'], timeout)

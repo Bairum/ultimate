@@ -878,6 +878,7 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     await server.harness.waitForIdle(context)
     expect(await server.harness.snapshot(Metadata, created, context)).toEqual({
       title: 'First message',
+      titleSource: 'input',
     })
     const conversation = (await server.harness.conversation(created, context))!
     await conversation.reset(undefined, context)

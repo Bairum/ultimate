@@ -53,6 +53,8 @@ After the first completed user/assistant exchange, then after each three further
 conversation-owned Pi background task requests `openai-codex/gpt-6-luna` with medium reasoning. It never changes the
 main agent's model, creates a child conversation, polls for idle time, or triggers on tools/stream chunks. The yield
 hook durably admits work, and the task waits for the final answer and a settled input before advancing the cadence.
+Counting and task advancement share one atomic commit, before context preparation, so an older slow context read
+cannot lose a distinct completed exchange or count it twice on recovery.
 Owned children, forks and intermediate yields continued by another hook are excluded. Existing conversations start
 counting at their next completed exchange; there is no historical backfill.
 
@@ -68,10 +70,16 @@ status; the next three exchanges retry. There is no timer retry.
 manual ownership, completed-exchange count, last yield/answer, reset revision and pending task id. Its latest state
 survives facet reloads and process restarts; an unfinished durable task resumes, with a memoized response reused once
 stored. A crash before the response is memoized can repeat the request. Generated titles use `ultimate.metadata` and
-can update; preexisting metadata titles and explicit renames are never replaced. A blank rename removes metadata
+can update. HTTP submit marks a newly created first-input fallback with `ultimate.metadata.titleSource: 'input'`
+in the same transaction that creates the title; it never marks an existing title. Generated replacements and explicit
+renames clear that marker atomically. Accepting an unchanged title in the rename field still takes manual ownership.
+Unmarked/preexisting metadata titles are never inferred to be fallbacks or replaced, even when they equal the first
+input; there is no historical backfill. A blank rename removes metadata
 and restores automatic naming; until the next summary, the first-message title is shown.
 
 Clear context keeps the title, clears the summary and resets the cadence. A revision and pending-task check reject
-in-flight results from the old context or a superseded request. Background work does not hold up answers or ordinary
+in-flight results from the old context or a superseded request. A response made stale by compaction clears only its
+own pending status and preserves the last valid summary; it cannot clear a superseding request. Background work does
+not hold up answers or ordinary
 idle/reset operations. The sidebar shows only the selected top-level summary, also when its child is selected; that
 child view subscribes to the owner's document and closes the subscription when selection changes.

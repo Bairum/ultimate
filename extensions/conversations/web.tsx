@@ -242,7 +242,6 @@ function Row({
     setEditing(false)
     if (cancelled.current) return
     const title = value.trim()
-    if (title === (conversation.title ?? '')) return
     void api.action('conversations', 'rename', { id: conversation.id, title })
   }
   const title = (

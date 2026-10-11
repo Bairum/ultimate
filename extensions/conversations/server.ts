@@ -46,6 +46,7 @@ export const actions = {
       state.manual = !!normalized
       delete state.generatedTitle
       const metadata = await tx.doc(host.metadata, id)
+      delete metadata.titleSource
       if (normalized) metadata.title = normalized
       else delete metadata.title
     }, context)

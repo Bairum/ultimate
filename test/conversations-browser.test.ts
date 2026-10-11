@@ -64,7 +64,9 @@ it('shows the selected summary and live owner summary while viewing a subagent',
         kind: 'pi.user',
         model: [{ role: 'user', content: title, timestamp: Date.now() }],
       })
-      ;(await tx.doc(Metadata, id)).title = title
+      const metadata = await tx.doc(Metadata, id)
+      metadata.title = title
+      if (id === server.root.id) metadata.titleSource = 'input'
       const state = await tx.doc(Summaries, id)
       state.summary = summary
       state.status = 'ready'
@@ -82,6 +84,18 @@ it('shows the selected summary and live owner summary while viewing a subagent',
     await expect
       .poll(() => summary.textContent(), timeout)
       .toContain('Implemented automatic titles')
+    // Accepting an unchanged title is an explicit manual rename, not a no-op.
+    await page.locator(`[data-conversation="${server.root.id}"] .truncate`).dblclick()
+    await page.keyboard.press('Enter')
+    await expect
+      .poll(
+        async () => (await server.harness.snapshot(Summaries, server.root.id, context))?.manual,
+        timeout,
+      )
+      .toBe(true)
+    expect(
+      (await server.harness.snapshot(Metadata, server.root.id, context))?.titleSource,
+    ).toBeUndefined()
     await page.locator(`[data-conversation="${other.id}"] > button`).first().click()
     await expect.poll(() => summary.textContent(), timeout).toContain('parser regression tests')
     await page.evaluate(

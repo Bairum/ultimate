@@ -109,7 +109,9 @@ export function summaryBehavior(
 ) {
   const SummaryTask = defineTask<
     { generation: TaskId<GenerationResult>; revision: number; inputs: SubmissionId[] },
-    { phase: 'observe' } | { phase: 'generate'; answer: EntryId; input: string },
+    | { phase: 'observe' }
+    | { phase: 'prepare'; answer: EntryId }
+    | { phase: 'generate'; answer: EntryId; input: string },
     null
   >({
     name: 'conversations.summary',
@@ -138,20 +140,30 @@ export function summaryBehavior(
           await runtime.commit(() => terminal, context)
           return
         }
-        const view = await runtime.context(runtime.conversationId, context, answer)
         await runtime.commit(async (tx) => {
           const state = await tx.doc(Summaries, runtime.conversationId)
-          if (
-            state.revision !== task.input.revision ||
-            (state.lastAnswer !== undefined && state.lastAnswer >= answer) ||
-            !(await visible(tx, runtime.conversationId, answer))
-          )
-            return terminal
-          state.lastAnswer = answer
+          if (state.revision !== task.input.revision) return terminal
+          // Counting and advancing this task are atomic: replay cannot count it twice,
+          // and a slower older observer must not lose a distinct completed exchange.
+          state.lastAnswer = Math.max(state.lastAnswer ?? answer, answer) as EntryId
           state.exchanges++
           if ((state.exchanges - 1) % 3 !== 0) return terminal
           state.pending = task.id
           state.status = 'pending'
+          return { status: 'running', checkpoint: { phase: 'prepare', answer: state.lastAnswer } }
+        }, context)
+      },
+      prepare: async (task, runtime, context) => {
+        const current = await runtime.snapshot(Summaries, runtime.conversationId, context)
+        if (current?.pending !== task.id || current.revision !== task.input.revision) {
+          await runtime.commit(() => terminal, context)
+          return
+        }
+        const answer = task.state.checkpoint.answer
+        const view = await runtime.context(runtime.conversationId, context, answer)
+        await runtime.commit(async (tx) => {
+          const state = await tx.doc(Summaries, runtime.conversationId)
+          if (state.pending !== task.id || state.revision !== task.input.revision) return terminal
           return {
             status: 'running',
             checkpoint: {
@@ -186,19 +198,22 @@ export function summaryBehavior(
         }
         await runtime.commit(async (tx) => {
           const state = await tx.doc(Summaries, runtime.conversationId)
-          if (
-            state.pending === task.id &&
-            state.revision === task.input.revision &&
-            (await visible(tx, runtime.conversationId, checkpoint.answer))
-          ) {
+          if (state.pending === task.id && state.revision === task.input.revision) {
             delete state.pending
-            state.status = result ? 'ready' : 'error'
-            if (result) {
+            const usable = result && (await visible(tx, runtime.conversationId, checkpoint.answer))
+            state.status = usable ? 'ready' : 'error'
+            if (result && usable) {
               state.summary = result.summary
               const metadata = await tx.doc(host.metadata, runtime.conversationId)
               // Unknown/preexisting metadata belongs to the user, not to this extension.
-              if (!state.manual && (!metadata.title || metadata.title === state.generatedTitle)) {
+              if (
+                !state.manual &&
+                (!metadata.title ||
+                  metadata.titleSource === 'input' ||
+                  metadata.title === state.generatedTitle)
+              ) {
                 metadata.title = result.title
+                delete metadata.titleSource
                 state.generatedTitle = result.title
               }
             }
