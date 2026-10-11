@@ -157,8 +157,15 @@ const Reporter = defineTask<
       )
     },
   },
-  abort: (_task, runtime, context) =>
-    runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), context),
+  abort: (task, runtime, context) =>
+    runtime.commit(async (tx) => {
+      const state = await tx.doc(Subagents, runtime.conversationId)
+      const action = Object.values(state.actions).find(
+        (candidate) => candidate.reporter === task.id,
+      )!
+      action.status = 'unanswered'
+      return { status: 'terminal', outcome: { status: 'aborted' } }
+    }, context),
 })
 
 /** Details name the child and whether it answers in the background, for the call's renderer. */
@@ -856,19 +863,52 @@ Available definitions:
           const id = args.id as ConversationId
           const info = details(id, index.agents[String(id)].background)
           await api.details(info, context)
-          const child = (await api.conversation(id, context))!
           if (args.action === 'stop') {
-            // Remember the run, not just the child: replay must never stop a newer run.
+            // Capture identities before cancellation; replay must leave later reuse alone.
+            const live = await api.snapshot(LiveDoc, id, context)
+            const state = await api.snapshot(Subagents, api.conversationId, context)
             const target = await api.memo(
-              'stopRun',
-              (await api.snapshot(LiveDoc, id, context))?.run?.taskId ?? null,
+              'stopTarget',
+              {
+                run: live?.run?.taskId ?? null,
+                inputs: live?.run?.inputs ?? [],
+                reporters: Object.values(state?.actions ?? {}).flatMap((action) =>
+                  action.conversationId === id && action.reporter !== undefined
+                    ? [action.reporter]
+                    : [],
+                ),
+              },
               context,
             )
-            if (
-              target !== null &&
-              (await api.snapshot(LiveDoc, id, context))?.run?.taskId === target
+            // Join delivery invocations before inspecting admissions that may have raced stop.
+            for (const reporter of target.reporters) {
+              await host.harness().abortTask(reporter, context)
+              await api.waitForTask(reporter, context)
+            }
+            const submissions = await api.commit(
+              (tx) =>
+                Promise.all(
+                  target.reporters.map((reporter) =>
+                    tx.submissionByRequest(id, `subagent:${reporter}`),
+                  ),
+                ),
+              context,
             )
-              await child.abort(context)
+            for (const submission of submissions)
+              if (submission?.status === 'queued')
+                await host.harness().abortSubmission(submission.id, context, id)
+            const inputs = new Set([
+              ...target.inputs,
+              ...submissions.flatMap((submission) => (submission ? [submission.id] : [])),
+            ])
+            const run = (await api.snapshot(LiveDoc, id, context))?.run
+            if (
+              run &&
+              (run.taskId === target.run || run.inputs.some((input) => inputs.has(input)))
+            ) {
+              await host.harness().abortTask(run.taskId, context)
+              await api.waitForTask(run.taskId, context)
+            }
             return finish(`Stopped ${id}.`, info)
           }
           const reporters = Object.values(index.actions).flatMap((action) =>

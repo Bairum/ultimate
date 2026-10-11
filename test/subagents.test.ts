@@ -13,7 +13,7 @@ import {
   hook,
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Extension, Task, ToolRegistration } from '@earendil-works/pi-durable'
-import type { JsonValue } from '@earendil-works/chord'
+import type { Context, JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
 import { createEventBus, ModelRuntime } from '@earendil-works/pi-coding-agent'
@@ -256,6 +256,45 @@ async function latestResult(opened: OpenHost) {
   }
 }
 
+function stopCaptureGate(f: Awaited<ReturnType<typeof gatedFixture>>) {
+  const state = { ...gate(), entered: false, enabled: true }
+  f.prepared.registry.install(
+    defineExtension({
+      name: 'stop-gate',
+      wraps: [
+        {
+          tool: 'subagent',
+          wrap: (tool: ToolRegistration): ToolRegistration => ({
+            ...tool,
+            execute: (args, api, toolContext) =>
+              tool.execute(
+                args,
+                {
+                  ...api,
+                  memo: (name: string, value: JsonValue | Context, memoContext?: Context) => {
+                    const saved =
+                      memoContext === undefined
+                        ? api.memo(name, value as Context)
+                        : api.memo(name, value as JsonValue, memoContext)
+                    return saved.then(async (winner) => {
+                      if (name === 'stopTarget' && state.enabled) {
+                        state.entered = true
+                        await awaitWithContext(state.promise, toolContext)
+                      }
+                      return winner
+                    })
+                  },
+                },
+                toolContext,
+              ),
+          }),
+        },
+      ],
+    }),
+  )
+  return state
+}
+
 describe('subagents', () => {
   it.each(['start', 'message', 'wait'] as const)(
     '%s yields on steer before child completes and reports once',
@@ -459,6 +498,173 @@ describe('subagents', () => {
     held.release()
     await until(async () => (await reports(f.opened)).length === 1)
     await f.opened.root.waitForIdle(context)
+  })
+
+  it('stops a pending Reporter before delivery and leaves the child reusable', async () => {
+    const held = { ...gate(), entered: false, phase: 'deliver' }
+    const f = await fixture(undefined, undefined, held)
+    await call(f.opened, {
+      action: 'start',
+      agent: 'scout',
+      task: 'contradicting work',
+      background: true,
+    })
+    await until(async () => held.entered)
+    const [child] = await children(f.opened)
+    const state = (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!
+    const action = Object.values(state.actions)[0]
+    expect(
+      (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
+    ).toBeUndefined()
+    expect(
+      await f.opened.harness.commit(
+        (tx) => tx.submissionByRequest(child.conversationId, `subagent:${action.reporter}`),
+        context,
+      ),
+    ).toBeUndefined()
+    expect((await call(f.opened, { action: 'stop', id: child.conversationId })).text).toBe(
+      `Stopped ${child.conversationId}.`,
+    )
+    expect(await f.opened.harness.getTask(action.reporter!, context)).toMatchObject({
+      state: { status: 'terminal', outcome: { status: 'aborted' } },
+    })
+    held.release()
+    await f.opened.harness.waitForTask(action.reporter!, context)
+    const view = await (await f.opened.harness.conversation(
+      child.conversationId,
+      context,
+    ))!.viewState(context)
+    try {
+      expect(view.value.entries.filter((entry) => entry.model?.[0]?.role === 'user')).toHaveLength(
+        0,
+      )
+    } finally {
+      view.dispose()
+    }
+    expect(await reports(f.opened)).toHaveLength(0)
+    await call(f.opened, { action: 'message', id: child.conversationId, text: 'fresh reuse' })
+    await until(async () => (await reports(f.opened)).length === 1)
+    await f.opened.root.waitForIdle(context)
+    expect(JSON.stringify(await reports(f.opened))).toContain('Child: fresh reuse')
+    expect(JSON.stringify(await reports(f.opened))).not.toContain('contradicting work')
+    expect(f.errors).toEqual([])
+  })
+  it('withdraws captured queued Reporter inputs as well as stopping the current run', async () => {
+    const f = await gatedFixture()
+    await call(f.opened, { action: 'start', agent: 'scout', task: 'HOLD', background: true })
+    const [child] = await children(f.opened)
+    await until(async () => f.holding.has(child.conversationId))
+    await call(f.opened, { action: 'message', id: child.conversationId, text: 'never execute' })
+    const state = (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!
+    const action = Object.values(state.actions).at(-1)!
+    await until(
+      async () =>
+        (
+          await f.opened.harness.commit(
+            (tx) => tx.submissionByRequest(child.conversationId, `subagent:${action.reporter}`),
+            context,
+          )
+        )?.status === 'queued',
+    )
+    await call(f.opened, { action: 'stop', id: child.conversationId })
+    expect(
+      (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
+    ).toBeUndefined()
+    expect(
+      (await f.opened.harness.snapshot(InboxDoc, child.conversationId, context))?.items,
+    ).toEqual([])
+    expect(
+      await f.opened.harness.commit(
+        (tx) => tx.submissionByRequest(child.conversationId, `subagent:${action.reporter}`),
+        context,
+      ),
+    ).toMatchObject({ status: 'unanswered', reason: 'aborted' })
+    f.childGate.release()
+    await f.opened.root.waitForIdle(context)
+    const view = await (await f.opened.harness.conversation(
+      child.conversationId,
+      context,
+    ))!.viewState(context)
+    try {
+      expect(view.value.entries.filter((entry) => entry.model?.[0]?.role === 'user')).toHaveLength(
+        1,
+      )
+    } finally {
+      view.dispose()
+    }
+    expect(await reports(f.opened)).toHaveLength(0)
+    await call(f.opened, { action: 'message', id: child.conversationId, text: 'fresh reuse' })
+    await until(async () => (await reports(f.opened)).length === 1)
+    await f.opened.root.waitForIdle(context)
+    expect(JSON.stringify(await reports(f.opened))).not.toContain('never execute')
+    expect(f.errors).toEqual([])
+  })
+  it('replays captured stop identities without stopping a newer child run', async () => {
+    const f = await gatedFixture()
+    await call(f.opened, { action: 'start', agent: 'scout', task: 'HOLD', background: true })
+    const [child] = await children(f.opened)
+    await until(async () => f.holding.has(child.conversationId))
+    const stopGate = stopCaptureGate(f)
+    await startCall(f.opened, { action: 'stop', id: child.conversationId })
+    await until(async () => stopGate.entered)
+    const handle = (await f.opened.harness.conversation(child.conversationId, context))!
+    await handle.abort(context)
+    const newer = await handle.submit(
+      { type: 'input', content: 'HOLD', requestId: 'later-reuse' },
+      context,
+    )
+    await until(
+      async () =>
+        (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run !==
+        undefined,
+    )
+    const run = (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))!.run!
+      .taskId
+    await f.opened.close()
+    hosts.splice(hosts.indexOf(f.opened), 1)
+    stopGate.enabled = false
+    const resumed = await f.reopen()
+    await resumed.root.waitForIdle(context)
+    expect(await latestResult(resumed)).toMatchObject({
+      content: [{ type: 'text', text: `Stopped ${child.conversationId}.` }],
+    })
+    expect(
+      (await resumed.harness.snapshot(LiveDoc, child.conversationId, context))?.run?.taskId,
+    ).toBe(run)
+    const submission = (await resumed.harness.submission(newer.id, context))!
+    expect(await submission.status(context)).toMatchObject({ status: 'placed' })
+    f.childGate.release()
+    expect(await submission.wait(context)).toMatchObject({ status: 'done' })
+    expect(await reports(resumed)).toHaveLength(0)
+    expect(f.errors).toEqual([])
+  })
+
+  it('stops an admission racing after capture when the captured run was absent', async () => {
+    const held = { ...gate(), entered: false, phase: 'deliver' }
+    const f = await gatedFixture(held)
+    await call(f.opened, { action: 'start', agent: 'scout', task: 'HOLD', background: true })
+    const [child] = await children(f.opened)
+    await until(async () => held.entered)
+    expect(
+      (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
+    ).toBeUndefined()
+    const stopGate = stopCaptureGate(f)
+    await startCall(f.opened, { action: 'stop', id: child.conversationId })
+    await until(async () => stopGate.entered)
+    // Admission follows capture but belongs to its captured reporter.
+    held.release()
+    await until(async () => f.holding.has(child.conversationId))
+    expect(
+      (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
+    ).toBeDefined()
+    stopGate.release()
+    await f.opened.root.waitForIdle(context)
+    expect(
+      (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
+    ).toBeUndefined()
+    f.childGate.release()
+    expect(await reports(f.opened)).toHaveLength(0)
+    expect(f.errors).toEqual([])
   })
   it('keeps a foreground child running when the parent is stopped', async () => {
     const f = await gatedFixture()
