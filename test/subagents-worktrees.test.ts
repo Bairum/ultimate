@@ -184,7 +184,8 @@ it('replays an interrupted start with the same child and worktree', async () => 
   hosts.push(f.opened)
   await f.opened.root.waitForIdle(context)
   expect(await f.children()).toHaveLength(1)
-  expect((await f.children())[0]).toEqual(before)
+  expect((await f.children())[0]).toEqual({ ...before, reported: expect.any(Array) })
+  expect((await f.children())[0].reported).toHaveLength(1)
   const index = (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!
   const call = Object.keys(index.actions)[0]
   expect((await create(f.project, f.home, 'worker', call)).record).toEqual(before.isolate)

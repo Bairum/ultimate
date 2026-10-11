@@ -1,18 +1,22 @@
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord'
 import type { JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import {
   AssistantEntry,
+  ToolResultEntry,
   defineDoc,
   defineExtension,
   defineTask,
   defineTool,
   LiveDoc,
+  InboxDoc,
+  GenerationTask,
+  hook,
   ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
@@ -25,6 +29,7 @@ import type {
   Tx,
   TaskOwnership,
   TaskOutcome,
+  ToolExecutionApi,
 } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -47,7 +52,10 @@ export const Subagents = defineDoc<{
       isolate?: Isolate
     }
   >
-  actions: Record<string, { conversationId: ConversationId; reporter?: TaskId }>
+  actions: Record<
+    string,
+    { conversationId: ConversationId; reporter?: TaskId; answer?: EntryId; status?: string }
+  >
 }>({
   kind: 'ultimate.subagents',
   version: 1,
@@ -73,7 +81,7 @@ const Anchor = defineTask<null, { phase: 'done' }, null>({
 })
 const textOf = (message: AssistantMessage | undefined) =>
   (message?.content ?? []).flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
-// A report is keyed by the answer it carries, so `wait` can withdraw it once it returns that answer itself.
+// A report is keyed by its answer, independently of the tool call that may return it.
 const answerRequest = (answer: EntryId) => `subagent-answer:${answer}`
 const Reporter = defineTask<
   { conversationId: ConversationId; text: string; steer: boolean },
@@ -102,8 +110,14 @@ const Reporter = defineTask<
         )
       ).wait(context)
       await runtime.commit(async (tx) => {
-        const agent = (await tx.doc(Subagents, runtime.conversationId)).agents[String(child.id)]
+        const state = await tx.doc(Subagents, runtime.conversationId)
+        const action = Object.values(state.actions).find(
+          (candidate) => candidate.reporter === task.id,
+        )!
+        action.status = settled.status
+        const agent = state.agents[String(child.id)]
         if (settled.status === 'done' && settled.type === 'input') {
+          action.answer = settled.answer
           if (agent.reported.includes(settled.answer))
             return { status: 'running', checkpoint: { phase: 'report' } }
           agent.reported.push(settled.answer)
@@ -148,14 +162,82 @@ const Reporter = defineTask<
 })
 
 /** Details name the child and whether it answers in the background, for the call's renderer. */
-const details = (conversationId: ConversationId, background: boolean) => ({
+const details = (
+  conversationId: ConversationId,
+  background: boolean,
+  delivery?: { yielded?: true; answerId?: EntryId },
+) => ({
   conversationId,
   ...(background ? { background } : {}),
+  ...delivery,
 })
 const reply = (text: string, info?: ReturnType<typeof details>) => ({
   content: [{ type: 'text' as const, text }],
   ...(info === undefined ? {} : { details: info }),
 })
+
+/** Stop only these local waits; child and reporter ownership never changes. */
+async function waitInterruptibly(
+  api: ToolExecutionApi,
+  id: ConversationId,
+  reporters: TaskId[],
+  idle: boolean,
+  context: Context,
+) {
+  await api.commit(async (tx) => {
+    await tx.doc(InboxDoc, api.conversationId)
+  }, context)
+  const local = withCancel(context)
+  const inbox = (await api.watchDoc(InboxDoc, api.conversationId, local.context))!
+  let wake!: () => void
+  const steering = new Promise<void>((resolve) => {
+    wake = resolve
+  })
+  const inspect = (value: typeof inbox.value) => {
+    if (value?.items.some((item) => item.mode === 'steer')) wake()
+  }
+  inbox.start(async (value) => {
+    inspect(value)
+  })
+  inspect(inbox.value)
+  const child = (await api.conversation(id, context))!
+  const ready = async () => {
+    if (idle && (await api.snapshot(LiveDoc, id, context))?.run !== undefined) return false
+    for (const reporter of reporters) {
+      const task = await api.getTask(reporter, context)
+      if (
+        task?.state.status !== 'terminal' &&
+        !(
+          task?.state.status === 'running' &&
+          (task.state.checkpoint as { phase?: string } | null)?.phase === 'report'
+        )
+      )
+        return false
+    }
+    return true
+  }
+  const completion = async () => {
+    for (const reporter of reporters) await api.waitForTask(reporter, local.context)
+    if (idle) await child.waitForIdle(local.context)
+  }
+  try {
+    const result = await Promise.race([
+      completion().then(() => true),
+      steering.then(async () => {
+        // Our reporter may have just queued the steer. Prefer its completed answer.
+        if (await ready()) {
+          await completion()
+          return true
+        }
+        return false
+      }),
+    ])
+    return result
+  } finally {
+    local.cancel()
+    await inbox.stop()
+  }
+}
 
 async function assertMessageable(
   id: ConversationId,
@@ -401,7 +483,83 @@ export default function subagents(
   return defineExtension({
     name: 'subagents',
     tasks: [Anchor, Reporter, lifecycle(host)],
+    hooks: [
+      hook(GenerationTask, {
+        afterTools: async (_assistant, results, api, context) => {
+          // Tool settlement is not a receipt. Only committed outer results may acknowledge.
+          await host.harness().commit(async (tx) => {
+            const answers = new Set<EntryId>()
+            for (const id of results) {
+              const message = (await tx.entry(ToolResultEntry, id))?.model?.[0]
+              if (message?.role !== 'toolResult' || message.isError) continue
+              const info = message.details as
+                | { answerId?: EntryId; subagentAnswers?: EntryId[] }
+                | undefined
+              if (message.toolName === 'subagent' && info?.answerId !== undefined)
+                answers.add(info.answerId)
+              if (message.toolName === 'codemode')
+                for (const answer of info?.subagentAnswers ?? []) answers.add(answer)
+            }
+            if (!answers.size) return
+            const submissions = []
+            for (const answer of answers)
+              submissions.push({
+                answer,
+                submission: await tx.submissionByRequest(api.conversationId, answerRequest(answer)),
+              })
+            const queued = submissions.flatMap(({ submission }) =>
+              submission?.status === 'queued' ? [submission.id] : [],
+            )
+            const inbox = await tx.doc(InboxDoc, api.conversationId)
+            inbox.items = inbox.items.filter((item) => !queued.includes(item.id))
+            for (const { answer, submission } of submissions) {
+              // A reporter not yet submitted must also see this receipt through request deduplication.
+              if (!submission)
+                await tx.createSubmission({
+                  conversationId: api.conversationId,
+                  requestId: answerRequest(answer),
+                  type: 'input',
+                  status: 'unanswered',
+                  reason: 'subagent-tool-delivered',
+                })
+              else if (submission.status === 'queued')
+                tx.settleSubmission(submission.id, {
+                  status: 'unanswered',
+                  reason: 'subagent-tool-delivered',
+                })
+            }
+          }, context)
+        },
+      }),
+    ],
     sections: [
+      section('subagent_state', async (input, context) => {
+        const state = await input.read.snapshot(Subagents, input.conversationId, context)
+        const running: string[] = []
+        const pending = new Set<ConversationId>()
+        for (const action of Object.values(state?.actions ?? {}))
+          if (
+            action.reporter !== undefined &&
+            action.status === undefined &&
+            (await host.harness().getTask(action.reporter, context))?.state.status !== 'terminal'
+          )
+            pending.add(action.conversationId)
+        const queued: string[] = []
+        for (const agent of Object.values(state?.agents ?? {})) {
+          const label = `${agent.conversationId} (${agent.agent})`
+          if (
+            (await input.read.snapshot(LiveDoc, agent.conversationId, context))?.run !== undefined
+          )
+            running.push(label)
+          else if (pending.has(agent.conversationId)) queued.push(label)
+        }
+        if (!running.length && !queued.length) return undefined
+        return [
+          ...(running.length ? [`Still running subagents: ${running.join(', ')}.`] : []),
+          ...(queued.length ? [`Pending subagent inputs: ${queued.join(', ')}.`] : []),
+          'A yielded wait is not a child answer. Use message, stop, or wait with these IDs; parent stop does not stop them. Queued inputs are delivered only at the normal boundary; do not act on them early.',
+        ].join(' ')
+      }),
       section('subagents', async () => {
         const discovered = await discoverAgents(
           host.ultimateRoot,
@@ -455,7 +613,7 @@ Available definitions:
       defineTool({
         name: 'subagent',
         description:
-          'Delegate to a named agent. start returns its answer (foreground) or id (background). message sends a follow-up or steer; wait returns the latest answer; stop stops current work; list shows your children; land verifies and fast-forwards a finished worktree child; discard removes its worktree but keeps its branch. start accepts isolate none or worktree, and fork true to inherit parent history before this call (more context cost; prompt caching usually covers the shared prefix). Background answers join the current run after its tool round.',
+          'Delegate to a named agent. start returns its answer (foreground) or id (background). Foreground start/message and wait yield on queued steering with details.yielded:true; work continues independently. Stop children explicitly; stopping the parent does not stop them. message sends a follow-up or steer; wait returns the latest answer; stop stops current work; list shows your children; land verifies and fast-forwards a finished worktree child; discard removes its worktree but keeps its branch. start accepts isolate none or worktree, and fork true to inherit parent history before this call (more context cost; prompt caching usually covers the shared prefix). Background answers join the current run after its tool round.',
         replay: 'safe',
         parameters: Type.Object({
           action: Type.Union([
@@ -605,12 +763,10 @@ Available definitions:
               if (state.actions[api.callId]) return { ...state.actions[api.callId] }
               let conversationId = args.id as ConversationId
               if (definition) {
-                const owner = args.background
-                  ? await tx.createTask(Anchor, null, {
-                      ownership: { kind: 'conversation' },
-                      background: true,
-                    })
-                  : api.taskId
+                const owner = await tx.createTask(Anchor, null, {
+                  ownership: { kind: 'conversation' },
+                  background: true,
+                })
                 const child = await createChild(tx, {
                   owner: { kind: 'task', taskId: owner },
                   definition: isolate
@@ -648,59 +804,53 @@ Available definitions:
                   if ((await tx.task(id))?.state.status !== 'terminal')
                     throw new Error('Child worktree lifecycle operation is in progress')
               }
-              const background = state.agents[String(conversationId)].background
-              const reporter = background
-                ? await tx.createTask(
-                    Reporter,
-                    { conversationId, text, steer: args.steer === true },
-                    { ownership: { kind: 'conversation' }, background: true },
-                  )
-                : undefined
-              const createdAction = {
-                conversationId,
-                ...(reporter === undefined ? {} : { reporter }),
-              }
+              const reporter = await tx.createTask(
+                Reporter,
+                { conversationId, text, steer: args.steer === true },
+                { ownership: { kind: 'conversation' }, background: true },
+              )
+              const createdAction = { conversationId, reporter }
               state.actions[api.callId] = createdAction
               return createdAction
             }, context)
-            const info = details(action.conversationId, action.reporter !== undefined)
+            const background =
+              index.agents[String(action.conversationId)]?.background ?? args.background === true
+            const info = details(action.conversationId, background)
             await api.details(info, context)
-            if (action.reporter !== undefined)
+            if (background)
               return finish(
                 `Started ${args.action === 'message' ? 'message to' : 'subagent'} ${action.conversationId}.${isolateInfo}`,
                 info,
               )
-            const child = (await api.conversation(action.conversationId, context))!
-            const current = await api.snapshot(Subagents, api.conversationId, context)
-            await assertMessageable(
-              action.conversationId,
-              current?.agents[String(action.conversationId)]?.isolate,
-              api,
-              context,
-            )
-            const settled = await (
-              await child.submit(
-                {
-                  type: 'input',
-                  content: text,
-                  whenBusy: args.steer ? 'steer' : 'followUp',
-                  requestId: `subagent:${api.callId}`,
-                },
+            if (
+              !(await waitInterruptibly(
+                api,
+                action.conversationId,
+                [action.reporter!],
+                false,
                 context,
-              )
-            ).wait(context)
-            if (settled.status !== 'done' || settled.type !== 'input')
-              return finish(
-                `Subagent ${action.conversationId}: ${settled.status}${isolateInfo}`,
-                info,
-              )
-            const answer = await api.commit(
-              (tx) => tx.entry(AssistantEntry, settled.answer),
-              context,
+              ))
             )
+              return finish(
+                `Wait yielded for subagent ${action.conversationId}; work continues.${isolateInfo}`,
+                details(action.conversationId, background, { yielded: true }),
+              )
+            const settled = (await api.snapshot(Subagents, api.conversationId, context))!.actions[
+              api.callId
+            ]
+            const answer =
+              settled.answer === undefined
+                ? undefined
+                : await api.commit((tx) => tx.entry(AssistantEntry, settled.answer!), context)
             return finish(
-              textOf(answer?.model?.[0] as AssistantMessage | undefined) + isolateInfo,
-              info,
+              (answer
+                ? textOf(answer.model?.[0] as AssistantMessage | undefined)
+                : `Subagent ${action.conversationId}: ${settled.status}`) + isolateInfo,
+              details(
+                action.conversationId,
+                background,
+                settled.answer === undefined ? undefined : { answerId: settled.answer },
+              ),
             )
           }
           const id = args.id as ConversationId
@@ -721,33 +871,36 @@ Available definitions:
               await child.abort(context)
             return finish(`Stopped ${id}.`, info)
           }
-          // Reporters claim answers before they submit them; once they finish, a queued report can be found.
-          for (const action of Object.values(index.actions))
-            if (action.conversationId === id && action.reporter !== undefined)
-              await api.waitForTask(action.reporter, context)
-          await child.waitForIdle(context)
-          const { answer, report } = await api.commit(async (tx) => {
+          const reporters = Object.values(index.actions).flatMap((action) =>
+            action.conversationId === id && action.reporter !== undefined ? [action.reporter] : [],
+          )
+          if (!(await waitInterruptibly(api, id, reporters, true, context)))
+            return finish(
+              `Wait yielded for subagent ${id}; work continues.`,
+              details(id, index.agents[String(id)].background, { yielded: true }),
+            )
+          const answer = await api.commit(async (tx) => {
             let cursor: Cursor | undefined
             let latest: EntryRecord | undefined
             do {
               const page = await tx.scanEntries({ conversationId: id }, 256, cursor)
               for (const entry of page.items)
-                if (entry.kind === 'pi.assistant' && latest === undefined) latest = entry
+                if (AssistantEntry.is(entry) && latest === undefined) latest = entry
               cursor = page.next
             } while (cursor !== undefined)
-            if (!latest) return { answer: undefined, report: undefined }
-            const submission = await tx.submissionByRequest(
-              api.conversationId,
-              answerRequest(latest.id),
-            )
+            if (!latest) return undefined
             const agent = (await tx.doc(Subagents, api.conversationId)).agents[String(id)]
             if (!agent.reported.includes(latest.id)) agent.reported.push(latest.id)
-            return { answer: latest, report: submission?.id }
+            return latest
           }, context)
-          // This result delivers the answer; a report still waiting in the inbox would repeat it.
-          if (report !== undefined)
-            await host.harness().abortSubmission(report, context, api.conversationId)
-          return finish(textOf(answer?.model?.[0] as AssistantMessage | undefined), info)
+          return finish(
+            textOf(answer?.model?.[0] as AssistantMessage | undefined),
+            details(
+              id,
+              index.agents[String(id)].background,
+              answer === undefined ? undefined : { answerId: answer.id },
+            ),
+          )
         },
       }),
     ],
