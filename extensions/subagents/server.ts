@@ -901,11 +901,14 @@ Available definitions:
               ...target.inputs,
               ...submissions.flatMap((submission) => (submission ? [submission.id] : [])),
             ])
-            const run = (await api.snapshot(LiveDoc, id, context))?.run
-            if (
-              run &&
-              (run.taskId === target.run || run.inputs.some((input) => inputs.has(input)))
-            ) {
+            // A tool round can hand off between the snapshot and abort; follow only captured inputs.
+            while (true) {
+              const run = (await api.snapshot(LiveDoc, id, context))?.run
+              if (
+                !run ||
+                (run.taskId !== target.run && !run.inputs.some((input) => inputs.has(input)))
+              )
+                break
               await host.harness().abortTask(run.taskId, context)
               await api.waitForTask(run.taskId, context)
             }

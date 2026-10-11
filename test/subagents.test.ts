@@ -12,7 +12,13 @@ import {
   GenerationTask,
   hook,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, Extension, Task, ToolRegistration } from '@earendil-works/pi-durable'
+import type {
+  ConversationId,
+  Extension,
+  Task,
+  TaskId,
+  ToolRegistration,
+} from '@earendil-works/pi-durable'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
@@ -664,6 +670,83 @@ describe('subagents', () => {
     ).toBeUndefined()
     f.childGate.release()
     expect(await reports(f.opened)).toHaveLength(0)
+    expect(f.errors).toEqual([])
+  })
+  it('stops captured inputs across a generation handoff racing the abort request', async () => {
+    const f = await gatedFixture()
+    const successorGate = gate()
+    let originalRun: TaskId | undefined
+    let successor: TaskId | undefined
+    f.prepared.registry.install(
+      defineExtension({
+        name: 'stop-handoff',
+        hooks: [
+          hook(GenerationTask, {
+            beforeRequest: async (_request, api, hookContext) => {
+              if (
+                api.conversationId !== f.opened.root.id &&
+                originalRun !== undefined &&
+                api.taskId !== originalRun
+              ) {
+                successor = api.taskId
+                await awaitWithContext(successorGate.promise, hookContext)
+              }
+            },
+          }),
+        ],
+      }),
+    )
+    await call(f.opened, { action: 'start', agent: 'scout', task: 'HOLD', background: true })
+    const [child] = await children(f.opened)
+    await until(async () => f.holding.has(child.conversationId))
+    const original = (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))!.run!
+    originalRun = original.taskId
+    const abortGate = gate()
+    let entered = false
+    const abort = f.opened.harness.abortTask.bind(f.opened.harness)
+    f.opened.harness.abortTask = async (id, taskContext) => {
+      if (id === original.taskId && !entered) {
+        entered = true
+        await awaitWithContext(abortGate.promise, taskContext)
+      }
+      return abort(id, taskContext)
+    }
+    try {
+      await startCall(f.opened, { action: 'stop', id: child.conversationId })
+      await until(async () => entered)
+      // Stop has snapshotted the old generation. Completing its tools moves the same inputs.
+      f.childGate.release()
+      await until(async () => successor !== undefined)
+      const moved = (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))!.run!
+      expect(moved.taskId).toBe(successor)
+      expect(moved.taskId).not.toBe(original.taskId)
+      expect(moved.inputs).toEqual(original.inputs)
+      expect(await f.opened.harness.getTask(original.taskId, context)).toMatchObject({
+        state: { status: 'terminal', outcome: { status: 'completed' } },
+      })
+      abortGate.release()
+      await f.opened.root.waitForIdle(context)
+      expect(await latestResult(f.opened)).toMatchObject({
+        content: [{ type: 'text', text: `Stopped ${child.conversationId}.` }],
+      })
+      expect(
+        (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
+      ).toBeUndefined()
+      const submission = (await f.opened.harness.submission(original.inputs[0], context))!
+      expect(await submission.status(context)).toMatchObject({
+        status: 'unanswered',
+        reason: 'aborted',
+      })
+      expect(await reports(f.opened)).toHaveLength(0)
+    } finally {
+      f.opened.harness.abortTask = abort
+      abortGate.release()
+      successorGate.release()
+    }
+    await call(f.opened, { action: 'message', id: child.conversationId, text: 'fresh reuse' })
+    await until(async () => (await reports(f.opened)).length === 1)
+    await f.opened.root.waitForIdle(context)
+    expect(JSON.stringify(await reports(f.opened))).toContain('Child: fresh reuse')
     expect(f.errors).toEqual([])
   })
   it('keeps a foreground child running when the parent is stopped', async () => {
