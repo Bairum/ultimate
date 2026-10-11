@@ -5,7 +5,7 @@ import { createServer } from 'vite-plus'
 import { expect, it } from 'vitest'
 import { linkDependencies, skipWithoutChromium, temp } from './helpers.ts'
 
-it('shows compact rates and honest tooltip, polls serially, resets and cleans up stale requests', async (test) => {
+it('preserves the shared server rate on navigation/remount, explains instance scope and cleans up stale/error requests', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const base = await temp('ultimate-status-line-browser-')
@@ -47,14 +47,17 @@ source.send('open')
 system(1)
 view()
 const root = createRoot(document.querySelector('#app'))
-root.render(h(TooltipProvider, { delayDuration: 0 }, h(extension.slots['statusline.left'][1])))
+const show = () => root.render(h(TooltipProvider, { delayDuration: 0 }, h(extension.slots['statusline.left'][1])))
+show()
 window.fixture = {
   requests,
   view,
   system,
   disconnect: () => source.send('error'),
   reconnect: () => source.send('open'),
-  finish: (index, output) => requests[index].resolve([{ id: requests[index].conversationId, input: output * 2, output, cacheRead: output * 3, cacheWrite: output * 4 }]),
+  finish: (index, output, elapsed) => requests[index].resolve(output === null ? null : { elapsed, rates: { input: output * 2, output, cacheRead: output * 3, cacheWrite: output * 4 } }),
+  hide: () => root.render(null),
+  show,
   fail: index => requests[index].reject(new Error('offline')),
   unmount: () => { root.unmount(); store.stop() },
 }
@@ -83,10 +86,11 @@ window.fixture = {
         (expected) => Reflect.get(window, 'fixture').requests.length === expected,
         n,
       )
-    const finish = (index: number, output: number) =>
+    const finish = (index: number, output: number | null, elapsed = 30) =>
       page.evaluate(
-        ([requestIndex, tokens]) => Reflect.get(window, 'fixture').finish(requestIndex, tokens),
-        [index, output],
+        ([requestIndex, tokens, seconds]) =>
+          Reflect.get(window, 'fixture').finish(requestIndex, tokens, seconds),
+        [index, output, elapsed],
       )
     await waitCount(1)
     expect(await rate.textContent()).toBe('↓? tok/s')
@@ -94,10 +98,10 @@ window.fixture = {
     for (const text of totals) expect(await page.locator('#app').textContent()).toContain(text)
     await page.clock.runFor(2000)
     expect(await count()).toBe(1) // Completion-chained, no overlap.
-    await finish(0, 10000)
+    await finish(0, null)
     await page.clock.runFor(1000)
     await waitCount(2)
-    await finish(1, 10123)
+    await finish(1, 123, 1)
     await page.waitForFunction(
       () =>
         document.querySelector('[aria-label="Output token rate"]')?.textContent === '↓123 tok/s',
@@ -113,25 +117,25 @@ window.fixture = {
       'Output ↓123.0',
       'Cache read 369.0',
       'Cache write 492.0',
-      'conversation 1 + owned descendants',
+      'entire instance · all conversations and subagents',
       'parallel/background additive',
       'Rolling 30s',
       '1.0s observed',
       'reporting may arrive late',
       'not instantaneous decoding',
       'Historical tokens',
-      'new children',
+      'new conversations count from creation',
       'tool usage excluded',
       'Reasoning is not added again',
     ])
       expect(tip).toContain(text)
     await page.mouse.move(700, 500)
     await page.evaluate(() => Reflect.get(window, 'fixture').view(2))
+    expect(await rate.textContent()).toBe('↓123 tok/s')
+    expect(await count()).toBe(2)
+    await page.clock.runFor(900)
     await waitCount(3)
-    expect(await rate.textContent()).toBe('↓? tok/s')
-    expect(
-      await page.evaluate(() => Reflect.get(window, 'fixture').requests[2].conversationId),
-    ).toBe(2)
+    expect(await rate.textContent()).toBe('↓123 tok/s')
     await page.evaluate(() => Reflect.get(window, 'fixture').disconnect())
     await page.waitForFunction(() => Reflect.get(window, 'fixture').requests[2].aborted)
     await finish(2, 999999) // An aborted transport that still resolves cannot contaminate the next scope.
@@ -139,10 +143,10 @@ window.fixture = {
     expect(await count()).toBe(3)
     await page.evaluate(() => Reflect.get(window, 'fixture').reconnect())
     await waitCount(4)
-    await finish(3, 20000)
+    await finish(3, 100)
     await page.clock.runFor(1000)
     await waitCount(5)
-    await finish(4, 20100)
+    await finish(4, 100)
     await page.waitForFunction(
       () =>
         document.querySelector('[aria-label="Output token rate"]')?.textContent === '↓100 tok/s',
@@ -155,11 +159,14 @@ window.fixture = {
     )
     await page.clock.runFor(1000)
     await waitCount(7)
-    await finish(6, 90000)
-    expect(await rate.textContent()).toBe('↓? tok/s')
+    await finish(6, 100)
+    await page.waitForFunction(
+      () =>
+        document.querySelector('[aria-label="Output token rate"]')?.textContent === '↓100 tok/s',
+    )
     await page.clock.runFor(1000)
     await waitCount(8)
-    await finish(7, 90100)
+    await finish(7, 100)
     await page.waitForFunction(
       () =>
         document.querySelector('[aria-label="Output token rate"]')?.textContent === '↓100 tok/s',
@@ -167,19 +174,20 @@ window.fixture = {
     await page.evaluate(() => Reflect.get(window, 'fixture').system(2))
     await waitCount(9)
     expect(await rate.textContent()).toBe('↓? tok/s')
-    await finish(8, 100000)
+    await finish(8, null)
     await page.clock.runFor(1000)
     await waitCount(10)
-    await finish(9, 100100)
+    await finish(9, 100)
     await page.waitForFunction(
       () =>
         document.querySelector('[aria-label="Output token rate"]')?.textContent === '↓100 tok/s',
     )
     await page.clock.fastForward(7000) // Background-tab / long sampling gap.
     await waitCount(11)
-    await finish(10, 100500)
+    await finish(10, 200)
     await page.waitForFunction(
-      () => document.querySelector('[aria-label="Output token rate"]')?.textContent === '↓? tok/s',
+      () =>
+        document.querySelector('[aria-label="Output token rate"]')?.textContent === '↓200 tok/s',
     )
     await page.clock.runFor(1000)
     await waitCount(12)
@@ -191,11 +199,25 @@ window.fixture = {
     await page.clock.runFor(1000)
     await waitCount(13)
     expect(await rate.textContent()).toBe('↓? tok/s')
-    await page.evaluate(() => Reflect.get(window, 'fixture').unmount())
+    await page.evaluate(() => Reflect.get(window, 'fixture').hide())
     await page.waitForFunction(() => Reflect.get(window, 'fixture').requests[12].aborted)
     await finish(12, 900000)
     await page.clock.runFor(10000)
     expect(await count()).toBe(13)
+    await page.evaluate(() => Reflect.get(window, 'fixture').show())
+    await waitCount(14)
+    await finish(13, 123)
+    await page.waitForFunction(
+      () =>
+        document.querySelector('[aria-label="Output token rate"]')?.textContent === '↓123 tok/s',
+    )
+    await page.clock.runFor(1000)
+    await waitCount(15)
+    await page.evaluate(() => Reflect.get(window, 'fixture').unmount())
+    await page.waitForFunction(() => Reflect.get(window, 'fixture').requests[14].aborted)
+    await finish(14, 900000)
+    await page.clock.runFor(10000)
+    expect(await count()).toBe(15)
     expect(errors).toEqual([])
   } finally {
     await browser.close()

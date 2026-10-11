@@ -32,7 +32,8 @@ const message = (output: number) => {
   return value
 }
 
-it('atomically snapshots settled models plus partials for owned idle/background descendants only', async () => {
+it('returns one server sample across every shown ID after unrelated roots, forks and background children spend', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] })
   const server = await fauxServer({
     ultimateRoot: resolve('.'),
     home: await temp(),
@@ -81,38 +82,38 @@ it('atomically snapshots settled models plus partials for owned idle/background 
       return { child: child.id, nested: nested.id, fork: fork.id, unrelated: unrelated.id }
     }, context)
     await until(() => server.api.conversations().length >= 5)
-    await until(() => !server.api.conversations().some((item) => item.busy))
+    await vi.advanceTimersByTimeAsync(1000)
     const commit = vi.spyOn(server.harness, 'commit')
-    const snapshot = async (conversationId = root) =>
+    const snapshot = async (conversationId: number = root) =>
       post(server, '/api/extensions/status-line/actions/rates', { conversationId, args: null })
     const first = await snapshot()
     expect(first.status).toBe(200)
-    expect(commit).toHaveBeenCalledTimes(1)
-    expect(first.data.result).toEqual([
-      { id: root, input: 260, output: 130, cacheRead: 390, cacheWrite: 520 },
-      { id: ids.child, input: 460, output: 230, cacheRead: 690, cacheWrite: 920 },
-      { id: ids.nested, input: 660, output: 330, cacheRead: 990, cacheWrite: 1320 },
-    ])
+    expect(commit).not.toHaveBeenCalled()
+    expect(first.data.result).toEqual({
+      elapsed: 1,
+      rates: { input: 37500, output: 18750, cacheRead: 56250, cacheWrite: 75000 },
+    })
+    for (const id of [ids.child, ids.nested, ids.fork, ids.unrelated, 999999])
+      expect((await snapshot(id)).data).toEqual(first.data)
+    expect(
+      (await post(server, '/api/extensions/status-line/actions/rates', { args: null })).data,
+    ).toEqual(first.data)
     commit.mockRestore()
     // Pi's settlement operation updates the model ledger and removes the partial in one commit.
     await server.harness.commit(async (tx) => {
       ;(await tx.doc(UsageDoc, root)).models['faux/model'] = message(120).usage
       delete (await tx.doc(LiveDoc, root)).generation
     }, context)
-    expect((await snapshot()).data).toEqual(first.data)
-    expect((await snapshot(ids.child)).data.result.map((item: { id: number }) => item.id)).toEqual([
-      ids.child,
-      ids.nested,
-    ])
-    expect(
-      (
-        await post(server, '/api/extensions/status-line/actions/rates', {
-          conversationId: 999999,
-          args: null,
-        })
-      ).status,
-    ).toBe(500)
+    await vi.advanceTimersByTimeAsync(1000)
+    const final = await snapshot()
+    expect(final.data.result).toEqual({
+      elapsed: 2,
+      rates: { input: 18750, output: 9375, cacheRead: 28125, cacheWrite: 37500 },
+    })
+    expect((await snapshot(ids.child)).data).toEqual(final.data)
   } finally {
     await server.close()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
   }
 })

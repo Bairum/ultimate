@@ -1,5 +1,4 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { createRateSampler, samplingGap, type RateSample, type TokenCounters } from './rates.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   api,
@@ -102,35 +101,35 @@ function lastAssistant(entries: readonly EntryRecord[]) {
 
 const prompt = (usage: Usage) => usage.input + usage.cacheRead + usage.cacheWrite
 
+type RateSample = {
+  rates: Pick<Usage, 'input' | 'output' | 'cacheRead' | 'cacheWrite'>
+  elapsed: number
+}
+
 function useTokenRates() {
-  const { conversationId } = useUltimate()
   const connection = useConnection()
   const system = useSystem()
   const generation = system?.process.generation
-  const key = `${conversationId}:${connection.status}:${connection.since}:${generation}`
+  const key = `${connection.status}:${connection.since}:${generation}`
   const [observed, setObserved] = useState<{ key: string; sample: RateSample | null }>()
   useEffect(() => {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     let requestTimeout: ReturnType<typeof setTimeout> | undefined
     let request: AbortController | undefined
-    let sample = createRateSampler()
     setObserved({ key, sample: null })
-    if (conversationId === undefined || connection.status !== 'open' || generation === undefined)
-      return undefined
+    if (connection.status !== 'open' || generation === undefined) return undefined
     async function poll() {
       request = new AbortController()
-      requestTimeout = setTimeout(() => request?.abort(), samplingGap)
+      requestTimeout = setTimeout(() => request?.abort(), 5000)
       try {
-        const counters = await api.action<TokenCounters[]>('status-line', 'rates', null, {
-          conversationId,
+        const sample = await api.action<RateSample | null>('status-line', 'rates', null, {
           signal: request.signal,
         })
         request.signal.throwIfAborted()
-        if (!cancelled) setObserved({ key, sample: sample(performance.now(), counters) })
+        if (!cancelled) setObserved({ key, sample })
       } catch {
         if (!cancelled) {
-          sample = createRateSampler()
           setObserved({ key, sample: null })
         }
       } finally {
@@ -145,14 +144,13 @@ function useTokenRates() {
       clearTimeout(requestTimeout)
       request?.abort()
     }
-  }, [key, conversationId, connection.status, generation])
+  }, [key, connection.status, generation])
   return observed?.key === key ? observed.sample : null
 }
 
 function Tokens() {
   const { usage, entries, agent } = useConversation()
   const speed = useTokenRates()
-  const { conversationId } = useUltimate()
   const models = useModels()
   const buckets = [...Object.values(usage.models), ...Object.values(usage.tools)]
   const total = buckets.reduce(
@@ -214,7 +212,7 @@ function Tokens() {
               {speed ? speed.rates.cacheWrite.toFixed(1) : '?'}
             </div>
             <div>
-              Scope: conversation {conversationId} + owned descendants (parallel/background
+              Scope: entire instance · all conversations and subagents (parallel/background
               additive)
             </div>
             <div>
@@ -222,7 +220,10 @@ function Tokens() {
               {speed ? `${speed.elapsed.toFixed(1)}s observed` : 'warming up / unavailable'}
             </div>
             <div>Provider reporting may arrive late; not instantaneous decoding speed.</div>
-            <div>Historical tokens before observation excluded, including new children.</div>
+            <div>
+              Historical tokens before server observation excluded; new conversations count from
+              creation.
+            </div>
             <div>Model only; tool usage excluded. Reasoning is not added again.</div>
           </div>
         </>
