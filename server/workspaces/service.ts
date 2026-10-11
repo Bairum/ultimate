@@ -37,6 +37,41 @@ async function records(tx: Tx) {
   return rows
 }
 
+function pathRelations() {
+  const physical = new Map<string, Promise<string>>()
+  const checkouts = new Map<string, Promise<string | undefined>>()
+  const canonical = (path: string) => {
+    let value = physical.get(path)
+    if (!value) physical.set(path, (value = worktree.canonicalPath(path)))
+    return value
+  }
+  const within = async (root: string, path: string) =>
+    worktree.contains(await canonical(root), await canonical(path))
+  return {
+    canonical,
+    within,
+    async checkout(root: string, path: string) {
+      if (!(await within(root, path))) return false
+      const cwd = await canonical(path)
+      const target = await canonical(root)
+      if (cwd === target) return true
+      let identity = checkouts.get(cwd)
+      if (!identity) {
+        identity = worktree
+          .git(cwd, 'rev-parse', '--show-toplevel')
+          .then(canonical)
+          .catch((error: NodeJS.ErrnoException) => {
+            if (error.code === 'ENOENT' || Number(error.code) === 128) return undefined
+            throw error
+          })
+        checkouts.set(cwd, identity)
+      }
+      const checkout = await identity
+      return checkout === undefined || checkout === target
+    },
+  }
+}
+
 export function createWorkspaces(host: {
   home: string
   projectRoot: string
@@ -58,28 +93,43 @@ export function createWorkspaces(host: {
         `Workspace preparation is ${workspace.preparation}${workspace.error ? `: ${workspace.error}` : ''}`,
       )
     const cwd = (await tx.doc(AgentDoc, id)).cwd ?? host.projectRoot
-    if (workspace && cwd !== workspace.path)
+    const paths = pathRelations()
+    if (workspace && !(await paths.within(workspace.path, cwd)))
       throw new Error(
         'Workspace cwd changed; restore the authoritative workspace path before submitting',
       )
     const queue = await tx.doc(LifecycleQueue)
-    for (const [child, tasks] of Object.entries(queue.children)) {
+    for (const child of Object.keys(queue.children)) {
       const other = (await tx.doc(WorkspaceDoc, Number(child) as ConversationId)).workspace
-      if (other?.path === cwd && other.state === 'discarded')
+      const inside = other && (await paths.within(other.path, cwd))
+      if (inside && other.state === 'discarded')
         throw new Error('Workspace was discarded; create a new conversation in an active checkout')
-      if (other?.path === cwd && other.preparation !== 'ready')
+      if (inside && other.preparation !== 'ready')
         throw new Error(`Workspace preparation is ${other.preparation}`)
+    }
+    if ((await blockingLifecycle(tx, id)).length)
+      throw new Error('Child worktree lifecycle operation is in progress')
+  }
+  async function blockingLifecycle(tx: Tx, id: ConversationId) {
+    const paths = pathRelations()
+    const cwd = (await tx.doc(AgentDoc, id)).cwd ?? host.projectRoot
+    const workspace = (await tx.doc(WorkspaceDoc, id)).workspace
+    const queue = await tx.doc(LifecycleQueue)
+    const blocked: TaskId[] = []
+    for (const [child, tasks] of Object.entries(queue.children)) {
+      if (!tasks.length) continue
+      const other = (await tx.doc(WorkspaceDoc, Number(child) as ConversationId)).workspace
       const related =
         Number(child) === id ||
-        other?.source === cwd ||
-        other?.path === cwd ||
-        (workspace && other?.path === workspace.source)
+        (other &&
+          ((await paths.checkout(other.source, cwd)) ||
+            (await paths.within(other.path, cwd)) ||
+            (workspace && (await paths.within(other.path, workspace.source)))))
       if (!related) continue
-      for (const task of tasks) {
-        if ((await tx.task(task))?.state.status !== 'terminal')
-          throw new Error('Child worktree lifecycle operation is in progress')
-      }
+      for (const task of tasks)
+        if ((await tx.task(task))?.state.status !== 'terminal') blocked.push(task)
     }
+    return [...new Set(blocked)]
   }
   async function guardTx(
     tx: Tx,
@@ -106,13 +156,15 @@ export function createWorkspaces(host: {
     )
       throw new Error(`Workspace preparation is ${workspace.preparation}`)
     const rows = await records(tx)
+    const paths = pathRelations()
     if (operation === 'discard') {
       for (const row of rows) {
         const dependent = (await tx.doc(WorkspaceDoc, row.id)).workspace
         if (
           row.id !== child &&
           dependent?.state === 'active' &&
-          dependent.source === workspace.path
+          ((await paths.within(workspace.path, dependent.source)) ||
+            (await paths.within(workspace.path, dependent.path)))
         )
           throw new Error(
             'Workspace has an active dependent workspace; discard it explicitly first',
@@ -132,22 +184,26 @@ export function createWorkspaces(host: {
           continue
         const input = task.input as { child: ConversationId }
         const other = (await tx.doc(WorkspaceDoc, input.child)).workspace
-        if (other?.source === workspace.source) {
+        if (
+          other &&
+          (await paths.canonical(other.source)) === (await paths.canonical(workspace.source))
+        ) {
           lifecycleAllowed.add(task.id)
           continue
         }
         if (
           other &&
-          [other.source, other.path].some(
-            (path) => path === workspace.source || path === workspace.path,
-          )
+          ((await paths.within(workspace.path, other.source)) ||
+            (await paths.within(other.path, workspace.source)) ||
+            (await paths.within(workspace.path, other.path)) ||
+            (await paths.within(other.path, workspace.path)))
         )
           throw new Error('Dependent workspace lifecycle operation is in progress')
       }
       taskCursor = page.next
     } while (taskCursor !== undefined)
     const descendants = new Set<ConversationId>([child])
-    const descendantPaths = new Set([workspace.path])
+    const descendantPaths = new Set([await paths.canonical(workspace.path)])
     let changed = true
     while (changed) {
       changed = false
@@ -157,10 +213,11 @@ export function createWorkspaces(host: {
         if (
           !descendants.has(row.id) &&
           ((owner && descendants.has(owner)) ||
-            (dependent?.state === 'active' && descendantPaths.has(dependent.source)))
+            (dependent?.state === 'active' &&
+              descendantPaths.has(await paths.canonical(dependent.source))))
         ) {
           descendants.add(row.id)
-          if (dependent) descendantPaths.add(dependent.path)
+          if (dependent) descendantPaths.add(await paths.canonical(dependent.path))
           changed = true
         }
       }
@@ -169,7 +226,12 @@ export function createWorkspaces(host: {
       (a, b) => Number(descendants.has(b.id)) - Number(descendants.has(a.id)),
     )) {
       const cwd = (await tx.doc(AgentDoc, row.id)).cwd ?? host.projectRoot
-      if (!descendants.has(row.id) && cwd !== workspace.path && cwd !== workspace.source) continue
+      if (
+        !descendants.has(row.id) &&
+        !(await paths.within(workspace.path, cwd)) &&
+        !(await paths.checkout(workspace.source, cwd))
+      )
+        continue
       if (holds.has(row.id)) throw new Error('Workspace has an active preview hold')
       if (admissions.has(row.id))
         throw new Error('Workspace execution admission is in progress; retry')
@@ -185,6 +247,7 @@ export function createWorkspaces(host: {
           page.items.some(
             (task) =>
               task.state.status !== 'terminal' &&
+              task.kind !== 'ultimate.automation-scheduler' &&
               !lifecycleAllowed.has(task.id) &&
               !allowed.has(task.id),
           )
@@ -270,7 +333,7 @@ export function createWorkspaces(host: {
         branch: `ultimate/${agent}-${key.slice(0, 16)}`,
         base: await worktree.git(source, 'rev-parse', 'HEAD'),
         source: await realpath(await worktree.git(source, 'rev-parse', '--show-toplevel')),
-        targetBranch: await worktree.git(source, 'symbolic-ref', '--short', 'HEAD'),
+        ...(await worktree.target(source)),
         state: 'active',
         preparation: 'pending',
       }
@@ -304,6 +367,7 @@ export function createWorkspaces(host: {
       return snapshot(id, context)
     },
     assertAdmission,
+    blockingLifecycle,
     async withAdmission<T>(
       id: ConversationId,
       operation: (cwd: string) => Promise<T>,
@@ -312,8 +376,7 @@ export function createWorkspaces(host: {
       const harness = host.harness()
       const cwd = await harness.commit(async (tx) => {
         await assertAdmission(tx, id)
-        const workspace = (await tx.doc(WorkspaceDoc, id)).workspace
-        const executionCwd = workspace?.path ?? (await tx.doc(AgentDoc, id)).cwd ?? host.projectRoot
+        const executionCwd = (await tx.doc(AgentDoc, id)).cwd ?? host.projectRoot
         admissions.set(id, (admissions.get(id) ?? 0) + 1)
         return executionCwd
       }, context)
@@ -435,8 +498,10 @@ export function createWorkspaces(host: {
         } while (cursor !== undefined)
         for (const parent of legacyParents) {
           const source = (await tx.doc(AgentDoc, parent.id)).cwd ?? host.projectRoot
-          const canonical = await realpath(source)
-          const targetBranch = await worktree.git(canonical, 'symbolic-ref', '--short', 'HEAD')
+          const canonical = await realpath(
+            await worktree.git(source, 'rev-parse', '--show-toplevel'),
+          )
+          const target = await worktree.target(canonical)
           const index = await tx.doc(LegacySubagents, parent.id)
           for (const [id, child] of Object.entries(index.agents)) {
             if (!child.isolate) continue
@@ -445,7 +510,7 @@ export function createWorkspaces(host: {
             saved.workspace = {
               ...child.isolate,
               source: canonical,
-              targetBranch,
+              ...target,
               preparation: 'ready',
             }
             ;(await tx.doc(LifecycleQueue)).children[id] = []

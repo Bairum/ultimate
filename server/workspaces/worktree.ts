@@ -1,7 +1,15 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { mkdir, readFile, readlink, realpath, rename, stat, writeFile } from 'node:fs/promises'
+import {
+  basename,
+  dirname,
+  join,
+  resolve as resolvePath,
+  relative,
+  isAbsolute,
+  sep,
+} from 'node:path'
 import { promisify } from 'node:util'
 
 import type { JsonObject } from '@earendil-works/pi-durable'
@@ -11,6 +19,33 @@ const exec = promisify(execFile)
 export async function git(cwd: string, ...args: string[]) {
   const { stdout } = await exec('git', args, { cwd, timeout: 30000, maxBuffer: 1024 * 1024 })
   return stdout.trim()
+}
+export async function canonicalPath(path: string): Promise<string> {
+  const absolute = resolvePath(path)
+  try {
+    return await realpath(absolute)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    // Removed workspaces and dangling aliases still retain their physical identity.
+    const link = await readlink(absolute).catch((failure: NodeJS.ErrnoException) => {
+      if (failure.code !== 'ENOENT' && failure.code !== 'EINVAL') throw failure
+      return undefined
+    })
+    if (link !== undefined) return canonicalPath(resolvePath(dirname(absolute), link))
+    return join(await canonicalPath(dirname(absolute)), basename(absolute))
+  }
+}
+export function contains(root: string, path: string) {
+  const suffix = relative(root, path)
+  return suffix === '' || (!isAbsolute(suffix) && suffix !== '..' && !suffix.startsWith(`..${sep}`))
+}
+export async function target(cwd: string): Promise<Pick<Workspace, 'targetBranch' | 'targetHead'>> {
+  try {
+    return { targetBranch: await git(cwd, 'symbolic-ref', '--quiet', '--short', 'HEAD') }
+  } catch (error) {
+    if ((error as { code?: number }).code !== 1) throw error
+    return { targetBranch: null, targetHead: await git(cwd, 'rev-parse', 'HEAD') }
+  }
 }
 export async function create(
   parent: string,
@@ -65,7 +100,7 @@ export async function create(
         base,
         state: 'active',
         source: await realpath(await git(parent, 'rev-parse', '--show-toplevel')),
-        targetBranch: await git(parent, 'symbolic-ref', '--short', 'HEAD'),
+        ...(await target(parent)),
         preparation: 'ready',
       }
   try {

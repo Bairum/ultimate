@@ -1,4 +1,4 @@
-import { mkdir, writeFile, readFile, access } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, access, symlink } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -10,6 +10,14 @@ import {
   configure,
   AgentDoc,
 } from '@earendil-works/pi-durable'
+import { awaitWithContext } from '@earendil-works/chord/context'
+import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
+import type { ActionContext } from '../server/actions.ts'
+import automations, {
+  actions as automationActions,
+  Automations,
+} from '../extensions/automations/server.ts'
+import type { Automation } from '../extensions/automations/server.ts'
 import type { ConversationId, EntryId, TaskId } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
@@ -308,6 +316,108 @@ it('preview leases block cleanup, cleanup refuses dirty output and retains the b
     f.prepared.workspaces.submit(shared, { type: 'input', content: 'do not fall back' }, context),
   ).rejects.toThrow('Workspace was discarded')
 })
+it.each(['workspace-subdir', 'workspace-alias', 'source-subdir', 'source-alias'])(
+  'guards ownerless %s tasks and submits through canonical checkout identity',
+  async (mode) => {
+    const f = await fixture()
+    const { id, workspace } = await f.spawn(`identity-${mode}`)
+    const root = mode.startsWith('workspace') ? workspace.path : f.projectRoot
+    await mkdir(join(root, 'src'))
+    const alias = join(f.directory, 'alias')
+    await symlink(root, alias, 'dir')
+    const cwd = join(mode.endsWith('alias') ? alias : root, 'src')
+    const Gate = defineTask<null, { phase: 'hold' }, null>({
+      name: 'test.workspace-identity-gate',
+      version: 1,
+      initial: () => ({ phase: 'hold' }),
+      phases: {
+        hold: async (_task, runtime, ctx) => {
+          await runtime.sleep(Date.now() + 60000, ctx)
+        },
+      },
+      abort: (_task, runtime, ctx) =>
+        runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+    })
+    f.prepared.registry.install(defineExtension({ name: 'identity-gate', tasks: [Gate] }))
+    const { conversationId, active: activeTask } = await f.opened.harness.commit(async (tx) => {
+      const record = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+      await configure(tx, record.id, { cwd })
+      const active = await tx.createTask(Gate, null, {
+        conversationId: record.id,
+        ownership: { kind: 'conversation' },
+        background: true,
+      })
+      return { conversationId: record.id, active }
+    }, context)
+    await expect(
+      f.prepared.workspaces.runLifecycle(f.opened.root.id, id, 'land', context),
+    ).rejects.toThrow('running or queued')
+    await expect(
+      f.prepared.workspaces.runLifecycle(f.opened.root.id, id, 'discard', context),
+    ).rejects.toThrow('running or queued')
+    await f.opened.harness.abortTask(activeTask, context)
+    await f.opened.harness.waitForTask(activeTask, context)
+    const predecessor = await f.opened.harness.commit(async (tx) => {
+      const unrelated = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+      await configure(tx, unrelated.id, { cwd: f.directory })
+      const gate = await tx.createTask(Gate, null, {
+        conversationId: unrelated.id,
+        ownership: { kind: 'conversation' },
+        background: true,
+      })
+      ;(await tx.doc(LifecycleQueue)).checkouts[workspace.source] = gate
+      return gate
+    }, context)
+    const land = await f.opened.harness.commit(
+      (tx) =>
+        f.prepared.workspaces.createLifecycle(tx, f.opened.root.id, id, 'land', {
+          kind: 'conversation',
+        }),
+      context,
+    )
+    await until(
+      async () => (await f.opened.harness.getTask(land, context))?.state.status === 'waiting',
+    )
+    await f.reopen()
+    await expect(
+      f.prepared.workspaces.submit(
+        conversationId,
+        { type: 'input', content: 'must not execute' },
+        context,
+      ),
+    ).rejects.toThrow('lifecycle operation')
+    await expect(
+      f.prepared.workspaces.withAdmission(
+        conversationId,
+        async () => {
+          throw new Error('Command must not start')
+        },
+        context,
+      ),
+    ).rejects.toThrow('lifecycle operation')
+    await f.opened.harness.abortTask(predecessor, context)
+    expect((await f.opened.harness.waitForTask(land, context)).state.outcome.status).toBe(
+      'completed',
+    )
+    await f.prepared.workspaces.runLifecycle(f.opened.root.id, id, 'discard', context)
+    const afterRemoval = mode.startsWith('workspace')
+      ? await f.prepared.workspaces
+          .submit(conversationId, { type: 'input', content: 'removed alias' }, context)
+          .then(
+            () => 'admitted',
+            (error) => String(error),
+          )
+      : await f.opened.harness
+          .commit((tx) => f.prepared.workspaces.assertAdmission(tx, conversationId), context)
+          .then(() => 'admitted')
+    expect(afterRemoval.includes('discarded')).toBe(mode.startsWith('workspace'))
+    const view = await (await f.opened.harness.conversation(conversationId, context))!.viewState(
+      context,
+    )
+    expect(view.value.entries.filter((entry) => entry.kind === 'pi.user')).toHaveLength(0)
+    view.dispose()
+  },
+)
 it('retains the original target checkout and branch, refusing dirty targets and branch switches', async () => {
   const f = await fixture()
   const { id, workspace } = await f.spawn('target')
@@ -384,6 +494,144 @@ it('guards queued descendant tasks and admission while a lifecycle is queued, in
   await f.opened.harness.abortTask(checkoutGate, context)
   expect((await f.opened.harness.waitForTask(task, context)).state.outcome.status).toBe('completed')
 })
+it('allows dormant automation scheduling, defers a due firing across lifecycle/reopen, and guards the actual run', async () => {
+  const f = await fixture()
+  const { id, workspace } = await f.spawn('automation-target')
+  let release: (() => void) | undefined
+  let observedHead: string | undefined
+  const Gate = defineTask<null, { phase: 'hold' }, null>({
+    name: 'test.automation-checkout-gate',
+    version: 1,
+    initial: () => ({ phase: 'hold' }),
+    phases: {
+      hold: async (_task, runtime, ctx) => {
+        await runtime.sleep(Date.now() + 60000, ctx)
+      },
+    },
+    abort: (_task, runtime, ctx) =>
+      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+  })
+  f.prepared.registry.install(
+    defineExtension({
+      name: 'automation-test',
+      tasks: [Gate],
+      tools: [
+        defineTool({
+          name: 'automation-hold',
+          description: 'Hold a real automation run',
+          replay: 'safe',
+          parameters: Type.Object({}),
+          execute: async (_args, _api, ctx) => {
+            observedHead = await git(f.projectRoot, 'rev-parse', 'HEAD')
+            await awaitWithContext(
+              new Promise<void>((complete) => {
+                release = complete
+              }),
+              ctx,
+            )
+            return { content: [{ type: 'text', text: 'Released' }] }
+          },
+        }),
+      ],
+    }),
+  )
+  const host = {
+    ...f.prepared,
+    harness: () => f.opened.harness,
+    metadata: Metadata,
+    extensions: () => [{ name: 'subagents', enabled: true }],
+  } as unknown as Parameters<typeof automations>[0]
+  f.prepared.registry.install(automations(host))
+  await f.opened.root.configure(
+    {
+      tools: f.prepared.registry.snapshot().extension('automation-test')!.tools!,
+      extensions: [{ name: 'automation-test' }],
+    },
+    context,
+  )
+  const route: FauxResponseFactory = (transcript) => {
+    f.prepared.faux!.appendResponses([route])
+    const last = transcript.messages.findLast((message) => message.role !== 'system')!
+    return last.role === 'user'
+      ? fauxAssistantMessage([fauxToolCall('automation-hold', {})], { stopReason: 'toolUse' })
+      : fauxAssistantMessage([fauxText('Automation finished')])
+  }
+  f.prepared.faux!.setResponses([route])
+  const actionContext = { host } as unknown as ActionContext
+  const future = (await automationActions.create(
+    { name: 'Future', prompt: 'future', schedule: 'in 1h' },
+    actionContext,
+  )) as unknown as Automation
+  await until(
+    async () =>
+      (
+        (await f.opened.harness.getTask(future.scheduler!, context))!.state as {
+          checkpoint?: { phase: string }
+        }
+      ).checkpoint?.phase === 'sleep',
+  )
+  await writeFile(join(workspace.path, 'first.txt'), 'first')
+  await git(workspace.path, 'add', '.')
+  await git(workspace.path, 'commit', '-m', 'land with a dormant scheduler')
+  const first = await git(workspace.path, 'rev-parse', 'HEAD')
+  await f.prepared.workspaces.runLifecycle(f.opened.root.id, id, 'land', context)
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(first)
+  await writeFile(join(workspace.path, 'second.txt'), 'second')
+  await git(workspace.path, 'add', '.')
+  await git(workspace.path, 'commit', '-m', 'land before scheduled work')
+  const second = await git(workspace.path, 'rev-parse', 'HEAD')
+  const predecessor = await f.opened.harness.commit(async (tx) => {
+    const unrelated = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+    await configure(tx, unrelated.id, { cwd: f.directory })
+    const gate = await tx.createTask(Gate, null, {
+      conversationId: unrelated.id,
+      ownership: { kind: 'conversation' },
+      background: true,
+    })
+    ;(await tx.doc(LifecycleQueue)).checkouts[workspace.source] = gate
+    return gate
+  }, context)
+  const land = await f.opened.harness.commit(
+    (tx) =>
+      f.prepared.workspaces.createLifecycle(tx, f.opened.root.id, id, 'land', {
+        kind: 'conversation',
+      }),
+    context,
+  )
+  const due = (await automationActions.create(
+    { name: 'Due during land', prompt: 'scheduled hold', schedule: 'in 1s' },
+    actionContext,
+  )) as unknown as Automation
+  await until(
+    async () =>
+      (await f.opened.harness.getTask(due.scheduler!, context))?.state.status === 'waiting',
+  )
+  expect(
+    (await f.opened.harness.snapshot(Automations, context))!.automations[due.id].runs,
+  ).toHaveLength(0)
+  expect(release).toBeUndefined()
+  await f.reopen()
+  await f.opened.harness.abortTask(predecessor, context)
+  expect((await f.opened.harness.waitForTask(land, context)).state.outcome.status).toBe('completed')
+  await until(() => !!release)
+  expect(observedHead).toBe(second)
+  const records = async () =>
+    (await f.opened.harness.snapshot(Automations, context))!.automations[due.id].runs
+  expect((await records())[0].status).toBe('running')
+  await expect(
+    f.prepared.workspaces.runLifecycle(f.opened.root.id, id, 'land', context),
+  ).rejects.toThrow('running')
+  release!()
+  await until(async () => (await records())[0].status === 'done')
+  await f.prepared.workspaces.runLifecycle(f.opened.root.id, id, 'land', context)
+  await f.reopen()
+  expect(await records()).toHaveLength(1)
+  expect((await records())[0].answer).toBe('Automation finished')
+  const child = await f.opened.harness.conversation((await records())[0].conversationId!, context)
+  const view = await child!.viewState(context)
+  expect(view.value.entries.filter((entry) => entry.kind === 'pi.user')).toHaveLength(1)
+  view.dispose()
+})
 it('migrates actual persisted legacy isolates once before resume, retaining landed and discarded identities', async () => {
   const f = await fixture()
   const legacy = defineDoc<{
@@ -439,6 +687,70 @@ it('migrates actual persisted legacy isolates once before resume, retaining land
     old.record.base,
   )
 })
+it.each(['active', 'discarded'] as const)(
+  'adopts legacy %s identities from a detached source without guessing a target branch',
+  async (state) => {
+    const f = await fixture()
+    const old = await create(f.projectRoot, f.home, 'legacy', `legacy-detached-${state}`)
+    const Legacy = defineDoc<{
+      agents: Record<
+        string,
+        {
+          isolate?: Omit<
+            import('../shared/protocol.ts').Workspace,
+            'source' | 'targetBranch' | 'preparation'
+          >
+        }
+      >
+    }>({
+      kind: 'ultimate.subagents',
+      version: 1,
+      scope: 'conversation',
+      history: 'latest',
+      fork: 'initial',
+      initial: () => ({ agents: {} }),
+    })
+    if (state === 'discarded') await git(f.projectRoot, 'worktree', 'remove', old.cwd)
+    await git(f.projectRoot, 'switch', '--detach', old.record.base)
+    const id = await f.opened.harness.commit(async (tx) => {
+      const child = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+      await configure(tx, child.id, { cwd: old.cwd })
+      const {
+        source: _source,
+        targetBranch: _targetBranch,
+        preparation: _preparation,
+        ...isolate
+      } = old.record
+      ;(await tx.doc(Legacy, f.opened.root.id)).agents[String(child.id)] = {
+        isolate: { ...isolate, state, landed: old.record.base },
+      }
+      return child.id
+    }, context)
+    await f.reopen()
+    expect(await f.prepared.workspaces.snapshot(id, context)).toEqual({
+      ...old.record,
+      state,
+      landed: old.record.base,
+      targetBranch: null,
+      targetHead: old.record.base,
+    })
+    expect(
+      (await f.opened.harness.snapshot(Legacy, f.opened.root.id, context))!.agents[String(id)]
+        .isolate,
+    ).toBeUndefined()
+    await f.reopen()
+    expect((await f.prepared.workspaces.snapshot(id, context))!.targetBranch).toBeNull()
+    await git(f.projectRoot, 'switch', 'main')
+    await expect(
+      f.prepared.workspaces.runLifecycle(f.opened.root.id, id, 'land', context),
+    ).rejects.toThrow(state === 'active' ? 'captured detached' : 'Workspace is discarded')
+    await f.prepared.workspaces.runLifecycle(f.opened.root.id, id, 'discard', context)
+    expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(old.record.base)
+    expect(await git(f.projectRoot, 'branch', '--list', old.record.branch)).toContain(
+      old.record.branch,
+    )
+  },
+)
 it.each(['deliver', 'report'] as const)(
   'adopts an active legacy workspace and resumes a background reporter from %s without duplicate delivery',
   async (checkpoint) => {

@@ -5,11 +5,11 @@ import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { configure, defineExtension, defineTask, LiveDoc } from '@earendil-works/pi-durable'
-import type { TaskId } from '@earendil-works/pi-durable'
+import type { TaskId, ConversationId, EntryId, TaskDefinition } from '@earendil-works/pi-durable'
 import { lifecycle } from '../server/workspaces/lifecycle.ts'
 import { LifecycleQueue } from '../server/workspaces/doc.ts'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -33,6 +33,7 @@ const Gate = defineTask<null, { phase: 'hold' }, null>({
 const directories: string[] = []
 const hosts: OpenHost[] = []
 afterEach(async () => {
+  vi.restoreAllMocks()
   for (const host of hosts.splice(0)) await host.close()
   for (const path of directories.splice(0)) await removeTemp(path)
 })
@@ -219,6 +220,100 @@ it('refuses lifecycle operations while the child is running', async () => {
   )
   await f.call({ action: 'stop', id: child.conversationId })
   expect(await f.call({ action: 'discard', id: child.conversationId })).toContain('kept branch')
+})
+it('persists one background preparation failure report across reopen without submitting child model input', async () => {
+  const f = await fixture()
+  new ProjectTrustStore(join(f.prepared.userHome, '.ultimate')).set(f.project, true)
+  await mkdir(join(f.project, '.ultimate'))
+  await writeFile(
+    join(f.project, '.ultimate/settings.json'),
+    JSON.stringify({
+      isolates: { worktree: { setup: ['echo background-setup-failed >&2; exit 1'] } },
+    }),
+  )
+  const gate = await f.opened.harness.commit(
+    (tx) =>
+      tx.createTask(Gate, null, {
+        conversationId: f.opened.root.id,
+        ownership: { kind: 'conversation' },
+        background: true,
+      }),
+    context,
+  )
+  const phases = f.prepared.registry
+    .snapshot()
+    .extension('subagents')!
+    .tasks!.find((task) => task.definition.name === 'ultimate.subagent-reporter')!.definition
+    .phases as TaskDefinition<
+    { conversationId: ConversationId; text: string; steer: boolean },
+    { phase: 'deliver' } | { phase: 'report'; report?: string; answer?: EntryId },
+    null,
+    object
+  >['phases']
+  const delayed = vi.spyOn(phases, 'report').mockImplementationOnce(async (task, runtime, ctx) => {
+    await runtime.commit(
+      () => ({
+        status: 'waiting',
+        on: [gate],
+        policy: 'allSettled',
+        checkpoint: task.state.checkpoint,
+      }),
+      ctx,
+    )
+  })
+  await f.call({
+    action: 'start',
+    agent: 'worker',
+    task: 'must not reach the child model',
+    background: true,
+  })
+  const child = (await f.children())[0]
+  const reporter = Object.values(
+    (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!.actions,
+  )[0].reporter!
+  await until(
+    async () => (await f.opened.harness.getTask(reporter, context))?.state.status === 'waiting',
+  )
+  expect((await f.opened.harness.getTask(reporter, context))!.state).toMatchObject({
+    checkpoint: { phase: 'report', report: expect.stringContaining('background-setup-failed') },
+  })
+  expect((await f.prepared.workspaces.snapshot(child.conversationId, context))!.preparation).toBe(
+    'error',
+  )
+  expect(
+    Object.values(
+      (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!.actions,
+    )[0].status,
+  ).toBe('failed')
+  delayed.mockRestore()
+  await f.opened.close()
+  hosts.splice(hosts.indexOf(f.opened), 1)
+  f.opened = await f.prepared.open()
+  hosts.push(f.opened)
+  await f.opened.harness.abortTask(gate, context)
+  expect((await f.opened.harness.waitForTask(reporter, context)).state.outcome.status).toBe(
+    'completed',
+  )
+  await f.opened.root.waitForIdle(context)
+  await f.opened.close()
+  hosts.splice(hosts.indexOf(f.opened), 1)
+  f.opened = await f.prepared.open()
+  hosts.push(f.opened)
+  const parentView = await f.opened.root.viewState(context)
+  expect(
+    parentView.value.entries.filter(
+      (entry) =>
+        entry.kind === 'pi.user' &&
+        JSON.stringify(entry.model).includes(`[subagent ${child.conversationId} failed:`),
+    ),
+  ).toHaveLength(1)
+  parentView.dispose()
+  const childView = await (await f.opened.harness.conversation(
+    child.conversationId,
+    context,
+  ))!.viewState(context)
+  expect(childView.value.entries.filter((entry) => entry.kind === 'pi.user')).toHaveLength(0)
+  childView.dispose()
 })
 it('runs setup once with source env and removes a failed worktree', async () => {
   const f = await fixture()

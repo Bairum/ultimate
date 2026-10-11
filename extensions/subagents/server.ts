@@ -89,47 +89,66 @@ function createReporter(host: Pick<ExtensionHost, 'workspaces'>) {
     initial: () => ({ phase: 'deliver' }),
     phases: {
       deliver: async (task, runtime, context) => {
-        const child = (await runtime.conversation(task.input.conversationId, context))!
-        await host.workspaces.ready(child.id, context)
-        const settled = await (
-          await host.workspaces.submit(
-            child.id,
-            {
-              type: 'input',
-              content: task.input.text,
-              whenBusy: task.input.steer ? 'steer' : 'followUp',
-              requestId: `subagent:${task.id}`,
-            },
-            context,
-          )
-        ).wait(context)
-        await runtime.commit(async (tx) => {
-          const state = await tx.doc(Subagents, runtime.conversationId)
-          const action = Object.values(state.actions).find(
-            (candidate) => candidate.reporter === task.id,
-          )!
-          action.status = settled.status
-          const agent = state.agents[String(child.id)]
-          if (settled.status === 'done' && settled.type === 'input') {
-            action.answer = settled.answer
-            if (agent.reported.includes(settled.answer))
-              return { status: 'running', checkpoint: { phase: 'report' } }
-            agent.reported.push(settled.answer)
-            const answer = (await tx.entry(AssistantEntry, settled.answer))?.model?.[0] as
-              | AssistantMessage
-              | undefined
-            const report = `[subagent ${child.id} (${agent.agent}) answered] ${textOf(answer)}`
+        try {
+          const child = (await runtime.conversation(task.input.conversationId, context))!
+          await host.workspaces.ready(child.id, context)
+          const settled = await (
+            await host.workspaces.submit(
+              child.id,
+              {
+                type: 'input',
+                content: task.input.text,
+                whenBusy: task.input.steer ? 'steer' : 'followUp',
+                requestId: `subagent:${task.id}`,
+              },
+              context,
+            )
+          ).wait(context)
+          await runtime.commit(async (tx) => {
+            const state = await tx.doc(Subagents, runtime.conversationId)
+            const action = Object.values(state.actions).find(
+              (candidate) => candidate.reporter === task.id,
+            )!
+            action.status = settled.status
+            const agent = state.agents[String(child.id)]
+            if (settled.status === 'done' && settled.type === 'input') {
+              action.answer = settled.answer
+              if (agent.reported.includes(settled.answer))
+                return { status: 'running', checkpoint: { phase: 'report' } }
+              agent.reported.push(settled.answer)
+              const answer = (await tx.entry(AssistantEntry, settled.answer))?.model?.[0] as
+                | AssistantMessage
+                | undefined
+              const report = `[subagent ${child.id} (${agent.agent}) answered] ${textOf(answer)}`
+              return {
+                status: 'running',
+                checkpoint: { phase: 'report', report, answer: settled.answer },
+              }
+            }
+            if (settled.status === 'unanswered' && settled.reason !== 'aborted') {
+              const report = `[subagent ${child.id} failed: ${settled.reason}]`
+              return { status: 'running', checkpoint: { phase: 'report', report } }
+            }
+            return { status: 'running', checkpoint: { phase: 'report' } }
+          }, context)
+        } catch (error) {
+          if (runtime.signal.aborted) throw error
+          const message = error instanceof Error ? error.message : String(error)
+          await runtime.commit(async (tx) => {
+            const state = await tx.doc(Subagents, runtime.conversationId)
+            const action = Object.values(state.actions).find(
+              (candidate) => candidate.reporter === task.id,
+            )!
+            action.status = 'failed'
             return {
               status: 'running',
-              checkpoint: { phase: 'report', report, answer: settled.answer },
+              checkpoint: {
+                phase: 'report',
+                report: `[subagent ${task.input.conversationId} failed: ${message}]`,
+              },
             }
-          }
-          if (settled.status === 'unanswered' && settled.reason !== 'aborted') {
-            const report = `[subagent ${child.id} failed: ${settled.reason}]`
-            return { status: 'running', checkpoint: { phase: 'report', report } }
-          }
-          return { status: 'running', checkpoint: { phase: 'report' } }
-        }, context)
+          }, context)
+        }
       },
       report: async (task, runtime, context) => {
         const { report, answer } = task.state.checkpoint

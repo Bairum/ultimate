@@ -27,7 +27,8 @@ export type Workspace = {
   branch: string
   base: string
   source: string
-  targetBranch: string
+  targetBranch: string | null
+  targetHead?: string
   state: 'active' | 'discarded'
   preparation: 'pending' | 'ready' | 'error'
   error?: string

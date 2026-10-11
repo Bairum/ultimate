@@ -5,6 +5,7 @@ import { Type } from '@earendil-works/pi-ai'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import {
   AssistantEntry,
+  AgentDoc,
   defineDoc,
   defineExtension,
   defineTask,
@@ -75,6 +76,7 @@ type Host = Pick<
   | 'userHome'
   | 'modelRuntime'
   | 'extensions'
+  | 'workspaces'
 >
 const owner = {
   ownership: { kind: 'conversation' as const },
@@ -114,6 +116,15 @@ function backend(host: Host) {
           const parent = await runtime.agent(context)
           const profile = a.agent ? await definition(host, a.agent) : undefined
           await runtime.commit(async (tx) => {
+            const blocked = await host.workspaces.blockingLifecycle(tx, runtime.conversationId)
+            if (blocked.length)
+              return {
+                status: 'waiting',
+                on: blocked,
+                policy: 'allSettled',
+                checkpoint: task.state.checkpoint,
+              }
+            await host.workspaces.assertAdmission(tx, runtime.conversationId)
             const child = await createChild(tx, {
               owner: { kind: 'task', taskId: task.id },
               definition: profile,
@@ -124,6 +135,7 @@ function backend(host: Host) {
               title: `${a.name} · ${new Date(task.input.firedAt).toLocaleString()}`,
               excludeTools: a.agent ? ['automation', 'subagent'] : ['automation'],
               excludeExtensions: ['automations'],
+              cwd: (await tx.doc(AgentDoc, runtime.conversationId)).cwd ?? host.projectRoot,
               model: a.model,
               thinking: a.thinking,
             })
@@ -149,9 +161,27 @@ function backend(host: Host) {
       },
       deliver: async (task, runtime, context) => {
         try {
+          let waiting = false
+          await runtime.commit(async (tx) => {
+            const blocked = await host.workspaces.blockingLifecycle(
+              tx,
+              task.state.checkpoint.conversationId,
+            )
+            waiting = blocked.length > 0
+            if (waiting)
+              return {
+                status: 'waiting',
+                on: blocked,
+                policy: 'allSettled',
+                checkpoint: task.state.checkpoint,
+              }
+            return undefined
+          }, context)
+          if (waiting) return
           const child = (await runtime.conversation(task.state.checkpoint.conversationId, context))!
           const result = await (
-            await child.submit(
+            await host.workspaces.submit(
+              child.id,
               {
                 type: 'input',
                 content: task.input.automation.prompt,
@@ -205,6 +235,10 @@ function backend(host: Host) {
       }, context),
   })
   async function fire(tx: Tx, a: Automation, firedAt: number) {
+    if ((await host.workspaces.blockingLifecycle(tx, ROOT_CONVERSATION_ID)).length)
+      throw new Error(
+        'Workspace lifecycle operation is in progress; run the automation after it settles',
+      )
     let running = a.runs.some((r) => r.status === 'running')
     // A long run can outlive the bounded run history.
     if (!running) {
@@ -277,6 +311,14 @@ function backend(host: Host) {
         runtime.commit(async (tx) => {
           const a = (await tx.doc(Automations)).automations[task.input.id]
           if (!a?.enabled || a.scheduler !== task.id) return terminal
+          const blocked = await host.workspaces.blockingLifecycle(tx, runtime.conversationId)
+          if (blocked.length)
+            return {
+              status: 'waiting',
+              on: blocked,
+              policy: 'allSettled',
+              checkpoint: task.state.checkpoint,
+            }
           await fire(tx, a, runtime.now())
           delete a.nextAt
           if (a.schedule.kind === 'at') {
@@ -418,6 +460,10 @@ export const actions = Object.fromEntries(
 )
 
 export default function automations(host: Host) {
+  if (!host.workspaces?.blockingLifecycle)
+    throw new Error(
+      'automations requires core workspace admission; upgrade and restart the Ultimate core before loading this facet',
+    )
   const api = backend(host)
   return defineExtension({
     name: 'automations',

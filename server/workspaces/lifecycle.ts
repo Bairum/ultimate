@@ -62,6 +62,10 @@ function guarded<P extends State>(
   }
 }
 async function checkout(workspace: Workspace) {
+  if (workspace.targetBranch === null)
+    throw new Error(
+      'Workspace target was captured detached; choose an explicit target and reverify before landing',
+    )
   const branch = await worktree.git(workspace.source, 'symbolic-ref', '--short', 'HEAD')
   if (branch !== workspace.targetBranch)
     throw new Error('Target branch changed; restore the saved target branch before landing')
