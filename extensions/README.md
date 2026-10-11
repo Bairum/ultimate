@@ -40,8 +40,6 @@ explicitly to `DEFAULT_EXTENSIONS` in `server/extension-settings.ts`. Enable one
 enabled by default: adding the folder is the opt-in. Settings changes apply live without a restart; unknown names
 produce a notice. The clone's `.ultimate/settings.json` is the suggested full setup.
 
-The [`claude-code`](claude-code/README.md) built-in is opt-in: native Claude Code delegates using your own login, with full autonomy; prefer worktree isolates.
-
 The `secrets` and `parallel` built-ins are opt-in; enable both for parallel.ai web tools. Secrets are user-global, not project state.
 
 A server facet may export `secrets: { name: string; description: string; url?: string }[]`. Names must match `^[A-Z][A-Z0-9_]*$`, descriptions must be non-empty, and optional URLs must use http(s). Installed declarations appear in `ExtensionInfo.server.secrets` and the Secrets panel; values never appear in extension info. Other server facets may import `readSecret(userHome, name)` from `extensions/secrets/store.ts`, like automations imports subagent helpers.

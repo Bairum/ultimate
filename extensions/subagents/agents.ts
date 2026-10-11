@@ -41,10 +41,7 @@ export function definitionAgent(
     tools: parent.tools.filter(
       (tool) =>
         !excludeTools.includes(tool.name) &&
-        (!definition?.tools || definition.tools.includes(tool.name)) &&
-        (ref?.provider !== 'claude-code' ||
-          !!definition?.tools ||
-          !['restart', 'land', 'discard'].includes(tool.name)),
+        (!definition?.tools || definition.tools.includes(tool.name)),
     ),
     extensions: parent.extensions.filter(
       (extension) => !excludeExtensions.includes(extension.name),
