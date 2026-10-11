@@ -1,6 +1,8 @@
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { createRateSampler, samplingGap, type RateSample, type TokenCounters } from './rates.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
+  api,
   cn,
   defineWebExtension,
   elidePath,
@@ -100,8 +102,57 @@ function lastAssistant(entries: readonly EntryRecord[]) {
 
 const prompt = (usage: Usage) => usage.input + usage.cacheRead + usage.cacheWrite
 
+function useTokenRates() {
+  const { conversationId } = useUltimate()
+  const connection = useConnection()
+  const system = useSystem()
+  const generation = system?.process.generation
+  const key = `${conversationId}:${connection.status}:${connection.since}:${generation}`
+  const [observed, setObserved] = useState<{ key: string; sample: RateSample | null }>()
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let requestTimeout: ReturnType<typeof setTimeout> | undefined
+    let request: AbortController | undefined
+    let sample = createRateSampler()
+    setObserved({ key, sample: null })
+    if (conversationId === undefined || connection.status !== 'open' || generation === undefined)
+      return undefined
+    async function poll() {
+      request = new AbortController()
+      requestTimeout = setTimeout(() => request?.abort(), samplingGap)
+      try {
+        const counters = await api.action<TokenCounters[]>('status-line', 'rates', null, {
+          conversationId,
+          signal: request.signal,
+        })
+        request.signal.throwIfAborted()
+        if (!cancelled) setObserved({ key, sample: sample(performance.now(), counters) })
+      } catch {
+        if (!cancelled) {
+          sample = createRateSampler()
+          setObserved({ key, sample: null })
+        }
+      } finally {
+        clearTimeout(requestTimeout)
+        if (!cancelled) timer = setTimeout(poll, 1000)
+      }
+    }
+    void poll()
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      clearTimeout(requestTimeout)
+      request?.abort()
+    }
+  }, [key, conversationId, connection.status, generation])
+  return observed?.key === key ? observed.sample : null
+}
+
 function Tokens() {
   const { usage, entries, agent } = useConversation()
+  const speed = useTokenRates()
+  const { conversationId } = useUltimate()
   const models = useModels()
   const buckets = [...Object.values(usage.models), ...Object.values(usage.tools)]
   const total = buckets.reduce(
@@ -135,18 +186,46 @@ function Tokens() {
         {subscription && <span className="text-muted-foreground"> (sub)</span>}
       </span>,
     )
-  if (parts.length === 0) return null
+  parts.push(
+    <span aria-label="Output token rate">
+      ↓{speed ? Math.round(speed.rates.output) : '?'} tok/s
+    </span>,
+  )
   return (
     <Item
       tip={
-        <div className="grid grid-cols-[auto_auto] gap-x-3">
-          {Object.entries(usage.models).map(([model, bucket]) => (
-            <ModelRow bucket={bucket} key={model} label={model} />
-          ))}
-          {Object.entries(usage.tools).map(([tool, bucket]) => (
-            <ModelRow bucket={bucket} key={tool} label={`tool ${tool}`} />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-[auto_auto] gap-x-3">
+            {Object.entries(usage.models).map(([model, bucket]) => (
+              <ModelRow bucket={bucket} key={model} label={model} />
+            ))}
+            {Object.entries(usage.tools).map(([tool, bucket]) => (
+              <ModelRow bucket={bucket} key={tool} label={`tool ${tool}`} />
+            ))}
+          </div>
+          <div className="mt-1 border-t border-border pt-1">
+            <div>Provider-reported model rates · tok/s</div>
+            <div>
+              Input ↑{speed ? speed.rates.input.toFixed(1) : '?'} · Output ↓
+              {speed ? speed.rates.output.toFixed(1) : '?'}
+            </div>
+            <div>
+              Cache read {speed ? speed.rates.cacheRead.toFixed(1) : '?'} · Cache write{' '}
+              {speed ? speed.rates.cacheWrite.toFixed(1) : '?'}
+            </div>
+            <div>
+              Scope: conversation {conversationId} + owned descendants (parallel/background
+              additive)
+            </div>
+            <div>
+              Rolling 30s window ·{' '}
+              {speed ? `${speed.elapsed.toFixed(1)}s observed` : 'warming up / unavailable'}
+            </div>
+            <div>Provider reporting may arrive late; not instantaneous decoding speed.</div>
+            <div>Historical tokens before observation excluded, including new children.</div>
+            <div>Model only; tool usage excluded. Reasoning is not added again.</div>
+          </div>
+        </>
       }
     >
       {parts.map((part, index) => (
