@@ -254,7 +254,18 @@ export default function codemode(host: ExtensionHost) {
       renderDeclarations({ globals: globalDeclarations }),
     parameters: Type.Object({ code: Type.String() }),
     async execute({ code: source }, api, context) {
-      const calls: { name: string; args: unknown; status: string; ms: number }[] = []
+      const calls: {
+        name: string
+        args: unknown
+        status: string
+        ms: number
+        conversationId?: number
+        background?: boolean
+      }[] = []
+      const subagentAnswers = new Set<number>()
+      const controller = new AbortController()
+      const sandboxContext = withAbortSignal(controller.signal, context)
+      let yielded = false
       const agent = await api.agent(context)
       const tools = declarations(agent.tools).map((declaration): CodemodeTool => ({
         ...declaration,
@@ -263,7 +274,12 @@ export default function codemode(host: ExtensionHost) {
             (tool) => tool.name === declaration.name,
           )! as StructuredTool
           const started = performance.now()
-          const call = { name: resolved.name, args, status: 'running', ms: 0 }
+          const call: (typeof calls)[number] = {
+            name: resolved.name,
+            args,
+            status: 'running',
+            ms: 0,
+          }
           calls.push(call)
           let output = ''
           let active = true
@@ -300,6 +316,22 @@ export default function codemode(host: ExtensionHost) {
               nested,
               withAbortSignal(signal, context),
             )
+            signal.throwIfAborted()
+            const details =
+              result.details && typeof result.details === 'object' && !Array.isArray(result.details)
+                ? result.details
+                : undefined
+            if (resolved.name === 'subagent' && details?.yielded === true) {
+              call.status = 'yielded'
+              if (typeof details.conversationId === 'number')
+                call.conversationId = details.conversationId
+              if (typeof details.background === 'boolean') call.background = details.background
+              yielded = true
+              // Abort synchronously: pi-codemode clears pending replies and terminates the VM,
+              // so neither a resolved value nor a catch/finally can resume the script.
+              controller.abort()
+              return undefined
+            }
             const text =
               result.content === undefined
                 ? output
@@ -313,6 +345,8 @@ export default function codemode(host: ExtensionHost) {
               .filter(Boolean)
               .join('\n')
             if (result.isError) throw new Error(error || `Tool ${resolved.name} failed`)
+            if (resolved.name === 'subagent' && typeof details?.answerId === 'number')
+              subagentAnswers.add(details.answerId)
             call.status = 'ok'
             return resolved.outputSchema && result.structuredContent !== undefined
               ? result.structuredContent
@@ -335,24 +369,49 @@ export default function codemode(host: ExtensionHost) {
         const saved = await api.snapshot(Store, api.conversationId, context)
         const sandbox = new CodemodeSandbox({
           tools,
-          globals: globals(host, api.conversationId, context),
+          globals: globals(host, api.conversationId, sandboxContext),
           timeoutMs: parsed.options.timeoutMs ?? 60000,
           memoryLimitBytes: 256 * 1024 * 1024,
         })
         let result
         try {
           result = await sandbox.execute(parsed.code, {
-            signal: context.abortSignal,
+            signal: sandboxContext.abortSignal,
             store: saved ?? {},
           })
         } finally {
           await sandbox.close()
         }
         for (const call of calls) if (call.status === 'running') call.status = 'cancelled'
+        const scriptYielded = yielded && !context.abortSignal?.aborted
+        const pendingSubagents = calls
+          .filter(
+            (call) =>
+              call.name === 'subagent' &&
+              (call.status === 'yielded' || call.status === 'cancelled'),
+          )
+          .flatMap((call) => {
+            const conversationId =
+              call.conversationId ?? (call.args as { id?: number } | undefined)?.id
+            return typeof conversationId === 'number'
+              ? [
+                  {
+                    conversationId,
+                    ...(call.background === undefined ? {} : { background: call.background }),
+                  },
+                ]
+              : []
+          })
         const content = [
           {
             type: 'text' as const,
-            text: result.ok ? 'Script completed\nOutput:' : 'Script failed\nOutput:',
+            text: scriptYielded
+              ? 'Script yielded to steering; subagents still running; remaining script not executed; prior side effects may have happened.\nPending subagents: ' +
+                JSON.stringify(pendingSubagents) +
+                '\nOutput:'
+              : result.ok
+                ? 'Script completed\nOutput:'
+                : 'Script failed\nOutput:',
           },
           ...result.output,
         ]
@@ -365,6 +424,11 @@ export default function codemode(host: ExtensionHost) {
             if (item.text.length > remaining)
               item.text = item.text.slice(0, remaining) + '\n[Output truncated]'
             remaining = Math.max(0, remaining - item.text.length)
+          }
+        if (scriptYielded)
+          return {
+            content,
+            details: { calls, yielded: true, pendingSubagents } as JsonObject,
           }
         if (result.ok) {
           if (result.storeWrites.delete.length || Object.keys(result.storeWrites.set).length) {
@@ -379,6 +443,7 @@ export default function codemode(host: ExtensionHost) {
             content,
             details: {
               calls,
+              subagentAnswers: [...subagentAnswers],
               ...(result.value === undefined ? {} : { value: result.value }),
             } as JsonObject,
           }

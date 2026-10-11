@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
+import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import { fauxServer as createServer, until, temp, removeTemp, linkDependencies } from './helpers.ts'
 import { context } from '../server/harness.ts'
@@ -77,6 +78,9 @@ async function run(
           calls: { name: string; status: string; ms: number }[]
           value?: unknown
           error?: string
+          yielded?: boolean
+          pendingSubagents?: { conversationId: number; background?: boolean }[]
+          subagentAnswers?: number[]
         }
         isError: boolean
       },
@@ -298,6 +302,245 @@ it('shows faux-demo nested progress in pi.live before completion and aborts nest
     JSON.stringify(view.value.entries.findLast((entry) => entry.kind === 'pi.tool-result')),
   ).toMatch(/aborted|interrupted/)
   view.dispose()
+})
+
+it.each([
+  ['sequential', `await tools.subagent({action:'wait', id:41});`],
+  ['foreground start', `await tools.subagent({action:'start'});`],
+  [
+    'catch',
+    `try { await tools.subagent({action:'wait', id:41}); } catch { text('caught'); await tools.effect({}); }`,
+  ],
+  [
+    'finally',
+    `try { await tools.subagent({action:'wait', id:41}); } finally { text('finalized'); await tools.effect({}); }`,
+  ],
+])('yields %s without executing the remainder or committing store writes', async (_name, wait) => {
+  const { server } = await fixture()
+  let effects = 0
+  server.host.registry.install(
+    defineExtension({
+      name: 'yield-test',
+      tools: [
+        defineTool({
+          name: 'subagent',
+          description: 'Fake child wait',
+          parameters: Type.Object({ action: Type.String(), id: Type.Optional(Type.Number()) }),
+          execute: async ({ id }): Promise<ToolExecutionResult> =>
+            id === 1
+              ? {
+                  content: [{ type: 'text', text: 'earlier-private-answer' }],
+                  details: { conversationId: 1, answerId: 101 },
+                }
+              : {
+                  content: [{ type: 'text', text: 'Unfinished; yielded to steering' }],
+                  details: { yielded: true, conversationId: id ?? 41, background: true },
+                },
+        }),
+        defineTool({
+          name: 'effect',
+          description: 'Record a side effect',
+          parameters: Type.Object({}),
+          execute: async () => {
+            effects++
+            return { content: [{ type: 'text', text: 'effect' }] }
+          },
+        }),
+      ],
+    }),
+  )
+  await run(server, `store('saved', 7); store('deleted', true);`)
+  const result = await run(
+    server,
+    `await tools.subagent({action:'wait', id:1}); await tools.effect({}); text('prior-output'); store('saved', 99); store('deleted', undefined); store('new', true); ${wait} text('continued'); await tools.effect({}); return 'finished';`,
+  )
+  expect(result.data.isError).toBe(false)
+  expect(result.data.details).toMatchObject({
+    yielded: true,
+    pendingSubagents: [{ conversationId: 41, background: true }],
+    calls: [
+      { name: 'subagent', status: 'ok' },
+      { name: 'effect', status: 'ok' },
+      { name: 'subagent', status: 'yielded' },
+    ],
+  })
+  expect(result.data.details).not.toHaveProperty('subagentAnswers')
+  expect(result.data.details.value).toBeUndefined()
+  expect(result.data.details.error).toBeUndefined()
+  expect(result.text).toContain(
+    'Script yielded to steering; subagents still running; remaining script not executed; prior side effects may have happened',
+  )
+  expect(result.text).toContain('41')
+  expect(result.text).toContain('prior-output')
+  expect(result.text).not.toMatch(
+    /Script completed|Script failed|continued|caught|finalized|finished|earlier-private-answer/,
+  )
+  expect(effects).toBe(1)
+  expect(await server.harness.snapshot(Store, server.root.id, context)).toEqual({
+    saved: 7,
+    deleted: true,
+  })
+  // A sandbox-local yield does not cancel the parent's invocation or its next tool round.
+  expect((await run(server, `return await tools.effect({});`)).data.details.value).toBe('effect')
+  expect(effects).toBe(2)
+})
+
+it('yields Promise.all, cancels pending host work, and preserves other waiting child IDs', async () => {
+  const { server } = await fixture()
+  let entered = 0
+  let release!: () => void
+  const barrier = new Promise<void>((done) => {
+    release = done
+  })
+  let cancelled = 0
+  let effects = 0
+  const rendezvous = () => {
+    if (++entered === 3) release()
+  }
+  server.host.registry.install(
+    defineExtension({
+      name: 'parallel-yield-test',
+      tools: [
+        defineTool({
+          name: 'subagent',
+          description: 'Fake parallel wait',
+          parameters: Type.Object({ action: Type.String(), id: Type.Number() }),
+          execute: async ({ id }, _api, nestedContext) => {
+            rendezvous()
+            if (id === 41) {
+              await barrier
+              return {
+                content: [{ type: 'text', text: 'Still running' }],
+                details: { yielded: true, conversationId: id },
+              }
+            }
+            await new Promise<void>((_resolve, reject) => {
+              nestedContext.abortSignal!.addEventListener(
+                'abort',
+                () => {
+                  cancelled++
+                  reject(new Error('Wait cancelled'))
+                },
+                { once: true },
+              )
+            })
+            throw new Error('Unreachable')
+          },
+        }),
+        defineTool({
+          name: 'effect',
+          description: 'Normal cancellable tool',
+          parameters: Type.Object({}),
+          execute: async (_args, _api, nestedContext) => {
+            rendezvous()
+            await new Promise<void>((_resolve, reject) => {
+              nestedContext.abortSignal!.addEventListener(
+                'abort',
+                () => {
+                  cancelled++
+                  reject(new Error('Work cancelled'))
+                },
+                { once: true },
+              )
+            })
+            effects++
+            return { content: [{ type: 'text', text: 'effect' }] }
+          },
+        }),
+      ],
+    }),
+  )
+  const result = await run(
+    server,
+    `store('parallel', true); try { await Promise.all([tools.subagent({action:'wait', id:41}), tools.subagent({action:'wait', id:42}), tools.effect({})]); } catch { text('caught'); } finally { text('finalized'); } text('continued'); return 'finished';`,
+  )
+  expect(result.data.isError).toBe(false)
+  expect(result.data.details.yielded).toBe(true)
+  expect(result.data.details).not.toHaveProperty('subagentAnswers')
+  expect(result.data.details.pendingSubagents).toEqual([
+    { conversationId: 41 },
+    { conversationId: 42 },
+  ])
+  expect(result.data.details.calls.map((call) => [call.name, call.status])).toEqual([
+    ['subagent', 'yielded'],
+    ['subagent', 'cancelled'],
+    ['effect', 'cancelled'],
+  ])
+  expect(cancelled).toBe(2)
+  expect(effects).toBe(0)
+  expect(result.text).not.toMatch(/caught|finalized|continued|finished|Script failed/)
+  expect(await server.harness.snapshot(Store, server.root.id, context)).toBeUndefined()
+})
+
+it('acknowledges unique completed subagent answer IDs only on successful script completion', async () => {
+  const { server } = await fixture()
+  server.host.registry.install(
+    defineExtension({
+      name: 'receipt-test',
+      tools: [
+        defineTool({
+          name: 'subagent',
+          description: 'Fake completed child',
+          parameters: Type.Object({
+            id: Type.Optional(Type.Number()),
+            fail: Type.Optional(Type.Boolean()),
+          }),
+          execute: async ({ id, fail }) => ({
+            content: [{ type: 'text', text: 'completed-child-answer' }],
+            details: { conversationId: 41, answerId: id ?? 101 },
+            isError: fail === true,
+          }),
+        }),
+      ],
+    }),
+  )
+  const success = await run(
+    server,
+    `await tools.subagent({}); await Promise.all([tools.subagent({}), tools.subagent({id:102})]); try { await tools.subagent({id:103, fail:true}); } catch {} return 'filtered';`,
+  )
+  expect(success.data.isError).toBe(false)
+  expect(success.text).not.toContain('completed-child-answer')
+  expect(success.data.details.subagentAnswers).toEqual([101, 102])
+  for (const failure of [
+    `throw new Error('later failure');`,
+    `await tools.read({path:'missing-file'});`,
+  ]) {
+    const result = await run(server, `await tools.subagent({}); ${failure}`)
+    expect(result.data.isError).toBe(true)
+    expect(result.text).toContain('Script failed')
+    expect(result.text).not.toContain('completed-child-answer')
+    expect(result.data.details).not.toHaveProperty('subagentAnswers')
+  }
+})
+
+it('does not treat yielded details on an ordinary tool as a subagent yield', async () => {
+  const { server } = await fixture()
+  server.host.registry.install(
+    defineExtension({
+      name: 'ordinary-yield-test',
+      tools: [
+        defineTool({
+          name: 'ordinary',
+          description: 'Ordinary result with unrelated details',
+          parameters: Type.Object({}),
+          execute: async () => ({
+            content: [{ type: 'text', text: 'ordinary answer' }],
+            details: { yielded: true, conversationId: 41, answerId: 999 },
+          }),
+        }),
+      ],
+    }),
+  )
+  const result = await run(
+    server,
+    `const answer = await tools.ordinary({}); store('ok', true); return answer;`,
+  )
+  expect(result.data.isError).toBe(false)
+  expect(result.data.details.value).toBe('ordinary answer')
+  expect(result.data.details.yielded).toBeUndefined()
+  expect(result.data.details.subagentAnswers).toEqual([])
+  expect(result.text).toContain('Script completed')
+  expect(await server.harness.snapshot(Store, server.root.id, context)).toEqual({ ok: true })
 })
 
 it('recovers an unsafe interrupted script with its committed nested-call log', async () => {
