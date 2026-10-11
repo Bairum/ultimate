@@ -27,12 +27,12 @@ import {
   errorMessage,
   useAction,
   useConversations,
-  useDoc,
   useTasks,
   useToolDuration,
   useUltimate,
 } from '@/sdk'
 import type { ConversationSummary, ToolCallView } from '@/sdk'
+import type { Workspace as Isolate } from '../../shared/protocol.ts'
 import { DefinitionDialog, Definitions } from './definitions.tsx'
 import { Heading, Tag, useRefresh } from './parts.tsx'
 
@@ -44,23 +44,14 @@ function BusyDot({ className }: { className?: string }) {
   )
 }
 
-/** Where a child works, as the parent's `ultimate.subagents` document records it. */
-type Isolate = {
-  kind: 'worktree'
-  path: string
-  branch: string
-  base: string
-  state: 'active' | 'discarded'
-  landed?: string
-}
-type Index = { agents: Record<string, { isolate?: Isolate }> }
-
 const isolateState = (isolate: Isolate) =>
   isolate.state === 'discarded'
     ? 'discarded'
-    : isolate.landed
-      ? `landed ${isolate.landed.slice(0, 7)}`
-      : 'active'
+    : isolate.preparation !== 'ready'
+      ? isolate.preparation
+      : isolate.landed
+        ? `landed ${isolate.landed.slice(0, 7)}`
+        : 'active'
 
 function StateTag({ isolate }: { isolate: Isolate }) {
   return (
@@ -79,9 +70,9 @@ function StateTag({ isolate }: { isolate: Isolate }) {
   )
 }
 
-/** The call card's compact isolate: branch and state. The card renders in the parent, whose document has it. */
+/** The call card's compact workspace: branch and state from the child's summary. */
 function IsolateBadge({ childId }: { childId: number }) {
-  const isolate = useDoc<Index>('ultimate.subagents')?.agents[String(childId)]?.isolate
+  const isolate = useConversations().find((conversation) => conversation.id === childId)?.workspace
   if (!isolate) return null
   return (
     <span
@@ -287,8 +278,12 @@ function IsolateActions({
       await refetch()
     }
   }
-  const disabled = child.busy || pending !== undefined
-  const reason = child.busy ? 'The child is running: wait or stop it first' : undefined
+  const disabled = child.busy || pending !== undefined || isolate.preparation === 'pending'
+  const reason = child.busy
+    ? 'The child is running: wait or stop it first'
+    : isolate.preparation === 'pending'
+      ? 'Workspace preparation is pending'
+      : undefined
   // Under the row's icon.
   const indent = { paddingLeft: `${1.3 + depth}rem` }
   return (
@@ -305,10 +300,10 @@ function IsolateActions({
           <span className="ml-auto flex shrink-0 items-center gap-0.5 pl-1">
             <Button
               className="h-5 gap-1 px-1.5 text-[11px]"
-              disabled={disabled}
+              disabled={disabled || isolate.preparation !== 'ready'}
               onClick={() => void act('land')}
               size="xs"
-              title={reason ?? 'Rebase its commits onto the parent checkout and fast-forward'}
+              title={reason ?? 'Fast-forward the verified SHA into the original target checkout'}
               variant="ghost"
             >
               <GitMergeIcon className="size-3" />
@@ -328,6 +323,11 @@ function IsolateActions({
           </span>
         )}
       </div>
+      {isolate.error && (
+        <div className="pr-2 text-error" style={indent}>
+          {isolate.error}
+        </div>
+      )}
       {confirming && (
         <div className="flex min-w-0 items-center gap-1.5 pr-2" style={indent}>
           <span className="min-w-0 font-sans text-[12px] leading-snug text-foreground/85">
@@ -444,10 +444,10 @@ function Child({
     parent: parent.id,
     id: conversation.id,
   })
-  const { conversationId } = useUltimate()
-  const recorded = useDoc<Index>('ultimate.subagents')?.agents[String(conversation.id)]?.isolate
-  const settled =
-    conversationId === parent.id && recorded ? `${recorded.state} ${recorded.landed ?? ''}` : ''
+  const recorded = conversation.workspace
+  const settled = recorded
+    ? `${recorded.state} ${recorded.preparation} ${recorded.error ?? ''} ${recorded.landed ?? ''}`
+    : ''
   useRefresh(refetch, `${conversation.busy} ${parent.busy} ${settled}`)
   return (
     <>

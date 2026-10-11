@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 
-import type { ExtensionHost } from '../../../server/extensions.ts'
-import type { CreatedIsolate, Isolate } from './types.ts'
+import type { JsonObject } from '@earendil-works/pi-durable'
+import type { Workspace } from '../../shared/protocol.ts'
+type ProjectSettings = () => Promise<JsonObject>
 const exec = promisify(execFile)
 export async function git(cwd: string, ...args: string[]) {
   const { stdout } = await exec('git', args, { cwd, timeout: 30000, maxBuffer: 1024 * 1024 })
@@ -16,15 +17,16 @@ export async function create(
   home: string,
   agent: string,
   call: string,
-  projectSettings: ExtensionHost['projectSettings'] = async () => ({}),
+  projectSettings: ProjectSettings = async () => ({}),
   signal?: AbortSignal,
+  prepared?: Workspace,
 ) {
   const key = createHash('sha256').update(call).digest('hex')
   const path = await worktreePath(home, key)
   const branch = `ultimate/${agent}-${key.slice(0, 16)}`
   let base: string
   try {
-    base = await git(parent, 'rev-parse', 'HEAD')
+    base = prepared?.base ?? (await git(parent, 'rev-parse', 'HEAD'))
   } catch {
     throw new Error(`Worktree isolate requires a git repository with a HEAD: ${parent}`)
   }
@@ -32,7 +34,10 @@ export async function create(
     .split('\n')
     .includes(`worktree ${path}`)
   if (!registered) {
-    await rm(path, { recursive: true, force: true })
+    if (await stat(path).catch(() => undefined))
+      throw new Error(
+        `Unregistered workspace path exists; inspect it before explicit cleanup: ${path}`,
+      )
     const branches = await git(parent, 'branch', '--list', branch)
     if (branches) base = await git(parent, 'rev-parse', branch)
     await git(
@@ -46,24 +51,36 @@ export async function create(
   }
   const marker = join(home, 'worktrees', `${key}.ready`)
   try {
-    const record = JSON.parse(await readFile(marker, 'utf8')) as Isolate
+    const record = JSON.parse(await readFile(marker, 'utf8')) as Workspace
     return { cwd: record.path, record }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
-  const record: Isolate = { kind: 'worktree', path, branch, base, state: 'active' }
+  const record: Workspace = prepared
+    ? { ...prepared, preparation: 'ready' }
+    : {
+        kind: 'worktree',
+        path,
+        branch,
+        base,
+        state: 'active',
+        source: await realpath(await git(parent, 'rev-parse', '--show-toplevel')),
+        targetBranch: await git(parent, 'symbolic-ref', '--short', 'HEAD'),
+        preparation: 'ready',
+      }
   try {
     await setupWorktree(projectSettings, parent, path, signal)
     await writeFile(`${marker}.tmp`, JSON.stringify(record))
     await rename(`${marker}.tmp`, marker)
   } catch (error) {
-    await git(parent, 'worktree', 'remove', '--force', path)
+    // A failed setup may have valuable untracked output; never force-remove it.
+    await git(parent, 'worktree', 'remove', path).catch(() => undefined)
     throw error
   }
-  return { cwd: path, record } satisfies CreatedIsolate
+  return { cwd: path, record }
 }
 async function setupWorktree(
-  projectSettings: ExtensionHost['projectSettings'],
+  projectSettings: ProjectSettings,
   parent: string,
   path: string,
   signal?: AbortSignal,
@@ -100,12 +117,12 @@ async function setupWorktree(
     })
   }
 }
-async function worktreePath(home: string, key: string) {
+export async function worktreePath(home: string, key: string) {
   const directory = join(home, 'worktrees')
   await mkdir(directory, { recursive: true })
   return join(await realpath(directory), key)
 }
-export async function discard(parent: string, isolate: Isolate) {
+export async function discard(parent: string, isolate: Workspace) {
   if (isolate.state === 'discarded')
     return { text: `Already discarded; kept branch ${isolate.branch}.` }
   if (
@@ -113,6 +130,6 @@ export async function discard(parent: string, isolate: Isolate) {
       .split('\n')
       .includes(`worktree ${join(await realpath(dirname(isolate.path)), basename(isolate.path))}`)
   )
-    await git(parent, 'worktree', 'remove', '--force', isolate.path)
+    await git(parent, 'worktree', 'remove', isolate.path)
   return { text: `Discarded isolate; kept branch ${isolate.branch}.`, state: 'discarded' as const }
 }

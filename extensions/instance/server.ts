@@ -20,7 +20,7 @@ const info = ({ id, url, home, pid }: { id: string; url: string; home: string; p
 export default function instanceExtension(
   host: Pick<
     ExtensionHost,
-    'resource' | 'onClose' | 'home' | 'ultimateRoot' | 'projectRoot' | 'userHome'
+    'resource' | 'onClose' | 'home' | 'ultimateRoot' | 'projectRoot' | 'userHome' | 'workspaces'
   >,
 ) {
   const instances = host.resource('instance', () => {
@@ -29,7 +29,15 @@ export default function instanceExtension(
     })
     return new Map<
       string,
-      { id: string; url: string; home: string; pid: number; child: ChildProcess; output: string }
+      {
+        id: string
+        url: string
+        home: string
+        pid: number
+        child: ChildProcess
+        output: string
+        release?: () => void
+      }
     >()
   })
   const starts = host.resource('instance.starts', () => ({ pending: 0 }))
@@ -46,6 +54,7 @@ export default function instanceExtension(
         clearTimeout(timer)
       }
     }
+    instance.release?.()
     instances.delete(id)
   }
   return defineExtension({
@@ -73,6 +82,7 @@ export default function instanceExtension(
         }),
         async execute(args, api, context) {
           let reserved = false
+          let release: (() => void) | undefined
           try {
             context.abortSignal?.throwIfAborted()
             let result: unknown
@@ -105,9 +115,15 @@ export default function instanceExtension(
                   String(args.subagent)
                 ]
                 if (!child) throw new Error(`Unknown subagent: ${args.subagent}`)
-                if (child.isolate?.kind !== 'worktree' || child.isolate.state === 'discarded')
+                const workspace = await host.workspaces.snapshot(child.conversationId, context)
+                if (
+                  !workspace ||
+                  workspace.state === 'discarded' ||
+                  workspace.preparation !== 'ready'
+                )
                   throw new Error('Subagent must have an active worktree isolate')
-                cwd = project = child.isolate.path
+                release = await host.workspaces.hold(child.conversationId, context)
+                cwd = project = workspace.path
                 for (const [path, directory, message] of [
                   ['server/main.ts', false, 'Worktree is not Ultimate: missing server/main.ts'],
                   ['node_modules', true, 'Worktree has no node_modules; run pnpm install first'],
@@ -165,7 +181,9 @@ export default function instanceExtension(
                 stdio: ['ignore', 'pipe', 'pipe'],
               })
               const id = randomUUID()
-              const item = { id, url, home, pid: child.pid ?? 0, child, output: '' }
+              const item = { id, url, home, pid: child.pid ?? 0, child, output: '', release }
+              child.once('exit', () => item.release?.())
+              release = undefined
               instances.set(id, item)
               starts.pending--
               reserved = false
@@ -215,6 +233,7 @@ export default function instanceExtension(
           } catch (error) {
             return { isError: true, content: [{ type: 'text', text: String(error) }] }
           } finally {
+            release?.()
             if (reserved) starts.pending--
           }
         },

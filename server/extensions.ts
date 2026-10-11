@@ -22,6 +22,8 @@ import type { ViteDevServer } from 'vite-plus'
 import type { ConversationSummary, ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { PreparedHost } from './harness.ts'
 import { Metadata } from './metadata.ts'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import type { ConversationId } from '@earendil-works/pi-durable'
 import type { Access } from './request-security.ts'
 
 export type ExtensionHost = Pick<
@@ -38,6 +40,7 @@ export type ExtensionHost = Pick<
   | 'models'
   | 'skills'
   | 'restart'
+  | 'workspaces'
 > & {
   /** Process-local Pi bus, shared across facets and reloads. Events are ephemeral, not bridged to the browser. */
   events: EventBus
@@ -171,7 +174,9 @@ export async function loadExtensions(
   const records = new Map<string, ExtensionInfo>()
   const documents = new Map<string, ConversationDocToken<JsonObject>[]>()
   const findDoc = (kind: string) =>
-    [...documents.values()].flat().find((doc) => doc.definition.kind === kind)
+    kind === host.workspaces.doc.definition.kind
+      ? host.workspaces.doc
+      : [...documents.values()].flat().find((doc) => doc.definition.kind === kind)
   const openers = new Set<() => Promise<void>>()
   let open = false
   const cleanups = new Set<() => Promise<void>>()
@@ -201,6 +206,7 @@ export async function loadExtensions(
     models: () => host.models(),
     skills: (cwd) => host.skills(cwd),
     restart: (approved) => host.restart(approved),
+    workspaces: host.workspaces,
     harness: runtime.harness,
     system: runtime.system,
     conversations: runtime.conversations,
@@ -515,11 +521,26 @@ export async function loadExtensions(
       conversationId?: number,
     ) {
       const fn = actions.get(name)![action]
+      if (
+        conversationId !== undefined &&
+        (!Number.isSafeInteger(conversationId) || conversationId < 1)
+      )
+        throw new Error('Invalid conversationId')
       return fn(args, {
         host: facetHosts.get(name)!,
         conversationId,
         signal,
-        exec: actionExec(host.projectRoot, signal),
+        exec:
+          conversationId === undefined
+            ? actionExec(host.projectRoot, signal)
+            : async (command, arguments_, options) => {
+                const conversation = await runtime
+                  .harness()
+                  .conversation(conversationId as ConversationId, BACKGROUND_CONTEXT)
+                if (!conversation) throw new Error('Unknown conversation')
+                const cwd = (await conversation.agent(BACKGROUND_CONTEXT)).cwd ?? host.projectRoot
+                return actionExec(cwd, signal)(command, arguments_, options)
+              },
       })
     },
     doc: findDoc,

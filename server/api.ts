@@ -20,6 +20,8 @@ import { Metadata } from './metadata.ts'
 import { admit } from './request-security.ts'
 import type { Access } from './request-security.ts'
 import { conversationIndex } from './project.ts'
+import { LifecycleQueue } from './workspaces/doc.ts'
+import { configure as configureAgent } from '@earendil-works/pi-durable'
 
 class HttpError extends Error {
   status: number
@@ -101,6 +103,7 @@ export async function createApi(
       try {
         const agent = await conversation.agent(context)
         const metadata = await harness.snapshot(Metadata, record.id, context)
+        const workspace = await host.workspaces.snapshot(record.id, context)
         const { entries } = view.value
         const input = entries.find((entry) => entry.kind === 'pi.user')?.model?.[0]
         const title =
@@ -143,6 +146,7 @@ export async function createApi(
               ? { title: title.replace(/\s+/g, ' ').slice(0, 160) }
               : {}),
           cwd: agent.cwd,
+          ...(workspace ? { workspace } : {}),
           ...(inputAt === undefined ? {} : { inputAt }),
           ...(answerAt === undefined ? {} : { answerAt }),
         })
@@ -209,7 +213,11 @@ export async function createApi(
       if (
         change.type === 'document' &&
         change.conversationId &&
-        (change.record.kind === 'ultimate.metadata' ||
+        ((change.record.kind === 'ultimate.workspace' &&
+          (change.value === null ||
+            change.value.workspace !== undefined ||
+            change.ops.length > 0)) ||
+          change.record.kind === 'ultimate.metadata' ||
           (change.record.kind === 'pi.agent' &&
             change.ops.some((op) => op[0] === 'r' || op[1][0] === 'cwd')))
       )
@@ -421,20 +429,48 @@ export async function createApi(
         if (url.pathname === '/api/conversations') {
           const cwd = data.cwd === undefined ? host.projectRoot : text(data.cwd, 'cwd')
           const title = data.title === undefined ? undefined : text(data.title, 'title')
+          if (data.isolate !== undefined && data.isolate !== 'none' && data.isolate !== 'worktree')
+            throw new HttpError(400, 'Invalid isolate')
+          const requestId =
+            data.requestId === undefined ? undefined : text(data.requestId, 'requestId')
+          if (data.isolate === 'worktree' && !requestId)
+            throw new HttpError(400, 'Isolated creation requires requestId')
+          if (requestId && data.isolate !== 'worktree')
+            throw new HttpError(400, 'requestId is only supported for isolated creation')
           const agent = await root.agent(context)
-          const created = await harness.createConversation(
-            {
-              ownership: { kind: 'ownerless' },
-              agent: { cwd, model: agent.model, thinkingLevel: agent.thinkingLevel },
-            },
-            context,
-          )
-          if (title)
-            await created.commit(async (tx) => {
-              ;(await tx.doc(Metadata, created.id)).title = title
-            }, context)
+          const workspace =
+            data.isolate === 'worktree'
+              ? await host.workspaces.describe(cwd, 'conversation', `conversation:${requestId}`)
+              : undefined
+          const id = await harness.commit(async (tx) => {
+            const queue = await tx.doc(LifecycleQueue)
+            const previous = requestId && queue.creations[requestId]
+            if (previous) {
+              if (previous.source !== workspace!.source)
+                throw new HttpError(409, 'requestId already used with another source')
+              return previous.id
+            }
+            const created = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+            await configureAgent(tx, created.id, {
+              cwd,
+              model: agent.model,
+              thinkingLevel: agent.thinkingLevel,
+            })
+            if (title) (await tx.doc(Metadata, created.id)).title = title
+            if (workspace) {
+              await host.workspaces.prepare(
+                tx,
+                created.id,
+                workspace,
+                'conversation',
+                `conversation:${requestId}`,
+              )
+              queue.creations[requestId!] = { id: created.id, source: workspace.source }
+            }
+            return created.id
+          }, context)
           await refreshing
-          json(201, { id: created.id })
+          json(201, { id })
           return true
         }
         const cancel = /^\/api\/conversations\/(\d+)\/inbox\/(\d+)\/cancel$/.exec(url.pathname)
@@ -484,10 +520,15 @@ export async function createApi(
                   const metadata = await tx.doc(Metadata, conversation.id)
                   metadata.title ??= content.replace(/\s+/g, ' ').trim().slice(0, 160)
                 }, context)
-              const submission = await conversation.submit(
-                { type: 'input', content, whenBusy: data.whenBusy },
-                context,
-              )
+              const submission = await host.workspaces
+                .submit(
+                  conversation.id,
+                  { type: 'input', content, whenBusy: data.whenBusy },
+                  context,
+                )
+                .catch((error: unknown) => {
+                  throw new HttpError(409, error instanceof Error ? error.message : String(error))
+                })
               json(202, { submissionId: submission.id })
               break
             }

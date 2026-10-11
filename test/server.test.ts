@@ -466,6 +466,7 @@ export const actions = { keys: async () => keys }`,
         'uiState',
         'ultimateRoot',
         'userHome',
+        'workspaces',
       ].toSorted(),
     )
   })
