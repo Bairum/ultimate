@@ -5,8 +5,9 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Summaries, summaryBehavior } from './summary.ts'
+import { Overview, overviewBehavior } from './overview.ts'
 
-export const docs = [Summaries]
+export const docs = [Summaries, Overview]
 
 const record = (host: Pick<ExtensionHost, 'harness'>, id: ConversationId, caller: Context) =>
   host.harness().commit((tx) => tx.conversation(id), caller)
@@ -78,6 +79,10 @@ export const actions = {
       delete state.lastAnswer
       delete state.pending
       delete state.summary
+      delete state.summaryOwed
+      delete state.assessment
+      delete state.activity
+      delete state.assessmentStatus
       delete state.status
     }, context)
     await (await host.harness().conversation(id, context))!.reset(undefined, context)
@@ -87,6 +92,7 @@ export const actions = {
 
 /** Tells each top-level conversation which other conversations work in this project. */
 export default (host: ExtensionHost) => {
+  overviewBehavior(host)
   /** Whether each conversation is top-level, read once: `owner` and `parent` never change after creation. */
   const topLevel = new Map<ConversationId, boolean>()
   return defineExtension({

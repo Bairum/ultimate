@@ -15,6 +15,8 @@ import {
 import { afterEach, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
+import { Overview } from '../extensions/conversations/overview.ts'
+import { LiveDoc } from '@earendil-works/pi-durable'
 import {
   generateSummary,
   Summaries,
@@ -40,6 +42,8 @@ async function launch() {
   let server = await fauxServer(options)
   servers.push(server)
   const generated = vi.fn<typeof generateSummary>(async () => ({
+    assessment: 'done',
+    activity: 'Added concise summaries to the sidebar.',
     title: 'Improve the conversation sidebar',
     summary: 'Added concise summaries to the sidebar.',
   }))
@@ -136,7 +140,7 @@ it('summarizes the first, fourth and seventh completed exchanges, not tools, str
     await fixture.exchange()
     await until(async () => (await fixture.read())?.exchanges === count)
   }
-  await until(() => fixture.generated.mock.calls.length === 2)
+  await until(() => fixture.generated.mock.calls.length === 4)
   expect((await server.harness.snapshot(Metadata, server.root.id, context))?.title).toBe(
     'Improve the conversation sidebar',
   )
@@ -147,9 +151,18 @@ it('summarizes the first, fourth and seventh completed exchanges, not tools, str
     await fixture.exchange()
     await until(async () => (await fixture.read())?.exchanges === count)
   }
-  await until(() => fixture.generated.mock.calls.length === 3)
+  await until(() => fixture.generated.mock.calls.length === 7)
   await fixture.server.harness.waitForIdle(context)
-  expect(fixture.generated).toHaveBeenCalledTimes(3)
+  expect(fixture.generated).toHaveBeenCalledTimes(7)
+  expect(fixture.generated.mock.calls.map((call) => call[3])).toEqual([
+    true,
+    false,
+    false,
+    true,
+    false,
+    false,
+    true,
+  ])
 }, 60000)
 
 it('counts distinct completions durably when an older context read finishes after a newer reply', async () => {
@@ -219,10 +232,10 @@ it('counts distinct completions durably when an older context read finishes afte
     expect((await fixture.read())?.exchanges).toBe(2)
     expect((await fixture.read())?.lastAnswer).toBe(latest)
     await fixture.exchange()
-    expect(fixture.generated).toHaveBeenCalledTimes(1)
+    expect(fixture.generated).toHaveBeenCalledTimes(2)
     await fixture.exchange()
     expect((await fixture.read())?.exchanges).toBe(4)
-    expect(fixture.generated).toHaveBeenCalledTimes(2)
+    expect(fixture.generated).toHaveBeenCalledTimes(3)
   } finally {
     release()
   }
@@ -236,7 +249,12 @@ it('replaces only a marked HTTP input fallback and clears its provenance with th
   })
   fixture.generated.mockImplementationOnce(async () => {
     await gate
-    return { title: 'Improve the conversation sidebar', summary: 'Generated summary.' }
+    return {
+      assessment: 'done' as const,
+      activity: 'Implemented the requested sidebar changes.',
+      title: 'Improve the conversation sidebar',
+      summary: 'Generated summary.',
+    }
   })
   try {
     fixture.server.host.faux!.setResponses([fauxAssistantMessage('Done.')])
@@ -294,7 +312,12 @@ it('preserves an equal-text manual rename during an in-flight HTTP-submit summar
   })
   fixture.generated.mockImplementationOnce(async () => {
     await gate
-    return { title: 'An automatically generated title', summary: 'Generated summary.' }
+    return {
+      assessment: 'done' as const,
+      activity: 'Implemented the requested sidebar changes.',
+      title: 'An automatically generated title',
+      summary: 'Generated summary.',
+    }
   })
   try {
     fixture.server.host.faux!.setResponses([fauxAssistantMessage('Done.')])
@@ -338,11 +361,16 @@ it('protects preexisting and in-flight manual titles, and blank rename restores 
   const gate = new Promise<void>((done) => {
     release = done
   })
+  for (let count = 2; count <= 3; count++) await fixture.exchange()
   fixture.generated.mockImplementationOnce(async () => {
     await gate
-    return { title: 'An automatically updated title', summary: 'Updated summary.' }
+    return {
+      assessment: 'done' as const,
+      activity: 'Implemented the requested sidebar changes.',
+      title: 'An automatically updated title',
+      summary: 'Updated summary.',
+    }
   })
-  for (let count = 2; count <= 3; count++) await fixture.exchange()
   fixture.server.host.faux!.setResponses([fauxAssistantMessage('Fourth answer.')])
   const fourth = await fixture.server.root.submit(
     { type: 'input', content: 'Fourth input' },
@@ -375,7 +403,12 @@ it('clears summary and cadence on reset, drops stale completion and isolates pro
   })
   fixture.generated.mockImplementationOnce(async () => {
     await gate
-    return { title: 'A stale generated title', summary: 'Stale summary.' }
+    return {
+      assessment: 'done' as const,
+      activity: 'Implemented the requested sidebar changes.',
+      title: 'A stale generated title',
+      summary: 'Stale summary.',
+    }
   })
   fixture.server.host.faux!.setResponses([fauxAssistantMessage('Done.')])
   const first = await fixture.server.root.submit({ type: 'input', content: 'Old context' }, context)
@@ -395,10 +428,10 @@ it('clears summary and cadence on reset, drops stale completion and isolates pro
   expect((await fixture.read())?.summary).toBeUndefined()
   for (let count = 2; count <= 4; count++) await fixture.exchange()
   await until(async () => (await fixture.read())?.status === 'ready')
-  expect(fixture.generated).toHaveBeenCalledTimes(3)
+  expect(fixture.generated).toHaveBeenCalledTimes(5)
 }, 60000)
 
-it('excludes owned children and forks, and does not backfill historical exchanges on install', async () => {
+it('assesses owned children without renaming them, excludes ownerless forks, and does not backfill', async () => {
   const fixture = await launch()
   const root = fixture.server.root
   await fixture.server.harness.commit(
@@ -432,7 +465,12 @@ it('excludes owned children and forks, and does not backfill historical exchange
       conversationId: root.id,
       background: true,
     })
-    return tx.createConversation({ ownership: { kind: 'task', taskId: owner } })
+    const created = await tx.createConversation({ ownership: { kind: 'task', taskId: owner } })
+    Object.assign(await tx.doc(Metadata, created.id), {
+      title: 'Scout the task boundaries',
+      label: 'scout',
+    })
+    return created
   }, context)
   const entry = (await root.context(context)).entries[0]
   const fork = await root.fork(entry.id, { ownership: { kind: 'ownerless' } }, context)
@@ -446,11 +484,27 @@ it('excludes owned children and forks, and does not backfill historical exchange
         ).wait(context)
       ).status,
     ).toBe('done')
-    expect((await fixture.server.harness.snapshot(Summaries, id, context))?.exchanges ?? 0).toBe(0)
   }
-  expect(fixture.generated).not.toHaveBeenCalled()
-  await fixture.exchange()
+  await until(
+    async () =>
+      (await fixture.server.harness.snapshot(Summaries, child.id, context))?.assessmentStatus ===
+      'ready',
+  )
+  expect((await fixture.server.harness.snapshot(Summaries, child.id, context))?.exchanges).toBe(1)
+  expect(
+    (await fixture.server.harness.snapshot(Summaries, child.id, context))?.summary,
+  ).toBeUndefined()
+  expect(await fixture.server.harness.snapshot(Metadata, child.id, context)).toEqual({
+    title: 'Scout the task boundaries',
+    label: 'scout',
+  })
+  expect((await fixture.server.harness.snapshot(Summaries, fork.id, context))?.exchanges ?? 0).toBe(
+    0,
+  )
   expect(fixture.generated).toHaveBeenCalledTimes(1)
+  expect(fixture.generated.mock.calls[0][3]).toBe(false)
+  await fixture.exchange()
+  expect(fixture.generated).toHaveBeenCalledTimes(2)
 }, 60000)
 
 it('clears its own pending status when compaction makes the generated summary stale', async () => {
@@ -465,7 +519,12 @@ it('clears its own pending status when compaction makes the generated summary st
   })
   fixture.generated.mockImplementationOnce(async () => {
     await gate
-    return { title: 'A compacted stale title', summary: 'Compacted stale summary.' }
+    return {
+      assessment: 'done' as const,
+      activity: 'Implemented the requested sidebar changes.',
+      title: 'A compacted stale title',
+      summary: 'Compacted stale summary.',
+    }
   })
   try {
     fixture.server.host.faux!.setResponses([fauxAssistantMessage('Done.')])
@@ -510,23 +569,35 @@ it('does not clear a superseding pending request when an older compacted result 
   const newerGate = new Promise<void>((done) => {
     releaseNewer = done
   })
-  fixture.generated
-    .mockImplementationOnce(async () => {
-      await olderGate
-      return { title: 'An older compacted title', summary: 'Older compacted summary.' }
-    })
-    .mockImplementationOnce(async () => {
-      await newerGate
-      return { title: 'A newer current title', summary: 'Newer current summary.' }
-    })
+  fixture.generated.mockImplementationOnce(async () => {
+    await olderGate
+    return {
+      assessment: 'done' as const,
+      activity: 'Implemented the requested sidebar changes.',
+      title: 'An older compacted title',
+      summary: 'Older compacted summary.',
+    }
+  })
   try {
     let olderTask: number | undefined
     for (let count = 1; count <= 4; count++) {
+      if (count === 4)
+        fixture.generated.mockImplementationOnce(async () => {
+          await newerGate
+          return {
+            assessment: 'done' as const,
+            activity: 'Completed the newer task.',
+            title: 'A newer current title',
+            summary: 'Newer current summary.',
+          }
+        })
       fixture.server.host.faux!.setResponses([fauxAssistantMessage('Done.')])
       await (
         await fixture.server.root.submit({ type: 'input', content: `Input ${count}` }, context)
       ).wait(context)
       await until(async () => (await fixture.read())?.exchanges === count)
+      if (count === 2 || count === 3)
+        await until(async () => (await fixture.read())?.assessmentStatus === 'ready')
       if (count === 1) {
         await until(() => fixture.generated.mock.calls.length === 1)
         olderTask = (await fixture.read())?.pending
@@ -546,8 +617,9 @@ it('does not clear a superseding pending request when an older compacted result 
         ).wait(context)
       }
     }
-    await until(() => fixture.generated.mock.calls.length === 2)
+    await until(() => fixture.generated.mock.calls.length === 4)
     const newerTask = (await fixture.read())?.pending
+    const previousSummary = (await fixture.read())?.summary
     expect(newerTask).not.toBe(olderTask)
     releaseOlder()
     await until(
@@ -558,7 +630,7 @@ it('does not clear a superseding pending request when an older compacted result 
     )
     expect((await fixture.read())?.pending).toBe(newerTask)
     expect((await fixture.read())?.status).toBe('pending')
-    expect((await fixture.read())?.summary).toBeUndefined()
+    expect((await fixture.read())?.summary).toBe(previousSummary)
     releaseNewer()
     await until(async () => (await fixture.read())?.status === 'ready')
     expect((await fixture.read())?.summary).toBe('Newer current summary.')
@@ -576,7 +648,12 @@ it('rejects an older response after a newer scheduled summary has completed', as
   })
   fixture.generated.mockImplementationOnce(async () => {
     await gate
-    return { title: 'An older stale title', summary: 'Older stale summary.' }
+    return {
+      assessment: 'done' as const,
+      activity: 'Implemented the requested sidebar changes.',
+      title: 'An older stale title',
+      summary: 'Older stale summary.',
+    }
   })
   for (let count = 1; count <= 4; count++) {
     fixture.server.host.faux!.setResponses([fauxAssistantMessage('Done.')])
@@ -584,6 +661,8 @@ it('rejects an older response after a newer scheduled summary has completed', as
       await fixture.server.root.submit({ type: 'input', content: `Exchange ${count}` }, context)
     ).wait(context)
     await until(async () => (await fixture.read())?.exchanges === count)
+    if (count === 1) await until(() => fixture.generated.mock.calls.length === 1)
+    else await until(async () => (await fixture.read())?.assessmentStatus === 'ready')
   }
   await until(async () => (await fixture.read())?.status === 'ready')
   release()
@@ -651,7 +730,12 @@ it('selects Luna/medium with bounded text-only context and cancels oversized out
   const stream = vi.fn<Models['streamSimple']>((_model, _input, options) => {
     const events = new AssistantMessageEventStream()
     const answer = fauxAssistantMessage(
-      JSON.stringify({ title: 'A compact useful title', summary: 'A brief current summary.' }),
+      JSON.stringify({
+        assessment: 'done',
+        activity: 'Implemented the requested changes.',
+        title: 'A compact useful title',
+        summary: 'A brief current summary.',
+      }),
     )
     events.push({ type: 'done', reason: 'stop', message: answer })
     events.end()
@@ -667,6 +751,8 @@ it('selects Luna/medium with bounded text-only context and cancels oversized out
   ])
   expect(input.length).toBeLessThanOrEqual(12060)
   expect(await generateSummary(models, input, new AbortController().signal)).toEqual({
+    assessment: 'done',
+    activity: 'Implemented the requested changes.',
     title: 'A compact useful title',
     summary: 'A brief current summary.',
   })
@@ -687,4 +773,177 @@ it('selects Luna/medium with bounded text-only context and cancels oversized out
     'exceeds bounds',
   )
   expect(stream.mock.calls[1][2]?.signal?.aborted).toBe(true)
+})
+
+it('assesses every idle final reply, keeps summaries between due exchanges, and exposes neutral/failure honestly', async () => {
+  const fixture = await launch()
+  const index = async () =>
+    (await fixture.server.harness.snapshot(Overview, fixture.server.root.id, context))
+      ?.conversations[fixture.server.root.id]
+  await fixture.exchange()
+  await until(async () => (await index())?.assessment?.value === 'done')
+  const summary = (await fixture.read())?.summary
+  fixture.generated.mockResolvedValueOnce({
+    assessment: 'needs_input',
+    activity: 'Asked the coordinator to approve the deployment target.',
+  })
+  await fixture.exchange()
+  await until(async () => (await index())?.assessment?.value === 'needs_input')
+  expect((await fixture.read())?.summary).toBe(summary)
+  expect((await index())?.runState).toBe('done')
+  expect((await index())?.assessment?.answerId).toBe((await index())?.answerId)
+  fixture.generated.mockResolvedValueOnce({
+    assessment: 'neutral',
+    activity: 'Outlined unfinished work without claiming completion.',
+  })
+  await fixture.exchange()
+  await until(async () => (await index())?.assessment?.value === 'neutral')
+  expect((await fixture.read())?.summary).toBe(summary)
+  fixture.generated.mockRejectedValueOnce(new Error('Malformed assessment'))
+  await fixture.exchange()
+  await until(async () => (await index())?.assessmentStatus === 'error')
+  expect((await index())?.assessment).toBeUndefined()
+  expect((await fixture.read())?.summary).toBe(summary)
+  expect(fixture.generated).toHaveBeenCalledTimes(4)
+  const before = await index()
+  await fixture.reopen()
+  await until(async () => (await index())?.assessmentStatus === 'error')
+  expect(await index()).toEqual(before)
+  expect(fixture.generated).toHaveBeenCalledTimes(4)
+}, 60000)
+
+it('suppresses an old assessment during new actual work and rejects an in-flight result after new input', async () => {
+  const fixture = await launch()
+  await fixture.exchange()
+  let releaseAssessment!: () => void
+  let releaseTool!: () => void
+  const assessmentGate = new Promise<void>((done) => {
+    releaseAssessment = done
+  })
+  const toolGate = new Promise<void>((done) => {
+    releaseTool = done
+  })
+  let toolStarted = false
+  fixture.server.host.registry.install(
+    defineExtension({
+      name: 'assessment-wait',
+      tools: [
+        defineTool({
+          name: 'assessment_wait',
+          description: 'Wait',
+          parameters: Type.Object({}),
+          execute: async () => {
+            toolStarted = true
+            await toolGate
+            return { content: [{ type: 'text', text: 'Wait complete.' }] }
+          },
+        }),
+      ],
+    }),
+  )
+  fixture.generated.mockImplementationOnce(async () => {
+    await assessmentGate
+    return { assessment: 'done', activity: 'An old reply whose assessment is now stale.' }
+  })
+  try {
+    fixture.server.host.faux!.setResponses([fauxAssistantMessage('Second reply.')])
+    await (
+      await fixture.server.root.submit({ type: 'input', content: 'Second input' }, context)
+    ).wait(context)
+    await until(() => fixture.generated.mock.calls.length === 2)
+    fixture.server.host.faux!.setResponses([
+      fauxAssistantMessage([fauxToolCall('assessment_wait', {})], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('Third final reply.'),
+    ])
+    const third = await fixture.server.root.submit(
+      { type: 'input', content: 'New work invalidates the old assessment' },
+      context,
+    )
+    await until(() => toolStarted)
+    await until(
+      async () =>
+        (await fixture.server.harness.snapshot(Overview, fixture.server.root.id, context))
+          ?.conversations[fixture.server.root.id]?.runState === 'working',
+    )
+    expect(
+      (await fixture.server.harness.snapshot(Overview, fixture.server.root.id, context))
+        ?.conversations[fixture.server.root.id]?.assessment,
+    ).toBeUndefined()
+    releaseAssessment()
+    await until(async () => (await fixture.read())?.assessmentStatus === 'error')
+    expect((await fixture.read())?.assessment).toBeUndefined()
+    expect((await fixture.read())?.summary).toBe('Added concise summaries to the sidebar.')
+    releaseTool()
+    expect((await third.wait(context)).status).toBe('done')
+    await until(async () => (await fixture.read())?.assessmentStatus === 'ready')
+    expect((await fixture.read())?.assessment?.answerId).toBe((await fixture.read())?.lastAnswer)
+  } finally {
+    releaseAssessment()
+    releaseTool()
+  }
+}, 60000)
+
+it('does not reconcile the overview or read summary histories for streamed live chunks', async () => {
+  const fixture = await launch()
+  await fixture.exchange()
+  await until(
+    async () =>
+      (await fixture.server.harness.snapshot(Overview, fixture.server.root.id, context))
+        ?.conversations[fixture.server.root.id]?.assessmentStatus === 'ready',
+  )
+  const reads = vi.spyOn(fixture.server.harness, 'snapshot')
+  let publications = 0
+  const stop = fixture.server.harness.subscribeCommits((publication) => {
+    publications += publication.changes.filter(
+      (change) => change.type === 'document' && change.record.kind === Overview.definition.kind,
+    ).length
+  })
+  try {
+    for (let chunk = 0; chunk < 12; chunk++)
+      await fixture.server.root.commit(async (tx) => {
+        ;(await tx.doc(LiveDoc, fixture.server.root.id)).generation = {
+          attempt: 1,
+          message: JSON.parse(JSON.stringify(fauxAssistantMessage(`Partial ${chunk}`))),
+        }
+      }, context)
+    await fixture.server.root.commit(async (tx) => {
+      delete (await tx.doc(LiveDoc, fixture.server.root.id)).generation
+    }, context)
+    expect(
+      reads.mock.calls.filter((call) => call[0].definition.kind === Summaries.definition.kind),
+    ).toHaveLength(0)
+    expect(publications).toBe(0)
+  } finally {
+    stop()
+    reads.mockRestore()
+  }
+}, 60000)
+
+it('validates assessment-only JSON and rejects unapproved or malformed outcome states', async () => {
+  let output: unknown = {
+    assessment: 'needs_input',
+    activity: 'Asked the coordinator to choose a deployment target.',
+  }
+  const stream = vi.fn<Models['streamSimple']>(() => {
+    const events = new AssistantMessageEventStream()
+    const answer = fauxAssistantMessage(JSON.stringify(output))
+    events.push({ type: 'done', reason: 'stop', message: answer })
+    events.end()
+    return events
+  })
+  const models = {
+    getModel: () => ({ provider: 'openai-codex', id: 'gpt-6-luna' }),
+    streamSimple: stream,
+  } as unknown as Models
+  expect(
+    await generateSummary(models, 'Untrusted reply text', new AbortController().signal, false),
+  ).toEqual(output)
+  expect(stream.mock.calls[0][1].systemPrompt).toContain('Do not include title or summary.')
+  expect(stream.mock.calls[0][1].systemPrompt).toContain('not necessarily a human')
+  for (const value of ['blocked', 'unfinished', ['done'], null]) {
+    output = { assessment: value, activity: 'Some work was discussed.' }
+    await expect(
+      generateSummary(models, 'Reply', new AbortController().signal, false),
+    ).rejects.toThrow('Invalid assessment')
+  }
 })
