@@ -16,6 +16,10 @@ The fixture includes a long landed title (ready checkout, zero ahead), failed ne
 fixture.archive([2]) // hides the landed worker AND its nested failed child and tasks
 fixture.archive([1]) // hides the whole first root subtree
 fixture.archive([]) // restores all rows and counts
+fixture.summaries([{ id: 1 }, { id: 6 }]) // simulate child summaries still in flight
+fixture.archive([1]) // only #6's run remains, despite null-owner child runs
+fixture.summaries() // full summaries arrive; archived tasks remain hidden
+fixture.archive([]) // restore
 ```
 
 Regression command:

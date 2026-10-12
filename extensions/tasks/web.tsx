@@ -31,9 +31,28 @@ function build(
   let changed = true
   while (changed) {
     changed = false
+    // Task ownership can arrive before the child's summary; child runs have no task owner.
     for (const task of all) {
-      if (task.owner != null && hiddenTasks.has(task.owner) && !hiddenTasks.has(task.id)) {
-        hiddenTasks.add(task.id)
+      if (hidden.has(task.conversationId) || (task.owner != null && hiddenTasks.has(task.owner))) {
+        if (!hiddenTasks.has(task.id)) {
+          hiddenTasks.add(task.id)
+          changed = true
+        }
+        for (const id of task.conversations) {
+          if (!hidden.has(id)) {
+            hidden.add(id)
+            changed = true
+          }
+        }
+      }
+    }
+    for (const conversation of conversations) {
+      if (
+        conversation.parentConversationId !== undefined &&
+        hidden.has(conversation.parentConversationId) &&
+        !hidden.has(conversation.id)
+      ) {
+        hidden.add(conversation.id)
         changed = true
       }
     }

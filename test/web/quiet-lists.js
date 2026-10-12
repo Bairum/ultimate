@@ -59,7 +59,7 @@ window.fetch = async (url, options) =>
 store.start()
 const send = (name, data) =>
   source.dispatchEvent(new MessageEvent(name, { data: JSON.stringify(data) }))
-send('conversations', [
+const summaries = [
   { id: 1, title: 'Plan the release', busy: false },
   {
     id: 2,
@@ -73,7 +73,8 @@ send('conversations', [
   { id: 4, parentConversationId: 1, busy: true },
   { id: 5, title: 'Review changes', parentConversationId: 1, busy: true },
   { id: 6, busy: false },
-])
+]
+send('conversations', summaries)
 const task = (id, conversationId, owner, conversations = []) => ({
   id,
   conversationId,
@@ -82,21 +83,22 @@ const task = (id, conversationId, owner, conversations = []) => ({
   kind: 'pi.run',
   state: { status: 'running', phase: 'working' },
 })
-send('tasks', {
+const graph = {
   tasks: {
     10: task(10, 1, null, [2, 4, 5]),
-    20: task(20, 2, 10, [3]),
-    30: task(30, 3, 20),
-    40: task(40, 4, 10),
+    20: task(20, 2, null, [3]),
+    30: task(30, 3, null),
+    40: task(40, 4, null),
     50: {
-      ...task(50, 5, 10),
+      ...task(50, 5, null),
       state: { status: 'waiting', phase: 'review', on: [40], policy: 'all' },
       background: true,
       abortRequested: true,
     },
     60: task(60, 6, null),
   },
-})
+}
+send('tasks', graph)
 const root = createRoot(document.querySelector('#app'))
 flushSync(() =>
   root.render(
@@ -125,5 +127,7 @@ flushSync(() =>
   ),
 )
 window.fixture = {
+  summaries: (rows = summaries) => flushSync(() => send('conversations', rows)),
+  graph: (value) => flushSync(() => send('tasks', value ?? graph)),
   archive: (ids) => flushSync(() => uiState.receive({ 'ext.conversations.archived': ids })),
 }
