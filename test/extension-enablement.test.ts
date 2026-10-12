@@ -61,7 +61,7 @@ it('starts bare with exactly the default extensions and tools, and exposes off b
     ].toSorted(),
   )
   expect(await tools(server)).toEqual(
-    ['read', 'write', 'edit', 'bash', 'codemode', 'screenshot', 'browser'].toSorted(),
+    ['read', 'write', 'edit', 'bash', 'codemode', 'screenshot', 'browser', 'workspace'].toSorted(),
   )
   const info = server.system.current().extensions
   expect(info.filter((entry) => !entry.enabled).map((entry) => entry.name)).toEqual([

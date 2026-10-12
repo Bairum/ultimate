@@ -7,9 +7,11 @@ afterEach(() => vi.unstubAllEnvs())
 
 function fixture(cwd?: string, agentCwd?: string) {
   const restart = vi.fn<ExtensionHost['restart']>(async () => 'Preparation failed')
+  const proof = vi.fn<() => void>()
   const host = {
     projectRoot: '/host/project',
     ultimateRoot: '/host/ultimate',
+    workspaces: { doc: {}, snapshot: async () => undefined, proveHostLanding: proof },
     restart,
     build: () => ({ id: 'new-build' }),
     system: () => ({ process: { activationError: 'Activation failed' } }),
@@ -17,9 +19,9 @@ function fixture(cwd?: string, agentCwd?: string) {
   const tool = self(host).tools![0]
   const memo = vi.fn<(key: string, ...args: unknown[]) => Promise<unknown>>(async () => undefined)
   const agent = async () => ({ cwd: agentCwd })
-  const api = { taskId: 'task-1', env: cwd ? { cwd } : undefined, agent, memo }
+  const api = { conversationId: 1, taskId: 'task-1', env: cwd ? { cwd } : undefined, agent, memo }
   const run = () => tool.execute({}, api as never, context)
-  return { tool, restart, memo, agent, run }
+  return { tool, restart, memo, agent, run, proof }
 }
 
 it.each([
@@ -81,6 +83,30 @@ it('replays an approved shared-host restart without a second restart', async () 
   expect(JSON.stringify(result.content)).toContain('Restarted. Now running generation 2')
   expect(f.restart).not.toHaveBeenCalled()
 })
+
+it.each([1, 2])(
+  'resumes the pre-workspace a898 restart receipt without absent lease fields or another effect (generation %s)',
+  async (generation) => {
+    vi.stubEnv('ULTIMATE_GENERATION', String(generation))
+    const f = fixture('/host/project')
+    const receipt = { generation: 2, fromGeneration: 1, build: 'a898-old-build' }
+    f.memo.mockResolvedValue(receipt)
+    f.proof.mockImplementation(() => {
+      throw new Error('No old receipt proof/lease exists')
+    })
+    const result = await f.run()
+    expect(result.isError).toBe(generation === 1 ? true : undefined)
+    expect(result.details).toMatchObject({
+      fromGeneration: 1,
+      toGeneration: generation,
+      fromBuild: 'a898-old-build',
+      toBuild: 'new-build',
+    })
+    expect(f.memo).toHaveBeenCalledExactlyOnceWith('restart:task-1', context)
+    expect(f.proof).not.toHaveBeenCalled()
+    expect(f.restart).not.toHaveBeenCalled()
+  },
+)
 
 it('reports rollback when the memoed generation did not activate', async () => {
   vi.stubEnv('ULTIMATE_GENERATION', '1')

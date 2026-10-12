@@ -39,7 +39,7 @@ async function fixture(
   agents = false,
   sources?: Record<string, string>,
   empty = false,
-  workspaceCandidate?: 'subagents' | 'instance' | 'automations',
+  workspaceCandidate?: 'subagents' | 'instance' | 'automations' | 'self',
 ) {
   const directory = await temp()
   directories.push(directory)
@@ -1051,6 +1051,8 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     ['instance', false],
     ['automations', false],
     ['automations', true],
+    ['self', false],
+    ['self', true],
   ] as const)(
     'retains the installed %s facet when its actual replacement requires an unavailable workspace core (partial service: %s)',
     async (name, partial) => {
@@ -1073,12 +1075,14 @@ export const actions = { ping: async (_args, ctx) => ({ version: 'legacy', dispo
         path,
         `import candidate from './candidate.ts'
 export const actions = { replacement: async () => 'new' }
-export default host => { const { workspaces, ...oldCore } = host; ${partial ? 'const { blockingLifecycle, ...previousService } = workspaces; return candidate({ ...oldCore, workspaces: previousService })' : 'return candidate(oldCore)'} }`,
+export default host => { const { workspaces, ...oldCore } = host; ${partial ? `const { ${name === 'self' ? 'proveHostLanding' : 'blockingLifecycle'}, ...previousService } = workspaces; return candidate({ ...oldCore, workspaces: previousService })` : 'return candidate(oldCore)'} }`,
       )
       const requirement =
         name === 'automations'
           ? 'automations requires core workspace admission'
-          : `${name} requires host.workspaces`
+          : name === 'self'
+            ? 'self requires core workspace landing proof'
+            : `${name} requires host.workspaces`
       await expect
         .poll(() => server.extensions.info().find((entry) => entry.name === name)?.server?.error)
         .toContain(requirement)
@@ -1108,7 +1112,13 @@ export default host => { const { workspaces, ...oldCore } = host; ${partial ? 'c
           .extension(name)!
           .tools?.map((tool) => tool.name),
       ).toContain(
-        name === 'subagents' ? 'subagent' : name === 'automations' ? 'automation' : 'instance',
+        name === 'subagents'
+          ? 'subagent'
+          : name === 'automations'
+            ? 'automation'
+            : name === 'self'
+              ? 'restart'
+              : 'instance',
       )
     },
   )

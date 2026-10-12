@@ -507,15 +507,34 @@ it('reads an isolate with its commits ahead of the parent for the Agents tab', a
   const read = () => actions.isolate({ parent, id: child.conversationId }, ctx)
   expect(await actions.isolate({ parent, id: plain.conversationId }, ctx)).toBeNull()
   await expect(actions.isolate({ id: child.conversationId }, ctx)).rejects.toThrow('required')
-  expect(await read()).toEqual({ ...child.workspace, ahead: 0 })
+  const sourceTip = child.workspace!.base
+  const branches = {
+    currentBranch: child.workspace!.branch,
+    sourceBranch: child.workspace!.targetBranch,
+  }
+  expect(await read()).toEqual({
+    ...child.workspace,
+    ahead: 0,
+    tip: sourceTip,
+    sourceTip,
+    ...branches,
+  })
   await git(child.workspace!.path, 'add', '.')
   await git(child.workspace!.path, 'commit', '-m', 'child change')
-  expect(await read()).toEqual({ ...child.workspace, ahead: 1 })
+  const tip = await git(child.workspace!.path, 'rev-parse', 'HEAD')
+  expect(await read()).toEqual({ ...child.workspace, ahead: 1, tip, sourceTip, ...branches })
   const landed = await actions.land(
     { id: child.conversationId },
     { ...ctx, conversationId: parent },
   )
-  expect(await read()).toEqual({ ...child.workspace, landed: landed.landed, ahead: 0 })
+  expect(await read()).toEqual({
+    ...child.workspace,
+    landed: landed.landed,
+    ahead: 0,
+    tip,
+    sourceTip: tip,
+    ...branches,
+  })
   await actions.discard({ id: child.conversationId }, { ...ctx, conversationId: parent })
   await git(f.project, 'branch', '-D', child.workspace!.branch)
   expect(await read()).toMatchObject({ state: 'discarded', ahead: null })

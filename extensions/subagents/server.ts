@@ -564,9 +564,12 @@ An epic means the full flow: tasks, isolated workers, land, and review before it
 5. On each answer, read the report and inspect the commit diff in the isolate.
    Rerun the meaningful checks yourself in the isolate before landing.
 6. Epic commits come from workers in isolates and reach the checkout only through land.
-   Land verified work, then reload; use restart for server/ and shared/ changes.
-   After the last land of a batch, rerun meaningful checks on the parent checkout yourself.
-   Discard a child's isolate once its work has landed and it has no further work.
+   Land verified workers into your current checkout and rerun meaningful combined checks there.
+   For an isolated main, that is intermediate: verify/review the final tip, explicitly workspace land
+   into the captured original checkout/branch, and check the source revision before any host apply.
+   Shared mains already integrate into source. Use restart only for required server/ and shared/
+   changes after final source verification and authorization; honor supervisor-owned rollout.
+   Discard a child's clean isolate only when explicitly requested; never auto-clean up.
 7. Record verification evidence with plan and set the task done; only you do this.
 8. When all tasks are done, run every definition whose name starts with reviewer
    in parallel on the same commit range. Name base..head, not a directory.
@@ -646,7 +649,7 @@ Available definitions:
                   args.id as ConversationId,
                   operation,
                   { kind: 'task', taskId: api.taskId },
-                  String(api.taskId),
+                  `subagent:${api.conversationId}:${api.callId}`,
                 ),
               context,
             )

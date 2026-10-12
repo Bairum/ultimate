@@ -1,4 +1,5 @@
 import { realpath } from 'node:fs/promises'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import {
   AgentDoc,
   configure,
@@ -71,6 +72,17 @@ function pathRelations() {
   }
 }
 
+async function hostApply(tx: Tx) {
+  const queue = await tx.doc(LifecycleQueue)
+  const apply = queue.hostApply
+  // An approved swap stays pinned even after caller stop, until storage handoff/reopen.
+  if (apply && !apply.handoff && (await tx.task(apply.caller))?.state.status === 'terminal') {
+    delete queue.hostApply
+    return undefined
+  }
+  return apply
+}
+
 export function createWorkspaces(host: {
   home: string
   projectRoot: string
@@ -93,6 +105,12 @@ export function createWorkspaces(host: {
       )
     const cwd = (await tx.doc(AgentDoc, id)).cwd ?? host.projectRoot
     const paths = pathRelations()
+    const apply = await hostApply(tx)
+    if (
+      apply &&
+      ((await paths.checkout(apply.source, cwd)) || (await paths.within(apply.path, cwd)))
+    )
+      throw new Error('Host apply reservation is in progress; execution admission is blocked')
     if (workspace && !(await paths.within(workspace.path, cwd)))
       throw new Error(
         'Workspace cwd changed; restore the authoritative workspace path before submitting',
@@ -115,6 +133,12 @@ export function createWorkspaces(host: {
     const workspace = (await tx.doc(WorkspaceDoc, id)).workspace
     const queue = await tx.doc(LifecycleQueue)
     const blocked: TaskId[] = []
+    const apply = await hostApply(tx)
+    if (
+      apply &&
+      ((await paths.checkout(apply.source, cwd)) || (await paths.within(apply.path, cwd)))
+    )
+      blocked.push(apply.caller)
     for (const [child, tasks] of Object.entries(queue.children)) {
       if (!tasks.length) continue
       const other = (await tx.doc(WorkspaceDoc, Number(child) as ConversationId)).workspace
@@ -137,6 +161,7 @@ export function createWorkspaces(host: {
     operation: 'land' | 'discard',
     caller?: TaskId,
     current?: TaskId,
+    proving?: TaskId,
   ) {
     const allowed = new Set<TaskId>()
     let ancestor = caller
@@ -156,6 +181,15 @@ export function createWorkspaces(host: {
       throw new Error(`Workspace preparation is ${workspace.preparation}`)
     const rows = await records(tx)
     const paths = pathRelations()
+    const apply = await hostApply(tx)
+    if (
+      apply &&
+      apply.caller !== proving &&
+      ((await paths.checkout(apply.source, workspace.source)) ||
+        (await paths.within(apply.path, workspace.source)) ||
+        (await paths.within(apply.path, workspace.path)))
+    )
+      throw new Error('Host apply reservation is in progress; workspace mutation is blocked')
     if (operation === 'discard') {
       for (const row of rows) {
         const dependent = (await tx.doc(WorkspaceDoc, row.id)).workspace
@@ -256,6 +290,95 @@ export function createWorkspaces(host: {
       } while (cursor !== undefined)
     }
   }
+  async function verifyHostLanding(
+    id: ConversationId,
+    caller: TaskId,
+    cwd: string,
+    context: Context,
+  ) {
+    const workspace = await host.harness().commit(async (tx) => {
+      const row = await tx.conversation(id)
+      if (!row) throw new Error('Unknown conversation')
+      if (row.owner || row.parent)
+        throw new Error('Only a top-level main conversation can apply its landed workspace')
+      const own = (await tx.doc(WorkspaceDoc, id)).workspace
+      if (!own || own.state !== 'active' || own.preparation !== 'ready')
+        throw new Error('Host apply requires a ready, active own workspace')
+      const source = await realpath(own.source)
+      if (source !== (await realpath(host.ultimateRoot)))
+        throw new Error('Workspace destination is not the actual running Ultimate checkout')
+      if (own.targetBranch === null)
+        throw new Error('Workspace target was captured detached; host apply is unavailable')
+      if (!own.landed) throw new Error('Own workspace has not been landed into the host')
+      const paths = pathRelations()
+      const savedCwd = (await tx.doc(AgentDoc, id)).cwd
+      if (
+        !savedCwd ||
+        !(await paths.checkout(own.path, savedCwd)) ||
+        !(await paths.checkout(own.path, cwd))
+      )
+        throw new Error('Workspace cwd changed; restore the authoritative workspace checkout')
+      const apply = await hostApply(tx)
+      if (
+        apply &&
+        (apply.caller !== caller ||
+          apply.id !== id ||
+          apply.tip !== own.landed ||
+          apply.path !== own.path ||
+          apply.source !== source ||
+          apply.branch !== own.targetBranch)
+      )
+        throw new Error('Another or changed host apply reservation is in progress')
+      await guardTx(tx, id, id, 'land', caller, undefined, caller)
+      const queue = await tx.doc(LifecycleQueue)
+      const head = queue.checkouts[source]
+      if (head && head !== caller && (await tx.task(head))?.state.status !== 'terminal')
+        throw new Error('Host checkout has a pending workspace mutation; wait before apply')
+      let cursor: Cursor | undefined
+      do {
+        const page = await tx.scanTasks({}, 256, cursor)
+        for (const task of page.items) {
+          if (task.kind !== 'ultimate.workspace-lifecycle' || task.state.status === 'terminal')
+            continue
+          const other = (
+            await tx.doc(WorkspaceDoc, (task.input as { child: ConversationId }).child)
+          ).workspace
+          if (other && (await paths.canonical(other.source)) === source)
+            throw new Error('Host checkout has a pending workspace mutation; wait before apply')
+        }
+        cursor = page.next
+      } while (cursor !== undefined)
+      queue.hostApply ??= {
+        id,
+        caller,
+        source,
+        path: own.path,
+        branch: own.targetBranch,
+        tip: own.landed,
+      }
+      return { ...own }
+    }, context)
+    if (
+      (await worktree.git(workspace.path, 'symbolic-ref', '--short', 'HEAD')) !== workspace.branch
+    )
+      throw new Error('Workspace branch changed; reverify before host apply')
+    if (
+      (await worktree.git(workspace.source, 'symbolic-ref', '--short', 'HEAD')) !==
+      workspace.targetBranch
+    )
+      throw new Error('Target branch changed; restore the captured branch before host apply')
+    if (await worktree.git(workspace.path, 'status', '--porcelain'))
+      throw new Error('Own workspace is dirty; commit, verify and land before host apply')
+    if (await worktree.git(workspace.source, 'status', '--porcelain'))
+      throw new Error('Host checkout is dirty; host apply is unavailable')
+    const tip = await worktree.git(workspace.path, 'rev-parse', 'HEAD')
+    const sourceTip = await worktree.git(workspace.source, 'rev-parse', 'HEAD')
+    if (tip !== workspace.landed)
+      throw new Error('Own workspace tip is not the recorded landed tip; reverify and land first')
+    if (sourceTip !== tip)
+      throw new Error('Host source moved from the verified landed tip; reverify before host apply')
+    return { source: workspace.source, branch: workspace.targetBranch, tip }
+  }
   const lifecycleTask = lifecycle({
     ...host,
     guard: (child, parent, operation, caller, current, context) =>
@@ -322,7 +445,41 @@ export function createWorkspaces(host: {
       const ahead = await worktree
         .git(workspace.source, 'rev-list', '--count', `HEAD..${workspace.branch}`)
         .then(Number, () => null)
-      return { ...workspace, ahead }
+      const tip = await worktree.git(workspace.path, 'rev-parse', 'HEAD').catch(() => null)
+      const sourceTip = await worktree.git(workspace.source, 'rev-parse', 'HEAD').catch(() => null)
+      const currentBranch = await worktree
+        .git(workspace.path, 'symbolic-ref', '--short', 'HEAD')
+        .catch(() => null)
+      const sourceBranch = await worktree
+        .git(workspace.source, 'symbolic-ref', '--short', 'HEAD')
+        .catch(() => null)
+      return { ...workspace, ahead, tip, sourceTip, currentBranch, sourceBranch }
+    },
+    async proveHostLanding(id: ConversationId, caller: TaskId, cwd: string, context: Context) {
+      const harness = host.harness()
+      const release = (cleanup: Context) =>
+        harness.commit(async (tx) => {
+          const queue = await tx.doc(LifecycleQueue)
+          if (queue.hostApply?.caller === caller) delete queue.hostApply
+        }, cleanup)
+      try {
+        const proof = await verifyHostLanding(id, caller, cwd, context)
+        return {
+          ...proof,
+          recheck: (check: Context) => verifyHostLanding(id, caller, cwd, check),
+          checkpoint: (check: Context) =>
+            harness.commit(async (tx) => {
+              const apply = (await tx.doc(LifecycleQueue)).hostApply
+              if (!apply || apply.caller !== caller)
+                throw new Error('Host apply reservation was lost')
+              apply.handoff = true
+            }, check),
+          release,
+        }
+      } catch (error) {
+        await release(BACKGROUND_CONTEXT)
+        throw error
+      }
     },
     async describe(source: string, _agent: string, request: string): Promise<Workspace> {
       const name = worktree.requestName(request)
@@ -405,6 +562,11 @@ export function createWorkspaces(host: {
       const queue = await tx.doc(LifecycleQueue)
       if (request && queue.requests[request]) return queue.requests[request]
       const caller = ownership.kind === 'task' ? ownership.taskId : undefined
+      if (caller && parent === child && operation === 'land') {
+        const row = await tx.conversation(parent)
+        if (!row || row.owner || row.parent)
+          throw new Error('Only a top-level main conversation can land its own workspace')
+      }
       if (caller && parent === child && operation === 'discard')
         throw new Error('Cannot discard the active caller workspace')
       await guardTx(tx, child, parent, operation, caller)
@@ -481,6 +643,9 @@ export function createWorkspaces(host: {
           legacyParents.push(parent)
       }
       await harness.commit(async (tx) => {
+        const queue = await tx.doc(LifecycleQueue)
+        if (queue.hostApply && (await tx.task(queue.hostApply.caller))?.state.status === 'terminal')
+          delete queue.hostApply
         let cursor: Cursor | undefined
         do {
           const page = await tx.scanTasks({}, 256, cursor)

@@ -15,6 +15,18 @@ it('fails at factory initialization on absent or partial core service before cre
     {},
     { doc: {}, info: vi.fn<() => void>() },
     { doc: {}, runLifecycle: vi.fn<() => void>() },
+    {
+      doc: {},
+      info: vi.fn<() => void>(),
+      runLifecycle: vi.fn<() => void>(),
+      snapshot: vi.fn<() => void>(),
+    },
+    {
+      doc: {},
+      info: vi.fn<() => void>(),
+      runLifecycle: vi.fn<() => void>(),
+      createLifecycle: vi.fn<() => void>(),
+    },
   ]) {
     const host = { workspaces: service } as unknown as ExtensionHost
     expect(() => workspaceExtension(host)).toThrow('upgrade and restart the Ultimate core')
@@ -24,6 +36,8 @@ it('fails at factory initialization on absent or partial core service before cre
 it('validates ids and explicit discard confirmation, delegates info and lifecycle only to core', async () => {
   const service = {
     doc: {},
+    createLifecycle: vi.fn<() => void>(),
+    snapshot: vi.fn<() => void>(),
     info: vi.fn<(...args: unknown[]) => Promise<null>>().mockResolvedValue(null),
     runLifecycle: vi
       .fn<(...args: unknown[]) => Promise<{ ok: boolean }>>()

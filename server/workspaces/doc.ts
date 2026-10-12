@@ -23,6 +23,15 @@ export const LifecycleQueue = defineDoc<{
   children: Record<string, TaskId[]>
   requests: Record<string, TaskId<LifecycleResult>>
   creations: Record<string, { id: ConversationId; source: string }>
+  hostApply?: {
+    id: ConversationId
+    caller: TaskId
+    source: string
+    path: string
+    branch: string
+    tip: string
+    handoff?: boolean
+  }
 }>({
   kind: 'ultimate.workspace-queue',
   version: 1,

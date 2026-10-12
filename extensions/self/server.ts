@@ -1,13 +1,18 @@
 import { resolve } from 'node:path'
-import { awaitWithContext } from '@earendil-works/chord/context'
+import { awaitWithContext, BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 
 import type { ExtensionHost } from '../../server/extensions.ts'
 
-export default (host: ExtensionHost) =>
-  defineExtension({
+export default function self(host: ExtensionHost) {
+  const workspaces = host.workspaces
+  if (!workspaces?.doc || !workspaces.snapshot || !workspaces.proveHostLanding)
+    throw new Error(
+      'self requires core workspace landing proof; upgrade and restart the Ultimate core before loading this facet',
+    )
+  return defineExtension({
     name: 'self',
     sections: [
       section('self', (input) => {
@@ -26,9 +31,9 @@ export default (host: ExtensionHost) =>
           `The running host loads project config and extensions from ${host.projectRoot}/.ultimate/ and built-ins from ${host.ultimateRoot}/extensions/. These are host-scoped, not switched by your work cwd.`,
           `Before changing Ultimate, read ${sourceRoot}/AGENTS.md (layers, reloads, durability) and ${sourceRoot}/extensions/README.md (new UI is a new extension folder).`,
           isolated
-            ? 'You are working in a separate checkout from the running host. Isolated edits do not hot-reload the host. Preview and verify this checkout separately; land changes for the host to pick them up. The restart tool is unavailable from this cwd.'
+            ? 'You are working in a separate checkout from the running host. Isolated edits do not hot-reload the host. Preview and verify this checkout separately. The restart tool is unavailable from this cwd with unlanded work: only a top-level main with a clean, unchanged own tip proven finally landed into the actual running Ultimate checkout may deliberately call restart with applyHost: true.'
             : 'UI and extension changes in the running host reload live. Call restart only after editing server/ or shared/, never for web/, extensions/, or agents/.',
-          'Restart swaps the shared Ultimate host for all conversations, not just your checkout. Landing changes does not automatically restart it; leave any required host restart to the coordinator or user.',
+          'Restart swaps the shared Ultimate host for all conversations, not just your checkout. Landing changes does not automatically restart it. Apply only when required and authorized; honor supervisor-owned rollout and leave any restricted host restart to the coordinator or user. Report the apply blocker, never claim completion at an intermediate workspace.',
         ].join('\n')
       }),
     ],
@@ -36,12 +41,20 @@ export default (host: ExtensionHost) =>
       defineTool({
         name: 'restart',
         description:
-          'Restart the shared Ultimate host for all conversations after changes to server/ or shared/. Only available from the host project cwd; not needed for web/, extensions/, or agents/.',
-        parameters: Type.Object({}),
+          'Restart the shared Ultimate host for all conversations after changes to server/ or shared/. From an isolated main, deliberately set applyHost: true only after verified final own landing into the running Ultimate checkout. Requires authorization; not needed for web/, extensions/, or agents/.',
+        parameters: Type.Object({
+          applyHost: Type.Optional(
+            Type.Boolean({
+              description:
+                'Intentional shared-host apply after proven final own landing; honor supervisor-owned rollout.',
+            }),
+          ),
+        }),
         replay: 'safe',
-        async execute(_args, api, context): Promise<ToolExecutionResult> {
+        async execute(args, api, context): Promise<ToolExecutionResult> {
           const cwd = api.env?.cwd ?? (await api.agent(context)).cwd ?? host.projectRoot
-          if (resolve(cwd) !== resolve(host.projectRoot)) {
+          const own = await workspaces.snapshot(api.conversationId, context)
+          if ((own || resolve(cwd) !== resolve(host.projectRoot)) && args.applyHost !== true) {
             const error = `Restart refused: your cwd (${cwd}) is not the host project (${host.projectRoot}). Restart affects the shared Ultimate host for all conversations, not this checkout. Preview and verify your checkout separately; leave any host restart after landing to the coordinator or user.`
             return {
               isError: true,
@@ -49,71 +62,99 @@ export default (host: ExtensionHost) =>
               content: [{ type: 'text', text: error }],
             }
           }
-          const key = `restart:${api.taskId}`
-          const done = await api.memo<{
-            generation: number
-            fromGeneration: number
-            build: string
-          }>(key, context)
-          if (done && Number(process.env.ULTIMATE_GENERATION) !== done.generation)
+          let proof: Awaited<ReturnType<typeof workspaces.proveHostLanding>> | undefined
+          let handedOff = false
+          try {
+            if (own || args.applyHost === true) {
+              try {
+                proof = await workspaces.proveHostLanding(
+                  api.conversationId,
+                  api.taskId,
+                  cwd,
+                  context,
+                )
+              } catch (error) {
+                const message = `Restart refused: ${error instanceof Error ? error.message : String(error)}. Restart affects the shared Ultimate host for all conversations; honor supervisor-owned rollout.`
+                return {
+                  isError: true,
+                  details: { refused: true, error: message },
+                  content: [{ type: 'text', text: message }],
+                }
+              }
+            }
+            const key = `restart:${api.taskId}`
+            const done = await api.memo<{
+              generation: number
+              fromGeneration: number
+              build: string
+            }>(key, context)
+            if (done && Number(process.env.ULTIMATE_GENERATION) !== done.generation)
+              return {
+                isError: true,
+                details: {
+                  fromGeneration: done.fromGeneration,
+                  toGeneration: Number(process.env.ULTIMATE_GENERATION),
+                  fromBuild: done.build,
+                  toBuild: host.build().id,
+                  rolledBack: true,
+                  error: host.system().process.activationError ?? 'Activation failed',
+                },
+                content: [
+                  {
+                    type: 'text',
+                    text: `Restart failed during activation; rolled back to generation ${process.env.ULTIMATE_GENERATION}. ${host.system().process.activationError ?? ''}`,
+                  },
+                ],
+              }
+            if (done)
+              return {
+                details: {
+                  fromGeneration: done.fromGeneration,
+                  toGeneration: done.generation,
+                  fromBuild: done.build,
+                  toBuild: host.build().id,
+                },
+                content: [
+                  {
+                    type: 'text',
+                    text: `Restarted. Now running generation ${process.env.ULTIMATE_GENERATION ?? done.generation} (pid ${process.pid}), build ${done.build} → ${host.build().id}.`,
+                  },
+                ],
+              }
+            const error = await awaitWithContext(
+              host.restart(async (generation) => {
+                await proof?.recheck(context)
+                await proof?.checkpoint(context)
+                await api.memo(
+                  key,
+                  {
+                    generation,
+                    fromGeneration: Number(process.env.ULTIMATE_GENERATION ?? 1),
+                    build: host.build().id,
+                  },
+                  context,
+                )
+                handedOff = true
+              }),
+              context,
+            )
+            handedOff = false
             return {
               isError: true,
               details: {
-                fromGeneration: done.fromGeneration,
-                toGeneration: Number(process.env.ULTIMATE_GENERATION),
-                fromBuild: done.build,
+                fromGeneration: Number(process.env.ULTIMATE_GENERATION ?? 1),
+                toGeneration: Number(process.env.ULTIMATE_GENERATION ?? 1),
+                fromBuild: host.build().id,
                 toBuild: host.build().id,
-                rolledBack: true,
-                error: host.system().process.activationError ?? 'Activation failed',
+                error,
               },
-              content: [
-                {
-                  type: 'text',
-                  text: `Restart failed during activation; rolled back to generation ${process.env.ULTIMATE_GENERATION}. ${host.system().process.activationError ?? ''}`,
-                },
-              ],
+              content: [{ type: 'text', text: error }],
             }
-          if (done)
-            return {
-              details: {
-                fromGeneration: done.fromGeneration,
-                toGeneration: done.generation,
-                fromBuild: done.build,
-                toBuild: host.build().id,
-              },
-              content: [
-                {
-                  type: 'text',
-                  text: `Restarted. Now running generation ${process.env.ULTIMATE_GENERATION ?? done.generation} (pid ${process.pid}), build ${done.build} → ${host.build().id}.`,
-                },
-              ],
-            }
-          const error = await awaitWithContext(
-            host.restart(async (generation) => {
-              await api.memo(
-                key,
-                {
-                  generation,
-                  fromGeneration: Number(process.env.ULTIMATE_GENERATION ?? 1),
-                  build: host.build().id,
-                },
-                context,
-              )
-            }),
-            context,
-          )
-          return {
-            isError: true,
-            details: {
-              fromGeneration: Number(process.env.ULTIMATE_GENERATION ?? 1),
-              toGeneration: Number(process.env.ULTIMATE_GENERATION ?? 1),
-              fromBuild: host.build().id,
-              toBuild: host.build().id,
-              error,
-            },
-            content: [{ type: 'text', text: error }],
+          } finally {
+            if (proof && !handedOff) await proof.release(BACKGROUND_CONTEXT)
           }
         },
       }),
     ],
   })
+}
