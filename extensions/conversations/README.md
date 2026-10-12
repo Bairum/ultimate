@@ -89,9 +89,21 @@ visible context; queued/new input, reset, compaction or superseding work prevent
 manual ownership, completed-exchange count, last yield/answer, reset revision, pending task id, an owed-summary flag,
 assessment status, stamped assessment and bounded activity. Its latest state
 survives facet reloads and process restarts; an unfinished durable task resumes, with a memoized response reused once
-stored. A crash before the response is memoized can repeat the request. Generated titles use `ultimate.metadata` and
-can update. HTTP submit marks a newly created first-input fallback with `ultimate.metadata.titleSource: 'input'`
-in the same transaction that creates the title; it never marks an existing title. Generated replacements and explicit
+stored. A crash before the response is memoized can repeat the request.
+
+Helper usage is **settles-only**, not live telemetry: each received response is memoized before JSON validation,
+then its reported usage is added to the task-owning conversation's public `pi.usage.models[provider/model]` in the
+same transaction that settles the task. A child's usage stays in its own ledger, not the root. Combined and
+assessment-only replies, malformed/provider-error replies, and stale/aborted results with saved receipts are accounted
+independently of UI freshness. Other model buckets are preserved. Reported optional `cacheWrite1h` and `reasoning`
+counters and every cost component are summed; reasoning is already a subset of output and is not added again to
+`totalTokens`. Reopen/replay reuses a saved receipt without another charge; a genuinely new retry response counts
+separately. Missing usage is never estimated, partial stream counters are not accumulated, and old conversations are
+not backfilled. Receipt loss/crash before durable capture can repeat a remotely billed request; this is **not remote
+exactly-once billing** and cannot reconstruct unreported spend.
+
+Generated titles use `ultimate.metadata` and can update. HTTP submit marks a newly created first-input fallback with
+`ultimate.metadata.titleSource: 'input'` in the same transaction that creates the title; it never marks an existing title. Generated replacements and explicit
 renames clear that marker atomically. Accepting an unchanged title in the rename field still takes manual ownership.
 Unmarked/preexisting metadata titles are never inferred to be fallbacks or replaced, even when they equal the first
 input; there is no historical backfill. A blank rename removes metadata
