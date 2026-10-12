@@ -671,9 +671,11 @@ function Far({ agent, feed }: { agent: Agent; feed?: CanvasAgent }) {
           {conclusion?.stale && <span className="text-muted-foreground">· outdated</span>}
           <span className="ml-auto font-mono text-muted-foreground/70">#{agent.id}</span>
         </div>
+        {/* A card without a conclusion is smaller: it holds one line of title. */}
         <p
           className={cn(
-            'mt-1 line-clamp-2 shrink-0 text-[30px] leading-tight font-medium break-words',
+            'mt-1 shrink-0 text-[30px] leading-tight font-medium break-words',
+            conclusion ? 'line-clamp-2' : 'line-clamp-1',
             conclusion?.stale && 'opacity-60',
           )}
         >

@@ -20,7 +20,7 @@ import type {
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { conclusionBehavior, watchConclusions } from './conclusion.ts'
-import { Canvas, Conclusions } from './documents.ts'
+import { ARCHIVED, archivedIds, Canvas, Conclusions } from './documents.ts'
 import { active, applyAgent, applyEntry, applyLive, applyUsage, newFeed } from './feed.ts'
 import type { Feed, Place } from './feed.ts'
 
@@ -46,10 +46,6 @@ const AGENTS = 150
 const SCAN = 48
 /** Conversations rebuilt per transaction. */
 const BATCH = 16
-const ARCHIVED = 'ext.conversations.archived'
-
-const archivedIds = (value: JsonValue | undefined) =>
-  new Set(Array.isArray(value) ? value.filter((id) => typeof id === 'number') : [])
 
 /** Rebuild a row from the newest stored entries and the live state. */
 async function rebuild(tx: Tx, id: ConversationId, place: Place) {

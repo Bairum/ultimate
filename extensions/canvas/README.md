@@ -142,10 +142,12 @@ A tree is a top-level conversation and every conversation it owns (subagents, at
 it). The server follows commits and, about 300 ms after something touches a tree (an answer, a tool result, a run
 starting or ending, queued input, a Luna assessment or overview row, a landed or removed checkout), evaluates it.
 When the facet opens or reloads, it evaluates every non-archived tree, so decisions show for trees that settled before
-it ran, without new work:
+it ran, without new work, and drops the `trees` entries of trees that are not on the map. Archiving a tree drops its
+entry and calls off a pending conclusion; unarchiving evaluates it again, which brings back its decision and its stored
+conclusion. So `trees` holds only non-archived trees with a decision or a conclusion.
 
 - **Active**: a run, queued input, or a Luna assessment still coming. Its decision clears, a pending conclusion is
-  called off, and its conclusion turns `stale` when there is work newer than it.
+  called off, and its conclusion turns `stale` until the tree settles again without newer work.
 - **Settled with a decision**: the reasons go into `trees[id].decision`, and no conclusion is made. `needs_input` is
   Luna's current assessment of a conversation's latest answer; a subagent's counts only while its owner has not
   answered since (its question was for the coordinator). `unlanded` comes from Git at evaluation time: a ready
@@ -158,15 +160,15 @@ it ran, without new work:
   `pending` mark and it ends without a word. Without Luna nothing is started and nothing is shown.
 
 Conclusions are never backfilled: a tree that settled before the facet ran gets its decision, not a conclusion, until
-it works again. The task collects, from the stored entries of every
-conversation in the tree:
+it works again. The task collects, from the stored entries of every conversation in the tree, read a page at a time
+and newest first without holding them (a tool result's text waits only until its call is read):
 
 - commits from `git commit` output in bash results (`[branch sha] subject`), and the commits of `workspace` and
   `subagent` land results, marked landed;
 - pushed, when a bash `git push` succeeded;
 - files: the paths of successful edits and writes, and landed paths;
-- subagents with their roles; the duration from the first message to the last; the last screenshot (`screenshot` or
-  `browser` image).
+- subagents with their roles; the duration from the first message to the last; the tree's newest screenshot
+  (`screenshot` or `browser` image), kept as a reference until the thumbnail is made.
 
 Luna reads each conversation's visible text (the top-level one's last 8000 characters, a share of 6000 for the
 subagents), as source text, never instructions, plus the artifact list, and returns `headline`, `summary` (2–4

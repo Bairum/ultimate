@@ -122,6 +122,9 @@ function bounds(boxes: { point: Point; size: Size }[]) {
   return { x: left, y: top, width: right - left, height: bottom - top }
 }
 
+/** What an agent's edge shows: its state, and whether its parent waits on it. */
+type Line = Pick<Agent, 'id' | 'parent' | 'archived' | 'status'> & { flowing: boolean }
+
 /** What the camera, the commands and callbacks read: this render's state, without re-subscribing. */
 type Latest = {
   byId: ReadonlyMap<number, Agent>
@@ -377,33 +380,44 @@ export function CanvasMap() {
 
   /** Per parent-child edge: whether the parent waits on the working child, and when its last wait ended. */
   const flows = useRef(new Map<string, { flowing: boolean; answered: number }>())
+  // The edges change with the tree, its states and who waits on whom, not with every streamed row.
+  const lines = JSON.stringify(
+    agents.map((agent): Line => ({
+      id: agent.id,
+      parent: agent.parent,
+      archived: agent.archived,
+      status: agent.status,
+      flowing:
+        agent.parent !== undefined &&
+        (agent.status === 'working' || agent.status === 'waiting') &&
+        feed.agents[agent.parent]?.waitingOn?.includes(agent.id) === true,
+    })),
+  )
   const edges = useMemo(
     () =>
-      agents.map((agent): HubEdge | FlowEdge => {
-        if (agent.parent === undefined)
+      (JSON.parse(lines) as Line[]).map((line): HubEdge | FlowEdge => {
+        if (line.parent === undefined)
           return {
-            id: `hub-${agent.id}`,
+            id: `hub-${line.id}`,
             source: 'hub',
-            target: String(agent.id),
+            target: String(line.id),
             type: 'hub',
-            data: { archived: agent.archived },
+            data: { archived: line.archived },
           }
-        const id = `${agent.parent}-${agent.id}`
-        const flowing =
-          (agent.status === 'working' || agent.status === 'waiting') &&
-          feed.agents[agent.parent]?.waitingOn?.includes(agent.id) === true
+        const id = `${line.parent}-${line.id}`
+        const { flowing } = line
         const before = flows.current.get(id)
         const answered = before?.flowing && !flowing ? Date.now() : (before?.answered ?? 0)
         flows.current.set(id, { flowing, answered })
         return {
           id,
-          source: String(agent.parent),
-          target: String(agent.id),
+          source: String(line.parent),
+          target: String(line.id),
           type: 'flow',
-          data: { status: agent.status, flowing, answered },
+          data: { status: line.status, flowing, answered },
         }
       }),
-    [agents, feed.agents],
+    [lines],
   )
 
   // Camera.
@@ -518,11 +532,12 @@ export function CanvasMap() {
     )
   }, [targets, settled, flow])
   // The first layout: the stored viewport, else everything; a deep-linked conversation eases into view.
+  const [stored] = useState(storedViewport)
   const placed = useRef(false)
   useEffect(() => {
     if (!loaded || placed.current || !width) return
     placed.current = true
-    if (!storedViewport()) fitAll(0)
+    if (!stored) fitAll(0)
     if (shown !== undefined) show(shown)
   })
   // The selection follows the shown conversation; the camera follows the selection.
@@ -708,7 +723,7 @@ export function CanvasMap() {
         tabIndex={-1}
       >
         <ReactFlow
-          defaultViewport={storedViewport() ?? { x: 0, y: 0, zoom: 0.8 }}
+          defaultViewport={stored ?? { x: 0, y: 0, zoom: 0.8 }}
           deleteKeyCode={null}
           disableKeyboardA11y
           edgeTypes={edgeTypes}

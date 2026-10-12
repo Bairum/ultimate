@@ -16,7 +16,6 @@ import type {
   ConversationId,
   Cursor,
   EntryId,
-  EntryRecord,
   Tx,
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -33,13 +32,12 @@ import { git } from '../workspaces/git.ts'
 import type { LandResult, Workspace } from '../workspaces/types.ts'
 import { Workspaces } from '../workspaces/workspaces.ts'
 import { Overview } from '../conversations/overview.ts'
-import { Canvas, Conclusions } from './documents.ts'
+import { ARCHIVED, archivedIds, Canvas, Conclusions } from './documents.ts'
 import { shorten } from './feed.ts'
 import type { CanvasConclusion, CanvasReason, Conclusion, ConclusionCommit } from './types.ts'
 
 /** How long a settled tree stays quiet before it concludes (ms). `ULTIMATE_CANVAS_QUIET_MS` is only for tests. */
 const quiet = () => Number(process.env.ULTIMATE_CANVAS_QUIET_MS) || 30_000
-const ARCHIVED = 'ext.conversations.archived'
 /** Changes are gathered this long (ms) before the trees they touch are evaluated. */
 const SETTLE = 300
 /** Entries that are work: a message, an answer or a tool result; titles, summaries and compactions are not. */
@@ -76,27 +74,22 @@ async function topOf(tx: Tx, id: ConversationId) {
   }
 }
 
-/** Every entry the conversation made itself, oldest first: a fork's inherited history is left out. */
-async function ownEntries(
+/** Each page of the entries the conversation made itself, newest first: a fork's inherited history is left out. */
+async function* ownPages(
   host: Pick<ExtensionHost, 'harness'>,
   id: ConversationId,
   caller: Context,
 ) {
-  const entries: EntryRecord[] = []
   let cursor: Cursor | undefined
-  let done = false
   do {
     const page = await host
       .harness()
       .commit((tx) => tx.scanEntries({ conversationId: id }, 128, cursor), caller)
-    for (const entry of page.items) {
-      done = entry.conversationId !== id
-      if (done) break
-      entries.push(entry)
-    }
+    const own = page.items.filter((entry) => entry.conversationId === id)
+    yield own
+    if (own.length < page.items.length) return
     cursor = page.next
-  } while (!done && cursor !== undefined)
-  return entries.toReversed()
+  } while (cursor !== undefined)
 }
 
 /** The newest work entry and the newest answer the conversation made itself; 0 when none. */
@@ -138,8 +131,10 @@ async function unlandedCommits(workspace: Workspace) {
 
 const textOf = (message: ToolResultMessage) =>
   message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n')
-const stringArg = (args: Record<string, JsonValue> | undefined, key: string) =>
-  typeof args?.[key] === 'string' ? args[key] : ''
+const stringArg = (args: Record<string, JsonValue>, key: string) =>
+  typeof args[key] === 'string' ? args[key] : ''
+/** Tools whose results show artifacts, once their calls say what they did. */
+const COUNTED = new Set(['bash', 'workspace', 'subagent', 'edit', 'write'])
 
 /** What a tree produced, read deterministically from its stored entries. */
 export type Artifacts = {
@@ -148,13 +143,17 @@ export type Artifacts = {
   files: string[]
   subagents: { id: number; label?: string }[]
   duration: number
-  /** The newest screenshot: its tool result entry and the image's index in its content. */
+  /** The newest screenshot of the tree: its tool result entry and the image's index in its content. */
   screenshot?: { entry: number; index: number }
   /** The newest work entry of the tree. */
   through: number
 }
 
-/** Collect a tree's artifacts and Luna's input: each conversation's visible text, then the artifact list. */
+/**
+ * Collect a tree's artifacts and Luna's input: each conversation's visible text, then the artifact list. Entries are
+ * read a page at a time, newest first, and never held: a result's text waits only until its call is read, and of the
+ * screenshots only the newest one's place is kept.
+ */
 async function collect(
   host: Pick<ExtensionHost, 'harness' | 'metadata' | 'userHome'>,
   /** The conversation's model context, whose visible text Luna reads. */
@@ -190,56 +189,74 @@ async function collect(
       cwd: (await harness.snapshot(AgentDoc, id, caller))?.cwd ?? '',
       home: host.userHome,
     }
-    const calls = new Map<string, { name: string; args: Record<string, JsonValue> }>()
-    for (const entry of await ownEntries(host, id, caller)) {
-      const message = entry.model?.[0]
-      if (WORK.has(entry.kind)) {
-        through = Math.max(through, entry.id)
-        ended = Math.max(ended, message?.timestamp ?? 0)
-      }
-      if (entry.kind === 'pi.user' && id === top) started ??= message?.timestamp
-      if (AssistantEntry.is(entry) && message?.role === 'assistant') {
-        for (const part of message.content)
-          if (part.type === 'toolCall')
-            calls.set(part.id, {
-              name: part.name,
-              args: part.arguments as Record<string, JsonValue>,
-            })
-      }
-      if (!ToolResultEntry.is(entry) || message?.role !== 'toolResult') continue
-      const call = calls.get(message.toolCallId)
-      const name = call?.name ?? message.toolName
-      if (name === 'bash') {
-        const command = stringArg(call?.args, 'command')
-        // A commit counts even when a later command in the chain failed.
-        if (/\bgit\b.*\bcommit\b/.test(command))
-          for (const [, branch, sha, subject] of textOf(message).matchAll(COMMIT))
-            add({ sha, subject, branch })
-        if (/\bgit\b.*\bpush\b/.test(command) && !message.isError) pushed = true
-      } else if (
-        (name === 'workspace' || name === 'subagent') &&
-        stringArg(call?.args, 'action') === 'land' &&
-        !message.isError
-      ) {
-        let result: LandResult | undefined
-        try {
-          result = JSON.parse(textOf(message)) as LandResult
-        } catch {
-          result = undefined
+    /** Results read before their calls: whether each failed, and its text until its call is read. */
+    const results = new Map<string, { isError: boolean; text: string }>()
+    /** The commits and changed paths of each call, newest first. */
+    const produced: { commits: ConclusionCommit[]; paths: string[] }[] = []
+    for await (const page of ownPages(host, id, caller))
+      for (const entry of page) {
+        const message = entry.model?.[0]
+        if (WORK.has(entry.kind)) {
+          through = Math.max(through, entry.id)
+          ended = Math.max(ended, message?.timestamp ?? 0)
         }
-        for (const line of result?.commits ?? []) {
-          const [sha, ...subject] = line.split(' ')
-          add({ sha, subject: subject.join(' '), landed: true })
-        }
-        for (const path of result?.paths ?? []) files.add(path)
-      } else if ((name === 'edit' || name === 'write') && !message.isError) {
-        const path = stringArg(call?.args, 'path')
-        if (path) files.add(shorten(path, place))
+        // Newest first: the last user message read is the first one.
+        if (entry.kind === 'pi.user' && id === top) started = message?.timestamp ?? started
+        if (ToolResultEntry.is(entry) && message?.role === 'toolResult') {
+          const name = message.toolName
+          if (
+            (name === 'screenshot' || name === 'browser') &&
+            !message.isError &&
+            entry.id > (screenshot?.entry ?? 0)
+          ) {
+            const index = message.content.findLastIndex((part) => part.type === 'image')
+            if (index >= 0) screenshot = { entry: entry.id, index }
+          }
+          if (COUNTED.has(name))
+            results.set(message.toolCallId, { isError: message.isError, text: textOf(message) })
+        } else if (AssistantEntry.is(entry) && message?.role === 'assistant')
+          for (const part of message.content) {
+            if (part.type !== 'toolCall') continue
+            const result = results.get(part.id)
+            if (!result) continue
+            results.delete(part.id)
+            const args = part.arguments as Record<string, JsonValue>
+            const made: ConclusionCommit[] = []
+            const paths: string[] = []
+            if (part.name === 'bash') {
+              const command = stringArg(args, 'command')
+              // A commit counts even when a later command in the chain failed.
+              if (/\bgit\b.*\bcommit\b/.test(command))
+                for (const [, branch, sha, subject] of result.text.matchAll(COMMIT))
+                  made.push({ sha, subject, branch })
+              if (/\bgit\b.*\bpush\b/.test(command) && !result.isError) pushed = true
+            } else if (
+              (part.name === 'workspace' || part.name === 'subagent') &&
+              stringArg(args, 'action') === 'land' &&
+              !result.isError
+            ) {
+              let landed: LandResult | undefined
+              try {
+                landed = JSON.parse(result.text) as LandResult
+              } catch {
+                landed = undefined
+              }
+              for (const line of landed?.commits ?? []) {
+                const [sha, ...subject] = line.split(' ')
+                made.push({ sha, subject: subject.join(' '), landed: true })
+              }
+              paths.push(...(landed?.paths ?? []))
+            } else if ((part.name === 'edit' || part.name === 'write') && !result.isError) {
+              const path = stringArg(args, 'path')
+              if (path) paths.push(shorten(path, place))
+            }
+            if (made.length || paths.length) produced.push({ commits: made, paths })
+          }
       }
-      if ((name === 'screenshot' || name === 'browser') && !message.isError) {
-        const index = message.content.findLastIndex((part) => part.type === 'image')
-        if (index >= 0) screenshot = { entry: entry.id, index }
-      }
+    // Oldest first, as they happened.
+    for (const { commits: made, paths } of produced.toReversed()) {
+      for (const commit of made) add(commit)
+      for (const path of paths) files.add(path)
     }
     const view = await transcript(id, caller)
     const heading =
@@ -478,7 +495,8 @@ function indexKeys(
  * needs a decision; with none, and work newer than its last conclusion, it starts the task that concludes it after the
  * quiet. Decisions are evaluated for every tree on the map when the facet opens, so ones recorded before (or never)
  * show without new work; a conclusion is never backfilled: only a tree that worked since then, or that waited for a
- * decision or worked past its conclusion, gets one.
+ * decision or worked past its conclusion, gets one. The document keeps entries only for trees on the map: archiving a
+ * tree drops its entry, and unarchiving brings back its decision and stored conclusion.
  */
 export function watchConclusions(
   host: Pick<
@@ -499,6 +517,8 @@ export function watchConclusions(
   const touched = new Map<ConversationId, boolean>()
   /** Trees that worked while this process ran; kept across reloads of the facet. */
   const worked = host.resource('canvas.worked', () => new Set<ConversationId>())
+  let archived = new Set<number>()
+  let archiveChanges = 0
   let timer: ReturnType<typeof setTimeout> | undefined
   let stop: (() => void) | undefined
   let closed = true
@@ -506,6 +526,16 @@ export function watchConclusions(
 
   const evaluate = async (top: ConversationId) => {
     const harness = host.harness()
+    if (archived.has(top)) {
+      // An archived tree leaves the map, with any conclusion still coming; unarchived, it is evaluated anew.
+      const pending = (await harness.snapshot(Conclusions, top, context))?.pending
+      await harness.commit(async (tx) => {
+        const { trees } = await tx.doc(Canvas, ROOT_CONVERSATION_ID)
+        if (Object.hasOwn(trees, String(top))) delete trees[String(top)]
+        if (pending !== undefined) delete (await tx.doc(Conclusions, top)).pending
+      }, context)
+      return
+    }
     const { owners, answers, active, newest } = await harness.commit(async (tx) => {
       const read = {
         owners: await membersOf(tx, top),
@@ -563,16 +593,21 @@ export function watchConclusions(
         }
       const { trees } = await tx.doc(Canvas, ROOT_CONVERSATION_ID)
       const key = String(top)
+      // Back on the map, as after unarchiving: its last conclusion shows again.
+      if (saved?.conclusion && !trees[key]?.conclusion) {
+        trees[key] ??= {}
+        trees[key].conclusion = brief(saved.conclusion)
+      }
       const tree = trees[key]
       // A tree that waited for a decision, or worked past its conclusion, may conclude without new work.
       const owed =
         worked.has(top) || tree?.decision !== undefined || tree?.conclusion?.stale === true
-      if (
-        tree?.conclusion &&
-        !tree.conclusion.stale &&
-        (!settled || newest > tree.conclusion.through)
-      )
-        tree.conclusion.stale = true
+      if (tree?.conclusion) {
+        // Outdated by activity; current again once the tree settles without newer work.
+        const stale = !settled || newest > tree.conclusion.through
+        if (stale && !tree.conclusion.stale) tree.conclusion.stale = true
+        else if (!stale && tree.conclusion.stale) delete tree.conclusion.stale
+      }
       if (reasons.length) {
         if (JSON.stringify(tree?.decision?.reasons) !== JSON.stringify(reasons)) {
           trees[key] ??= {}
@@ -653,12 +688,21 @@ export function watchConclusions(
         )
           touch(change.conversationId, true)
         else if (kind === Summaries.definition.kind) touch(change.conversationId, false)
-        // An assessment that changes, or a checkout that lands or goes away, may settle the decision of its tree.
-        else if (kind === Overview.definition.kind)
+        // An assessment that changes, or a checkout that lands or goes away, may settle the decision of its tree. An
+        // overview replaced whole (created, or rebuilt at once on open) names every conversation: the open pass and
+        // the summaries' own changes cover those.
+        else if (kind === Overview.definition.kind && change.ops.every((op) => op[0] !== 'r'))
           for (const id of indexKeys(change, 'conversations'))
             touch(Number(id) as ConversationId, false)
         else if (kind === Workspaces.definition.kind)
           for (const id of indexKeys(change, 'items')) touch(Number(id) as ConversationId, false)
+        // Archiving takes a tree off the map; unarchiving puts it back.
+        else if (kind === 'ultimate.ui' && change.conversationId === ROOT_CONVERSATION_ID) {
+          const next = archivedIds(change.value?.[ARCHIVED])
+          for (const id of next.symmetricDifference(archived)) touch(id as ConversationId, false)
+          archived = next
+          archiveChanges++
+        }
       }
     }
   }
@@ -667,22 +711,23 @@ export function watchConclusions(
     closed = false
     tops.clear()
     stop = host.harness().subscribeCommits(listen)
-    // Every tree on the map shows what it waits for, including ones settled before this facet ran.
-    const archived = (await host.uiState(context))[ARCHIVED]
+    const changes = archiveChanges
+    const ui = await host.uiState(context)
+    if (changes === archiveChanges) archived = archivedIds(ui[ARCHIVED])
+    // Every tree on the map shows what it waits for, including ones settled before this facet ran; the entries of
+    // trees that are not on the map, such as ones archived meanwhile, go.
     const roots = await host.harness().commit(async (tx) => {
-      const found: ConversationId[] = []
+      const found = new Set<ConversationId>()
       let cursor: Cursor | undefined
       do {
         const page = await tx.scanConversations({}, 256, cursor)
         for (const record of page.items)
-          if (
-            !record.owner &&
-            !record.parent &&
-            !(Array.isArray(archived) && archived.includes(record.id))
-          )
-            found.push(record.id)
+          if (!record.owner && !record.parent && !archived.has(record.id)) found.add(record.id)
         cursor = page.next
       } while (cursor !== undefined)
+      const { trees } = await tx.doc(Canvas, ROOT_CONVERSATION_ID)
+      for (const key of Object.keys(trees))
+        if (!found.has(Number(key) as ConversationId)) delete trees[key]
       return found
     }, context)
     for (const id of roots) touch(id, false)

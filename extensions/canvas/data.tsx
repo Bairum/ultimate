@@ -129,10 +129,14 @@ export function useConclusion(id: number, at: number | undefined) {
     if (at === undefined) return undefined
     let known = conclusions.get(id)
     if (known?.at !== at) {
-      known = {
-        at,
-        value: api.action<Conclusion | null>('canvas', 'conclusion', { id }).catch(() => null),
-      }
+      const request: Promise<Conclusion | null> = api
+        .action<Conclusion | null>('canvas', 'conclusion', { id })
+        .catch(() => {
+          // A failed fetch is not kept: the card asks again when it next shows.
+          if (conclusions.get(id)?.value === request) conclusions.delete(id)
+          return null
+        })
+      known = { at, value: request }
       conclusions.set(id, known)
     }
     let current = true

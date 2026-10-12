@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { crc32, deflateSync } from 'node:zlib'
+import type { Context } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
 import type { AssistantMessage, JsonObject, Models } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -13,7 +14,13 @@ import {
   ROOT_CONVERSATION_ID,
   UsageDoc,
 } from '@earendil-works/pi-durable'
-import type { ConversationId } from '@earendil-works/pi-durable'
+import type {
+  ConversationId,
+  Cursor,
+  EntryQuery,
+  EntryRecord,
+  Tx,
+} from '@earendil-works/pi-durable'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -240,6 +247,56 @@ const conclusionTasks = (server: Server) =>
     context,
   )
 const quietly = () => new Promise((done) => setTimeout(done, 1600))
+const archive = (server: Server, ids: number[]) =>
+  post(server, '/api/ui', { set: { 'ext.conversations.archived': ids } })
+
+/** A member of `target`, bound to it, for a proxy to pass on. */
+function bound(target: object, key: string | symbol) {
+  const value: unknown = Reflect.get(target, key, target)
+  return typeof value === 'function' ? value.bind(target) : value
+}
+
+/**
+ * The harness, with entry scans three entries a page; `late` lists entries whose content was read after the next page
+ * of a scan was asked for, that is, entries held past their page.
+ */
+function paging(harness: Server['harness']) {
+  const late = new Set<number>()
+  let pages = 0
+  let page: EntryRecord[] = []
+  const paged = (tx: Tx) =>
+    new Proxy(tx, {
+      get: (target, key) =>
+        key !== 'scanEntries'
+          ? bound(target, key)
+          : async (query: EntryQuery, _limit: number, cursor?: Cursor) => {
+              for (const entry of page) {
+                const { model } = entry
+                Object.defineProperty(entry, 'model', {
+                  get: () => {
+                    late.add(entry.id)
+                    return model
+                  },
+                })
+              }
+              const next = await target.scanEntries(query, 3, cursor)
+              pages++
+              page = [...next.items]
+              return next
+            },
+    })
+  return {
+    late,
+    pages: () => pages,
+    harness: new Proxy(harness, {
+      get: (target, key) =>
+        key !== 'commit'
+          ? bound(target, key)
+          : (change: (tx: Tx) => unknown, caller: Context) =>
+              target.commit((tx) => change(paged(tx)), caller),
+    }),
+  }
+}
 const call = (name: string, args: JsonObject) =>
   fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: 'toolUse' })
 
@@ -516,6 +573,133 @@ it('marks the conclusion stale on new work, and the next quiet replaces it', asy
   expect(second.at).toBeGreaterThan(first.at)
   expect(fixture.generated).toHaveBeenCalledTimes(2)
   expect(fixture.generated.mock.calls[1][1]).toContain('user: Second')
+}, 90000)
+
+it('concludes a tree with many screenshots a page at a time, keeping only the newest screenshot', async () => {
+  const fixture = await launch({ repository: true })
+  const { server } = fixture
+  // Each screenshot is one pixel wider than the one before, so the thumbnail tells which one it shows.
+  let shots = 0
+  const registry = server.host.registry
+  registry.install(
+    defineExtension({
+      name: 'test-screenshot',
+      tools: [
+        defineTool({
+          name: 'screenshot',
+          description: 'Screenshot the UI',
+          parameters: Type.Object({}),
+          execute: async () => ({
+            content: [
+              {
+                type: 'image' as const,
+                mimeType: 'image/png',
+                data: png(100 + ++shots, 40).toString('base64'),
+              },
+              { type: 'text' as const, text: 'Title: Demo' },
+            ],
+          }),
+        }),
+      ],
+    }),
+  )
+  const paged = paging(server.harness)
+  registry.install(
+    defineExtension({
+      ...registry.snapshot().extension('canvas')!,
+      ...conclusionBehavior(
+        { harness: () => paged.harness, metadata: Metadata, userHome: fixture.home },
+        fixture.generated,
+      ),
+    }),
+  )
+  // Twelve screenshots, a note written with every fourth, and a fix committed in between.
+  const steps = Array.from({ length: 12 }, (_, index) => [
+    call('screenshot', {}),
+    ...(index % 4 === 0 ? [call('write', { path: `notes-${index}.txt`, content: 'Seen.\n' })] : []),
+  ]).flat()
+  steps.splice(
+    7,
+    0,
+    call('write', { path: 'bug.txt', content: 'fixed\n' }),
+    call('bash', { command: 'git commit -am "Fix the bug"' }),
+  )
+  script(server, [...steps, fauxAssistantMessage('Looked at it twelve times.')], () =>
+    fauxAssistantMessage('Unused.'),
+  )
+  let checkpoint: unknown
+  fixture.generated.mockImplementationOnce(async (_models, input, signal, receipt) => {
+    checkpoint = (await conclusionTasks(server))[0].state
+    return generateConclusion(fixture.provider.models, input, signal, receipt)
+  })
+  await post(server, '/api/conversations/1/submit', { text: 'Look at the UI' })
+  await until(async () => (await fixture.tree(1))?.conclusion !== undefined, 60000)
+
+  // Every page was done with before the next was read.
+  expect(paged.pages()).toBeGreaterThan(10)
+  expect([...paged.late]).toEqual([])
+  // Between collecting and asking Luna, the task keeps the newest screenshot's place, and no image.
+  const { items } = await server.harness.commit(
+    (tx) => tx.scanEntries({ conversationId: ROOT_CONVERSATION_ID }, 100),
+    context,
+  )
+  const newest = items.find(
+    (entry) => entry.model?.[0]?.role === 'toolResult' && entry.model[0].toolName === 'screenshot',
+  )!
+  expect(checkpoint).toMatchObject({
+    checkpoint: { phase: 'generate', artifacts: { screenshot: { entry: newest.id, index: 0 } } },
+  })
+  // `iVBORw0KGgo` starts every PNG in base64.
+  expect(JSON.stringify(checkpoint)).not.toContain('iVBORw0KGgo')
+  // Calls and results read pages apart still count, oldest first.
+  const full = (await fixture.full(1))!
+  expect(shots).toBe(12)
+  expect(full.thumbnail).toMatchObject({ width: 112, height: 40 })
+  expect(full.files).toEqual(['notes-0.txt', 'notes-4.txt', 'bug.txt', 'notes-8.txt'])
+  expect(full.commits).toMatchObject([{ subject: 'Fix the bug', branch: 'main' }])
+  expect((await fixture.tree(1))?.conclusion).toMatchObject({
+    screenshot: true,
+    files: 4,
+    commits: 1,
+  })
+}, 90000)
+
+it('drops an archived tree from the root document, shows its conclusion again once unarchived, and prunes on open', async () => {
+  const fixture = await launch()
+  script(fixture.server, [fauxAssistantMessage('Done.')], () => fauxAssistantMessage('Unused.'))
+  await post(fixture.server, '/api/conversations/1/submit', { text: 'Work' })
+  await until(async () => (await fixture.tree(1))?.conclusion !== undefined, 30000)
+  const concluded = (await fixture.tree(1))!
+
+  // Archived, the tree leaves the document every tab loads; its conclusion stays with the conversation.
+  await archive(fixture.server, [1])
+  await until(async () => (await fixture.tree(1)) === undefined)
+  expect((await fixture.full(1))?.headline).toBe('Fixed the bug and landed it')
+
+  // Unarchived, the stored conclusion shows again, without asking Luna again.
+  await archive(fixture.server, [])
+  await until(async () => (await fixture.tree(1))?.conclusion !== undefined)
+  expect(await fixture.tree(1)).toEqual(concluded)
+  await quietly()
+  expect(fixture.generated).toHaveBeenCalledTimes(1)
+
+  // Entries left for trees that are not on the map, as when one was archived while the canvas was off, or for an id
+  // that is no conversation, go when the canvas opens.
+  await archive(fixture.server, [1])
+  await until(async () => (await fixture.tree(1)) === undefined)
+  await fixture.server.harness.commit(async (tx) => {
+    const { trees } = await tx.doc(Canvas, ROOT_CONVERSATION_ID)
+    trees['1'] = concluded
+    trees['999'] = concluded
+  }, context)
+  await fixture.reopen()
+  await until(
+    async () =>
+      Object.keys(
+        (await fixture.server.harness.snapshot(Canvas, ROOT_CONVERSATION_ID, context))?.trees ?? {},
+      ).length === 0,
+  )
+  expect(fixture.notices).toEqual([])
 }, 90000)
 
 it('stays quiet without Luna: no task, no conclusion and no notices', async () => {

@@ -1,3 +1,4 @@
+import type { JsonValue } from '@earendil-works/chord'
 import { defineDoc } from '@earendil-works/pi-durable'
 import type { TaskId } from '@earendil-works/pi-durable'
 import type { CanvasState, Conclusion } from './types.ts'
@@ -29,3 +30,8 @@ export const Conclusions = defineDoc<ConclusionState>({
   fork: 'initial',
   initial: () => ({}),
 })
+
+/** The archived top-level conversations, as the conversations extension keeps them in the shared UI state. */
+export const ARCHIVED = 'ext.conversations.archived'
+export const archivedIds = (value: JsonValue | undefined) =>
+  new Set(Array.isArray(value) ? value.filter((id) => typeof id === 'number') : [])
