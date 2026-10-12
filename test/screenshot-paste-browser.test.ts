@@ -147,3 +147,131 @@ it('pastes, removes, preserves failures, sends real images and reloads clickable
     await server.close()
   }
 }, 30000)
+
+it('reconciles delayed submissions across navigation and preserves keyboard focus and newer drafts', async (test) => {
+  const executablePath = await skipWithoutChromium(test)
+  if (!executablePath) return
+  const userHome = await temp('ultimate-send-lifecycle-')
+  const projectRoot = join(userHome, 'project')
+  await mkdir(projectRoot)
+  const server = await fauxServer({
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    userHome,
+    home: join(userHome, 'state'),
+  })
+  const browser = await chromium.launch({ executablePath, headless: true })
+  try {
+    const page = await browser.newPage()
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    page.setDefaultTimeout(8000)
+    await page.goto(server.url)
+    await untilInput(page)
+    const input = page.locator('textarea')
+    await input.waitFor()
+    await untilInput(page)
+    // Stay on A: disabling the textarea would blur it, unlike a read-only editor.
+    let finish!: () => void
+    const delayed = new Promise<void>((done) => {
+      finish = done
+    })
+    await page.route('**/api/conversations/1/submit', async (route) => {
+      await delayed
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: '{"submissionId":1}',
+      })
+    })
+    await input.fill('Keyboard submission')
+    const completed = page.waitForResponse((response) => response.url().endsWith('/1/submit'))
+    await input.press('Enter')
+    await expect.poll(() => input.getAttribute('readonly')).not.toBeNull()
+    expect(await input.evaluate((element) => element === document.activeElement)).toBe(true)
+    finish()
+    await completed
+    await expect.poll(() => input.getAttribute('readonly')).toBeNull()
+    await page.keyboard.type('Keyboard draft')
+    expect(await input.inputValue()).toBe('Keyboard draft')
+    await page.unroute('**/api/conversations/1/submit')
+    const other = (await post(server, '/api/conversations', {})).data.id as number
+    for (const scenario of [
+      { success: true, returnFirst: false, newer: false },
+      { success: true, returnFirst: true, newer: false },
+      { success: false, returnFirst: false, newer: false },
+      { success: false, returnFirst: true, newer: false },
+      { success: true, returnFirst: true, newer: true },
+      { success: true, returnFirst: false, newer: true },
+      { success: false, returnFirst: false, newer: true },
+    ]) {
+      await paste(page)
+      await page.getByRole('button', { name: 'Remove image 1' }).waitFor()
+      await input.fill('Submitted draft')
+      let release!: () => void
+      const gate = new Promise<void>((done) => {
+        release = done
+      })
+      let requested!: () => void
+      const started = new Promise<void>((done) => {
+        requested = done
+      })
+      await page.route('**/api/conversations/1/submit', async (route) => {
+        requested()
+        await gate
+        await route.fulfill({
+          status: scenario.success ? 202 : 400,
+          contentType: 'application/json',
+          body: JSON.stringify(
+            scenario.success ? { submissionId: 1 } : { error: 'Retry screenshot' },
+          ),
+        })
+      })
+      const received = page.waitForResponse((response) => response.url().endsWith('/1/submit'))
+      await input.press('Enter')
+      await started
+      expect(await input.evaluate((element) => element === document.activeElement)).toBe(true)
+      expect(await input.getAttribute('readonly')).not.toBeNull()
+      await show(page, other)
+      expect(await page.getByAltText('Pasted image 1').count()).toBe(0)
+      await input.fill('Other conversation draft')
+      if (scenario.newer)
+        await page.evaluate(() => localStorage.setItem('ultimate.draft.1', 'Newer draft'))
+      if (scenario.returnFirst) await show(page, 1)
+      release()
+      await received
+      if (!scenario.returnFirst) await show(page, 1)
+      await expect.poll(() => input.getAttribute('readonly')).toBeNull()
+      const expected = scenario.newer ? 'Newer draft' : scenario.success ? '' : 'Submitted draft'
+      expect(await input.inputValue()).toBe(expected)
+      expect(await page.evaluate(() => localStorage.getItem('ultimate.draft.1'))).toBe(
+        expected || null,
+      )
+      expect(await page.getByAltText('Pasted image 1').count()).toBe(scenario.success ? 0 : 1)
+      expect(await page.getByText('Retry screenshot', { exact: true }).count()).toBe(
+        scenario.success ? 0 : 1,
+      )
+      // Do not focus or fill: typing must land in the editor already focused by Enter/remount.
+      await page.keyboard.press('End')
+      await page.keyboard.type('Next message')
+      expect(await input.inputValue()).toBe(expected + 'Next message')
+      await page.unroute('**/api/conversations/1/submit')
+      await page.route('**/api/conversations/1/submit', (route) =>
+        route.fulfill({ status: 202, contentType: 'application/json', body: '{"submissionId":1}' }),
+      )
+      const retry = page.waitForResponse((response) => response.url().endsWith('/1/submit'))
+      await input.press('Enter')
+      await retry
+      await expect.poll(() => input.inputValue()).toBe('')
+      expect(await page.getByAltText('Pasted image 1').count()).toBe(0)
+      await page.unroute('**/api/conversations/1/submit')
+      await show(page, other)
+      expect(await input.inputValue()).toBe('Other conversation draft')
+      await show(page, 1)
+    }
+    expect(errors).toEqual([])
+  } finally {
+    await browser.close()
+    await server.close()
+  }
+}, 30000)

@@ -1,7 +1,7 @@
 import type { AgentState, InboxItem } from '@earendil-works/pi-durable'
 import { cn } from 'cn'
 import { CornerDownRightIcon, ListPlusIcon, XIcon } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { ToolImage } from '@/components/ai/tool'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../../shared/protocol.ts'
 import type { KeyboardEvent } from 'react'
@@ -94,12 +94,51 @@ export function Composer({ dock }: { dock?: boolean }) {
   return <ConversationComposer dock={dock} key={id} />
 }
 
+type Draft = {
+  text: string
+  images: { data: string; mimeType: string }[]
+  error?: string
+  sending: boolean
+  revision: number
+}
+
+// In-flight submissions and retryable failures belong to the conversation, not its mounted editor.
+const drafts = new Map<number | undefined, ReturnType<typeof createDraft>>()
+function createDraft(id: number | undefined) {
+  const key = id === undefined ? undefined : `ultimate.draft.${id}`
+  let value: Draft = {
+    text: key ? (localStorage.getItem(key) ?? '') : '',
+    images: [],
+    sending: false,
+    revision: 0,
+  }
+  const listeners = new Set<() => void>()
+  return {
+    key,
+    get: () => value,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+    set: (change: Partial<Draft>) => {
+      value = { ...value, ...change }
+      for (const listener of listeners) listener()
+    },
+  }
+}
+
 function ConversationComposer({ dock }: { dock?: boolean }) {
   const { id, busy, agent, inbox } = useConversation()
-  const [images, setImages] = useState<{ data: string; mimeType: string }[]>([])
+  if (!drafts.has(id)) drafts.set(id, createDraft(id))
+  const draft = drafts.get(id)!
+  const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
+  const setError = (message: string | undefined) => draft.set({ error: message })
+  const setImages = (change: (images: Draft['images']) => Draft['images']) =>
+    draft.set({ images: change(draft.get().images), revision: draft.get().revision + 1 })
   const [reading, setReading] = useState(false)
   const pending = useRef(false)
-  const submitting = useRef(false)
   const alive = useRef(true)
   useEffect(() => {
     alive.current = true
@@ -108,15 +147,13 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     }
   }, [])
   const models = useModels()
-  const key = id === undefined ? undefined : `ultimate.draft.${id}`
-  const [text, setText] = useState('')
-  const [error, setError] = useState<string>()
-  const [sending, setSending] = useState(false)
+  const key = draft.key
   useEffect(() => {
-    if (key) setText(localStorage.getItem(key) ?? '')
-  }, [key])
+    const stored = key ? (localStorage.getItem(key) ?? '') : ''
+    if (stored !== draft.get().text) draft.set({ text: stored, revision: draft.get().revision + 1 })
+  }, [draft, key])
   const update = (value: string) => {
-    setText(value)
+    draft.set({ text: value, revision: draft.get().revision + 1 })
     if (!key) return
     if (value) localStorage.setItem(key, value)
     else localStorage.removeItem(key)
@@ -133,7 +170,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
       })
     if (!files.length) return
     event.preventDefault()
-    if (pending.current || submitting.current) return
+    if (pending.current || draft.get().sending) return
     if (
       images.length + files.length > maxImages ||
       files.some((file) => file.size > maxImageBytes || !imageMimeTypes.includes(file.type))
@@ -172,22 +209,26 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   }
 
   async function send(whenBusy?: 'steer' | 'followUp') {
-    if (empty || blocked || submitting.current || pending.current || id === undefined) return
-    submitting.current = true
-    setSending(true)
-    setError(undefined)
+    if (empty || blocked || draft.get().sending || pending.current || id === undefined) return
+    const submitted = draft.get()
+    draft.set({ sending: true, error: undefined })
     try {
       await api.submit(text.trim(), busy ? (whenBusy ?? 'steer') : undefined, id, images)
-      if (alive.current) {
-        if (key) localStorage.removeItem(key)
-        setText('')
-        setImages([])
-      }
+      const stored = key ? (localStorage.getItem(key) ?? '') : ''
+      if (key && stored === submitted.text && draft.get().revision === submitted.revision)
+        localStorage.removeItem(key)
+      draft.set({
+        ...(draft.get().revision === submitted.revision
+          ? { text: stored === submitted.text ? '' : stored }
+          : {}),
+        ...(draft.get().images === submitted.images ? { images: [] } : {}),
+      })
     } catch (failure) {
-      if (alive.current) setError(errorMessage(failure))
+      if (key && draft.get().revision === submitted.revision)
+        draft.set({ text: localStorage.getItem(key) ?? '' })
+      setError(errorMessage(failure))
     } finally {
-      submitting.current = false
-      if (alive.current) setSending(false)
+      draft.set({ sending: false })
     }
   }
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -229,7 +270,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
         )}
         <PromptInputTextarea
           autoFocus
-          disabled={sending}
+          readOnly={sending}
           onPaste={(event) => void paste(event)}
           id="composer-input"
           onChange={(event) => update(event.target.value)}
