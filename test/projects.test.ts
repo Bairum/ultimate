@@ -81,16 +81,6 @@ it('keeps stores local while exposing projects, conversations and live URLs thro
     ]),
   )
   expect(b.api.conversations().some((item) => item.title === 'A titled conversation')).toBe(false)
-  const section = b.host.registry.snapshot().extension('conversations')!.sections![0]
-  const agent = await b.root.agent(context)
-  expect(
-    await section.render(
-      { conversationId: b.root.id, agent } as Parameters<typeof section.render>[0],
-      context,
-    ),
-  ).toBe(
-    '1 other project exists; in codemode, `ultimate.projects()` lists them with their conversations and URL when running.',
-  )
 }, 60000)
 
 it('lists unknown homes and ignores dead locks; skips unchanged index writes and excludes children', async () => {

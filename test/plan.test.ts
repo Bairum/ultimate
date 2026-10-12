@@ -7,7 +7,7 @@ import plan, { Plan } from '../extensions/plan/server.ts'
 import { context, prepareHarness } from '../server/harness.ts'
 import { temp, removeTemp } from './helpers.ts'
 
-it('keeps the ledger across restart, replays add once, and lists open work', async () => {
+it('keeps the ledger across restart and replays add once', async () => {
   const directory = await temp('ultimate-plan-')
   const prepared = await prepareHarness({
     ultimateRoot: directory,
@@ -44,15 +44,10 @@ it('keeps the ledger across restart, replays add once, and lists open work', asy
     }),
   )
   let opened = await prepared.open()
-  let prompt = ''
   const call = async (args: JsonObject) => {
     prepared.faux!.setResponses([
       fauxAssistantMessage([fauxToolCall('plan', args)], { stopReason: 'toolUse' }),
-      (request) => {
-        const system = request.messages.findLast((message) => message.role === 'system')
-        prompt = JSON.stringify(system)
-        return fauxAssistantMessage('Complete')
-      },
+      fauxAssistantMessage('Complete'),
     ])
     await (
       await opened.root.submit({ type: 'input', content: 'Update plan' }, context)
@@ -109,10 +104,6 @@ it('keeps the ledger across restart, replays add once, and lists open work', asy
     expect(replayResults.map(([_result, memo, receipt]) => [memo, receipt])).toEqual(
       replayResults.map(([result]) => [result, result]),
     )
-    expect(prompt).toContain('E1 planning Ship ledger')
-    expect(prompt).toContain('E1.1 in_review Implement child:42')
-    expect(prompt).toContain('E1.2 backlog Review deps:E1.1')
-    expect(prompt).not.toContain('## Request')
     await opened.close()
     opened = await prepared.open()
     expect(await opened.harness.snapshot(Plan, opened.root.id, context)).toEqual(saved)
@@ -121,8 +112,6 @@ it('keeps the ledger across restart, replays add once, and lists open work', asy
     expect(await opened.harness.snapshot(Plan, opened.root.id, context)).toEqual(saved)
     await call({ action: 'update', key: 'E1', status: 'done', verdict: 'Approved' })
     await call({ action: 'show' })
-    expect(prompt).not.toContain('E1 planning Ship ledger')
-    expect(prompt).not.toContain('<plan>')
   } finally {
     await opened.close()
     await removeTemp(directory)

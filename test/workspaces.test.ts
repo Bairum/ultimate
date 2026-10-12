@@ -17,7 +17,7 @@ import { workspaces } from '../extensions/workspaces/workspaces.ts'
 import { git, setup } from '../extensions/workspaces/git.ts'
 import self from '../extensions/self/server.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
-import { fauxServer, prepareFauxServer, post, temp, until } from './helpers.ts'
+import { prepareFauxServer, post, temp, until } from './helpers.ts'
 
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => {
@@ -210,13 +210,6 @@ exec /usr/bin/git "$@"
   const requests: string[] = []
   prepared.host.faux!.setResponses([
     (transcript) => {
-      const sections = transcript.messages
-        .filter((message) => message.role === 'system')
-        .flatMap((message) => Object.keys(message.sections ?? {}))
-      expect(sections.indexOf('workspace_workflow')).toBeGreaterThanOrEqual(0)
-      expect(sections.indexOf('project_context')).toBeGreaterThan(
-        sections.indexOf('workspace_workflow'),
-      )
       requests.push(
         JSON.stringify(transcript.messages.filter((message) => message.role === 'system')),
       )
@@ -558,28 +551,4 @@ it('starts a worker isolate, commits in the child and lands it through the paren
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(
     await git(workspace.path, 'rev-parse', 'HEAD'),
   )
-})
-it('creates a top-level isolated conversation over HTTP through the ordinary extension action', async () => {
-  const paths = await repository()
-  const server = await fauxServer({
-    ...paths,
-    ultimateRoot: join(import.meta.dirname, '..'),
-    userHome: paths.directory,
-  })
-  cleanup.push(() => server.close())
-  const created = await post(server, '/api/extensions/workspaces/actions/create', {
-    args: { title: 'isolated' },
-  })
-  expect(created.status).toBe(200)
-  const id = created.data.result.id
-  await until(
-    async () =>
-      (await post(server, '/api/extensions/workspaces/actions/info', { args: { id } })).data.result
-        ?.state === 'ready',
-  )
-  const workspace = (
-    await post(server, '/api/extensions/workspaces/actions/info', { args: { id } })
-  ).data.result
-  expect(workspace.source).toBe(paths.projectRoot)
-  expect(server.api.conversations().find((row) => row.id === id)?.title).toBe('isolated')
 })

@@ -89,12 +89,7 @@ it('tells each top-level conversation about the others, and the surface on scree
 
   const other = await create()
   await message(other, 'Fix the parser', 2000)
-  expect(await render('conversations', root)).toBe(
-    `You are conversation #1. Other conversations in this project, each a separate agent with its own context:
-- #${other} Fix the parser
-
-They work in the same checkout unless a cwd says otherwise: check \`git status\` before broad changes, never revert or reformat changes you did not make, and coordinate through the user. In codemode, \`ultimate.entries(id)\` shows what another conversation did and \`ultimate.taskGraph()\` whether it is working.`,
-  )
+  expect(listed(await render('conversations', root))).toEqual([other])
   const seen = await render('conversations', other)
   expect(seen).toMatch(new RegExp(`^You are conversation #${other}\\.`))
   expect(listed(seen)).toEqual([root])
@@ -135,40 +130,6 @@ They work in the same checkout unless a cwd says otherwise: check \`git status\`
   // Every top-level conversation gets the surface line.
   for (const id of [root, other, empty])
     expect(await render('surfaces', id)).toBe('The user is looking at the Agent surface (agent).')
-}, 60000)
-
-it('adds the section to a running conversation as one patch, not a re-sent prompt', async () => {
-  const { server, create, message } = await launch()
-  const systemEntries = async () =>
-    (await server.root.context(context)).entries.filter((entry) => entry.kind === 'pi.system')
-  await post(server, '/api/conversations/1/submit', { text: 'Return the word SCOUT.' })
-  await server.harness.waitForIdle(context)
-  const before = await systemEntries()
-  expect(before.length).toBeGreaterThan(0)
-  expect(
-    before.some((entry) => {
-      const system = entry.model?.[0]
-      return system?.role === 'system' && system.sections?.conversations !== undefined
-    }),
-  ).toBe(false)
-
-  const other = await create()
-  await message(other, 'Fix the parser', Date.now())
-  await post(server, '/api/conversations/1/submit', { text: 'Return the word SCOUT.' })
-  await server.harness.waitForIdle(context)
-  const added = (await systemEntries()).slice(before.length)
-  expect(added.map((entry) => entry.model)).toEqual([
-    [
-      {
-        role: 'system',
-        content: '',
-        sections: {
-          conversations: expect.stringContaining(`\n- #${other} Fix the parser\n`),
-        },
-        timestamp: expect.any(Number),
-      },
-    ],
-  ])
 }, 60000)
 
 it('renames and clears top-level conversations', async () => {

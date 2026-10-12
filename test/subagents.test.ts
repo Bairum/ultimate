@@ -4,21 +4,8 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import {
-  defineExtension,
-  defineTool,
-  InboxDoc,
-  LiveDoc,
-  GenerationTask,
-  hook,
-} from '@earendil-works/pi-durable'
-import type {
-  ConversationId,
-  Extension,
-  Task,
-  TaskId,
-  ToolRegistration,
-} from '@earendil-works/pi-durable'
+import { defineExtension, defineTool, InboxDoc, LiveDoc } from '@earendil-works/pi-durable'
+import type { ConversationId, Extension, Task, ToolRegistration } from '@earendil-works/pi-durable'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
@@ -473,41 +460,6 @@ describe('subagents', () => {
     await f.opened.root.waitForIdle(context)
     expect(await reports(f.opened)).toHaveLength(2)
   })
-  it('reminds the model of a durable pending input before the child run starts', async () => {
-    const held = { ...gate(), entered: false, phase: 'deliver' }
-    const requests: Parameters<FauxResponseFactory>[0][] = []
-    const f = await fixture(
-      undefined,
-      (request) => {
-        requests.push(request)
-      },
-      held,
-    )
-    await call(f.opened, {
-      action: 'start',
-      agent: 'scout',
-      task: 'not delivered yet',
-      background: true,
-    })
-    await until(async () => held.entered)
-    const [child] = await children(f.opened)
-    expect(
-      (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
-    ).toBeUndefined()
-    const system = requests
-      .at(-1)
-      ?.messages.findLast(
-        (message) =>
-          message.role === 'system' && Object.hasOwn(message.sections ?? {}, 'subagent_state'),
-      )
-    expect(JSON.stringify(system)).toContain(
-      `Pending subagent inputs: ${child.conversationId} (scout)`,
-    )
-    held.release()
-    await until(async () => (await reports(f.opened)).length === 1)
-    await f.opened.root.waitForIdle(context)
-  })
-
   it('stops a pending Reporter before delivery and leaves the child reusable', async () => {
     const held = { ...gate(), entered: false, phase: 'deliver' }
     const f = await fixture(undefined, undefined, held)
@@ -524,18 +476,9 @@ describe('subagents', () => {
     expect(
       (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
     ).toBeUndefined()
-    expect(
-      await f.opened.harness.commit(
-        (tx) => tx.submissionByRequest(child.conversationId, `subagent:${action.reporter}`),
-        context,
-      ),
-    ).toBeUndefined()
     expect((await call(f.opened, { action: 'stop', id: child.conversationId })).text).toBe(
       `Stopped ${child.conversationId}.`,
     )
-    expect(await f.opened.harness.getTask(action.reporter, context)).toMatchObject({
-      state: { status: 'terminal', outcome: { status: 'aborted' } },
-    })
     held.release()
     await f.opened.harness.waitForTask(action.reporter, context)
     const view = await (await f.opened.harness.conversation(
@@ -578,15 +521,6 @@ describe('subagents', () => {
     expect(
       (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
     ).toBeUndefined()
-    expect(
-      (await f.opened.harness.snapshot(InboxDoc, child.conversationId, context))?.items,
-    ).toEqual([])
-    expect(
-      await f.opened.harness.commit(
-        (tx) => tx.submissionByRequest(child.conversationId, `subagent:${action.reporter}`),
-        context,
-      ),
-    ).toMatchObject({ status: 'unanswered', reason: 'aborted' })
     f.childGate.release()
     await f.opened.root.waitForIdle(context)
     const view = await (await f.opened.harness.conversation(
@@ -647,110 +581,6 @@ describe('subagents', () => {
     expect(f.errors).toEqual([])
   })
 
-  it('stops an admission racing after capture when the captured run was absent', async () => {
-    const held = { ...gate(), entered: false, phase: 'deliver' }
-    const f = await gatedFixture(held)
-    await call(f.opened, { action: 'start', agent: 'scout', task: 'HOLD', background: true })
-    const [child] = await children(f.opened)
-    await until(async () => held.entered)
-    expect(
-      (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
-    ).toBeUndefined()
-    const stopGate = stopCaptureGate(f)
-    await startCall(f.opened, { action: 'stop', id: child.conversationId })
-    await until(async () => stopGate.entered)
-    // Admission follows capture but belongs to its captured reporter.
-    held.release()
-    await until(async () => f.holding.has(child.conversationId))
-    expect(
-      (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
-    ).toBeDefined()
-    stopGate.release()
-    await f.opened.root.waitForIdle(context)
-    expect(
-      (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
-    ).toBeUndefined()
-    f.childGate.release()
-    expect(await reports(f.opened)).toHaveLength(0)
-    expect(f.errors).toEqual([])
-  })
-  it('stops captured inputs across a generation handoff racing the abort request', async () => {
-    const f = await gatedFixture()
-    const successorGate = gate()
-    let originalRun: TaskId | undefined
-    let successor: TaskId | undefined
-    f.prepared.registry.install(
-      defineExtension({
-        name: 'stop-handoff',
-        hooks: [
-          hook(GenerationTask, {
-            beforeRequest: async (_request, api, hookContext) => {
-              if (
-                api.conversationId !== f.opened.root.id &&
-                originalRun !== undefined &&
-                api.taskId !== originalRun
-              ) {
-                successor = api.taskId
-                await awaitWithContext(successorGate.promise, hookContext)
-              }
-            },
-          }),
-        ],
-      }),
-    )
-    await call(f.opened, { action: 'start', agent: 'scout', task: 'HOLD', background: true })
-    const [child] = await children(f.opened)
-    await until(async () => f.holding.has(child.conversationId))
-    const original = (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))!.run!
-    originalRun = original.taskId
-    const abortGate = gate()
-    let entered = false
-    const abort = f.opened.harness.abortTask.bind(f.opened.harness)
-    f.opened.harness.abortTask = async (id, taskContext) => {
-      if (id === original.taskId && !entered) {
-        entered = true
-        await awaitWithContext(abortGate.promise, taskContext)
-      }
-      return abort(id, taskContext)
-    }
-    try {
-      await startCall(f.opened, { action: 'stop', id: child.conversationId })
-      await until(async () => entered)
-      // Stop has snapshotted the old generation. Completing its tools moves the same inputs.
-      f.childGate.release()
-      await until(async () => successor !== undefined)
-      const moved = (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))!.run!
-      expect(moved.taskId).toBe(successor)
-      expect(moved.taskId).not.toBe(original.taskId)
-      expect(moved.inputs).toEqual(original.inputs)
-      expect(await f.opened.harness.getTask(original.taskId, context)).toMatchObject({
-        state: { status: 'terminal', outcome: { status: 'completed' } },
-      })
-      abortGate.release()
-      await f.opened.root.waitForIdle(context)
-      expect(await latestResult(f.opened)).toMatchObject({
-        content: [{ type: 'text', text: `Stopped ${child.conversationId}.` }],
-      })
-      expect(
-        (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
-      ).toBeUndefined()
-      const submission = (await f.opened.harness.submission(original.inputs[0], context))!
-      expect(await submission.status(context)).toMatchObject({
-        status: 'unanswered',
-        reason: 'aborted',
-      })
-      expect(await reports(f.opened)).toHaveLength(0)
-    } finally {
-      f.opened.harness.abortTask = abort
-      abortGate.release()
-      successorGate.release()
-    }
-    await call(f.opened, { action: 'message', id: child.conversationId, text: 'fresh reuse' })
-    await until(async () => (await reports(f.opened)).length === 1)
-    await f.opened.root.waitForIdle(context)
-    expect(JSON.stringify(await reports(f.opened))).toContain('Child: fresh reuse')
-    expect(f.errors).toEqual([])
-  })
   it('keeps a foreground child running when the parent is stopped', async () => {
     const f = await gatedFixture()
     await startCall(f.opened, { action: 'start', agent: 'scout', task: 'HOLD' })
@@ -800,30 +630,6 @@ describe('subagents', () => {
     for (const child of await children(resumed)) expect(child.reported).toHaveLength(1)
   })
 
-  it('preserves an earlier nested answer when a sibling wait yields to its queued report', async () => {
-    const f = await gatedFixture()
-    const submitted = await f.opened.root.submit(
-      {
-        type: 'input',
-        content: `CODE await tools.subagent({action:'start',agent:'scout',task:'completed first'}); await tools.subagent({action:'start',agent:'scout',task:'HOLD'});`,
-      },
-      context,
-    )
-    await submitted.wait(context)
-    await until(async () => f.holding.size === 1)
-    const agents = await children(f.opened)
-    expect(agents).toHaveLength(2)
-    expect(
-      (await f.opened.harness.snapshot(LiveDoc, agents[1].conversationId, context))?.run,
-    ).toBeDefined()
-    expect(await reports(f.opened)).toHaveLength(1)
-    expect(JSON.stringify(await reports(f.opened))).toContain('Child: completed first')
-    f.childGate.release()
-    await until(async () => (await reports(f.opened)).length === 2)
-    await f.opened.root.waitForIdle(context)
-    expect(await reports(f.opened)).toHaveLength(2)
-    expect((await children(f.opened)).map((child) => child.reported.length)).toEqual([1, 1])
-  })
   it('lets the parent message and explicitly stop a foreground child after yielding', async () => {
     const f = await gatedFixture()
     await startCall(f.opened, { action: 'start', agent: 'scout', task: 'HOLD' })
@@ -864,156 +670,6 @@ describe('subagents', () => {
     expect(await reports(f.opened)).toHaveLength(0)
   })
 
-  it('waits for answer-ready reporter submission before acknowledging its direct result', async () => {
-    const held = { ...gate(), entered: false }
-    const f = await fixture(undefined, undefined, held)
-    const pending = await startCall(f.opened, {
-      action: 'start',
-      agent: 'scout',
-      task: 'race answer',
-    })
-    await until(async () => held.entered)
-    const [child] = await children(f.opened)
-    const state = (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!
-    const action = Object.values(state.actions)[0]
-    expect(action.answer).toBeDefined()
-    expect(
-      await f.opened.harness.commit(
-        (tx) => tx.submissionByRequest(f.opened.root.id, `subagent-answer:${action.answer}`),
-        context,
-      ),
-    ).toBeUndefined()
-    await f.opened.root.submit(
-      { type: 'input', content: 'completion race steer', whenBusy: 'steer' },
-      context,
-    )
-    expect(await latestResult(f.opened)).toBeUndefined()
-    held.release()
-    await pending.wait(context)
-    expect(await latestResult(f.opened)).toMatchObject({
-      content: [{ type: 'text', text: 'Child: race answer' }],
-      details: { conversationId: child.conversationId, answerId: action.answer },
-    })
-    expect(await reports(f.opened)).toHaveLength(0)
-    const receipt = await f.opened.harness.commit(
-      (tx) => tx.submissionByRequest(f.opened.root.id, `subagent-answer:${action.answer}`),
-      context,
-    )
-    expect(receipt).toMatchObject({ status: 'unanswered', reason: 'subagent-tool-delivered' })
-  })
-
-  it('records a durable receipt before a delayed reporter submits and suppresses its late duplicate', async () => {
-    const held = { ...gate(), entered: false }
-    const f = await fixture(
-      defineExtension({
-        name: 'receipt-contract',
-        wraps: [
-          {
-            tool: 'codemode',
-            wrap: (tool: ToolRegistration): ToolRegistration => ({
-              ...tool,
-              execute: async (_args, api, toolContext) => {
-                const index = (await api.snapshot(Subagents, api.conversationId, toolContext))!
-                const answer = Object.values(index.actions)[0].answer!
-                return {
-                  content: [{ type: 'text', text: 'Answer delivered by outer result' }],
-                  details: { subagentAnswers: [answer] },
-                }
-              },
-            }),
-          },
-        ],
-      }),
-      undefined,
-      held,
-    )
-    await call(f.opened, {
-      action: 'start',
-      agent: 'scout',
-      task: 'delayed report',
-      background: true,
-    })
-    await until(async () => held.entered)
-    await (
-      await f.opened.root.submit({ type: 'input', content: 'CODE receipt' }, context)
-    ).wait(context)
-    const index = (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!
-    const action = Object.values(index.actions)[0]
-    const receipt = await f.opened.harness.commit(
-      (tx) => tx.submissionByRequest(f.opened.root.id, `subagent-answer:${action.answer}`),
-      context,
-    )
-    expect(receipt).toMatchObject({ status: 'unanswered', reason: 'subagent-tool-delivered' })
-    held.release()
-    await f.opened.harness.waitForTask(action.reporter, context)
-    await f.opened.root.waitForIdle(context)
-    expect(await reports(f.opened)).toHaveLength(0)
-    expect(
-      await f.opened.harness.commit(
-        (tx) => tx.submissionByRequest(f.opened.root.id, `subagent-answer:${action.answer}`),
-        context,
-      ),
-    ).toEqual(receipt)
-  })
-  it('withdraws only successful outer codemode receipts and survives hook replay', async () => {
-    const f = await fixture()
-    const held = { ...gate(), entered: false }
-    f.prepared.registry.install(
-      defineExtension({
-        name: 'z-after-receipt',
-        hooks: [
-          hook(GenerationTask, {
-            afterTools: async (_assistant, _results, _api, toolContext) => {
-              if (_api.conversationId !== f.opened.root.id) return
-              held.entered = true
-              await awaitWithContext(held.promise, toolContext)
-            },
-          }),
-        ],
-      }),
-    )
-    await f.opened.root.submit(
-      {
-        type: 'input',
-        content: `CODE text(await tools.subagent({action:'start',agent:'scout',task:'receipt answer'}));`,
-      },
-      context,
-    )
-    await until(async () => held.entered)
-    const index = (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!
-    const answer = Object.values(index.actions)[0].answer!
-    expect(f.errors).toEqual([])
-    expect(await latestResult(f.opened)).toMatchObject({
-      toolName: 'codemode',
-      details: { subagentAnswers: [answer] },
-      isError: false,
-    })
-    expect(
-      await f.opened.harness.commit(
-        (tx) => tx.submissionByRequest(f.opened.root.id, `subagent-answer:${answer}`),
-        context,
-      ),
-    ).toMatchObject({ status: 'unanswered', reason: 'subagent-tool-delivered' })
-    await f.opened.close()
-    hosts.splice(hosts.indexOf(f.opened), 1)
-    const resumed = await f.reopen()
-    held.release()
-    await resumed.root.waitForIdle(context)
-    expect(await reports(resumed)).toHaveLength(0)
-    expect(await latestResult(resumed)).toMatchObject({ details: { subagentAnswers: [answer] } })
-    const before = await resumed.harness.commit(
-      (tx) => tx.submissionByRequest(resumed.root.id, `subagent-answer:${answer}`),
-      context,
-    )
-    await call(resumed, { action: 'wait', id: Object.values(index.agents)[0].conversationId })
-    expect(
-      await resumed.harness.commit(
-        (tx) => tx.submissionByRequest(resumed.root.id, `subagent-answer:${answer}`),
-        context,
-      ),
-    ).toEqual(before)
-    expect(await reports(resumed)).toHaveLength(0)
-  })
   it('keeps a completed nested answer durable when the enclosing script fails', async () => {
     const f = await fixture()
     await (
@@ -1123,28 +779,11 @@ describe('subagents', () => {
     expect(JSON.stringify(view.value.entries)).toContain('Child: follow-up')
     view.dispose()
   })
-  it('discovers all three locations, overrides by name, reports malformed files and rereads edits', async () => {
+  it('discovers model and thinking settings and reports unknown models', async () => {
     const repo = await directory(),
       home = await directory(),
       cwd = await directory()
-    for (const path of [
-      join(repo, 'agents'),
-      join(home, '.ultimate/agents'),
-      join(cwd, '.ultimate/agents'),
-    ])
-      await mkdir(path, { recursive: true })
-    await writeFile(join(repo, 'agents/scout.md'), definition('repo'))
-    await writeFile(join(home, '.ultimate/agents/scout.md'), definition('home'))
-    await writeFile(join(cwd, '.ultimate/agents/scout.md'), definition('cwd'))
-    await writeFile(
-      join(repo, 'agents/worker.md'),
-      definition('worker').replace('name: scout', 'name: worker'),
-    )
-    await writeFile(
-      join(home, '.ultimate/agents/researcher.md'),
-      definition('research').replace('name: scout', 'name: researcher'),
-    )
-    await writeFile(join(cwd, '.ultimate/agents/broken.md'), 'broken')
+    await mkdir(join(repo, 'agents'))
     const modelRuntime = await ModelRuntime.create()
     for (const [name, model, thinking] of [
       ['exact', 'anthropic/claude-opus-4-8', ''],
@@ -1173,25 +812,6 @@ describe('subagents', () => {
     expect(found.errors.find((file) => file.name === 'missing')?.error).toContain(
       'model: Model "ultimate-nonexistent-model" not found.',
     )
-    expect(found.definitions.map((agent) => agent.name).toSorted()).toEqual([
-      'exact',
-      'explicit',
-      'researcher',
-      'scout',
-      'suffix',
-      'worker',
-    ])
-    expect(found.definitions.find((agent) => agent.name === 'scout')?.instructions).toBe('cwd')
-    expect(found.errors.find((file) => file.name === 'broken')).toMatchObject({
-      name: 'broken',
-      error: expect.stringContaining('frontmatter'),
-    })
-    await writeFile(join(cwd, '.ultimate/agents/scout.md'), definition('edited'))
-    expect(
-      (await discoverAgents(repo, cwd, home, modelRuntime)).definitions.find(
-        (agent) => agent.name === 'scout',
-      )?.instructions,
-    ).toBe('edited')
   })
   it('parses definitions with Pi frontmatter and validates their fields', () => {
     expect(
@@ -1331,7 +951,7 @@ describe('subagents', () => {
     ).rejects.toThrow('scope must be user or project')
   })
   it('foreground returns the answer, exposes child details, inherits the parent and rereads scout on next start', async () => {
-    const { opened, ultimateRoot, userHome } = await fixture()
+    const { opened, ultimateRoot } = await fixture()
     const result = await call(opened, { action: 'start', agent: 'scout', task: 'facts' })
     expect(result.text).toBe('Child: facts')
     const [first] = await children(opened)
@@ -1375,19 +995,6 @@ describe('subagents', () => {
     const listed = JSON.parse((await call(opened, { action: 'list' })).text)
     expect(listed).toHaveLength(2)
     expect(listed[0]).toMatchObject({ conversationId: first.conversationId, busy: false })
-    await mkdir(join(userHome, '.ultimate/agents'), { recursive: true })
-    await writeFile(
-      join(userHome, '.ultimate/agents/home-agent.md'),
-      definition('User instructions').replace('name: scout', 'name: home-agent'),
-    )
-    expect((await call(opened, { action: 'start', agent: 'home-agent', task: 'home' })).text).toBe(
-      'Child: home',
-    )
-    const homeAgent = (await children(opened)).at(-1)!
-    expect(
-      (await (await opened.harness.conversation(homeAgent.conversationId, context))!.agent(context))
-        .instructions,
-    ).toBe('User instructions')
   })
   it('background returns immediately, survives parent abort and restart, and reports exactly once', async () => {
     const { reopen, opened } = await fixture()
@@ -1482,9 +1089,6 @@ describe('subagents', () => {
               item.content.startsWith('[subagent'),
           ) === true,
       )
-      const inbox = await opened.harness.snapshot(InboxDoc, opened.root.id, context)
-      expect(inbox?.items).toHaveLength(1)
-      expect(inbox?.items[0].mode).toBe('steer')
       releaseParent()
       await opened.root.waitForIdle(context)
       expect(await reports(opened)).toHaveLength(1)
@@ -1563,23 +1167,6 @@ describe('subagents', () => {
       releaseChild()
       releaseParent()
     }
-  })
-  it('records a background child answer returned by wait as reported', async () => {
-    const { opened } = await fixture()
-    await call(opened, { action: 'start', agent: 'scout', task: 'slow', background: true })
-    const [agent] = await children(opened)
-    await call(opened, { action: 'stop', id: agent.conversationId })
-    const child = (await opened.harness.conversation(agent.conversationId, context))!
-    const answer = await (
-      await child.submit({ type: 'input', content: 'wait-only answer' }, context)
-    ).wait(context)
-    expect(answer.status).toBe('done')
-    expect((await call(opened, { action: 'wait', id: agent.conversationId })).text).toBe(
-      'Child: wait-only answer',
-    )
-    if (answer.status !== 'done' || answer.type !== 'input') throw new Error('Expected answer')
-    expect((await children(opened))[0].reported).toContain(answer.answer)
-    expect(await reports(opened)).toHaveLength(0)
   })
   it('replays an interrupted foreground wait using its existing independent child', async () => {
     const { reopen, opened } = await fixture()

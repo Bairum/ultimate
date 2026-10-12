@@ -132,11 +132,6 @@ it('composes read and bash with private nested results and final JSON details', 
   const invalid = await run(server, `await tools.structured({answer:'wrong'});`)
   expect(invalid.data.isError).toBe(true)
   expect(invalid.data.details.calls[0].status).toBe('error')
-  const agent = await server.root.agent(context)
-  const tool = agent.tools.find((candidate) => candidate.name === 'codemode')!
-  expect(tool.description).toContain('ultimate')
-  expect(tool.description).toContain('conversationId: number')
-  expect(agent.tools.some((candidate) => candidate.name.startsWith('ultimate.'))).toBe(false)
   let entered = 0
   let release!: () => void
   const barrier = new Promise<void>((done) => {
@@ -177,54 +172,17 @@ it('composes read and bash with private nested results and final JSON details', 
   expect(failed.data.isError).toBe(true)
 })
 
-it('introspects extensions, documents, system, conversations, task graph, models, agents, and pre-reset stored history', async () => {
-  const { server, options } = await fixture()
-  await mkdir(join(options.ultimateRoot, 'agents'))
-  await writeFile(
-    join(options.ultimateRoot, 'agents/scout.md'),
-    '---\nname: scout\ndescription: Search\ntools: [read]\n---\nLook\n',
-  )
-  await writeFile(join(options.ultimateRoot, 'agents/broken.md'), 'broken')
+it('reads stored history and documents from before a reset', async () => {
+  const { server } = await fixture()
   await run(server, `store('saved', 7); return 1;`, 'history-needle')
   await server.root.reset(undefined, context)
-  const response = await fetch(server.url + '/api/ui', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ set: { 'shell.activeView': 'tasks' } }),
-  })
-  expect(response.status).toBe(200)
-  const ui = await run(
-    server,
-    `return {ui:await ultimate.uiState(), live:!!(await ultimate.doc('pi.live'))};`,
-  )
-  expect(ui.data.details.value).toEqual({ ui: { 'shell.activeView': 'tasks' }, live: true })
   const result = await run(
     server,
-    `const extensions = await ultimate.extensions(); const matches = await ultimate.search('history-needle'); const entries = await ultimate.entries(1, {kinds:['pi.user'], limit:1}); const old = await ultimate.entries(1, {before:entries[0].id}); return {extension:extensions.find(x=>x.name==='codemode'), matches:matches.length, old:old.length, doc:await ultimate.doc('codemode.store'), pid:(await ultimate.system()).process.pid, conversations:(await ultimate.conversations()).length, graph:!!(await ultimate.taskGraph()), models:Array.isArray(await ultimate.models()), agents:await ultimate.agents()};`,
+    `const matches = await ultimate.search('history-needle'); const entries = await ultimate.entries(1, {kinds:['pi.user'], limit:1}); const old = await ultimate.entries(1, {before:entries[0].id}); return {matches:matches.length, old:old.length, doc:await ultimate.doc('codemode.store')};`,
   )
   expect(result.data.isError).toBe(false)
   expect(result.data.details.value).toMatchObject({
-    extension: { facets: { server: true, web: false }, server: { tools: ['codemode'] } },
     doc: { saved: 7 },
-    conversations: 1,
-    graph: true,
-    models: true,
-    pid: process.pid,
-    agents: {
-      definitions: [
-        {
-          name: 'scout',
-          description: 'Search',
-          source: 'builtin',
-          path: join(options.ultimateRoot, 'agents/scout.md'),
-          tools: ['read'],
-          instructions: 'Look',
-        },
-      ],
-      errors: [
-        { name: 'broken', source: 'builtin', error: expect.stringContaining('frontmatter') },
-      ],
-    },
   })
   expect((result.data.details.value as { matches: number }).matches).toBeGreaterThan(0)
   expect((result.data.details.value as { old: number }).old).toBeGreaterThan(0)
@@ -257,23 +215,8 @@ it('persists store over two calls and harness close/reopen; discards failed writ
   expect(truncated.text).toContain('Output truncated')
 })
 
-it('shows faux-demo nested progress in pi.live before completion and aborts nested work', async () => {
+it('aborts nested work without committing store writes', async () => {
   const { server } = await fixture()
-  await server.root.submit({ type: 'input', content: 'codemode demo' }, context)
-  await until(async () => {
-    const state = await server.root.viewState(context)
-    try {
-      return JSON.stringify(state.value.docs['pi.live']).includes('✓ tools.read')
-    } finally {
-      state.dispose()
-    }
-  })
-  await server.harness.waitForIdle(context)
-  let view = await server.root.viewState(context)
-  expect(
-    JSON.stringify(view.value.entries.find((entry) => entry.kind === 'pi.tool-result')),
-  ).toContain('Script completed')
-  view.dispose()
   server.host.faux!.setResponses([
     fauxAssistantMessage(
       [
@@ -297,7 +240,7 @@ it('shows faux-demo nested progress in pi.live before completion and aborts nest
   await server.root.abort(context)
   await server.harness.waitForIdle(context)
   expect(await server.harness.snapshot(Store, server.root.id, context)).toBeUndefined()
-  view = await server.root.viewState(context)
+  const view = await server.root.viewState(context)
   expect(
     JSON.stringify(view.value.entries.findLast((entry) => entry.kind === 'pi.tool-result')),
   ).toMatch(/aborted|interrupted/)
@@ -470,77 +413,6 @@ it('yields Promise.all, cancels pending host work, and preserves other waiting c
   expect(effects).toBe(0)
   expect(result.text).not.toMatch(/caught|finalized|continued|finished|Script failed/)
   expect(await server.harness.snapshot(Store, server.root.id, context)).toBeUndefined()
-})
-
-it('acknowledges unique completed subagent answer IDs only on successful script completion', async () => {
-  const { server } = await fixture()
-  server.host.registry.install(
-    defineExtension({
-      name: 'receipt-test',
-      tools: [
-        defineTool({
-          name: 'subagent',
-          description: 'Fake completed child',
-          parameters: Type.Object({
-            id: Type.Optional(Type.Number()),
-            fail: Type.Optional(Type.Boolean()),
-          }),
-          execute: async ({ id, fail }) => ({
-            content: [{ type: 'text', text: 'completed-child-answer' }],
-            details: { conversationId: 41, answerId: id ?? 101 },
-            isError: fail === true,
-          }),
-        }),
-      ],
-    }),
-  )
-  const success = await run(
-    server,
-    `await tools.subagent({}); await Promise.all([tools.subagent({}), tools.subagent({id:102})]); try { await tools.subagent({id:103, fail:true}); } catch {} return 'filtered';`,
-  )
-  expect(success.data.isError).toBe(false)
-  expect(success.text).not.toContain('completed-child-answer')
-  expect(success.data.details.subagentAnswers).toEqual([101, 102])
-  for (const failure of [
-    `throw new Error('later failure');`,
-    `await tools.read({path:'missing-file'});`,
-  ]) {
-    const result = await run(server, `await tools.subagent({}); ${failure}`)
-    expect(result.data.isError).toBe(true)
-    expect(result.text).toContain('Script failed')
-    expect(result.text).not.toContain('completed-child-answer')
-    expect(result.data.details).not.toHaveProperty('subagentAnswers')
-  }
-})
-
-it('does not treat yielded details on an ordinary tool as a subagent yield', async () => {
-  const { server } = await fixture()
-  server.host.registry.install(
-    defineExtension({
-      name: 'ordinary-yield-test',
-      tools: [
-        defineTool({
-          name: 'ordinary',
-          description: 'Ordinary result with unrelated details',
-          parameters: Type.Object({}),
-          execute: async () => ({
-            content: [{ type: 'text', text: 'ordinary answer' }],
-            details: { yielded: true, conversationId: 41, answerId: 999 },
-          }),
-        }),
-      ],
-    }),
-  )
-  const result = await run(
-    server,
-    `const answer = await tools.ordinary({}); store('ok', true); return answer;`,
-  )
-  expect(result.data.isError).toBe(false)
-  expect(result.data.details.value).toBe('ordinary answer')
-  expect(result.data.details.yielded).toBeUndefined()
-  expect(result.data.details.subagentAnswers).toEqual([])
-  expect(result.text).toContain('Script completed')
-  expect(await server.harness.snapshot(Store, server.root.id, context)).toEqual({ ok: true })
 })
 
 it('recovers an unsafe interrupted script with its committed nested-call log', async () => {

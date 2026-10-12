@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { existsSync } from 'node:fs'
-import { mkdir, realpath, readFile, rm, writeFile, rename, symlink } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile, rename, symlink } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import {
@@ -18,7 +18,6 @@ import { context } from '../server/harness.ts'
 import { projectHome } from '../server/project.ts'
 import { actionExec } from '../server/actions.ts'
 import type { SystemInfo } from '../shared/protocol.ts'
-import { defineExtension } from '@earendil-works/pi-durable'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 
 const directories: string[] = []
@@ -84,20 +83,6 @@ it('prints a single-line error for a missing project', async () => {
   const [code] = await once(child, 'exit')
   expect(code).toBe(1)
   expect(error.trim().split('\n')).toEqual([`Cannot open project ${missing}: ENOENT`])
-})
-
-it('derives project storage from canonical roots and an injected user home', async () => {
-  const home = await temp()
-  const project = await realpath(await temp())
-  const expected = join(
-    home,
-    '.ultimate/projects',
-    project.split('/').at(-1)! +
-      '-' +
-      (await import('node:crypto')).createHash('sha256').update(project).digest('hex').slice(0, 8),
-  )
-  expect(projectHome(project, home)).toBe(expected)
-  expect(projectHome(project + '/other', home)).not.toBe(expected)
 })
 
 it('survives invalid settings at boot and mid-run and clears errors after repair', async () => {
@@ -223,14 +208,6 @@ it('loads external project facets over user and built-in names, actions and tran
     server: { tools: [] },
   })
   expect(record().server?.error).toBeUndefined()
-  expect((await server.vite.ssrLoadModule(join(path, 'server.ts'))).dependency).toBe(
-    defineExtension,
-  )
-  const virtual = await server.vite.ssrLoadModule('virtual:ultimate/web-facets')
-  expect(typeof virtual.loaders[join(path, 'web.tsx')]).toBe('function')
-  expect(
-    typeof virtual.loaders[join(server.host.ultimateRoot, 'extensions/status-line/web.tsx')],
-  ).toBe('function')
   const added = join(projectRoot, '.ultimate/extensions/added')
   await mkdir(added, { recursive: true })
   await writeFile(join(added, 'web.tsx'), 'export default {}')

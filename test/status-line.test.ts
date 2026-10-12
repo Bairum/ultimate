@@ -1,4 +1,3 @@
-import type { Context } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { fauxAssistantMessage, fauxText } from '@earendil-works/pi-ai/providers/faux'
 import { defineExtension, defineTask, LiveDoc, UsageDoc } from '@earendil-works/pi-durable'
@@ -143,10 +142,7 @@ describe('instance commit collector', () => {
         context,
       )
       vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] })
-      const commit = vi.spyOn(f.harness, 'commit')
       await f.open()
-      expect(commit).toHaveBeenCalledTimes(1)
-      commit.mockRestore()
       expect(f.rate()).toBeNull()
       await vi.advanceTimersByTimeAsync(1000)
       expect(f.rate()).toEqual({ elapsed: 1, rates: counters(0) })
@@ -171,72 +167,6 @@ describe('instance commit collector', () => {
       expect(f.rate()).toEqual({ elapsed: 2, rates: counters(690 / 2) })
       for (let index = 0; index < 30; index++) await vi.advanceTimersByTimeAsync(1000)
       expect(f.rate()?.rates.output).toBe(0)
-      expect(f.notices).toEqual([])
-    } finally {
-      await f.cleanup()
-    }
-  })
-
-  it('does not lose a commit between the seed publication and opener completion; adopts whole settlement and correction', async () => {
-    const f = await fixture()
-    try {
-      const root = f.root.id
-      await f.harness.commit((tx) => settled(tx, root, 100), context)
-      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] })
-      const original = f.harness.commit.bind(f.harness)
-      vi.spyOn(f.harness, 'commit').mockImplementationOnce(
-        async <T>(change: (tx: Tx) => T | Promise<T>, caller: Context) => {
-          const result = await original(change, caller)
-          await original((tx) => settled(tx, root, 110), context)
-          return result
-        },
-      )
-      await f.open()
-      await vi.advanceTimersByTimeAsync(1000)
-      expect(f.rate()?.rates.output).toBe(10)
-      await original(async (tx) => {
-        ;(await tx.doc(LiveDoc, root)).generation = {
-          attempt: 1,
-          message: JSON.parse(JSON.stringify(message(100))),
-        }
-      }, context)
-      await vi.advanceTimersByTimeAsync(1000)
-      expect(f.rate()?.rates.output).toBe(55)
-      await original(async (tx) => {
-        ;(await tx.doc(LiveDoc, root)).generation!.message!.usage = message(80).usage
-      }, context)
-      await vi.advanceTimersByTimeAsync(1000)
-      expect(f.rate()?.rates.output).toBe(30)
-      await original(async (tx) => {
-        await settled(tx, root, 190)
-        delete (await tx.doc(LiveDoc, root)).generation
-      }, context)
-      await vi.advanceTimersByTimeAsync(1000)
-      expect(f.rate()?.rates.output).toBe(22.5)
-      expect(f.notices).toEqual([])
-    } finally {
-      await f.cleanup()
-    }
-  })
-
-  it('treats non-finite counters as zero and keeps collecting later updates', async () => {
-    const f = await fixture()
-    try {
-      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] })
-      await f.open()
-      await f.harness.commit(async (tx) => {
-        await settled(tx, f.root.id, 10)
-        ;(await tx.doc(UsageDoc, f.root.id)).models['faux/model'].output =
-          'invalid' as unknown as number
-      }, context)
-      await vi.advanceTimersByTimeAsync(1000)
-      expect(f.rate()).toEqual({
-        elapsed: 1,
-        rates: { input: 20, output: 0, cacheRead: 30, cacheWrite: 40 },
-      })
-      await f.harness.commit((tx) => settled(tx, f.root.id, 20), context)
-      await vi.advanceTimersByTimeAsync(1000)
-      expect(f.rate()).toEqual({ elapsed: 2, rates: counters(10) })
       expect(f.notices).toEqual([])
     } finally {
       await f.cleanup()

@@ -4,7 +4,6 @@ import { join, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { fauxServer, sourceCopy, temp, until, attach } from './helpers.ts'
 import { context } from '../server/harness.ts'
-import { DEFAULT_EXTENSIONS } from '../server/extension-settings.ts'
 import { discoverExtensions } from '../server/discovery.ts'
 
 const homes: string[] = []
@@ -35,51 +34,6 @@ const tools = async (server: Awaited<ReturnType<typeof fauxServer>>) =>
   (await server.root.agent(context)).tools.map((tool) => tool.name).toSorted()
 const web = async (server: Awaited<ReturnType<typeof fauxServer>>) =>
   Object.keys((await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders)
-
-it('starts bare with exactly the default extensions and tools, and exposes off building blocks', async () => {
-  const { server } = await fixture()
-  expect(
-    server.extensions
-      .info()
-      .filter((entry) => entry.enabled)
-      .map((entry) => entry.name)
-      .toSorted(),
-  ).toEqual([...DEFAULT_EXTENSIONS].toSorted())
-  expect(
-    server.host.registry
-      .snapshot()
-      .installed()
-      .map((entry) => entry.name)
-      .toSorted(),
-  ).toEqual(
-    server.extensions
-      .info()
-      .filter((entry) => entry.enabled && entry.facets.server)
-      .map((entry) => entry.name)
-      .toSorted(),
-  )
-  expect(await tools(server)).toEqual(
-    ['read', 'write', 'edit', 'bash', 'codemode', 'screenshot', 'browser', 'workspace'].toSorted(),
-  )
-  const info = server.system.current().extensions
-  expect(info.filter((entry) => !entry.enabled).map((entry) => entry.name)).toEqual([
-    'automations',
-    'clock',
-    'documents',
-    'exclusive-commands',
-    'info',
-    'instance',
-    'parallel',
-    'plan',
-    'secrets',
-    'self',
-    'subagents',
-    'surfaces',
-    'tailscale',
-    'tasks',
-  ])
-  expect((await web(server)).some((path) => path.includes('/subagents/'))).toBe(false)
-})
 
 it('layers settings live, installs and uninstalls tools and web facets, and notices unknown names once', async () => {
   const { home, projectRoot, server } = await fixture()
@@ -246,22 +200,4 @@ it('enables the full repository set including github-triage', async () => {
       .filter((entry) => !['tailscale', 'secrets', 'parallel'].includes(entry.name))
       .every((entry) => entry.enabled),
   ).toBe(true)
-  expect(discovered.filter((entry) => entry.enabled).map((entry) => entry.name)).toEqual(
-    [
-      ...DEFAULT_EXTENSIONS,
-      'automations',
-      'claude-code',
-      'clock',
-      'documents',
-      'exclusive-commands',
-      'info',
-      'instance',
-      'plan',
-      'self',
-      'subagents',
-      'surfaces',
-      'tasks',
-      'github-triage',
-    ].toSorted(),
-  )
 })

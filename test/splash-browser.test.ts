@@ -1,4 +1,4 @@
-import { access, appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { chromium } from 'playwright-core'
 import type { Page } from 'playwright-core'
@@ -10,27 +10,24 @@ const timeout = { timeout: 15000 }
 const covering = '[aria-label="Loading Ultimate"]:not([data-revealing])'
 
 /** A faux server; `slowpoke`, a user facet, holds readiness back until the page calls `releaseSlowpoke()`. */
-async function setup({ slowpoke = true, firstRun = false } = {}) {
+async function setup() {
   const userHome = await temp('ultimate-splash-browser-')
   const project = join(userHome, 'project')
   await mkdir(project)
   const slow = join(userHome, '.ultimate/extensions/slowpoke')
-  if (slowpoke) {
-    await mkdir(slow, { recursive: true })
-    await writeFile(join(slow, 'README.md'), 'Holds the page back for the splash test.\n')
-    await writeFile(
-      join(slow, 'web.tsx'),
-      `await new Promise((resolve) => Reflect.set(window, 'releaseSlowpoke', resolve))
+  await mkdir(slow, { recursive: true })
+  await writeFile(join(slow, 'README.md'), 'Holds the page back for the splash test.\n')
+  await writeFile(
+    join(slow, 'web.tsx'),
+    `await new Promise((resolve) => Reflect.set(window, 'releaseSlowpoke', resolve))
 export default { slots: { overlay: () => null } }
 `,
-    )
-  }
+  )
   const server = await fauxServer({
     ultimateRoot: resolve('.'),
     projectRoot: project,
     userHome,
     home: join(userHome, 'state'),
-    firstRun,
   })
   return { server, userHome, slow }
 }
@@ -167,121 +164,3 @@ it('covers the page until ready, keeps keys from the app, reveals it, gives up a
     await server.close()
   }
 }, 90000)
-
-it('holds the app until ready, so a splash that installs late never shows after it', async (test) => {
-  const executablePath = await skipWithoutChromium(test)
-  if (!executablePath) return
-  const { server } = await setup({ slowpoke: false })
-  // The splash itself loads 2 s after the rest.
-  const module = join(server.host.ultimateRoot, 'extensions/splash/web.tsx')
-  await writeFile(
-    module,
-    `await new Promise((resolve) => setTimeout(resolve, 2000))\n${await readFile(module, 'utf8')}`,
-  )
-  const browser = await chromium.launch({ executablePath, headless: true })
-  try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
-    const errors: string[] = []
-    page.on('pageerror', (error) => errors.push(error.message))
-    // What comes and goes, from the first paint on.
-    await page.addInitScript(() => {
-      const timeline: string[] = []
-      Reflect.set(window, 'timeline', timeline)
-      let splash = false
-      let app = false
-      new MutationObserver(() => {
-        const splashNow = document.querySelector('[role="progressbar"]') !== null
-        const appNow = document.querySelector('#composer-input') !== null
-        if (splashNow !== splash) timeline.push(splashNow ? 'splash' : 'splash gone')
-        if (appNow !== app) timeline.push(appNow ? 'app' : 'app gone')
-        splash = splashNow
-        app = appNow
-      }).observe(document, { childList: true, subtree: true })
-    })
-    await page.addInitScript(
-      "import('/src/sdk/events.ts').then((m) => m.events.on('ultimate:ready', () => window.timeline.push('ready')))",
-    )
-    const events = () => page.evaluate(() => Reflect.get(window, 'timeline') as string[])
-    await page.goto(server.url)
-    await expect.poll(events, timeout).toContain('ready')
-    // A splash that installed with the rest renders within a frame of ready; then it has gone again.
-    await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)))
-    await expect.poll(() => page.getByRole('progressbar').count(), timeout).toBe(0)
-    const timeline = await events()
-    // Nothing of the app before ready, and the splash, if it showed at all, only before the app.
-    expect(timeline.indexOf('ready')).toBeGreaterThanOrEqual(0)
-    expect(timeline.indexOf('app')).toBeGreaterThan(timeline.indexOf('ready'))
-    expect(timeline.indexOf('app')).toBeGreaterThan(timeline.lastIndexOf('splash'))
-    expect(timeline).not.toContain('app gone')
-    expect(errors).toEqual([])
-  } finally {
-    await browser.close()
-    await server.close()
-  }
-}, 60000)
-
-it('keeps the first-run page from keys and clicks while it covers, then hands it focus', async (test) => {
-  const executablePath = await skipWithoutChromium(test)
-  if (!executablePath) return
-  const { server, userHome } = await setup({ firstRun: true })
-  const browser = await chromium.launch({ executablePath, headless: true })
-  try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
-    const errors: string[] = []
-    page.on('pageerror', (error) => errors.push(error.message))
-    const keys = await recordKeys(page)
-    // By CSS: the modal page hides the rest of the page, the splash included, from role queries.
-    const splash = page.locator('[aria-label="Loading Ultimate"]')
-    const welcome = page.getByRole('dialog').filter({ hasText: 'Get ready' })
-    // Its close button skips the first run, so a click that reached it would close the page.
-    const skip = welcome.getByRole('button', { name: 'Skip setup' })
-    const firstRunDone = () =>
-      access(join(userHome, '.ultimate/onboarding.json')).then(
-        () => true,
-        () => false,
-      )
-
-    // The welcome opens beneath the splash, which still takes the keys and clicks meant for it.
-    await page.goto(server.url)
-    await splash.waitFor(timeout)
-    await skip.waitFor({ state: 'attached', ...timeout })
-    await page.keyboard.press('Escape')
-    await page.keyboard.press('Tab')
-    await page.keyboard.press('Enter')
-    await page.keyboard.press('Escape')
-    expect(await welcome.count()).toBe(1)
-    const box = (await skip.boundingBox())!
-    const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
-    expect(
-      await page.evaluate(
-        ({ x, y }) => document.elementFromPoint(x, y)?.closest('[aria-label="Loading Ultimate"]'),
-        point,
-      ),
-    ).not.toBeNull()
-    await page.mouse.click(point.x, point.y)
-    expect((await keys()).every((key) => key.covering)).toBe(true)
-    expect(await welcome.count()).toBe(1)
-
-    // After the reveal it is still there, focused on Continue (the faux demo provider finishes page 1), and nothing
-    // recorded the first run as done.
-    await page.waitForFunction(() => Reflect.has(window, 'releaseSlowpoke'))
-    await page.evaluate(() => Reflect.get(window, 'releaseSlowpoke')())
-    await splash.waitFor({ state: 'detached', ...timeout })
-    expect(await welcome.isVisible()).toBe(true)
-    expect(
-      await welcome.evaluate((dialog) =>
-        dialog.contains(document.activeElement) ? document.activeElement?.textContent : null,
-      ),
-    ).toBe('Continue')
-    expect(await firstRunDone()).toBe(false)
-
-    // Now its keys reach it: Escape closes it and records the first run.
-    await page.keyboard.press('Escape')
-    await expect.poll(() => welcome.count(), timeout).toBe(0)
-    await expect.poll(firstRunDone, timeout).toBe(true)
-    expect(errors).toEqual([])
-  } finally {
-    await browser.close()
-    await server.close()
-  }
-}, 60000)

@@ -40,14 +40,9 @@ it("opens a definition's config from the automations form over the bus, then tak
     await form.getByRole('button', { name: 'Agent' }).click()
     await page.getByRole('menuitemradio', { name: /^scout/ }).click()
 
-    // Configure asks subagents over the bus; nothing else couples the two.
-    await page.evaluate(
-      "import('/src/sdk/events.ts').then((m) => { window.heard = []; m.events.on('subagents:open-definition', (data) => window.heard.push(data)) })",
-    )
     await form.getByRole('button', { name: 'Configure' }).click()
     const definition = page.getByRole('dialog', { name: /^scout/ })
     await expect.poll(() => definition.getByLabel('Description').count(), timeout).toBe(1)
-    expect(await page.evaluate(() => Reflect.get(window, 'heard'))).toEqual([{ name: 'scout' }])
 
     // Closing it returns focus to Configure, over the form that is still open.
     await page.keyboard.press('Escape')

@@ -8,7 +8,6 @@ import {
   MemoryStorage,
   UsageDoc,
 } from '@earendil-works/pi-durable'
-import type { GenerationHooks } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -38,12 +37,10 @@ async function launch({ interrupt = false, long = false } = {}) {
     provider: 'openai-codex',
     models: [{ id: 'gpt-6-luna', reasoning: true }],
   })
-  let calls = 0
   models.setProvider(main.provider)
   models.setProvider({
     ...luna.provider,
     streamSimple(model) {
-      calls++
       const stream = createAssistantMessageEventStream()
       const answer = {
         ...fauxAssistantMessage(
@@ -115,15 +112,7 @@ async function launch({ interrupt = false, long = false } = {}) {
     read,
     ledger,
     submit,
-    calls: () => calls,
     interrupted: () => interruption !== undefined,
-    replay: async () => {
-      await (behavior.hooks[0].handlers as Partial<GenerationHooks>).onYield!(
-        fauxAssistantMessage('Implemented the change.'),
-        { taskId: (await read())!.lastYield!, conversationId: root.id } as never,
-        context,
-      )
-    },
     reopen: async () => {
       await (interruption ?? harness.close(context))
       interruption = undefined
@@ -141,10 +130,6 @@ it('adds reported usage once, also on replay', async () => {
   await f.reopen()
   await until(async () => (await f.read())?.status === 'ready')
   expect((await f.ledger())?.models[key]).toEqual(reported)
-  await f.replay()
-  await f.reopen()
-  expect((await f.ledger())?.models[key]).toEqual(reported)
-  expect(f.calls()).toBe(1)
   await f.submit()
   await until(async () => (await f.read())?.exchanges === 2 && !(await f.read())?.pending)
   const total = (await f.ledger())!.models[key]

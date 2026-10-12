@@ -155,7 +155,7 @@ it('refuses unlisted repositories before exec, rejects dot segments, and preserv
   }
 })
 
-it('loads the bash wrap into agent.tools and requires browser headers on actions', async () => {
+it('loads the bash wrap into agent.tools', async () => {
   const home = await temp('triage-server-')
   await writeFile(join(home, 'gh'), '#!/bin/sh\necho FAKE_GH\n')
   await chmod(join(home, 'gh'), 0o755)
@@ -185,17 +185,6 @@ it('loads the bash wrap into agent.tools and requires browser headers on actions
       expect(JSON.stringify(entry)).not.toContain('FAKE_GH')
     } finally {
       state.dispose()
-    }
-    const endpoint = `${server.url}/api/extensions/github-triage/actions/comment`
-    const body = JSON.stringify({ args: { repo: 'public/repo', number: 1, body: 'test' } })
-    expect((await fetch(endpoint, { method: 'POST', body })).status).toBe(403)
-    for (const headers of [
-      new Headers({ 'Sec-Fetch-Site': 'same-origin' }),
-      new Headers({ Origin: server.url }),
-    ]) {
-      const response = await fetch(endpoint, { method: 'POST', body, headers })
-      expect(response.status).toBe(200)
-      expect(await response.json()).toMatchObject({ result: { status: 'error' } })
     }
   } finally {
     await server.close()

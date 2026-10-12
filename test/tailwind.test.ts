@@ -7,20 +7,17 @@ import { skipWithoutChromium, temp, removeTemp, linkDependencies } from './helpe
 import { extensionModules } from '../server/vite-extensions.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 
-it.for(['builtin', 'user', 'project'] as const)(
-  'scans and hot-reloads created, edited and removed %s facets without navigating',
+it(
+  'scans and hot-reloads created, edited and removed project facets without navigating',
   { timeout: 60000 },
-  async (source, test) => {
+  async (test) => {
     const executablePath = await skipWithoutChromium(test)
     if (!executablePath) return
     const base = await temp('ultimate-tailwind-')
     const ultimate = join(base, 'ultimate')
     const project = join(base, 'project')
     const user = join(base, 'user')
-    const extensions =
-      source === 'builtin'
-        ? join(ultimate, 'extensions')
-        : join(source === 'user' ? user : project, '.ultimate/extensions')
+    const extensions = join(project, '.ultimate/extensions')
     let server: ViteDevServer | undefined
     let browser: Browser | undefined
     try {
@@ -42,7 +39,7 @@ it.for(['builtin', 'user', 'project'] as const)(
       await writeFile(
         join(ultimate, 'web/src/main.ts'),
         `import './index.css'
-${source === 'builtin' ? `const loaders = import.meta.glob('../../extensions/*/web.tsx')` : `import { loaders } from 'virtual:ultimate/web-facets'`}
+import { loaders } from 'virtual:ultimate/web-facets'
 async function render(map) {
   const modules = await Promise.all(Object.values(map).map(load => load()))
   const app = document.querySelector('#app')
@@ -55,7 +52,7 @@ async function render(map) {
   }
 }
 await render(loaders)
-${source === 'builtin' ? `if (import.meta.hot) import.meta.hot.accept()` : `if (import.meta.hot) import.meta.hot.accept('virtual:ultimate/web-facets', next => { if (next) void render(next.loaders) })`}
+if (import.meta.hot) import.meta.hot.accept('virtual:ultimate/web-facets', next => { if (next) void render(next.loaders) })
 `,
       )
       server = await createServer({

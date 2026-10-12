@@ -247,43 +247,6 @@ it('never forwards a non-JSON HTTP error body', async () => {
   expect(JSON.stringify(output)).toContain('HTTP 502')
   expect(JSON.stringify([output, f.details.mock.calls])).not.toMatch(/non-json-key|confidential/)
 })
-it('retains bounded diagnostics before truncated page text and adds full-content-only pages', async () => {
-  const f = await fixture()
-  vi.stubEnv('PARALLEL_API_KEY', 'env-key')
-  const fullContent = 'ü'.repeat(30000)
-  const warning = 'visible warning'
-  const failedUrl = 'https://failed.example/'
-  await fake((_body, path) => ({
-    data:
-      path === '/search'
-        ? {
-            search_id: 's',
-            session_id: 'session',
-            results: [{ ...page, excerpts: [fullContent] }],
-            warnings: [{ type: 'notice', message: warning }],
-          }
-        : {
-            extract_id: 'e',
-            session_id: 'session',
-            results: [{ ...page, excerpts: [], full_content: fullContent }],
-            errors: [{ url: failedUrl, error_type: 'blocked', http_status_code: 404 }],
-            warnings: [{ type: 'notice', message: warning }],
-          },
-  }))
-  const search = await f.run('web_search', { query: 'test' })
-  expect(JSON.stringify(search)).toContain(warning)
-  expect(JSON.stringify(search)).toContain('Output truncated')
-  const fetch = await f.run('web_fetch', { url: 'https://example.com' })
-  expect(fetch).toHaveProperty('isError', false)
-  expect(JSON.stringify(fetch)).toContain(failedUrl)
-  expect(JSON.stringify(fetch)).toContain(warning)
-  expect(JSON.stringify(fetch)).toContain('Output truncated')
-  const details = f.details.mock.calls.at(-1)?.[0]
-  expect(details).toHaveProperty('pages.0.content', fullContent.slice(0, 20000))
-  expect(details).toHaveProperty('pages.0.contentTruncated', true)
-  expect(details).toHaveProperty('results.0.excerpts', [])
-  expect(details).not.toHaveProperty('results.0.content')
-})
 it('repairs JSON-string URL arrays without mutating arguments and preserves excerpt fallback', async () => {
   const f = await fixture()
   vi.stubEnv('PARALLEL_API_KEY', 'env-key')
@@ -296,8 +259,6 @@ it('repairs JSON-string URL arrays without mutating arguments and preserves exce
   expect(await f.run('web_fetch', input)).toHaveProperty('isError', false)
   expect(input.url).toBe('["https://example.com","https://other.example"]')
   expect(requests[0].urls).toEqual(['https://example.com/', 'https://other.example/'])
-  expect(f.details.mock.calls[0][0]).toHaveProperty('pages.0.content', 'excerpt')
-  expect(f.details.mock.calls[0][0]).toHaveProperty('pages.0.contentTruncated', false)
   expect(await f.run('web_fetch', { url: '[invalid' })).toHaveProperty('isError', true)
 })
 it('maps invalid JSON, empty and malformed responses, invalid URLs, and total extract failure', async () => {

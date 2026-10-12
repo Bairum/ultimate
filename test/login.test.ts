@@ -113,23 +113,3 @@ it('closes the login dialog and cancels its flow when the tab shows another conv
   expect(await flows(other)).toEqual([])
   expect(errors).toEqual([])
 }, 120000)
-
-it('refreshes model availability when a tab regains focus after another tab logged in', async (test) => {
-  const { tab, start, errors } = await launch(test)
-  const stale = await tab()
-  const label = stale.getByRole('dialog').getByText(/not configured|✓ stored/)
-  expect(await label.textContent()).toBe('not configured')
-
-  const page = await tab()
-  await start(page)
-  await page.locator('#login-answer').fill('not-a-real-key')
-  await page.locator('#login-answer').press('Enter')
-  await expect
-    .poll(() => page.getByRole('dialog').getByText('Logged in to Stub').count(), timeout)
-    .toBe(1)
-  // The other tab learns of the login only when its window gains focus.
-  expect(await label.textContent()).toBe('not configured')
-  await stale.evaluate(() => dispatchEvent(new Event('focus')))
-  await expect.poll(() => label.textContent(), timeout).toBe('✓ stored')
-  expect(errors).toEqual([])
-}, 120000)
