@@ -15,8 +15,9 @@ import {
   useSystem,
   useUltimate,
 } from '@/sdk'
-import type { EntryRecord, Usage } from '@/sdk'
+import type { Usage } from '@/sdk'
 import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
+import { lastAssistant, promptTokens as prompt, usageTotals } from './context.ts'
 
 /** A status-line item with a tooltip of details; a button when it has `onClick`. */
 function Item({
@@ -91,20 +92,6 @@ function Cwd() {
   )
 }
 
-function lastAssistant(entries: readonly EntryRecord[]) {
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index]
-    // After a compaction or reset, the context size is unknown until the next response.
-    if (entry.kind === 'pi.compaction' || entry.kind === 'pi.reset') return { stale: true }
-    const message = entry.model?.[0]
-    if (entry.kind === 'pi.assistant' && message?.role === 'assistant')
-      return { message, stale: false }
-  }
-  return { stale: false }
-}
-
-const prompt = (usage: Usage) => usage.input + usage.cacheRead + usage.cacheWrite
-
 type RateSample = {
   rates: Pick<Usage, 'input' | 'output' | 'cacheRead' | 'cacheWrite'>
   elapsed: number
@@ -157,17 +144,7 @@ function Tokens() {
   const speed = useTokenRates()
   const running = useAllConversations().filter((conversation) => conversation.busy).length
   const models = useModels()
-  const buckets = [...Object.values(usage.models), ...Object.values(usage.tools)]
-  const total = buckets.reduce(
-    (sum, bucket) => ({
-      input: sum.input + bucket.input,
-      output: sum.output + bucket.output,
-      cacheRead: sum.cacheRead + bucket.cacheRead,
-      cacheWrite: sum.cacheWrite + bucket.cacheWrite,
-      cost: sum.cost + bucket.cost.total,
-    }),
-    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
-  )
+  const total = usageTotals(usage)
   const latest = lastAssistant(entries).message?.usage
   const hit =
     (total.cacheRead > 0 || total.cacheWrite > 0) && latest && prompt(latest) > 0

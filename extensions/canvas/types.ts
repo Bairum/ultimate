@@ -12,6 +12,19 @@ export type CanvasTool = {
 export type CanvasEdit = { path: string; added: number; removed: number; at: number }
 /** The tail of a text, and when it last changed (ms). */
 export type CanvasText = { text: string; at: number }
+/** An agent's model and spend; the context window comes from the model list, as the status line's. */
+export type CanvasUsage = {
+  /** The model of its `pi.agent`, when set. */
+  provider?: string
+  model?: string
+  /** Tokens in context: the latest answer's prompt since the last compaction or reset; absent while unknown. */
+  context?: number
+  /** Totals of its own `pi.usage`, every model and tool. */
+  input: number
+  output: number
+  cacheRead: number
+  cost: number
+}
 export type CanvasAgent = {
   /** The last 8 tool calls, newest last. */
   tools: CanvasTool[]
@@ -23,6 +36,7 @@ export type CanvasAgent = {
   edits: CanvasEdit[]
   /** Child conversations this agent waits on: a running foreground subagent start or message, or a wait. */
   waitingOn?: number[]
+  usage?: CanvasUsage
   /** The latest change (ms). */
   updatedAt: number
 }

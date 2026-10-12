@@ -3,8 +3,9 @@ import { isAbsolute, relative } from 'node:path'
 import type { JsonValue } from '@earendil-works/chord'
 import type { AssistantMessage, ToolResultMessage } from '@earendil-works/pi-ai'
 import { AssistantEntry, ToolResultEntry } from '@earendil-works/pi-durable'
-import type { EntryRecord, LiveState } from '@earendil-works/pi-durable'
-import type { CanvasAgent } from './types.ts'
+import type { AgentState, EntryRecord, LiveState, UsageState } from '@earendil-works/pi-durable'
+import { lastAssistant, promptTokens, usageTotals } from '../status-line/context.ts'
+import type { CanvasAgent, CanvasUsage } from './types.ts'
 
 const TOOLS = 8
 const EDITS = 4
@@ -126,14 +127,46 @@ function applyTexts(agent: CanvasAgent, content: AssistantMessage['content'], no
   return changed
 }
 
+const usageOf = (agent: CanvasAgent): CanvasUsage =>
+  (agent.usage ??= { input: 0, output: 0, cacheRead: 0, cost: 0 })
+
+/** Set `fields` of the row's usage; returns whether any changed. */
+function setUsage(agent: CanvasAgent, fields: Partial<CanvasUsage>) {
+  const usage = usageOf(agent)
+  let changed = false
+  for (const [key, value] of Object.entries(fields) as [keyof CanvasUsage, never][]) {
+    if (usage[key] === value) continue
+    if (value === undefined) delete usage[key]
+    else usage[key] = value
+    changed = true
+  }
+  return changed
+}
+
+/** Apply the conversation's `pi.usage`: its totals over every model and tool. */
+export function applyUsage(feed: Feed, state: Readonly<UsageState>) {
+  const { input, output, cacheRead, cost } = usageTotals(state)
+  return setUsage(feed.agent, { input, output, cacheRead, cost })
+}
+
+/** Apply the conversation's `pi.agent`: its model. */
+export function applyAgent(feed: Feed, state: Readonly<AgentState>) {
+  return setUsage(feed.agent, { provider: state.model?.provider, model: state.model?.modelId })
+}
+
 /** Apply a committed answer (its texts and tool calls) or tool result; returns whether the row changed. */
 export function applyEntry(feed: Feed, entry: EntryRecord, now: number, place: () => Place) {
   const { agent, calls } = feed
-  let changed = false
+  // The context, as the status line counts it: the latest answer's prompt, unknown after a compaction or reset.
+  const { message: answer, stale } = lastAssistant([entry])
+  let changed =
+    answer || stale
+      ? setUsage(agent, { context: answer ? promptTokens(answer.usage) : undefined })
+      : false
   if (AssistantEntry.is(entry)) {
     const message = entry.model?.[0]
-    if (message?.role !== 'assistant') return false
-    changed = applyTexts(agent, message.content, now)
+    if (message?.role !== 'assistant') return changed
+    changed = applyTexts(agent, message.content, now) || changed
     for (const part of message.content) {
       if (part.type !== 'toolCall' || agent.tools.some((tool) => tool.id === part.id)) continue
       const args = part.arguments as Args
@@ -158,7 +191,7 @@ export function applyEntry(feed: Feed, entry: EntryRecord, now: number, place: (
     }
   } else if (ToolResultEntry.is(entry)) {
     const message = entry.model?.[0] as ToolResultMessage | undefined
-    if (message?.role !== 'toolResult') return false
+    if (message?.role !== 'toolResult') return changed
     const status = message.isError ? 'error' : 'done'
     const tool = agent.tools.find((candidate) => candidate.id === message.toolCallId)
     if (tool && tool.status !== status) {

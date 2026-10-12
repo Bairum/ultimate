@@ -9,6 +9,7 @@ import {
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
+import type { Usage } from '@earendil-works/pi-ai'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { DocumentWatch } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
@@ -287,4 +288,49 @@ it('drops archived conversations and their subagents, and rebuilds them when una
     waitingOn: undefined,
   })
   expect(canvas.agent(child)!.writing!.text).toBe('Looked.')
+}, 60000)
+
+it('keeps each agent’s model, context and spend, updates them, and forgets the context after a reset', async () => {
+  const { server } = await launch()
+  const canvas = await observe(server)
+  await post(server, '/api/conversations/1/configure', {
+    model: { provider: 'faux', modelId: 'faux-1' },
+  })
+  server.host.faux!.setResponses([
+    fauxAssistantMessage('First answer.'),
+    fauxAssistantMessage('A second, longer answer to a longer conversation.'),
+  ])
+  await submit(server, 1, 'one')
+  await until(
+    () => canvas.agent(1)?.writing?.text === 'First answer.' && !!canvas.agent(1)?.usage?.output,
+  )
+  const first = canvas.agent(1)!.usage!
+  expect(first).toMatchObject({ provider: 'faux', model: 'faux-1' })
+  expect(first.input).toBeGreaterThan(0)
+  expect(first.context).toBeGreaterThan(0)
+
+  await submit(server, 1, 'two')
+  await until(() => canvas.agent(1)?.writing?.text.startsWith('A second') === true)
+  await until(() => canvas.agent(1)!.usage!.input > first.input)
+  const second = canvas.agent(1)!.usage!
+  expect(second.output).toBeGreaterThan(first.output)
+  // The context is what the latest answer's prompt took, as the status line counts it.
+  const latest = await server.harness.commit(
+    async (tx) =>
+      (await tx.scanEntries({ conversationId: ROOT_CONVERSATION_ID }, 8)).items.find(
+        (entry) => entry.kind === 'pi.assistant',
+      ),
+    context,
+  )
+  const prompt = (latest!.model![0] as { usage: Usage }).usage
+  expect(second.context).toBe(prompt.input + prompt.cacheRead + prompt.cacheWrite)
+  expect(second.context).not.toBe(first.context)
+
+  await server.harness.waitForIdle(context)
+  expect(
+    (await post(server, '/api/extensions/conversations/actions/reset', { args: { id: 1 } })).status,
+  ).toBe(200)
+  await until(() => canvas.agent(1)?.usage?.context === undefined)
+  // The spend stays: it was paid.
+  expect(canvas.agent(1)!.usage).toMatchObject({ input: second.input, output: second.output })
 }, 60000)
