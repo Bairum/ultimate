@@ -15,13 +15,13 @@ export const dialogs = {
 
 /** The shown conversation's model, its catalogue entry, and the thinking level the server configured. */
 export function useCurrentModel() {
-  const { agent } = useConversation()
+  const { agent, loading } = useConversation()
   const models = useModels()
   const ref = agent.model
   const model = models?.models.find(
     (candidate) => candidate.provider === ref?.provider && candidate.id === ref.modelId,
   )
-  return { ref, model, thinking: agent.thinkingLevel, models }
+  return { ref, model, thinking: agent.thinkingLevel, models, loading }
 }
 
 /** Configure the shown conversation's model; the server clamps its thinking level to the model as Pi does. */

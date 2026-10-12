@@ -1,6 +1,6 @@
 import type { AgentState, InboxItem } from '@earendil-works/pi-durable'
 import { cn } from 'cn'
-import { CornerDownRightIcon, ListPlusIcon, XIcon } from 'lucide-react'
+import { CornerDownRightIcon, ListPlusIcon, LoaderCircleIcon, XIcon } from 'lucide-react'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { ToolImage } from '@/components/ai/tool'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../../shared/protocol.ts'
@@ -130,7 +130,7 @@ function createDraft(id: number | undefined) {
 }
 
 function ConversationComposer({ dock }: { dock?: boolean }) {
-  const { id, busy, agent, inbox } = useConversation()
+  const { id, busy, agent, inbox, loading } = useConversation()
   if (!drafts.has(id)) drafts.set(id, createDraft(id))
   const draft = drafts.get(id)!
   const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
@@ -158,10 +158,14 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     if (value) localStorage.setItem(key, value)
     else localStorage.removeItem(key)
   }
-  const blocked = blockedBy(agent, models)
+  const blocked = loading ? undefined : blockedBy(agent, models)
   const empty = !text.trim() && images.length === 0
 
   async function paste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    if (loading) {
+      event.preventDefault()
+      return
+    }
     const files = Array.from(event.clipboardData.items)
       .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
       .flatMap((item) => {
@@ -209,7 +213,8 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   }
 
   async function send(whenBusy?: 'steer' | 'followUp') {
-    if (empty || blocked || draft.get().sending || pending.current || id === undefined) return
+    if (loading || empty || blocked || draft.get().sending || pending.current || id === undefined)
+      return
     const submitted = draft.get()
     draft.set({ sending: true, error: undefined })
     try {
@@ -258,7 +263,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
                 <button
                   aria-label={`Remove image ${index + 1}`}
                   className="absolute -top-2 -right-2 flex size-5 cursor-pointer items-center justify-center rounded-full border bg-background hover:bg-accent"
-                  disabled={sending || reading}
+                  disabled={loading || sending || reading}
                   onClick={() => setImages((current) => current.filter((_, i) => i !== index))}
                   type="button"
                 >
@@ -270,7 +275,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
         )}
         <PromptInputTextarea
           autoFocus
-          readOnly={sending}
+          readOnly={loading || sending}
           onPaste={(event) => void paste(event)}
           id="composer-input"
           onChange={(event) => update(event.target.value)}
@@ -310,9 +315,15 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
             )}
             {(!busy || !empty) && (
               <PromptInputSubmit
-                disabled={empty || !!blocked || sending || reading}
-                title={busy ? 'Steer (Enter)' : 'Send (Enter)'}
-              />
+                disabled={loading || empty || !!blocked || sending || reading}
+                aria-label={loading ? 'Loading conversation' : 'Send'}
+                title={loading ? 'Loading conversation' : busy ? 'Steer (Enter)' : 'Send (Enter)'}
+                className={loading ? 'bg-muted text-muted-foreground' : undefined}
+              >
+                {loading ? (
+                  <LoaderCircleIcon className="size-4 motion-safe:animate-spin" />
+                ) : undefined}
+              </PromptInputSubmit>
             )}
           </div>
         </PromptInputFooter>
