@@ -242,6 +242,56 @@ it('preserves an existing legacy ready marker byte-for-byte', async () => {
   })
   expect(await readFile(legacyMarker, 'utf8')).toBe(originalMarker)
 })
+it('recovers the complete owned publication checkpoint without rerunning setup', async () => {
+  const f = await fixture()
+  const request = 'complete-publication-checkpoint'
+  const first = await create(f.project, f.home, 'worker', request, setupOnce)
+  const ready = await readFile(f.marker(request), 'utf8')
+  const pending = { ...first.record, preparation: 'pending' as const }
+  await writeFile(`${f.marker(request)}.tmp`, ready)
+  await writeFile(f.marker(request), JSON.stringify({ ...pending, request }))
+  const registrations = await git(f.project, 'worktree', 'list', '--porcelain')
+  expect(await create(f.project, f.home, 'worker', request, setupOnce, undefined, pending)).toEqual(
+    first,
+  )
+  expect(await readFile(f.marker(request), 'utf8')).toBe(ready)
+  await expect(access(`${f.marker(request)}.tmp`)).rejects.toThrow('ENOENT')
+  expect(await readFile(join(first.cwd, 'runs.txt'), 'utf8')).toBe('run\n')
+  expect(await git(f.project, 'worktree', 'list', '--porcelain')).toBe(registrations)
+  expect(await create(f.project, f.home, 'worker', request, setupOnce)).toEqual(first)
+  expect(await readFile(join(first.cwd, 'runs.txt'), 'utf8')).toBe('run\n')
+})
+it.each([
+  'request',
+  'path',
+  'branch',
+  'base',
+  'source',
+  'targetBranch',
+  'preparation',
+  'missing-request',
+  'extra-field',
+  'partial',
+])('refuses and preserves an unrelated or partial publication checkpoint: %s', async (mismatch) => {
+  const f = await fixture()
+  const request = 'foreign-publication-checkpoint'
+  const first = await create(f.project, f.home, 'worker', request, setupOnce)
+  const foreign: Record<string, unknown> = { ...first.record, request }
+  if (mismatch === 'missing-request') delete foreign.request
+  else foreign[mismatch] = 'unrelated'
+  const temporary = mismatch === 'partial' ? '{"request":' : JSON.stringify(foreign)
+  const pending = JSON.stringify({ ...first.record, request, preparation: 'pending' })
+  await writeFile(`${f.marker(request)}.tmp`, temporary)
+  await writeFile(f.marker(request), pending)
+  const registrations = await git(f.project, 'worktree', 'list', '--porcelain')
+  await expect(create(f.project, f.home, 'worker', request, setupOnce)).rejects.toThrow(
+    mismatch === 'partial' ? 'Unexpected end of JSON input' : 'ownership conflict',
+  )
+  expect(await readFile(`${f.marker(request)}.tmp`, 'utf8')).toBe(temporary)
+  expect(await readFile(f.marker(request), 'utf8')).toBe(pending)
+  expect(await readFile(join(first.cwd, 'runs.txt'), 'utf8')).toBe('run\n')
+  expect(await git(f.project, 'worktree', 'list', '--porcelain')).toBe(registrations)
+})
 it('never adopts a retained branch on retry after failed clean setup', async () => {
   const f = await fixture()
   const request = 'failed-clean-setup'

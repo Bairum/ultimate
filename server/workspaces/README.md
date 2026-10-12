@@ -33,10 +33,13 @@ fails closed, even when a pending document happens to name that path/branch.
 
 Setup failure retains the existing clean-only Git removal behavior: valuable dirty
 or untracked output is never force-removed, and branches are retained. A removed
-checkout's retained branch is not automatically adopted on retry. Marker conflicts,
-including an existing temporary publication file, require explicit inspection;
-creation never overwrites that file. Setup commands must remain replay-safe when
-interrupted before the ready marker is published.
+checkout's retained branch is not automatically adopted on retry. If publication
+was interrupted after writing a complete `.ready.tmp`, replay promotes that file
+without rerunning setup, but only with an owned pending marker, matching registered
+worktree, and exact full request/workspace identity. Foreign, partial or non-file
+temporary checkpoints are refused and preserved for explicit inspection; creation
+never overwrites them. Setup commands must remain replay-safe when interrupted
+before the complete temporary ready marker is written.
 
 Verification: `pnpm test test/workspace-naming.test.ts test/workspaces.test.ts test/subagents-worktrees.test.ts --maxWorkers=2`.
 The naming suite includes sequential and concurrent real 40-bit truncated SHA-256

@@ -10,7 +10,7 @@ import {
   isAbsolute,
   sep,
 } from 'node:path'
-import { promisify } from 'node:util'
+import { isDeepStrictEqual, promisify } from 'node:util'
 
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { Workspace } from '../../shared/protocol.ts'
@@ -159,6 +159,21 @@ export async function create(
         preparation: 'ready',
       }
   if (saved?.preparation === 'ready') return { cwd: path, record }
+  const temporary = `${marker}.tmp`
+  const checkpoint = await lstat(temporary).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error
+    return undefined
+  })
+  if (checkpoint) {
+    if (!checkpoint.isFile() || !registered || saved?.preparation !== 'pending') throw conflict()
+    const complete = JSON.parse(await readFile(temporary, 'utf8'))
+    if (!isDeepStrictEqual(complete, JSON.parse(JSON.stringify({ ...record, request: call }))))
+      throw conflict()
+    // Setup already finished; recover only the exact owned publication checkpoint.
+    signal?.throwIfAborted()
+    await rename(temporary, marker)
+    return { cwd: path, record }
+  }
   if (!saved) {
     // Claim the full request identity before Git mutation, so interrupted add/setup can resume.
     await writeFile(marker, JSON.stringify({ ...record, preparation: 'pending', request: call }), {
@@ -173,8 +188,8 @@ export async function create(
     await git(parent, 'worktree', 'remove', path).catch(() => undefined)
     throw error
   }
-  await writeFile(`${marker}.tmp`, JSON.stringify({ ...record, request: call }), { flag: 'wx' })
-  await rename(`${marker}.tmp`, marker)
+  await writeFile(temporary, JSON.stringify({ ...record, request: call }), { flag: 'wx' })
+  await rename(temporary, marker)
   return { cwd: path, record }
 }
 async function setupWorktree(
