@@ -59,6 +59,8 @@ async function fixture() {
   )
   const host = {
     ...prepared,
+    service: () => ({ update: () => {}, dispose: () => {} }),
+    onOpen: () => {},
     harness: () => opened.harness,
     metadata: Metadata,
     extensions: () => [{ name: 'subagents', enabled }],

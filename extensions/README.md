@@ -76,6 +76,14 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
   by them, so set them on conversations you create (`subagents` labels each child with its definition).
 - `events`: Pi's ephemeral process-local event bus; see [Events](#events).
 - `access.allow({ origin, verify })`: register an HTTP origin with an identity verifier; returns a disposer and is automatically removed when the facet unloads or reloads. HTTP, API, and websocket upgrades use the same admission rules.
+- `service(name, { state, detail? })`: register ephemeral terminal status (`starting`, `ready`, `busy`, or `error`);
+  returns `{ update(status), dispose() }`. Names must be non-empty and unique within the facet. Registrations are
+  staged until installation succeeds, then removed automatically on replacement, disable, removal or shutdown.
+  Failed installation leaves the previous facet's rows intact; stale handles cannot update/remove replacement rows.
+  Handles are always facet-scoped, even inside `resource()`; do not save them in reload-stable resources. Reports
+  are hidden while the harness is released, and the supervisor ignores status from inactive cores. This API only
+  describes services: it does not start processes, schedule work, poll, or persist state. Example:
+  `const status = host.service('worker', { state: 'starting' }); host.onOpen(async () => { status.update({ state: 'ready' }) })`.
 - `notice(message)`: publish a warning notice and retain it in this facet's system diagnostics for later clients, until unload/reload.
 - `resource(key, create)`, `onOpen(callback)`, `onClose(cleanup)`: shared reload-stable resources, async work each
   time the harness opens (at once if it is open; the server serves once it settles), and async cleanup. Facet-level callbacks are removed on unload/reload, with cleanup run before the replacement opens. Callbacks registered inside a shared resource's creation belong to that reload-stable resource and survive until server shutdown.

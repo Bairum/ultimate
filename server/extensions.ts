@@ -26,6 +26,9 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { AgentDoc } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { Access } from './request-security.ts'
+import { serviceRegistry } from './services.ts'
+import type { ServiceStatus, ServiceHandle } from './services.ts'
+import { reportCore } from './supervisor-protocol.ts'
 
 export type ExtensionHost = Pick<
   PreparedHost,
@@ -46,6 +49,8 @@ export type ExtensionHost = Pick<
   events: EventBus
   access: Pick<Access, 'allow'>
   notice(message: string): void
+  /** Ephemeral terminal status, scoped to this facet; staged until installation succeeds. */
+  service(name: string, status: ServiceStatus): ServiceHandle
   resource<T>(key: string, create: () => T): T
   /** Run `callback` each time the harness opens, at once when it is open; the server serves once it settles. */
   onOpen(callback: () => Promise<void>): void
@@ -86,6 +91,10 @@ export async function loadExtensions(
 ) {
   const roots = discoveryRoots(host.ultimateRoot, host.projectRoot, host.userHome)
   const directories = roots.map((root) => join(root.path, 'extensions'))
+  const services = serviceRegistry((snapshot) =>
+    reportCore({ type: 'services', services: snapshot }),
+  )
+  const facetServices = new Map<ExtensionHost, ReturnType<typeof services.scope>>()
   const facetHosts = new Map<string, ExtensionHost>()
   const subscriptions = new Map<ExtensionHost, Set<() => void>>()
   const facetOpeners = new Map<ExtensionHost, Set<() => Promise<void>>>()
@@ -93,6 +102,8 @@ export async function loadExtensions(
   const facetNotices = new Map<ExtensionHost, Set<string>>()
   const dispose = async (facetHost: ExtensionHost | undefined) => {
     if (!facetHost) return
+    facetServices.get(facetHost)?.dispose()
+    facetServices.delete(facetHost)
     for (const stop of subscriptions.get(facetHost) ?? []) stop()
     subscriptions.delete(facetHost)
     for (const callback of facetOpeners.get(facetHost) ?? []) openers.delete(callback)
@@ -107,11 +118,13 @@ export async function loadExtensions(
     facetCleanups.delete(facetHost)
     facetNotices.delete(facetHost)
   }
-  const scope = (): ExtensionHost => {
+  const scope = (name: string): ExtensionHost => {
+    const serviceScope = services.scope(name)
     const stops = new Set<() => void>()
     let sharedResource = false
     const facetHost = {
       ...extensionHost,
+      service: (serviceName, status) => serviceScope.service(serviceName, status),
       notice: (message) => {
         facetNotices.get(facetHost)!.add(message)
         notice(message)
@@ -163,6 +176,7 @@ export async function loadExtensions(
         },
       },
     } satisfies ExtensionHost
+    facetServices.set(facetHost, serviceScope)
     subscriptions.set(facetHost, stops)
     facetOpeners.set(facetHost, new Set())
     facetCleanups.set(facetHost, new Set())
@@ -181,6 +195,9 @@ export async function loadExtensions(
   const resources = new Map<string, unknown>()
   const extensionHost: ExtensionHost = {
     events,
+    service: () => {
+      throw new Error('Services require a facet scope')
+    },
     access: runtime.access,
     notice,
     resource: <T>(key: string, create: () => T) => {
@@ -325,7 +342,7 @@ export async function loadExtensions(
         ...(previous?.server ? { server: previous.server } : {}),
       }
       if (enabled && record.facets.server && (!servers || servers.has(name))) {
-        const facetHost = scope()
+        const facetHost = scope(name)
         try {
           const module = await vite.ssrLoadModule(join(path, 'server.ts'))
           const extension: Extension =
@@ -342,6 +359,7 @@ export async function loadExtensions(
           host.registry.install(extension)
           await dispose(facetHosts.get(name))
           facetHosts.set(name, facetHost)
+          facetServices.get(facetHost)!.activate()
           if (open) await Promise.all([...facetOpeners.get(facetHost)!].map(runOpener))
           actions.set(name, exportedActions)
           if (module.reloadOnSettings === true) settingsReloads.add(name)
@@ -546,13 +564,17 @@ export async function loadExtensions(
     /** The harness is open: run the `onOpen` callbacks. */
     async opened() {
       open = true
+      services.visible(true)
       await Promise.all([...openers].map(runOpener))
     },
+    services: services.snapshot,
     released() {
+      services.visible(false)
       open = false
     },
     async close() {
       closed = true
+      services.visible(false)
       unwatch()
       await chain
       for (const facetHost of subscriptions.keys()) await dispose(facetHost)
