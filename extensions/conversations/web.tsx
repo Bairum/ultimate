@@ -21,6 +21,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Kbd, KbdGroup } from '@/components/ui/kbd'
@@ -50,7 +52,8 @@ import type { Assessment, OverviewRow, OverviewState, TitleChange } from './type
 
 const newKeys = 'mod+alt+n'
 const resetDialog = 'conversations.reset'
-const isolatedDialog = 'conversations.new-isolated'
+let creationType = 'isolated'
+let creating = false
 const overviewKind = 'ultimate.conversation-overview'
 
 /** One root stream for all rows, unchanged when selection or expansion changes. */
@@ -183,6 +186,23 @@ async function newConversation(actions: UltimateActions) {
   focusWhenShown(actions, id)
 }
 
+/** Both creation commands share a guard; failures propagate to the command notice handler. */
+async function createConversation(actions: UltimateActions, type = creationType) {
+  if (creating) return
+  creating = true
+  try {
+    if (type === 'shared') await newConversation(actions)
+    else {
+      const { id } = await api.action<{ id: number }>('workspaces', 'create', {})
+      actions.showSurface('agent')
+      actions.switchConversation(id)
+      focusWhenShown(actions, id)
+    }
+  } finally {
+    creating = false
+  }
+}
+
 /** The conversation the clear-context dialog asks about; set just before it opens. */
 let resetTarget: number | undefined
 function openReset(actions: Pick<UltimateActions, 'open'>, id: number) {
@@ -282,6 +302,7 @@ function Row({
   const afterMenu = useRef<() => void>(undefined)
   const name = conversation.title ?? (draft ? 'New conversation' : `#${conversation.id}`)
   const latest = Math.max(conversation.inputAt ?? 0, conversation.answerAt ?? 0)
+  const hasMetadata = conversation.workspace || latest > 0
   const rename = () => {
     cancelled.current = false
     setEditing(true)
@@ -311,7 +332,8 @@ function Row({
   return (
     <div
       className={cn(
-        'group relative mx-2 flex h-7 items-center rounded-md transition-colors',
+        'group relative mx-2 flex items-center rounded-md transition-colors',
+        hasMetadata ? 'h-11' : 'h-7',
         shown ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/50',
       )}
       data-conversation={conversation.id}
@@ -344,10 +366,7 @@ function Row({
       ) : (
         <button
           aria-current={shown ? 'true' : undefined}
-          className={cn(
-            'flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md pr-2 pl-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
-            conversation.workspace && 'pr-7',
-          )}
+          className="flex h-full min-w-0 flex-1 cursor-pointer flex-col justify-center rounded-md pr-2 pl-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
           onClick={() => actions.switchConversation(conversation.id)}
           ref={(element) => {
             if (!element || !refocus.current) return
@@ -356,22 +375,21 @@ function Row({
           }}
           type="button"
         >
-          <Mark assessment={assessment} unseen={unseen} working={working} />
-          {title}
-          {conversation.workspace && (
-            <span
-              className="shrink-0 font-mono text-[10px] text-muted-foreground"
-              title="Isolated checkout"
-            >
-              W{conversation.id}
-            </span>
-          )}
-          {latest > 0 && (
-            <span
-              className="shrink-0 font-mono text-[10.5px] text-muted-foreground/80 group-focus-within:invisible group-hover:invisible group-has-[[data-state=open]]:invisible"
-              title={new Date(latest).toLocaleString()}
-            >
-              {ago(latest, now)}
+          <span className="flex w-full min-w-0 items-center gap-1.5">
+            <Mark assessment={assessment} unseen={unseen} working={working} />
+            {title}
+          </span>
+          {hasMetadata && (
+            <span className="flex w-full items-center gap-2 pr-5 pl-[18px] font-mono text-[10px] leading-4 text-muted-foreground">
+              {conversation.workspace && <span title="Isolated checkout">W{conversation.id}</span>}
+              {latest > 0 && (
+                <span
+                  className="text-muted-foreground/80"
+                  title={new Date(latest).toLocaleString()}
+                >
+                  {ago(latest, now)}
+                </span>
+              )}
             </span>
           )}
         </button>
@@ -380,7 +398,7 @@ function Row({
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger
             aria-label="Conversation actions"
-            className="invisible absolute right-1 flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none group-focus-within:visible group-hover:visible hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:visible data-[state=open]:bg-sidebar-accent data-[state=open]:text-foreground"
+            className="invisible absolute right-1 bottom-1 flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none group-focus-within:visible group-hover:visible hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:visible data-[state=open]:bg-sidebar-accent data-[state=open]:text-foreground"
           >
             <EllipsisIcon className="size-3.5" />
           </DropdownMenuTrigger>
@@ -517,6 +535,7 @@ function Conversations() {
   const actions = useUltimate()
   const shownId = useShownId()
   const now = useNow(60_000)
+  const [type, setType] = useExtensionUiState('creationType', 'isolated')
   const [archived, setArchived] = useExtensionUiState<number[]>('archived', [])
   const [seen] = useExtensionUiState<Record<string, number>>('seen', {})
   const shownTop = topOf(shownId, conversations)
@@ -606,11 +625,11 @@ function Conversations() {
             }
           >
             <CollapsibleTrigger
-              aria-label={`Agents of conversation ${conversation.id}`}
+              aria-label={`Sub-agents of conversation ${conversation.id}`}
               className="group/agents ml-5 flex cursor-pointer items-center gap-1 py-1 text-[10.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
             >
               <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/agents:rotate-90" />
-              Agents · {children.length}
+              Sub-agents · {children.length}
             </CollapsibleTrigger>
             <CollapsibleContent className="ml-4 border-l border-border/60">
               {children.map((child) => tree(child, true))}
@@ -638,7 +657,7 @@ function Conversations() {
             </Button>
           </TooltipTrigger>
           <TooltipContent className="flex items-center gap-2">
-            New conversation
+            New {type === 'shared' ? 'shared' : 'isolated'} conversation
             <Shortcut keys={newKeys} />
           </TooltipContent>
         </Tooltip>
@@ -650,19 +669,21 @@ function Conversations() {
             <ChevronDownIcon className="size-3.5" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem
-              className="cursor-pointer text-xs"
-              onSelect={() => actions.runCommand('conversations.new')}
+            <DropdownMenuRadioGroup
+              value={type}
+              onValueChange={(value) => {
+                creationType = value
+                setType(value)
+              }}
             >
-              New conversation
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              className="cursor-pointer text-xs"
-              onSelect={() => actions.runCommand('conversations.new-isolated')}
-            >
-              <GitBranchIcon />
-              New isolated conversation…
-            </DropdownMenuItem>
+              <DropdownMenuRadioItem className="cursor-pointer text-xs" value="isolated">
+                Isolated
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem className="cursor-pointer text-xs" value="shared">
+                Shared (not isolated)
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+            <div role="separator" className="my-1 border-t border-border" />
             <DropdownMenuItem
               className="cursor-pointer text-xs"
               onSelect={() => actions.openPanel('workspaces')}
@@ -718,6 +739,9 @@ function Conversations() {
 
 /** Records the answer the user has seen: the shown top-level conversation's latest, once it is idle. */
 function Seen() {
+  // Commands stay in sync even when the sidebar is not mounted.
+  const [type] = useExtensionUiState('creationType', 'isolated')
+  creationType = type
   const id = useShownId()
   const summary = useConversations().find((conversation) => conversation.id === id)
   const [seen, setSeen] = useExtensionUiState<Record<string, number>>('seen', {})
@@ -781,72 +805,6 @@ function ResetDialog() {
   )
 }
 
-/** Create an isolated conversation through the workspaces extension. */
-function IsolatedDialog() {
-  const [open, setOpen] = useDialog(isolatedDialog)
-  const actions = useUltimate()
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState<string>()
-  const create = async () => {
-    if (pending) return
-    setPending(true)
-    setError(undefined)
-    try {
-      const { id } = await api.action<{ id: number }>('workspaces', 'create', {})
-      setOpen(false)
-      actions.showSurface('agent')
-      actions.switchConversation(id)
-      focusWhenShown(actions, id)
-    } catch (failure) {
-      setError(errorMessage(failure))
-    } finally {
-      setPending(false)
-    }
-  }
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!pending) setOpen(next)
-      }}
-    >
-      <DialogContent
-        className="gap-4 sm:max-w-md [&_button]:cursor-pointer"
-        showCloseButton={!pending}
-      >
-        <DialogTitle className="text-sm font-medium">New isolated conversation</DialogTitle>
-        <DialogDescription className="text-xs leading-relaxed">
-          The conversation gets its own Git checkout of this project.
-        </DialogDescription>
-        {error && (
-          <p role="alert" className="text-xs text-error break-words">
-            {error}
-          </p>
-        )}
-        <div className="flex justify-end gap-2">
-          <Button
-            className="cursor-pointer"
-            disabled={pending}
-            onClick={() => setOpen(false)}
-            size="sm"
-            variant="ghost"
-          >
-            Cancel
-          </Button>
-          <Button
-            className="cursor-pointer"
-            disabled={pending}
-            onClick={() => void create()}
-            size="sm"
-          >
-            {pending ? 'Creating…' : 'Create'}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 function TitleChanged({ entry }: { entry: EntryRecord }) {
   const { title, at } = entry.data as TitleChange
   const date = new Date(at)
@@ -867,20 +825,20 @@ function TitleChanged({ entry }: { entry: EntryRecord }) {
 
 export default defineWebExtension({
   entries: { 'conversations.title-changed': TitleChanged },
-  slots: { sidebar: Conversations, overlay: [ResetDialog, Seen, IsolatedDialog] },
+  slots: { sidebar: Conversations, overlay: [ResetDialog, Seen] },
   commands: [
     {
       id: 'conversations.new',
       title: 'New conversation',
       keys: newKeys,
       group: 'Conversations',
-      run: (context) => newConversation(context),
+      run: (context) => createConversation(context),
     },
     {
       id: 'conversations.new-isolated',
       title: 'New isolated conversation',
       group: 'Conversations',
-      run: (actions) => actions.open(isolatedDialog),
+      run: (actions) => createConversation(actions, 'isolated'),
     },
     {
       id: 'conversations.reset',

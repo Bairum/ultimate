@@ -14,7 +14,7 @@ const timeout = { timeout: 15000 }
 const row = (page: Page, id: number) =>
   page.locator(`nav[aria-label="Conversations"] [data-conversation="${id}"]`)
 
-it('opts in without model input, keeps shared reuse and manages every isolated draft safely', async (test) => {
+it('defaults to isolated without model input, keeps shared reuse and manages every isolated draft safely', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const directory = await temp('ultimate-workspace-browser-')
@@ -55,9 +55,7 @@ it('opts in without model input, keeps shared reuse and manages every isolated d
     })
     await page.goto(server.url)
     await untilInput(page)
-    await page.getByRole('button', { name: 'Conversation creation options', exact: true }).click()
-    await page.getByRole('menuitem', { name: 'New isolated conversation…', exact: true }).click()
-    await page.getByRole('dialog').getByRole('button', { name: 'Create', exact: true }).click()
+    await page.getByLabel('New conversation', { exact: true }).click()
     await until(() => receivedId > 0)
     await expect
       .poll(
@@ -73,7 +71,9 @@ it('opts in without model input, keeps shared reuse and manages every isolated d
       .poll(() => row(page, receivedId).textContent(), timeout)
       .toContain(`W${receivedId}`)
     expect(await row(page, receivedId).textContent()).not.toContain(active.branch)
-    await page.getByRole('button', { name: 'New conversation', exact: true }).click()
+    await page.getByRole('button', { name: 'Conversation creation options', exact: true }).click()
+    await page.getByRole('menuitemradio', { name: 'Shared (not isolated)', exact: true }).click()
+    await page.getByLabel('New conversation', { exact: true }).click()
     await expect
       .poll(
         () => row(page, shared).getByRole('button').first().getAttribute('aria-current'),

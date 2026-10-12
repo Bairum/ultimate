@@ -217,7 +217,12 @@ it('expands real agent roles and outcomes, separates Replied from Luna Done, and
     )
     await page.goto(server.url)
     await untilInput(page)
-    await page.getByRole('button', { name: 'Agents of conversation 1', exact: true }).click()
+    const subagents = page.getByRole('button', {
+      name: 'Sub-agents of conversation 1',
+      exact: true,
+    })
+    expect(await subagents.textContent()).toBe(`Sub-agents · ${children.length}`)
+    await subagents.click()
     const childRow = (id: number) => page.locator(`[data-child-conversation="${id}"]`)
     const [scout, worker, reviewer] = children
     await expect.poll(() => childRow(scout).textContent(), timeout).toContain('scout')
@@ -311,12 +316,12 @@ it('expands real agent roles and outcomes, separates Replied from Luna Done, and
     ).wait(context)
     await expect.poll(() => childRow(reviewer).textContent(), timeout).toContain('Run failed')
     expect(await childRow(reviewer).getByRole('img').count()).toBe(0)
-    await page.getByRole('button', { name: 'Agents of conversation 1', exact: true }).click()
+    await subagents.click()
     expect(await childRow(scout).count()).toBe(0)
     await page.reload()
     await untilInput(page)
     expect(await childRow(scout).count()).toBe(0)
-    await page.getByRole('button', { name: 'Agents of conversation 1', exact: true }).click()
+    await subagents.click()
     await expect.poll(() => childRow(scout).count(), timeout).toBe(1)
     expect(errors).toEqual([])
   } finally {
@@ -397,6 +402,34 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
     server.host.faux!.setResponses([fauxAssistantMessage('First answer.')])
     await send('first message')
     await expect.poll(titles, timeout).toEqual(['first message'])
+
+    // Choosing Shared only sets the preference, which survives reload.
+    const count = server.api.conversations().length
+    await page.getByRole('button', { name: 'Conversation creation options' }).click()
+    await expect
+      .poll(
+        () =>
+          page
+            .getByRole('menuitemradio', { name: 'Isolated', exact: true })
+            .getAttribute('aria-checked'),
+        timeout,
+      )
+      .toBe('true')
+    await page.getByRole('menuitemradio', { name: 'Shared (not isolated)', exact: true }).click()
+    expect(server.api.conversations()).toHaveLength(count)
+    await page.reload()
+    await untilInput(page)
+    await page.getByRole('button', { name: 'Conversation creation options' }).click()
+    await expect
+      .poll(
+        () =>
+          page
+            .getByRole('menuitemradio', { name: 'Shared (not isolated)', exact: true })
+            .getAttribute('aria-checked'),
+        timeout,
+      )
+      .toBe('true')
+    await page.keyboard.press('Escape')
 
     // New conversation shows an empty draft, configured with the shown one's model, listed first, the composer focused.
     const { model } = await server.root.agent(context)
