@@ -219,6 +219,9 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
       return !!instance
     }, 60000)
     expect(instance?.pid).toBeGreaterThan(0)
+    const port = Number(new URL(instance!.url).port)
+    expect(port).toBeGreaterThan(0)
+    expect(port).toBeLessThanOrEqual(65535)
     const environment = await readFile(`/proc/${instance!.pid}/environ`, 'utf8')
     expect(environment).not.toContain('ULTIMATE_SUPERVISED=')
     expect(environment).not.toContain('ULTIMATE_PUBLIC_URL=')
@@ -235,7 +238,7 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
     )
     expect(env).toMatchObject({
       ULTIMATE_HOME: instance!.home,
-      ULTIMATE_PORT: new URL(instance!.url).port,
+      ULTIMATE_PORT: '0',
       ULTIMATE_NO_OPEN: '1',
       ULTIMATE_FAUX: '1',
       ULTIMATE_INSTANCE_OWNER: String(owner.pid),

@@ -1,8 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtemp, mkdir, stat } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
-import { createServer } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Type } from '@earendil-works/pi-ai'
@@ -45,10 +44,15 @@ export default function instanceExtension(
     >()
   })
   const starts = host.resource('instance.starts', () => ({ pending: 0 }))
+  const homes = host.resource('instance.homes', () => new Set<string>())
   async function stop(id: string) {
     const instance = instances.get(id)
     if (!instance) throw new Error(`Unknown instance: ${id}`)
-    if (instance.child.exitCode === null && instance.child.signalCode === null) {
+    if (
+      instance.child.pid !== undefined &&
+      instance.child.exitCode === null &&
+      instance.child.signalCode === null
+    ) {
       const exited = new Promise<void>((resolve) => instance.child.once('exit', () => resolve()))
       instance.child.kill('SIGTERM')
       const timer = setTimeout(() => instance.child.kill('SIGKILL'), 5000)
@@ -74,7 +78,7 @@ export default function instanceExtension(
       defineTool({
         name: 'instance',
         description:
-          'Start, inspect logs, list or stop isolated standalone Ultimate test servers (maximum three). Set subagent to preview a child worktree; set faux for token-free testing.',
+          'Start, inspect logs, list or stop isolated standalone Ultimate test servers (maximum three). Defaults to the calling workspace; set subagent to preview an owned child worktree, or faux for token-free testing.',
         parameters: Type.Object({
           action: Type.Union(
             ['start', 'stop', 'logs', 'list'].map((action) => Type.Literal(action)),
@@ -87,6 +91,7 @@ export default function instanceExtension(
         async execute(args, api, context) {
           let reserved = false
           let release: (() => void) | undefined
+          let reservedHome: string | undefined
           try {
             context.abortSignal?.throwIfAborted()
             let result: unknown
@@ -114,19 +119,21 @@ export default function instanceExtension(
               reserved = true
               let cwd = host.ultimateRoot
               let project = host.projectRoot
+              let conversationId = api.conversationId
               if (args.subagent !== undefined) {
                 const child = (await api.snapshot(Subagents, api.conversationId, context))?.agents[
                   String(args.subagent)
                 ]
                 if (!child) throw new Error(`Unknown subagent: ${args.subagent}`)
-                const workspace = await host.workspaces.snapshot(child.conversationId, context)
-                if (
-                  !workspace ||
-                  workspace.state === 'discarded' ||
-                  workspace.preparation !== 'ready'
-                )
-                  throw new Error('Subagent must have an active worktree isolate')
-                release = await host.workspaces.hold(child.conversationId, context)
+                conversationId = child.conversationId
+              }
+              const workspace = await host.workspaces.snapshot(conversationId, context)
+              if (args.subagent !== undefined && !workspace)
+                throw new Error('Subagent must have an active worktree isolate')
+              if (workspace) {
+                if (workspace.state !== 'active' || workspace.preparation !== 'ready')
+                  throw new Error('Preview requires an active, ready workspace')
+                release = await host.workspaces.hold(conversationId, context)
                 cwd = project = workspace.path
                 for (const [path, directory, message] of [
                   ['server/main.ts', false, 'Worktree is not Ultimate: missing server/main.ts'],
@@ -137,25 +144,17 @@ export default function instanceExtension(
                     throw new Error(message)
                 }
               }
-              const home = args.home
+              const requestedHome = args.home
                 ? resolvePath(args.home)
                 : await mkdtemp(join(tmpdir(), 'ultimate-instance-'))
-              if (home === resolvePath(host.home))
+              await mkdir(requestedHome, { recursive: true })
+              const home = await realpath(requestedHome)
+              if (home === (await realpath(host.home)))
                 throw new Error('A test instance cannot share the running server home')
-              if ([...instances.values()].some((item) => item.home === home))
-                throw new Error('Home is already owned by an instance')
-              await mkdir(home, { recursive: true })
-              const port = await new Promise<number>((resolve, reject) => {
-                const socket = createServer()
-                socket.once('error', reject)
-                socket.listen(0, '127.0.0.1', () => {
-                  const address = socket.address()
-                  socket.close(() =>
-                    resolve(typeof address === 'object' && address ? address.port : 0),
-                  )
-                })
-              })
-              const url = `http://127.0.0.1:${port}`
+              if (homes.has(home)) throw new Error('Home is already owned by an instance')
+              homes.add(home)
+              reservedHome = home
+              context.abortSignal?.throwIfAborted()
               const env: NodeJS.ProcessEnv = {
                 ...Object.fromEntries(
                   Object.entries(process.env).filter(
@@ -174,7 +173,7 @@ export default function instanceExtension(
                 ULTIMATE_HOME: home,
                 ULTIMATE_PROJECT: project,
                 HOME: host.userHome,
-                ULTIMATE_PORT: String(port),
+                ULTIMATE_PORT: '0',
                 ULTIMATE_NO_OPEN: '1',
                 ULTIMATE_INSTANCE_OWNER: String(process.pid),
               }
@@ -185,9 +184,26 @@ export default function instanceExtension(
                 stdio: ['ignore', 'pipe', 'pipe'],
               })
               const id = randomUUID()
-              const item = { id, url, home, pid: child.pid ?? 0, child, output: '', release }
-              child.once('exit', () => item.release?.())
+              const lease = release
+              let released = false
+              const item = {
+                id,
+                url: '',
+                home,
+                pid: child.pid ?? 0,
+                child,
+                output: '',
+                release: () => {
+                  if (released) return
+                  released = true
+                  lease?.()
+                  homes.delete(home)
+                },
+              }
+              child.once('exit', item.release)
+              child.once('close', item.release)
               release = undefined
+              reservedHome = undefined
               instances.set(id, item)
               starts.pending--
               reserved = false
@@ -198,13 +214,25 @@ export default function instanceExtension(
                   .join('\n')
                   .slice(-100000)
               }
-              child.stdout?.on('data', append)
+              let stdout = ''
+              child.stdout?.on('data', (chunk: Buffer) => {
+                append(chunk)
+                stdout += chunk.toString()
+                const lines = stdout.split('\n')
+                stdout = lines.pop()!.slice(-10000)
+                for (const line of lines) {
+                  const match = /^Ultimate: (http:\/\/127\.0\.0\.1:([1-9]\d*))\r?$/.exec(line)
+                  if (match && Number(match[2]) <= 65535) item.url = match[1]
+                }
+              })
               child.stderr?.on('data', append)
+              let failed = false
               child.on('error', (error) => {
+                failed = true
                 item.output += String(error)
               })
-              api.output(`Starting ${id} at ${url}\n`)
               try {
+                api.output(`Starting ${id}\n`)
                 const deadline = Date.now() + 60000
                 let ready = false
                 while (
@@ -213,11 +241,21 @@ export default function instanceExtension(
                   child.signalCode === null
                 ) {
                   context.abortSignal?.throwIfAborted()
+                  if (failed) break
                   try {
-                    const response = await fetch(`${url}/api/models`, {
-                      signal: AbortSignal.timeout(1000),
-                    })
-                    if (response.ok) {
+                    const response = item.url
+                      ? await fetch(`${item.url}/api/models`, {
+                          signal: context.abortSignal
+                            ? AbortSignal.any([context.abortSignal, AbortSignal.timeout(1000)])
+                            : AbortSignal.timeout(1000),
+                        })
+                      : undefined
+                    if (
+                      response?.ok &&
+                      !failed &&
+                      child.exitCode === null &&
+                      child.signalCode === null
+                    ) {
                       ready = true
                       break
                     }
@@ -226,6 +264,7 @@ export default function instanceExtension(
                   }
                   await sleep(250, undefined, { signal: context.abortSignal })
                 }
+                context.abortSignal?.throwIfAborted()
                 if (!ready) throw new Error(`Instance did not become ready:\n${item.output}`)
                 result = info(item)
               } catch (error) {
@@ -238,6 +277,7 @@ export default function instanceExtension(
             return { isError: true, content: [{ type: 'text', text: String(error) }] }
           } finally {
             release?.()
+            if (reservedHome) homes.delete(reservedHome)
             if (reserved) starts.pending--
           }
         },

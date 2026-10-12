@@ -214,6 +214,11 @@ it('refuses lifecycle operations while the child is running', async () => {
   const f = await fixture()
   await f.call({ action: 'start', agent: 'worker', task: 'slow', background: true })
   const [child] = await f.children()
+  await until(
+    async () =>
+      (await f.prepared.workspaces.snapshot(child.conversationId, context))?.preparation ===
+        'ready' && !!(await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
+  )
   expect(await f.call({ action: 'land', id: child.conversationId })).toContain('Child is running')
   expect(await f.call({ action: 'discard', id: child.conversationId })).toContain(
     'Child is running',

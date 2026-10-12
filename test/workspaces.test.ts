@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdir, writeFile, readFile, access, symlink } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
@@ -79,6 +80,41 @@ async function fixture() {
     },
   }
 }
+it('core preparation resumes its persisted long path and branch across reopen', async () => {
+  const f = await fixture()
+  const request = 'persisted-core-request'
+  const key = createHash('sha256').update(request).digest('hex')
+  const workspace = await f.prepared.workspaces.describe(f.projectRoot, 'old-worker', request)
+  expect(workspace.path).toMatch(/\/w-[a-f0-9]{10}$/)
+  expect(workspace.branch).toMatch(/^ultimate\/w-[a-f0-9]{10}$/)
+  const shortPath = workspace.path
+  workspace.path = join(f.home, 'worktrees', key)
+  workspace.branch = `ultimate/old-worker-${key.slice(0, 16)}`
+  // Old setup could be interrupted after Git add but before writing its ready marker.
+  await git(
+    f.projectRoot,
+    'worktree',
+    'add',
+    '-b',
+    workspace.branch,
+    workspace.path,
+    workspace.base,
+  )
+  const id = await f.opened.harness.commit(async (tx) => {
+    const conversation = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+    await f.prepared.workspaces.prepare(tx, conversation.id, workspace, 'old-worker', request)
+    return conversation.id
+  }, context)
+  await f.prepared.workspaces.ready(id, context)
+  await f.reopen()
+  const saved = (await f.prepared.workspaces.ready(id, context))!
+  expect(saved).toEqual({ ...workspace, preparation: 'ready' })
+  expect((await (await f.opened.harness.conversation(id, context))!.agent(context)).cwd).toBe(
+    workspace.path,
+  )
+  expect(await git(workspace.path, 'symbolic-ref', '--short', 'HEAD')).toBe(workspace.branch)
+  await expect(access(shortPath)).rejects.toThrow('ENOENT')
+})
 it('main isolated creation is opt-in, deduplicated and shares the core lifecycle; shared drafts stay shared', async () => {
   const paths = await repository()
   const extension = join(paths.projectRoot, '.ultimate/extensions/exec-test')

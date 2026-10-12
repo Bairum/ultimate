@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import {
   AgentDoc,
@@ -325,12 +324,12 @@ export function createWorkspaces(host: {
         .then(Number, () => null)
       return { ...workspace, ahead }
     },
-    async describe(source: string, agent: string, request: string): Promise<Workspace> {
-      const key = createHash('sha256').update(request).digest('hex')
+    async describe(source: string, _agent: string, request: string): Promise<Workspace> {
+      const name = worktree.requestName(request)
       return {
         kind: 'worktree',
-        path: await worktree.worktreePath(host.home, key),
-        branch: `ultimate/${agent}-${key.slice(0, 16)}`,
+        path: await worktree.worktreePath(host.home, name),
+        branch: `ultimate/${name}`,
         base: await worktree.git(source, 'rev-parse', 'HEAD'),
         source: await realpath(await worktree.git(source, 'rev-parse', '--show-toplevel')),
         ...(await worktree.target(source)),
