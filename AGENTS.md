@@ -99,23 +99,10 @@ Start a subagent with `isolate: "worktree"` (the worker default) to give its too
 
 ### Main-agent final integration
 
-The built-in `workspace` tool provides top-level-main `status` and explicit own `land`; workers and history forks
-cannot self-land through it. An isolated main verifies each worker's diff/checks, lands verified children into its
-workspace, then reviews and verifies the final combined committed tip. This is intermediate, not Done. Explicitly
-call `workspace land` to the captured original checkout/branch, then `workspace status` to check live own tip = source
-tip = returned landed SHA. Never hardcode `main`. If source advances, update and reverify before retrying; dirty,
-busy, diverged, detached and changed-branch targets are blockers. No automatic rebase, discard, push or generic deploy.
-Shared mains retain the ordinary verified children → shared source workflow, with final combined verification there.
-
-For Ultimate `server/` or `shared/` changes, deliberately apply the host only when authorized. An isolated main uses
-existing `restart {applyHost: true}` after final own landing into the actual running Ultimate checkout; core proof
-requires ready/active own workspace, correct own cwd/branch, clean own and destination, unchanged non-null captured
-branch, and exact own tip = recorded landed tip = source tip. Core reserves the checkouts in its durable lifecycle
-queue, refuses pending same-source mutations and blocks new related execution/landing through the restart handoff.
-Unlanded or dirty isolates and moved/unrelated host revisions cannot restart; do not bypass the tool with raw HTTP. Host apply affects all conversations and remains
-subject to coordinator/user and supervisor-owned rollout restrictions. Report ready or the explicit apply blocker
-when no grant exists. Never claim final completion at a conversation branch unless branch-only work was requested;
-verify the requested source revision and any required authorized host application before the final verdict.
+A top-level conversation created with New isolated conversation works in its own worktree.
+`workspace status` shows its tip and the original checkout's tip.
+After landing verified workers and checking the combined tip, call `workspace land` to fast-forward the original branch; it refuses dirty, changed or diverged targets and never rebases or pushes.
+For `server/` or `shared/` changes, an authorized `restart` works once the running clone is clean at the landed commit.
 
 ## Conventions
 
@@ -123,7 +110,7 @@ verify the requested source revision and any required authorized host applicatio
   new dependency in its commit message.
 - Plain TypeScript, ESM, Node 26 runs `.ts` directly: erasable syntax only (no enums, namespaces, or parameter
   properties), relative imports end in `.ts`.
-- `shared/protocol.ts` is the only contract between server and web.
+- Core server/web contracts live in `shared/protocol.ts`; extension-local types live with their extension.
 - Pin `@earendil-works/*` packages to exact versions; Pi Durable is experimental.
 - Checks: `pnpm check` (format, lint, types) and `pnpm test` must pass before a commit.
 

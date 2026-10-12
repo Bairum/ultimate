@@ -4,73 +4,55 @@ import type { ExtensionHost } from '../server/extensions.ts'
 import { context } from '../server/harness.ts'
 
 afterEach(() => vi.unstubAllEnvs())
-
 function fixture(cwd?: string, agentCwd?: string) {
   const restart = vi.fn<ExtensionHost['restart']>(async () => 'Preparation failed')
-  const proof = vi.fn<() => void>()
   const host = {
     projectRoot: '/host/project',
     ultimateRoot: '/host/ultimate',
-    workspaces: { doc: {}, snapshot: async () => undefined, proveHostLanding: proof },
+    resource: (_key: string, create: () => unknown) => create(),
+    harness: () => ({ snapshot: async () => undefined }),
     restart,
     build: () => ({ id: 'new-build' }),
     system: () => ({ process: { activationError: 'Activation failed' } }),
   } as unknown as ExtensionHost
   const tool = self(host).tools![0]
   const memo = vi.fn<(key: string, ...args: unknown[]) => Promise<unknown>>(async () => undefined)
-  const agent = async () => ({ cwd: agentCwd })
-  const api = { conversationId: 1, taskId: 'task-1', env: cwd ? { cwd } : undefined, agent, memo }
-  const run = () => tool.execute({}, api as never, context)
-  return { tool, restart, memo, agent, run, proof }
+  const api = {
+    conversationId: 1,
+    taskId: 'task-1',
+    env: cwd ? { cwd } : undefined,
+    agent: async () => ({ cwd: agentCwd }),
+    memo,
+  }
+  return { tool, restart, memo, run: () => tool.execute({}, api as never, context) }
 }
-
-it.each([
-  ['/isolated/worktree', '/host/project'],
-  [undefined, '/isolated/worktree'],
-  ['/host/project-other', '/host/project'],
-  ['/host/project/../isolated', '/host/project'],
-  ['/host/project/.worktrees/child', '/host/project'],
-])('refuses a separate cwd before restart or memo side effects (%s)', async (cwd, agentCwd) => {
-  const f = fixture(cwd, agentCwd)
-  const result = await f.run()
-  expect(result).toMatchObject({ isError: true, details: { refused: true } })
-  expect(JSON.stringify(result.content)).toContain('shared Ultimate host for all conversations')
-  expect(JSON.stringify(result.content)).toContain('leave any host restart after landing')
-  expect(f.restart).not.toHaveBeenCalled()
-  expect(f.memo).not.toHaveBeenCalled()
-})
-
-it.each([
-  ['/host/project', '/isolated/worktree'],
-  ['/host/project/.', undefined],
-  [undefined, '/host/project'],
-  [undefined, undefined],
-])('keeps normal host-root restart and approval memo behavior (%s)', async (cwd, agentCwd) => {
-  vi.stubEnv('ULTIMATE_GENERATION', '1')
-  const f = fixture(cwd, agentCwd)
-  f.restart.mockImplementation(async (approved) => {
-    await approved(2)
-    return 'Preparation failed'
-  })
-  expect(f.tool.replay).toBe('safe')
-  const result = await f.run()
-  expect(f.restart).toHaveBeenCalledOnce()
-  expect(f.memo).toHaveBeenCalledWith('restart:task-1', context)
-  expect(f.memo).toHaveBeenCalledWith(
-    'restart:task-1',
-    { generation: 2, fromGeneration: 1, build: 'new-build' },
-    context,
-  )
-  expect(result).toMatchObject({
-    isError: true,
-    details: { fromGeneration: 1, toGeneration: 1, error: 'Preparation failed' },
-    content: [{ type: 'text', text: 'Preparation failed' }],
-  })
-})
-
-it('replays an approved shared-host restart without a second restart', async () => {
+it.each(['/host/project', '/host/project/src', undefined])(
+  'keeps shared restart and approval memo behavior (%s)',
+  async (cwd) => {
+    vi.stubEnv('ULTIMATE_GENERATION', '1')
+    const f = fixture(cwd)
+    f.restart.mockImplementation(async (approved) => {
+      await approved(2)
+      return 'Preparation failed'
+    })
+    expect(f.tool.replay).toBe('safe')
+    const result = await f.run()
+    expect(f.restart).toHaveBeenCalledOnce()
+    expect(f.memo).toHaveBeenCalledWith('restart:task-1', context)
+    expect(f.memo).toHaveBeenCalledWith(
+      'restart:task-1',
+      { generation: 2, fromGeneration: 1, build: 'new-build' },
+      context,
+    )
+    expect(result).toMatchObject({
+      isError: true,
+      details: { fromGeneration: 1, toGeneration: 1, error: 'Preparation failed' },
+    })
+  },
+)
+it('replays an approved restart without a second restart', async () => {
   vi.stubEnv('ULTIMATE_GENERATION', '2')
-  const f = fixture('/host/project')
+  const f = fixture()
   f.memo.mockResolvedValue({ generation: 2, fromGeneration: 1, build: 'old-build' })
   const result = await f.run()
   expect(result.isError).not.toBe(true)
@@ -83,34 +65,9 @@ it('replays an approved shared-host restart without a second restart', async () 
   expect(JSON.stringify(result.content)).toContain('Restarted. Now running generation 2')
   expect(f.restart).not.toHaveBeenCalled()
 })
-
-it.each([1, 2])(
-  'resumes the pre-workspace a898 restart receipt without absent lease fields or another effect (generation %s)',
-  async (generation) => {
-    vi.stubEnv('ULTIMATE_GENERATION', String(generation))
-    const f = fixture('/host/project')
-    const receipt = { generation: 2, fromGeneration: 1, build: 'a898-old-build' }
-    f.memo.mockResolvedValue(receipt)
-    f.proof.mockImplementation(() => {
-      throw new Error('No old receipt proof/lease exists')
-    })
-    const result = await f.run()
-    expect(result.isError).toBe(generation === 1 ? true : undefined)
-    expect(result.details).toMatchObject({
-      fromGeneration: 1,
-      toGeneration: generation,
-      fromBuild: 'a898-old-build',
-      toBuild: 'new-build',
-    })
-    expect(f.memo).toHaveBeenCalledExactlyOnceWith('restart:task-1', context)
-    expect(f.proof).not.toHaveBeenCalled()
-    expect(f.restart).not.toHaveBeenCalled()
-  },
-)
-
 it('reports rollback when the memoed generation did not activate', async () => {
   vi.stubEnv('ULTIMATE_GENERATION', '1')
-  const f = fixture('/host/project')
+  const f = fixture()
   f.memo.mockResolvedValue({ generation: 2, fromGeneration: 1, build: 'old-build' })
   expect(await f.run()).toMatchObject({
     isError: true,

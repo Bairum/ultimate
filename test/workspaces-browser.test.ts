@@ -3,18 +3,18 @@ import { join, resolve } from 'node:path'
 import { chromium } from 'playwright-core'
 import type { Page } from 'playwright-core'
 import { expect, it } from 'vitest'
-import { defineExtension, defineTask } from '@earendil-works/pi-durable'
+import { defineExtension, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { context } from '../server/harness.ts'
-import { WorkspaceDoc } from '../server/workspaces/doc.ts'
-import { git } from '../server/workspaces/worktree.ts'
+import { Workspaces } from '../extensions/workspaces/workspaces.ts'
+import { git } from '../extensions/workspaces/git.ts'
 import { fauxServer, post, skipWithoutChromium, temp, until, untilInput } from './helpers.ts'
 
 const timeout = { timeout: 15000 }
 const row = (page: Page, id: number) =>
   page.locator(`nav[aria-label="Conversations"] [data-conversation="${id}"]`)
 
-it('opts in without model input, retries the same lost-response receipt, keeps shared reuse and manages every isolated draft safely', async (test) => {
+it('opts in without model input, keeps shared reuse and manages every isolated draft safely', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const directory = await temp('ultimate-workspace-browser-')
@@ -44,49 +44,31 @@ it('opts in without model input, retries the same lost-response receipt, keeps s
       permissions: ['clipboard-read', 'clipboard-write'],
     })
     const errors: string[] = []
-    const requests: { isolate: string; requestId: string }[] = []
     let receivedId = 0
     page.on('pageerror', (error) => errors.push(error.message))
-    await page.route('**/api/conversations', async (route) => {
-      if (route.request().method() !== 'POST') return route.continue()
-      const body = route.request().postDataJSON()
-      if (body.isolate !== 'worktree') return route.continue()
-      requests.push(body)
-      const response = await route.fetch()
-      receivedId = (await response.json()).id
-      if (requests.length === 1)
-        return route.fulfill({
-          status: 503,
-          contentType: 'application/json',
-          body: JSON.stringify({ error: 'Simulated lost creation response' }),
-        })
-      return route.fulfill({ response })
+    page.on('response', async (response) => {
+      if (
+        new URL(response.url()).pathname === '/api/extensions/workspaces/actions/create' &&
+        response.ok()
+      )
+        receivedId = (await response.json()).result.id
     })
     await page.goto(server.url)
     await untilInput(page)
     await page.getByRole('button', { name: 'Conversation creation options', exact: true }).click()
     await page.getByRole('menuitem', { name: 'New isolated conversation…', exact: true }).click()
     await page.getByRole('button', { name: 'Create isolated conversation', exact: true }).click()
-    await expect
-      .poll(() => page.getByRole('alert').textContent(), timeout)
-      .toContain('Simulated lost creation response')
-    await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-    await page.reload()
-    await untilInput(page)
-    await page.getByRole('button', { name: 'Conversation creation options', exact: true }).click()
-    await page.getByRole('menuitem', { name: 'New isolated conversation…', exact: true }).click()
-    await page.getByRole('button', { name: 'Create isolated conversation', exact: true }).click()
+    await until(() => receivedId > 0)
     await expect
       .poll(
         () => row(page, receivedId).getByRole('button').first().getAttribute('aria-current'),
         timeout,
       )
       .toBe('true')
-    expect(requests).toHaveLength(2)
-    expect(requests[0].requestId).toBe(requests[1].requestId)
-    expect(requests[0].requestId.length).toBeGreaterThan(10)
-    await server.host.workspaces.ready(receivedId as ConversationId, context)
-    const active = (await server.host.workspaces.info(receivedId as ConversationId, context))!
+    const info = async (id: number) =>
+      (await post(server, '/api/extensions/workspaces/actions/info', { args: { id } })).data.result
+    await until(async () => (await info(receivedId)).state === 'ready')
+    const active = await info(receivedId)
     await expect
       .poll(() => row(page, receivedId).textContent(), timeout)
       .toContain(`W${receivedId}`)
@@ -115,13 +97,9 @@ it('opts in without model input, retries the same lost-response receipt, keeps s
     }
     const fixtures: Record<string, number> = {}
     for (const state of ['pending', 'error', 'discarded']) {
-      const id = (
-        await post(server, '/api/conversations', {
-          isolate: 'worktree',
-          requestId: `presentation-${state}`,
-        })
-      ).data.id
-      await server.host.workspaces.ready(id, context)
+      const id = (await post(server, '/api/extensions/workspaces/actions/create', { args: {} }))
+        .data.result.id
+      await until(async () => (await info(id)).state === 'ready')
       if (state === 'discarded')
         await post(server, '/api/extensions/workspaces/actions/discard', {
           args: { id, confirm: true },
@@ -129,8 +107,8 @@ it('opts in without model input, retries the same lost-response receipt, keeps s
         })
       else
         await server.harness.commit(async (tx) => {
-          const workspace = (await tx.doc(WorkspaceDoc, id)).workspace!
-          workspace.preparation = state as 'pending' | 'error'
+          const workspace = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)]
+          workspace.state = state === 'pending' ? 'preparing' : 'failed'
           if (state === 'error') workspace.error = 'Recorded setup failure for inspection'
         }, context)
       fixtures[state] = id
@@ -232,11 +210,7 @@ it('opts in without model input, retries the same lost-response receipt, keeps s
     expect(await git(active.path, 'rev-parse', 'HEAD')).toBe(laterTip)
     await card.getByRole('button', { name: 'Remove checkout…', exact: true }).click()
     await card.getByRole('button', { name: 'Confirm clean-only removal', exact: true }).click()
-    await until(
-      async () =>
-        (await server.host.workspaces.info(receivedId as ConversationId, context))?.state ===
-        'discarded',
-    )
+    await until(async () => (await info(receivedId))?.state === 'removed')
     expect(await git(projectRoot, 'rev-parse', active.branch)).toBe(laterTip)
     expect(errors).toEqual([])
   } finally {
@@ -245,63 +219,3 @@ it('opts in without model input, retries the same lost-response receipt, keeps s
     await server.close()
   }
 }, 90000)
-
-it.for(['missing', 'false', 'truthy'] as const)(
-  'never sends an isolate request when the streamed core capability is %s',
-  { timeout: 45000 },
-  async (capability, test) => {
-    const executablePath = await skipWithoutChromium(test)
-    if (!executablePath) return
-    const directory = await temp('ultimate-workspace-old-core-browser-')
-    const projectRoot = join(directory, 'project')
-    await mkdir(projectRoot)
-    const server = await fauxServer({
-      ultimateRoot: resolve('.'),
-      projectRoot,
-      userHome: directory,
-      home: join(directory, 'state'),
-    })
-    const browser = await chromium.launch({ executablePath, headless: true })
-    try {
-      const page = await browser.newPage()
-      const isolation: unknown[] = []
-      page.on('request', (request) => {
-        if (
-          request.method() === 'POST' &&
-          new URL(request.url()).pathname === '/api/conversations' &&
-          request.postDataJSON()?.isolate
-        )
-          isolation.push(request.postDataJSON())
-      })
-      await page.addInitScript(
-        `const Original=window.EventSource;window.EventSource=class extends Original {addEventListener(name, listener, options){if(name!=='system')return super.addEventListener(name,listener,options);return super.addEventListener(name,event=>{const value=JSON.parse(event.data);${capability === 'missing' ? 'delete value.execution.workspaces' : `value.execution.workspaces=${capability === 'false' ? 'false' : '1'}`};listener(new MessageEvent('system',{data:JSON.stringify(value)}))},options)}}`,
-      )
-      await page.goto(server.url)
-      await untilInput(page)
-      expect(
-        await page
-          .getByRole('button', { name: 'Conversation creation options', exact: true })
-          .count(),
-      ).toBe(0)
-      await page.evaluate(
-        `import('/src/sdk/actions.ts').then(({actions})=>actions.open('conversations.new-isolated'))`,
-      )
-      await expect
-        .poll(
-          () =>
-            page
-              .getByRole('button', { name: 'Create isolated conversation', exact: true })
-              .isDisabled(),
-          timeout,
-        )
-        .toBe(true)
-      expect(await page.getByRole('alert').textContent()).toContain('Upgrade and restart the core')
-      await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-      await page.locator('button[aria-label="New conversation"]').click()
-      expect(isolation).toEqual([])
-    } finally {
-      await browser.close()
-      await server.close()
-    }
-  },
-)

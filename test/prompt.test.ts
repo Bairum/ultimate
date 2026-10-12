@@ -97,12 +97,8 @@ it('renders only enabled guidance, lists off building blocks, and adds self guid
       expect(isolated.building_blocks).toContain(`${projectRoot}/.ultimate/extensions/`)
       expect(isolated.self).toContain(`Project (your work): ${checkout}`)
       expect(isolated.self).toContain(`Direct project edits to ${checkout}`)
-      expect(isolated.self).toContain('Isolated edits do not hot-reload the host')
-      expect(isolated.self).not.toContain(
-        'UI and extension changes in the running host reload live',
-      )
-      expect(isolated.self).toContain('restart tool is unavailable from this cwd')
-      expect(isolated.self).toContain('Landing changes does not automatically restart')
+      expect(isolated.self).toContain('UI and extension changes in the running host reload live')
+      expect(isolated.self).not.toContain('Land your workspace')
     }
     skills.mockRestore()
 

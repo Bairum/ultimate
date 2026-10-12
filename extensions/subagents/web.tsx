@@ -26,13 +26,14 @@ import {
   defineWebExtension,
   errorMessage,
   useAction,
-  useConversations,
   useTasks,
   useToolDuration,
   useUltimate,
 } from '@/sdk'
-import type { ConversationSummary, ToolCallView } from '@/sdk'
-import type { Workspace as Isolate } from '../../shared/protocol.ts'
+import type { ToolCallView } from '@/sdk'
+import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
+import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
+import type { Workspace as Isolate } from '../workspaces/types.ts'
 import { DefinitionDialog, Definitions } from './definitions.tsx'
 import { Heading, Tag, useRefresh } from './parts.tsx'
 
@@ -45,18 +46,14 @@ function BusyDot({ className }: { className?: string }) {
 }
 
 const isolateState = (isolate: Isolate) =>
-  isolate.state === 'discarded'
-    ? 'discarded'
-    : isolate.preparation !== 'ready'
-      ? isolate.preparation
-      : 'ready'
+  isolate.state === 'removed' ? 'discarded' : isolate.state
 
 function StateTag({ isolate }: { isolate: Isolate }) {
   return (
     <Tag
       className={cn(
         'font-mono',
-        isolate.state === 'discarded' ? 'text-muted-foreground/70' : 'border-brand/40 text-brand',
+        isolate.state === 'removed' ? 'text-muted-foreground/70' : 'border-brand/40 text-brand',
       )}
     >
       <span
@@ -278,10 +275,10 @@ function IsolateActions({
       await refetch()
     }
   }
-  const disabled = child.busy || pending !== undefined || isolate.preparation === 'pending'
+  const disabled = child.busy || pending !== undefined || isolate.state === 'preparing'
   const reason = child.busy
     ? 'The child is running: wait or stop it first'
-    : isolate.preparation === 'pending'
+    : isolate.state === 'preparing'
       ? 'Workspace preparation is pending'
       : undefined
   // Under the row's icon.
@@ -293,14 +290,14 @@ function IsolateActions({
         <span className="min-w-0 truncate" title={`${isolate.branch}\n${isolate.path}`}>
           W{child.id}
         </span>
-        {isolate.state === 'discarded' && (
+        {isolate.state === 'removed' && (
           <span className="shrink-0 text-muted-foreground/60">kept</span>
         )}
-        {isolate.state === 'active' && !confirming && (
+        {isolate.state !== 'removed' && !confirming && (
           <span className="ml-auto flex shrink-0 items-center gap-0.5 pl-1">
             <Button
               className="h-5 gap-1 px-1.5 text-[11px]"
-              disabled={disabled || isolate.preparation !== 'ready'}
+              disabled={disabled || isolate.state !== 'ready'}
               onClick={() => void act('land')}
               size="xs"
               title={reason ?? 'Fast-forward the verified SHA into the original target checkout'}
@@ -446,7 +443,7 @@ function Child({
   })
   const recorded = conversation.workspace
   const settled = recorded
-    ? `${recorded.state} ${recorded.preparation} ${recorded.error ?? ''} ${recorded.landed ?? ''}`
+    ? `${recorded.state} ${recorded.error ?? ''} ${recorded.landed ?? ''}`
     : ''
   useRefresh(refetch, `${conversation.busy} ${parent.busy} ${settled}`)
   return (

@@ -28,7 +28,7 @@ import '/@fs/${resolve('web/src/index.css')}'
 let source
 window.EventSource = class extends EventTarget {
   readyState = 1
-  constructor() { super(); source = this }
+  constructor(url) { super(); if (!url.includes('ultimate.workspaces')) source = this }
   close() {}
 }
 store.start()

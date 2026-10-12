@@ -32,13 +32,9 @@ an empty isolated conversation, including the shown one. From a top-level conver
 it takes that one's model and thinking level; from a subagent it sets none, so a reused conversation keeps its own and a
 new one gets the main conversation's.
 
-When `system.execution.workspaces === true`, the small New options menu also offers New isolated conversation.
-Its confirmation uses core `POST /api/conversations` with `isolate: "worktree"` and a random `requestId` retained in
-session storage until a successful response. Failed/retried requests, closing the dialog and page reload reuse that
-receipt rather than creating duplicate workspaces after a lost response. Creation never submits input or runs a model.
-The button and palette command are absent on an older core; confirmation also rechecks the explicit capability.
-Setup errors are inspected in Workspaces, not retried by bypassing core preparation/admission. Ordinary New keeps its
-shared-draft behavior. Archive and clear context never remove checkouts or commits.
+The New options menu also offers New isolated conversation through the workspaces extension's `create` action.
+Creation never submits input or runs a model. Setup errors are inspected in Workspaces; start a new conversation to try again.
+Ordinary New keeps its shared-draft behavior. Archive and clear context never remove checkouts or commits.
 
 On hover or focus, a row's `…` menu offers Rename (inline; also on double-click; Enter or leaving the field saves,
 Escape cancels, and after either key focus returns to the row), Clear context… (asks first; not while the conversation

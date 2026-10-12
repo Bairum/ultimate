@@ -1,0 +1,39 @@
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import type { JsonObject } from '@earendil-works/pi-durable'
+
+const exec = promisify(execFile)
+export async function git(cwd: string, ...args: string[]) {
+  const { stdout } = await exec('git', args, { cwd, timeout: 30000, maxBuffer: 1024 * 1024 })
+  return stdout.trim()
+}
+export async function setup(
+  source: string,
+  path: string,
+  settings: JsonObject,
+  signal: AbortSignal,
+) {
+  const commands =
+    (settings as { isolates?: { worktree?: { setup?: string[] } } }).isolates?.worktree?.setup ?? []
+  if (!Array.isArray(commands) || !commands.every((command) => typeof command === 'string'))
+    throw new Error('isolates.worktree.setup must be an array of command strings')
+  for (const command of commands) {
+    signal.throwIfAborted()
+    try {
+      await exec('sh', ['-c', command], {
+        cwd: path,
+        env: { ...process.env, ULTIMATE_SOURCE: source },
+        signal,
+        timeout: 120000,
+        killSignal: 'SIGKILL',
+        maxBuffer: 1024 * 1024,
+      })
+    } catch (error) {
+      const output = error as Error & { stdout?: string; stderr?: string }
+      throw new Error(
+        `Worktree setup failed: ${command}\n${`${output.stdout ?? ''}${output.stderr ?? ''}${output.message}`.slice(-4000)}`,
+        { cause: error },
+      )
+    }
+  }
+}

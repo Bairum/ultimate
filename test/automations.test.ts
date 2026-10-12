@@ -5,14 +5,13 @@ import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { afterEach, expect, it, vi } from 'vitest'
 import { Type } from '@earendil-works/pi-ai'
-import { defineExtension, defineTool, defineTask } from '@earendil-works/pi-durable'
-import type { ConversationId, TaskDefinition, TaskId } from '@earendil-works/pi-durable'
+import { defineExtension, defineTool } from '@earendil-works/pi-durable'
+import type { ConversationId, TaskDefinition } from '@earendil-works/pi-durable'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import automations, { actions, Automations } from '../extensions/automations/server.ts'
 import type { Automation } from '../extensions/automations/server.ts'
-import legacyAutomations, { actions as legacyActions } from './fixtures/legacy-automations.ts'
 import type { ActionContext } from '../server/actions.ts'
 import { temp, until } from './helpers.ts'
 
@@ -21,7 +20,7 @@ afterEach(async () => {
   vi.restoreAllMocks()
   for (const host of hosts.splice(0)) await host.close()
 })
-async function fixture(failDelivery = false, legacy = false) {
+async function fixture(failDelivery = false) {
   const root = await temp('ultimate-automations-')
   const userHome = await temp()
   await mkdir(join(root, 'agents'))
@@ -66,9 +65,7 @@ async function fixture(failDelivery = false, legacy = false) {
     metadata: Metadata,
     extensions: () => [{ name: 'subagents', enabled }],
   }
-  const extension = (legacy ? legacyAutomations : automations)(
-    host as unknown as Parameters<typeof automations>[0],
-  )
+  const extension = automations(host as unknown as Parameters<typeof automations>[0])
   if (failDelivery) {
     const phases = extension.tasks!.find((t) => t.definition.name === 'ultimate.automation-run')!
       .definition.phases as TaskDefinition<
@@ -102,9 +99,8 @@ async function fixture(failDelivery = false, legacy = false) {
   prepared.faux!.setResponses([route])
   opened = await prepared.open()
   hosts.push(opened)
-  let dispatch = legacy ? legacyActions : actions
   const action = async (name: string, args: unknown = {}) =>
-    dispatch[name](args as never, { host } as unknown as ActionContext)
+    actions[name](args as never, { host } as unknown as ActionContext)
   const records = async () =>
     Object.values((await opened.harness.snapshot(Automations, context))?.automations ?? {})
   return {
@@ -129,14 +125,6 @@ async function fixture(failDelivery = false, legacy = false) {
       opened = await prepared.open()
       hosts.push(opened)
     },
-    async upgrade() {
-      await opened.close()
-      hosts.splice(hosts.indexOf(opened), 1)
-      prepared.registry.install(automations(host as unknown as Parameters<typeof automations>[0]))
-      dispatch = actions
-      opened = await prepared.open()
-      hosts.push(opened)
-    },
     async close() {
       await opened.close()
       hosts.splice(hosts.indexOf(opened), 1)
@@ -145,126 +133,6 @@ async function fixture(failDelivery = false, legacy = false) {
 }
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-it('reopens actual old A1/A2 schedulers and an admitted legacy run with unchanged shapes and exactly-once delivery', async () => {
-  const f = await fixture(false, true)
-  const Gate = defineTask<null, { phase: 'hold' }, null>({
-    name: 'test.automation-legacy-boundary',
-    version: 1,
-    initial: () => ({ phase: 'hold' }),
-    phases: {
-      hold: async (_task, runtime, ctx) => {
-        await runtime.sleep(Date.now() + 60000, ctx)
-      },
-    },
-    abort: (_task, runtime, ctx) =>
-      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
-  })
-  f.prepared.registry.install(defineExtension({ name: 'legacy-boundary', tasks: [Gate] }))
-  const gate = await f.opened.harness.commit(
-    (tx) =>
-      tx.createTask(Gate, null, {
-        conversationId: f.opened.root.id,
-        ownership: { kind: 'conversation' },
-        background: true,
-      }),
-    context,
-  )
-  const a1 = (await f.action('create', {
-    name: 'A1 future',
-    prompt: 'future',
-    schedule: 'in 1h',
-  })) as Automation
-  const a2 = (await f.action('create', {
-    name: 'A2 legacy run',
-    prompt: 'Legacy boundary',
-    schedule: 'in 1h',
-  })) as Automation
-  const phases = f.extension.tasks!.find(
-    (task) => task.definition.name === 'ultimate.automation-run',
-  )!.definition.phases as TaskDefinition<
-    { automation: Automation; firedAt: number },
-    { phase: 'deliver'; conversationId: ConversationId },
-    null,
-    object
-  >['phases']
-  const deliver = phases.deliver
-  vi.spyOn(phases, 'deliver').mockImplementationOnce(async (task, runtime, ctx) => {
-    const commit = runtime.commit.bind(runtime)
-    // Execute the real old submit/wait, then pause before its final result commit.
-    vi.spyOn(runtime, 'commit').mockImplementationOnce((_change, current) =>
-      commit(
-        () => ({
-          status: 'waiting',
-          on: [gate],
-          policy: 'allSettled',
-          checkpoint: task.state.checkpoint,
-        }),
-        current,
-      ),
-    )
-    await deliver(task, runtime, ctx)
-  })
-  const run = (await f.action('run', { id: a2.id })) as { id: string }
-  const runId = Number(run.id) as TaskId
-  await until(
-    async () => (await f.opened.harness.getTask(runId, context))?.state.status === 'waiting',
-  )
-  const before = (await f.opened.harness.snapshot(Automations, context))!
-  expect(Object.keys(before.automations)).toEqual(['A1', 'A2'])
-  expect(before.next).toBe(3)
-  const scheduler = await f.opened.harness.getTask(a1.scheduler!, context)
-  expect(scheduler).toMatchObject({
-    kind: 'ultimate.automation-scheduler',
-    version: 1,
-    input: { id: 'A1' },
-    state: { checkpoint: { phase: 'sleep', until: before.automations.A1.nextAt } },
-  })
-  const task = await f.opened.harness.getTask(runId, context)
-  const childId = before.automations.A2.runs[0].conversationId!
-  expect(task).toMatchObject({
-    kind: 'ultimate.automation-run',
-    version: 1,
-    input: { automation: { id: 'A2', prompt: 'Legacy boundary', runs: [] } },
-    state: { checkpoint: { phase: 'deliver', conversationId: childId } },
-  })
-  const legacySubmission = await f.opened.harness.commit(
-    (tx) => tx.submissionByRequest(childId, `automation-run:${runId}`),
-    context,
-  )
-  expect(legacySubmission!.status).toBe('done')
-  await f.upgrade()
-  expect(await f.opened.harness.snapshot(Automations, context)).toEqual(before)
-  expect((await f.opened.harness.getTask(a1.scheduler!, context))!.input).toEqual(scheduler!.input)
-  expect((await f.opened.harness.getTask(runId, context))!.input).toEqual(task!.input)
-  const submit = vi.spyOn(f.prepared.workspaces, 'submit')
-  await f.opened.harness.abortTask(gate, context)
-  expect((await f.opened.harness.waitForTask(runId, context)).state.outcome.status).toBe(
-    'completed',
-  )
-  expect(submit).toHaveBeenCalledWith(
-    childId,
-    expect.objectContaining({ requestId: `automation-run:${runId}` }),
-    expect.anything(),
-  )
-  await f.reopen()
-  const after = (await f.opened.harness.snapshot(Automations, context))!
-  expect(after.automations.A1).toEqual(before.automations.A1)
-  expect(after.automations.A2.runs).toHaveLength(1)
-  expect(after.automations.A2.runs[0]).toMatchObject({
-    id: run.id,
-    conversationId: childId,
-    status: 'done',
-    answer: 'Answer: Legacy boundary',
-  })
-  const receipt = await f.opened.harness.commit(
-    (tx) => tx.submissionByRequest(childId, `automation-run:${runId}`),
-    context,
-  )
-  expect(receipt!.id).toBe(legacySubmission!.id)
-  const view = await (await f.opened.harness.conversation(childId, context))!.viewState(context)
-  expect(view.value.entries.filter((entry) => entry.kind === 'pi.user')).toHaveLength(1)
-  view.dispose()
-})
 it('fires every 2s into distinct answered conversations and supports pause, resume, run and delete', async () => {
   const f = await fixture()
   const a = (await f.action('create', {

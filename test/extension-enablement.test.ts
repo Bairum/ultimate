@@ -52,13 +52,11 @@ it('starts bare with exactly the default extensions and tools, and exposes off b
       .map((entry) => entry.name)
       .toSorted(),
   ).toEqual(
-    [
-      'ultimate-workspaces',
-      ...server.extensions
-        .info()
-        .filter((entry) => entry.enabled && entry.facets.server)
-        .map((entry) => entry.name),
-    ].toSorted(),
+    server.extensions
+      .info()
+      .filter((entry) => entry.enabled && entry.facets.server)
+      .map((entry) => entry.name)
+      .toSorted(),
   )
   expect(await tools(server)).toEqual(
     ['read', 'write', 'edit', 'bash', 'codemode', 'screenshot', 'browser', 'workspace'].toSorted(),

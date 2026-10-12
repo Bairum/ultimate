@@ -8,6 +8,7 @@ import { Type } from '@earendil-works/pi-ai'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import {
   AssistantEntry,
+  configure,
   ToolResultEntry,
   defineDoc,
   defineExtension,
@@ -26,7 +27,6 @@ import type {
   EntryId,
   EntryRecord,
   TaskId,
-  TaskOutcome,
   ToolExecutionApi,
 } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
@@ -34,8 +34,8 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import type { Source } from '../../server/project.ts'
 import { agentRoots, deleteDefinition, discoverAgents, saveDefinition } from './agents.ts'
 import { createChild } from './children.ts'
-import type { Workspace } from '../../shared/protocol.ts'
-import type { LifecycleResult } from '../../server/workspaces/doc.ts'
+import { workspaces } from '../workspaces/workspaces.ts'
+import { git } from '../workspaces/git.ts'
 
 export const Subagents = defineDoc<{
   agents: Record<
@@ -78,7 +78,7 @@ const textOf = (message: AssistantMessage | undefined) =>
   (message?.content ?? []).flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
 // A report is keyed by its answer, independently of the tool call that may return it.
 const answerRequest = (answer: EntryId) => `subagent-answer:${answer}`
-function createReporter(host: Pick<ExtensionHost, 'workspaces'>) {
+function createReporter() {
   return defineTask<
     { conversationId: ConversationId; text: string; steer: boolean },
     { phase: 'deliver' } | { phase: 'report'; report?: string; answer?: EntryId },
@@ -91,10 +91,8 @@ function createReporter(host: Pick<ExtensionHost, 'workspaces'>) {
       deliver: async (task, runtime, context) => {
         try {
           const child = (await runtime.conversation(task.input.conversationId, context))!
-          await host.workspaces.ready(child.id, context)
           const settled = await (
-            await host.workspaces.submit(
-              child.id,
+            await child.submit(
               {
                 type: 'input',
                 content: task.input.text,
@@ -154,8 +152,7 @@ function createReporter(host: Pick<ExtensionHost, 'workspaces'>) {
         const { report, answer } = task.state.checkpoint
         if (report !== undefined) {
           const parent = (await runtime.conversation(runtime.conversationId, context))!
-          await host.workspaces.submit(
-            parent.id,
+          await parent.submit(
             {
               type: 'input',
               content: report,
@@ -262,14 +259,8 @@ async function waitInterruptibly(
   }
 }
 
-function lifecycleResult(outcome: TaskOutcome<LifecycleResult>) {
-  if (outcome.status === 'completed') return outcome.result
-  if (outcome.status === 'failed' || outcome.status === 'faulted')
-    throw new Error(outcome.error.message)
-  throw new Error('Child worktree lifecycle operation was aborted')
-}
 async function runLifecycle(
-  host: Pick<ExtensionHost, 'harness' | 'workspaces'>,
+  host: ExtensionHost,
   parent: ConversationId,
   child: ConversationId,
   operation: 'land' | 'discard',
@@ -277,7 +268,7 @@ async function runLifecycle(
   const index = await host.harness().snapshot(Subagents, parent, BACKGROUND_CONTEXT)
   if (!index?.agents[String(child)])
     throw new Error('id must identify a child of this conversation')
-  return host.workspaces.runLifecycle(parent, child, operation, BACKGROUND_CONTEXT)
+  return workspaces(host)[operation](child, BACKGROUND_CONTEXT)
 }
 function childId(args: JsonValue, conversationId?: number) {
   if (
@@ -317,7 +308,7 @@ export const actions = {
     const conversationId = parent as ConversationId
     const index = await harness.snapshot(Subagents, conversationId, BACKGROUND_CONTEXT)
     if (!index?.agents[String(id)]) throw new Error('id must identify a child of this conversation')
-    return host.workspaces.info(id, BACKGROUND_CONTEXT)
+    return workspaces(host).info(id, BACKGROUND_CONTEXT)
   },
   /**
    * The definitions without their instructions and the files that failed to parse, and for the config view the main
@@ -449,14 +440,12 @@ export default function subagents(
     | 'modelRuntime'
     | 'home'
     | 'projectSettings'
-    | 'workspaces'
+    | 'resource'
+    | 'extensions'
   >,
 ) {
-  if (!host.workspaces)
-    throw new Error(
-      'subagents requires host.workspaces; upgrade and restart the Ultimate core before loading this facet',
-    )
-  const Reporter = createReporter(host)
+  const service = workspaces(host)
+  const Reporter = createReporter()
   return defineExtension({
     name: 'subagents',
     tasks: [Anchor, Reporter],
@@ -565,10 +554,8 @@ An epic means the full flow: tasks, isolated workers, land, and review before it
    Rerun the meaningful checks yourself in the isolate before landing.
 6. Epic commits come from workers in isolates and reach the checkout only through land.
    Land verified workers into your current checkout and rerun meaningful combined checks there.
-   For an isolated main, that is intermediate: verify/review the final tip, explicitly workspace land
-   into the captured original checkout/branch, and check the source revision before any host apply.
-   Shared mains already integrate into source. Use restart only for required server/ and shared/
-   changes after final source verification and authorization; honor supervisor-owned rollout.
+   An isolated main then verifies the combined tip and uses workspace land to reach its source.
+   Use restart only for required server/ and shared/ changes after verification and authorization.
    Discard a child's clean isolate only when explicitly requested; never auto-clean up.
 7. Record verification evidence with plan and set the task done; only you do this.
 8. When all tasks are done, run every definition whose name starts with reviewer
@@ -627,7 +614,7 @@ Available definitions:
             const rows = await Promise.all(
               Object.values(index.agents).map(async (agent) => ({
                 ...agent,
-                workspace: await host.workspaces.snapshot(agent.conversationId, context),
+                workspace: await service.get(agent.conversationId, context),
                 busy:
                   (await api.snapshot(LiveDoc, agent.conversationId, context))?.run !== undefined,
               })),
@@ -640,21 +627,12 @@ Available definitions:
           )
             throw new Error('id must identify a child of this conversation')
           if (args.action === 'land' || args.action === 'discard') {
+            if (await api.memo<boolean>('workspace-operation', context))
+              throw new Error('Workspace operation interrupted; call again')
+            await api.memo('workspace-operation', true, context)
             const operation = args.action
-            const task = await api.commit(
-              (tx) =>
-                host.workspaces.createLifecycle(
-                  tx,
-                  api.conversationId,
-                  args.id as ConversationId,
-                  operation,
-                  { kind: 'task', taskId: api.taskId },
-                  `subagent:${api.conversationId}:${api.callId}`,
-                ),
-              context,
-            )
             return finish(
-              JSON.stringify(lifecycleResult((await api.waitForTask(task, context)).state.outcome)),
+              JSON.stringify(await service[operation](args.id as ConversationId, context)),
             )
           }
           if (args.action === 'start' || args.action === 'message') {
@@ -662,11 +640,6 @@ Available definitions:
             if (!text?.trim())
               throw new Error(
                 `${args.action} requires ${args.action === 'start' ? 'task' : 'text'}`,
-              )
-            if (args.action === 'message')
-              await api.commit(
-                (tx) => host.workspaces.assertAdmission(tx, args.id as ConversationId),
-                context,
               )
             const parent = await api.agent(context)
             const existingAction = index.actions[api.callId]
@@ -691,29 +664,12 @@ Available definitions:
               throw new Error(
                 'Definition tools must be a subset of parent tools, excluding subagent',
               )
-            let isolate = existingAction
-              ? await host.workspaces.snapshot(existingAction.conversationId, context)
-              : undefined
-            if (definition && (args.isolate ?? definition.isolate ?? 'none') === 'worktree') {
-              isolate =
-                (await api.memo<Workspace>('workspace', context)) ??
-                (await api.memo(
-                  'workspace',
-                  await host.workspaces.describe(
-                    parent.cwd ?? host.projectRoot,
-                    definition.name,
-                    api.callId,
-                  ),
-                  context,
-                ))
-            }
+            const isolated =
+              definition && (args.isolate ?? definition.isolate ?? 'none') === 'worktree'
             const warning =
-              isolate && (await host.workspaces.dirty(parent.cwd ?? host.projectRoot))
+              isolated && (await git(parent.cwd ?? host.projectRoot, 'status', '--porcelain'))
                 ? '\nWarning: parent has uncommitted changes; they are not in the worktree.'
                 : ''
-            const isolateInfo = isolate
-              ? `\nIsolate: ${isolate.path}\nBranch: ${isolate.branch}${warning}`
-              : ''
             let forkAt: EntryId | undefined
             if (definition && args.fork) {
               const task = await api.getTask(api.taskId, context)
@@ -740,12 +696,7 @@ Available definitions:
                 })
                 const child = await createChild(tx, {
                   owner: { kind: 'task', taskId: owner },
-                  definition: isolate
-                    ? {
-                        ...definition,
-                        instructions: `${definition.instructions}\nWork only in ${isolate.path} on ${isolate.branch}, cut from ${isolate.base}. Commit your work on this branch with clear messages. Never push and never touch other checkouts.`,
-                      }
-                    : definition,
+                  definition,
                   parentAgent: parent,
                   modelRuntime: host.modelRuntime,
                   metadata: host.metadata,
@@ -765,11 +716,17 @@ Available definitions:
                   background: args.background === true,
                   reported: [],
                 }
-                if (isolate)
-                  await host.workspaces.prepare(tx, child.id, isolate, definition.name, api.callId)
+                if (isolated) {
+                  const workspace = await service.create(
+                    tx,
+                    child.id,
+                    parent.cwd ?? host.projectRoot,
+                  )
+                  await configure(tx, child.id, {
+                    instructions: `${definition.instructions}\nWork only in ${workspace.path} on ${workspace.branch}, cut from ${workspace.base}. Commit your work on this branch with clear messages. Never push and never touch other checkouts.`,
+                  })
+                }
               }
-              if (args.action === 'message')
-                await host.workspaces.assertAdmission(tx, conversationId)
               const reporter = await tx.createTask(
                 Reporter,
                 { conversationId, text, steer: args.steer === true },
@@ -779,6 +736,10 @@ Available definitions:
               state.actions[api.callId] = createdAction
               return createdAction
             }, context)
+            const isolate = await service.get(action.conversationId, context)
+            const isolateInfo = isolate
+              ? `\nIsolate: ${isolate.path}\nBranch: ${isolate.branch}${warning}`
+              : ''
             const background =
               index.agents[String(action.conversationId)]?.background ?? args.background === true
             const info = details(action.conversationId, background)

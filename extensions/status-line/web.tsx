@@ -10,12 +10,12 @@ import {
   useCommands,
   useConnection,
   useConversation,
-  useConversations,
   useModels,
   useSystem,
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, Usage } from '@/sdk'
+import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
 
 /** A status-line item with a tooltip of details; a button when it has `onClick`. */
 function Item({

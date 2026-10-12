@@ -78,6 +78,8 @@ async function fixture(
     ...prepared,
     harness: () => opened!.harness,
     metadata: Metadata,
+    resource: (_key, create) => create(),
+    extensions: () => [],
   })
   prepared.registry.install(
     reportGate

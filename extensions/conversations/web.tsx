@@ -33,16 +33,19 @@ import {
   formatKeys,
   getConversation,
   getState,
-  useConversations,
   useDialog,
   useExtensionUiState,
   useNow,
   useStore,
-  useSystem,
   useTasks,
   useUltimate,
 } from '@/sdk'
-import type { ConversationSummary, UltimateActions } from '@/sdk'
+import type { UltimateActions } from '@/sdk'
+import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
+import {
+  getWorkspaces,
+  useWorkspaceConversations as useConversations,
+} from '../workspaces/data.tsx'
 type Assessment = { inputId: number; answerId: number; value: 'needs_input' | 'done' | 'neutral' }
 type OverviewRow = {
   parentId?: number
@@ -61,7 +64,6 @@ type OverviewState = { conversations: Record<string, OverviewRow> }
 const newKeys = 'mod+alt+n'
 const resetDialog = 'conversations.reset'
 const isolatedDialog = 'conversations.new-isolated'
-const isolatedRequestKey = 'ultimate.isolated-conversation-request'
 const overviewKind = 'ultimate.conversation-overview'
 
 /** One root stream for all rows, unchanged when selection or expansion changes. */
@@ -161,7 +163,7 @@ async function newConversation(actions: UltimateActions) {
   const current = conversations.find((conversation) => conversation.id === shown.id)
   const topLevel = current !== undefined && current.parentConversationId === undefined
   // The replica, not the lagging summary: right after a first send, the shown conversation is no draft any longer.
-  if (topLevel && !current.workspace && shown.entries.length === 0) {
+  if (topLevel && !getWorkspaces()[String(current.id)] && shown.entries.length === 0) {
     focusWhenShown(actions, current.id)
     return
   }
@@ -172,7 +174,7 @@ async function newConversation(actions: UltimateActions) {
         conversation.parentConversationId === undefined &&
         conversation.inputAt === undefined &&
         conversation.title === undefined &&
-        !conversation.workspace &&
+        !getWorkspaces()[String(conversation.id)] &&
         !conversation.busy &&
         !(Array.isArray(archived) && archived.includes(conversation.id)),
     )
@@ -518,8 +520,6 @@ function ChildRow({
  * empty draft; archived ones in a collapsed group at the bottom.
  */
 function Conversations() {
-  const system = useSystem()
-  const workspaceCapable = system?.execution.workspaces === true
   const overview = useOverview()
   const tasks = useTasks()
   const foreground = new Set<number>(
@@ -527,7 +527,7 @@ function Conversations() {
       .filter((task) => !task.background)
       .map((task) => task.conversationId),
   )
-  // The task graph is authoritative; the timestamp/title list can lag a finished run.
+  // The task graph reflects the run; the timestamp/title list can lag.
   const conversations = useConversations().map((conversation) => ({
     ...conversation,
     busy: foreground.has(conversation.id) || overview[conversation.id]?.runState === 'working',
@@ -660,37 +660,35 @@ function Conversations() {
             <Shortcut keys={newKeys} />
           </TooltipContent>
         </Tooltip>
-        {workspaceCapable && (
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger
-              aria-label="Conversation creation options"
-              className="flex size-6 cursor-pointer items-center justify-center rounded-sm outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger
+            aria-label="Conversation creation options"
+            className="flex size-6 cursor-pointer items-center justify-center rounded-sm outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <ChevronDownIcon className="size-3.5" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              className="cursor-pointer text-xs"
+              onSelect={() => actions.runCommand('conversations.new')}
             >
-              <ChevronDownIcon className="size-3.5" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                className="cursor-pointer text-xs"
-                onSelect={() => actions.runCommand('conversations.new')}
-              >
-                New shared conversation
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="cursor-pointer text-xs"
-                onSelect={() => actions.runCommand('conversations.new-isolated')}
-              >
-                <GitBranchIcon />
-                New isolated conversation…
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="cursor-pointer text-xs"
-                onSelect={() => actions.openPanel('workspaces')}
-              >
-                Manage workspaces
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+              New shared conversation
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="cursor-pointer text-xs"
+              onSelect={() => actions.runCommand('conversations.new-isolated')}
+            >
+              <GitBranchIcon />
+              New isolated conversation…
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="cursor-pointer text-xs"
+              onSelect={() => actions.openPanel('workspaces')}
+            >
+              Manage workspaces
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       <nav aria-label="Conversations" className="flex flex-col gap-px">
         {listed.map((conversation) => tree(conversation))}
@@ -801,22 +799,18 @@ function ResetDialog() {
   )
 }
 
-/** Retain a request receipt across failure, cancellation and reload; only successful creation consumes it. */
+/** Create an isolated conversation through the workspaces extension. */
 function IsolatedDialog() {
   const [open, setOpen] = useDialog(isolatedDialog)
-  const supported = useSystem()?.execution.workspaces === true
   const actions = useUltimate()
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string>()
   const create = async () => {
-    if (!supported || pending) return
+    if (pending) return
     setPending(true)
     setError(undefined)
     try {
-      const requestId = sessionStorage.getItem(isolatedRequestKey) ?? crypto.randomUUID()
-      sessionStorage.setItem(isolatedRequestKey, requestId)
-      const { id } = await api.createConversation({ isolate: 'worktree', requestId })
-      sessionStorage.removeItem(isolatedRequestKey)
+      const { id } = await api.action<{ id: number }>('workspaces', 'create', {})
       setOpen(false)
       actions.showSurface('agent')
       actions.switchConversation(id)
@@ -843,11 +837,6 @@ function IsolatedDialog() {
           Create a separate Git checkout. No model starts until you send a message. Existing shared
           drafts are unchanged.
         </DialogDescription>
-        {!supported && (
-          <p role="alert" className="text-xs text-muted-foreground">
-            Upgrade and restart the core to create an isolated conversation.
-          </p>
-        )}
         {error && (
           <p role="alert" className="text-xs text-error break-words">
             {error} Resolve the reported problem and retry; the same creation request is retained,
@@ -866,7 +855,7 @@ function IsolatedDialog() {
           </Button>
           <Button
             className="cursor-pointer"
-            disabled={pending || !supported}
+            disabled={pending}
             onClick={() => void create()}
             size="sm"
           >
@@ -892,10 +881,7 @@ export default defineWebExtension({
       id: 'conversations.new-isolated',
       title: 'New isolated conversation',
       group: 'Conversations',
-      when: () => getState().system?.execution.workspaces === true,
-      run: (actions) => {
-        if (getState().system?.execution.workspaces === true) actions.open(isolatedDialog)
-      },
+      run: (actions) => actions.open(isolatedDialog),
     },
     {
       id: 'conversations.reset',

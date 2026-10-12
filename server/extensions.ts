@@ -23,6 +23,7 @@ import type { ConversationSummary, ExtensionInfo, SystemInfo } from '../shared/p
 import type { PreparedHost } from './harness.ts'
 import { Metadata } from './metadata.ts'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import { AgentDoc } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { Access } from './request-security.ts'
 
@@ -40,7 +41,6 @@ export type ExtensionHost = Pick<
   | 'models'
   | 'skills'
   | 'restart'
-  | 'workspaces'
 > & {
   /** Process-local Pi bus, shared across facets and reloads. Events are ephemeral, not bridged to the browser. */
   events: EventBus
@@ -174,9 +174,7 @@ export async function loadExtensions(
   const records = new Map<string, ExtensionInfo>()
   const documents = new Map<string, ConversationDocToken<JsonObject>[]>()
   const findDoc = (kind: string) =>
-    kind === host.workspaces.doc.definition.kind
-      ? host.workspaces.doc
-      : [...documents.values()].flat().find((doc) => doc.definition.kind === kind)
+    [...documents.values()].flat().find((doc) => doc.definition.kind === kind)
   const openers = new Set<() => Promise<void>>()
   let open = false
   const cleanups = new Set<() => Promise<void>>()
@@ -206,7 +204,6 @@ export async function loadExtensions(
     models: () => host.models(),
     skills: (cwd) => host.skills(cwd),
     restart: (approved) => host.restart(approved),
-    workspaces: host.workspaces,
     harness: runtime.harness,
     system: runtime.system,
     conversations: runtime.conversations,
@@ -530,13 +527,19 @@ export async function loadExtensions(
         host: facetHosts.get(name)!,
         conversationId,
         signal,
-        exec: (command, commandArgs, options) =>
-          host.workspaces.withExecution(
-            conversationId as ConversationId | undefined,
-            options?.cwd,
-            (cwd) => actionExec(cwd, signal)(command, commandArgs, { ...options, cwd }),
-            BACKGROUND_CONTEXT,
-          ),
+        exec: async (command, commandArgs, options) => {
+          const agent =
+            conversationId === undefined
+              ? undefined
+              : await runtime
+                  .harness()
+                  .snapshot(AgentDoc, conversationId as ConversationId, BACKGROUND_CONTEXT)
+          return actionExec(options?.cwd ?? agent?.cwd ?? host.projectRoot, signal)(
+            command,
+            commandArgs,
+            options,
+          )
+        },
       })
     },
     doc: findDoc,

@@ -21,19 +21,6 @@ export interface CompactResponse {
 export interface EmptyResponse {
   ok: true
 }
-export type Workspace = {
-  kind: 'worktree'
-  path: string
-  branch: string
-  base: string
-  source: string
-  targetBranch: string | null
-  targetHead?: string
-  state: 'active' | 'discarded'
-  preparation: 'pending' | 'ready' | 'error'
-  error?: string
-  landed?: string
-}
 export interface ConversationSummary {
   id: number
   parentConversationId?: number
@@ -42,7 +29,6 @@ export interface ConversationSummary {
   label?: string
   title?: string
   cwd?: string
-  workspace?: Workspace
   busy: boolean
   /** Timestamp (ms) of its latest user message; absent when it has none. */
   inputAt?: number
@@ -52,9 +38,6 @@ export interface ConversationSummary {
 export interface CreateConversationRequest {
   cwd?: string
   title?: string
-  isolate?: 'none' | 'worktree'
-  /** Required for isolated creation; retries refer to the same new conversation. */
-  requestId?: string
 }
 export interface CreateConversationResponse {
   id: number
@@ -121,7 +104,7 @@ export interface SystemInfo {
   }
   access: { origins: string[] }
   persistence: { kind: 'sqlite'; path: string; sizeBytes: number; walBytes: number }
-  execution: { kind: 'node-local'; defaultCwd: string; workspaces?: true }
+  execution: { kind: 'node-local'; defaultCwd: string }
   project: {
     root: string
     name: string

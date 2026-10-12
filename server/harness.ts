@@ -10,8 +10,6 @@ import { ModelRuntime, SettingsManager } from '@earendil-works/pi-coding-agent'
 import { createRegistry, Harness } from '@earendil-works/pi-durable'
 import type { Context } from '@earendil-works/chord'
 import { UiState } from './ui-state.ts'
-import { createWorkspaces } from './workspaces/service.ts'
-import { projectSettings } from './project-setup.ts'
 import { listModels } from './models.ts'
 import { projectSkills } from './skills.ts'
 import { requestSwap } from './supervisor-protocol.ts'
@@ -107,19 +105,7 @@ export async function prepareHarness(options: HostOptions) {
       (m) => m.provider === settings.getDefaultProvider() && m.id === settings.getDefaultModel(),
     ) ?? available[0]
   let active: { harness: Harness; root: { id: ConversationId } } | undefined
-  const workspaces = createWorkspaces({
-    home,
-    projectRoot,
-    ultimateRoot,
-    projectSettings: () => projectSettings(projectRoot, userHome),
-    harness: () => {
-      if (!active) throw new Error('Harness is not open')
-      return active.harness
-    },
-  })
-  registry.install(workspaces.extension)
   return {
-    workspaces,
     async uiState(caller: Context) {
       if (!active) throw new Error('Harness is not open')
       return (await active.harness.snapshot(UiState, active.root.id, caller)) ?? {}
@@ -186,7 +172,6 @@ export async function prepareHarness(options: HostOptions) {
           await tx.doc(UiState, root.id)
         }, context)
         active = { harness, root }
-        await workspaces.migrate(context)
         const openedHarness = harness
         if (resume) openedHarness.resume()
         return {

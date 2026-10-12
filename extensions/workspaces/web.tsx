@@ -8,23 +8,20 @@ import {
   errorMessage,
   useAction,
   useConversation,
-  useConversations,
-  useSystem,
   useTasks,
   useUltimate,
 } from '@/sdk'
-import type { ConversationSummary } from '@/sdk'
-import type { Workspace } from '../../shared/protocol.ts'
-
-type WorkspaceInfo = Workspace & { ahead: number | null }
+import { useWorkspaceConversations as useConversations } from './data.tsx'
+import type { WorkspaceConversation as ConversationSummary } from './data.tsx'
+import type { Workspace, WorkspaceInfo } from './types.ts'
 
 /** A saved landing is historical, never proof that the current branch tip is applied. */
 const stateLabel = (workspace: Workspace) =>
-  workspace.state === 'discarded'
+  workspace.state === 'removed'
     ? 'Removed'
-    : workspace.preparation === 'pending'
+    : workspace.state === 'preparing'
       ? 'Setting up…'
-      : workspace.preparation === 'error'
+      : workspace.state === 'failed'
         ? 'Setup failed'
         : 'Ready'
 
@@ -36,8 +33,6 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
   const [confirming, setConfirming] = useState(false)
   const [message, setMessage] = useState<string>()
   const [error, setError] = useState<string>()
-  const system = useSystem()
-  const supported = system?.execution.workspaces === true
   const tasks = useTasks()
   const busy =
     conversation.busy ||
@@ -55,28 +50,16 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
   )
   const recorded = conversation.workspace!
   const workspace =
-    info.data &&
-    info.data.state === recorded.state &&
-    info.data.preparation === recorded.preparation &&
-    info.data.landed === recorded.landed
+    info.data && info.data.state === recorded.state && info.data.landed === recorded.landed
       ? info.data
       : recorded
   useEffect(() => {
     if (shown) setOpen(true)
   }, [shown])
   useEffect(() => {
-    if (open && supported) void info.refetch()
-  }, [
-    recorded.state,
-    recorded.preparation,
-    recorded.landed,
-    conversation.busy,
-    open,
-    supported,
-    info.refetch,
-  ])
+    if (open) void info.refetch()
+  }, [recorded.state, recorded.landed, conversation.busy, open, info.refetch])
   const mutate = async (operation: 'land' | 'discard') => {
-    if (!supported) return
     setPending(operation)
     setError(undefined)
     setMessage(undefined)
@@ -104,16 +87,15 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
     }
   }
   const disabled =
-    !supported ||
     busy ||
     pending !== undefined ||
-    workspace.state === 'discarded' ||
-    workspace.preparation === 'pending'
+    workspace.state === 'removed' ||
+    workspace.state === 'preparing'
   const fields = [
     ['Path', workspace.path],
     ['Branch', workspace.branch],
     ['Source', workspace.source],
-    ['Target', workspace.targetBranch ?? `Detached @ ${workspace.targetHead ?? workspace.base}`],
+    ['Target', workspace.target],
     ...(workspace.landed ? [['Last landed', workspace.landed]] : []),
   ]
   return (
@@ -147,7 +129,7 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
           <Button
             aria-label={`Refresh W${conversation.id}`}
             className="ml-auto cursor-pointer"
-            disabled={info.loading || !supported}
+            disabled={info.loading}
             onClick={() => void info.refetch()}
             size="icon"
             variant="ghost"
@@ -196,20 +178,15 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
             checkout.
           </p>
         )}
-        {workspace.preparation === 'pending' && workspace.state !== 'discarded' && (
+        {workspace.state === 'preparing' && (
           <p role="status" className="text-muted-foreground">
             Setup is pending. Refresh to check progress; do not send input until Ready.
           </p>
         )}
-        {workspace.preparation === 'error' && workspace.state !== 'discarded' && (
+        {workspace.state === 'failed' && (
           <p role="alert" className="text-error break-words">
             {workspace.error ?? 'Workspace setup failed.'} Refresh details, then remove the clean
             checkout or create a new isolated conversation.
-          </p>
-        )}
-        {!supported && (
-          <p role="status" className="text-muted-foreground">
-            Upgrade and restart the core to manage workspaces.
           </p>
         )}
         {(error || info.error) && (
@@ -223,7 +200,7 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
             {message}
           </p>
         )}
-        {workspace.state !== 'discarded' &&
+        {workspace.state !== 'removed' &&
           (confirming ? (
             <div className="space-y-2 rounded-md border border-border/70 p-3">
               <p>
@@ -255,7 +232,7 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
             <div className="flex flex-wrap gap-2">
               <Button
                 className="cursor-pointer"
-                disabled={disabled || workspace.preparation !== 'ready'}
+                disabled={disabled || workspace.state !== 'ready'}
                 onClick={() => void mutate('land')}
                 size="sm"
                 variant="outline"

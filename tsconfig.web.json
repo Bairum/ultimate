@@ -21,6 +21,7 @@
     "extensions/**/*.tsx",
     ".ultimate/extensions/**/*.tsx",
     "shared/protocol.ts",
+    "extensions/workspaces/types.ts",
     "test/web"
   ]
 }
