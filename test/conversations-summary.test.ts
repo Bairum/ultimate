@@ -1,11 +1,13 @@
-import { mkdir } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { awaitWithContext } from '@earendil-works/chord/context'
+import { Subagents } from '../extensions/subagents/server.ts'
 import { join, resolve } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
-import type { Models } from '@earendil-works/pi-ai'
-import type { ConversationId } from '@earendil-works/pi-durable'
+import type { Models, JsonObject } from '@earendil-works/pi-ai'
+import type { ConversationId, EntryId, ToolRegistration } from '@earendil-works/pi-durable'
 import { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { defineExtension, defineTask, defineTool } from '@earendil-works/pi-durable'
+import { defineExtension, defineTask, defineTool, LiveDoc } from '@earendil-works/pi-durable'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -14,6 +16,7 @@ import {
   generateSummary,
   Summaries,
   summaryBehavior,
+  scheduleSpawnSummary,
   TitleChanged,
 } from '../extensions/conversations/summary.ts'
 import { fauxServer, post, prepareFauxServer, temp, until } from './helpers.ts'
@@ -22,10 +25,21 @@ const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 afterEach(async () => {
   for (const server of servers.splice(0)) await server.close()
 })
-async function launch() {
+async function launch(subagents = false) {
   const home = await temp('ultimate-summary-')
   const projectRoot = join(home, 'project')
   await mkdir(projectRoot)
+  if (subagents) {
+    await mkdir(join(projectRoot, '.ultimate/agents'), { recursive: true })
+    await writeFile(
+      join(projectRoot, '.ultimate/settings.json'),
+      JSON.stringify({ extensions: { enable: ['subagents'] } }),
+    )
+    await writeFile(
+      join(projectRoot, '.ultimate/agents/summary-child.md'),
+      '---\nname: summary-child\ndescription: Summary test child\ntools: [summary_hold]\n---\nWait for release.\n',
+    )
+  }
   const options = {
     ultimateRoot: resolve('.'),
     projectRoot,
@@ -78,6 +92,38 @@ async function launch() {
       return server
     },
     generated,
+    spawn: (answer: EntryId) =>
+      server.harness.commit(
+        (tx) =>
+          scheduleSpawnSummary(
+            tx,
+            {
+              harness: () => server.harness,
+              metadata: Metadata,
+              modelRuntime: server.host.modelRuntime,
+              extensions: () => [
+                {
+                  name: 'conversations',
+                  path: '',
+                  source: 'builtin',
+                  layer: 'default',
+                  actions: [],
+                  enabled: true,
+                  facets: { server: true, web: false },
+                  server: {
+                    tools: [],
+                    sections: [],
+                    hooks: 1,
+                    docs: ['ultimate.conversation-summaries'],
+                  },
+                },
+              ],
+            },
+            server.root.id,
+            { answer, agent: 'scout', task: 'Continue the plan.' },
+          ),
+        context,
+      ),
     titleChanges: async (id = server.root.id) =>
       (
         await server.harness.commit((tx) => tx.scanEntries({ conversationId: id }, 100), context)
@@ -104,6 +150,207 @@ async function launch() {
     },
   }
 }
+
+it.each([false, true])(
+  'refreshes during an actual subagent start, background=%s, while parent and child are busy',
+  async (background) => {
+    const fixture = await launch(true)
+    const { server } = fixture
+    let release!: () => void
+    const gate = new Promise<void>((done) => {
+      release = done
+    })
+    const holding = new Set<number>()
+    let replayed = false
+    const interrupted = new Error('Replay after committed creation, before result receipt')
+    server.host.registry.install(
+      defineExtension({
+        name: 'spawn-replay',
+        wraps: [
+          {
+            tool: 'subagent',
+            wrap: (tool: ToolRegistration): ToolRegistration => ({
+              ...tool,
+              execute: async (args, api, toolContext) => {
+                try {
+                  return await tool.execute(
+                    args,
+                    {
+                      ...api,
+                      details: async (value, caller) => {
+                        if (!replayed) {
+                          replayed = true
+                          throw interrupted
+                        }
+                        return api.details(value, caller)
+                      },
+                    },
+                    toolContext,
+                  )
+                } catch (error) {
+                  if (error !== interrupted) throw error
+                  return tool.execute(args, api, toolContext)
+                }
+              },
+            }),
+          },
+        ],
+      }),
+    )
+    server.host.registry.install(
+      defineExtension({
+        name: 'summary-hold',
+        tools: [
+          defineTool({
+            name: 'summary_hold',
+            description: 'Hold work until released',
+            parameters: Type.Object({}),
+            execute: async (_args, api, toolContext) => {
+              holding.add(api.conversationId)
+              await awaitWithContext(gate, toolContext)
+              return { content: [{ type: 'text', text: 'Released' }] }
+            },
+          }),
+        ],
+      }),
+    )
+    server.host.faux!.setResponses([
+      fauxAssistantMessage(
+        [
+          { type: 'text', text: 'Plan: delegate the sidebar implementation, then verify it.' },
+          fauxToolCall('subagent', {
+            action: 'start',
+            agent: 'summary-child',
+            task: 'Implement the sidebar plan.',
+            background,
+          }),
+        ],
+        { stopReason: 'toolUse' },
+      ),
+      fauxAssistantMessage([fauxToolCall('summary_hold', {})], { stopReason: 'toolUse' }),
+      fauxAssistantMessage([fauxToolCall('summary_hold', {})], { stopReason: 'toolUse' }),
+    ])
+    const submission = await server.root.submit(
+      { type: 'input', content: 'Plan and implement the sidebar.' },
+      context,
+    )
+    try {
+      await until(async () => (await fixture.read())?.status === 'ready')
+      const agents = Object.values(
+        (await server.harness.snapshot(Subagents, server.root.id, context))!.agents,
+      )
+      expect(agents).toHaveLength(1)
+      expect(replayed).toBe(true)
+      const child = agents[0].conversationId
+      await until(() => holding.has(child))
+      expect((await server.harness.snapshot(LiveDoc, child, context))?.run).toBeDefined()
+      expect((await server.harness.snapshot(LiveDoc, server.root.id, context))?.run).toBeDefined()
+      expect((await submission.status(context)).status).toBe('placed')
+      expect((await fixture.read())?.exchanges).toBe(0)
+      expect((await fixture.read())?.assessment).toBeUndefined()
+      expect((await fixture.read())?.activity).toBeUndefined()
+      expect((await fixture.read())?.summaryOwed).toBeUndefined()
+      expect((await fixture.read())?.summary).toBe('Added concise summaries to the sidebar.')
+      expect((await server.harness.snapshot(Metadata, server.root.id, context))?.title).toBe(
+        'Improve the conversation sidebar',
+      )
+      expect(fixture.generated).toHaveBeenCalledTimes(1)
+      expect(fixture.generated.mock.calls[0][1]).toContain(
+        'Plan: delegate the sidebar implementation',
+      )
+      expect(fixture.generated.mock.calls[0][1]).toContain('Implement the sidebar plan.')
+      expect(fixture.generated.mock.calls[0][5]).toBe('spawn')
+    } finally {
+      server.host.faux!.appendResponses(
+        Array.from({ length: 6 }, () => fauxAssistantMessage('Completed delegated work.')),
+      )
+      release()
+    }
+    await submission.wait(context)
+    await server.harness.waitForIdle(context)
+    await until(
+      async () => ((await fixture.read())?.exchanges ?? 0) >= 1 && !(await fixture.read())?.pending,
+    )
+    expect(fixture.generated.mock.calls.filter((call) => call[5] === 'spawn')).toHaveLength(1)
+    expect(
+      fixture.generated.mock.calls.some((call) => call[5] === 'reply' && call[3] === true),
+    ).toBe(true)
+    const child = Object.values(
+      (await server.harness.snapshot(Subagents, server.root.id, context))!.agents,
+    )[0].conversationId
+    const actions: JsonObject[] = [
+      { action: 'start', agent: 'missing-agent', task: 'Must fail' },
+      { action: 'message', id: child, text: 'Follow up', background: true },
+      { action: 'wait', id: child },
+    ]
+    for (const args of actions) {
+      server.host.faux!.setResponses([
+        fauxAssistantMessage([fauxToolCall('subagent', args)], { stopReason: 'toolUse' }),
+        ...Array.from({ length: 6 }, () => fauxAssistantMessage('Final reply.')),
+      ])
+      await (
+        await server.root.submit({ type: 'input', content: 'Exercise a non-spawn action' }, context)
+      ).wait(context)
+      await server.harness.waitForIdle(context)
+      await until(async () =>
+        Object.values((await server.harness.inspect(context)).tasks).every(
+          (task) => task.record.kind !== 'conversations.summary',
+        ),
+      )
+      expect(fixture.generated.mock.calls.filter((call) => call[5] === 'spawn')).toHaveLength(1)
+    }
+  },
+  60000,
+)
+
+it.each(['rename', 'reset', 'newer'] as const)(
+  'protects a held spawn result after %s',
+  async (change) => {
+    const fixture = await launch()
+    await fixture.exchange()
+    const answer = (await fixture.read())!.lastAnswer!
+    let release!: () => void
+    const gate = new Promise<void>((done) => {
+      release = done
+    })
+    fixture.generated.mockImplementationOnce(async () => {
+      await gate
+      return {
+        assessment: 'needs_input',
+        activity: 'Must not publish',
+        title: 'Old spawn title',
+        summary: 'Old spawn summary',
+      }
+    })
+    await fixture.spawn(answer)
+    await until(() => fixture.generated.mock.calls.length === 2)
+    try {
+      if (change === 'rename') await fixture.action('rename', 'Manual title')
+      else if (change === 'reset') await fixture.action('reset')
+      else await fixture.exchange()
+    } finally {
+      release()
+    }
+    await until(
+      async () => Object.values((await fixture.server.harness.inspect(context)).tasks).length === 0,
+    )
+    await until(async () => !(await fixture.read())?.pending)
+    const state = await fixture.read()
+    const title = (await fixture.server.harness.snapshot(Metadata, fixture.server.root.id, context))
+      ?.title
+    expect(state?.activity).not.toBe('Must not publish')
+    expect(title).toBe(change === 'rename' ? 'Manual title' : 'Improve the conversation sidebar')
+    expect(state?.summary).toBe(
+      {
+        rename: 'Old spawn summary',
+        reset: undefined,
+        newer: 'Added concise summaries to the sidebar.',
+      }[change],
+    )
+    expect(state?.exchanges).toBe({ rename: 1, reset: 0, newer: 2 }[change])
+  },
+  60000,
+)
 
 it('summarizes the first, fourth and seventh completed exchanges, not tools, streams or idle time; persists across reopen', async () => {
   const fixture = await launch()
@@ -430,28 +677,36 @@ it('rejects an older response after a newer scheduled summary has completed', as
   expect(await fixture.titleChanges()).toHaveLength(1)
 }, 60000)
 
-it('resumes pending background generation after shutdown without a stuck checkpoint', async () => {
-  const fixture = await launch()
-  fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
-    await new Promise((_done, reject) =>
-      signal.addEventListener('abort', () => reject(new Error('Closed')), { once: true }),
-    )
-    throw new Error('Unreachable')
-  })
-  fixture.server.host.faux!.setResponses([fauxAssistantMessage('Done.')])
-  await (
-    await fixture.server.root.submit({ type: 'input', content: 'Summarize this' }, context)
-  ).wait(context)
-  await until(() => fixture.generated.mock.calls.length === 1)
-  await fixture.reopen()
-  await until(async () => (await fixture.read())?.status === 'ready')
-  expect((await fixture.read())?.exchanges).toBe(1)
-  expect(fixture.generated).toHaveBeenCalledTimes(2)
-  const changes = await fixture.titleChanges()
-  expect(changes).toHaveLength(1)
-  await fixture.reopen()
-  expect(await fixture.titleChanges()).toEqual(changes)
-}, 60000)
+it.each(['reply', 'spawn'] as const)(
+  'resumes pending %s generation after shutdown without a stuck checkpoint',
+  async (mode) => {
+    const fixture = await launch()
+    if (mode === 'spawn') await fixture.exchange()
+    fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
+      await new Promise((_done, reject) =>
+        signal.addEventListener('abort', () => reject(new Error('Closed')), { once: true }),
+      )
+      throw new Error('Unreachable')
+    })
+    if (mode === 'spawn') await fixture.spawn((await fixture.read())!.lastAnswer!)
+    else {
+      fixture.server.host.faux!.setResponses([fauxAssistantMessage('Done.')])
+      await (
+        await fixture.server.root.submit({ type: 'input', content: 'Summarize this' }, context)
+      ).wait(context)
+    }
+    await until(() => fixture.generated.mock.calls.length === (mode === 'spawn' ? 2 : 1))
+    await fixture.reopen()
+    await until(async () => (await fixture.read())?.status === 'ready')
+    expect((await fixture.read())?.exchanges).toBe(1)
+    expect(fixture.generated).toHaveBeenCalledTimes(mode === 'spawn' ? 3 : 2)
+    const changes = await fixture.titleChanges()
+    expect(changes).toHaveLength(1)
+    await fixture.reopen()
+    expect(await fixture.titleChanges()).toEqual(changes)
+  },
+  60000,
+)
 
 it.each(['none', 'legacy'])(
   'skips summaries and assessments when current OpenAI Luna is unavailable (%s)',
@@ -519,6 +774,23 @@ it('validates assessment-only JSON and rejects unapproved or malformed outcome s
     await generateSummary(models, 'Untrusted reply text', new AbortController().signal, false),
   ).toEqual(output)
   expect(getModel).toHaveBeenCalledWith('openai', 'gpt-6-luna')
+  output = { title: 'Delegate the sidebar', summary: 'Planning has moved to implementation.' }
+  expect(
+    await generateSummary(
+      models,
+      'Delegation',
+      new AbortController().signal,
+      true,
+      undefined,
+      'spawn',
+    ),
+  ).toEqual({
+    ...(output as object),
+    assessment: 'neutral',
+    activity: '',
+  })
+  expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('work now starting')
+  expect(stream.mock.calls.at(-1)![1].systemPrompt).not.toContain('Assess the latest final reply')
   for (const value of ['blocked', 'unfinished', ['done'], null]) {
     output = { assessment: value, activity: 'Some work was discussed.' }
     await expect(

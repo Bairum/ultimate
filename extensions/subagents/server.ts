@@ -36,6 +36,7 @@ import { agentRoots, deleteDefinition, discoverAgents, saveDefinition } from './
 import { createChild } from './children.ts'
 import { workspaces } from '../workspaces/workspaces.ts'
 import { git } from '../workspaces/git.ts'
+import { scheduleSpawnSummary } from '../conversations/summary.ts'
 
 export const Subagents = defineDoc<{
   agents: Record<
@@ -620,11 +621,11 @@ Available definitions:
               isolated && (await git(parent.cwd ?? host.projectRoot, 'status', '--porcelain'))
                 ? '\nWarning: parent has uncommitted changes; they are not in the worktree.'
                 : ''
+            const task = definition ? await api.getTask(api.taskId, context) : undefined
+            // Pi upstream: @earendil-works/pi-durable@1.0.3 src/harness/tool.ts — internal ToolTaskInput.assistant locates the calling assistant. Drop when ToolExecutionApi exposes the calling assistant entry ID.
+            const assistant = (task?.input as { assistant: EntryId } | undefined)?.assistant
             let forkAt: EntryId | undefined
             if (definition && args.fork) {
-              const task = await api.getTask(api.taskId, context)
-              // Pi upstream: @earendil-works/pi-durable@1.0.3 src/harness/tool.ts — internal ToolTaskInput.assistant locates the calling assistant. Drop when ToolExecutionApi exposes the calling assistant entry ID.
-              const assistant = (task!.input as { assistant: EntryId }).assistant
               const conversation = (await host.harness().conversation(api.conversationId, context))!
               const view = await conversation.viewState(context)
               try {
@@ -640,6 +641,11 @@ Available definitions:
               if (state.actions[api.callId]) return { ...state.actions[api.callId] }
               let conversationId = args.id as ConversationId
               if (definition) {
+                await scheduleSpawnSummary(tx, host, api.conversationId, {
+                  answer: assistant!,
+                  agent: definition.name,
+                  task: text,
+                })
                 const owner = await tx.createTask(Anchor, null, {
                   ownership: { kind: 'conversation' },
                   background: true,
