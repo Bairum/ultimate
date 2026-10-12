@@ -238,7 +238,9 @@ function AssistantView({
             if (!block.thinking && !block.redacted) return null
             return (
               <Reasoning isStreaming={streaming && index === last} key={index}>
-                <ReasoningTrigger label={block.redacted ? 'Thinking (redacted)' : 'Thinking'} />
+                <ReasoningTrigger
+                  label={`${streaming && index === last ? 'Thinking' : 'Thought'}${block.redacted ? ' (redacted)' : ''}`}
+                />
                 <ReasoningContent>{block.thinking}</ReasoningContent>
               </Reasoning>
             )

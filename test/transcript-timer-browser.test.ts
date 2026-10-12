@@ -34,8 +34,8 @@ store.start()
 const root = createRoot(document.querySelector('#app'))
 flushSync(() => root.render(createElement(Transcript)))
 window.fixture = {
-  show: live => flushSync(() => source.dispatchEvent(new MessageEvent('view', {
-    data: JSON.stringify({ conversation: { id: 1 }, entries: [], docs: { 'pi.live': live } }),
+  show: (live, entries = []) => flushSync(() => source.dispatchEvent(new MessageEvent('view', {
+    data: JSON.stringify({ conversation: { id: 1 }, entries, docs: { 'pi.live': live } }),
   }))),
 }
 `,
@@ -90,6 +90,49 @@ window.fixture = {
     await page.clock.runFor(1000)
     expect(await timer.count()).toBe(0)
     expect(await page.getByText('retrying in', { exact: false }).count()).toBe(0)
+    for (const redacted of [false, true]) {
+      const reasoning = {
+        type: 'thinking',
+        thinking: redacted ? '' : 'Considering options.',
+        redacted,
+      }
+      const suffix = redacted ? ' (redacted)' : ''
+      await page.evaluate((thinking) => {
+        Reflect.get(window, 'fixture').show({
+          run: { taskId: 2 },
+          generation: { message: { role: 'assistant', content: [thinking] } },
+        })
+      }, reasoning)
+      expect(await page.getByText(`Thinking${suffix}…`, { exact: true }).count()).toBe(1)
+
+      for (const following of [
+        { type: 'text', text: 'Here is the answer.' },
+        { type: 'toolCall', id: 'call-1', name: 'read', arguments: {} },
+      ]) {
+        await page.evaluate(
+          ({ thinking, next }) => {
+            Reflect.get(window, 'fixture').show({
+              run: { taskId: 2 },
+              generation: { message: { role: 'assistant', content: [thinking, next] } },
+            })
+          },
+          { thinking: reasoning, next: following },
+        )
+        expect(await page.getByText(`Thought${suffix}`, { exact: true }).count()).toBe(1)
+        expect(await page.getByText(`Thinking${suffix}…`, { exact: true }).count()).toBe(0)
+      }
+
+      await page.evaluate((thinking) => {
+        Reflect.get(window, 'fixture').show({}, [
+          {
+            id: 1,
+            kind: 'pi.assistant',
+            model: [{ role: 'assistant', content: [thinking], stopReason: 'toolUse' }],
+          },
+        ])
+      }, reasoning)
+      expect(await page.getByText(`Thought${suffix}`, { exact: true }).count()).toBe(1)
+    }
     expect(errors).toEqual([])
   } finally {
     await browser?.close()
