@@ -6,6 +6,7 @@ import { useProjectSetup } from './project-setup.ts'
 export const DEFAULT_EXTENSIONS = [
   'agent',
   'conversations',
+  'workspaces',
   'coding-tools',
   'prompt',
   'models',

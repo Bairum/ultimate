@@ -49,23 +49,23 @@ const isolateState = (isolate: Isolate) =>
     ? 'discarded'
     : isolate.preparation !== 'ready'
       ? isolate.preparation
-      : isolate.landed
-        ? `landed ${isolate.landed.slice(0, 7)}`
-        : 'active'
+      : 'ready'
 
 function StateTag({ isolate }: { isolate: Isolate }) {
   return (
     <Tag
       className={cn(
         'font-mono',
-        isolate.state === 'discarded'
-          ? 'text-muted-foreground/70'
-          : isolate.landed
-            ? 'border-success/40 text-success'
-            : 'border-brand/40 text-brand',
+        isolate.state === 'discarded' ? 'text-muted-foreground/70' : 'border-brand/40 text-brand',
       )}
     >
-      {isolateState(isolate)}
+      <span
+        title={
+          isolate.landed ? `Last landed ${isolate.landed}; the current tip may differ` : undefined
+        }
+      >
+        {isolateState(isolate)}
+      </span>
     </Tag>
   )
 }
@@ -80,7 +80,7 @@ function IsolateBadge({ childId }: { childId: number }) {
       title={`${isolate.branch}\n${isolate.path}`}
     >
       <GitBranchIcon className="size-3 shrink-0" />
-      <span className="max-w-40 truncate">{isolate.branch}</span>
+      <span className="shrink-0">W{childId}</span>
       <StateTag isolate={isolate} />
     </span>
   )
@@ -291,7 +291,7 @@ function IsolateActions({
       <div className="flex h-6 min-w-0 items-center gap-1.5 pr-2" style={indent}>
         <GitBranchIcon className="size-3 shrink-0" />
         <span className="min-w-0 truncate" title={`${isolate.branch}\n${isolate.path}`}>
-          {isolate.branch}
+          W{child.id}
         </span>
         {isolate.state === 'discarded' && (
           <span className="shrink-0 text-muted-foreground/60">kept</span>

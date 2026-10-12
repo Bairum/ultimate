@@ -10,6 +10,7 @@ import {
   useCommands,
   useConnection,
   useConversation,
+  useConversations,
   useModels,
   useSystem,
   useUltimate,
@@ -55,18 +56,20 @@ function Item({
 
 function Cwd() {
   const system = useSystem()
-  const { agent } = useConversation()
+  const { agent, id } = useConversation()
+  const workspace = useConversations().find((conversation) => conversation.id === id)?.workspace
   if (!system) return null
   const cwd = agent.cwd ?? system.execution.defaultCwd
-  const shown = shortenPath(cwd, { home: system.machine.home })
+  const shown = workspace ? `W${id}` : shortenPath(cwd, { home: system.machine.home })
   const { branch, dirty, sha } = system.code
-  const inRepo = cwd === system.code.ultimateRoot
+  const inRepo = !workspace && cwd === system.code.ultimateRoot
   return (
     <Item
       className="min-w-0 text-foreground/80"
       tip={
         <>
-          {cwd}
+          {workspace?.path ?? cwd}
+          {workspace && <div>{workspace.branch}</div>}
           {inRepo && branch && (
             <div>
               {branch} @ {sha}

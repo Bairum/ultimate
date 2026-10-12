@@ -4,6 +4,8 @@ import {
   ArchiveIcon,
   ArchiveRestoreIcon,
   ChevronRightIcon,
+  ChevronDownIcon,
+  GitBranchIcon,
   CircleCheckIcon,
   CircleHelpIcon,
   EllipsisIcon,
@@ -36,6 +38,7 @@ import {
   useExtensionUiState,
   useNow,
   useStore,
+  useSystem,
   useTasks,
   useUltimate,
 } from '@/sdk'
@@ -57,6 +60,8 @@ type OverviewState = { conversations: Record<string, OverviewRow> }
 
 const newKeys = 'mod+alt+n'
 const resetDialog = 'conversations.reset'
+const isolatedDialog = 'conversations.new-isolated'
+const isolatedRequestKey = 'ultimate.isolated-conversation-request'
 const overviewKind = 'ultimate.conversation-overview'
 
 /** One root stream for all rows, unchanged when selection or expansion changes. */
@@ -156,7 +161,7 @@ async function newConversation(actions: UltimateActions) {
   const current = conversations.find((conversation) => conversation.id === shown.id)
   const topLevel = current !== undefined && current.parentConversationId === undefined
   // The replica, not the lagging summary: right after a first send, the shown conversation is no draft any longer.
-  if (topLevel && shown.entries.length === 0) {
+  if (topLevel && !current.workspace && shown.entries.length === 0) {
     focusWhenShown(actions, current.id)
     return
   }
@@ -167,6 +172,7 @@ async function newConversation(actions: UltimateActions) {
         conversation.parentConversationId === undefined &&
         conversation.inputAt === undefined &&
         conversation.title === undefined &&
+        !conversation.workspace &&
         !conversation.busy &&
         !(Array.isArray(archived) && archived.includes(conversation.id)),
     )
@@ -353,7 +359,10 @@ function Row({
       ) : (
         <button
           aria-current={shown ? 'true' : undefined}
-          className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md pr-2 pl-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+          className={cn(
+            'flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md pr-2 pl-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
+            conversation.workspace && 'pr-7',
+          )}
           onClick={() => actions.switchConversation(conversation.id)}
           ref={(element) => {
             if (!element || !refocus.current) return
@@ -364,6 +373,14 @@ function Row({
         >
           <Mark assessment={assessment} unseen={unseen} working={working} />
           {title}
+          {conversation.workspace && (
+            <span
+              className="shrink-0 font-mono text-[10px] text-muted-foreground"
+              title="Isolated workspace · details in Workspaces"
+            >
+              W{conversation.id}
+            </span>
+          )}
           {latest > 0 && (
             <span
               className="shrink-0 font-mono text-[10.5px] text-muted-foreground/80 group-focus-within:invisible group-hover:invisible group-has-[[data-state=open]]:invisible"
@@ -374,17 +391,17 @@ function Row({
           )}
         </button>
       )}
-      {!draft && !editing && (
+      {(!draft || conversation.workspace) && !editing && (
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger
             aria-label="Conversation actions"
-            className="invisible absolute right-1 flex size-5 items-center justify-center rounded-sm text-muted-foreground outline-none group-focus-within:visible group-hover:visible hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:visible data-[state=open]:bg-sidebar-accent data-[state=open]:text-foreground"
+            className="invisible absolute right-1 flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none group-focus-within:visible group-hover:visible hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:visible data-[state=open]:bg-sidebar-accent data-[state=open]:text-foreground"
           >
             <EllipsisIcon className="size-3.5" />
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="start"
-            className="w-44"
+            className="w-44 [&_[role=menuitem]]:cursor-pointer"
             onCloseAutoFocus={(event) => {
               const next = afterMenu.current
               afterMenu.current = undefined
@@ -393,6 +410,20 @@ function Row({
               next()
             }}
           >
+            {conversation.workspace && (
+              <DropdownMenuItem
+                className="cursor-pointer text-[12.5px]"
+                onSelect={() =>
+                  (afterMenu.current = () => {
+                    actions.switchConversation(conversation.id)
+                    actions.openPanel('workspaces')
+                  })
+                }
+              >
+                <GitBranchIcon />
+                Workspace details
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem
               className="text-[12.5px]"
               onSelect={() => (afterMenu.current = rename)}
@@ -461,6 +492,11 @@ function ChildRow({
         <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-foreground/80">
           {row?.role ?? 'Agent'} · #{conversation.id}
         </span>
+        {conversation.workspace && (
+          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+            W{conversation.id}
+          </span>
+        )}
         <span className="shrink-0 text-[10px] text-muted-foreground">{state}</span>
       </span>
       <span className="line-clamp-2 pl-[18px] text-[11px] leading-relaxed break-words text-muted-foreground">
@@ -482,6 +518,8 @@ function ChildRow({
  * empty draft; archived ones in a collapsed group at the bottom.
  */
 function Conversations() {
+  const system = useSystem()
+  const workspaceCapable = system?.execution.workspaces === true
   const overview = useOverview()
   const tasks = useTasks()
   const foreground = new Set<number>(
@@ -510,7 +548,9 @@ function Conversations() {
     .filter(
       (conversation) =>
         !archived.includes(conversation.id) &&
-        (conversation.inputAt !== undefined || conversation.id === shownTop?.id),
+        (conversation.inputAt !== undefined ||
+          conversation.id === shownTop?.id ||
+          conversation.workspace !== undefined),
     )
     .toSorted(byInput)
   const hidden = topLevel
@@ -607,7 +647,7 @@ function Conversations() {
           <TooltipTrigger asChild>
             <Button
               aria-label="New conversation"
-              className="ml-auto size-7 text-muted-foreground hover:text-foreground"
+              className="ml-auto size-7 cursor-pointer text-muted-foreground hover:text-foreground"
               onClick={() => actions.runCommand('conversations.new')}
               size="icon"
               variant="ghost"
@@ -620,6 +660,37 @@ function Conversations() {
             <Shortcut keys={newKeys} />
           </TooltipContent>
         </Tooltip>
+        {workspaceCapable && (
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger
+              aria-label="Conversation creation options"
+              className="flex size-6 cursor-pointer items-center justify-center rounded-sm outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <ChevronDownIcon className="size-3.5" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                className="cursor-pointer text-xs"
+                onSelect={() => actions.runCommand('conversations.new')}
+              >
+                New shared conversation
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="cursor-pointer text-xs"
+                onSelect={() => actions.runCommand('conversations.new-isolated')}
+              >
+                <GitBranchIcon />
+                New isolated conversation…
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="cursor-pointer text-xs"
+                onSelect={() => actions.openPanel('workspaces')}
+              >
+                Manage workspaces
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
       <nav aria-label="Conversations" className="flex flex-col gap-px">
         {listed.map((conversation) => tree(conversation))}
@@ -730,8 +801,85 @@ function ResetDialog() {
   )
 }
 
+/** Retain a request receipt across failure, cancellation and reload; only successful creation consumes it. */
+function IsolatedDialog() {
+  const [open, setOpen] = useDialog(isolatedDialog)
+  const supported = useSystem()?.execution.workspaces === true
+  const actions = useUltimate()
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string>()
+  const create = async () => {
+    if (!supported || pending) return
+    setPending(true)
+    setError(undefined)
+    try {
+      const requestId = sessionStorage.getItem(isolatedRequestKey) ?? crypto.randomUUID()
+      sessionStorage.setItem(isolatedRequestKey, requestId)
+      const { id } = await api.createConversation({ isolate: 'worktree', requestId })
+      sessionStorage.removeItem(isolatedRequestKey)
+      setOpen(false)
+      actions.showSurface('agent')
+      actions.switchConversation(id)
+      focusWhenShown(actions, id)
+    } catch (failure) {
+      setError(errorMessage(failure))
+    } finally {
+      setPending(false)
+    }
+  }
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!pending) setOpen(next)
+      }}
+    >
+      <DialogContent
+        className="gap-4 sm:max-w-md [&_button]:cursor-pointer"
+        showCloseButton={!pending}
+      >
+        <DialogTitle className="text-sm font-medium">New isolated conversation</DialogTitle>
+        <DialogDescription className="text-xs leading-relaxed">
+          Create a separate Git checkout. No model starts until you send a message. Existing shared
+          drafts are unchanged.
+        </DialogDescription>
+        {!supported && (
+          <p role="alert" className="text-xs text-muted-foreground">
+            Upgrade and restart the core to create an isolated conversation.
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="text-xs text-error break-words">
+            {error} Resolve the reported problem and retry; the same creation request is retained,
+            so a lost response will not create a second workspace.
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button
+            className="cursor-pointer"
+            disabled={pending}
+            onClick={() => setOpen(false)}
+            size="sm"
+            variant="ghost"
+          >
+            Cancel
+          </Button>
+          <Button
+            className="cursor-pointer"
+            disabled={pending || !supported}
+            onClick={() => void create()}
+            size="sm"
+          >
+            {pending ? 'Creating…' : error ? 'Retry creation' : 'Create isolated conversation'}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export default defineWebExtension({
-  slots: { sidebar: Conversations, overlay: [ResetDialog, Seen] },
+  slots: { sidebar: Conversations, overlay: [ResetDialog, Seen, IsolatedDialog] },
   commands: [
     {
       id: 'conversations.new',
@@ -739,6 +887,15 @@ export default defineWebExtension({
       keys: newKeys,
       group: 'Conversations',
       run: (context) => newConversation(context),
+    },
+    {
+      id: 'conversations.new-isolated',
+      title: 'New isolated conversation',
+      group: 'Conversations',
+      when: () => getState().system?.execution.workspaces === true,
+      run: (actions) => {
+        if (getState().system?.execution.workspaces === true) actions.open(isolatedDialog)
+      },
     },
     {
       id: 'conversations.reset',

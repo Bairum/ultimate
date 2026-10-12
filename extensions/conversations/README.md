@@ -6,7 +6,9 @@ conversations concise titles and sidebar summaries, and assesses each final repl
 
 The sidebar lists the top-level conversations that have a message, newest input first, so a row moves when its
 conversation gets input (your message or a background subagent's report), not while it works. Empty conversations stay
-out, except the shown one: an empty shown conversation is the draft, listed first as "New conversation". The shown row
+out, except the shown one and every isolated draft (including pending, failed and removed checkouts): an empty shown
+conversation is the draft, listed first as "New conversation". Isolated rows carry a short `W<conversationId>` badge;
+Workspace details in their menu opens the Workspaces panel. Empty isolated rows also have the management menu. The shown row
 is highlighted, also while one of its subagents is shown. Each row has its title (or `#id`) and the time of its latest
 message (`now`, `5m`, `3h`, `2d`, then a date). Its leading mark pulses while it or any of its subagents works, and is
 solid when an answer arrived since you last looked at it. Actual foreground tasks and live run boundaries determine
@@ -25,9 +27,18 @@ invented delegation edges. Expansion is persisted in `ext.conversations.expanded
 
 New conversation (the button, `mod+alt+n`, or the palette) shows an empty conversation on the Agent surface and
 focuses the composer. It reuses the shown draft (a shown top-level conversation without entries), else the newest
-empty, untitled, idle, unarchived conversation, and creates one only when there is none. From a top-level conversation
+empty, untitled, idle, unarchived **shared** conversation, and creates one only when there is none. It never reuses
+an empty isolated conversation, including the shown one. From a top-level conversation
 it takes that one's model and thinking level; from a subagent it sets none, so a reused conversation keeps its own and a
 new one gets the main conversation's.
+
+When `system.execution.workspaces === true`, the small New options menu also offers New isolated conversation.
+Its confirmation uses core `POST /api/conversations` with `isolate: "worktree"` and a random `requestId` retained in
+session storage until a successful response. Failed/retried requests, closing the dialog and page reload reuse that
+receipt rather than creating duplicate workspaces after a lost response. Creation never submits input or runs a model.
+The button and palette command are absent on an older core; confirmation also rechecks the explicit capability.
+Setup errors are inspected in Workspaces, not retried by bypassing core preparation/admission. Ordinary New keeps its
+shared-draft behavior. Archive and clear context never remove checkouts or commits.
 
 On hover or focus, a row's `…` menu offers Rename (inline; also on double-click; Enter or leaving the field saves,
 Escape cancels, and after either key focus returns to the row), Clear context… (asks first; not while the conversation
