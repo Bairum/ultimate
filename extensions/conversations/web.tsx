@@ -606,11 +606,11 @@ function Conversations() {
             }
           >
             <CollapsibleTrigger
-              aria-label={`Agents of conversation ${conversation.id}`}
+              aria-label={`Sub-agents of conversation ${conversation.id}`}
               className="group/agents ml-5 flex cursor-pointer items-center gap-1 py-1 text-[10.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
             >
               <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/agents:rotate-90" />
-              Agents · {children.length}
+              Sub-agents · {children.length}
             </CollapsibleTrigger>
             <CollapsibleContent className="ml-4 border-l border-border/60">
               {children.map((child) => tree(child, true))}
