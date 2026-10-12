@@ -65,7 +65,7 @@ function TranscriptEntries() {
   const [exhausted, setExhausted] = useState(false)
   const [before, setBefore] = useState<number>()
   const request = useRef<AbortController | null>(null)
-  const anchor = useRef<{ element: Element; top: number } | null>(null)
+  const anchor = useRef<{ entryId: number; top: number } | null>(null)
   const { contentRef, scrollRef, stopScroll } = useStickToBottomContext()
   // Retain already displayed rows when a live compaction replaces the active context.
   const entries = useMemo(() => {
@@ -87,6 +87,13 @@ function TranscriptEntries() {
           !previousActive.current.some((old) => old.id === entry.id),
       )
     ) {
+      request.current?.abort()
+      request.current = null
+      anchor.current = null
+      setPending(false)
+      setError('')
+      setBefore(Math.max(...active.map((entry) => entry.id)))
+      setExhausted(false)
       const retained = previousActive.current
       setHistory((previous) => {
         const rows = new Map(previous.map((entry) => [entry.id, entry]))
@@ -99,11 +106,12 @@ function TranscriptEntries() {
   useEffect(() => () => request.current?.abort(), [])
   useLayoutEffect(() => {
     if (anchor.current && scrollRef.current) {
-      const { element, top } = anchor.current
-      scrollRef.current.scrollTop += element.getBoundingClientRect().top - top
+      const { entryId, top } = anchor.current
+      const element = contentRef.current?.querySelector(`[data-entry-id="${entryId}"]`)
+      if (element) scrollRef.current.scrollTop += element.getBoundingClientRect().top - top
       anchor.current = null
     }
-  }, [history, scrollRef])
+  }, [history, scrollRef, contentRef])
   useEffect(() => {
     const scroll = scrollRef.current
     if (!scroll || tailSpace === 0) return undefined
@@ -131,11 +139,51 @@ function TranscriptEntries() {
       // discarded compaction markers which a minimum-active-ID cursor would skip.
       const page = await api.history(id, before ?? entries.at(-1)!.id, controller.signal)
       if (controller.signal.aborted) return
-      const element = [...(contentRef.current?.querySelectorAll('[data-entry-id]') ?? [])].find(
+      const { calls: mergedCalls } = indexTools([...entries, ...page.entries])
+      const survivors = new Set<number>(
+        entries
+          .filter(
+            (entry) =>
+              !(entry.kind === 'pi.tool-result' && mergedCalls.has(toolCallId(entry) ?? '')),
+          )
+          .map((entry) => entry.id),
+      )
+      const candidates = [
+        ...(contentRef.current?.querySelectorAll('[data-entry-id]') ?? []),
+      ].filter(
         (row) =>
           row.getBoundingClientRect().bottom >
           (scrollRef.current?.getBoundingClientRect().top ?? 0),
       )
+      // A result row disappears when this page brings its assistant call. Anchor a surviving
+      // row, or the replacement assistant when no existing displayed row survives.
+      const element = candidates.find((row) =>
+        survivors.has(Number(row.getAttribute('data-entry-id'))),
+      )
+      if (element) {
+        anchor.current = {
+          entryId: Number(element.getAttribute('data-entry-id')),
+          top: element.getBoundingClientRect().top,
+        }
+      } else if (candidates[0]) {
+        const orphan = entries.find(
+          (entry) => entry.id === Number(candidates[0].getAttribute('data-entry-id')),
+        )
+        const callId = orphan && toolCallId(orphan)
+        const replacement = page.entries.find((entry) => {
+          const message = entry.model?.[0]
+          return (
+            entry.kind === 'pi.assistant' &&
+            message?.role === 'assistant' &&
+            message.content.some((block) => block.type === 'toolCall' && block.id === callId)
+          )
+        })
+        if (replacement)
+          anchor.current = {
+            entryId: replacement.id,
+            top: candidates[0].getBoundingClientRect().top,
+          }
+      }
       stopScroll()
       // A short transcript needs its existing empty tail to remain scrollable after prepending.
       setTailSpace((space) =>
@@ -144,7 +192,6 @@ function TranscriptEntries() {
           (scrollRef.current?.clientHeight ?? 0) - (contentRef.current?.clientHeight ?? 0),
         ),
       )
-      if (element) anchor.current = { element, top: element.getBoundingClientRect().top }
       setHistory((previous) => {
         const rows = new Map(previous.map((entry) => [entry.id, entry]))
         for (const entry of page.entries) rows.set(entry.id, entry)
