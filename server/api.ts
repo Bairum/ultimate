@@ -3,6 +3,7 @@ import type {
   ConversationId,
   Cursor,
   DocumentWatch,
+  EntryId,
   JsonObject,
   SubmissionId,
 } from '@earendil-works/pi-durable'
@@ -352,6 +353,27 @@ export async function createApi(
             id as ConversationId,
             (url.searchParams.get('docs') ?? '').split(',').filter(Boolean),
           )
+          return true
+        }
+        const history = /^\/api\/conversations\/(\d+)\/history$/.exec(url.pathname)
+        if (request.method === 'GET' && history) {
+          const id = Number(history[1])
+          const before = Number(url.searchParams.get('before'))
+          if (!Number.isSafeInteger(id) || id < 1 || !Number.isSafeInteger(before) || before < 1)
+            throw new HttpError(400, 'Invalid history cursor or conversation id')
+          const conversation = await harness.conversation(id as ConversationId, context)
+          if (!conversation) throw new HttpError(404, 'Unknown conversation')
+          const page = await conversation.entries(
+            { maxEntryId: (before - 1) as EntryId },
+            65,
+            undefined,
+            context,
+          )
+          const entries = page.items.slice(0, 64)
+          json(200, {
+            entries,
+            before: page.items.length > 64 ? entries.at(-1)!.id : undefined,
+          })
           return true
         }
         if (request.method === 'GET' && url.pathname === '/api/models') {

@@ -5,6 +5,7 @@ import type {
   CreateConversationRequest,
   CreateConversationResponse,
   EmptyResponse,
+  HistoryResponse,
   ExtensionActionRequest,
   ExtensionActionResponse,
   SubmitRequest,
@@ -90,6 +91,14 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
         whenBusy,
         images,
       } satisfies SubmitRequest),
+    history: async (id: number, before: number, signal?: AbortSignal): Promise<HistoryResponse> => {
+      const response = await request(base + conversation(id, `history?before=${before}`), {
+        signal,
+      })
+      const data = await response.json()
+      if (!response.ok) throw new HttpError(response.status, data.error ?? 'Could not load history')
+      return data as HistoryResponse
+    },
     abort: (id?: number) => post<EmptyResponse>(conversation(id, 'abort')),
     cancelSubmission: (submissionId: number, id?: number) =>
       post<EmptyResponse>(conversation(id, `inbox/${submissionId}/cancel`)),

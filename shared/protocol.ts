@@ -1,7 +1,13 @@
 import type { JsonValue } from '@earendil-works/chord'
 import type { Op } from '@earendil-works/chord/delta'
 import type { AuthType, ModelThinkingLevel } from '@earendil-works/pi-ai'
-import type { ConversationView, JsonObject, ModelRef, TaskGraph } from '@earendil-works/pi-durable'
+import type {
+  ConversationView,
+  EntryRecord,
+  JsonObject,
+  ModelRef,
+  TaskGraph,
+} from '@earendil-works/pi-durable'
 import type { ModelRuntime } from '@earendil-works/pi-coding-agent'
 
 export const imageMimeTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
@@ -19,6 +25,11 @@ export interface SubmitResponse {
 export interface ConfigureRequest {
   model?: ModelRef
   thinkingLevel?: ModelThinkingLevel
+}
+/** Stored history, newest first; `before` is the exclusive cursor for the next page. */
+export interface HistoryResponse {
+  entries: EntryRecord[]
+  before?: number
 }
 export interface CompactResponse {
   taskId: number

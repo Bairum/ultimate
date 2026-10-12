@@ -15,10 +15,12 @@ import {
   CircleStopIcon,
   RotateCwIcon,
 } from 'lucide-react'
-import { Fragment, memo, useMemo } from 'react'
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
 import { useEvent } from '../sdk/events.ts'
+import { api } from '../sdk/client.ts'
+import { Button } from '@/components/ui/button'
 import {
   Conversation,
   ConversationContent,
@@ -41,7 +43,125 @@ import { ToolCallBlock } from './tool-call.tsx'
 
 /** The shown conversation; `dock` fits it into a narrow side region. */
 export function Transcript({ dock }: { dock?: boolean }) {
-  const { id, entries, live, busy, loading } = useConversation()
+  const { id } = useConversation()
+  return (
+    <Conversation className="min-h-0">
+      <ConversationContent className={cn(column(dock), 'gap-3 pt-6 pb-10')}>
+        <EntryNavigation conversationId={id} />
+        <TranscriptEntries key={id} />
+      </ConversationContent>
+      <ConversationScrollButton />
+    </Conversation>
+  )
+}
+
+function TranscriptEntries() {
+  const { id, entries: active, live, busy, loading } = useConversation()
+  const [history, setHistory] = useState<EntryRecord[]>([])
+  const previousActive = useRef(active)
+  const [tailSpace, setTailSpace] = useState(0)
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState('')
+  const [exhausted, setExhausted] = useState(false)
+  const [before, setBefore] = useState<number>()
+  const request = useRef<AbortController | null>(null)
+  const anchor = useRef<{ element: Element; top: number } | null>(null)
+  const { contentRef, scrollRef, stopScroll } = useStickToBottomContext()
+  // Retain already displayed rows when a live compaction replaces the active context.
+  const entries = useMemo(() => {
+    const rows = new Map(history.map((entry) => [entry.id, entry]))
+    const condensed = active.some(
+      (entry) =>
+        (entry.kind === 'pi.compaction' || entry.kind === 'pi.reset') &&
+        !previousActive.current.some((old) => old.id === entry.id),
+    )
+    if (condensed) for (const entry of previousActive.current) rows.set(entry.id, entry)
+    for (const entry of active) rows.set(entry.id, entry)
+    return [...rows.values()].toSorted((a, b) => a.id - b.id)
+  }, [history, active])
+  useLayoutEffect(() => {
+    if (
+      active.some(
+        (entry) =>
+          (entry.kind === 'pi.compaction' || entry.kind === 'pi.reset') &&
+          !previousActive.current.some((old) => old.id === entry.id),
+      )
+    ) {
+      const retained = previousActive.current
+      setHistory((previous) => {
+        const rows = new Map(previous.map((entry) => [entry.id, entry]))
+        for (const entry of retained) rows.set(entry.id, entry)
+        return [...rows.values()]
+      })
+    }
+    previousActive.current = active
+  }, [active])
+  useEffect(() => () => request.current?.abort(), [])
+  useLayoutEffect(() => {
+    if (anchor.current && scrollRef.current) {
+      const { element, top } = anchor.current
+      scrollRef.current.scrollTop += element.getBoundingClientRect().top - top
+      anchor.current = null
+    }
+  }, [history, scrollRef])
+  useEffect(() => {
+    const scroll = scrollRef.current
+    if (!scroll || tailSpace === 0) return undefined
+    const releaseTail = () => {
+      // Release temporary space once it cannot clamp the reader, or they return to the bottom.
+      const gap = contentRef.current
+        ? Number.parseFloat(getComputedStyle(contentRef.current).rowGap) || 0
+        : 0
+      const bottom = scroll.scrollHeight - scroll.clientHeight
+      if (scroll.scrollTop <= bottom - tailSpace - gap || scroll.scrollTop >= bottom - 1)
+        setTailSpace(0)
+    }
+    scroll.addEventListener('scroll', releaseTail)
+    releaseTail()
+    return () => scroll.removeEventListener('scroll', releaseTail)
+  }, [tailSpace, active, scrollRef, contentRef])
+  const loadEarlier = async () => {
+    if (id === undefined || request.current || !entries.length) return
+    const controller = new AbortController()
+    request.current = controller
+    setPending(true)
+    setError('')
+    try {
+      // Scan stored history independently of display order: retained suffixes can precede
+      // discarded compaction markers which a minimum-active-ID cursor would skip.
+      const page = await api.history(id, before ?? entries.at(-1)!.id, controller.signal)
+      if (controller.signal.aborted) return
+      const element = [...(contentRef.current?.querySelectorAll('[data-entry-id]') ?? [])].find(
+        (row) =>
+          row.getBoundingClientRect().bottom >
+          (scrollRef.current?.getBoundingClientRect().top ?? 0),
+      )
+      stopScroll()
+      // A short transcript needs its existing empty tail to remain scrollable after prepending.
+      setTailSpace((space) =>
+        Math.max(
+          space,
+          (scrollRef.current?.clientHeight ?? 0) - (contentRef.current?.clientHeight ?? 0),
+        ),
+      )
+      if (element) anchor.current = { element, top: element.getBoundingClientRect().top }
+      setHistory((previous) => {
+        const rows = new Map(previous.map((entry) => [entry.id, entry]))
+        for (const entry of page.entries) rows.set(entry.id, entry)
+        return [...rows.values()]
+      })
+      setBefore(page.before)
+      setExhausted(page.before === undefined)
+    } catch (failure) {
+      if (!controller.signal.aborted)
+        setError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      if (!controller.signal.aborted) {
+        request.current = null
+        setPending(false)
+      }
+    }
+  }
   const { results, calls } = useMemo(() => indexTools(entries), [entries])
   const slots = useMemo(() => slotsOf(live), [live])
   const partial = partialOf(live)
@@ -49,27 +169,48 @@ export function Transcript({ dock }: { dock?: boolean }) {
     (entry) => !(entry.kind === 'pi.tool-result' && calls.has(toolCallId(entry) ?? '')),
   )
   return (
-    <Conversation className="min-h-0">
-      <ConversationContent className={cn(column(dock), 'gap-3 pt-6 pb-10')}>
-        <EntryNavigation conversationId={id} />
-        {!loading && visible.length === 0 && !partial && <EmptyState />}
-        {visible.map((entry) => (
-          <div
-            className="empty:hidden"
-            data-conversation-id={id}
-            data-entry-id={entry.id}
-            key={entry.id}
+    <>
+      {!loading && entries.length > 0 && !exhausted && (
+        <div className="flex flex-col items-center gap-1">
+          <Button
+            className="cursor-pointer"
+            disabled={pending}
+            onClick={() => void loadEarlier()}
+            size="sm"
+            variant="ghost"
           >
-            <EntryView busy={busy} entry={entry} results={results} slots={slots} />
-          </div>
-        ))}
-        {partial && (
-          <AssistantView busy message={partial} results={results} slots={slots} streaming />
-        )}
-        <LiveStatus busy={busy} live={live} partial={partial} />
-      </ConversationContent>
-      <ConversationScrollButton />
-    </Conversation>
+            {pending
+              ? 'Loading earlier messages…'
+              : error
+                ? 'Retry loading earlier messages'
+                : 'Load earlier messages'}
+          </Button>
+          {error && (
+            <p className="text-xs text-error" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
+      {!loading && visible.length === 0 && !partial && <EmptyState />}
+      {visible.map((entry) => (
+        <div
+          className="empty:hidden"
+          data-conversation-id={id}
+          data-entry-id={entry.id}
+          key={entry.id}
+        >
+          <EntryView busy={busy} entry={entry} results={results} slots={slots} />
+        </div>
+      ))}
+      {partial && (
+        <AssistantView busy message={partial} results={results} slots={slots} streaming />
+      )}
+      <LiveStatus busy={busy} live={live} partial={partial} />
+      {tailSpace > 0 && (
+        <div aria-hidden="true" data-history-anchor-space style={{ height: tailSpace }} />
+      )}
+    </>
   )
 }
 
@@ -412,19 +553,24 @@ function SystemDivider({ message }: { message: SystemMessage }) {
 
 function CompactionView({ entry }: { entry: EntryRecord }) {
   const message = entry.model?.[0]
-  const summary = message?.role === 'user' ? textOf(message.content) : ''
+  const wrapped = message?.role === 'user' ? textOf(message.content) : ''
+  const start = wrapped.indexOf('<summary>\n')
+  const end = wrapped.lastIndexOf('\n</summary>')
+  const summary =
+    start >= 0 && end > start ? wrapped.slice(start + '<summary>\n'.length, end) : wrapped
   const reason = (entry.data as { reason?: string } | undefined)?.reason
   return (
-    <Collapsible className="group/compaction">
-      <CollapsibleTrigger className="w-full">
-        <Divider className="hover:text-muted-foreground">
-          <span className="flex items-center gap-1">
-            <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/compaction:rotate-90" />
-            context compacted{reason ? ` · ${reason}` : ''}
-          </span>
-        </Divider>
+    <Collapsible className="group/compaction rounded-lg border border-brand/30 bg-brand/5">
+      <CollapsibleTrigger className="flex w-full cursor-pointer flex-col gap-1 px-3.5 py-2.5 text-left">
+        <span className="flex items-center gap-1.5 font-mono text-[11px] text-brand">
+          <ChevronRightIcon className="size-3.5 transition-transform group-data-[state=open]/compaction:rotate-90" />
+          Conversation condensed{reason ? ` · ${reason}` : ''}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          Prior conversation was condensed into a summary. Earlier messages remain available above.
+        </span>
       </CollapsibleTrigger>
-      <CollapsibleContent className="mt-2 rounded-md border border-border/70 bg-card/40 px-3.5 py-2.5 text-[13px] text-muted-foreground">
+      <CollapsibleContent className="border-t border-brand/20 px-3.5 py-2.5 text-[13px]">
         <MessageResponse>{summary}</MessageResponse>
       </CollapsibleContent>
     </Collapsible>
