@@ -17,6 +17,9 @@ import { realpath } from 'node:fs/promises'
 import { extensionModules } from './vite-extensions.ts'
 import { admit, createAccess } from './request-security.ts'
 import { writeProject } from './project.ts'
+import { reportCore } from './supervisor-protocol.ts'
+import { viteLogger } from './vite-logger.ts'
+import type { Notice } from '../shared/protocol.ts'
 
 const send = (message: ChildMessage) => process.send?.(message)
 
@@ -31,11 +34,20 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     options.projectRoot ?? process.env.ULTIMATE_PROJECT ?? options.ultimateRoot ?? process.cwd(),
   )
   const events = new Events()
+  const notice = (entry: Notice) => {
+    events.emit('notice', entry)
+    reportCore({
+      type: 'log',
+      level: entry.level === 'warning' ? 'warn' : entry.level,
+      source: 'core',
+      text: entry.message,
+    })
+  }
   const host = await prepareHarness({
     ...options,
     ultimateRoot,
     projectRoot,
-    report: (notice) => events.emit('notice', notice),
+    report: notice,
   })
   let system: Awaited<ReturnType<typeof createSystem>> | undefined
   const access = createAccess(() => {
@@ -82,7 +94,10 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
   })
   // A vite.config.ts change restarts Vite with a new watcher; listeners move to each new one.
   const restarted = new Set<(watcher: ViteDevServer['watcher']) => void>()
+  reportCore({ type: 'web', state: 'preparing' })
   const vite = await createViteServer({
+    customLogger: viteLogger(),
+    clearScreen: false,
     configFile: resolvePath(ultimateRoot, 'vite.config.ts'),
     root: resolvePath(ultimateRoot, 'web'),
     server: {
@@ -138,7 +153,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       conversations: () => api?.conversations() ?? [],
     },
     watch,
-    (message) => events.emit('notice', { level: 'warning', message }),
+    (message) => notice({ level: 'warning', message }),
   )
   await new Promise<void>((resolve, reject) => {
     http.once('error', reject)
@@ -156,7 +171,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     url,
     extensions.info,
     (info) => events.emit('system', info),
-    (message) => events.emit('notice', { level: 'error', message }),
+    (message) => notice({ level: 'error', message }),
     processInfo,
     access.origins,
   )
@@ -175,6 +190,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       http.closeAllConnections()
       await opened?.close()
       opened = undefined
+      reportCore({ type: 'web', state: 'stopped' })
     },
     async go(activationError?: string) {
       processInfo.activationError = activationError
@@ -184,6 +200,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       await system.changed()
       api = await createApi(host, opened, events, system, extensions, access)
       opened.harness.resume()
+      reportCore({ type: 'web', state: 'ready' })
       return { ...opened, api, system }
     },
     async close() {
@@ -194,6 +211,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       await extensions.close()
       await system?.close()
       await vite.close()
+      reportCore({ type: 'web', state: 'stopped' })
       http.closeAllConnections()
       await stopped
       await opened?.close()

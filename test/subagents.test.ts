@@ -107,6 +107,7 @@ async function fixture(
       events: createEventBus(),
       access: { allow: () => () => {} },
       notice: () => {},
+      service: () => ({ update: () => {}, dispose: () => {} }),
       resource: (_key, create) => create(),
       onOpen: () => {},
       onClose: () => {},

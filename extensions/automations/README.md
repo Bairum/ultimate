@@ -2,6 +2,10 @@ Durable schedules for agent prompts, with every run kept as a conversation. Opt-
 
 Enable `automations` and `subagents` in `extensions.enable`. This repository enables both; automations is not in the default set.
 
+The supervisor terminal dashboard shows `automations/scheduler: ready · durable scheduler` after the harness opens.
+This facet-scoped status reports availability, not idleness or run counts; it adds no polling and does not change the
+root-owned durable scheduler. It disappears when the extension is disabled or the core is released/stopped.
+
 ## Schedules
 
 - `cron "0 9 * * 1-5" Europe/Vienna`: five fields (minute, hour, day of month, month, weekday); numbers, lists, ranges and steps. Sunday is 0 or 7. Timezone defaults to the machine's IANA timezone. Restricted day-of-month and weekday fields use cron's OR rule. Search is bounded to eight years, including leap-day schedules. Nonexistent local minutes in the spring daylight-saving gap are skipped (not shifted); a repeated wall-clock match in the autumn hour fires only once.

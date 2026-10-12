@@ -419,7 +419,11 @@ export const actions = Object.fromEntries(
   ]),
 )
 
-export default function automations(host: Host) {
+export default function automations(host: Host & Pick<ExtensionHost, 'onOpen' | 'service'>) {
+  const status = host.service('scheduler', { state: 'starting', detail: 'durable scheduler' })
+  host.onOpen(async () => {
+    status.update({ state: 'ready', detail: 'durable scheduler' })
+  })
   const api = backend(host)
   return defineExtension({
     name: 'automations',
