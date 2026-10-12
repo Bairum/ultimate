@@ -217,7 +217,12 @@ it('expands real agent roles and outcomes, separates Replied from Luna Done, and
     )
     await page.goto(server.url)
     await untilInput(page)
-    await page.getByRole('button', { name: 'Agents of conversation 1', exact: true }).click()
+    const subagents = page.getByRole('button', {
+      name: 'Sub-agents of conversation 1',
+      exact: true,
+    })
+    expect(await subagents.textContent()).toBe(`Sub-agents · ${children.length}`)
+    await subagents.click()
     const childRow = (id: number) => page.locator(`[data-child-conversation="${id}"]`)
     const [scout, worker, reviewer] = children
     await expect.poll(() => childRow(scout).textContent(), timeout).toContain('scout')
@@ -311,12 +316,12 @@ it('expands real agent roles and outcomes, separates Replied from Luna Done, and
     ).wait(context)
     await expect.poll(() => childRow(reviewer).textContent(), timeout).toContain('Run failed')
     expect(await childRow(reviewer).getByRole('img').count()).toBe(0)
-    await page.getByRole('button', { name: 'Agents of conversation 1', exact: true }).click()
+    await subagents.click()
     expect(await childRow(scout).count()).toBe(0)
     await page.reload()
     await untilInput(page)
     expect(await childRow(scout).count()).toBe(0)
-    await page.getByRole('button', { name: 'Agents of conversation 1', exact: true }).click()
+    await subagents.click()
     await expect.poll(() => childRow(scout).count(), timeout).toBe(1)
     expect(errors).toEqual([])
   } finally {

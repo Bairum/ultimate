@@ -20,7 +20,7 @@ Idle, currently assessed replies may show a circular question (needs input) or g
 coordinator, not necessarily a human. Unknown, neutral, stale or failed assessments never show a success mark.
 There is no third red blocked/unfinished assessment.
 
-A conversation with genuinely owned children has an expandable Agents group. Rows show the recorded agent role/name,
+A conversation with genuinely owned children has an expandable Sub-agents group. Rows show the recorded agent role/name,
 actual Working/Queued/Idle/Replied/Run failed state, and a brief what-it-did description from its latest assessed reply.
 Replied means a run answered, not that its goal is fulfilled. During new work, an old activity is labeled Last reply.
 A row switches to its child, highlights selection and keeps the top-level summary visible. History forks are not
