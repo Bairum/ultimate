@@ -21,18 +21,25 @@ const toolbarButton =
   'flex h-7 max-w-56 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground'
 
 function ModelButton() {
-  const { ref } = useCurrentModel()
+  const { ref, loading } = useCurrentModel()
   const actions = useUltimate()
   return (
     <button
       className={toolbarButton}
+      disabled={loading}
+      aria-label={loading ? 'Loading model' : undefined}
       onClick={() => actions.open(dialogs.picker)}
-      title="Pick a model"
+      title={loading ? 'Loading model' : 'Pick a model'}
       type="button"
     >
       <CpuIcon className="size-3.5 shrink-0" />
-      <span className={cn('truncate', ref ? 'text-foreground/85' : 'text-warning')}>
-        {ref?.modelId ?? 'no model'}
+      <span
+        className={cn(
+          'truncate',
+          loading ? undefined : ref ? 'text-foreground/85' : 'text-warning',
+        )}
+      >
+        {loading ? 'model…' : (ref?.modelId ?? 'no model')}
       </span>
       <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
     </button>
@@ -40,9 +47,23 @@ function ModelButton() {
 }
 
 function ThinkingButton() {
-  const { model, thinking } = useCurrentModel()
+  const { model, thinking, loading } = useCurrentModel()
   const [open, setOpen] = useDialog(dialogs.thinking)
   const [error, setError] = useState<string>()
+  if (loading)
+    return (
+      <button
+        className={toolbarButton}
+        disabled
+        aria-label="Loading thinking level"
+        title="Loading thinking level"
+        type="button"
+      >
+        <BrainIcon className="size-3.5 shrink-0" />
+        <span>thinking…</span>
+        <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
+      </button>
+    )
   if (!model?.reasoning) return null
   const levels = model.thinkingLevels
   const current = thinking ?? 'off'
@@ -100,7 +121,9 @@ export default defineWebExtension({
     {
       id: 'model.pick',
       title: 'Pick a model',
-      run: (context) => context.open(dialogs.picker),
+      run: (context) => {
+        if (!getConversation().loading) context.open(dialogs.picker)
+      },
     },
     {
       id: 'model.thinking',
@@ -113,7 +136,8 @@ export default defineWebExtension({
       keys: 'shift+tab',
       whileTyping: true,
       run: () => {
-        const { agent } = getConversation()
+        const { agent, loading } = getConversation()
+        if (loading) return undefined
         const model = getState().models?.models.find(
           (candidate) =>
             candidate.provider === agent.model?.provider && candidate.id === agent.model.modelId,
