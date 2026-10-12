@@ -225,6 +225,15 @@ function script(server: Server, steps: AssistantMessage[], others: FauxResponseF
   server.host.faux!.setResponses([route])
 }
 
+/** Luna counts as available, as with a signed-in OpenAI account. */
+const offerLuna = (runtime: Server['host']['modelRuntime']) =>
+  vi
+    .spyOn(runtime, 'getAvailableSnapshot')
+    .mockReturnValue(
+      runtime
+        .getModels()
+        .filter((model) => model.provider === 'openai' && model.id === 'gpt-6-luna'),
+    )
 const conclusionTasks = (server: Server) =>
   server.harness.commit(
     async (tx) => (await tx.scanTasks({ kind: 'canvas.conclusion' }, 100)).items,
@@ -394,6 +403,93 @@ it('waits while Luna says the conversation needs input; a subagent question its 
   expect(fixture.generated).toHaveBeenCalledTimes(1)
 }, 90000)
 
+it('shows what settled trees wait for once the canvas opens, without new work, and concludes none of them', async () => {
+  vi.stubEnv('ULTIMATE_CANVAS_QUIET_MS', '400')
+  const home = await temp('ultimate-conclusions-open-')
+  const projectRoot = join(home, 'project')
+  await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
+  const enable = (names: string[]) =>
+    writeFile(
+      join(projectRoot, '.ultimate/settings.json'),
+      JSON.stringify({ extensions: { enable: names } }),
+    )
+  const options = {
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    userHome: home,
+    home: join(home, 'state'),
+  }
+  // Before the canvas runs: Luna says one conversation needs input, another is done.
+  await enable([])
+  const before = await fauxServer(options)
+  offerLuna(before.host.modelRuntime)
+  const registry = before.host.registry
+  registry.install(
+    defineExtension({
+      ...registry.snapshot().extension('conversations')!,
+      ...summaryBehavior(
+        {
+          harness: () => before.harness,
+          metadata: Metadata,
+          modelRuntime: before.host.modelRuntime,
+        },
+        async (_models, input) => ({
+          assessment: /\?\s*$/.test(input) ? 'needs_input' : 'done',
+          activity: 'Answered.',
+          title: 'A question',
+          summary: 'Answered.',
+        }),
+      ),
+    }),
+  )
+  script(
+    before,
+    [fauxAssistantMessage('Which database should I use?'), fauxAssistantMessage('Tidied up.')],
+    () => fauxAssistantMessage('Unused.'),
+  )
+  const assessed = async (id: number) =>
+    (await before.harness.snapshot(Summaries, id as ConversationId, context))?.assessment?.value
+  await post(before, '/api/conversations/1/submit', { text: 'Pick a database' })
+  await until(async () => (await assessed(1)) === 'needs_input')
+  const other = (await post(before, '/api/conversations', {})).data.id as number
+  await post(before, `/api/conversations/${other}/submit`, { text: 'Tidy up' })
+  await until(async () => (await assessed(other)) === 'done')
+  await before.close()
+
+  // The canvas opens with Luna available: the decision shows, and nothing old is concluded.
+  await enable(['canvas'])
+  const prepared = await prepareFauxServer(options)
+  offerLuna(prepared.host.modelRuntime)
+  const generated = vi.fn<typeof generateConclusion>()
+  const canvas = prepared.host.registry
+  canvas.install(
+    defineExtension({
+      ...canvas.snapshot().extension('canvas')!,
+      ...conclusionBehavior(
+        { harness: () => server.harness, metadata: Metadata, userHome: home },
+        generated,
+      ),
+    }),
+  )
+  const server: Server = { ...prepared, ...(await prepared.go()) }
+  const close = server.close.bind(server)
+  server.close = async () => {
+    await server.vite.watcher.close()
+    await close()
+  }
+  servers.push(server)
+  const tree = async (id: number) =>
+    (await server.harness.snapshot(Canvas, ROOT_CONVERSATION_ID, context))?.trees[id]
+  await until(async () => (await tree(1))?.decision !== undefined, 30000)
+  expect((await tree(1))?.decision?.reasons).toEqual([
+    { kind: 'needs_input', conversationId: 1, detail: 'needs input' },
+  ])
+  await quietly()
+  expect(await tree(other)).toBeUndefined()
+  expect(generated).not.toHaveBeenCalled()
+  expect(await conclusionTasks(server)).toEqual([])
+}, 90000)
+
 it('marks the conclusion stale on new work, and the next quiet replaces it', async () => {
   const fixture = await launch()
   const { server } = fixture
@@ -432,7 +528,7 @@ it('stays quiet without Luna: no task, no conclusion and no notices', async () =
   expect(fixture.generated).not.toHaveBeenCalled()
   expect(await conclusionTasks(server)).toEqual([])
   expect(await fixture.tree(1)).toBeUndefined()
-  expect(await server.harness.snapshot(Conclusions, ROOT_CONVERSATION_ID, context)).toEqual({})
+  expect(await server.harness.snapshot(Conclusions, ROOT_CONVERSATION_ID, context)).toBeUndefined()
   expect(await fixture.full(1)).toBeNull()
   expect(fixture.notices).toEqual([])
 }, 60000)

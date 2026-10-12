@@ -32,12 +32,14 @@ import type { LunaReceipt, ResponseReceipt } from '../conversations/summary.ts'
 import { git } from '../workspaces/git.ts'
 import type { LandResult, Workspace } from '../workspaces/types.ts'
 import { Workspaces } from '../workspaces/workspaces.ts'
+import { Overview } from '../conversations/overview.ts'
 import { Canvas, Conclusions } from './documents.ts'
 import { shorten } from './feed.ts'
 import type { CanvasConclusion, CanvasReason, Conclusion, ConclusionCommit } from './types.ts'
 
 /** How long a settled tree stays quiet before it concludes (ms). `ULTIMATE_CANVAS_QUIET_MS` is only for tests. */
 const quiet = () => Number(process.env.ULTIMATE_CANVAS_QUIET_MS) || 30_000
+const ARCHIVED = 'ext.conversations.archived'
 /** Changes are gathered this long (ms) before the trees they touch are evaluated. */
 const SETTLE = 300
 /** Entries that are work: a message, an answer or a tool result; titles, summaries and compactions are not. */
@@ -456,20 +458,47 @@ export function conclusionBehavior(host: Host, generate = generateConclusion) {
   return { tasks: [ConclusionTask] }
 }
 
+/** The ids a change to a root index document touches: the keys under `field` it sets or deletes, or all of them. */
+function indexKeys(
+  change: Extract<CommitPublication['changes'][number], { type: 'document' }>,
+  field: string,
+) {
+  return change.ops.flatMap((op) =>
+    op[0] === 'r'
+      ? Object.keys((change.value?.[field] as Record<string, unknown> | undefined) ?? {})
+      : op[1][0] === field && op[1][1] !== undefined
+        ? [String(op[1][1])]
+        : [],
+  )
+}
+
 /**
  * Follows commits and evaluates the trees they touch. An active tree (a run, queued input, or an assessment still
  * coming) drops its decision and pending conclusion, and marks its conclusion stale. A settled tree records what still
  * needs a decision; with none, and work newer than its last conclusion, it starts the task that concludes it after the
- * quiet. Nothing is backfilled: only trees that change, and on open those that waited for a decision, are evaluated.
+ * quiet. Decisions are evaluated for every tree on the map when the facet opens, so ones recorded before (or never)
+ * show without new work; a conclusion is never backfilled: only a tree that worked since then, or that waited for a
+ * decision or worked past its conclusion, gets one.
  */
 export function watchConclusions(
   host: Pick<
     ExtensionHost,
-    'harness' | 'metadata' | 'userHome' | 'modelRuntime' | 'onOpen' | 'onClose' | 'notice'
+    | 'harness'
+    | 'metadata'
+    | 'userHome'
+    | 'modelRuntime'
+    | 'onOpen'
+    | 'onClose'
+    | 'notice'
+    | 'uiState'
+    | 'resource'
   >,
 ) {
   const tops = new Map<ConversationId, ConversationId | null>()
-  const touched = new Set<ConversationId>()
+  /** Conversations touched since the last evaluation, and whether by work. */
+  const touched = new Map<ConversationId, boolean>()
+  /** Trees that worked while this process ran; kept across reloads of the facet. */
+  const worked = host.resource('canvas.worked', () => new Set<ConversationId>())
   let timer: ReturnType<typeof setTimeout> | undefined
   let stop: (() => void) | undefined
   let closed = true
@@ -516,6 +545,8 @@ export function watchConclusions(
           })
       }
     }
+    // Read first, so a tree with nothing to change writes nothing.
+    const saved = await harness.snapshot(Conclusions, top, context)
     await harness.commit(async (tx) => {
       if (settled)
         for (const [index, id] of members.entries()) {
@@ -533,6 +564,9 @@ export function watchConclusions(
       const { trees } = await tx.doc(Canvas, ROOT_CONVERSATION_ID)
       const key = String(top)
       const tree = trees[key]
+      // A tree that waited for a decision, or worked past its conclusion, may conclude without new work.
+      const owed =
+        worked.has(top) || tree?.decision !== undefined || tree?.conclusion?.stale === true
       if (
         tree?.conclusion &&
         !tree.conclusion.stale &&
@@ -548,24 +582,27 @@ export function watchConclusions(
         if (tree.conclusion) delete tree.decision
         else delete trees[key]
       }
-      const state = await tx.doc(Conclusions, top)
-      // A pending task that ended without clearing itself, for example one that faulted, holds nothing back.
-      if (
-        state.pending !== undefined &&
-        (await tx.task(state.pending))?.state.status === 'terminal'
-      )
-        delete state.pending
-      if (!settled || reasons.length) {
-        if (state.pending !== undefined) delete state.pending
-        return
+      if (saved?.pending !== undefined) {
+        const state = await tx.doc(Conclusions, top)
+        // A pending task that ended without clearing itself, for example one that faulted, holds nothing back.
+        if (
+          state.pending !== undefined &&
+          (!settled ||
+            reasons.length > 0 ||
+            (await tx.task(state.pending))?.state.status === 'terminal')
+        )
+          delete state.pending
+        if (state.pending !== undefined) return
       }
       if (
-        state.pending !== undefined ||
-        newest <= (state.conclusion?.through ?? 0) ||
+        !settled ||
+        reasons.length ||
+        !owed ||
+        newest <= (saved?.conclusion?.through ?? 0) ||
         !lunaAvailable(host.modelRuntime)
       )
         return
-      state.pending = await tx.createTask(
+      ;(await tx.doc(Conclusions, top)).pending = await tx.createTask(
         conclusionBehavior(host).tasks[0],
         { until: Date.now() + quiet() },
         { ownership: { kind: 'conversation' }, conversationId: top, background: true },
@@ -582,10 +619,12 @@ export function watchConclusions(
         if (closed) return
         const trees = await host.harness().commit(async (tx) => {
           const found = new Set<ConversationId>()
-          for (const id of ids) {
+          for (const [id, byWork] of ids) {
             if (!tops.has(id)) tops.set(id, (await topOf(tx, id)) ?? null)
             const top = tops.get(id)
-            if (top) found.add(top)
+            if (!top) continue
+            found.add(top)
+            if (byWork) worked.add(top)
           }
           return found
         }, context)
@@ -595,33 +634,31 @@ export function watchConclusions(
         if (!closed) host.notice(`Canvas conclusions: ${String(error)}`)
       })
   }
-  const touch = (id: ConversationId) => {
-    touched.add(id)
+  const touch = (id: ConversationId, byWork: boolean) => {
+    touched.set(id, byWork || touched.get(id) === true)
     if (!timer && !closed) timer = setTimeout(drain, SETTLE)
   }
   const listen = (publication: CommitPublication) => {
     if (closed) return
     for (const change of publication.changes) {
-      if (change.type === 'conversation') touch(change.value.id)
+      if (change.type === 'conversation') touch(change.value.id, true)
       else if (change.type === 'entry') {
-        if (WORK.has(change.value.kind)) touch(change.value.conversationId)
+        if (WORK.has(change.value.kind)) touch(change.value.conversationId, true)
       } else if (change.type === 'document' && change.conversationId !== undefined) {
         const kind = change.record.kind
         if (
           (kind === LiveDoc.definition.kind &&
             change.ops.some((op) => op[0] === 'r' || op[1][0] === 'run')) ||
-          kind === InboxDoc.definition.kind ||
-          kind === Summaries.definition.kind
+          kind === InboxDoc.definition.kind
         )
-          touch(change.conversationId)
-        // A checkout that lands or goes away may settle the decision of its tree.
+          touch(change.conversationId, true)
+        else if (kind === Summaries.definition.kind) touch(change.conversationId, false)
+        // An assessment that changes, or a checkout that lands or goes away, may settle the decision of its tree.
+        else if (kind === Overview.definition.kind)
+          for (const id of indexKeys(change, 'conversations'))
+            touch(Number(id) as ConversationId, false)
         else if (kind === Workspaces.definition.kind)
-          for (const op of change.ops)
-            if (op[0] === 'r')
-              for (const id of Object.keys(change.value?.items ?? {}))
-                touch(Number(id) as ConversationId)
-            else if (op[1][0] === 'items' && op[1][1] !== undefined)
-              touch(Number(op[1][1]) as ConversationId)
+          for (const id of indexKeys(change, 'items')) touch(Number(id) as ConversationId, false)
       }
     }
   }
@@ -630,10 +667,25 @@ export function watchConclusions(
     closed = false
     tops.clear()
     stop = host.harness().subscribeCommits(listen)
-    // A checkout landed by hand while Ultimate was down: check the trees that waited for a decision again.
-    const trees = (await host.harness().snapshot(Canvas, ROOT_CONVERSATION_ID, context))?.trees
-    for (const [key, tree] of Object.entries(trees ?? {}))
-      if (tree.decision) touch(Number(key) as ConversationId)
+    // Every tree on the map shows what it waits for, including ones settled before this facet ran.
+    const archived = (await host.uiState(context))[ARCHIVED]
+    const roots = await host.harness().commit(async (tx) => {
+      const found: ConversationId[] = []
+      let cursor: Cursor | undefined
+      do {
+        const page = await tx.scanConversations({}, 256, cursor)
+        for (const record of page.items)
+          if (
+            !record.owner &&
+            !record.parent &&
+            !(Array.isArray(archived) && archived.includes(record.id))
+          )
+            found.push(record.id)
+        cursor = page.next
+      } while (cursor !== undefined)
+      return found
+    }, context)
+    for (const id of roots) touch(id, false)
   })
   host.onClose(async () => {
     closed = true

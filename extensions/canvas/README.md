@@ -5,8 +5,8 @@ settings.
 ## The map
 
 The hub sits at the centre. Type into it and press Enter to start a conversation, isolated in its own checkout when the
-Isolated toggle is on (the sidebar's remembered creation type, `ext.conversations.creationType`, so both views agree;
-shown only while `workspaces` is enabled). A shared start reuses the shown empty draft, as the sidebar's New does. The
+Isolated switch is on (filled in the accent; quiet when off). It keeps the sidebar's remembered creation type,
+`ext.conversations.creationType`, so both views agree, and shows only while `workspaces` is enabled. A shared start reuses the shown empty draft, as the sidebar's New does. The
 new panel springs out of the hub, and the view frames both.
 
 Each top-level conversation is a ray from a slot on the first ring; the subagents it owns pack outward along that ray,
@@ -140,7 +140,9 @@ are dropped, and rebuilt when unarchived. At most 150 rows are kept; the least r
 
 A tree is a top-level conversation and every conversation it owns (subagents, at any depth; history forks are not in
 it). The server follows commits and, about 300 ms after something touches a tree (an answer, a tool result, a run
-starting or ending, queued input, a Luna assessment, a landed or removed checkout), evaluates it:
+starting or ending, queued input, a Luna assessment or overview row, a landed or removed checkout), evaluates it.
+When the facet opens or reloads, it evaluates every non-archived tree, so decisions show for trees that settled before
+it ran, without new work:
 
 - **Active**: a run, queued input, or a Luna assessment still coming. Its decision clears, a pending conclusion is
   called off, and its conclusion turns `stale` when there is work newer than it.
@@ -148,14 +150,15 @@ starting or ending, queued input, a Luna assessment, a landed or removed checkou
   Luna's current assessment of a conversation's latest answer; a subagent's counts only while its owner has not
   answered since (its question was for the coordinator). `unlanded` comes from Git at evaluation time: a ready
   checkout whose branch tip is not the tip it last landed, and whose target lacks commits of it
-  (`rev-list --count target..branch`). On open, trees that waited for a decision are evaluated again, in case a
-  checkout was landed by hand meanwhile.
-- **Settled with nothing to decide**, and work newer than its last conclusion: when Luna (`openai/gpt-6-luna`, as the
+  (`rev-list --count target..branch`), run only for members with a ready checkout.
+- **Settled with nothing to decide**, work newer than its last conclusion, and a reason to conclude now (it worked
+  while this process ran, waited for a decision, or worked past its conclusion): when Luna (`openai/gpt-6-luna`, as the
   conversation summaries use) is available, a durable background task (`canvas.conclusion`) on the top-level
   conversation sleeps through 30 seconds of quiet, then concludes. Activity or a decision meanwhile clears the task's
   `pending` mark and it ends without a word. Without Luna nothing is started and nothing is shown.
 
-Nothing is backfilled: only trees that change are evaluated. The task collects, from the stored entries of every
+Conclusions are never backfilled: a tree that settled before the facet ran gets its decision, not a conclusion, until
+it works again. The task collects, from the stored entries of every
 conversation in the tree:
 
 - commits from `git commit` output in bash results (`[branch sha] subject`), and the commits of `workspace` and

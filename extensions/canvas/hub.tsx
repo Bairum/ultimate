@@ -4,6 +4,7 @@ import { ArrowUpIcon, GitBranchIcon, LoaderCircleIcon, PlusIcon } from 'lucide-r
 import { memo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
+import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api, cn, errorMessage, formatKeys, getConversation, getState, useUiState } from '@/sdk'
 import { getFeed } from './data.tsx'
@@ -132,20 +133,25 @@ export const Hub = memo(function Hub({ data }: NodeProps<HubNode>) {
             {isolation && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button
-                    aria-pressed={isolated}
+                  {/* On, it is filled in the accent with its switch on; off, it stays quiet. */}
+                  <label
                     className={cn(
                       'nodrag flex h-7 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-[12px] transition-colors',
                       isolated
-                        ? 'border-brand/50 bg-brand/10 text-foreground'
-                        : 'border-border text-muted-foreground hover:text-foreground',
+                        ? 'border-brand/60 bg-brand/15 text-foreground'
+                        : 'border-transparent text-muted-foreground hover:text-foreground',
                     )}
-                    onClick={() => setCreation(isolated ? 'shared' : 'isolated')}
-                    type="button"
+                    data-isolated={isolated}
                   >
-                    <GitBranchIcon className="size-3.5" />
+                    <GitBranchIcon className={cn('size-3.5', isolated && 'text-brand')} />
                     Isolated
-                  </button>
+                    <Switch
+                      aria-label="Isolated"
+                      checked={isolated}
+                      className="ml-0.5"
+                      onCheckedChange={(on) => setCreation(on ? 'isolated' : 'shared')}
+                    />
+                  </label>
                 </TooltipTrigger>
                 <TooltipContent>
                   {isolated

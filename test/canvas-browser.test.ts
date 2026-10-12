@@ -92,7 +92,10 @@ it('starts a conversation at the hub and follows its tools, writing, subagent an
     // The hub starts a shared conversation (the Isolated toggle is on by default) and shows it.
     const hub = page.getByRole('textbox', { name: 'Start a conversation' })
     await hub.waitFor(timeout)
-    await page.getByRole('button', { name: 'Isolated' }).click()
+    const isolated = page.getByRole('switch', { name: 'Isolated' })
+    expect(await isolated.getAttribute('aria-checked')).toBe('true')
+    await isolated.click()
+    await expect.poll(() => isolated.getAttribute('aria-checked')).toBe('false')
     await hub.fill('Count the files twice')
     await hub.press('Enter')
     await expect
