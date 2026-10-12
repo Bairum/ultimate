@@ -49,7 +49,7 @@ export const Subagents = defineDoc<{
   >
   actions: Record<
     string,
-    { conversationId: ConversationId; reporter?: TaskId; answer?: EntryId; status?: string }
+    { conversationId: ConversationId; reporter: TaskId; answer?: EntryId; status?: string }
   >
 }>({
   kind: 'ultimate.subagents',
@@ -505,7 +505,6 @@ export default function subagents(
         const pending = new Set<ConversationId>()
         for (const action of Object.values(state?.actions ?? {}))
           if (
-            action.reporter !== undefined &&
             action.status === undefined &&
             (await host.harness().getTask(action.reporter, context))?.state.status !== 'terminal'
           )
@@ -753,7 +752,7 @@ Available definitions:
               !(await waitInterruptibly(
                 api,
                 action.conversationId,
-                [action.reporter!],
+                [action.reporter],
                 false,
                 context,
               ))
@@ -793,9 +792,7 @@ Available definitions:
                 run: live?.run?.taskId ?? null,
                 inputs: live?.run?.inputs ?? [],
                 reporters: Object.values(state?.actions ?? {}).flatMap((action) =>
-                  action.conversationId === id && action.reporter !== undefined
-                    ? [action.reporter]
-                    : [],
+                  action.conversationId === id ? [action.reporter] : [],
                 ),
               },
               context,
@@ -835,7 +832,7 @@ Available definitions:
             return finish(`Stopped ${id}.`, info)
           }
           const reporters = Object.values(index.actions).flatMap((action) =>
-            action.conversationId === id && action.reporter !== undefined ? [action.reporter] : [],
+            action.conversationId === id ? [action.reporter] : [],
           )
           if (!(await waitInterruptibly(api, id, reporters, true, context)))
             return finish(

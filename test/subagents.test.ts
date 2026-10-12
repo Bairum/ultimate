@@ -533,11 +533,11 @@ describe('subagents', () => {
     expect((await call(f.opened, { action: 'stop', id: child.conversationId })).text).toBe(
       `Stopped ${child.conversationId}.`,
     )
-    expect(await f.opened.harness.getTask(action.reporter!, context)).toMatchObject({
+    expect(await f.opened.harness.getTask(action.reporter, context)).toMatchObject({
       state: { status: 'terminal', outcome: { status: 'aborted' } },
     })
     held.release()
-    await f.opened.harness.waitForTask(action.reporter!, context)
+    await f.opened.harness.waitForTask(action.reporter, context)
     const view = await (await f.opened.harness.conversation(
       child.conversationId,
       context,
@@ -945,7 +945,7 @@ describe('subagents', () => {
     )
     expect(receipt).toMatchObject({ status: 'unanswered', reason: 'subagent-tool-delivered' })
     held.release()
-    await f.opened.harness.waitForTask(action.reporter!, context)
+    await f.opened.harness.waitForTask(action.reporter, context)
     await f.opened.root.waitForIdle(context)
     expect(await reports(f.opened)).toHaveLength(0)
     expect(
@@ -956,30 +956,7 @@ describe('subagents', () => {
     ).toEqual(receipt)
   })
   it('withdraws only successful outer codemode receipts and survives hook replay', async () => {
-    // Emulate the agreed codemode handoff without modifying that worker's implementation.
-    const f = await fixture(
-      defineExtension({
-        name: 'receipt-contract',
-        wraps: [
-          {
-            tool: 'codemode',
-            wrap: (tool: ToolRegistration): ToolRegistration => ({
-              ...tool,
-              execute: async (args, api, toolContext) => {
-                const result = await tool.execute(args, api, toolContext)
-                const index = await api.snapshot(Subagents, api.conversationId, toolContext)
-                const answers = Object.entries(index?.actions ?? {}).flatMap(([callId, action]) =>
-                  callId.startsWith(`${api.callId}/`) && action.answer !== undefined
-                    ? [action.answer]
-                    : [],
-                )
-                return { ...result, details: { subagentAnswers: answers } }
-              },
-            }),
-          },
-        ],
-      }),
-    )
+    const f = await fixture()
     const held = { ...gate(), entered: false }
     f.prepared.registry.install(
       defineExtension({

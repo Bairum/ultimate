@@ -36,7 +36,7 @@ Entry/search limits default to 100 and must be 1–1000. Pagination of raw entri
 
 ## Durable store
 
-`store(key, value)` / `load(key)` use the conversation document `codemode.store` (rewindable, fork as-of). Values are loaded before every script. Only scripts that complete successfully apply their store writes; a yielded outer result is successful but discards all script store changes (including changes made before the yield). The document is exported in `docs` for SSE subscriptions.
+`store(key, value)` / `load(key)` use the conversation document `codemode.store` (rewindable, fork as-of). Values are loaded before every script. Store writes are saved only when the script finishes successfully; a yielded wait discards them. The document is exported in `docs` for SSE subscriptions.
 
 **Crash window:** Pi Durable 1.0 has no result-transaction callback. Store writes use a separate `api.commit()` immediately before returning success. A crash between that commit and durable tool settlement retains the writes while the model may be told the script was **interrupted**. Do not treat store updates as atomic receipts of external side effects.
 

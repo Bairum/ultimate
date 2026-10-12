@@ -476,17 +476,6 @@ export async function createApi(
               )
                 throw new HttpError(400, 'Invalid whenBusy')
               const content = text(data.text, 'text')
-              // The view loses the first message to a compaction or reset; keep it as the title.
-              if (
-                summaries.find((summary) => summary.id === conversation.id)?.inputAt === undefined
-              )
-                await conversation.commit(async (tx) => {
-                  const metadata = await tx.doc(Metadata, conversation.id)
-                  if (metadata.title === undefined) {
-                    metadata.title = content.replace(/\s+/g, ' ').trim().slice(0, 160)
-                    metadata.titleSource = 'input'
-                  }
-                }, context)
               const submission = await conversation.submit(
                 { type: 'input', content, whenBusy: data.whenBusy },
                 context,

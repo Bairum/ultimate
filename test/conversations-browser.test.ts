@@ -65,7 +65,14 @@ it('expands real agent roles and outcomes, separates Replied from Luna Done, and
     defineExtension({
       ...existing,
       ...summaryBehavior(
-        { harness: () => server.harness, metadata: Metadata },
+        {
+          harness: () => server.harness,
+          metadata: Metadata,
+          modelRuntime: {
+            getAvailableSnapshot: () =>
+              server.host.modelRuntime.getModels().filter((model) => model.id === 'gpt-6-luna'),
+          },
+        },
         async (_models, input) => ({
           assessment: input.includes('UNCERTAIN_RESULT')
             ? 'neutral'
@@ -292,8 +299,8 @@ it('shows the selected summary and live owner summary while viewing a subagent',
       })
       const metadata = await tx.doc(Metadata, id)
       metadata.title = title
-      if (id === server.root.id) metadata.titleSource = 'input'
       const state = await tx.doc(Summaries, id)
+      if (id === server.root.id) state.generatedTitle = title
       state.summary = summary
       state.status = 'ready'
     }
@@ -315,13 +322,11 @@ it('shows the selected summary and live owner summary while viewing a subagent',
     await page.keyboard.press('Enter')
     await expect
       .poll(
-        async () => (await server.harness.snapshot(Summaries, server.root.id, context))?.manual,
+        async () =>
+          (await server.harness.snapshot(Summaries, server.root.id, context))?.generatedTitle,
         timeout,
       )
-      .toBe(true)
-    expect(
-      (await server.harness.snapshot(Metadata, server.root.id, context))?.titleSource,
-    ).toBeUndefined()
+      .toBeUndefined()
     await page.locator(`[data-conversation="${other.id}"] > button`).first().click()
     await expect.poll(() => summary.textContent(), timeout).toContain('parser regression tests')
     await page.evaluate(

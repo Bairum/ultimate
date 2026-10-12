@@ -68,74 +68,26 @@ Actions, each on a top-level conversation; bad args, unknown conversations, suba
 
 ## Automatic summaries and reply assessments
 
-Each completed user/assistant reply, including an owned child's reply, admits a conversation-owned Pi background task
-requesting `openai-codex/gpt-6-luna` with medium reasoning. On a top-level conversation's first exchange, then after each
-three further exchanges (1, 4, 7, …), that same request also generates title and summary—never a duplicate request.
-A due summary displaced by newer work remains owed and combines with the next current reply. It never changes the
-main agent's model, creates a child conversation, polls for idle time, or triggers on tools/stream chunks. The yield
-hook durably admits work, and the task waits for the final answer and a settled input before advancing the cadence.
-Counting and task advancement share one atomic commit, before context preparation, so an older slow context read
-cannot lose a distinct completed exchange or count it twice on recovery.
-Owned children receive assessment/activity only; their assignment titles are preserved. Ownerless history forks and
-intermediate yields continued by another hook are excluded. Older delayed observers still count, but cannot replace a
-newer reply's assessment. Existing conversations start
-counting at their next completed exchange; there is no historical backfill.
-
-The request includes only recent user/assistant text (at most 2,400 characters per message and 12,000 total), plus the
-previous brief summary. Tools, images and thinking are omitted. JSON must contain an assessment (`needs_input`, `done`
-or `neutral`) and meaningful activity (at most 160 characters). Unknown/unapproved outcomes are rejected, not converted
-to success. When due, it must also contain a 3–7-word title (at most 80 characters) and a brief 1–2 sentence summary
-(at most 420 characters). Requests use a 2,048-token output
-option, cancel text output over 2,048 characters, and time out after 60 seconds. **Pi's Codex adapter does not forward
-`maxTokens` to the provider, so the option is not a provider-side reasoning-token ceiling.** There is no silent model
-substitution. Failed or malformed responses preserve the last good summary and show a quiet unavailable status;
-the next completed reply retries. There is no timer retry. Results require matching input/answer identities and idle,
-visible context; queued/new input, reset, compaction or superseding work prevents stale assessments from applying.
-
-`ultimate.conversation-summaries` is a conversation document holding the summary, generated-title provenance,
-manual ownership, completed-exchange count, last yield/answer, reset revision, pending task id, an owed-summary flag,
-assessment status, stamped assessment and bounded activity. Its latest state
-survives facet reloads and process restarts; an unfinished durable task resumes, with a memoized response reused once
-stored. A crash before the response is memoized can repeat the request.
-
-Helper usage is **settles-only**, not live telemetry: each received response is memoized before JSON validation,
-then its reported usage is added to the task-owning conversation's public `pi.usage.models[provider/model]` in the
-same transaction that settles the task. A child's usage stays in its own ledger, not the root. Combined and
-assessment-only replies, malformed/provider-error replies, and stale/aborted results with saved receipts are accounted
-independently of UI freshness. Other model buckets are preserved. Reported optional `cacheWrite1h` and `reasoning`
-counters and every cost component are summed; reasoning is already a subset of output and is not added again to
-`totalTokens`. Reopen/replay reuses a saved receipt without another charge; a genuinely new retry response counts
-separately. Missing usage is never estimated, partial stream counters are not accumulated, and old conversations are
-not backfilled. Receipt loss/crash before durable capture can repeat a remotely billed request; this is **not remote
-exactly-once billing** and cannot reconstruct unreported spend.
-
-Generated titles use `ultimate.metadata` and can update. HTTP submit marks a newly created first-input fallback with
-`ultimate.metadata.titleSource: 'input'` in the same transaction that creates the title; it never marks an existing title. Generated replacements and explicit
-renames clear that marker atomically. Accepting an unchanged title in the rename field still takes manual ownership.
-Unmarked/preexisting metadata titles are never inferred to be fallbacks or replaced, even when they equal the first
-input; there is no historical backfill. A blank rename removes metadata
-and restores automatic naming; until the next summary, the first-message title is shown.
-
-Clear context keeps the title, clears the summary/assessment/activity and resets the cadence. A revision and pending-task check reject
-in-flight results from the old context or a superseded request. A response made stale by compaction clears only its
-own pending status and preserves the last valid summary; it cannot clear a superseding request. Background work does
-not hold up answers or ordinary idle/reset operations. The sidebar shows only the selected top-level summary, also
-when its child is selected.
+Luna assesses each completed reply, including subagent replies, in a background task with medium reasoning.
+Top-level conversations also get a title and summary on exchanges 1, 4, 7, and so on, in the same request.
+A summary delayed by newer work is included with the next current reply. Tools and partial replies do not trigger it.
+The request reads recent user/assistant text and the previous summary, not tools, images or thinking.
+It times out after 60 seconds. Assessment, activity, title and summary are checked and shortened for display.
+Assessments describe the reply, not verified completion. New work, reset or compaction can make a result stale.
+Subagents get assessments and activity only; history forks are excluded.
+Luna can name an untitled conversation or update its own last generated title.
+API titles, renames and creator-given labels are kept. A blank rename restores automatic naming.
+Clear context keeps the title, clears summary and assessment, and restarts the cadence.
+The task saves the provider response before parsing it and adds reported usage even for stale or invalid results.
+Replaying a saved response does not count it again. Crashing before it is saved can repeat the request.
+State survives reloads and restarts. Failed requests preserve the last summary and retry on the next reply.
+When Luna is unavailable in the model runtime, summaries and assessments are skipped quietly, without a task.
 
 ## Shared sidebar index
 
-`ultimate.conversation-overview`, written only on reserved root conversation #1, contains `conversations[id]` rows:
-`parentId` (actual owner conversation, not history ancestry), `role` (metadata label), `runState`
-(`working | queued | idle | done | error`), active `inputId`/`answerId`, `summary`/`summaryStatus`, `activity`,
-`assessmentStatus`, and optional `assessment: { inputId, answerId, value: needs_input | done | neutral }`.
-`runState: done` is displayed as Replied; assessment Done is explicitly model opinion. A current assessment projects
-its settled submission's input entry id, not a synthetic continuation's transcript user entry. The latest transcript
-user still guards freshness, so new input invalidates old assessments. Existing conversation summaries already supply
-titles, timestamps and owner task ids, so these are not duplicated in the index.
-
-One root-document SSE serves every row, unchanged by expansion/selection; no per-row or selected-owner streams.
-On open/reload, the extension reads task receipts and each conversation's newest visible user entry to reconstruct
-actual state without paid backfill. Thereafter it reconciles only affected rows from meaningful commit publications:
-input/submission changes, run boundaries/terminal receipts, role changes, resets/compactions and summary/assessment
-commits. Live generation/tool chunks are ignored, and index commits do not feed themselves back into reconciliation.
-Facet cleanup releases the listener and drains outstanding work.
+`ultimate.conversation-overview` keeps sidebar rows in the root conversation document.
+Rows include child links, roles, run state, summaries, activity and assessments tied to their input and answer.
+Replied means an answer arrived; Done is Luna's opinion, not proof of completion.
+One root-document stream serves all rows. Titles and timestamps come from the core conversation list.
+On open, the extension rebuilds rows from stored conversations without requesting old assessments.
+Afterwards it updates affected rows when work or summaries change, ignoring live stream chunks.

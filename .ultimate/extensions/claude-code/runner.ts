@@ -67,8 +67,6 @@ export async function runClaude(
     activity: 'Starting Claude Code',
   }
   const timeoutMs = (options.timeoutSeconds ?? 300) * 1000
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2147483647)
-    throw new Error('timeoutSeconds must be positive and fit a Node timer')
   signal.throwIfAborted()
   const child = spawn('claude', claudeArgs(options), {
     cwd,

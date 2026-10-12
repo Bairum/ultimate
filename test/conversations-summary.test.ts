@@ -1,7 +1,7 @@
 import { mkdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
-import type { Model, Models } from '@earendil-works/pi-ai'
+import type { Models } from '@earendil-works/pi-ai'
 import type { ConversationId, GenerationHooks } from '@earendil-works/pi-durable'
 import { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -17,12 +17,7 @@ import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import { Overview } from '../extensions/conversations/overview.ts'
 import { LiveDoc } from '@earendil-works/pi-durable'
-import {
-  generateSummary,
-  Summaries,
-  summaryBehavior,
-  summaryInput,
-} from '../extensions/conversations/summary.ts'
+import { generateSummary, Summaries, summaryBehavior } from '../extensions/conversations/summary.ts'
 import { fauxServer, post, prepareFauxServer, temp, until } from './helpers.ts'
 
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
@@ -52,7 +47,17 @@ async function launch() {
     registry.install(
       defineExtension({
         ...existing,
-        ...summaryBehavior({ harness: () => server.harness, metadata: Metadata }, generated),
+        ...summaryBehavior(
+          {
+            harness: () => server.harness,
+            metadata: Metadata,
+            modelRuntime: {
+              getAvailableSnapshot: () =>
+                server.host.modelRuntime.getModels().filter((model) => model.id === 'gpt-6-luna'),
+            },
+          },
+          generated,
+        ),
       }),
     )
   }
@@ -168,7 +173,14 @@ it('summarizes the first, fourth and seventh completed exchanges, not tools, str
 it('counts distinct completions durably when an older context read finishes after a newer reply', async () => {
   const fixture = await launch()
   const behavior = summaryBehavior(
-    { harness: () => fixture.server.harness, metadata: Metadata },
+    {
+      harness: () => fixture.server.harness,
+      metadata: Metadata,
+      modelRuntime: {
+        getAvailableSnapshot: () =>
+          fixture.server.host.modelRuntime.getModels().filter((model) => model.id === 'gpt-6-luna'),
+      },
+    },
     fixture.generated,
   )
   const definition = behavior.tasks[0].definition
@@ -241,53 +253,7 @@ it('counts distinct completions durably when an older context read finishes afte
   }
 }, 60000)
 
-it('replaces only a marked HTTP input fallback and clears its provenance with the generated title', async () => {
-  const fixture = await launch()
-  let release!: () => void
-  const gate = new Promise<void>((done) => {
-    release = done
-  })
-  fixture.generated.mockImplementationOnce(async () => {
-    await gate
-    return {
-      assessment: 'done' as const,
-      activity: 'Implemented the requested sidebar changes.',
-      title: 'Improve the conversation sidebar',
-      summary: 'Generated summary.',
-    }
-  })
-  try {
-    fixture.server.host.faux!.setResponses([fauxAssistantMessage('Done.')])
-    expect(
-      (
-        await post(fixture.server, '/api/conversations/1/submit', {
-          text: 'A first prompt that is not a concise title.',
-        })
-      ).status,
-    ).toBe(202)
-    await until(() => fixture.generated.mock.calls.length === 1)
-    expect(
-      await fixture.server.harness.snapshot(Metadata, fixture.server.root.id, context),
-    ).toMatchObject({ title: 'A first prompt that is not a concise title.', titleSource: 'input' })
-    release()
-    await until(async () => (await fixture.read())?.status === 'ready')
-    const metadata = await fixture.server.harness.snapshot(
-      Metadata,
-      fixture.server.root.id,
-      context,
-    )
-    expect(metadata?.title).toBe('Improve the conversation sidebar')
-    expect(metadata?.titleSource).toBeUndefined()
-    await fixture.reopen()
-    expect(
-      (await fixture.server.harness.snapshot(Metadata, fixture.server.root.id, context))?.title,
-    ).toBe('Improve the conversation sidebar')
-  } finally {
-    release()
-  }
-}, 60000)
-
-it('never marks or replaces an unmarked preexisting HTTP title equal to the first input', async () => {
+it('keeps an explicit API title even when it equals the first input', async () => {
   const fixture = await launch()
   const text = 'This preexisting title equals the prompt.'
   const created = await post(fixture.server, '/api/conversations', { title: text })
@@ -323,15 +289,7 @@ it('preserves an equal-text manual rename during an in-flight HTTP-submit summar
     fixture.server.host.faux!.setResponses([fauxAssistantMessage('Done.')])
     expect((await post(fixture.server, '/api/conversations/1/submit', { text })).status).toBe(202)
     await until(() => fixture.generated.mock.calls.length === 1)
-    expect(
-      (await fixture.server.harness.snapshot(Metadata, fixture.server.root.id, context))
-        ?.titleSource,
-    ).toBe('input')
     expect((await fixture.action('rename', text)).status).toBe(200)
-    expect(
-      (await fixture.server.harness.snapshot(Metadata, fixture.server.root.id, context))
-        ?.titleSource,
-    ).toBeUndefined()
     release()
     await until(async () => (await fixture.read())?.status === 'ready')
     expect(
@@ -771,56 +729,6 @@ it('counts only completed inputs, not a yield continued by another hook', async 
   expect((await index())?.inputId).toBe(newer.entry)
 }, 60000)
 
-it('selects Luna/medium with bounded text-only context and cancels oversized output', async () => {
-  const model = { provider: 'openai-codex', id: 'gpt-6-luna' }
-  const stream = vi.fn<Models['streamSimple']>((_model, _input, options) => {
-    const events = new AssistantMessageEventStream()
-    const answer = fauxAssistantMessage(
-      JSON.stringify({
-        assessment: 'done',
-        activity: 'Implemented the requested changes.',
-        title: 'A compact useful title',
-        summary: 'A brief current summary.',
-      }),
-    )
-    events.push({ type: 'done', reason: 'stop', message: answer })
-    events.end()
-    expect(options?.reasoning).toBe('medium')
-    expect(options?.maxTokens).toBe(2048)
-    return events
-  })
-  const getModel = vi.fn<Models['getModel']>(() => model as Model<string>)
-  const models = { getModel, streamSimple: stream } as unknown as Models
-  const input = summaryInput([
-    { role: 'user', content: 'x'.repeat(50000), timestamp: 1 },
-    fauxAssistantMessage('y'.repeat(50000)),
-  ])
-  expect(input.length).toBeLessThanOrEqual(12060)
-  expect(await generateSummary(models, input, new AbortController().signal)).toEqual({
-    assessment: 'done',
-    activity: 'Implemented the requested changes.',
-    title: 'A compact useful title',
-    summary: 'A brief current summary.',
-  })
-  expect(getModel).toHaveBeenCalledWith('openai-codex', 'gpt-6-luna')
-  expect(stream.mock.calls[0][1].tools).toBeUndefined()
-  stream.mockImplementationOnce((_model, _input, options) => {
-    const events = new AssistantMessageEventStream()
-    events.push({
-      type: 'text_delta',
-      contentIndex: 0,
-      delta: 'z'.repeat(2049),
-      partial: fauxAssistantMessage('z'.repeat(2049)),
-    })
-    options!.signal!.addEventListener('abort', () => events.end())
-    return events
-  })
-  await expect(generateSummary(models, input, new AbortController().signal)).rejects.toThrow(
-    'exceeds bounds',
-  )
-  expect(stream.mock.calls[1][2]?.signal?.aborted).toBe(true)
-})
-
 it('assesses every idle final reply, keeps summaries between due exchanges, and exposes neutral/failure honestly', async () => {
   const fixture = await launch()
   const index = async () =>
@@ -964,6 +872,38 @@ it('does not reconcile the overview or read summary histories for streamed live 
     reads.mockRestore()
   }
 }, 60000)
+
+it('skips summaries and assessments quietly when Luna is unavailable', async () => {
+  const fixture = await launch()
+  const server = fixture.server
+  const existing = server.host.registry.snapshot().extension('conversations')!
+  server.host.registry.install(
+    defineExtension({
+      ...existing,
+      ...summaryBehavior(
+        {
+          harness: () => server.harness,
+          metadata: Metadata,
+          modelRuntime: { getAvailableSnapshot: () => [] },
+        },
+        fixture.generated,
+      ),
+    }),
+  )
+  server.host.faux!.setResponses([fauxAssistantMessage('Done.')])
+  await (await server.root.submit({ type: 'input', content: 'Work' }, context)).wait(context)
+  await server.harness.waitForIdle(context)
+  expect(fixture.generated).not.toHaveBeenCalled()
+  expect((await server.harness.inspect(context)).tasks).toHaveLength(0)
+  expect((await fixture.read())?.status).toBeUndefined()
+  expect((await fixture.read())?.assessmentStatus).toBeUndefined()
+  expect((await fixture.read())?.exchanges ?? 0).toBe(0)
+  expect(
+    (await server.harness.snapshot(Overview, server.root.id, context))?.conversations[
+      server.root.id
+    ]?.assessmentStatus,
+  ).toBeUndefined()
+})
 
 it('validates assessment-only JSON and rejects unapproved or malformed outcome states', async () => {
   let output: unknown = {

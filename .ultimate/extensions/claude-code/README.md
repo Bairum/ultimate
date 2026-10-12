@@ -30,5 +30,3 @@ Each call waits for one fresh print-mode CLI invocation in the calling agent's w
 Progress reports actual model/session, latest activity, turns, cost, duration and permission denials when available. A failure subtype or `is_error` is a failure even with exit code zero; missing/malformed result, nonzero exit, authentication/spawn errors and output overflow are errors too. Combined stdout/stderr capture is capped at 1 MiB; overflow stops the CLI rather than silently truncating an answer. Timeout, cancellation and shutdown terminate the process group with SIGTERM, then SIGKILL after 250 ms, including stubborn descendants. This runner targets Ultimate's Linux environment.
 
 Calls are not replay-safe and do not resume sessions after interruption: retrying may duplicate spend or edits. No native Ultimate child conversation or background runner is created.
-
-Verification: `pnpm test test/claude-code.test.ts` uses a temporary fake CLI, never paid requests.

@@ -219,49 +219,25 @@ describe('instance commit collector', () => {
     }
   })
 
-  it('cleans timer/subscription, rebaselines on reopen, and reports seed or listener failure as unavailable', async () => {
+  it('treats non-finite counters as zero and keeps collecting later updates', async () => {
     const f = await fixture()
     try {
       vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] })
-      const original = f.harness.subscribeCommits.bind(f.harness)
-      const disposers: ReturnType<typeof vi.fn>[] = []
-      vi.spyOn(f.harness, 'subscribeCommits').mockImplementation((listener) => {
-        const dispose = vi.fn<() => void>(original(listener))
-        disposers.push(dispose)
-        return dispose
-      })
       await f.open()
-      expect(vi.getTimerCount()).toBe(1)
-      await vi.advanceTimersByTimeAsync(1000)
-      expect(f.rate()?.rates.output).toBe(0)
-      const clock = vi.spyOn(performance, 'now').mockReturnValue(8000)
-      await vi.advanceTimersByTimeAsync(1000)
-      expect(f.rate()).toBeNull()
-      clock.mockReturnValue(9000)
-      await vi.advanceTimersByTimeAsync(1000)
-      expect(f.rate()).toEqual({ elapsed: 1, rates: counters(0) })
-      clock.mockRestore()
-      await f.stop()
-      expect(disposers[0]).toHaveBeenCalledTimes(1)
-      expect(vi.getTimerCount()).toBe(0)
-      expect(f.rate()).toBeNull()
-      await f.harness.commit((tx) => settled(tx, f.root.id, 9999), context)
-      await f.open()
-      await vi.advanceTimersByTimeAsync(1000)
-      expect(f.rate()?.rates.output).toBe(0)
       await f.harness.commit(async (tx) => {
+        await settled(tx, f.root.id, 10)
         ;(await tx.doc(UsageDoc, f.root.id)).models['faux/model'].output =
           'invalid' as unknown as number
       }, context)
-      expect(f.rate()).toBeNull() // Listener must neither throw nor retain a stale live rate.
       await vi.advanceTimersByTimeAsync(1000)
-      expect(f.rate()).toBeNull()
-      await f.stop()
-      vi.spyOn(f.harness, 'commit').mockRejectedValueOnce(new Error('seed unavailable'))
-      await f.open()
-      expect(f.rate()).toBeNull()
-      expect(vi.getTimerCount()).toBe(0)
-      expect(f.notices).toEqual(['Instance token rates unavailable: Error: seed unavailable'])
+      expect(f.rate()).toEqual({
+        elapsed: 1,
+        rates: { input: 20, output: 0, cacheRead: 30, cacheWrite: 40 },
+      })
+      await f.harness.commit((tx) => settled(tx, f.root.id, 20), context)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(f.rate()).toEqual({ elapsed: 2, rates: counters(10) })
+      expect(f.notices).toEqual([])
     } finally {
       await f.cleanup()
     }

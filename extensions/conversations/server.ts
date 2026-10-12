@@ -44,10 +44,8 @@ export const actions = {
     const normalized = title.replace(/\s+/g, ' ').trim().slice(0, 160)
     await host.harness().commit(async (tx) => {
       const state = await tx.doc(Summaries, id)
-      state.manual = !!normalized
       delete state.generatedTitle
       const metadata = await tx.doc(host.metadata, id)
-      delete metadata.titleSource
       if (normalized) metadata.title = normalized
       else delete metadata.title
     }, context)

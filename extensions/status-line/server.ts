@@ -52,12 +52,12 @@ export default function statusLine(host: Host) {
     const documents = new Map<number, { settled: Rates; partial: Rates }>()
     const total = zero()
     const sample = createRateSampler()
-    let failed = false
     const replace = (id: number, part: 'settled' | 'partial', next: Rates) => {
-      for (const key of keys)
-        if (!Number.isFinite(next[key])) throw new Error('Invalid provider token counter')
       const before = documents.get(id) ?? { settled: zero(), partial: zero() }
-      for (const key of keys) total[key] += next[key] - before[part][key]
+      for (const key of keys) {
+        if (!Number.isFinite(next[key])) next[key] = 0
+        total[key] += next[key] - before[part][key]
+      }
       before[part] = next
       documents.set(id, before)
     }
@@ -77,29 +77,19 @@ export default function statusLine(host: Host) {
         // Subscribe while this atomic seed still holds the commit boundary. Its own publication
         // is safe to adopt again (absolute counters); no following commit can slip past the seed.
         unsubscribe = harness.subscribeCommits((publication) => {
-          if (failed) return
-          try {
-            for (const change of publication.changes) {
-              if (change.type !== 'document' || change.conversationId === undefined) continue
-              if (change.record.kind === UsageDoc.definition.kind)
-                replace(
-                  change.conversationId,
-                  'settled',
-                  settled(change.value as UsageState | null),
-                )
-              if (change.record.kind === LiveDoc.definition.kind)
-                replace(change.conversationId, 'partial', partial(change.value))
-            }
-            // Do not sample here: settled + partial must be adopted from the whole publication.
-          } catch {
-            failed = true
-            latest = null
+          for (const change of publication.changes) {
+            if (change.type !== 'document' || change.conversationId === undefined) continue
+            if (change.record.kind === UsageDoc.definition.kind)
+              replace(change.conversationId, 'settled', settled(change.value as UsageState | null))
+            if (change.record.kind === LiveDoc.definition.kind)
+              replace(change.conversationId, 'partial', partial(change.value))
           }
+          // Do not sample here: settled + partial must be adopted from the whole publication.
         })
       }, context)
       if (opened !== epoch) return
       timer = setInterval(() => {
-        if (!failed) latest = sample(performance.now(), total)
+        latest = sample(performance.now(), total)
       }, 1000)
     } catch (error) {
       if (opened !== epoch) return

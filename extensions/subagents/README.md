@@ -2,13 +2,14 @@ Delegate bounded work with `subagent`: `start {agent, task, background?, fork?}`
 
 ## Interruptible waits and delivery
 
-A yielded wait returns status text, **not an answer**, with `details: { conversationId, yielded: true }` (and `background: true` for a background-style child). Message or stop that ID, or wait again. The wait observes the parent inbox's acquisition snapshot and updates; it never reads queued input content or places it. Follow-ups do not wake waits. Other children's answer reports do wake waits so the parent can act; an already completed answer from the awaited child takes precedence. Only local losing waits are canceled, never the child or parent. An unrelated long tool in the same round can still delay the normal boundary.
-
-Before each model request, a compact reminder lists running children and durable inputs still pending before their child run starts. The reminder is refreshed from documents/tasks, not from prior tool results.
-
-Start/message atomically install a reporter with their action record before waiting. Reporters claim each answer once and submit it with `subagent-answer:<answer entry ID>`. Successful answer results carry `details.answerId`. A nested result consumed by a script is not yet a model receipt: successful outer codemode results acknowledge answers through `details.subagentAnswers`; yielded/error results omit these receipts, leaving earlier answers queued rather than losing them when a sibling wait yields.
-
-The subagents `afterTools` hook reads committed outer tool results before Pi's boundary and atomically withdraws only acknowledged, still-queued reports. It also records a settled request receipt when a reporter has not submitted yet, so a late submission is deduplicated by the same answer identity. Already placed reports are not withdrawn. Receipts and hook replay are idempotent across restart. `wait` can still return an already delivered answer on explicit request; exactly-once applies to automatic reports, not repeated explicit reads.
+A wait can yield to steering while the child keeps running. It returns status text and the child's ID, not an answer.
+Message or stop that ID, or wait again. Follow-ups do not wake waits; steering and other children's answers do.
+An answer already completed by the awaited child takes precedence. Only the local wait is cancelled.
+Before each request, a reminder lists running children and inputs waiting to start.
+Each start or message creates a reporter that delivers its answer once, including after restart.
+Successful tool answers carry `details.answerId`; completed codemode scripts list these in `details.subagentAnswers`.
+The backend removes queued reports already returned by those tools. Failed or yielded scripts leave reports queued.
+Reports already sent to the model stay there. An explicit `wait` can still return an earlier answer.
 
 Definitions are Markdown with YAML frontmatter, parsed by Pi's `parseFrontmatter`: required `name` and `description`, optional `isolate` (`none` or `worktree`), `model` (Pi's `resolveCliModel` accepts `provider/id`, fuzzy id or name, and a `:thinking` suffix; unknown models are errors and custom models must be registered in Pi's `models.json`), `thinking` (a Pi thinking level), and `tools` (a YAML list, `[read, bash]` or one `- item` per line); other fields are errors. An explicit `thinking` field overrides the model suffix. The body is the instructions. `agents.ts` reads them from three directories, later overriding by name: `agents/` in Ultimate's clone, `~/.ultimate/agents/`, and the project root's `.ultimate/agents/` (not a conversation's cwd). Omitted tools inherit the parent's tools minus `subagent`. Tool restrictions select tools, not a shell sandbox: read-only agents' bash restrictions are instructions. An edited definition is not a code change, so it does not change the build id.
 

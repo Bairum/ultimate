@@ -791,8 +791,7 @@ export const actions = { keys: async () => keys }`,
     const summaryReads = snapshot.mock.calls.filter(
       ([token]) => token.definition.kind === 'ultimate.metadata',
     )
-    // One for the title the first message stores, one for its entry.
-    expect(summaryReads.map(([, id]) => id)).toEqual([1, 1])
+    expect(summaryReads.map(([, id]) => id)).toEqual([1])
     await stream.close()
   })
   it('streams input and answer times, keeps them across a reset, and gives summaries to server facets', async () => {
@@ -869,7 +868,7 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     expect(reads).not.toHaveBeenCalled()
     await stream.close()
   })
-  it('keeps the first submitted message as the title through a reset and later messages', async () => {
+  it('derives a title from the active context without storing it and keeps explicit API titles', async () => {
     const { server } = await fixture()
     server.host.faux!.setResponses(
       ['One', 'Two', 'Three'].map((text) => fauxAssistantMessage(text)),
@@ -879,10 +878,9 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     const summary = (id: number) => server.api.conversations().find((item) => item.id === id)
     await post(server, `/api/conversations/${created}/submit`, { text: '  First\n\n message ' })
     await server.harness.waitForIdle(context)
-    expect(await server.harness.snapshot(Metadata, created, context)).toEqual({
-      title: 'First message',
-      titleSource: 'input',
-    })
+    await until(() => summary(created)?.inputAt !== undefined)
+    expect(summary(created)?.title).toBe(' First message ')
+    expect((await server.harness.snapshot(Metadata, created, context))?.title).toBeUndefined()
     const conversation = (await server.harness.conversation(created, context))!
     await conversation.reset(undefined, context)
     await server.harness.waitForIdle(context)
@@ -892,10 +890,8 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
       ;(await tx.doc(Metadata, created)).label = 'refreshed'
     }, context)
     await until(() => summary(created)?.label === 'refreshed')
-    expect(summary(created)?.title).toBe('First message')
-    expect(await server.harness.snapshot(Metadata, created, context)).toMatchObject({
-      title: 'First message',
-    })
+    expect(summary(created)?.title).toBe('Second message')
+    expect((await server.harness.snapshot(Metadata, created, context))?.title).toBeUndefined()
     // A title given at creation is not replaced by the first message.
     await post(server, `/api/conversations/${named}/submit`, { text: 'Not the title' })
     await server.harness.waitForIdle(context)

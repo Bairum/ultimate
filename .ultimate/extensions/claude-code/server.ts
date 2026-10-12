@@ -3,6 +3,8 @@ import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../../server/extensions.ts'
 import { claudeCaptureLimit, runClaude } from './runner.ts'
 
+const claudeOutputLimit = claudeCaptureLimit + 4096
+
 export default function claudeCode(host: ExtensionHost) {
   const shutdown = new AbortController()
   const running = new Set<Promise<unknown>>()
@@ -17,8 +19,8 @@ export default function claudeCode(host: ExtensionHost) {
         name: 'claude_code',
         // Keep captured text plus error-message overhead; even all-newline output must fit.
         outputLimits: {
-          maxBytes: claudeCaptureLimit + 4096,
-          maxLines: claudeCaptureLimit + 4097,
+          maxBytes: claudeOutputLimit,
+          maxLines: claudeOutputLimit + 1,
         },
         description:
           'Delegate a bounded foreground task to the installed, authenticated Claude Code CLI and wait for its Markdown answer. Defaults: opus, 10 turns, 300 seconds, read-only Read/Glob/Grep tools, dontAsk permissions. Uses your working directory. Settings/hooks still apply; not an OS sandbox. No session resume or permission bypass.',
