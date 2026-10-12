@@ -352,6 +352,49 @@ it.each(['rename', 'reset', 'newer'] as const)(
   60000,
 )
 
+it.each([2, 3])(
+  'settles a held spawn superseded by assessment-only exchange %s without changing cadence',
+  async (exchange) => {
+    const fixture = await launch()
+    for (let count = 1; count < exchange; count++) await fixture.exchange()
+    const before = (await fixture.read())!
+    let release!: () => void
+    const gate = new Promise<void>((done) => {
+      release = done
+    })
+    fixture.generated.mockImplementationOnce(async () => {
+      await gate
+      return { assessment: 'done', activity: 'Old spawn', title: 'Old spawn', summary: 'Old spawn' }
+    })
+    await fixture.spawn(before.lastAnswer!)
+    await until(() => fixture.generated.mock.calls.length === exchange)
+    expect((await fixture.read())?.status).toBe('pending')
+    try {
+      await fixture.exchange()
+      const state = await fixture.read()
+      expect(state?.pending).toBeUndefined()
+      expect(state?.assessmentStatus).toBe('ready')
+      expect(state?.exchanges).toBe(exchange)
+      expect(state?.summary).toBe(before.summary)
+      expect(state?.summaryOwed).toBeUndefined()
+      expect(fixture.generated.mock.calls.at(-1)![3]).toBe(false)
+      expect(state?.status).toBe('error')
+    } finally {
+      release()
+    }
+    await until(async () => (await fixture.server.harness.inspect(context)).tasks.length === 0)
+    expect((await fixture.read())?.status).toBe('error')
+    expect((await fixture.read())?.summary).toBe(before.summary)
+    for (let count = exchange + 1; count <= 4; count++) await fixture.exchange()
+    expect((await fixture.read())?.exchanges).toBe(4)
+    expect((await fixture.read())?.status).toBe('ready')
+    expect(
+      fixture.generated.mock.calls.filter((call) => call[5] === 'reply').map((call) => call[3]),
+    ).toEqual([true, false, false, true])
+  },
+  60000,
+)
+
 it('summarizes the first, fourth and seventh completed exchanges, not tools, streams or idle time; persists across reopen', async () => {
   const fixture = await launch()
   const { server } = fixture

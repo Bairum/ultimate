@@ -349,6 +349,8 @@ export function summaryBehavior(
           state.assessmentStatus = 'pending'
           delete state.assessment
           if (state.summaryOwed) state.status = 'pending'
+          // An assessment-only task supersedes any spawn refresh, but cannot settle its status later.
+          else if (state.status === 'pending') state.status = 'error'
           return {
             status: 'running',
             checkpoint: { phase: 'prepare', answer, summary: !!state.summaryOwed },
