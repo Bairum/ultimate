@@ -20,6 +20,7 @@
     "extensions/**/*.ts",
     ".ultimate/extensions/**/*.ts",
     "test",
+    "evals",
     "vite.config.ts"
   ],
   "exclude": ["test/web"],
