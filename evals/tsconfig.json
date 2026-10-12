@@ -1,0 +1,7 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "tsBuildInfoFile": "../node_modules/.cache/tsc-evals/tsconfig.tsbuildinfo" },
+  "include": ["./**/*.ts"],
+  "exclude": [],
+  "references": [{ "path": "../tsconfig.web.json" }]
+}
