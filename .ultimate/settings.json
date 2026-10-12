@@ -2,6 +2,7 @@
   "extensions": {
     "enable": [
       "automations",
+      "canvas",
       "documents",
       "exclusive-commands",
       "info",

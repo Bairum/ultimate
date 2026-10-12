@@ -40,7 +40,7 @@ Skills load from clone `skills/`, then Pi's defaults, then `~/.ultimate/skills/`
 `<project>/.ultimate/skills/`, with later names winning.
 The default set is `agent`, `conversations`, `workspaces`, `coding-tools`, `prompt`, `models`, `status-line`, `notices`, `theme`,
 `faux` (inert unless `ULTIMATE_FAUX=1`), `codemode`, `browser`, `onboarding`, and `splash`. Other built-ins are opt-in
-building blocks, including `secrets`, `parallel` (web tools; requires `secrets`), and `tailscale` (remote access, user-level enablement only). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
+building blocks, including `secrets`, `parallel` (web tools; requires `secrets`), `canvas` (the live per-agent activity feed), and `tailscale` (remote access, user-level enablement only). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
 restart. User/project extension folders are on by default; `disable` can turn off those or defaults too. Unknown names
 produce a notice.
@@ -112,8 +112,11 @@ applies to this repository whether public or private, not to other repositories.
 landed branch explicitly (for example, `git -C /home/haza/Projects/ultimate push origin main`); `workspace land` itself
 still never pushes. Subagents commit and report; only the top-level agent pushes after verification and integration.
 
-Use normal, non-force pushes only. If checks fail, landing is blocked, or the push is rejected, stop and report the
-blocker rather than rewriting history or overwriting remote work. Do not push secrets or unrelated unverified work.
+Use normal, non-force pushes only. Remote advancement or a non-fast-forward rejection is normal: fetch, inspect the
+incoming log and diff, and merge non-destructively in an isolated workspace, preserving both histories. Rerun checks
+and the required reviews, then land and push normally without asking again. Stop and report ambiguous conflicts,
+failing checks, security concerns, or a situation requiring a force push or history rewrite—not ordinary remote
+advancement. Do not push secrets or unrelated unverified work.
 This standing permission does not authorize releases, publishing, deployments, or GitHub issue/PR changes.
 
 ## Conventions
@@ -171,6 +174,7 @@ Definitions live in `agents/`, `~/.ultimate/agents/`, and the project root's `.u
 - `extensions/coding-tools/web.tsx` — internal bash error wording drives exitOf and untyped details.patch/details.diff drive Edit. Drop when Pi exports structured bash outcomes and structured diff rows for rendering.
 - `extensions/self/web.tsx` — internal remove-all pi.system entry immediately precedes a reordered re-add, hidden here. Drop when Pi exposes prompt reorder metadata instead of requiring entry-sequence inference.
 - `extensions/subagents/server.ts` — internal ToolTaskInput.assistant locates the calling assistant for history forks. Drop when ToolExecutionApi exposes the calling assistant entry ID.
+- `extensions/canvas/feed.ts` — internal untyped details.patch counts an edit's added and removed lines. Drop when Pi exports structured diff rows for rendering.
 
 On a Pi upgrade, run `rg "Pi upstream:"` and recheck each marked item against the new version; test/pi-upstream.test.ts checks that every tracked marker matches the installed package version and its path appears in this list, and every backticked path in this list is tracked and contains a marker.
 Delete copies and patches that Pi now exports or fixes, then update the remaining markers and this list after verification.
