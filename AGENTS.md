@@ -104,6 +104,18 @@ A top-level conversation created with New isolated conversation works in its own
 After landing verified workers and checking the combined tip, call `workspace land` to fast-forward the original branch; it refuses dirty, changed or diverged targets and never rebases or pushes.
 For `server/` or `shared/` changes, an authorized `restart` works once the running clone is clean at the landed commit.
 
+### Standing permission to push this repository
+
+The user authorizes the top-level agent to commit verified changes, land them, and push the destination branch
+(normally `main`) to this repository's GitHub remote, `origin` (`HazAT/ultimate`), without asking again. This permission
+applies to this repository whether public or private, not to other repositories. After a successful land, push the
+landed branch explicitly (for example, `git -C /home/haza/Projects/ultimate push origin main`); `workspace land` itself
+still never pushes. Subagents commit and report; only the top-level agent pushes after verification and integration.
+
+Use normal, non-force pushes only. If checks fail, landing is blocked, or the push is rejected, stop and report the
+blocker rather than rewriting history or overwriting remote work. Do not push secrets or unrelated unverified work.
+This standing permission does not authorize releases, publishing, deployments, or GitHub issue/PR changes.
+
 ## Conventions
 
 - Pi is the role model: minimal, readable, malleable. Prefer platform features and existing dependencies; justify every
