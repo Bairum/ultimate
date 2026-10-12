@@ -126,6 +126,33 @@ This standing permission does not authorize releases, publishing, deployments, o
 - Pin `@earendil-works/*` packages to exact versions; Pi Durable is experimental.
 - Checks: `pnpm check` (format, lint, types) and `pnpm test` must pass before a commit.
 
+## Review quality
+
+Reject slop and jargon: keep code and explanations direct, minimal, and grounded in evidence. No backward-compatibility
+shims or speculative fallbacks; move forward and update callers. Tests must exercise meaningful behaviour and failure
+cases, not inflate coverage or merely restate the implementation.
+
+## Fixed review team
+
+The coordinator owns review sequencing and the final verdict. Resolve immutable full commit SHAs for one explicit
+`base..head`; every reviewer must review that exact range, never a directory or moving branch. Supply the acceptance
+criteria, full `git log base..head` and full `git diff base..head` to all three independent reviewers. Claude's
+read-only tools cannot run Git, so include the complete log and diff in each Claude prompt, without truncation.
+
+1. Launch these three independent reviews in parallel from the coordinator: `subagent` with `agent: reviewer-astra`
+   (Astra 6, high), and two direct `claude_code` calls with `model: claude-fable-5-1` and `model: claude-opus-5-5`.
+   For each Claude call set `tools: [Read, Glob, Grep]`, `allowedTools: [Read, Glob, Grep]`, and
+   `permissionMode: dontAsk`. Give all three the same review quality rules and require concrete file:line findings,
+   impact, evidence, verification limits, and the reviewed range. Do not share reports between independent reviewers.
+2. Wait for all three reports and check completion, range, and actual returned model identity. A missing or failed
+   report, ambiguous model identity, or unexpected returned model blocks approval; never substitute another model
+   or silently reduce the team. Report the blocker.
+3. Only then launch `subagent` with `agent: reviewer` (Sol 6.1, xhigh), supplying the same range, criteria, log, diff,
+   and all three complete reports with their model identities. Sol verifies and synthesizes them, not another
+   independent parallel review. No nested subagents, reviewer delegation, or wrappers around Claude calls.
+4. The coordinator verifies the synthesis and findings, routes confirmed fixes, and owns acceptance. After changes,
+   select a new immutable range and repeat the full sequence before approval.
+
 ## Subagents
 
 Use `subagent` to delegate bounded research, recon, review, or isolated implementation; verify the results. Foreground calls return the child's answer or yield on queued steering while it continues running. All new children survive the parent's stop; use explicit child stop. Undelivered answers steer the active run at its next tool-round boundary, or start a run when idle. Start, message/steer, wait, stop, and list all use child conversation IDs. No nested subagents.
