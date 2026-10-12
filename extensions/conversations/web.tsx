@@ -282,6 +282,7 @@ function Row({
   const afterMenu = useRef<() => void>(undefined)
   const name = conversation.title ?? (draft ? 'New conversation' : `#${conversation.id}`)
   const latest = Math.max(conversation.inputAt ?? 0, conversation.answerAt ?? 0)
+  const hasMetadata = conversation.workspace || latest > 0
   const rename = () => {
     cancelled.current = false
     setEditing(true)
@@ -311,7 +312,8 @@ function Row({
   return (
     <div
       className={cn(
-        'group relative mx-2 flex h-7 items-center rounded-md transition-colors',
+        'group relative mx-2 flex items-center rounded-md transition-colors',
+        hasMetadata ? 'h-11' : 'h-7',
         shown ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/50',
       )}
       data-conversation={conversation.id}
@@ -344,10 +346,7 @@ function Row({
       ) : (
         <button
           aria-current={shown ? 'true' : undefined}
-          className={cn(
-            'flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md pr-2 pl-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
-            conversation.workspace && 'pr-7',
-          )}
+          className="flex h-full min-w-0 flex-1 cursor-pointer flex-col justify-center rounded-md pr-2 pl-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
           onClick={() => actions.switchConversation(conversation.id)}
           ref={(element) => {
             if (!element || !refocus.current) return
@@ -356,22 +355,21 @@ function Row({
           }}
           type="button"
         >
-          <Mark assessment={assessment} unseen={unseen} working={working} />
-          {title}
-          {conversation.workspace && (
-            <span
-              className="shrink-0 font-mono text-[10px] text-muted-foreground"
-              title="Isolated checkout"
-            >
-              W{conversation.id}
-            </span>
-          )}
-          {latest > 0 && (
-            <span
-              className="shrink-0 font-mono text-[10.5px] text-muted-foreground/80 group-focus-within:invisible group-hover:invisible group-has-[[data-state=open]]:invisible"
-              title={new Date(latest).toLocaleString()}
-            >
-              {ago(latest, now)}
+          <span className="flex w-full min-w-0 items-center gap-1.5">
+            <Mark assessment={assessment} unseen={unseen} working={working} />
+            {title}
+          </span>
+          {hasMetadata && (
+            <span className="flex w-full items-center gap-2 pr-5 pl-[18px] font-mono text-[10px] leading-4 text-muted-foreground">
+              {conversation.workspace && <span title="Isolated checkout">W{conversation.id}</span>}
+              {latest > 0 && (
+                <span
+                  className="text-muted-foreground/80"
+                  title={new Date(latest).toLocaleString()}
+                >
+                  {ago(latest, now)}
+                </span>
+              )}
             </span>
           )}
         </button>
@@ -380,7 +378,7 @@ function Row({
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger
             aria-label="Conversation actions"
-            className="invisible absolute right-1 flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none group-focus-within:visible group-hover:visible hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:visible data-[state=open]:bg-sidebar-accent data-[state=open]:text-foreground"
+            className="invisible absolute right-1 bottom-1 flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none group-focus-within:visible group-hover:visible hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:visible data-[state=open]:bg-sidebar-accent data-[state=open]:text-foreground"
           >
             <EllipsisIcon className="size-3.5" />
           </DropdownMenuTrigger>
