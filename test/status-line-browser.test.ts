@@ -5,7 +5,7 @@ import { createServer } from 'vite-plus'
 import { expect, it } from 'vitest'
 import { linkDependencies, skipWithoutChromium, temp } from './helpers.ts'
 
-it('renders token totals, explains shared rates and updates the sample', async (test) => {
+it('renders token totals, shared rates and live global running-agent counts', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const base = await temp('ultimate-status-line-browser-')
@@ -38,7 +38,7 @@ source.send('system', { process: { generation: 1, pid: 1 } })
 source.send('view', { conversation: { id: 1 }, entries: [], docs: { 'pi.agent': {}, 'pi.usage': { models: { 'faux/model': { input: 100, output: 200, cacheRead: 300, cacheWrite: 400, cost: { total: 0.003 } } }, tools: { fixture: { input: 50, output: 60, cacheRead: 0, cacheWrite: 0, cost: { total: 0.005 } } } }, 'pi.live': {} } })
 const root = createRoot(document.querySelector('#app'))
 root.render(h(TooltipProvider, { delayDuration: 0 }, h(extension.slots['statusline.left'][1])))
-window.fixture = { sample: value => { output = value }, unmount: () => { root.unmount(); store.stop() } }
+window.fixture = { sample: value => { output = value }, conversations: value => source.send('conversations', value), unmount: () => { root.unmount(); store.stop() } }
 `,
   )
   const server = await createServer({
@@ -60,6 +60,19 @@ window.fixture = { sample: value => { output = value }, unmount: () => { root.un
     const rate = page.getByLabel('Output token rate')
     await rate.waitFor()
     expect(await rate.textContent()).toBe('↓? tok/s')
+    const running = page.getByLabel('Running agents')
+    expect(await running.textContent()).toBe('0 agents')
+    await page.evaluate(() =>
+      Reflect.get(window, 'fixture').conversations([
+        { id: 1, busy: true },
+        { id: 2, busy: true },
+        { id: 3, parentConversationId: 2, ownerTaskId: 10, busy: true },
+        { id: 4, busy: false },
+      ]),
+    )
+    await page.waitForFunction(
+      () => document.querySelector('[aria-label="Running agents"]')?.textContent === '3 agents',
+    )
     for (const text of ['↑150', '↓260', 'R300', 'W400', '$0.008'])
       expect(await page.locator('#app').textContent()).toContain(text)
     await page.evaluate(() => Reflect.get(window, 'fixture').sample(123))
@@ -79,6 +92,7 @@ window.fixture = { sample: value => { output = value }, unmount: () => { root.un
       'Cache write 492.0',
       'across all conversations, averaged over the last 30 seconds',
       'tool usage is excluded',
+      'Running agents across all conversations in this project, including subagents',
     ])
       expect(await tooltip.textContent()).toContain(text)
     await page.mouse.move(700, 500)
@@ -92,6 +106,22 @@ window.fixture = { sample: value => { output = value }, unmount: () => { root.un
     await page.clock.runFor(100)
     await tooltip.waitFor()
     expect(await tooltip.textContent()).toContain('Output ↓200.0')
+    await page.evaluate(() =>
+      Reflect.get(window, 'fixture').conversations([
+        { id: 1, busy: false },
+        { id: 2, busy: true },
+        { id: 3, parentConversationId: 2, ownerTaskId: 10, busy: false },
+      ]),
+    )
+    await page.waitForFunction(
+      () => document.querySelector('[aria-label="Running agents"]')?.textContent === '1 agent',
+    )
+    await page.evaluate(() =>
+      Reflect.get(window, 'fixture').conversations([{ id: 2, busy: false }]),
+    )
+    await page.waitForFunction(
+      () => document.querySelector('[aria-label="Running agents"]')?.textContent === '0 agents',
+    )
     await page.evaluate(() => Reflect.get(window, 'fixture').unmount())
     expect(errors).toEqual([])
   } finally {
