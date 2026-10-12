@@ -40,7 +40,6 @@ export function workspaces(host: Host) {
         const workspace = (await get(task.input.id, context))!
         let created = false
         try {
-          await mkdir(join(host.home, 'worktrees'), { recursive: true })
           const registered = (await git(workspace.source, 'worktree', 'list', '--porcelain'))
             .split('\n\n')
             .find((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
@@ -59,8 +58,14 @@ export function workspaces(host: Host) {
               })
             )
               throw new Error(`Workspace path already exists: ${workspace.path}`)
-            if (await git(workspace.source, 'branch', '--list', workspace.branch))
-              throw new Error(`Workspace branch already exists: ${workspace.branch}`)
+            if (await git(workspace.source, 'branch', '--list', workspace.branch)) {
+              if (
+                !resumed ||
+                (await git(workspace.source, 'rev-parse', workspace.branch)) !== workspace.base
+              )
+                throw new Error(`Workspace branch already exists: ${workspace.branch}`)
+              await git(workspace.source, 'branch', '-D', workspace.branch)
+            }
             await runtime.memo('started', true, context)
             created = true
             await git(
@@ -133,13 +138,14 @@ export function workspaces(host: Host) {
       throw new Error('Conversation has queued input; wait or cancel it first')
   }
   async function land(id: ConversationId, context: Context, own = false): Promise<LandResult> {
-    const workspace = await get(id, context)
-    if (!workspace) throw new Error('Conversation has no workspace')
-    const source = workspace.source
+    const record = await get(id, context)
+    if (!record) throw new Error('Conversation has no workspace')
+    const source = record.source
     const previous = queues.get(source) ?? Promise.resolve()
     const operation = previous
       .catch(() => undefined)
       .then(async () => {
+        const workspace = (await get(id, context))!
         await idle(id, context, own)
         if (workspace.state !== 'ready') throw new Error(`Workspace is ${workspace.state}`)
         const dirty = await git(workspace.path, 'status', '--porcelain')
@@ -214,8 +220,10 @@ export function workspaces(host: Host) {
       if (!target) throw new Error('Check out a branch first')
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       if (index.items[String(id)]) throw new Error('Conversation already has a workspace')
+      await mkdir(join(host.home, 'worktrees'), { recursive: true })
+      const parent = await realpath(join(host.home, 'worktrees'))
       index.items[String(id)] = {
-        path: join(host.home, 'worktrees', String(id)),
+        path: join(parent, String(id)),
         branch: `ultimate/${createHash('sha256').update(host.home).digest('hex').slice(0, 6)}-${id}`,
         base: await git(source, 'rev-parse', 'HEAD'),
         source,

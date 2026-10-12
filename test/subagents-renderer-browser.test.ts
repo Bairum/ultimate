@@ -5,7 +5,7 @@ import { createServer, type ViteDevServer } from 'vite-plus'
 import { expect, it } from 'vitest'
 import { linkDependencies, skipWithoutChromium, temp } from './helpers.ts'
 
-it('renders yielded waits separately from answers and follows the live child busy state', async (test) => {
+it('renders yielded waits and skips workspace info for unrecorded Agents and plan children', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const base = await temp('ultimate-subagents-renderer-')
@@ -23,19 +23,32 @@ it('renders yielded waits separately from answers and follows the live child bus
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import extension from '/@fs/${resolve('extensions/subagents/web.tsx')}'
+import plan from '/@fs/${resolve('extensions/plan/web.tsx')}'
 import { store } from '/@fs/${resolve('web/src/sdk/client.ts')}'
+import { ExtensionNameContext } from '/@fs/${resolve('web/src/sdk/hooks.ts')}'
 import '/@fs/${resolve('web/src/index.css')}'
-let source
+let source, workspaces
 window.EventSource = class extends EventTarget {
   readyState = 1
-  constructor(url) { super(); if (!url.includes('ultimate.workspaces')) source = this }
+  constructor(url) { super(); if (url.includes('ultimate.workspaces')) workspaces = this; else source = this }
   close() {}
 }
 store.start()
 const root = createRoot(document.querySelector('#app'))
 window.fixture = {
+  rows: () => flushSync(() => root.render(createElement('div', {},
+    createElement(ExtensionNameContext.Provider, { value: 'subagents' }, createElement(extension.panels[0].component)),
+    createElement(plan.documents[0].component, { conversationId: 1, value: { next: 2, epics: {
+      E1: { key: 'E1', title: 'Example epic', body: '', status: 'in_progress', tasks: {
+        T1: { key: 'T1', title: 'Linked task', role: 'worker', description: '', deps: [], status: 'in_progress', child: 2, notes: [] },
+      } },
+    } } }),
+  ))),
+  record: () => flushSync(() => workspaces.dispatchEvent(new MessageEvent('doc', { data: JSON.stringify({
+    kind: 'ultimate.workspaces', value: { items: { '2': { path: '/workspace', branch: 'worker', source: '/source', target: 'main', base: 'base', state: 'ready' } } },
+  }) }))),
   busy: busy => flushSync(() => source.dispatchEvent(new MessageEvent('conversations', {
-    data: JSON.stringify([{ id: 2, label: 'worker', parentConversationId: 1, busy }]),
+    data: JSON.stringify([{ id: 1, busy: false }, { id: 2, label: 'worker', parentConversationId: 1, busy }]),
   }))),
   show: (action, background, yielded, status = 'done') => flushSync(() => root.render(
     createElement(extension.tools.subagent, { key: action + background + yielded + status, call: {
@@ -61,6 +74,16 @@ window.fixture.show('wait', undefined, true)
     browser = await chromium.launch({ executablePath, headless: true })
     const page = await browser.newPage()
     const errors: string[] = []
+    const infoRequests: unknown[] = []
+    await page.route('**/api/extensions/**/actions/**', async (route) => {
+      const request = route.request()
+      if (request.url().endsWith('/workspaces/actions/info'))
+        infoRequests.push(request.postDataJSON())
+      const result = request.url().endsWith('/subagents/actions/definitions')
+        ? { definitions: [], errors: [], main: { tools: [] }, scopes: {}, projectLocal: false }
+        : null
+      await route.fulfill({ json: { result } })
+    })
     page.on('pageerror', (error) => errors.push(error.message))
     await page.goto(server.resolvedUrls!.local[0])
     await page.waitForFunction(() => Reflect.has(window, 'fixture'))
@@ -112,6 +135,19 @@ window.fixture.show('wait', undefined, true)
     expect(await working.count()).toBe(1)
     await page.evaluate(() => Reflect.get(window, 'fixture').busy(false))
     expect(await working.count()).toBe(0)
+    await page.evaluate(() => Reflect.get(window, 'fixture').rows())
+    await page.getByText('Linked task', { exact: true }).waitFor()
+    await page.evaluate(() => {
+      Reflect.get(window, 'fixture').busy(true)
+      window.dispatchEvent(new Event('focus'))
+    })
+    await page.waitForTimeout(150)
+    expect(infoRequests).toEqual([])
+    await page.evaluate(() => Reflect.get(window, 'fixture').record())
+    await page.waitForFunction(() =>
+      document.querySelector('#app')?.textContent?.includes('Linked task'),
+    )
+    await expect.poll(() => infoRequests.length).toBeGreaterThanOrEqual(2)
     expect(errors).toEqual([])
   } finally {
     await browser?.close()

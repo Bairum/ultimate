@@ -34,7 +34,7 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { ConversationSummary, DocumentProps, ToolCallView } from '@/sdk'
-import { stateLabel, useWorkspaceAction } from '../workspaces/data.tsx'
+import { stateLabel, useWorkspaceAction, useWorkspaces } from '../workspaces/data.tsx'
 import type { WorkspaceInfo } from '../workspaces/types.ts'
 
 /** The `ultimate.plan` document, as `server.ts` defines it. */
@@ -135,10 +135,14 @@ function useRefresh(refetch: () => unknown, key: string) {
 function IsolateRow({ child, parent }: { child: ConversationSummary; parent: number }) {
   const conversations = useConversations()
   const parentBusy = conversations.find((conversation) => conversation.id === parent)?.busy
-  const { data: isolate, refetch } = useAction<WorkspaceInfo | null>('workspaces', 'info', {
-    id: child.id,
-  })
-  useRefresh(refetch, `${child.busy} ${parentBusy}`)
+  const recorded = useWorkspaces()[String(child.id)]
+  const { data: isolate, refetch } = useAction<WorkspaceInfo | null>(
+    'workspaces',
+    'info',
+    { id: child.id },
+    { enabled: !!recorded },
+  )
+  useRefresh(() => recorded && refetch(), `${child.busy} ${parentBusy}`)
   const { pending, outcome, land } = useWorkspaceAction(child.id, refetch)
   if (!isolate) return null
   return (

@@ -102,7 +102,7 @@ it('opts in without model input, keeps shared reuse and manages every isolated d
       await until(async () => (await info(id)).state === 'ready')
       if (state === 'discarded')
         await post(server, '/api/extensions/workspaces/actions/discard', {
-          args: { id, confirm: true },
+          args: { id },
           conversationId: id,
         })
       else

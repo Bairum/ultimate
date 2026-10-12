@@ -1,11 +1,11 @@
-import { mkdir, readFile, writeFile, access, symlink } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, access, symlink, realpath } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { join } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { defineExtension, defineTool, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
@@ -13,11 +13,11 @@ import { Metadata } from '../server/metadata.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { ActionContext } from '../server/actions.ts'
 import workspaceExtension, { actions } from '../extensions/workspaces/server.ts'
-import { Workspaces, workspaces } from '../extensions/workspaces/workspaces.ts'
-import { git } from '../extensions/workspaces/git.ts'
+import { workspaces } from '../extensions/workspaces/workspaces.ts'
+import { git, setup } from '../extensions/workspaces/git.ts'
 import self from '../extensions/self/server.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
-import { fauxServer, post, temp, until } from './helpers.ts'
+import { fauxServer, prepareFauxServer, post, temp, until } from './helpers.ts'
 
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => {
@@ -184,6 +184,73 @@ it('creates through the action; setup receives ULTIMATE_SOURCE and the first mod
   expect(await git(pending.path, 'branch', '--show-current')).toBe(pending.branch)
   expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
 })
+it('renders workspace preparation before project context in the first composed provider request', async () => {
+  const paths = await repository()
+  const marker = 'CHECKOUT_RULE_ULT_123: preserve the release manifest.'
+  await writeFile(join(paths.projectRoot, 'AGENTS.md'), marker)
+  await git(paths.projectRoot, 'add', 'AGENTS.md')
+  await git(paths.projectRoot, 'commit', '-m', 'checkout instructions')
+  const bin = join(paths.directory, 'bin')
+  await mkdir(bin)
+  await writeFile(
+    join(bin, 'git'),
+    `#!/bin/sh
+if [ "$1 $2" = "worktree add" ]; then sleep 0.3; fi
+exec /usr/bin/git "$@"
+`,
+    { mode: 0o755 },
+  )
+  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+  const prepared = await prepareFauxServer({
+    ...paths,
+    ultimateRoot: join(import.meta.dirname, '..'),
+    userHome: paths.directory,
+  })
+  cleanup.push(() => prepared.close())
+  const requests: string[] = []
+  prepared.host.faux!.setResponses([
+    (transcript) => {
+      const sections = transcript.messages
+        .filter((message) => message.role === 'system')
+        .flatMap((message) => Object.keys(message.sections ?? {}))
+      expect(sections.indexOf('workspace_workflow')).toBeGreaterThanOrEqual(0)
+      expect(sections.indexOf('project_context')).toBeGreaterThan(
+        sections.indexOf('workspace_workflow'),
+      )
+      requests.push(
+        JSON.stringify(transcript.messages.filter((message) => message.role === 'system')),
+      )
+      return fauxAssistantMessage('instructions read')
+    },
+  ])
+  const running = await prepared.go()
+  const server = { url: prepared.url }
+  const id = (await post(server, '/api/extensions/workspaces/actions/create', { args: {} })).data
+    .result.id
+  const workspace = (
+    await post(server, '/api/extensions/workspaces/actions/info', { args: { id } })
+  ).data.result
+  await expect(access(join(workspace.path, 'AGENTS.md'))).rejects.toThrow('ENOENT')
+  const conversation = (await running.harness.conversation(id, context))!
+  await (
+    await conversation.submit({ type: 'input', content: 'Read the checkout rules.' }, context)
+  ).wait(context)
+  expect(requests).toHaveLength(1)
+  expect(requests[0]).toContain(marker)
+  expect(await readFile(join(workspace.path, 'AGENTS.md'), 'utf8')).toBe(marker)
+})
+it('setup closes stdin so commands waiting for EOF finish', async () => {
+  const paths = await repository()
+  await setup(
+    paths.projectRoot,
+    paths.projectRoot,
+    {
+      isolates: { worktree: { setup: ['cat >/dev/null; echo eof > eof.txt'] } },
+    },
+    AbortSignal.timeout(2000),
+  )
+  expect(await readFile(join(paths.projectRoot, 'eof.txt'), 'utf8')).toBe('eof\n')
+})
 it('failed setup keeps its output tail, removes its empty branch, and blocks tools rather than writing in the source', async () => {
   const f = await fixture(['echo SETUP_OUTPUT_TAIL >&2; exit 1'])
   const id = await f.create()
@@ -199,13 +266,18 @@ it('failed setup keeps its output tail, removes its empty branch, and blocks too
   expect(f.writes).toBe(0)
   await expect(access(join(f.projectRoot, 'change.txt'))).rejects.toThrow('ENOENT')
 })
-it('resumes preparation after a process crash mid-setup in the same registered checkout', async () => {
-  const paths = await repository()
-  const started = join(paths.directory, 'started')
-  const gate = join(paths.directory, 'gate')
-  const idFile = join(paths.directory, 'id')
-  const commands = [`echo attempt >> '${started}'; while [ ! -f '${gate}' ]; do sleep 0.05; done`]
-  const script = `
+it.each(['symlinked home mid-setup', 'branch creation before registration'])(
+  'resumes preparation after a process crash: %s',
+  async (scenario) => {
+    const paths = await repository()
+    const physicalHome = join(paths.directory, 'physical-state')
+    await mkdir(physicalHome)
+    await symlink(physicalHome, paths.home)
+    const started = join(paths.directory, 'started')
+    const gate = join(paths.directory, 'gate')
+    const idFile = join(paths.directory, 'id')
+    const commands = [`echo attempt >> '${started}'; while [ ! -f '${gate}' ]; do sleep 0.05; done`]
+    const script = `
     import { writeFile } from 'node:fs/promises';
     import { prepareHarness, context } from './server/harness.ts';
     import extension, { actions } from './extensions/workspaces/server.ts';
@@ -222,39 +294,61 @@ it('resumes preparation after a process crash mid-setup in the same registered c
     await writeFile(${JSON.stringify(idFile)}, String((await actions.create({}, { host })).id));
     setInterval(() => {}, 1000);
   `
-  const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
-    cwd: process.cwd(),
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  let output = ''
-  child.stderr.on('data', (data) => {
-    output += data.toString()
-  })
-  try {
-    await until(async () => {
-      if (child.exitCode !== null) throw new Error(output)
-      return readFile(started, 'utf8').then(
-        () => true,
-        () => false,
-      )
+    const bin = join(paths.directory, 'bin')
+    await mkdir(bin)
+    await writeFile(
+      join(bin, 'git'),
+      `#!/bin/sh
+if [ "$1 $2" = "worktree add" ]; then
+  /usr/bin/git branch "$4" "$6" || exit 1
+  echo branch > '${started}'
+  while [ ! -f '${gate}' ]; do sleep 0.05; done
+fi
+exec /usr/bin/git "$@"
+`,
+      { mode: 0o755 },
+    )
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        ...(scenario === 'branch creation before registration'
+          ? { PATH: `${bin}:${process.env.PATH}` }
+          : {}),
+      },
     })
-    child.kill('SIGKILL')
-    await once(child, 'exit')
-    const id = Number(await readFile(idFile, 'utf8')) as ConversationId
-    await writeFile(gate, '')
-    const f = await fixture(commands, paths)
-    await f.service.ready(id, context)
-    const workspace = (await f.service.get(id, context))!
-    expect(workspace.state).toBe('ready')
-    expect((await readFile(started, 'utf8')).trim().split('\n')).toHaveLength(2)
-    expect(await git(workspace.path, 'branch', '--show-current')).toBe(workspace.branch)
-  } finally {
-    if (child.exitCode === null && child.signalCode === null) {
+    let output = ''
+    child.stderr.on('data', (data) => {
+      output += data.toString()
+    })
+    try {
+      await until(async () => {
+        if (child.exitCode !== null) throw new Error(output)
+        return readFile(started, 'utf8').then(
+          () => true,
+          () => false,
+        )
+      })
       child.kill('SIGKILL')
       await once(child, 'exit')
+      const id = Number(await readFile(idFile, 'utf8')) as ConversationId
+      await writeFile(gate, '')
+      const f = await fixture(commands, paths)
+      await f.service.ready(id, context)
+      const workspace = (await f.service.get(id, context))!
+      expect(workspace.state).toBe('ready')
+      expect(workspace.path).toBe(join(await realpath(physicalHome), 'worktrees', String(id)))
+      expect((await readFile(started, 'utf8')).trim().split('\n')).toHaveLength(2)
+      expect(await git(workspace.path, 'branch', '--show-current')).toBe(workspace.branch)
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL')
+        await once(child, 'exit')
+      }
     }
-  }
-})
+  },
+)
 it('rejects a detached source and preserves existing paths and branches instead of adopting them', async () => {
   const f = await fixture()
   await git(f.projectRoot, 'switch', '--detach')
@@ -307,6 +401,45 @@ it('lands fast-forward, lists commits and paths, and is idempotent', async () =>
   await mkdir(join(workspace.path, 'server'))
   await commit(workspace.path, 'server/change.ts')
   expect((await f.service.land(id, context)).needsRestart).toBe(true)
+})
+it('queued landing reads the current record after another workspace lands', async () => {
+  const f = await fixture()
+  const first = await f.create()
+  const second = await f.create()
+  await f.service.ready(first, context)
+  await f.service.ready(second, context)
+  await commit((await f.service.get(first, context))!.path)
+  const bin = join(f.directory, 'bin')
+  const started = join(f.directory, 'merge-started')
+  const gate = join(f.directory, 'merge-gate')
+  await mkdir(bin)
+  await writeFile(
+    join(bin, 'git'),
+    `#!/bin/sh
+if [ "$1" = "merge" ]; then
+  touch '${started}'
+  while [ ! -f '${gate}' ]; do sleep 0.05; done
+fi
+exec /usr/bin/git "$@"
+`,
+    { mode: 0o755 },
+  )
+  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+  const landing = f.service.land(first, context)
+  await until(() =>
+    access(started).then(
+      () => true,
+      () => false,
+    ),
+  )
+  const queued = f.service.land(second, context).catch((error: Error) => error)
+  try {
+    await actions.discard({ id: second }, { host: f.host } as ActionContext)
+  } finally {
+    await writeFile(gate, '')
+  }
+  await landing
+  expect(await queued).toMatchObject({ message: 'Workspace is removed' })
 })
 it('refuses dirty workspaces, dirty targets, changed branches and diverged targets', async () => {
   const f = await fixture()
@@ -379,7 +512,7 @@ it('discard refuses dirty, keeps the branch, and blocks removed-workspace tools'
   await writeFile(join(workspace.path, 'change.txt'), 'dirty')
   await expect(f.service.discard(id, context)).rejects.toThrow('modified or untracked')
   const tip = await commit(workspace.path)
-  await f.service.discard(id, context)
+  await actions.discard({ id }, { host: f.host } as ActionContext)
   expect(await git(f.projectRoot, 'rev-parse', workspace.branch)).toBe(tip)
   const result = await f.call(id, 'write_commit')
   expect(JSON.stringify(result)).toContain('This workspace was removed; start a new conversation')
@@ -448,8 +581,5 @@ it('creates a top-level isolated conversation over HTTP through the ordinary ext
     await post(server, '/api/extensions/workspaces/actions/info', { args: { id } })
   ).data.result
   expect(workspace.source).toBe(paths.projectRoot)
-  expect(
-    (await server.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!.items[String(id)],
-  ).toMatchObject({ state: 'ready' })
   expect(server.api.conversations().find((row) => row.id === id)?.title).toBe('isolated')
 })

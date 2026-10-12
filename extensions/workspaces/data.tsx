@@ -64,7 +64,6 @@ export function useWorkspaceAction(id: number, done: () => unknown) {
     try {
       const result = await api.action<LandResult>('workspaces', operation, {
         id,
-        ...(operation === 'discard' && { confirm: true }),
       })
       if (operation === 'land') {
         const count = result.commits?.length ?? 0

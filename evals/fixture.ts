@@ -30,12 +30,12 @@ export const user = (text: string): UserMessage => ({
   content: text,
   timestamp: Date.now(),
 })
-export const assistant = (text: string, toolCalls: ToolCall[] = []): AssistantMessage => ({
+export const assistant = (
+  text: string,
+  toolCalls: ToolCall[] = [],
+): Omit<AssistantMessage, 'api' | 'provider' | 'model'> => ({
   role: 'assistant',
   content: [...(text ? [{ type: 'text' as const, text }] : []), ...toolCalls],
-  api: 'openai-codex-responses',
-  provider: 'openai-codex',
-  model: 'gpt-6-luna',
   usage: zeroUsage(),
   stopReason: toolCalls.length ? 'toolUse' : 'stop',
   timestamp: Date.now(),
@@ -71,8 +71,6 @@ export async function start(
     throw new Error(
       `Eval model ${model} is unavailable. Configure Pi auth/model or set ULTIMATE_EVAL_MODEL.`,
     )
-  if (selected.provider !== 'openai-codex')
-    throw new Error('This pilot requires an openai-codex model.')
   const directory = await mkdtemp(join(tmpdir(), 'ultimate-eval-'))
   const projectRoot = join(directory, 'project')
   const userHome = join(directory, 'user')
@@ -153,7 +151,9 @@ export async function start(
       action: (extension: string, action: string, args: unknown = {}) =>
         post(`/api/extensions/${extension}/actions/${action}`, { args }),
       stop: cleanup,
-      async conversation({ history = [] }: { history?: Message[] } = {}) {
+      async conversation({
+        history = [],
+      }: { history?: (Message | ReturnType<typeof assistant>)[] } = {}) {
         const { id } = (await post('/api/conversations', {})) as { id: ConversationId }
         await post(`/api/conversations/${id}/configure`, {
           model: { provider: selected.provider, modelId: selected.id },
@@ -168,7 +168,16 @@ export async function start(
                 await tx.appendEntry(UserEntry, id, { model: [message] })
                 break
               case 'assistant':
-                await tx.appendEntry(AssistantEntry, id, { model: [message] })
+                await tx.appendEntry(AssistantEntry, id, {
+                  model: [
+                    {
+                      ...message,
+                      provider: selected.provider,
+                      model: selected.id,
+                      api: selected.api,
+                    },
+                  ],
+                })
                 break
               case 'toolResult':
                 await tx.appendEntry(ToolResultEntry, id, {

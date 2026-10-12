@@ -16,7 +16,7 @@ The Workspaces panel shows every checkout, including empty, archived and removed
 `land {id}` fast-forwards the saved source branch to the clean, verified workspace tip.
 Both checkouts must be clean; another running conversation or queued input prevents landing.
 If the target changed or diverged, update the workspace onto it and verify again; landing never rebases or pushes.
-`discard {id, confirm: true}` removes a clean checkout and keeps its branch and history.
+`discard {id}` removes a clean checkout and keeps its branch and history.
 
 Top-level mains use `workspace status` and `workspace land` for their own checkout.
 Own tool landing skips the calling conversation's run and inbox checks; UI landing does not.

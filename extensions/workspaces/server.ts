@@ -5,7 +5,6 @@ import {
   configure,
   defineExtension,
   defineTool,
-  GenerationTask,
   hook,
   ROOT_CONVERSATION_ID,
   section,
@@ -15,6 +14,7 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
+export const order = -200
 export const docs = [Workspaces]
 const finish = (value: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value) }],
@@ -54,8 +54,6 @@ export const actions = {
     return workspaces(host).land(workspaceId(args), context)
   },
   discard(args: JsonValue, { host }: ActionContext) {
-    if (!args || typeof args !== 'object' || Array.isArray(args) || args.confirm !== true)
-      throw new Error('Confirm clean-only discard; the branch and history will be kept')
     return workspaces(host).discard(workspaceId(args), context)
   },
 }
@@ -65,11 +63,6 @@ export default function workspaceExtension(host: ExtensionHost) {
     name: 'workspaces',
     tasks: [service.Preparation],
     hooks: [
-      hook(GenerationTask, {
-        beforeRequest: async (_request, api, caller) => {
-          await service.ready(api.conversationId, caller)
-        },
-      }),
       hook(ToolTask, {
         beforeTool: async (_call, api, caller) => {
           const workspace = await service.get(api.conversationId, caller)
@@ -106,6 +99,7 @@ export default function workspaceExtension(host: ExtensionHost) {
     ],
     sections: [
       section('workspace_workflow', async (input, caller) => {
+        await service.ready(input.conversationId, caller)
         const own = await service.get(input.conversationId, caller)
         if (!own) return undefined
         return `Workspace: ${own.path} (branch ${own.branch}).\nSource: ${own.source}, target: ${own.target}.\n\`workspace status\` shows both tips; \`workspace land\` fast-forwards ${own.target} to your clean, verified tip; it never rebases or pushes.`

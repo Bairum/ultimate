@@ -363,14 +363,17 @@ function Child({
   parent: ConversationSummary
   depth: number
 }) {
-  const { data: isolate, refetch } = useAction<WorkspaceInfo | null>('workspaces', 'info', {
-    id: conversation.id,
-  })
   const recorded = conversation.workspace
+  const { data: isolate, refetch } = useAction<WorkspaceInfo | null>(
+    'workspaces',
+    'info',
+    { id: conversation.id },
+    { enabled: !!recorded },
+  )
   const settled = recorded
     ? `${recorded.state} ${recorded.error ?? ''} ${recorded.landed ?? ''}`
     : ''
-  useRefresh(refetch, `${conversation.busy} ${parent.busy} ${settled}`)
+  useRefresh(() => recorded && refetch(), `${conversation.busy} ${parent.busy} ${settled}`)
   return (
     <>
       <Row
