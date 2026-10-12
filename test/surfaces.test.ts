@@ -224,20 +224,17 @@ it('switches surfaces without interrupting the conversation, and tells the agent
   const gate = new Promise<void>((done) => {
     release = done
   })
-  await page.route(
-    '**/api/extensions/fixture/actions/items',
-    async (route) => {
-      await gate
-      await route.continue()
-    },
-    { times: 1 },
-  )
+  await page.route('**/api/extensions/fixture/actions/items', async (route) => {
+    await gate
+    await route.continue()
+  })
   try {
     await page.reload()
     await expect.poll(() => page.getByTestId('fixture').count(), timeout).toBe(1)
     await expect.poll(() => page.getByTestId('loading').count(), timeout).toBe(1)
   } finally {
     release()
+    await page.unrouteAll({ behavior: 'wait' })
   }
   await expect.poll(() => page.getByTestId('item').count(), timeout).toBe(3)
   await untilInput(page)

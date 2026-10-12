@@ -145,6 +145,13 @@ it('applies user-only settings through the real loader and tears down on live se
   await until(async () => (await status()).state === 'disabled')
   expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(2)
   await until(() => server.system.current().access.origins.length === 0)
+  await until(() =>
+    server.system
+      .current()
+      .extensionDiagnostics.some((message) =>
+        message.includes('project settings cannot enable remote access'),
+      ),
+  )
   expect(
     server.system
       .current()
