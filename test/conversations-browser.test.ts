@@ -36,7 +36,9 @@ it('automatically renders a timestamped title action and keeps it after reload',
           metadata: Metadata,
           modelRuntime: {
             getAvailableSnapshot: () =>
-              server.host.modelRuntime.getModels().filter((model) => model.id === 'gpt-6-luna'),
+              server.host.modelRuntime
+                .getModels()
+                .filter((model) => model.provider === 'openai' && model.id === 'gpt-6-luna'),
           },
         },
         async () => ({
@@ -139,7 +141,9 @@ it('expands real agent roles and outcomes, separates Replied from Luna Done, and
           metadata: Metadata,
           modelRuntime: {
             getAvailableSnapshot: () =>
-              server.host.modelRuntime.getModels().filter((model) => model.id === 'gpt-6-luna'),
+              server.host.modelRuntime
+                .getModels()
+                .filter((model) => model.provider === 'openai' && model.id === 'gpt-6-luna'),
           },
         },
         async (_models, input) => ({
@@ -267,6 +271,9 @@ it('expands real agent roles and outcomes, separates Replied from Luna Done, and
         .getByRole('img', { name: /Done \(Luna/ })
         .count(),
     ).toBe(0)
+    expect(await childRow(worker).locator('.animate-pulse-dot').count()).toBe(1)
+    const rootRow = page.locator('[data-conversation="1"]')
+    expect(await rootRow.locator('.animate-pulse-dot').count()).toBe(1)
     release()
     expect((await work.wait(context)).status).toBe('done')
     await until(
@@ -285,6 +292,11 @@ it('expands real agent roles and outcomes, separates Replied from Luna Done, and
         timeout,
       )
       .toEqual([])
+    await expect.poll(() => rootRow.locator('.animate-pulse-dot').count(), timeout).toBe(0)
+    expect(await childRow(worker).locator('.animate-pulse-dot').count()).toBe(0)
+    await expect
+      .poll(() => rootRow.getByRole('img', { name: /Done \(Luna/ }).count(), timeout)
+      .toBe(1)
     server.host.faux!.setResponses([
       fauxAssistantMessage('', {
         stopReason: 'error',

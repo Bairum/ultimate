@@ -13,6 +13,7 @@ is highlighted, also while one of its subagents is shown. Each row has its title
 message (`now`, `5m`, `3h`, `2d`, then a date). Its leading mark pulses while it or any of its subagents works, and is
 solid when an answer arrived since you last looked at it. Actual foreground tasks and live run boundaries determine
 Working, not the potentially lagging title/timestamp list. While working, old assessment marks are suppressed.
+A solid purple dot means an unread reply, not ongoing work; only the pulsing dot means working.
 
 Idle, currently assessed replies may show a circular question (needs input) or green circular check (Done). These are
 **Luna assessments, not verified completion**; the tooltips say so. For a child, a question means it may need its
@@ -70,7 +71,9 @@ Actions, each on a top-level conversation; bad args, unknown conversations, suba
 
 The `GenerationTask.onYield` hook schedules a background observer. It waits for generation to settle and
 only counts an exchange when an input submission completed with that answer (not an intermediate yield).
-Luna assesses each completed reply, including subagent replies, in a background task with medium reasoning.
+Luna uses `openai/gpt-6-luna` through the current OpenAI provider (including Sign in with ChatGPT), not the
+superseded `openai-codex` provider. It assesses each completed reply, including subagent replies, in a background
+task with medium reasoning.
 Top-level conversations also get a title and summary on exchanges 1, 4, 7, and so on, in the same request.
 A summary delayed by newer work is included with the next current reply. Tools and partial replies do not trigger it.
 The request reads recent user/assistant text and the previous summary, not tools, images or thinking.

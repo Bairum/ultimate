@@ -139,7 +139,7 @@ export async function generateSummary(
 ): Promise<SummaryResult> {
   let response = receipt?.response
   if (!response) {
-    const model = models.getModel('openai-codex', 'gpt-6-luna')
+    const model = models.getModel('openai', 'gpt-6-luna')
     if (!model) throw new Error('GPT-6 Luna is unavailable')
     const events = models.streamSimple(
       model,
@@ -426,7 +426,7 @@ export function summaryBehavior(
           if (
             !host.modelRuntime
               .getAvailableSnapshot()
-              .some((model) => model.provider === 'openai-codex' && model.id === 'gpt-6-luna')
+              .some((model) => model.provider === 'openai' && model.id === 'gpt-6-luna')
           )
             return undefined
           await host.harness().commit(async (tx) => {

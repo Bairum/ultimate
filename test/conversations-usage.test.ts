@@ -24,17 +24,17 @@ const reported = {
   cacheWrite1h: 6,
   cost: { input: 0.03, output: 0.05, cacheRead: 0.001, cacheWrite: 0, total: 0.081 },
 }
-const key = 'openai-codex/gpt-6-luna'
+const key = 'openai/gpt-6-luna'
 const cleanups: (() => Promise<void>)[] = []
 afterEach(async () => {
   for (const close of cleanups.splice(0)) await close()
 })
 
-async function launch({ interrupt = false, long = false } = {}) {
+async function launch({ interrupt = false, long = false, assessment = 'done' } = {}) {
   const models = createModels()
   const main = fauxProvider({ tokensPerSecond: 100000 })
   const luna = fauxProvider({
-    provider: 'openai-codex',
+    provider: 'openai',
     models: [{ id: 'gpt-6-luna', reasoning: true }],
   })
   models.setProvider(main.provider)
@@ -45,7 +45,7 @@ async function launch({ interrupt = false, long = false } = {}) {
       const answer = {
         ...fauxAssistantMessage(
           JSON.stringify({
-            assessment: 'done',
+            assessment,
             activity: 'Implemented the change.',
             title: 'Implement the change',
             summary: long ? 'x'.repeat(3000) : 'Implemented the change.',
@@ -77,7 +77,9 @@ async function launch({ interrupt = false, long = false } = {}) {
   const behavior = summaryBehavior({
     harness: () => harness,
     metadata: Metadata,
-    modelRuntime: { getAvailableSnapshot: () => models.getModels() },
+    modelRuntime: {
+      getAvailableSnapshot: () => models.getModels().filter((model) => model.provider === 'openai'),
+    },
   })
   registry.install(defineExtension({ name: 'conversations', ...behavior }))
   harness = await Harness.open(storage, { models, registry }, context)
@@ -146,6 +148,22 @@ it('adds reported usage once, also on replay', async () => {
   expect(total.cost.total).toBeCloseTo(0.162)
   expect(await f.titleChanges()).toEqual(changes)
 })
+
+it.each(['done', 'needs_input'])(
+  'generates a title and %s assessment with only current OpenAI Luna available',
+  async (assessment) => {
+    const f = await launch({ assessment })
+    await f.submit()
+    await until(async () => (await f.read())?.status === 'ready')
+    expect((await f.read())?.assessment?.value).toBe(assessment)
+    expect((await f.read())?.generatedTitle).toBe('Implement the change')
+    expect((await f.titleChanges()).map((entry) => entry.data.title)).toEqual([
+      'Implement the change',
+    ])
+    expect((await f.ledger())?.models[key]).toEqual(reported)
+    expect((await f.ledger())?.models['openai-codex/gpt-6-luna']).toBeUndefined()
+  },
+)
 
 it('a response with usage after a long stream still counts', async () => {
   const f = await launch({ long: true })

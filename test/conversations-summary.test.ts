@@ -51,7 +51,9 @@ async function launch() {
             metadata: Metadata,
             modelRuntime: {
               getAvailableSnapshot: () =>
-                server.host.modelRuntime.getModels().filter((model) => model.id === 'gpt-6-luna'),
+                server.host.modelRuntime
+                  .getModels()
+                  .filter((model) => model.provider === 'openai' && model.id === 'gpt-6-luna'),
             },
           },
           generated,
@@ -451,38 +453,48 @@ it('resumes pending background generation after shutdown without a stuck checkpo
   expect(await fixture.titleChanges()).toEqual(changes)
 }, 60000)
 
-it('skips summaries and assessments quietly when Luna is unavailable', async () => {
-  const fixture = await launch()
-  const server = fixture.server
-  const existing = server.host.registry.snapshot().extension('conversations')!
-  server.host.registry.install(
-    defineExtension({
-      ...existing,
-      ...summaryBehavior(
-        {
-          harness: () => server.harness,
-          metadata: Metadata,
-          modelRuntime: { getAvailableSnapshot: () => [] },
-        },
-        fixture.generated,
-      ),
-    }),
-  )
-  server.host.faux!.setResponses([fauxAssistantMessage('Done.')])
-  await (await server.root.submit({ type: 'input', content: 'Work' }, context)).wait(context)
-  await server.harness.waitForIdle(context)
-  expect(fixture.generated).not.toHaveBeenCalled()
-  expect(await fixture.titleChanges()).toEqual([])
-  expect((await server.harness.inspect(context)).tasks).toHaveLength(0)
-  expect((await fixture.read())?.status).toBeUndefined()
-  expect((await fixture.read())?.assessmentStatus).toBeUndefined()
-  expect((await fixture.read())?.exchanges ?? 0).toBe(0)
-  expect(
-    (await server.harness.snapshot(Overview, server.root.id, context))?.conversations[
-      server.root.id
-    ]?.assessmentStatus,
-  ).toBeUndefined()
-})
+it.each(['none', 'legacy'])(
+  'skips summaries and assessments when current OpenAI Luna is unavailable (%s)',
+  async (available) => {
+    const fixture = await launch()
+    const server = fixture.server
+    const existing = server.host.registry.snapshot().extension('conversations')!
+    const models =
+      available === 'none'
+        ? []
+        : server.host.modelRuntime
+            .getModels()
+            .filter((model) => model.provider === 'openai-codex' && model.id === 'gpt-6-luna')
+    expect(models).toHaveLength(available === 'none' ? 0 : 1)
+    server.host.registry.install(
+      defineExtension({
+        ...existing,
+        ...summaryBehavior(
+          {
+            harness: () => server.harness,
+            metadata: Metadata,
+            modelRuntime: { getAvailableSnapshot: () => models },
+          },
+          fixture.generated,
+        ),
+      }),
+    )
+    server.host.faux!.setResponses([fauxAssistantMessage('Done.')])
+    await (await server.root.submit({ type: 'input', content: 'Work' }, context)).wait(context)
+    await server.harness.waitForIdle(context)
+    expect(fixture.generated).not.toHaveBeenCalled()
+    expect(await fixture.titleChanges()).toEqual([])
+    expect((await server.harness.inspect(context)).tasks).toHaveLength(0)
+    expect((await fixture.read())?.status).toBeUndefined()
+    expect((await fixture.read())?.assessmentStatus).toBeUndefined()
+    expect((await fixture.read())?.exchanges ?? 0).toBe(0)
+    expect(
+      (await server.harness.snapshot(Overview, server.root.id, context))?.conversations[
+        server.root.id
+      ]?.assessmentStatus,
+    ).toBeUndefined()
+  },
+)
 
 it('validates assessment-only JSON and rejects unapproved or malformed outcome states', async () => {
   let output: unknown = {
@@ -496,13 +508,17 @@ it('validates assessment-only JSON and rejects unapproved or malformed outcome s
     events.end()
     return events
   })
+  const getModel = vi.fn<(provider: string, id: string) => { provider: string; id: string }>(
+    () => ({ provider: 'openai', id: 'gpt-6-luna' }),
+  )
   const models = {
-    getModel: () => ({ provider: 'openai-codex', id: 'gpt-6-luna' }),
+    getModel,
     streamSimple: stream,
   } as unknown as Models
   expect(
     await generateSummary(models, 'Untrusted reply text', new AbortController().signal, false),
   ).toEqual(output)
+  expect(getModel).toHaveBeenCalledWith('openai', 'gpt-6-luna')
   for (const value of ['blocked', 'unfinished', ['done'], null]) {
     output = { assessment: value, activity: 'Some work was discussed.' }
     await expect(
