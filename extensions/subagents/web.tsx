@@ -41,7 +41,7 @@ import type { Workspace as Isolate, WorkspaceInfo } from '../workspaces/types.ts
 import { hiddenConversationIds } from '../conversations/visible.tsx'
 import { DefinitionDialog, Definitions } from './definitions.tsx'
 import { Heading, Tag, useRefresh } from './parts.tsx'
-import { AgentInput, AgentMessages, openAgentSource } from './messages.tsx'
+import { AgentInbox, AgentInput, AgentMessages, openAgentSource } from './messages.tsx'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 
@@ -508,6 +508,7 @@ export default defineWebExtension({
   tools: { subagent: SubagentCall },
   panels: [{ id: 'agents', title: 'Agents', icon: NetworkIcon, component: AgentsPanel, order: -6 }],
   entries: { 'pi.user': AgentInput },
+  inbox: AgentInbox,
   slots: { overlay: [DefinitionDialog], 'header.right': [AgentMessages] },
   commands: [
     {

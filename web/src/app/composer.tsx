@@ -15,10 +15,11 @@ import {
 import { Kbd } from '@/components/ui/kbd'
 import { api } from '../sdk/client.ts'
 import { errorMessage } from '../sdk/format.ts'
-import { useConversation, useModels } from '../sdk/hooks.ts'
+import { useConversation, useExtensions, useModels } from '../sdk/hooks.ts'
 import { isMac } from '../sdk/keys.ts'
 import type { ModelsResponse } from '../../../shared/protocol.ts'
-import { Slot } from './boundary.tsx'
+import { ExtensionBoundary, Slot } from './boundary.tsx'
+import { inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
 
 const alt = isMac ? '⌥' : 'Alt'
@@ -46,6 +47,7 @@ function inboxText(item: InboxItem): string {
 function Inbox({ items }: { items: readonly InboxItem[] }) {
   const { id } = useConversation()
   const [error, setError] = useState<string>()
+  const renderer = inboxRenderer(useExtensions())
   const queued = items.filter((item) => item.mode !== 'write')
   if (queued.length === 0) return null
   const cancel = async (submissionId: number) => {
@@ -58,20 +60,9 @@ function Inbox({ items }: { items: readonly InboxItem[] }) {
   }
   return (
     <div className="mb-2 font-mono text-[12px]">
-      <div className="max-h-24 overflow-y-auto">
-        {queued.map((item) => (
-          <div className="flex min-w-0 items-center gap-2 text-muted-foreground" key={item.id}>
-            {item.mode === 'steer' ? (
-              <CornerDownRightIcon className="size-3 shrink-0 text-brand" />
-            ) : (
-              <ListPlusIcon className="size-3 shrink-0" />
-            )}
-            <span className="shrink-0 text-foreground/80">
-              {item.mode === 'steer' ? 'steer' : 'follow-up'}
-            </span>
-            <span className="min-w-0 flex-1 truncate" title={inboxText(item)}>
-              {inboxText(item)}
-            </span>
+      <div className="max-h-40 space-y-1 overflow-y-auto">
+        {queued.map((item) => {
+          const cancellation = (
             <button
               aria-label={`Cancel queued input: ${inboxText(item)}`}
               className="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-sm hover:bg-accent hover:text-foreground"
@@ -81,8 +72,36 @@ function Inbox({ items }: { items: readonly InboxItem[] }) {
             >
               <XIcon className="size-3" />
             </button>
-          </div>
-        ))}
+          )
+          const core = (
+            <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
+              {item.mode === 'steer' ? (
+                <CornerDownRightIcon className="size-3 shrink-0 text-brand" />
+              ) : (
+                <ListPlusIcon className="size-3 shrink-0" />
+              )}
+              <span className="shrink-0 text-foreground/80">
+                {item.mode === 'steer' ? 'steer' : 'follow-up'}
+              </span>
+              <span className="min-w-0 flex-1 truncate" title={inboxText(item)}>
+                {inboxText(item)}
+              </span>
+              {cancellation}
+            </div>
+          )
+          if (!renderer) return <div key={item.id}>{core}</div>
+          const Renderer = renderer.component
+          return (
+            <ExtensionBoundary
+              key={`${renderer.extension}:${item.id}`}
+              extension={renderer.extension}
+              version={renderer.version}
+              fallback={core}
+            >
+              <Renderer item={item} core={core} cancel={cancellation} />
+            </ExtensionBoundary>
+          )
+        })}
       </div>
       {error && <p className="mt-1 text-error">{error}</p>}
     </div>

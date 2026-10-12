@@ -1,4 +1,4 @@
-import type { EntryRecord } from '@earendil-works/pi-durable'
+import type { EntryRecord, InboxItem } from '@earendil-works/pi-durable'
 import { ArrowLeftIcon, BotIcon, SquareArrowOutUpRightIcon } from 'lucide-react'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
@@ -8,6 +8,7 @@ import { useWorkspaceConversations } from '../workspaces/data.tsx'
 import type { AgentOrigin } from './message-types.ts'
 
 let origins: Record<string, AgentOrigin> = {}
+let pendingOrigins: { conversation?: number; items: Record<string, AgentOrigin> } = { items: {} }
 const listeners = new Set<() => void>()
 const subscribe = (listener: () => void) => {
   listeners.add(listener)
@@ -34,7 +35,7 @@ export function openAgentSource(
 
 /** One query per transcript revision, shared by all input renderers. */
 export function AgentMessages() {
-  const { id, entries, loading } = useConversation()
+  const { id, entries, inbox, loading } = useConversation()
   const { switchConversation } = useUltimate()
   const [, refresh] = useState(0)
   useEffect(() => subscribe(() => refresh((value) => value + 1)), [])
@@ -45,6 +46,19 @@ export function AgentMessages() {
     { entries: ids, conversation: id ?? null },
     { enabled: !!id && ids.length > 0 },
   )
+  const { data: pending } = useAction<Record<string, AgentOrigin>>(
+    'subagents',
+    'provenance',
+    {
+      submissions: inbox.filter((item) => item.mode !== 'write').map((item) => item.id),
+      conversation: id ?? null,
+    },
+    { enabled: !!id && inbox.length > 0 },
+  )
+  useEffect(() => {
+    pendingOrigins = { conversation: id, items: pending ?? {} }
+    notify()
+  }, [pending, id])
   useEffect(() => {
     if (data) {
       origins = data
@@ -93,13 +107,7 @@ export function AgentInput({ entry, core }: { entry: EntryRecord; core: ReactNod
     typeof content === 'string'
       ? content
       : content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n')
-  // Only remove transport framing after durable attribution, never to decide who sent a message.
-  if (origin.kind === 'report') {
-    body = body.replace(new RegExp(`^\\[subagent ${origin.sender} \\([^\\n]*\\) answered\\] `), '')
-    const failure = `[subagent ${origin.sender} failed: `
-    if (body.startsWith(failure) && body.endsWith(']'))
-      body = `Failed: ${body.slice(failure.length, -1)}`
-  }
+  body = agentBody(body, origin)
   return (
     <section
       data-agent-origin={origin.kind}
@@ -145,6 +153,86 @@ export function AgentInput({ entry, core }: { entry: EntryRecord; core: ReactNod
           {expanded ? 'Compact view' : 'Expand full message'}
         </button>
       )}
+    </section>
+  )
+}
+
+// Strip transport framing only after durable attribution.
+function agentBody(body: string, origin: AgentOrigin) {
+  if (origin.kind !== 'report') return body
+  body = body.replace(new RegExp(`^\\[subagent ${origin.sender} \\([^\\n]*\\) answered\\] `), '')
+  const failure = `[subagent ${origin.sender} failed: `
+  return body.startsWith(failure) && body.endsWith(']')
+    ? `Failed: ${body.slice(failure.length, -1)}`
+    : body
+}
+
+export function AgentInbox({
+  item,
+  core,
+  cancel,
+}: {
+  item: InboxItem
+  core: ReactNode
+  cancel: ReactNode
+}) {
+  const map = useSyncExternalStore(subscribe, () => pendingOrigins)
+  const { id } = useConversation()
+  const { switchConversation } = useUltimate()
+  const conversations = useWorkspaceConversations()
+  const origin = map.conversation === id ? map.items[item.id] : undefined
+  if (!origin || item.mode === 'write') return core
+  const sender = conversations.find((conversation) => conversation.id === origin.sender)
+  const content = item.content
+  const body = agentBody(
+    typeof content === 'string'
+      ? content
+      : content.flatMap((part) => (part.type === 'text' ? [part.text] : ['[image]'])).join(' '),
+    origin,
+  )
+  return (
+    <section
+      data-agent-inbox={origin.kind}
+      className="flex min-w-0 items-center gap-2 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20 px-2 py-1 text-muted-foreground"
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 text-[11px]">
+          <BotIcon className="size-3 shrink-0 text-brand" />
+          <span
+            className="min-w-0 truncate text-foreground"
+            title={`${sender?.label ?? 'agent'} #${origin.sender}`}
+          >
+            {sender?.label ?? 'agent'} #{origin.sender}
+          </span>
+          <span>{origin.kind}</span>
+          <span className={item.mode === 'steer' ? 'text-brand' : ''}>
+            {item.mode === 'steer' ? 'steer' : 'follow-up'}
+          </span>
+        </div>
+        <p className="truncate text-[12px]" title={body}>
+          {body}
+        </p>
+      </div>
+      <button
+        type="button"
+        disabled={!sender}
+        title={
+          sender ? `Open source conversation #${origin.sender}` : 'Source conversation unavailable'
+        }
+        className="flex shrink-0 cursor-pointer items-center gap-1 text-[11px] hover:text-foreground disabled:cursor-default disabled:opacity-50"
+        onClick={() =>
+          id &&
+          openAgentSource(
+            switchConversation,
+            { conversation: origin.sender, entry: origin.entry },
+            { conversation: id },
+          )
+        }
+      >
+        <SquareArrowOutUpRightIcon className="size-3" />
+        {sender ? 'source' : 'unavailable'}
+      </button>
+      {cancel}
     </section>
   )
 }

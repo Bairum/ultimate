@@ -34,6 +34,18 @@ Wait for `Agent message preview: http://127.0.0.1:<port>` and open that URL whil
 
 For a smaller standalone preview, start a faux instance, accept its project setup, send `delegate to scout`, and use the foreground card's Open button to inspect the attributed child instruction. The rich report fixture above is independent of any user/project agent profile overrides.
 
+## Queued agent inputs
+
+Above the composer, actual pending instructions and reports use quiet bordered rows: sender, instruction/report, steer/follow-up, a truncated preview with full text in its tooltip, Source, and the existing cancellation button. Human lookalikes remain ordinary queue rows. The `provenance {submissions: number[]}` action intersects requested IDs with the receiving conversation's live inbox, then joins the same durable reporter submissions as transcript attribution. Delivered or cancelled submissions cannot be attributed as pending. Source uses the same one-hop Return navigation, returning to the receiving conversation without a transcript entry target.
+
+For a paused, token-free renderer fixture (including a human lookalike and unavailable source), run:
+
+```sh
+AGENT_INBOX_PREVIEW_MS=120000 pnpm exec vp test test/subagents-renderer-browser.test.ts
+```
+
+Open the printed `Agent inbox preview` URL, including `?inbox=1`, before the pause ends. This standalone fixture supplies deterministic browser data rather than provider runs. Resize to 360px to inspect wrapping and scroll the queue to see the unavailable-source row. `AGENT_INBOX_SCREENSHOT=/tmp/agent-inbox.png` optionally saves the test browser's narrow screenshot. The automated test drives source/return and cancellation; the durable subagent tests separately verify real queued submission identities and cancellation.
+
 ## Definitions are shared profiles
 
 A definition is the profile both subagents and automations run with: one helper, `createChild` (`children.ts`) with `definitionAgent` (`agents.ts`), turns it into a child's agent configuration for `start` and for an automation that names it. Edit one in the Agents tab or as its file; both are the same Markdown, and Ultimate changes one when asked by editing that file (codemode's `ultimate.agents()` lists every definition with its source, path, and fields). Built-ins in the clone are never written: saving one writes an override with the same name to the project's `.ultimate/agents/` (shared with the team, and only once the project's setup is local) or to `~/.ultimate/agents/`. Deleting an override makes the definition it shadowed apply again.

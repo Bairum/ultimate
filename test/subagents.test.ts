@@ -309,6 +309,51 @@ async function latestResult(opened: OpenHost) {
   }
 }
 
+it('attributes real queued instructions and reports by submission identity and drops cancellations', async () => {
+  const f = await gatedFixture()
+  await call(f.opened, { action: 'start', agent: 'scout', task: 'HOLD', background: true })
+  const [child] = await children(f.opened)
+  await until(async () => f.holding.has(child.conversationId))
+  await call(f.opened, { action: 'message', id: child.conversationId, text: 'queued instruction' })
+  const childHandle = (await f.opened.harness.conversation(child.conversationId, context))!
+  await until(
+    async () =>
+      (await f.opened.harness.snapshot(InboxDoc, child.conversationId, context))!.items.length > 0,
+  )
+  const instruction = (await f.opened.harness.snapshot(InboxDoc, child.conversationId, context))!
+    .items[0]
+  expect(
+    (await provenance(f.opened.harness, child.conversationId, [instruction.id], true))[
+      instruction.id
+    ],
+  ).toMatchObject({ sender: 1, kind: 'instruction' })
+  const human = await childHandle.submit(
+    { type: 'input', content: 'queued instruction', whenBusy: 'followUp' },
+    context,
+  )
+  expect(await provenance(f.opened.harness, child.conversationId, [human.id], true)).toEqual({})
+  await (await f.opened.harness.submission(instruction.id, context))!.abort(context)
+  expect(await provenance(f.opened.harness, child.conversationId, [instruction.id], true)).toEqual(
+    {},
+  )
+  await human.abort(context)
+  await f.opened.root.submit({ type: 'input', content: 'HOLD' }, context)
+  await until(async () => f.holding.has(1))
+  f.childGate.release()
+  await until(
+    async () =>
+      (await f.opened.harness.snapshot(InboxDoc, f.opened.root.id, context))!.items.length > 0,
+  )
+  const report = (await f.opened.harness.snapshot(InboxDoc, f.opened.root.id, context))!.items[0]
+  expect(
+    (await provenance(f.opened.harness, f.opened.root.id, [report.id], true))[report.id],
+  ).toMatchObject({ sender: child.conversationId, kind: 'report' })
+  expect(await provenance(f.opened.harness, child.conversationId, [report.id], true)).toEqual({})
+  await (await f.opened.harness.submission(report.id, context))!.abort(context)
+  expect(await provenance(f.opened.harness, f.opened.root.id, [report.id], true)).toEqual({})
+  f.parentGate.release()
+})
+
 function stopCaptureGate(f: Awaited<ReturnType<typeof gatedFixture>>) {
   const state = { ...gate(), entered: false, enabled: true }
   f.prepared.registry.install(
