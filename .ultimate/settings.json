@@ -2,7 +2,6 @@
   "extensions": {
     "enable": [
       "automations",
-      "clock",
       "documents",
       "exclusive-commands",
       "info",
@@ -11,8 +10,10 @@
       "self",
       "subagents",
       "surfaces",
-      "tasks"
-    ]
+      "tasks",
+      "clock"
+    ],
+    "disable": []
   },
   "exclusiveCommands": ["\\bpnpm( run)? test\\b", "\\bvp test\\b"],
   "isolates": {

@@ -539,7 +539,7 @@ function Conversations() {
   const [archived, setArchived] = useExtensionUiState<number[]>('archived', [])
   const [seen] = useExtensionUiState<Record<string, number>>('seen', {})
   const shownTop = topOf(shownId, conversations)
-  const summary = shownTop ? overview[shownTop.id] : undefined
+  const summary = shownTop && !archived.includes(shownTop.id) ? overview[shownTop.id] : undefined
   const [expanded, setExpanded] = useExtensionUiState<number[]>('expanded', [])
   const working = workingByTop(conversations)
   const topLevel = conversations.filter(
