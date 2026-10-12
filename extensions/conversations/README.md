@@ -82,7 +82,14 @@ Luna uses `openai/gpt-6-luna` through the current OpenAI provider (including Sig
 superseded `openai-codex` provider. It assesses each completed reply, including subagent replies, in a background
 task with medium reasoning.
 Top-level conversations also get a title and summary on exchanges 1, 4, 7, and so on, in the same request.
-A summary delayed by newer work is included with the next current reply. Tools and partial replies do not trigger it.
+A summary delayed by newer work is included with the next current reply. Tools and partial replies do not trigger reply assessments.
+Successful subagent creation additionally schedules a parent title/summary refresh in the creation transaction,
+before either foreground waiting or background return. It describes the plan and delegation now starting, using
+recent visible text plus the agent/task, without publishing a final-reply assessment or activity, counting an
+exchange, or consuming the 1/4/7 reply cadence. The durable action receipt deduplicates replay; failed starts,
+messages and waits do not schedule it. If conversations or Luna is unavailable, child creation proceeds without it.
+Spawn refreshes share the summary task, response receipt and usage accounting. They may publish while the parent
+is busy, but reset, newer input or a superseding summary request invalidates them; manual titles stay protected.
 The request reads recent user/assistant text and the previous summary, not tools, images or thinking.
 It times out after 60 seconds. Assessment, activity, title and summary are checked and shortened for display.
 Assessments describe the reply, not verified completion. New work, reset or compaction can make a result stale.
