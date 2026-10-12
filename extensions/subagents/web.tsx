@@ -20,7 +20,15 @@ import {
   ToolSection,
 } from '@/components/ai/tool'
 import { Button } from '@/components/ui/button'
-import { cn, defineWebExtension, useAction, useTasks, useToolDuration, useUltimate } from '@/sdk'
+import {
+  cn,
+  defineWebExtension,
+  useAction,
+  useTasks,
+  useToolDuration,
+  useUiState,
+  useUltimate,
+} from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import {
@@ -29,6 +37,7 @@ import {
   useWorkspaceConversations as useConversations,
 } from '../workspaces/data.tsx'
 import type { Workspace as Isolate, WorkspaceInfo } from '../workspaces/types.ts'
+import { hiddenConversationIds } from '../conversations/visible.tsx'
 import { DefinitionDialog, Definitions } from './definitions.tsx'
 import { Heading, Tag, useRefresh } from './parts.tsx'
 
@@ -41,11 +50,12 @@ function BusyDot({ className }: { className?: string }) {
 }
 
 function StateTag({ isolate }: { isolate: Isolate }) {
+  if (isolate.state === 'ready') return null
   return (
     <Tag
       className={cn(
         'font-mono',
-        isolate.state === 'removed' ? 'text-muted-foreground/70' : 'border-brand/40 text-brand',
+        isolate.state === 'failed' ? 'border-error/40 text-error' : 'text-muted-foreground/70',
       )}
     >
       <span title={isolate.landed ? `Last landed ${isolate.landed.slice(0, 7)}` : undefined}>
@@ -220,7 +230,7 @@ function IsolateActions({
       <div className="flex h-6 min-w-0 items-center gap-1.5 pr-2" style={indent}>
         <GitBranchIcon className="size-3 shrink-0" />
         <span className="min-w-0 truncate" title={`${isolate.branch}\n${isolate.path}`}>
-          W{child.id}
+          {isolate.branch}
         </span>
         {isolate.state !== 'removed' && !confirming && (
           <span className="ml-auto flex shrink-0 items-center gap-0.5 pl-1">
@@ -318,7 +328,7 @@ function Row({
   return (
     <button
       className={cn(
-        'flex h-7 w-full min-w-0 items-center gap-1.5 pr-3 text-left font-mono text-[11.5px] transition-colors hover:bg-accent/50',
+        'flex w-full min-w-0 items-center gap-1.5 py-1.5 pr-3 text-left font-mono text-[11.5px] transition-colors hover:bg-accent/50',
         shown && 'bg-accent/70',
       )}
       onClick={() => switchConversation(conversation.id)}
@@ -327,20 +337,24 @@ function Row({
     >
       {depth > 0 && <span className="-ml-2 shrink-0 text-muted-foreground/40">└</span>}
       <Icon className={cn('size-3.5 shrink-0', shown ? 'text-brand' : 'text-muted-foreground')} />
-      <span className={cn('shrink-0', shown ? 'text-foreground' : 'text-foreground/85')}>
-        {conversation.id === 1
-          ? 'main'
-          : (conversation.label ?? (main ? 'conversation' : 'subagent'))}
-      </span>
-      <span className="shrink-0 text-muted-foreground/60">#{conversation.id}</span>
-      {conversation.title && conversation.id !== 1 && (
+      <span className="min-w-0 flex-1">
         <span
-          className="min-w-0 truncate font-sans text-[12px] text-muted-foreground"
+          className="block truncate font-sans text-[12px] text-foreground/90"
           title={conversation.title}
         >
-          {conversation.title}
+          {conversation.title ||
+            conversation.label ||
+            (main ? 'Untitled conversation' : 'Subagent')}
         </span>
-      )}
+        <span className="flex items-center gap-1.5 text-[10.5px] text-muted-foreground/60">
+          <span>#{conversation.id}</span>
+          {conversation.workspace && (
+            <span title={`${conversation.workspace.branch}\n${conversation.workspace.path}`}>
+              · W{conversation.id}
+            </span>
+          )}
+        </span>
+      </span>
       <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
         {meta}
         {background && <Tag>bg</Tag>}
@@ -383,7 +397,7 @@ function Child({
           isolate && (
             <>
               <StateTag isolate={isolate} />
-              {isolate.ahead !== null && (
+              {isolate.ahead !== null && isolate.ahead > 0 && (
                 <span
                   className="text-[10.5px] text-muted-foreground/80"
                   title={`${isolate.ahead} commit${isolate.ahead === 1 ? '' : 's'} on the branch that the parent checkout does not have`}
@@ -435,7 +449,10 @@ function Node({
 
 /** Main and its subagents as a tree; click one to show it, and the composer talks to it. Below, the definitions. */
 function AgentsPanel() {
-  const conversations = useConversations()
+  const all = useConversations()
+  const [archived] = useUiState<number[]>('ext.conversations.archived', [])
+  const hidden = hiddenConversationIds(all, archived)
+  const conversations = all.filter((conversation) => !hidden.has(conversation.id))
   const ids = new Set(conversations.map((conversation) => conversation.id))
   const children = Map.groupBy(
     conversations.filter((conversation) => conversation.parentConversationId !== undefined),

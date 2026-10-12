@@ -1,15 +1,12 @@
 import { ListTreeIcon, MessageSquareIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { ToolStatusIcon } from '@/components/ai/tool'
-import {
-  cn,
-  defineWebExtension,
-  useConversation,
-  useConversations,
-  useTasks,
-  useUltimate,
-} from '@/sdk'
-import type { ConversationSummary, TaskGraph, TaskGraphNode } from '@/sdk'
+import { cn, defineWebExtension, useConversation, useTasks, useUltimate, useUiState } from '@/sdk'
+import type { TaskGraph, TaskGraphNode } from '@/sdk'
+import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
+import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
+
+import { hiddenConversationIds } from '../conversations/visible.tsx'
 
 interface Tree {
   /** Live tasks by owner task id. */
@@ -21,8 +18,32 @@ interface Tree {
   tools: Map<number, string>
 }
 
-function build(graph: TaskGraph | undefined, conversations: readonly ConversationSummary[]) {
-  const tasks = Object.values(graph?.tasks ?? {}).toSorted((a, b) => a.id - b.id)
+function build(
+  graph: TaskGraph | undefined,
+  conversations: readonly ConversationSummary[],
+  archived: number[],
+) {
+  const hidden = hiddenConversationIds(conversations, archived)
+  const all = Object.values(graph?.tasks ?? {}).toSorted((a, b) => a.id - b.id)
+  const hiddenTasks = new Set(
+    all.filter((task) => hidden.has(task.conversationId)).map((task) => task.id),
+  )
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const task of all) {
+      if (task.owner != null && hiddenTasks.has(task.owner) && !hiddenTasks.has(task.id)) {
+        hiddenTasks.add(task.id)
+        changed = true
+      }
+    }
+  }
+  const tasks = all
+    .filter((task) => !hiddenTasks.has(task.id))
+    .map((task) => ({
+      ...task,
+      conversations: task.conversations.filter((id) => !hidden.has(id)),
+    }))
   const children = new Map<number, TaskGraphNode[]>()
   const roots = new Map<number, TaskGraphNode[]>()
   for (const task of tasks) {
@@ -80,14 +101,17 @@ function TaskRow({ task, tree, depth }: { task: TaskGraphNode; tree: Tree; depth
   return (
     <>
       <div
-        className="flex h-6 min-w-0 items-center gap-1.5 pr-3 font-mono text-[11.5px]"
+        className="flex min-w-0 items-center gap-1.5 py-1.5 pr-3 font-mono text-[11.5px]"
         style={{ paddingLeft: `${0.75 + depth * 0.9}rem` }}
       >
         <ToolStatusIcon className="size-3" state={icon} />
-        <span className="shrink-0 text-foreground/90">{kind}</span>
-        {tool && <span className="shrink-0 text-brand">{tool}</span>}
-        <span className="shrink-0 text-muted-foreground/60">#{task.id}</span>
-        <span className={cn('min-w-0 truncate text-muted-foreground', tone)}>{text}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-foreground/90">{tool ?? kind}</span>
+          <span className="flex min-w-0 items-center gap-1.5 text-[10.5px] text-muted-foreground/60">
+            <span className="shrink-0">#{task.id}</span>
+            <span className={cn('truncate', tone)}>{text}</span>
+          </span>
+        </span>
         {task.background && (
           <span className="shrink-0 rounded-sm border border-border/80 px-1 text-[10px] text-muted-foreground">
             bg
@@ -115,7 +139,7 @@ function ConversationRow({ id, tree, depth }: { id: number; tree: Tree; depth: n
     <>
       <button
         className={cn(
-          'flex h-6 w-full min-w-0 items-center gap-1.5 pr-3 text-left font-mono text-[11.5px] transition-colors hover:bg-accent/50',
+          'flex w-full min-w-0 items-center gap-1.5 py-1.5 pr-3 text-left font-mono text-[11.5px] transition-colors hover:bg-accent/50',
           shown && 'bg-accent/60',
         )}
         onClick={() => switchConversation(id)}
@@ -126,15 +150,18 @@ function ConversationRow({ id, tree, depth }: { id: number; tree: Tree; depth: n
         <MessageSquareIcon
           className={cn('size-3 shrink-0', shown ? 'text-brand' : 'text-muted-foreground')}
         />
-        <span className="shrink-0 text-foreground">
-          {id === 1 ? 'main' : (summary?.label ?? 'conversation')}
-        </span>
-        <span className="shrink-0 text-muted-foreground/60">#{id}</span>
-        {summary?.title && id !== 1 && (
-          <span className="min-w-0 truncate font-sans text-[12px] text-muted-foreground">
-            {summary.title}
+        <span className="min-w-0 flex-1">
+          <span
+            className="block truncate font-sans text-[12px] text-foreground/90"
+            title={summary?.title}
+          >
+            {summary?.title || summary?.label || 'Untitled conversation'}
           </span>
-        )}
+          <span className="block text-[10.5px] text-muted-foreground/60">
+            #{id}
+            {summary?.workspace && ` · W${id}`}
+          </span>
+        </span>
       </button>
       {(tree.roots.get(id) ?? []).map((task) => (
         <TaskRow depth={depth + 1} key={task.id} task={task} tree={tree} />
@@ -147,7 +174,8 @@ function TasksPanel() {
   const graph = useTasks()
   const conversations = useConversations()
   const { live } = useConversation()
-  const { tasks, top, ...rest } = build(graph, conversations)
+  const [archived] = useUiState<number[]>('ext.conversations.archived', [])
+  const { tasks, top, ...rest } = build(graph, conversations, archived)
   const tree: Tree = {
     ...rest,
     tools: new Map(
