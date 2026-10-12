@@ -127,6 +127,32 @@ it(
       expect(
         await intent.locator('..').evaluate((node) => node.scrollWidth <= node.clientWidth),
       ).toBe(true)
+      await page.setViewportSize({ width: 1280, height: 800 })
+      const summary = page.getByRole('region', { name: 'Conversation summary' })
+      expect(await summary.textContent()).toContain(
+        'Review sidebar accessibility before implementation.',
+      )
+      const conversation = page.locator(`[data-conversation="${server.root.id}"]`)
+      await conversation.hover()
+      await conversation.getByRole('button', { name: 'Conversation actions' }).click()
+      await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
+      await expect
+        .poll(
+          () => page.getByRole('navigation', { name: 'Conversations', exact: true }).textContent(),
+          timeout,
+        )
+        .toBe('')
+      await expect.poll(() => summary.count(), timeout).toBe(0)
+      await page.reload()
+      await untilInput(page)
+      expect(await summary.count()).toBe(0)
+      await page.getByRole('button', { name: /^Archived/ }).click()
+      await conversation.hover()
+      await conversation.getByRole('button', { name: 'Conversation actions' }).click()
+      await page.getByRole('menuitem', { name: 'Unarchive', exact: true }).click()
+      await expect
+        .poll(() => summary.textContent(), timeout)
+        .toContain('Review sidebar accessibility before implementation.')
       expect(errors).toEqual([])
     } finally {
       release()
@@ -442,9 +468,34 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
     const shown = () =>
       page.locator('[data-conversation]:has([aria-current])').getAttribute('data-conversation')
     const focused = () => page.evaluate(() => document.activeElement?.id)
-    const send = async (text: string) => {
+    const ready = async (id: number) => {
+      // Sidebar selection and focus can precede the replacement conversation snapshot.
+      await expect
+        .poll(
+          () =>
+            page.evaluate(
+              `import('/src/sdk/client.ts').then(({ store }) => { const view = store.getState().view; return view?.conversation.id === ${id} && !!view.docs['pi.agent']?.model })`,
+            ),
+          timeout,
+        )
+        .toBe(true)
+      await page.evaluate(
+        () =>
+          new Promise<void>((done) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => done())),
+          ),
+      )
+    }
+    const send = async (text: string, id = Number(server.root.id)) => {
+      await ready(id)
+      const submitted = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === `/api/conversations/${id}/submit` &&
+          response.request().method() === 'POST',
+      )
       await page.locator('#composer-input').fill(text)
       await page.keyboard.press('Enter')
+      expect((await submitted).status()).toBe(202)
       await expect.poll(() => page.locator('#composer-input').inputValue(), timeout).toBe('')
     }
 
@@ -497,9 +548,11 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
     // From the main conversation, the shortcut reuses that draft instead of creating another.
     await row('first message').locator('> button').first().click()
     await expect.poll(shown, timeout).toBe('1')
+    await ready(Number(server.root.id))
     await page.keyboard.press('Control+Alt+n')
     await expect.poll(shown, timeout).toBe(draft)
     await expect.poll(focused, timeout).toBe('composer-input')
+    await ready(Number(draft))
     expect(await titles()).toEqual(['New conversation', 'first message'])
 
     // Sending titles the draft's row and lists it first; it shows working while it runs, also when not shown.
@@ -508,7 +561,7 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
       fauxAssistantMessage('Second answer.'),
     ])
     try {
-      await send('second message')
+      await send('second message', Number(draft))
       await expect.poll(titles, timeout).toEqual(['second message', 'first message'])
       const second = row('second message')
       await expect.poll(() => second.getByRole('img', { name: 'Working' }).count(), timeout).toBe(1)
