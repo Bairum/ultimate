@@ -65,7 +65,7 @@ function TranscriptEntries() {
   const [exhausted, setExhausted] = useState(false)
   const [before, setBefore] = useState<number>()
   const request = useRef<AbortController | null>(null)
-  const anchor = useRef<{ entryId: number; top: number } | null>(null)
+  const anchor = useRef<{ entryId: number; toolCallId?: string; top: number } | null>(null)
   const { contentRef, scrollRef, stopScroll } = useStickToBottomContext()
   // Retain already displayed rows when a live compaction replaces the active context.
   const entries = useMemo(() => {
@@ -106,8 +106,13 @@ function TranscriptEntries() {
   useEffect(() => () => request.current?.abort(), [])
   useLayoutEffect(() => {
     if (anchor.current && scrollRef.current) {
-      const { entryId, top } = anchor.current
-      const element = contentRef.current?.querySelector(`[data-entry-id="${entryId}"]`)
+      const { entryId, toolCallId: callId, top } = anchor.current
+      const entry = contentRef.current?.querySelector(`[data-entry-id="${entryId}"]`)
+      const tool =
+        callId === undefined
+          ? undefined
+          : entry?.querySelector(`[data-tool-call-id="${CSS.escape(callId)}"]`)
+      const element = tool && tool.getBoundingClientRect().height > 0 ? tool : entry
       if (element) scrollRef.current.scrollTop += element.getBoundingClientRect().top - top
       anchor.current = null
     }
@@ -156,7 +161,7 @@ function TranscriptEntries() {
           (scrollRef.current?.getBoundingClientRect().top ?? 0),
       )
       // A result row disappears when this page brings its assistant call. Anchor a surviving
-      // row, or the replacement assistant when no existing displayed row survives.
+      // row, or its matching replacement tool when no existing displayed row survives.
       const element = candidates.find((row) =>
         survivors.has(Number(row.getAttribute('data-entry-id'))),
       )
@@ -181,6 +186,7 @@ function TranscriptEntries() {
         if (replacement)
           anchor.current = {
             entryId: replacement.id,
+            toolCallId: callId,
             top: candidates[0].getBoundingClientRect().top,
           }
       }

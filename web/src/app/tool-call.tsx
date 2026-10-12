@@ -15,17 +15,22 @@ import { ExtensionBoundary } from './boundary.tsx'
 /** A tool call through its extension renderer, or the generic one. */
 export function ToolCallBlock({ call }: { call: ToolCallView }) {
   const renderer = rendererFor(useExtensions(), 'tools', call.name)
-  if (!renderer) return <GenericToolCall call={call} />
-  const Renderer = renderer.component
+  const Renderer = renderer?.component
   return (
-    <ExtensionBoundary
-      extension={renderer.extension}
-      key={renderer.extension}
-      fallback={<GenericToolCall call={call} />}
-      version={renderer.version}
-    >
-      <Renderer call={call} />
-    </ExtensionBoundary>
+    <div className="empty:hidden" data-tool-call-id={call.id}>
+      {renderer && Renderer ? (
+        <ExtensionBoundary
+          extension={renderer.extension}
+          key={renderer.extension}
+          fallback={<GenericToolCall call={call} />}
+          version={renderer.version}
+        >
+          <Renderer call={call} />
+        </ExtensionBoundary>
+      ) : (
+        <GenericToolCall call={call} />
+      )}
+    </div>
   )
 }
 

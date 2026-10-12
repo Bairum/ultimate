@@ -254,59 +254,93 @@ it('anchors a surviving row when paging joins a standalone tool result to its ea
   })
 })
 
-it('anchors the replacement assistant when the standalone result is the only displayed row', async (test) => {
-  await fixture(test, async (page) => {
-    await page.evaluate(() => {
-      const f = Reflect.get(window, 'fixture')
-      const result = {
-        id: 66,
-        kind: 'pi.tool-result',
-        model: [
-          {
-            role: 'toolResult',
-            toolCallId: 'only-call',
-            toolName: 'read',
-            content: [{ type: 'text', text: 'Read result' }],
-          },
-        ],
-      }
-      const assistant = {
-        id: 65,
-        kind: 'pi.assistant',
-        model: [
-          {
-            role: 'assistant',
-            content: [{ type: 'toolCall', id: 'only-call', name: 'read', arguments: {} }],
-            stopReason: 'toolUse',
-          },
-        ],
-      }
-      f.page(66, {
-        entries: [
-          assistant,
-          ...Array.from({ length: 63 }, (_, n) => ({
-            id: 64 - n,
-            kind: 'pi.user',
-            model: [{ role: 'user', content: `Earlier message ${64 - n}` }],
-          })),
-        ],
-      })
-      f.show([result])
+for (const prefix of ['text and thinking', 'multiple earlier calls']) {
+  it(`anchors the matching replacement tool after ${prefix}`, async (test) => {
+    await fixture(test, async (page) => {
+      await page.evaluate((preceding) => {
+        const f = Reflect.get(window, 'fixture')
+        const result = {
+          id: 66,
+          kind: 'pi.tool-result',
+          model: [
+            {
+              role: 'toolResult',
+              toolCallId: 'only-call',
+              toolName: 'read',
+              content: [{ type: 'text', text: 'Read result' }],
+            },
+          ],
+        }
+        const assistant = {
+          id: 65,
+          kind: 'pi.assistant',
+          model: [
+            {
+              role: 'assistant',
+              content: [
+                {
+                  type: 'thinking',
+                  thinking: 'Consider the earlier work before reading the file.',
+                },
+                {
+                  type: 'text',
+                  text: 'First, review the previous changes.\n\nThen read the requested file.',
+                },
+                ...(preceding === 'multiple earlier calls'
+                  ? [
+                      {
+                        type: 'toolCall',
+                        id: 'earlier-call-a',
+                        name: 'read',
+                        arguments: { path: 'earlier-file-a' },
+                      },
+                      {
+                        type: 'toolCall',
+                        id: 'earlier-call-b',
+                        name: 'read',
+                        arguments: { path: 'earlier-file-b' },
+                      },
+                    ]
+                  : []),
+                {
+                  type: 'toolCall',
+                  id: 'only-call',
+                  name: 'read',
+                  arguments: { path: 'matched-tool' },
+                },
+              ],
+              stopReason: 'toolUse',
+            },
+          ],
+        }
+        f.page(66, {
+          entries: [
+            assistant,
+            ...Array.from({ length: 63 }, (_, n) => ({
+              id: 64 - n,
+              kind: 'pi.user',
+              model: [{ role: 'user', content: `Earlier message ${64 - n}` }],
+            })),
+          ],
+        })
+        f.show([result])
+      }, prefix)
+      await page.locator('[data-entry-id="66"]').waitFor()
+      const top = await page
+        .locator('[data-entry-id="66"] [class~="group/tool"]')
+        .evaluate((row) => row.getBoundingClientRect().top)
+      await page.getByRole('button', { name: 'Load earlier messages', exact: true }).click()
+      await page.locator('[data-entry-id="65"]').waitFor()
+      await page.waitForTimeout(350)
+      expect(await page.locator('[data-entry-id="66"]').count()).toBe(0)
+      expect(
+        Math.abs(
+          (await page
+            .locator('[data-entry-id="65"] [class~="group/tool"]')
+            .filter({ hasText: 'path=matched-tool' })
+            .evaluate((row) => row.getBoundingClientRect().top)) - top,
+        ),
+      ).toBeLessThan(3)
     })
-    await page.locator('[data-entry-id="66"]').waitFor()
-    const top = await page
-      .locator('[data-entry-id="66"]')
-      .evaluate((row) => row.getBoundingClientRect().top)
-    await page.getByRole('button', { name: 'Load earlier messages', exact: true }).click()
-    await page.locator('[data-entry-id="65"]').waitFor()
-    await page.waitForTimeout(350)
-    expect(await page.locator('[data-entry-id="66"]').count()).toBe(0)
-    expect(
-      Math.abs(
-        (await page
-          .locator('[data-entry-id="65"]')
-          .evaluate((row) => row.getBoundingClientRect().top)) - top,
-      ),
-    ).toBeLessThan(3)
   })
-})
+}
