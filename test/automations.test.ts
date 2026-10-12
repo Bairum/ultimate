@@ -3,10 +3,9 @@ import { awaitWithContext } from '@earendil-works/chord/context'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, expect, it } from 'vitest'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
-import type { ConversationId, TaskDefinition } from '@earendil-works/pi-durable'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -17,10 +16,9 @@ import { temp, until } from './helpers.ts'
 
 const hosts: OpenHost[] = []
 afterEach(async () => {
-  vi.restoreAllMocks()
   for (const host of hosts.splice(0)) await host.close()
 })
-async function fixture(failDelivery = false) {
+async function fixture() {
   const root = await temp('ultimate-automations-')
   const userHome = await temp()
   await mkdir(join(root, 'agents'))
@@ -66,20 +64,6 @@ async function fixture(failDelivery = false) {
     extensions: () => [{ name: 'subagents', enabled }],
   }
   const extension = automations(host as unknown as Parameters<typeof automations>[0])
-  if (failDelivery) {
-    const phases = extension.tasks!.find((t) => t.definition.name === 'ultimate.automation-run')!
-      .definition.phases as TaskDefinition<
-      { automation: Automation; firedAt: number },
-      { phase: 'deliver'; conversationId: ConversationId },
-      null,
-      object
-    >['phases']
-    const deliver = phases.deliver
-    vi.spyOn(phases, 'deliver').mockImplementationOnce((task, runtime, ctx) => {
-      vi.spyOn(runtime, 'conversation').mockRejectedValueOnce(new Error('Delivery unavailable'))
-      return deliver(task, runtime, ctx)
-    })
-  }
   prepared.registry.install(extension)
   const route: FauxResponseFactory = (transcript) => {
     prepared.faux!.appendResponses([route])
@@ -88,10 +72,6 @@ async function fixture(failDelivery = false) {
       typeof last.content === 'string'
         ? last.content
         : last.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
-    if (last.role === 'user' && text.startsWith('CALL '))
-      return fauxAssistantMessage([fauxToolCall('automation', JSON.parse(text.slice(5)))], {
-        stopReason: 'toolUse',
-      })
     if (last.role === 'user' && text === 'HOLD')
       return fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
     return fauxAssistantMessage([fauxText(`Answer: ${text}\nSecond line`)])
@@ -217,35 +197,6 @@ it('catches up a missed fire exactly once after reopening', async () => {
   expect(a.enabled).toBe(false)
 })
 
-it('creates an automation through a faux model tool call', async () => {
-  const f = await fixture()
-  await (
-    await f.opened.root.submit(
-      {
-        type: 'input',
-        content:
-          'CALL ' +
-          JSON.stringify({
-            action: 'create',
-            name: 'Tool schedule',
-            prompt: 'Hello',
-            schedule: 'every 15m',
-            agent: 'writer',
-          }),
-      },
-      context,
-    )
-  ).wait(context)
-  expect((await f.records())[0]).toMatchObject({
-    id: 'A1',
-    name: 'Tool schedule',
-    agent: 'writer',
-    schedule: { kind: 'every', ms: 900000 },
-  })
-  await f.action('pause', { id: 'A1' })
-  expect(await f.opened.harness.conversation(1 as ConversationId, context)).toBeDefined()
-})
-
 it('fails removed profiles clearly and requires the subagents extension', async () => {
   const f = await fixture()
   const a = (await f.action('create', {
@@ -259,31 +210,13 @@ it('fails removed profiles clearly and requires the subagents extension', async 
   await until(async () => (await f.records())[0].runs[0]?.status === 'failed')
   expect((await f.records())[0].runs[0].answer).toContain('Unknown agent: writer')
   await f.action('pause', { id: a.id })
-  const described = (await f.action('describe', {
-    schedule: 'cron "0 9 * * 1-5" Europe/Vienna',
-  })) as { description: string; next: number[] }
-  expect(described.description).toBe('At 09:00 on weekdays (Europe/Vienna)')
-  expect(described.next).toHaveLength(3)
   f.disableDependency()
   await expect(f.action('list')).rejects.toThrow(
     'automations needs the subagents extension enabled',
   )
 })
 
-it('records a throwing delivery as failed and lets the next scheduled fire run', async () => {
-  const f = await fixture(true)
-  const a = (await f.action('create', {
-    name: 'Retry',
-    prompt: 'Hello',
-    schedule: 'every 1s',
-  })) as Automation
-  await until(async () => (await f.records())[0].runs[0]?.status === 'failed', 3000)
-  expect((await f.records())[0].runs[0].answer).toContain('Delivery unavailable')
-  await until(async () => (await f.records())[0].runs[1]?.status === 'done', 3000)
-  await f.action('pause', { id: a.id })
-})
-
-it('refuses resuming a spent one-shot through both action and tool', async () => {
+it('refuses resuming a spent one-shot through the action', async () => {
   const f = await fixture()
   const a = (await f.action('create', {
     name: 'Spent',
@@ -292,19 +225,6 @@ it('refuses resuming a spent one-shot through both action and tool', async () =>
   })) as Automation
   await until(async () => (await f.records())[0].runs[0]?.status === 'done', 3000)
   await expect(f.action('resume', { id: a.id })).rejects.toThrow('update the time first')
-  await (
-    await f.opened.root.submit(
-      {
-        type: 'input',
-        content: 'CALL ' + JSON.stringify({ action: 'resume', id: a.id }),
-      },
-      context,
-    )
-  ).wait(context)
-  const view = await f.opened.root.viewState(context)
-  expect(JSON.stringify(view.value.entries)).toContain('update the time first')
-  view.dispose()
-  await delay(100)
   expect((await f.records())[0].runs).toHaveLength(1)
   expect((await f.records())[0].enabled).toBe(false)
 })

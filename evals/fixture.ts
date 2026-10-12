@@ -15,6 +15,7 @@ import { AssistantEntry, ToolResultEntry, UserEntry } from '@earendil-works/pi-d
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { createServer } from '../server/main.ts'
 import { context } from '../server/harness.ts'
+import { attach, until } from '../test/helpers.ts'
 
 const exec = promisify(execFile)
 const zeroUsage = () => ({
@@ -114,11 +115,9 @@ export async function start(
         extensions: {
           enable: options.extensions?.enable ?? [],
           disable: [
-            'workspaces',
-            'conversations',
-            'status-line',
-            'browser',
-            'faux',
+            ...['workspaces', 'conversations', 'status-line', 'browser', 'faux'].filter(
+              (name) => !options.extensions?.enable?.includes(name),
+            ),
             ...(options.extensions?.disable ?? []),
           ],
         },
@@ -151,10 +150,22 @@ export async function start(
       action: (extension: string, action: string, args: unknown = {}) =>
         post(`/api/extensions/${extension}/actions/${action}`, { args }),
       stop: cleanup,
+      async conversations() {
+        const stream = await attach(running)
+        try {
+          await until(() => stream.events.some((event) => event.name === 'conversations'))
+          return stream.events.findLast((event) => event.name === 'conversations')!
+            .data as import('../shared/protocol.ts').ConversationSummary[]
+        } finally {
+          await stream.close()
+        }
+      },
       async conversation({
+        id: existingId,
         history = [],
-      }: { history?: (Message | ReturnType<typeof assistant>)[] } = {}) {
-        const { id } = (await post('/api/conversations', {})) as { id: ConversationId }
+      }: { id?: ConversationId; history?: (Message | ReturnType<typeof assistant>)[] } = {}) {
+        const id =
+          existingId ?? ((await post('/api/conversations', {})) as { id: ConversationId }).id
         await post(`/api/conversations/${id}/configure`, {
           model: { provider: selected.provider, modelId: selected.id },
           thinkingLevel,

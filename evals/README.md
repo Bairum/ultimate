@@ -7,6 +7,9 @@ Override with `ULTIMATE_EVAL_MODEL` and `ULTIMATE_EVAL_THINKING`.
 Write a `*.eval.ts` file under `evals/`, using Vitest and `./fixture.ts`.
 Call `start({ project: { files, git }, extensions: { enable, disable } })`.
 Create a conversation with `conversation({ history: [user(...), assistant(...)] })`.
+Attach to an action-created conversation with `conversation({ id })`; it uses the selected eval model.
+List conversations with `await ultimate.conversations()` (a snapshot from the existing HTTP event stream).
+Opt-in extensions override the fixture's default disabled set, so workspace and conversation evals can enable them.
 Use `assistant('', [toolCall])` and `toolResult(id, name, text, isError)` for tool history.
 Seeds append actual Durable entries without running a model.
 Call `c.run(input)` to submit through HTTP and wait for idle; call it again to continue.

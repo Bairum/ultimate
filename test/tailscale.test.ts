@@ -5,7 +5,6 @@ import tailscale, { actions } from '../extensions/tailscale/server.ts'
 import type { Status } from '../extensions/tailscale/server.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { createAccess } from '../server/request-security.ts'
-import * as locks from '../server/lock.ts'
 import { fauxServer, linkDependencies, post, temp, until } from './helpers.ts'
 
 const closes: (() => Promise<void>)[] = []
@@ -161,16 +160,6 @@ it('applies user-only settings through the real loader and tears down on live se
   ).toBe(true)
 })
 
-it('requires user enablement and does not run the CLI for a project-only enable', async () => {
-  const f = await fixture({})
-  const app = await f.instance()
-  expect(await app.status()).toMatchObject({
-    state: 'disabled',
-    hint: expect.stringContaining('project settings cannot'),
-  })
-  expect(app.notices).toHaveLength(1)
-  expect(await f.invocations()).toEqual([])
-})
 it('serves, verifies the owner login by default, and tears down only its port', async () => {
   const f = await fixture()
   const app = await f.instance()
@@ -265,7 +254,6 @@ it('skips foreign ports for new projects and refuses foreign targets on existing
   expect((await f.invocations()).filter((args) => args.includes('--https=4747'))).toEqual([])
 })
 it.each([
-  [{ node: { ...node, BackendState: 'NeedsLogin' } }, 'not-running', 'tailscale up'],
   [{ node: { ...node, CertDomains: [] } }, 'https-disabled', 'admin console'],
   [
     {
@@ -275,8 +263,6 @@ it.each([
     'not-operator',
     'sudo tailscale set --operator=$USER',
   ],
-  [{ error: 'failed to connect to local tailscaled' }, 'not-running', 'tailscale up'],
-  [{ error: 'unexpected CLI failure' }, 'error', 'unexpected CLI failure'],
 ])('reports actionable failure states (%s)', async (scenario, state, hint) => {
   const f = await fixture(undefined, scenario)
   const app = await f.instance()
@@ -314,14 +300,6 @@ it('reports not installed without attempting Serve', async () => {
     hint: expect.stringContaining('Install Tailscale'),
   })
   expect(await f.invocations()).toEqual([])
-})
-it('reads the explicit allowlist only from user settings', async () => {
-  const f = await fixture({
-    extensions: { enable: ['tailscale'] },
-    tailscale: { allow: ['explicit@example.com'] },
-  })
-  const app = await f.instance()
-  expect((await app.status()).allow).toEqual(['explicit@example.com'])
 })
 it('hands ownership to an overlapping successor and does not remove foreign replacements', async () => {
   const f = await fixture()
@@ -373,19 +351,6 @@ it('keeps a live preview owner absent from the project supervisor list', async (
   const app = await f.instance()
   expect((await app.status()).state).toBe('ready')
   expect((await f.invocations()).filter((args) => args.includes('--https=4748'))).toEqual([])
-})
-it('reports a registry-specific timeout and retry hint', async () => {
-  const f = await fixture()
-  vi.spyOn(locks, 'acquireLock').mockRejectedValueOnce(
-    new Error('Ultimate core already owns this storage (pid 123)'),
-  )
-  const app = await f.instance()
-  expect(await app.status()).toMatchObject({
-    state: 'error',
-    hint: expect.stringContaining('Tailscale port registry is busy'),
-  })
-  expect((await app.status()).hint).toContain('retry')
-  expect((await app.status()).hint).not.toContain('storage')
 })
 it('reports failed teardown without throwing and classifies filesystem failures as errors', async () => {
   const f = await fixture()

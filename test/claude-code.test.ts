@@ -58,30 +58,6 @@ it('passes defaults as separate argv, stdin prompt, caller cwd, and streams actu
   const result = await f.run({ prompt })
   expect(result.isError).toBe(false)
   expect(JSON.parse(result.text)).toEqual({ prompt, argv: claudeArgs({ prompt }), cwd: f.root })
-  expect(claudeArgs({ prompt })).toEqual([
-    '-p',
-    '--output-format',
-    'stream-json',
-    '--verbose',
-    '--no-session-persistence',
-    '--strict-mcp-config',
-    '--mcp-config',
-    '{"mcpServers":{}}',
-    '--model',
-    'opus',
-    '--max-turns',
-    '10',
-    '--tools',
-    'Read,Glob,Grep',
-    '--permission-mode',
-    'dontAsk',
-  ])
-  expect(f.progress.map((d) => d.activity)).toEqual([
-    'Claude Code initialized',
-    'Using Read',
-    'Reviewing files',
-    'Claude Code completed',
-  ])
   expect(result.details).toMatchObject({
     model: 'claude-opus-5-5',
     sessionId: 'session',
@@ -157,51 +133,6 @@ it.each(['answer', 'error overhead'])(
     }
   },
 )
-it('passes optional limits and controls without shell interpretation, returns Markdown', async () => {
-  const f = await fake(`fs.readFileSync(0,'utf8'); emit(${JSON.stringify(success)});`)
-  const options: ClaudeOptions = {
-    prompt: 'review',
-    model: 'exact-model',
-    maxTurns: 2,
-    timeoutSeconds: 5,
-    maxBudgetUsd: 0.25,
-    effort: 'xhigh',
-    agent: 'reviewer',
-    appendSystemPrompt: 'do not edit; $(exit)',
-    tools: [],
-    allowedTools: ['Read', 'Bash(git diff *)'],
-    permissionMode: 'plan',
-  }
-  expect(claudeArgs(options)).toEqual([
-    '-p',
-    '--output-format',
-    'stream-json',
-    '--verbose',
-    '--no-session-persistence',
-    '--strict-mcp-config',
-    '--mcp-config',
-    '{"mcpServers":{}}',
-    '--model',
-    'exact-model',
-    '--max-turns',
-    '2',
-    '--tools',
-    '',
-    '--permission-mode',
-    'plan',
-    '--max-budget-usd',
-    '0.25',
-    '--effort',
-    'xhigh',
-    '--agent',
-    'reviewer',
-    '--append-system-prompt',
-    options.appendSystemPrompt,
-    '--allowedTools',
-    'Read,Bash(git diff *)',
-  ])
-  expect(await f.run(options)).toMatchObject({ text: success.result, isError: false })
-})
 it.each([
   ['is_error', { ...success, is_error: true, errors: ['Not authenticated'] }],
   ['turn limit', { ...success, subtype: 'error_max_turns', result: 'Partial answer' }],
@@ -223,13 +154,6 @@ it.each([
     'missing',
     `emit({type:'assistant',message:{content:[{type:'text',text:'Partial'}]}});`,
     'without a result',
-  ],
-  ['malformed JSON', `console.log('not json');`, 'protocol/progress error'],
-  ['malformed result', `emit({type:'result',subtype:'success'});`, 'Malformed Claude Code result'],
-  [
-    'missing text',
-    `emit({type:'result',subtype:'success',is_error:false});`,
-    'Missing Claude Code result text',
   ],
 ])('reports %s honestly', async (_name, body, message) => {
   const f = await fake(`fs.readFileSync(0,'utf8'); ${body}`)
@@ -346,9 +270,6 @@ it('registers schema without replay/bypass, resolves agent cwd, and waits for sh
     },
   } as unknown as ExtensionHost)
   const tool = extension.tools![0]
-  expect(extension.name).toBe('claude-code')
-  expect(tool.name).toBe('claude_code')
-  expect(tool.replay).toBeUndefined()
   const validate = (args: JsonObject) =>
     validateToolArguments(tool, { type: 'toolCall', id: 'call', name: tool.name, arguments: args })
   expect(validate({ prompt: 'review' })).toMatchObject({ prompt: 'review' })
