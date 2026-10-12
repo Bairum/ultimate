@@ -7,6 +7,7 @@ import type {
   SubmissionId,
 } from '@earendil-works/pi-durable'
 import type { ServerEvents, ConversationSummary, ConfigureRequest } from '../shared/protocol.ts'
+import { imageMimeTypes, maxImageBytes, maxImages } from '../shared/protocol.ts'
 import { listModels } from './models.ts'
 import type { Extensions } from './extensions.ts'
 import { context } from './harness.ts'
@@ -36,12 +37,15 @@ export class Events {
     for (const listener of this.listeners) listener(name, data)
   }
 }
-async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function body(
+  request: IncomingMessage,
+  limit = 1024 * 1024,
+): Promise<Record<string, unknown>> {
   let data = ''
   request.setEncoding('utf8')
   for await (const chunk of request) {
     data += chunk.toString()
-    if (Buffer.byteLength(data) > 1024 * 1024) throw new HttpError(413, 'Request too large')
+    if (Buffer.byteLength(data) > limit) throw new HttpError(413, 'Request too large')
   }
   try {
     const value = JSON.parse(data || '{}')
@@ -355,7 +359,10 @@ export async function createApi(
           return true
         }
         if (request.method !== 'POST') throw new HttpError(404, 'Unknown endpoint')
-        const data = await body(request)
+        const data = await body(
+          request,
+          /^\/api\/conversations\/\d+\/submit$/.test(url.pathname) ? 12 * 1024 * 1024 : undefined,
+        )
         const action = /^\/api\/extensions\/([^/]+)\/actions\/([^/]+)$/.exec(url.pathname)
         if (action) {
           if (request.headers['sec-fetch-site'] !== 'same-origin' && !origin)
@@ -475,7 +482,36 @@ export async function createApi(
                 data.whenBusy !== 'followUp'
               )
                 throw new HttpError(400, 'Invalid whenBusy')
-              const content = text(data.text, 'text')
+              if (typeof data.text !== 'string') throw new HttpError(400, 'Expected text')
+              const images = data.images === undefined ? [] : data.images
+              if (!Array.isArray(images)) throw new HttpError(400, 'Expected images array')
+              if (images.length > maxImages) throw new HttpError(413, `At most ${maxImages} images`)
+              const blocks = images.map((image: unknown) => {
+                if (!image || typeof image !== 'object') throw new HttpError(400, 'Invalid image')
+                const { data: encoded, mimeType } = image as Record<string, unknown>
+                if (
+                  typeof mimeType !== 'string' ||
+                  !imageMimeTypes.includes(mimeType) ||
+                  typeof encoded !== 'string' ||
+                  !encoded ||
+                  encoded.length % 4 !== 0 ||
+                  !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)
+                )
+                  throw new HttpError(400, 'Expected supported image MIME type and base64 data')
+                if (Buffer.byteLength(encoded, 'base64') > maxImageBytes)
+                  throw new HttpError(413, 'Image exceeds 2 MiB')
+                if (Buffer.from(encoded, 'base64').toString('base64') !== encoded)
+                  throw new HttpError(400, 'Invalid image base64 data')
+                return { type: 'image' as const, data: encoded, mimeType }
+              })
+              if (!data.text.trim() && !blocks.length)
+                throw new HttpError(400, 'Expected text or images')
+              const content = blocks.length
+                ? [
+                    ...(data.text.trim() ? [{ type: 'text' as const, text: data.text }] : []),
+                    ...blocks,
+                  ]
+                : data.text
               const submission = await conversation.submit(
                 { type: 'input', content, whenBusy: data.whenBusy },
                 context,

@@ -639,6 +639,110 @@ export default host => { host.resource('cleanup.process',()=>{
     expect(await readFile(join(server.host.home, 'demo.txt'), 'utf8')).toBe('after\n')
     await stream.close()
   })
+  it('persists image-only and mixed inputs and validates image requests', async () => {
+    const { server, options } = await fixture()
+    const image = { data: 'aGVsbG8=', mimeType: 'image/png' }
+    server.host.faux!.setResponses([fauxAssistantMessage('Seen.')])
+    expect(
+      (await post(server, '/api/conversations/1/submit', { text: '', images: [image] })).status,
+    ).toBe(202)
+    await server.harness.waitForIdle(context)
+    const entries = (await server.root.entries({}, 100, undefined, context)).items
+    expect(entries.find((entry) => entry.kind === 'pi.user')?.model?.[0]).toMatchObject({
+      content: [{ type: 'image', ...image }],
+    })
+    for (const images of [
+      null,
+      {},
+      [{ ...image, mimeType: 'image/svg+xml' }],
+      [{ ...image, data: 'not base64' }],
+    ]) {
+      expect((await post(server, '/api/conversations/1/submit', { text: '', images })).status).toBe(
+        400,
+      )
+    }
+    expect(
+      (
+        await post(server, '/api/conversations/1/submit', {
+          text: '',
+          images: Array.from({ length: 5 }, () => ({ ...image })),
+        })
+      ).status,
+    ).toBe(413)
+    expect(
+      (
+        await post(server, '/api/conversations/1/submit', {
+          text: '',
+          images: [{ ...image, data: Buffer.alloc(2 * 1024 * 1024 + 1).toString('base64') }],
+        })
+      ).status,
+    ).toBe(413)
+    expect(
+      (await post(server, '/api/conversations/1/submit', { text: '', images: [] })).status,
+    ).toBe(400)
+    server.host.faux!.setResponses([fauxAssistantMessage('Seen again.')])
+    expect(
+      (await post(server, '/api/conversations/1/submit', { text: 'Look', images: [image] })).status,
+    ).toBe(202)
+    await server.harness.waitForIdle(context)
+    expect(
+      (await server.root.entries({}, 100, undefined, context)).items
+        .filter((entry) => entry.kind === 'pi.user')
+        .at(0)?.model?.[0],
+    ).toMatchObject({
+      content: [
+        { type: 'text', text: 'Look' },
+        { type: 'image', ...image },
+      ],
+    })
+    await server.close()
+    servers.splice(servers.indexOf(server), 1)
+    const reopened = await createServer(options)
+    servers.push(reopened)
+    expect(
+      (await reopened.root.entries({}, 100, undefined, context)).items.filter(
+        (entry) => entry.kind === 'pi.user',
+      ),
+    ).toHaveLength(2)
+    expect(
+      (await reopened.root.entries({}, 100, undefined, context)).items.find(
+        (entry) => entry.kind === 'pi.user',
+      )?.model?.[0],
+    ).toMatchObject({
+      content: [
+        { type: 'text', text: 'Look' },
+        { type: 'image', ...image },
+      ],
+    })
+  })
+  it('queues images as steer and follow-up content while busy', async () => {
+    const { server } = await fixture()
+    const image = { data: 'aGVsbG8=', mimeType: 'image/png' }
+    await post(server, '/api/conversations/1/submit', { text: 'start' })
+    expect((await server.harness.snapshot(LiveDoc, server.root.id, context))?.run).toBeDefined()
+    for (const whenBusy of ['steer', 'followUp']) {
+      expect(
+        (
+          await post(server, '/api/conversations/1/submit', {
+            text: 'Look',
+            images: [image],
+            whenBusy,
+          })
+        ).status,
+      ).toBe(202)
+      const items = (await server.harness.snapshot(InboxDoc, server.root.id, context))?.items ?? []
+      expect(items).toContainEqual(
+        expect.objectContaining({
+          mode: whenBusy,
+          content: [
+            { type: 'text', text: 'Look' },
+            { type: 'image', ...image },
+          ],
+        }),
+      )
+    }
+    await server.root.abort(context)
+  })
   it('accepts configure, submit, steering, follow-up and abort; validates errors and creates conversations', async () => {
     const { server } = await fixture()
     // Pi's levels for this model: off, low, high.

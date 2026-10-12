@@ -20,6 +20,7 @@ import {
 import { Message, MessageContent, MessageResponse } from '@/components/ai/message'
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai/reasoning'
 import { Shimmer } from '@/components/ai/shimmer'
+import { ToolImage } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { elidePath, formatDuration, formatTokens, shortenPath } from '../sdk/format.ts'
 import { useConversation, useExtensions, useModels, useNow, useSystem } from '../sdk/hooks.ts'
@@ -200,16 +201,18 @@ function coreEntry(
 function UserView({ message }: { message: UserMessage }) {
   const images =
     typeof message.content === 'string'
-      ? 0
-      : message.content.filter((block) => block.type === 'image').length
+      ? []
+      : message.content.filter((block) => block.type === 'image')
   return (
     <Message className="mt-3 first:mt-0" from="user">
       <MessageContent>
         <p className="break-words whitespace-pre-wrap">{textOf(message.content)}</p>
-        {images > 0 && (
-          <span className="font-mono text-[11px] text-muted-foreground">
-            {images} image{images > 1 ? 's' : ''}
-          </span>
+        {images.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {images.map((image, index) => (
+              <ToolImage alt={`Attached image ${index + 1}`} image={image} key={index} />
+            ))}
+          </div>
         )}
       </MessageContent>
     </Message>

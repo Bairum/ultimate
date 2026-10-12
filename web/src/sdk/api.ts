@@ -79,8 +79,17 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
     `/api/conversations/${id ?? shown()}/${action}`
 
   return {
-    submit: (text: string, whenBusy?: SubmitRequest['whenBusy'], id?: number) =>
-      post<SubmitResponse>(conversation(id, 'submit'), { text, whenBusy } satisfies SubmitRequest),
+    submit: (
+      text: string,
+      whenBusy?: SubmitRequest['whenBusy'],
+      id?: number,
+      images?: SubmitRequest['images'],
+    ) =>
+      post<SubmitResponse>(conversation(id, 'submit'), {
+        text,
+        whenBusy,
+        images,
+      } satisfies SubmitRequest),
     abort: (id?: number) => post<EmptyResponse>(conversation(id, 'abort')),
     cancelSubmission: (submissionId: number, id?: number) =>
       post<EmptyResponse>(conversation(id, `inbox/${submissionId}/cancel`)),

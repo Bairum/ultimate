@@ -4,8 +4,13 @@ import type { AuthType, ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { ConversationView, JsonObject, ModelRef, TaskGraph } from '@earendil-works/pi-durable'
 import type { ModelRuntime } from '@earendil-works/pi-coding-agent'
 
+export const imageMimeTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+export const maxImageBytes = 2 * 1024 * 1024
+export const maxImages = 4
+
 export interface SubmitRequest {
   text: string
+  images?: { data: string; mimeType: string }[]
   whenBusy?: 'steer' | 'followUp'
 }
 export interface SubmitResponse {
