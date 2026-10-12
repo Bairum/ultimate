@@ -1,33 +1,58 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { ConversationId, Cursor, EntryId, Harness } from '@earendil-works/pi-durable'
+import { InboxDoc } from '@earendil-works/pi-durable'
+import type {
+  ConversationId,
+  Cursor,
+  EntryId,
+  Harness,
+  SubmissionId,
+  SubmissionRecord,
+} from '@earendil-works/pi-durable'
 import type { AgentOrigin } from './message-types.ts'
 
 /** Batch fork-aware history and scoped reporter scans, never scan history per row. */
-export async function provenance(harness: Harness, conversationId: ConversationId, ids: EntryId[]) {
+export async function provenance(
+  harness: Harness,
+  conversationId: ConversationId,
+  ids: EntryId[] | SubmissionId[],
+  pending = false,
+) {
   if (!ids.length) return {}
   return harness.commit(async (tx) => {
-    const wanted = new Set(ids)
+    const wanted = new Set<number>(ids)
+    const queued = pending ? ((await tx.doc(InboxDoc, conversationId))?.items ?? []) : []
+    const pendingIds = new Set(queued.filter((item) => wanted.has(item.id)).map((item) => item.id))
     const visible = new Set<EntryId>()
     const owners = new Set<ConversationId>()
     let cursor: Cursor | undefined
-    do {
-      const page = await tx.scanEntries(
-        {
-          conversationId,
-          minEntryId: Math.min(...ids) as EntryId,
-          maxEntryId: Math.max(...ids) as EntryId,
-        },
-        500,
-        cursor,
-      )
-      for (const entry of page.items)
-        if (entry.kind === 'pi.user' && wanted.has(entry.id)) {
-          visible.add(entry.id)
-          owners.add(entry.conversationId)
-        }
-      cursor = page.next
-    } while (cursor)
+    if (pending) owners.add(conversationId)
+    else
+      do {
+        const page = await tx.scanEntries(
+          {
+            conversationId,
+            minEntryId: Math.min(...ids) as EntryId,
+            maxEntryId: Math.max(...ids) as EntryId,
+          },
+          500,
+          cursor,
+        )
+        for (const entry of page.items)
+          if (entry.kind === 'pi.user' && wanted.has(entry.id)) {
+            visible.add(entry.id)
+            owners.add(entry.conversationId)
+          }
+        cursor = page.next
+      } while (cursor)
     const result: Record<string, AgentOrigin> = {}
+    const identity = (submission: SubmissionRecord | undefined) =>
+      pending
+        ? submission?.conversationId === conversationId && pendingIds.has(submission.id)
+          ? submission.id
+          : undefined
+        : submission?.entry && visible.has(submission.entry)
+          ? submission.entry
+          : undefined
     const sources = new Set(owners)
     for (const owner of owners) {
       const conversation = await tx.conversation(owner)
@@ -43,8 +68,9 @@ export async function provenance(harness: Harness, conversationId: ConversationI
         for (const task of page.items) {
           const input = task.input as { conversationId: ConversationId; sourceEntry?: EntryId }
           const delivery = await tx.submissionByRequest(input.conversationId, `subagent:${task.id}`)
-          if (delivery?.entry && visible.has(delivery.entry)) {
-            result[delivery.entry] = {
+          const instructionId = identity(delivery)
+          if (instructionId) {
+            result[instructionId] = {
               sender: task.conversationId,
               kind: 'instruction',
               ...(input.sourceEntry ? { entry: input.sourceEntry } : {}),
@@ -57,8 +83,9 @@ export async function provenance(harness: Harness, conversationId: ConversationI
             [`subagent-report:${task.id}`, delivery?.entry] as const,
           ]) {
             const report = await tx.submissionByRequest(task.conversationId, request)
-            if (report?.entry && visible.has(report.entry)) {
-              result[report.entry] = {
+            const reportId = identity(report)
+            if (reportId) {
+              result[reportId] = {
                 sender: input.conversationId,
                 kind: 'report',
                 ...(entry ? { entry } : {}),

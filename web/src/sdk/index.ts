@@ -10,6 +10,7 @@ export type {
   DocumentContribution,
   DocumentProps,
   EntryRenderer,
+  InboxRenderer,
   PanelContribution,
   SlotName,
   SurfaceContribution,

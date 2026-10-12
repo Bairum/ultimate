@@ -6,6 +6,7 @@ import type {
   Contribution,
   DocumentContribution,
   EntryRenderer,
+  InboxRenderer,
   PanelContribution,
   SlotName,
   SurfaceContribution,
@@ -114,6 +115,7 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   ],
   tools: [objectOf(isComponent), 'an object of tool name → component'],
   entries: [objectOf(isComponent), 'an object of entry kind → component'],
+  inbox: [isComponent, 'an inbox renderer component'],
   documents: [
     arrayOf(
       fields({
@@ -386,6 +388,15 @@ export function documentItems(records: readonly ExtensionRecord[]): Map<string, 
     for (const document of extension?.documents ?? [])
       byKind.set(document.kind, { ...document, extension: name, version })
   return byKind
+}
+
+export function inboxRenderer(
+  records: readonly ExtensionRecord[],
+): { extension: string; version: number; component: InboxRenderer } | undefined {
+  for (const record of records.toReversed())
+    if (record.extension?.inbox)
+      return { extension: record.name, version: record.version, component: record.extension.inbox }
+  return undefined
 }
 
 /** The renderer for a tool or entry kind; the last extension in folder order wins. */

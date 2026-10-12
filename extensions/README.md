@@ -21,6 +21,8 @@ existing extension and change it:
 | A prompt section from durable UI state            | `surfaces`                                          |
 | Toasts or other global overlays                   | `notices`                                           |
 
+An optional `inbox` renderer wraps each queued composer input with `{ item, core, cancel }`. Return `core` for inputs you do not own; when replacing it, include `cancel` to retain core cancellation. Like entry renderers, the last facet in folder order wins and runs behind an extension boundary with core fallback. Keep provenance and domain-specific UI in the extension.
+
 ## Where extensions live
 
 Ultimate looks for extension folders in three places. When two have the same folder name, the later place wins and

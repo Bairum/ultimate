@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from 'react'
 import type { ImageContent, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai'
-import type { EntryRecord, JsonObject, ToolDiagnostic } from '@earendil-works/pi-durable'
+import type { EntryRecord, InboxItem, JsonObject, ToolDiagnostic } from '@earendil-works/pi-durable'
 
 /** Named places in the shell that extensions fill with components. */
 export type SlotName =
@@ -69,6 +69,8 @@ export interface ToolCallView {
 export type ToolRenderer = ComponentType<{ call: ToolCallView }>
 /** `core` is the core's rendering of the entry: return it for entries you leave alone, or wrap it. */
 export type EntryRenderer = ComponentType<{ entry: EntryRecord; core: ReactNode }>
+
+export type InboxRenderer = ComponentType<{ item: InboxItem; core: ReactNode; cancel: ReactNode }>
 
 /** What a document renderer receives: the shown conversation's document of its kind, live. */
 export interface DocumentProps {
@@ -139,6 +141,7 @@ export interface WebExtension {
   tools?: Readonly<Record<string, ToolRenderer>>
   /** Entry renderers by entry kind; they also replace the core renderer of a `pi.*` kind. */
   entries?: Readonly<Record<string, EntryRenderer>>
+  inbox?: InboxRenderer
   /** Document renderers; a later facet wins a kind. */
   documents?: readonly DocumentContribution[]
   commands?: readonly CommandContribution[]

@@ -264,7 +264,8 @@ async function waitInterruptibly(
 /** Browser actions for message provenance and the Agents tab. */
 export const actions = {
   async provenance(args: JsonValue, { host, conversationId }: ActionContext) {
-    const ids = (args as { entries?: number[] })?.entries
+    const { entries, submissions } = args as { entries?: number[]; submissions?: number[] }
+    const ids = submissions ?? entries
     if (
       !conversationId ||
       !Array.isArray(ids) ||
@@ -272,7 +273,12 @@ export const actions = {
       ids.some((id) => !Number.isSafeInteger(id) || id < 1)
     )
       throw new Error('Invalid entries')
-    return provenance(host.harness(), conversationId as ConversationId, ids as EntryId[])
+    return provenance(
+      host.harness(),
+      conversationId as ConversationId,
+      ids as EntryId[],
+      !!submissions,
+    )
   },
   /**
    * The definitions without their instructions and the files that failed to parse, and for the config view the main
