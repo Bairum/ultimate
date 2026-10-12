@@ -10,6 +10,7 @@ import {
   useCommands,
   useConnection,
   useConversation,
+  useConversations as useAllConversations,
   useModels,
   useSystem,
   useUltimate,
@@ -154,6 +155,7 @@ function useTokenRates() {
 function Tokens() {
   const { usage, entries, agent } = useConversation()
   const speed = useTokenRates()
+  const running = useAllConversations().filter((conversation) => conversation.busy).length
   const models = useModels()
   const buckets = [...Object.values(usage.models), ...Object.values(usage.tools)]
   const total = buckets.reduce(
@@ -191,6 +193,9 @@ function Tokens() {
     <span aria-label="Output token rate">
       ↓{speed ? Math.round(speed.rates.output) : '?'} tok/s
     </span>,
+    <span aria-label="Running agents" className="tabular-nums">
+      {running} {running === 1 ? 'agent' : 'agents'}
+    </span>,
   )
   return (
     <Item
@@ -216,6 +221,9 @@ function Tokens() {
             <div className="mt-1 max-w-72">
               Model tokens per second across all conversations, averaged over the last 30 seconds.
               Provider reports may arrive late, and tool usage is excluded.
+            </div>
+            <div className="mt-1 max-w-72">
+              Running agents across all conversations in this project, including subagents.
             </div>
           </div>
         </>
