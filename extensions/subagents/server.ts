@@ -37,6 +37,7 @@ import { createChild } from './children.ts'
 import { workspaces } from '../workspaces/workspaces.ts'
 import { git } from '../workspaces/git.ts'
 import { scheduleSpawnSummary } from '../conversations/summary.ts'
+import { provenance } from './provenance.ts'
 
 export const Subagents = defineDoc<{
   agents: Record<
@@ -81,7 +82,7 @@ const textOf = (message: AssistantMessage | undefined) =>
 const answerRequest = (answer: EntryId) => `subagent-answer:${answer}`
 function createReporter() {
   return defineTask<
-    { conversationId: ConversationId; text: string; steer: boolean },
+    { conversationId: ConversationId; text: string; steer: boolean; sourceEntry?: EntryId },
     { phase: 'deliver' } | { phase: 'report'; report?: string; answer?: EntryId },
     null
   >({
@@ -260,8 +261,19 @@ async function waitInterruptibly(
   }
 }
 
-/** Definitions for the Agents tab. */
+/** Browser actions for message provenance and the Agents tab. */
 export const actions = {
+  async provenance(args: JsonValue, { host, conversationId }: ActionContext) {
+    const ids = (args as { entries?: number[] })?.entries
+    if (
+      !conversationId ||
+      !Array.isArray(ids) ||
+      ids.length > 10000 ||
+      ids.some((id) => !Number.isSafeInteger(id) || id < 1)
+    )
+      throw new Error('Invalid entries')
+    return provenance(host.harness(), conversationId as ConversationId, ids as EntryId[])
+  },
   /**
    * The definitions without their instructions and the files that failed to parse, and for the config view the main
    * conversation's model and tools (a definition may list a subset), where each scope saves, and whether the
@@ -621,7 +633,7 @@ Available definitions:
               isolated && (await git(parent.cwd ?? host.projectRoot, 'status', '--porcelain'))
                 ? '\nWarning: parent has uncommitted changes; they are not in the worktree.'
                 : ''
-            const task = definition ? await api.getTask(api.taskId, context) : undefined
+            const task = await api.getTask(api.taskId, context)
             // Pi upstream: @earendil-works/pi-durable@1.0.3 src/harness/tool.ts — internal ToolTaskInput.assistant locates the calling assistant. Drop when ToolExecutionApi exposes the calling assistant entry ID.
             const assistant = (task?.input as { assistant: EntryId } | undefined)?.assistant
             let forkAt: EntryId | undefined
@@ -685,7 +697,12 @@ Available definitions:
               }
               const reporter = await tx.createTask(
                 Reporter,
-                { conversationId, text, steer: args.steer === true },
+                {
+                  conversationId,
+                  text,
+                  steer: args.steer === true,
+                  ...(assistant ? { sourceEntry: assistant } : {}),
+                },
                 { ownership: { kind: 'conversation' }, background: true },
               )
               const createdAction = { conversationId, reporter }

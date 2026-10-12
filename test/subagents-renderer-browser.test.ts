@@ -23,6 +23,7 @@ it('renders yielded waits and skips workspace info for unrecorded Agents and pla
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import extension from '/@fs/${resolve('extensions/subagents/web.tsx')}'
+import { AgentInput, AgentMessages } from '/@fs/${resolve('extensions/subagents/messages.tsx')}'
 import plan from '/@fs/${resolve('extensions/plan/web.tsx')}'
 import { store } from '/@fs/${resolve('web/src/sdk/client.ts')}'
 import { ExtensionNameContext } from '/@fs/${resolve('web/src/sdk/hooks.ts')}'
@@ -36,6 +37,11 @@ window.EventSource = class extends EventTarget {
 store.start()
 const root = createRoot(document.querySelector('#app'))
 window.fixture = {
+  missing: () => {
+    const entry = { id: 55, conversationId: 1, kind: 'pi.user', model: [{ role: 'user', content: '[subagent 999 failed: **Unavailable source**]', timestamp: 0 }] }
+    flushSync(() => source.dispatchEvent(new MessageEvent('view', { data: JSON.stringify({ conversation: { id: 1 }, entries: [entry], docs: {} }) })))
+    flushSync(() => root.render(createElement('div', {}, createElement(AgentMessages), createElement(AgentInput, { entry, core: 'Core fallback' }))))
+  },
   rows: () => flushSync(() => root.render(createElement('div', {},
     createElement(ExtensionNameContext.Provider, { value: 'subagents' }, createElement(extension.panels[0].component)),
     createElement(plan.documents[0].component, { conversationId: 1, value: { next: 2, epics: {
@@ -81,7 +87,9 @@ window.fixture.show('wait', undefined, true)
         infoRequests.push(request.postDataJSON())
       const result = request.url().endsWith('/subagents/actions/definitions')
         ? { definitions: [], errors: [], main: { tools: [] }, scopes: {}, projectLocal: false }
-        : null
+        : request.url().endsWith('/subagents/actions/provenance')
+          ? { '55': { sender: 999, kind: 'report' } }
+          : null
       await route.fulfill({ json: { result } })
     })
     page.on('pageerror', (error) => errors.push(error.message))
@@ -148,6 +156,25 @@ window.fixture.show('wait', undefined, true)
       document.querySelector('#app')?.textContent?.includes('Linked task'),
     )
     await expect.poll(() => infoRequests.length).toBeGreaterThanOrEqual(2)
+    await page.evaluate(() =>
+      Reflect.get(window, 'fixture').show('wait', undefined, false, 'error'),
+    )
+    expect(await header.getByLabel('failed').count()).toBe(1)
+    expect(await page.getByText('Child result.', { exact: true }).count()).toBe(1)
+    await page.evaluate(() => Reflect.get(window, 'fixture').missing())
+    const unavailable = page.getByRole('button', { name: 'source unavailable', exact: true })
+    await unavailable.waitFor()
+    expect(await unavailable.isDisabled()).toBe(true)
+    expect(await page.getByText('agent #999', { exact: true }).count()).toBe(1)
+    expect(await page.locator('[data-streamdown="strong"]').textContent()).toBe(
+      'Unavailable source',
+    )
+    expect(await page.locator('[data-agent-origin="report"]').textContent()).toContain(
+      'Failed: Unavailable source',
+    )
+    expect(await page.locator('[data-agent-origin="report"]').textContent()).not.toContain(
+      '[subagent',
+    )
     expect(errors).toEqual([])
   } finally {
     await browser?.close()

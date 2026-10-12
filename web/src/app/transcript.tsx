@@ -11,6 +11,8 @@ import { cn } from 'cn'
 import { ChevronRightIcon, CircleAlertIcon, CircleStopIcon, RotateCwIcon } from 'lucide-react'
 import { Fragment, memo, useMemo } from 'react'
 import type { ReactNode } from 'react'
+import { useStickToBottomContext } from 'use-stick-to-bottom'
+import { useEvent } from '../sdk/events.ts'
 import {
   Conversation,
   ConversationContent,
@@ -33,7 +35,7 @@ import { ToolCallBlock } from './tool-call.tsx'
 
 /** The shown conversation; `dock` fits it into a narrow side region. */
 export function Transcript({ dock }: { dock?: boolean }) {
-  const { entries, live, busy, loading } = useConversation()
+  const { id, entries, live, busy, loading } = useConversation()
   const { results, calls } = useMemo(() => indexTools(entries), [entries])
   const slots = useMemo(() => slotsOf(live), [live])
   const partial = partialOf(live)
@@ -43,9 +45,17 @@ export function Transcript({ dock }: { dock?: boolean }) {
   return (
     <Conversation className="min-h-0">
       <ConversationContent className={cn(column(dock), 'gap-3 pt-6 pb-10')}>
+        <EntryNavigation conversationId={id} />
         {!loading && visible.length === 0 && !partial && <EmptyState />}
         {visible.map((entry) => (
-          <EntryView busy={busy} entry={entry} key={entry.id} results={results} slots={slots} />
+          <div
+            className="empty:hidden"
+            data-conversation-id={id}
+            data-entry-id={entry.id}
+            key={entry.id}
+          >
+            <EntryView busy={busy} entry={entry} results={results} slots={slots} />
+          </div>
         ))}
         {partial && (
           <AssistantView busy message={partial} results={results} slots={slots} streaming />
@@ -55,6 +65,21 @@ export function Transcript({ dock }: { dock?: boolean }) {
       <ConversationScrollButton />
     </Conversation>
   )
+}
+
+/** Reveal a stored row without the transcript's auto-follow animation overriding the jump. */
+function EntryNavigation({ conversationId }: { conversationId?: number }) {
+  const { contentRef, stopScroll } = useStickToBottomContext()
+  useEvent('ultimate:reveal-entry', (value) => {
+    const target = value as { conversationId?: number; entryId?: number } | undefined
+    if (target?.conversationId !== conversationId || !Number.isSafeInteger(target?.entryId)) return
+    const element = contentRef.current?.querySelector(`[data-entry-id="${target?.entryId}"]`)
+    if (element) {
+      stopScroll()
+      element.scrollIntoView({ block: 'start' })
+    }
+  })
+  return null
 }
 
 /** What this Ultimate is and runs on, before the first message. */

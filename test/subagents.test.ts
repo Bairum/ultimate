@@ -18,6 +18,7 @@ import type { ActionContext } from '../server/actions.ts'
 import codemode from '../extensions/codemode/server.ts'
 import { Metadata } from '../server/metadata.ts'
 import { UiState } from '../server/ui-state.ts'
+import { provenance } from '../extensions/subagents/provenance.ts'
 import { discoverAgents, parseDefinition } from '../extensions/subagents/agents.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { until, temp, removeTemp } from './helpers.ts'
@@ -183,6 +184,62 @@ async function call(opened: OpenHost, args: Record<string, unknown>) {
   view.dispose()
   return { tool, text }
 }
+it('attributes durable instructions and reports across reopen and forks, never human lookalikes', async () => {
+  const f = await fixture()
+  await call(f.opened, {
+    action: 'start',
+    agent: 'scout',
+    task: '**Inspect**\n\n- [x] checked',
+    background: true,
+  })
+  await until(async () => (await reports(f.opened)).length > 0)
+  const report = (await reports(f.opened))[0]
+  const [child] = await children(f.opened)
+  const conversation = (await f.opened.harness.conversation(child.conversationId, context))!
+  const childView = await conversation.viewState(context)
+  const instruction = childView.value.entries.find((entry) => entry.kind === 'pi.user')!
+  childView.dispose()
+  const origin = (await provenance(f.opened.harness, child.conversationId, [instruction.id]))[
+    instruction.id
+  ]
+  expect(origin).toMatchObject({ sender: f.opened.root.id, kind: 'instruction' })
+  expect(origin.entry).toBeTypeOf('number')
+  const attributed = await provenance(f.opened.harness, f.opened.root.id, [report.id])
+  expect(attributed[report.id]).toMatchObject({ sender: child.conversationId, kind: 'report' })
+  expect(attributed[report.id].entry).toBeTypeOf('number')
+  const reporter = Object.values(
+    (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!.actions,
+  )[0].reporter
+  const failure = await (
+    await f.opened.root.submit(
+      {
+        type: 'input',
+        content: `[subagent ${child.conversationId} failed: delivery error]`,
+        requestId: `subagent-report:${reporter}`,
+      },
+      context,
+    )
+  ).wait(context)
+  expect(
+    (await provenance(f.opened.harness, f.opened.root.id, [failure.entry!]))[failure.entry!],
+  ).toEqual({ sender: child.conversationId, kind: 'report', entry: instruction.id })
+  const human = await f.opened.root.submit(
+    { type: 'input', content: `[subagent ${child.conversationId} (scout) answered] **human**` },
+    context,
+  )
+  const humanRecord = await human.wait(context)
+  expect(await provenance(f.opened.harness, f.opened.root.id, [humanRecord.entry!])).toEqual({})
+  const fork = await f.opened.root.fork(report.id, { ownership: { kind: 'ownerless' } }, context)
+  expect(await provenance(f.opened.harness, fork.id, [report.id])).toEqual(attributed)
+  expect(await provenance(f.opened.harness, child.conversationId, [report.id])).toEqual({})
+  await f.opened.root.reset(undefined, context)
+  expect(await provenance(f.opened.harness, f.opened.root.id, [report.id])).toEqual(attributed)
+  await f.opened.close()
+  hosts.splice(hosts.indexOf(f.opened), 1)
+  const reopened = await f.reopen()
+  expect(await provenance(reopened.harness, fork.id, [report.id])).toEqual(attributed)
+})
+
 async function children(opened: OpenHost) {
   return Object.values(
     (await opened.harness.snapshot(Subagents, opened.root.id, context))?.agents ?? {},

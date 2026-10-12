@@ -13,6 +13,27 @@ Reports already sent to the model stay there. An explicit `wait` can still retur
 
 Definitions are Markdown with YAML frontmatter, parsed by Pi's `parseFrontmatter`: required `name` and `description`, optional `isolate` (`none` or `worktree`), `model` (Pi's `resolveCliModel` accepts `provider/id`, fuzzy id or name, and a `:thinking` suffix; unknown models are errors and custom models must be registered in Pi's `models.json`), `thinking` (a Pi thinking level), and `tools` (a YAML list, `[read, bash]` or one `- item` per line); other fields are errors. An explicit `thinking` field overrides the model suffix. The body is the instructions. `agents.ts` reads them from three directories, later overriding by name: `agents/` in Ultimate's clone, `~/.ultimate/agents/`, and the project root's `.ultimate/agents/` (not a conversation's cwd). Omitted tools inherit the parent's tools minus `subagent`. Tool restrictions select tools, not a shell sandbox: read-only agents' bash restrictions are instructions. An edited definition is not a code change, so it does not change the build id.
 
+## Attributed transcript messages
+
+The `pi.user` renderer leaves ordinary human input to core. Agent instructions and asynchronous reports use compact Markdown cards with a bot marker, sender conversation ID, and a Source button. Long messages have a scrollable compact view and an explicit expansion control. Successful foreground answers still use the existing `SubagentCall` / `MessageResponse` renderer; their Open button now targets the answer when available.
+
+The `provenance {entries: number[]}` action verifies requested entries against fork-aware history, then joins reporter tasks to durable input/report submissions by their request IDs. It batches history and reporter scans, scoped to the stored entry owners and their creating parents, rather than scanning per row. No message text determines attribution. Known report framing is stripped only after this join. New reporters retain the calling assistant entry for instruction-source navigation; older instructions still link to their true sender, without an entry target. Answer reports retain their original answer target through forks, resets and reopen. If an entry is no longer in the source's active transcript, Source still opens that conversation without scrolling to a different entry.
+
+Source and foreground Open offer a header Return button back to the receiving conversation and its message when known. Transcript entry anchors and the core `ultimate:reveal-entry {conversationId, entryId}` web event cancel auto-follow before revealing a row, so a long answer cannot pull the view back to its end. This one-hop navigation is local to the browser session; ordinary conversation switching remains unchanged. Missing sender summaries keep the ID visible and disable Source with an explanatory tooltip.
+
+### Token-free screenshot fixture
+
+From this checkout, run:
+
+```sh
+AGENT_MESSAGES_PREVIEW_MS=120000 AGENT_MESSAGES_SCREENSHOT=/tmp/agent-report.png \
+  pnpm exec vp test test/subagents-messages-browser.test.ts
+```
+
+Wait for `Agent message preview: http://127.0.0.1:<port>` and open that URL while the test pauses. It uses an isolated temporary home and faux responses, not provider tokens. Scroll up to the first report card if the new browser opens at the transcript's end. The receiving transcript includes a long report with bold, lists, a checked task and a TypeScript block, plus human text resembling a report prefix. Click Source to jump to the child's answer (the parent's Markdown instruction is above it), then Return to restore the receiving report. Use Expand full message / Compact view to compare density. The test also saves the screenshot at the supplied path and closes its server after the pause. Omit both environment variables for the normal automated regression.
+
+For a smaller standalone preview, start a faux instance, accept its project setup, send `delegate to scout`, and use the foreground card's Open button to inspect the attributed child instruction. The rich report fixture above is independent of any user/project agent profile overrides.
+
 ## Definitions are shared profiles
 
 A definition is the profile both subagents and automations run with: one helper, `createChild` (`children.ts`) with `definitionAgent` (`agents.ts`), turns it into a child's agent configuration for `start` and for an automation that names it. Edit one in the Agents tab or as its file; both are the same Markdown, and Ultimate changes one when asked by editing that file (codemode's `ultimate.agents()` lists every definition with its source, path, and fields). Built-ins in the clone are never written: saving one writes an override with the same name to the project's `.ultimate/agents/` (shared with the team, and only once the project's setup is local) or to `~/.ultimate/agents/`. Deleting an override makes the definition it shadowed apply again.

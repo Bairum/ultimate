@@ -20,7 +20,15 @@ import {
   ToolSection,
 } from '@/components/ai/tool'
 import { Button } from '@/components/ui/button'
-import { cn, defineWebExtension, useAction, useTasks, useToolDuration, useUltimate } from '@/sdk'
+import {
+  cn,
+  defineWebExtension,
+  useAction,
+  useConversation,
+  useTasks,
+  useToolDuration,
+  useUltimate,
+} from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import {
@@ -31,6 +39,7 @@ import {
 import type { Workspace as Isolate, WorkspaceInfo } from '../workspaces/types.ts'
 import { DefinitionDialog, Definitions } from './definitions.tsx'
 import { Heading, Tag, useRefresh } from './parts.tsx'
+import { AgentInput, AgentMessages, openAgentSource } from './messages.tsx'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 
@@ -75,10 +84,11 @@ function IsolateBadge({ childId }: { childId: number }) {
 function SubagentCall({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
   const { switchConversation } = useUltimate()
+  const { id } = useConversation()
   const conversations = useConversations()
   const action = text(call.args.action) || 'start'
   const details = call.details as
-    | { conversationId?: number; background?: boolean; yielded?: boolean }
+    | { conversationId?: number; background?: boolean; yielded?: boolean; answerId?: number }
     | undefined
   const childId =
     details?.conversationId ?? (typeof call.args.id === 'number' ? call.args.id : undefined)
@@ -127,7 +137,17 @@ function SubagentCall({ call }: { call: ToolCallView }) {
         {childId !== undefined && (
           <Button
             className="mr-1 h-6 shrink-0 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
-            onClick={() => switchConversation(childId)}
+            onClick={(event) => {
+              const entry = Number(
+                event.currentTarget.closest('[data-entry-id]')?.getAttribute('data-entry-id'),
+              )
+              if (id)
+                openAgentSource(
+                  switchConversation,
+                  { conversation: childId, entry: details?.answerId },
+                  { conversation: id, ...(entry ? { entry } : {}) },
+                )
+            }}
             size="sm"
             title={`Show conversation #${childId}`}
             variant="ghost"
@@ -477,7 +497,8 @@ function AgentsPanel() {
 export default defineWebExtension({
   tools: { subagent: SubagentCall },
   panels: [{ id: 'agents', title: 'Agents', icon: NetworkIcon, component: AgentsPanel, order: -6 }],
-  slots: { overlay: [DefinitionDialog] },
+  entries: { 'pi.user': AgentInput },
+  slots: { overlay: [DefinitionDialog], 'header.right': [AgentMessages] },
   commands: [
     {
       id: 'subagents.open',

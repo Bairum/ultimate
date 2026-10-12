@@ -23,6 +23,7 @@
     "shared/protocol.ts",
     "extensions/conversations/types.ts",
     "extensions/workspaces/types.ts",
+    "extensions/subagents/message-types.ts",
     "test/web"
   ]
 }
