@@ -26,16 +26,23 @@ Replied means a run answered, not that its goal is fulfilled. During new work, a
 A row switches to its child, highlights selection and keeps the top-level summary visible. History forks are not
 invented delegation edges. Expansion is persisted in `ext.conversations.expanded`; buttons support keyboard access.
 
-New conversation (the button, `mod+alt+n`, or the palette) shows an empty conversation on the Agent surface and
-focuses the composer. It reuses the shown draft (a shown top-level conversation without entries), else the newest
+New conversation (the button, `mod+alt+n`, or the palette) uses the remembered creation type and focuses the composer
+on the Agent surface. The dropdown's radio choices, Isolated and Shared (not isolated), only select the type; they do
+not create a conversation. The default is Isolated, and the tooltip shows the selected type. The preference is stored
+in `ext.conversations.creationType`, shared across tabs and retained across reloads and restarts.
+
+Shared reuses the shown draft (a shown top-level conversation without entries), else the newest
 empty, untitled, idle, unarchived **shared** conversation, and creates one only when there is none. It never reuses
 an empty isolated conversation, including the shown one. From a top-level conversation
 it takes that one's model and thinking level; from a subagent it sets none, so a reused conversation keeps its own and a
 new one gets the main conversation's.
 
-The New options menu also offers New isolated conversation through the workspaces extension's `create` action.
-Creation never submits input or runs a model. Setup errors are inspected in Workspaces; start a new conversation to try again.
-Ordinary New keeps its shared-draft behavior. Archive and clear context never remove checkouts or commits.
+Isolated creates directly through the workspaces extension's `create` action, without a confirmation dialog.
+The explicit New isolated conversation palette command always creates isolated, without changing the preference.
+Creation never submits input or runs a model. Both commands share an in-flight guard against duplicate creation.
+Request errors appear in command notices; non-Git projects never silently fall back to Shared. Checkout setup errors
+are inspected in Workspaces; start a new conversation to try again. The menu retains Manage workspaces.
+Archive and clear context never remove checkouts or commits.
 
 On hover or focus, a row's `…` menu offers Rename (inline; also on double-click; Enter or leaving the field saves,
 Escape cancels, and after either key focus returns to the row), Clear context… (asks first; not while the conversation

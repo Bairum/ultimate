@@ -21,6 +21,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Kbd, KbdGroup } from '@/components/ui/kbd'
@@ -50,7 +52,8 @@ import type { Assessment, OverviewRow, OverviewState, TitleChange } from './type
 
 const newKeys = 'mod+alt+n'
 const resetDialog = 'conversations.reset'
-const isolatedDialog = 'conversations.new-isolated'
+let creationType = 'isolated'
+let creating = false
 const overviewKind = 'ultimate.conversation-overview'
 
 /** One root stream for all rows, unchanged when selection or expansion changes. */
@@ -181,6 +184,23 @@ async function newConversation(actions: UltimateActions) {
       .catch(() => undefined)
   actions.switchConversation(id)
   focusWhenShown(actions, id)
+}
+
+/** Both creation commands share a guard; failures propagate to the command notice handler. */
+async function createConversation(actions: UltimateActions, type = creationType) {
+  if (creating) return
+  creating = true
+  try {
+    if (type === 'shared') await newConversation(actions)
+    else {
+      const { id } = await api.action<{ id: number }>('workspaces', 'create', {})
+      actions.showSurface('agent')
+      actions.switchConversation(id)
+      focusWhenShown(actions, id)
+    }
+  } finally {
+    creating = false
+  }
 }
 
 /** The conversation the clear-context dialog asks about; set just before it opens. */
@@ -517,6 +537,7 @@ function Conversations() {
   const actions = useUltimate()
   const shownId = useShownId()
   const now = useNow(60_000)
+  const [type, setType] = useExtensionUiState('creationType', 'isolated')
   const [archived, setArchived] = useExtensionUiState<number[]>('archived', [])
   const [seen] = useExtensionUiState<Record<string, number>>('seen', {})
   const shownTop = topOf(shownId, conversations)
@@ -638,7 +659,7 @@ function Conversations() {
             </Button>
           </TooltipTrigger>
           <TooltipContent className="flex items-center gap-2">
-            New conversation
+            New {type === 'shared' ? 'shared' : 'isolated'} conversation
             <Shortcut keys={newKeys} />
           </TooltipContent>
         </Tooltip>
@@ -650,19 +671,21 @@ function Conversations() {
             <ChevronDownIcon className="size-3.5" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem
-              className="cursor-pointer text-xs"
-              onSelect={() => actions.runCommand('conversations.new')}
+            <DropdownMenuRadioGroup
+              value={type}
+              onValueChange={(value) => {
+                creationType = value
+                setType(value)
+              }}
             >
-              New conversation
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              className="cursor-pointer text-xs"
-              onSelect={() => actions.runCommand('conversations.new-isolated')}
-            >
-              <GitBranchIcon />
-              New isolated conversation…
-            </DropdownMenuItem>
+              <DropdownMenuRadioItem className="cursor-pointer text-xs" value="isolated">
+                Isolated
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem className="cursor-pointer text-xs" value="shared">
+                Shared (not isolated)
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+            <div role="separator" className="my-1 border-t border-border" />
             <DropdownMenuItem
               className="cursor-pointer text-xs"
               onSelect={() => actions.openPanel('workspaces')}
@@ -718,6 +741,9 @@ function Conversations() {
 
 /** Records the answer the user has seen: the shown top-level conversation's latest, once it is idle. */
 function Seen() {
+  // Commands stay in sync even when the sidebar is not mounted.
+  const [type] = useExtensionUiState('creationType', 'isolated')
+  creationType = type
   const id = useShownId()
   const summary = useConversations().find((conversation) => conversation.id === id)
   const [seen, setSeen] = useExtensionUiState<Record<string, number>>('seen', {})
@@ -781,72 +807,6 @@ function ResetDialog() {
   )
 }
 
-/** Create an isolated conversation through the workspaces extension. */
-function IsolatedDialog() {
-  const [open, setOpen] = useDialog(isolatedDialog)
-  const actions = useUltimate()
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState<string>()
-  const create = async () => {
-    if (pending) return
-    setPending(true)
-    setError(undefined)
-    try {
-      const { id } = await api.action<{ id: number }>('workspaces', 'create', {})
-      setOpen(false)
-      actions.showSurface('agent')
-      actions.switchConversation(id)
-      focusWhenShown(actions, id)
-    } catch (failure) {
-      setError(errorMessage(failure))
-    } finally {
-      setPending(false)
-    }
-  }
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!pending) setOpen(next)
-      }}
-    >
-      <DialogContent
-        className="gap-4 sm:max-w-md [&_button]:cursor-pointer"
-        showCloseButton={!pending}
-      >
-        <DialogTitle className="text-sm font-medium">New isolated conversation</DialogTitle>
-        <DialogDescription className="text-xs leading-relaxed">
-          The conversation gets its own Git checkout of this project.
-        </DialogDescription>
-        {error && (
-          <p role="alert" className="text-xs text-error break-words">
-            {error}
-          </p>
-        )}
-        <div className="flex justify-end gap-2">
-          <Button
-            className="cursor-pointer"
-            disabled={pending}
-            onClick={() => setOpen(false)}
-            size="sm"
-            variant="ghost"
-          >
-            Cancel
-          </Button>
-          <Button
-            className="cursor-pointer"
-            disabled={pending}
-            onClick={() => void create()}
-            size="sm"
-          >
-            {pending ? 'Creating…' : 'Create'}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 function TitleChanged({ entry }: { entry: EntryRecord }) {
   const { title, at } = entry.data as TitleChange
   const date = new Date(at)
@@ -867,20 +827,20 @@ function TitleChanged({ entry }: { entry: EntryRecord }) {
 
 export default defineWebExtension({
   entries: { 'conversations.title-changed': TitleChanged },
-  slots: { sidebar: Conversations, overlay: [ResetDialog, Seen, IsolatedDialog] },
+  slots: { sidebar: Conversations, overlay: [ResetDialog, Seen] },
   commands: [
     {
       id: 'conversations.new',
       title: 'New conversation',
       keys: newKeys,
       group: 'Conversations',
-      run: (context) => newConversation(context),
+      run: (context) => createConversation(context),
     },
     {
       id: 'conversations.new-isolated',
       title: 'New isolated conversation',
       group: 'Conversations',
-      run: (actions) => actions.open(isolatedDialog),
+      run: (actions) => createConversation(actions, 'isolated'),
     },
     {
       id: 'conversations.reset',

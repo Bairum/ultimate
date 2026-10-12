@@ -398,6 +398,34 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
     await send('first message')
     await expect.poll(titles, timeout).toEqual(['first message'])
 
+    // Choosing Shared only sets the preference, which survives reload.
+    const count = server.api.conversations().length
+    await page.getByRole('button', { name: 'Conversation creation options' }).click()
+    await expect
+      .poll(
+        () =>
+          page
+            .getByRole('menuitemradio', { name: 'Isolated', exact: true })
+            .getAttribute('aria-checked'),
+        timeout,
+      )
+      .toBe('true')
+    await page.getByRole('menuitemradio', { name: 'Shared (not isolated)', exact: true }).click()
+    expect(server.api.conversations()).toHaveLength(count)
+    await page.reload()
+    await untilInput(page)
+    await page.getByRole('button', { name: 'Conversation creation options' }).click()
+    await expect
+      .poll(
+        () =>
+          page
+            .getByRole('menuitemradio', { name: 'Shared (not isolated)', exact: true })
+            .getAttribute('aria-checked'),
+        timeout,
+      )
+      .toBe('true')
+    await page.keyboard.press('Escape')
+
     // New conversation shows an empty draft, configured with the shown one's model, listed first, the composer focused.
     const { model } = await server.root.agent(context)
     await page.getByRole('button', { name: 'New conversation' }).click()
