@@ -10,7 +10,12 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import { Overview } from '../extensions/conversations/overview.ts'
-import { generateSummary, Summaries, summaryBehavior } from '../extensions/conversations/summary.ts'
+import {
+  generateSummary,
+  Summaries,
+  summaryBehavior,
+  TitleChanged,
+} from '../extensions/conversations/summary.ts'
 import { fauxServer, post, prepareFauxServer, temp, until } from './helpers.ts'
 
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
@@ -71,6 +76,10 @@ async function launch() {
       return server
     },
     generated,
+    titleChanges: async (id = server.root.id) =>
+      (
+        await server.harness.commit((tx) => tx.scanEntries({ conversationId: id }, 100), context)
+      ).items.filter((entry) => TitleChanged.is(entry)),
     install,
     read,
     exchange,
@@ -143,7 +152,20 @@ it('summarizes the first, fourth and seventh completed exchanges, not tools, str
   expect((await server.harness.snapshot(Metadata, server.root.id, context))?.title).toBe(
     'Improve the conversation sidebar',
   )
+  const changes = await fixture.titleChanges()
+  expect(changes).toHaveLength(1)
+  expect(changes[0].data).toEqual({
+    title: 'Improve the conversation sidebar',
+    at: expect.any(Number),
+  })
+  expect(changes[0].model).toBeUndefined()
+  const view = await server.root.context(context)
+  expect(view.contributions[view.entries.findIndex((entry) => entry.id === changes[0].id)]).toEqual(
+    [],
+  )
+  expect(JSON.stringify(view.messages)).not.toContain('Improve the conversation sidebar')
   await fixture.reopen()
+  expect(await fixture.titleChanges()).toEqual(changes)
   expect((await fixture.read())?.summary).toBe('Sidebar summary 4.')
   expect((await fixture.read())?.exchanges).toBe(4)
   for (let count = 5; count <= 7; count++) {
@@ -153,6 +175,42 @@ it('summarizes the first, fourth and seventh completed exchanges, not tools, str
     expect((await fixture.read())?.summary).toBe(`Sidebar summary ${count === 7 ? 7 : 4}.`)
   }
   await fixture.server.harness.waitForIdle(context)
+  expect(await fixture.titleChanges()).toEqual(changes)
+}, 60000)
+
+it('logs each accepted title change once, but not a manual rename to the generated title', async () => {
+  const fixture = await launch()
+  const started = Date.now()
+  await fixture.exchange()
+  fixture.generated.mockResolvedValue({
+    assessment: 'done',
+    activity: 'Refined the sidebar.',
+    title: 'Refine the sidebar',
+    summary: 'Refined the sidebar.',
+  })
+  for (let count = 2; count <= 4; count++) await fixture.exchange()
+  const changes = await fixture.titleChanges()
+  expect(changes.map((entry) => entry.data)).toEqual([
+    { title: 'Refine the sidebar', at: expect.any(Number) },
+    { title: 'Improve the conversation sidebar', at: expect.any(Number) },
+  ])
+  for (const entry of changes) {
+    expect(entry.data.at).toBeGreaterThanOrEqual(started)
+    expect(entry.data.at).toBeLessThanOrEqual(Date.now())
+    expect(entry.model).toBeUndefined()
+    expect(entry.byTaskId).toBeDefined()
+  }
+  await fixture.action('rename', 'Refine the sidebar')
+  fixture.generated.mockResolvedValue({
+    assessment: 'done',
+    activity: 'Done.',
+    title: 'Not accepted',
+    summary: 'Done.',
+  })
+  for (let count = 5; count <= 7; count++) await fixture.exchange()
+  expect(await fixture.titleChanges()).toEqual(changes)
+  await fixture.reopen()
+  expect(await fixture.titleChanges()).toEqual(changes)
 }, 60000)
 
 it('keeps an explicit API title even when it equals the first input', async () => {
@@ -169,6 +227,7 @@ it('keeps an explicit API title even when it equals the first input', async () =
   expect(await fixture.server.harness.snapshot(Metadata, id, context)).toEqual({ title: text })
   await fixture.reopen()
   expect(await fixture.server.harness.snapshot(Metadata, id, context)).toEqual({ title: text })
+  expect(await fixture.titleChanges(id)).toEqual([])
 }, 60000)
 
 it('protects preexisting and in-flight manual titles, and blank rename restores automatic naming', async () => {
@@ -211,12 +270,14 @@ it('protects preexisting and in-flight manual titles, and blank rename restores 
     (await fixture.server.harness.snapshot(Metadata, fixture.server.root.id, context))?.title,
   ).toBe('My deliberate title')
   expect((await fixture.read())?.summary).toBe('Updated summary.')
+  expect(await fixture.titleChanges()).toEqual([])
   await fixture.action('rename', '')
   for (let count = 5; count <= 7; count++) await fixture.exchange()
   await until(async () => (await fixture.read())?.status === 'ready')
   expect(
     (await fixture.server.harness.snapshot(Metadata, fixture.server.root.id, context))?.title,
   ).toBe('Improve the conversation sidebar')
+  expect(await fixture.titleChanges()).toHaveLength(1)
 }, 60000)
 
 it('clears summary and cadence on reset, drops stale completion and isolates provider errors', async () => {
@@ -250,6 +311,7 @@ it('clears summary and cadence on reset, drops stale completion and isolates pro
   await fixture.exchange()
   expect((await fixture.read())?.status).toBe('error')
   expect((await fixture.read())?.summary).toBeUndefined()
+  expect(await fixture.titleChanges()).toEqual([])
   for (let count = 2; count <= 4; count++) await fixture.exchange()
   await until(async () => (await fixture.read())?.status === 'ready')
   expect(fixture.generated).toHaveBeenCalledTimes(5)
@@ -326,6 +388,8 @@ it('assesses owned children without renaming them, excludes ownerless forks, and
     0,
   )
   expect(fixture.generated).toHaveBeenCalledTimes(1)
+  expect(await fixture.titleChanges(child.id)).toEqual([])
+  expect(await fixture.titleChanges(fork.id)).toEqual([])
   await fixture.exchange()
   expect(fixture.generated).toHaveBeenCalledTimes(2)
 }, 60000)
@@ -361,6 +425,7 @@ it('rejects an older response after a newer scheduled summary has completed', as
   expect(
     (await fixture.server.harness.snapshot(Metadata, fixture.server.root.id, context))?.title,
   ).toBe('Improve the conversation sidebar')
+  expect(await fixture.titleChanges()).toHaveLength(1)
 }, 60000)
 
 it('resumes pending background generation after shutdown without a stuck checkpoint', async () => {
@@ -380,6 +445,10 @@ it('resumes pending background generation after shutdown without a stuck checkpo
   await until(async () => (await fixture.read())?.status === 'ready')
   expect((await fixture.read())?.exchanges).toBe(1)
   expect(fixture.generated).toHaveBeenCalledTimes(2)
+  const changes = await fixture.titleChanges()
+  expect(changes).toHaveLength(1)
+  await fixture.reopen()
+  expect(await fixture.titleChanges()).toEqual(changes)
 }, 60000)
 
 it('skips summaries and assessments quietly when Luna is unavailable', async () => {
@@ -403,6 +472,7 @@ it('skips summaries and assessments quietly when Luna is unavailable', async () 
   await (await server.root.submit({ type: 'input', content: 'Work' }, context)).wait(context)
   await server.harness.waitForIdle(context)
   expect(fixture.generated).not.toHaveBeenCalled()
+  expect(await fixture.titleChanges()).toEqual([])
   expect((await server.harness.inspect(context)).tasks).toHaveLength(0)
   expect((await fixture.read())?.status).toBeUndefined()
   expect((await fixture.read())?.assessmentStatus).toBeUndefined()

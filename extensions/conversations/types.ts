@@ -1,5 +1,7 @@
 import type { EntryId } from '@earendil-works/pi-durable'
 
+export type TitleChange = { title: string; at: number }
+
 export type AssessmentValue = 'needs_input' | 'done' | 'neutral'
 export type Assessment = { inputId: EntryId; answerId: EntryId; value: AssessmentValue }
 export type OverviewRow = {

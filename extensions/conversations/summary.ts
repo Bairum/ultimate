@@ -1,6 +1,7 @@
 import { copyJson } from '@earendil-works/chord'
 import {
   defineDoc,
+  defineEntry,
   defineTask,
   GenerationTask,
   hook,
@@ -25,7 +26,9 @@ import type {
   Usage,
 } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { Assessment, AssessmentValue } from './types.ts'
+import type { Assessment, AssessmentValue, TitleChange } from './types.ts'
+
+export const TitleChanged = defineEntry<TitleChange>('conversations.title-changed')
 
 export type SummaryResult = {
   assessment: AssessmentValue
@@ -386,7 +389,12 @@ export function summaryBehavior(
                 delete state.summaryOwed
                 const metadata = await tx.doc(host.metadata, runtime.conversationId)
                 if (metadata.title === undefined || metadata.title === state.generatedTitle) {
-                  metadata.title = result.title
+                  if (metadata.title !== result.title) {
+                    metadata.title = result.title
+                    await tx.appendEntry(TitleChanged, runtime.conversationId, {
+                      data: { title: result.title, at: runtime.now() },
+                    })
+                  }
                   state.generatedTitle = result.title
                 }
               }

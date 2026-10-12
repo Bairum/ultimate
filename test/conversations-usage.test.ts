@@ -11,7 +11,7 @@ import {
 import { afterEach, expect, it } from 'vitest'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
-import { Summaries, summaryBehavior } from '../extensions/conversations/summary.ts'
+import { Summaries, summaryBehavior, TitleChanged } from '../extensions/conversations/summary.ts'
 import { until } from './helpers.ts'
 
 const reported = {
@@ -111,6 +111,8 @@ async function launch({ interrupt = false, long = false } = {}) {
   return {
     read,
     ledger,
+    titleChanges: async () =>
+      (await root.context(context)).entries.filter((entry) => TitleChanged.is(entry)),
     submit,
     interrupted: () => interruption !== undefined,
     reopen: async () => {
@@ -130,6 +132,11 @@ it('adds reported usage once, also on replay', async () => {
   await f.reopen()
   await until(async () => (await f.read())?.status === 'ready')
   expect((await f.ledger())?.models[key]).toEqual(reported)
+  const changes = await f.titleChanges()
+  expect(changes).toHaveLength(1)
+  expect(changes[0].data.title).toBe('Implement the change')
+  await f.reopen()
+  expect(await f.titleChanges()).toEqual(changes)
   await f.submit()
   await until(async () => (await f.read())?.exchanges === 2 && !(await f.read())?.pending)
   const total = (await f.ledger())!.models[key]
@@ -137,6 +144,7 @@ it('adds reported usage once, also on replay', async () => {
   expect(total.reasoning).toBe(80)
   expect(total.cacheWrite1h).toBe(12)
   expect(total.cost.total).toBeCloseTo(0.162)
+  expect(await f.titleChanges()).toEqual(changes)
 })
 
 it('a response with usage after a long stream still counts', async () => {

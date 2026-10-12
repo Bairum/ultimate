@@ -40,13 +40,13 @@ import {
   useTasks,
   useUltimate,
 } from '@/sdk'
-import type { UltimateActions } from '@/sdk'
+import type { EntryRecord, UltimateActions } from '@/sdk'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import {
   getWorkspaces,
   useWorkspaceConversations as useConversations,
 } from '../workspaces/data.tsx'
-import type { Assessment, OverviewRow, OverviewState } from './types.ts'
+import type { Assessment, OverviewRow, OverviewState, TitleChange } from './types.ts'
 
 const newKeys = 'mod+alt+n'
 const resetDialog = 'conversations.reset'
@@ -847,7 +847,26 @@ function IsolatedDialog() {
   )
 }
 
+function TitleChanged({ entry }: { entry: EntryRecord }) {
+  const { title, at } = entry.data as TitleChange
+  const date = new Date(at)
+  return (
+    <div className="flex items-baseline gap-2 font-mono text-[11px] text-muted-foreground">
+      <PencilIcon aria-hidden className="size-3 shrink-0 self-center" />
+      <span className="min-w-0 break-words">Title changed to “{title}”</span>
+      <time
+        className="shrink-0 text-muted-foreground/70"
+        dateTime={date.toISOString()}
+        title={date.toLocaleString()}
+      >
+        {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+      </time>
+    </div>
+  )
+}
+
 export default defineWebExtension({
+  entries: { 'conversations.title-changed': TitleChanged },
   slots: { sidebar: Conversations, overlay: [ResetDialog, Seen, IsolatedDialog] },
   commands: [
     {

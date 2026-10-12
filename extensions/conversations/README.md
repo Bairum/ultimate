@@ -68,6 +68,8 @@ Actions, each on a top-level conversation; bad args, unknown conversations, suba
 
 ## Automatic summaries and reply assessments
 
+The `GenerationTask.onYield` hook schedules a background observer. It waits for generation to settle and
+only counts an exchange when an input submission completed with that answer (not an intermediate yield).
 Luna assesses each completed reply, including subagent replies, in a background task with medium reasoning.
 Top-level conversations also get a title and summary on exchanges 1, 4, 7, and so on, in the same request.
 A summary delayed by newer work is included with the next current reply. Tools and partial replies do not trigger it.
@@ -77,6 +79,12 @@ Assessments describe the reply, not verified completion. New work, reset or comp
 Subagents get assessments and activity only; history forks are excluded.
 Luna can name an untitled conversation or update its own last generated title.
 API titles, renames and creator-given labels are kept. A blank rename restores automatic naming.
+Each accepted automatic title change appends a `conversations.title-changed` entry with `{ title, at }`
+(`at` is Unix milliseconds), atomically with the metadata update and task settlement. The transcript displays
+“Title changed to …” with the local time and a full-date tooltip. This is an automatic system action, not an
+agent-triggered tool or model message. Unchanged titles, protected manual titles, stale results, failures and
+unavailable Luna produce no action. Entries survive reload/restart without duplication; old changes are not
+backfilled and manual renames are not logged.
 Clear context keeps the title, clears summary and assessment, and restarts the cadence.
 The task saves the provider response before parsing it and adds reported usage even for stale or invalid results.
 Replaying a saved response does not count it again. Crashing before it is saved can repeat the request.

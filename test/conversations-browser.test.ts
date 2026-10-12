@@ -13,6 +13,75 @@ import { context } from '../server/harness.ts'
 
 const timeout = { timeout: 15000 }
 
+it('automatically renders a timestamped title action and keeps it after reload', async (test) => {
+  const executablePath = await skipWithoutChromium(test)
+  if (!executablePath) return
+  const userHome = await temp('ultimate-title-action-browser-')
+  const project = join(userHome, 'project')
+  await mkdir(project)
+  const server = await fauxServer({
+    ultimateRoot: resolve('.'),
+    projectRoot: project,
+    userHome,
+    home: join(userHome, 'state'),
+  })
+  const title = 'Review <script>alert(1)</script> & sidebar accessibility'
+  const existing = server.host.registry.snapshot().extension('conversations')!
+  server.host.registry.install(
+    defineExtension({
+      ...existing,
+      ...summaryBehavior(
+        {
+          harness: () => server.harness,
+          metadata: Metadata,
+          modelRuntime: {
+            getAvailableSnapshot: () =>
+              server.host.modelRuntime.getModels().filter((model) => model.id === 'gpt-6-luna'),
+          },
+        },
+        async () => ({
+          assessment: 'done',
+          activity: 'Reviewed the sidebar.',
+          title,
+          summary: 'Reviewed accessibility.',
+        }),
+      ),
+    }),
+  )
+  const browser = await chromium.launch({ executablePath, headless: true })
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    await page.goto(server.url)
+    await untilInput(page)
+    server.host.faux!.setResponses([fauxAssistantMessage('Reviewed the sidebar accessibility.')])
+    await (
+      await server.root.submit({ type: 'input', content: 'Review the sidebar.' }, context)
+    ).wait(context)
+    const row = page.getByText(`Title changed to “${title}”`, { exact: true })
+    await expect.poll(() => row.count(), timeout).toBe(1)
+    const stamp = row.locator('..').locator('time')
+    const at = await stamp.getAttribute('datetime')
+    expect(Number.isNaN(Date.parse(at!))).toBe(false)
+    expect(await stamp.textContent()).not.toBe('')
+    expect(await stamp.getAttribute('title')).not.toBe('')
+    await page.reload()
+    await untilInput(page)
+    await expect.poll(() => row.count(), timeout).toBe(1)
+    expect(await stamp.getAttribute('datetime')).toBe(at)
+    await page.setViewportSize({ width: 480, height: 800 })
+    await row.scrollIntoViewIfNeeded()
+    expect(await row.locator('..').evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(
+      true,
+    )
+    expect(errors).toEqual([])
+  } finally {
+    await browser.close()
+    await server.close()
+  }
+}, 60000)
+
 it('expands real agent roles and outcomes, separates Replied from Luna Done, and uses one index stream', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
