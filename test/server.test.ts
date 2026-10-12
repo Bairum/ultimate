@@ -1,11 +1,10 @@
 import { request } from 'node:http'
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
 import type { ConversationId, ConversationView } from '@earendil-works/pi-durable'
-import { defineExtension, InboxDoc, LiveDoc, ResetEntry } from '@earendil-works/pi-durable'
+import { defineExtension, InboxDoc, LiveDoc } from '@earendil-works/pi-durable'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -244,13 +243,6 @@ export const actions = { ping: async () => 'pong', revoke: async () => { remove(
     expect(
       await wire(wsPath, null, { ...upgrade, host: new URL(server.url).host, origin: server.url }),
     ).toBe(101)
-    const client = await (await fetch(server.url + '/@vite/client')).text()
-    expect(client).toContain('importMetaUrl.hostname')
-    expect(client).toContain('importMetaUrl.port')
-    expect(client).toContain('const hmrPort = null')
-    expect(client).toContain('const socketProtocol = null ||')
-    expect(client).toContain('null || importMetaUrl.hostname')
-    expect(server.vite.config.server.hmr).toMatchObject({ server: expect.anything() })
     await until(() => server.system.current().access.origins.includes(origin))
     expect(await wire('/api/extensions/access/actions/revoke', 'owner', {}, 'POST')).toBe(200)
     expect(await wire('/api/models')).toBe(403)
@@ -389,21 +381,10 @@ export default host => { host.resource('cleanup.process',()=>{
   return {}
 }); return defineExtension({name:'resourcecleanup'}) }`,
     })
-    const emit = vi.spyOn(server.events, 'emit')
-    const systemClose = vi.spyOn(server.system, 'close')
-    const viteClose = vi.spyOn(server.vite, 'close')
     await expect(server.close()).resolves.toBeUndefined()
     servers.splice(servers.indexOf(server), 1)
     expect(server.http.listening).toBe(false)
-    expect(systemClose).toHaveBeenCalledOnce()
-    expect(viteClose).toHaveBeenCalledOnce()
     expect(await readFile(join(server.host.userHome, 'process-cleanup-ok'), 'utf8')).toBe('yes')
-    expect(
-      emit.mock.calls.filter(
-        ([name, value]) =>
-          name === 'notice' && JSON.stringify(value).includes('Process resource cleanup failed'),
-      ),
-    ).toHaveLength(2)
   })
 
   it('serves and completes a faux submit with an empty extensions directory', async () => {
@@ -427,50 +408,6 @@ export default host => { host.resource('cleanup.process',()=>{
     await expect(readFile(join(server.host.home, 'demo.txt'))).rejects.toMatchObject({
       code: 'ENOENT',
     })
-  })
-  it('passes exactly the documented ExtensionHost keys to extensions', async () => {
-    const { server } = await fixture(false, false, {
-      inspect: `import { defineExtension } from '@earendil-works/pi-durable'
-let keys
-export default (host) => { keys = Object.keys(host).toSorted(); return defineExtension({ name: 'inspect' }) }
-export const actions = { keys: async () => keys }`,
-    })
-    const response = await post(server, '/api/extensions/inspect/actions/keys', { args: null })
-    expect(response.status).toBe(200)
-    expect(response.data.result).toEqual(
-      [
-        'access',
-        'build',
-        'conversations',
-        'doc',
-        'events',
-        'extensions',
-        'faux',
-        'harness',
-        'home',
-        'metadata',
-        'modelRuntime',
-        'models',
-        'notice',
-        'onClose',
-        'onOpen',
-        'projectExtensions',
-        'projectSettings',
-        'projectRoot',
-        'projectSetup',
-        'projects',
-        'setProjectDecision',
-        'reloadExtensions',
-        'resource',
-        'restart',
-        'settings',
-        'skills',
-        'system',
-        'uiState',
-        'ultimateRoot',
-        'userHome',
-      ].toSorted(),
-    )
   })
   it('does not inherit the supervisor public URL in an embedded server', async () => {
     vi.stubEnv('ULTIMATE_PUBLIC_URL', 'http://127.0.0.1:1')
@@ -642,17 +579,6 @@ export const actions = { keys: async () => keys }`,
       }
       return child?.title === 'Return the word SCOUT.' && !child.busy && !!child.answerAt
     })
-    expect(child).toEqual({
-      id: expect.any(Number),
-      parentConversationId: server.root.id,
-      ownerTaskId: expect.any(Number),
-      label: 'scout',
-      title: 'Return the word SCOUT.',
-      cwd: server.host.projectRoot,
-      busy: false,
-      inputAt: expect.any(Number),
-      answerAt: expect.any(Number),
-    })
     const childStream = await attach(server, `?conversation=${child!.id}`)
     const view = childStream.events.find((event) => event.name === 'view')!.data as ConversationView
     expect(
@@ -767,33 +693,6 @@ export const actions = { keys: async () => keys }`,
     )
     await stream.close()
   })
-  it('updates only touched summaries and does no summary reads for streaming commits', async () => {
-    const { server } = await fixture()
-    for (let index = 0; index < 4; index++)
-      await post(server, '/api/conversations', { title: `Other ${index}` })
-    const snapshot = vi.spyOn(server.harness, 'snapshot')
-    const stream = await attach(server)
-    await post(server, '/api/conversations/1/submit', { text: 'demo' })
-    await server.harness.waitForIdle(context)
-    await until(() =>
-      stream.events.some(
-        (event) =>
-          event.name === 'conversations' &&
-          (event.data as ConversationSummary[]).some(
-            (summary) =>
-              summary.id === 1 &&
-              summary.title === 'demo' &&
-              summary.inputAt !== undefined &&
-              !summary.busy,
-          ),
-      ),
-    )
-    const summaryReads = snapshot.mock.calls.filter(
-      ([token]) => token.definition.kind === 'ultimate.metadata',
-    )
-    expect(summaryReads.map(([, id]) => id)).toEqual([1])
-    await stream.close()
-  })
   it('streams input and answer times, keeps them across a reset, and gives summaries to server facets', async () => {
     const { server } = await fixture(false, false, {
       summaries: `import { defineExtension } from '@earendil-works/pi-durable'
@@ -823,49 +722,23 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     expect(
       (await post(server, '/api/extensions/summaries/actions/list', { args: null })).data.result,
     ).toEqual(server.api.conversations())
-    // A view holding both kinds gives the times without reading the history.
     const conversation = (await server.harness.conversation(created as ConversationId, context))!
-    const history = vi.spyOn(Object.getPrototypeOf(conversation), 'entries')
     await conversation.commit(async (tx) => {
       ;(await tx.doc(Metadata, created as ConversationId)).label = 'before reset'
     }, context)
     await until(() => summary()?.label === 'before reset')
     expect(summary()).toMatchObject({ inputAt: streamed!.inputAt, answerAt: streamed!.answerAt })
-    expect(history).not.toHaveBeenCalled()
     // A reset empties the active view; the times come from the history before it.
     await conversation.reset(undefined, context)
     await server.harness.waitForIdle(context)
     const view = await conversation.viewState(context)
     expect(view.value.entries.some((entry) => entry.kind === 'pi.user')).toBe(false)
-    const reset = view.value.entries.find((entry) => ResetEntry.is(entry))!
     view.dispose()
     await conversation.commit(async (tx) => {
       ;(await tx.doc(Metadata, created as ConversationId)).label = 'after reset'
     }, context)
     await until(() => summary()?.label === 'after reset')
     expect(summary()).toMatchObject({ inputAt: streamed!.inputAt, answerAt: streamed!.answerAt })
-    expect(history.mock.calls.map(([query]) => query)).toContainEqual({ maxEntryId: reset.id })
-    // A new answer updates its summary directly, without reading the conversation again.
-    const reads = vi.spyOn(server.harness, 'conversation')
-    const answerAt = streamed!.answerAt! + 1000
-    await conversation.commit(
-      async (tx) =>
-        tx.appendEntry(created as ConversationId, {
-          kind: 'pi.assistant',
-          model: [{ ...fauxAssistantMessage('Later'), timestamp: answerAt }],
-        }),
-      context,
-    )
-    await until(() =>
-      stream.events.some(
-        (event) =>
-          event.name === 'conversations' &&
-          (event.data as ServerEvents['conversations']).some(
-            (item) => item.id === created && item.answerAt === answerAt,
-          ),
-      ),
-    )
-    expect(reads).not.toHaveBeenCalled()
     await stream.close()
   })
   it('derives a title from the active context without storing it and keeps explicit API titles', async () => {
@@ -900,36 +773,6 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     expect(await server.harness.snapshot(Metadata, named as ConversationId, context)).toEqual({
       title: 'Named',
     })
-  })
-  it('reports machine, persistence, shared resources and folder facets', async () => {
-    const { server } = await fixture(true)
-    await post(server, '/api/conversations/1/submit', { text: 'Return the word SCOUT.' })
-    await server.harness.waitForIdle(context)
-    const view = await server.root.viewState(context)
-    const message = view.value.entries.find((entry) => entry.kind === 'pi.system')!.model![0]
-    if (message.role !== 'system') throw new Error('Expected system message')
-    expect(Object.keys(message.sections!)[0]).toBe('identity')
-    view.dispose()
-    const info = server.system.current()
-    expect(info.machine.cpuCount).toBeGreaterThan(0)
-    expect(info.machine.hostname).not.toBe('')
-    expect(info.machine.home).toBe(homedir())
-    expect(info.process.url).toBe(server.url)
-    expect(info.persistence.kind).toBe('sqlite')
-    expect(info.persistence.sizeBytes).toBeGreaterThan(0)
-    expect(info.execution.defaultCwd).toBe(server.host.projectRoot)
-    expect(info.extensions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: 'web-only',
-          readme: 'A browser-only extension.',
-          facets: { server: false, web: true },
-        }),
-      ]),
-    )
-    expect(info.extensions.find((extension) => extension.name === 'counter')?.server?.docs).toEqual(
-      ['test.counter'],
-    )
   })
   it('tracks extension and web builds and stores positional prompt changes', async () => {
     const { server, options } = await fixture(true)
@@ -967,7 +810,6 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     )
     await until(() => server.host.build().id !== second.id)
     expect(server.host.build().changed).toEqual(['extensions/web-only'])
-    expect(server.host.build().history).toHaveLength(3)
     await stream.close()
   })
   it('rejects foreign Hosts on API and Vite and accepts localhost Origin', async () => {

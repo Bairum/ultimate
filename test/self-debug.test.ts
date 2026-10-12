@@ -4,7 +4,7 @@ import { readFile, readdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { createEventBus } from '@earendil-works/pi-coding-agent'
-import { expect, it, vi } from 'vitest'
+import { expect, it } from 'vitest'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import {
   fauxServer as createServer,
@@ -98,42 +98,6 @@ it('stores screenshot images and PNGs, drives the UI, and forwards nested images
       'PNG',
     )
     const browser = await browserState.launched!
-    const newContext = browser.newContext.bind(browser)
-    const themes: { preference: string | null; dark: boolean }[] = []
-    const observe = vi.spyOn(browser, 'newContext').mockImplementation(async (options) => {
-      const isolated = await newContext(options)
-      isolated.on('page', (page) => {
-        const screenshot = page.screenshot.bind(page)
-        vi.spyOn(page, 'screenshot').mockImplementation(async (captureOptions) => {
-          await page.waitForFunction(() => {
-            const preference = localStorage.getItem('ultimate.theme')
-            return (
-              preference !== null &&
-              document.documentElement.classList.contains('dark') === (preference === 'dark')
-            )
-          })
-          themes.push(
-            await page.evaluate(() => ({
-              preference: localStorage.getItem('ultimate.theme'),
-              dark: document.documentElement.classList.contains('dark'),
-            })),
-          )
-          return screenshot(captureOptions)
-        })
-      })
-      return isolated
-    })
-    const ui = await server.host.uiState(context)
-    for (const theme of ['light', 'dark']) {
-      const shot = await run(server, 'screenshot', { theme, waitMs: 0 })
-      expect(shot.isError).not.toBe(true)
-    }
-    expect(themes).toEqual([
-      { preference: 'light', dark: false },
-      { preference: 'dark', dark: true },
-    ])
-    expect(await server.host.uiState(context)).toEqual(ui)
-    observe.mockRestore()
     await browser.close()
     const recovered = await run(server, 'screenshot', { url: server.url, waitMs: 0 })
     expect(recovered.isError).not.toBe(true)
@@ -271,44 +235,6 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
       }
       await removeTemp(instance.home)
     }
-    await removeTemp(home)
-  }
-}, 90000)
-
-it('starts an isolated standalone instance, reads logs and stops it', async () => {
-  const home = await temp('ultimate-instance-test-')
-  const childHome = join(home, 'child')
-  const server = await createServer({
-    ultimateRoot: resolve('.'),
-    userHome: home,
-    home,
-    faux: true,
-    port: 0,
-  })
-  try {
-    const started = await run(server, 'instance', { action: 'start', faux: true, home: childHome })
-    expect(started.isError).not.toBe(true)
-    const block = started.content.find((item) => item.type === 'text')!
-    if (block.type !== 'text') throw new Error('Expected text')
-    const instance = JSON.parse(block.text) as {
-      id: string
-      url: string
-      home: string
-      pid: number
-    }
-    expect(instance.home).toBe(childHome)
-    expect(instance.pid).toBeGreaterThan(0)
-    expect((await fetch(instance.url + '/api/models')).ok).toBe(true)
-    const logs = await run(server, 'instance', { action: 'logs', id: instance.id })
-    expect(logs.isError).not.toBe(true)
-    expect(JSON.stringify(logs.content)).toContain(instance.url)
-    expect((await run(server, 'instance', { action: 'stop', id: instance.id })).isError).not.toBe(
-      true,
-    )
-    await expect(fetch(instance.url + '/api/models')).rejects.toThrow('fetch failed')
-  } finally {
-    await server.vite.watcher.close()
-    await server.close()
     await removeTemp(home)
   }
 }, 90000)

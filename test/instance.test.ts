@@ -181,6 +181,7 @@ it('selects shared, isolated main and owned child checkouts without trusting wor
     await assertProject(selected, childWorkspace.path, null)
     expect(await f.run({ action: 'start', faux: true })).toContain('At most three')
     for (const preview of [selected, shared, own]) {
+      expect(await f.call('instance', { action: 'logs', id: preview.id })).toContain(preview.url)
       await f.run({ action: 'stop', id: preview.id })
       await removeTemp(preview.home)
     }
