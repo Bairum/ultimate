@@ -92,18 +92,21 @@ export function createWorkspaces(host: {
 }) {
   const holds = new Map<ConversationId, number>()
   const admissions = new Map<ConversationId, number>()
+  const executions = new Map<string, number>()
   const snapshot = async (id: ConversationId, context: Context) =>
     (await host.harness().snapshot(WorkspaceDoc, id, context))?.workspace
-  async function assertAdmission(tx: Tx, id: ConversationId) {
-    if (!(await tx.conversation(id))) throw new Error('Unknown conversation')
-    const workspace = (await tx.doc(WorkspaceDoc, id)).workspace
+  async function assertAdmission(tx: Tx, id?: ConversationId, executionCwd?: string) {
+    if (id !== undefined && !(await tx.conversation(id))) throw new Error('Unknown conversation')
+    const workspace = id === undefined ? undefined : (await tx.doc(WorkspaceDoc, id)).workspace
     if (workspace?.state === 'discarded')
       throw new Error("Child's worktree was discarded; start a new child")
     if (workspace && workspace.preparation !== 'ready')
       throw new Error(
         `Workspace preparation is ${workspace.preparation}${workspace.error ? `: ${workspace.error}` : ''}`,
       )
-    const cwd = (await tx.doc(AgentDoc, id)).cwd ?? host.projectRoot
+    const cwd =
+      executionCwd ??
+      (id === undefined ? host.projectRoot : ((await tx.doc(AgentDoc, id)).cwd ?? host.projectRoot))
     const paths = pathRelations()
     const apply = await hostApply(tx)
     if (
@@ -124,13 +127,15 @@ export function createWorkspaces(host: {
       if (inside && other.preparation !== 'ready')
         throw new Error(`Workspace preparation is ${other.preparation}`)
     }
-    if ((await blockingLifecycle(tx, id)).length)
+    if ((await blockingLifecycle(tx, id, cwd)).length)
       throw new Error('Child worktree lifecycle operation is in progress')
   }
-  async function blockingLifecycle(tx: Tx, id: ConversationId) {
+  async function blockingLifecycle(tx: Tx, id?: ConversationId, executionCwd?: string) {
     const paths = pathRelations()
-    const cwd = (await tx.doc(AgentDoc, id)).cwd ?? host.projectRoot
-    const workspace = (await tx.doc(WorkspaceDoc, id)).workspace
+    const cwd =
+      executionCwd ??
+      (id === undefined ? host.projectRoot : ((await tx.doc(AgentDoc, id)).cwd ?? host.projectRoot))
+    const workspace = id === undefined ? undefined : (await tx.doc(WorkspaceDoc, id)).workspace
     const queue = await tx.doc(LifecycleQueue)
     const blocked: TaskId[] = []
     const apply = await hostApply(tx)
@@ -190,6 +195,12 @@ export function createWorkspaces(host: {
         (await paths.within(apply.path, workspace.path)))
     )
       throw new Error('Host apply reservation is in progress; workspace mutation is blocked')
+    for (const cwd of executions.keys())
+      if (
+        (await paths.checkout(workspace.source, cwd)) ||
+        (await paths.within(workspace.path, cwd))
+      )
+        throw new Error('Workspace execution admission is in progress; retry')
     if (operation === 'discard') {
       for (const row of rows) {
         const dependent = (await tx.doc(WorkspaceDoc, row.id)).workspace
@@ -542,6 +553,32 @@ export function createWorkspaces(host: {
         const count = admissions.get(id)! - 1
         if (count) admissions.set(id, count)
         else admissions.delete(id)
+      }
+    },
+    async withExecution<T>(
+      id: ConversationId | undefined,
+      override: string | undefined,
+      operation: (cwd: string) => Promise<T>,
+      context: Context,
+    ): Promise<T> {
+      const cwd = await host.harness().commit(async (tx) => {
+        if (id !== undefined) await assertAdmission(tx, id)
+        const actual = await worktree.canonicalPath(
+          override ??
+            (id === undefined
+              ? host.projectRoot
+              : ((await tx.doc(AgentDoc, id)).cwd ?? host.projectRoot)),
+        )
+        await assertAdmission(tx, undefined, actual)
+        executions.set(actual, (executions.get(actual) ?? 0) + 1)
+        return actual
+      }, context)
+      try {
+        return await operation(cwd)
+      } finally {
+        const count = executions.get(cwd)! - 1
+        if (count) executions.set(cwd, count)
+        else executions.delete(cwd)
       }
     },
     async submit(id: ConversationId, draft: SubmissionDraft, context: Context) {

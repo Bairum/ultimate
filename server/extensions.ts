@@ -531,13 +531,12 @@ export async function loadExtensions(
         conversationId,
         signal,
         exec: (command, commandArgs, options) =>
-          conversationId === undefined
-            ? actionExec(host.projectRoot, signal)(command, commandArgs, options)
-            : host.workspaces.withAdmission(
-                conversationId as ConversationId,
-                (cwd) => actionExec(cwd, signal)(command, commandArgs, options),
-                BACKGROUND_CONTEXT,
-              ),
+          host.workspaces.withExecution(
+            conversationId as ConversationId | undefined,
+            options?.cwd,
+            (cwd) => actionExec(cwd, signal)(command, commandArgs, { ...options, cwd }),
+            BACKGROUND_CONTEXT,
+          ),
       })
     },
     doc: findDoc,
