@@ -8,7 +8,13 @@ import type {
 } from '@earendil-works/pi-ai'
 import type { EntryRecord, LiveState, ToolSlot } from '@earendil-works/pi-durable'
 import { cn } from 'cn'
-import { ChevronRightIcon, CircleAlertIcon, CircleStopIcon, RotateCwIcon } from 'lucide-react'
+import {
+  CheckIcon,
+  ChevronRightIcon,
+  CircleAlertIcon,
+  CircleStopIcon,
+  RotateCwIcon,
+} from 'lucide-react'
 import { Fragment, memo, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import {
@@ -233,8 +239,24 @@ function AssistantView({
   streaming?: boolean
 }) {
   const last = message.content.length - 1
+  const final =
+    !streaming &&
+    message.stopReason === 'stop' &&
+    !message.content.some((block) => block.type === 'toolCall') &&
+    message.content.some((block) => block.type === 'text' && block.text.trim())
   return (
-    <Message className="group/assistant gap-3" from="assistant">
+    <Message
+      className={cn(
+        'group/assistant gap-3',
+        final && 'rounded-lg border border-success/40 bg-success/5 px-3.5 py-2.5',
+      )}
+      from="assistant"
+    >
+      {final && (
+        <div className="flex items-center gap-1.5 font-mono text-[11px] text-success">
+          <CheckIcon aria-hidden="true" className="size-3.5" /> Final answer
+        </div>
+      )}
       {message.content.map((block, index) => {
         switch (block.type) {
           case 'thinking':
