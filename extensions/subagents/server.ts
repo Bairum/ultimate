@@ -36,7 +36,7 @@ import { agentRoots, deleteDefinition, discoverAgents, saveDefinition } from './
 import { createChild } from './children.ts'
 import { workspaces } from '../workspaces/workspaces.ts'
 import { git } from '../workspaces/git.ts'
-import { scheduleSpawnSummary } from '../conversations/summary.ts'
+import { requestSummary } from '../conversations/summary.ts'
 import { provenance } from './provenance.ts'
 
 export const Subagents = defineDoc<{
@@ -653,11 +653,21 @@ Available definitions:
               if (state.actions[api.callId]) return { ...state.actions[api.callId] }
               let conversationId = args.id as ConversationId
               if (definition) {
-                await scheduleSpawnSummary(tx, host, api.conversationId, {
-                  answer: assistant!,
-                  agent: definition.name,
-                  task: text,
-                })
+                if (
+                  host
+                    .extensions()
+                    .some(
+                      (extension) =>
+                        extension.enabled &&
+                        extension.server?.docs.includes('ultimate.conversation-summaries'),
+                    )
+                )
+                  await requestSummary(tx, host, api.conversationId, {
+                    reason: 'spawn',
+                    answer: assistant!,
+                    agent: definition.name,
+                    task: text,
+                  })
                 const owner = await tx.createTask(Anchor, null, {
                   ownership: { kind: 'conversation' },
                   background: true,

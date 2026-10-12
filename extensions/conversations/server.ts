@@ -73,6 +73,7 @@ export const actions = {
       const state = await tx.doc(Summaries, id)
       state.exchanges = 0
       state.revision++
+      delete state.intentRequested
       delete state.lastYield
       delete state.lastAnswer
       delete state.pending

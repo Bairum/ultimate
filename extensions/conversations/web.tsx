@@ -48,7 +48,7 @@ import {
   getWorkspaces,
   useWorkspaceConversations as useConversations,
 } from '../workspaces/data.tsx'
-import type { Assessment, OverviewRow, OverviewState, TitleChange } from './types.ts'
+import type { Assessment, IntentSummary, OverviewRow, OverviewState, TitleChange } from './types.ts'
 
 const newKeys = 'mod+alt+n'
 const resetDialog = 'conversations.reset'
@@ -805,13 +805,16 @@ function ResetDialog() {
   )
 }
 
-function TitleChanged({ entry }: { entry: EntryRecord }) {
-  const { title, at } = entry.data as TitleChange
-  const date = new Date(at)
+function SummaryAction({ entry }: { entry: EntryRecord }) {
+  const intent = entry.kind === 'conversations.intent-summarized'
+  const text = intent
+    ? `Intent: ${(entry.data as IntentSummary).summary}`
+    : `Title changed to “${(entry.data as TitleChange).title}”`
+  const date = new Date((entry.data as IntentSummary | TitleChange).at)
   return (
     <div className="flex items-baseline gap-2 font-mono text-[11px] text-muted-foreground">
       <PencilIcon aria-hidden className="size-3 shrink-0 self-center" />
-      <span className="min-w-0 break-words">Title changed to “{title}”</span>
+      <span className="min-w-0 break-words">{text}</span>
       <time
         className="shrink-0 text-muted-foreground/70"
         dateTime={date.toISOString()}
@@ -824,7 +827,10 @@ function TitleChanged({ entry }: { entry: EntryRecord }) {
 }
 
 export default defineWebExtension({
-  entries: { 'conversations.title-changed': TitleChanged },
+  entries: {
+    'conversations.title-changed': SummaryAction,
+    'conversations.intent-summarized': SummaryAction,
+  },
   slots: { sidebar: Conversations, overlay: [ResetDialog, Seen] },
   commands: [
     {

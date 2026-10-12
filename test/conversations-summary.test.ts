@@ -7,7 +7,14 @@ import type { Models, JsonObject } from '@earendil-works/pi-ai'
 import type { ConversationId, EntryId, ToolRegistration } from '@earendil-works/pi-durable'
 import { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { defineExtension, defineTask, defineTool, LiveDoc } from '@earendil-works/pi-durable'
+import {
+  defineExtension,
+  defineTask,
+  defineTool,
+  GenerationTask,
+  hook,
+  LiveDoc,
+} from '@earendil-works/pi-durable'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -16,7 +23,8 @@ import {
   generateSummary,
   Summaries,
   summaryBehavior,
-  scheduleSpawnSummary,
+  requestSummary,
+  IntentSummarized,
   TitleChanged,
 } from '../extensions/conversations/summary.ts'
 import { fauxServer, post, prepareFauxServer, temp, until } from './helpers.ts'
@@ -25,7 +33,7 @@ const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 afterEach(async () => {
   for (const server of servers.splice(0)) await server.close()
 })
-async function launch(subagents = false) {
+async function launch(subagents = false, initialIntent = false) {
   const home = await temp('ultimate-summary-')
   const projectRoot = join(home, 'project')
   await mkdir(projectRoot)
@@ -48,6 +56,15 @@ async function launch(subagents = false) {
   }
   let server = await fauxServer(options)
   servers.push(server)
+  if (!initialIntent)
+    await server.harness.commit(
+      (tx) =>
+        tx.appendEntry(server.root.id, {
+          kind: 'pi.user',
+          model: [{ role: 'user', content: 'Established context', timestamp: 1 }],
+        }),
+      context,
+    )
   const generated = vi.fn<typeof generateSummary>(async () => ({
     assessment: 'done',
     activity: 'Added concise summaries to the sidebar.',
@@ -95,32 +112,15 @@ async function launch(subagents = false) {
     spawn: (answer: EntryId) =>
       server.harness.commit(
         (tx) =>
-          scheduleSpawnSummary(
+          requestSummary(
             tx,
             {
               harness: () => server.harness,
               metadata: Metadata,
               modelRuntime: server.host.modelRuntime,
-              extensions: () => [
-                {
-                  name: 'conversations',
-                  path: '',
-                  source: 'builtin',
-                  layer: 'default',
-                  actions: [],
-                  enabled: true,
-                  facets: { server: true, web: false },
-                  server: {
-                    tools: [],
-                    sections: [],
-                    hooks: 1,
-                    docs: ['ultimate.conversation-summaries'],
-                  },
-                },
-              ],
             },
             server.root.id,
-            { answer, agent: 'scout', task: 'Continue the plan.' },
+            { reason: 'spawn', answer, agent: 'scout', task: 'Continue the plan.' },
           ),
         context,
       ),
@@ -600,13 +600,14 @@ it('clears summary and cadence on reset, drops stale completion and isolates pro
   )
   expect((await fixture.read())?.summary).toBeUndefined()
   fixture.generated.mockRejectedValueOnce(new Error('Provider offline'))
+  fixture.generated.mockRejectedValueOnce(new Error('Provider offline'))
   await fixture.exchange()
   expect((await fixture.read())?.status).toBe('error')
   expect((await fixture.read())?.summary).toBeUndefined()
   expect(await fixture.titleChanges()).toEqual([])
   for (let count = 2; count <= 4; count++) await fixture.exchange()
   await until(async () => (await fixture.read())?.status === 'ready')
-  expect(fixture.generated).toHaveBeenCalledTimes(5)
+  expect(fixture.generated).toHaveBeenCalledTimes(6)
 }, 60000)
 
 it('assesses owned children without renaming them, excludes ownerless forks, and does not backfill', async () => {
@@ -684,6 +685,7 @@ it('assesses owned children without renaming them, excludes ownerless forks, and
   expect(await fixture.titleChanges(fork.id)).toEqual([])
   await fixture.exchange()
   expect(fixture.generated).toHaveBeenCalledTimes(2)
+  expect(fixture.generated.mock.calls.some((call) => call[5] === 'intent')).toBe(false)
 }, 60000)
 
 it('rejects an older response after a newer scheduled summary has completed', async () => {
@@ -834,6 +836,15 @@ it('validates assessment-only JSON and rejects unapproved or malformed outcome s
   })
   expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('work now starting')
   expect(stream.mock.calls.at(-1)![1].systemPrompt).not.toContain('Assess the latest final reply')
+  await generateSummary(
+    models,
+    'Initial input',
+    new AbortController().signal,
+    true,
+    undefined,
+    'intent',
+  )
+  expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('initial intent')
   for (const value of ['blocked', 'unfinished', ['done'], null]) {
     output = { assessment: value, activity: 'Some work was discussed.' }
     await expect(
@@ -841,3 +852,159 @@ it('validates assessment-only JSON and rejects unapproved or malformed outcome s
     ).rejects.toThrow('Invalid assessment')
   }
 })
+
+it('publishes initial intent while the main model request is blocked, once across retries and reopen', async () => {
+  const fixture = await launch(false, true)
+  const { server } = fixture
+  let release!: () => void
+  const gate = new Promise<void>((done) => {
+    release = done
+  })
+  server.host.registry.install(
+    defineExtension({
+      ...server.host.registry.snapshot().extension('conversations')!,
+      tools: [
+        defineTool({
+          name: 'intent_probe',
+          description: 'Probe another model round',
+          parameters: Type.Object({}),
+          execute: async () => ({ content: [{ type: 'text', text: 'Continue' }] }),
+        }),
+      ],
+      hooks: [
+        ...server.host.registry.snapshot().extension('conversations')!.hooks!,
+        hook(GenerationTask, {
+          beforeRequest: async () => {
+            await gate
+            return undefined
+          },
+        }),
+      ],
+    }),
+  )
+  server.host.faux!.setResponses([
+    fauxAssistantMessage([fauxToolCall('intent_probe', {})], { stopReason: 'toolUse' }),
+    fauxAssistantMessage('Final answer.'),
+  ])
+  const submission = await server.root.submit(
+    { type: 'input', content: 'Build a sidebar.' },
+    context,
+  )
+  const intents = () =>
+    fixture.server.harness.commit(
+      async (tx) =>
+        (await tx.scanEntries({ conversationId: fixture.server.root.id }, 100)).items.filter(
+          (entry) => IntentSummarized.is(entry),
+        ),
+      context,
+    )
+  try {
+    await until(async () => (await intents()).length === 1)
+    expect((await submission.status(context)).status).toBe('placed')
+    expect((await fixture.read())?.exchanges).toBe(0)
+    expect((await fixture.read())?.assessment).toBeUndefined()
+    expect(fixture.generated.mock.calls.map((call) => call[5])).toEqual(['intent'])
+    expect(fixture.generated.mock.calls[0][1]).toContain('Build a sidebar.')
+    const entries = await intents()
+    expect(entries[0].data).toEqual({
+      summary: 'Added concise summaries to the sidebar.',
+      at: expect.any(Number),
+    })
+    expect(entries[0].model).toBeUndefined()
+    const view = await server.root.context(context)
+    expect(JSON.stringify(view.messages)).not.toContain('Added concise summaries')
+    expect(
+      view.contributions[view.entries.findIndex((entry) => entry.id === entries[0].id)],
+    ).toEqual([])
+  } finally {
+    release()
+  }
+  await submission.wait(context)
+  await until(
+    async () => (await fixture.read())?.exchanges === 1 && !(await fixture.read())?.pending,
+  )
+  const entries = await intents()
+  await fixture.exchange()
+  expect(await intents()).toEqual(entries)
+  await fixture.reopen()
+  expect(await intents()).toEqual(entries)
+  await fixture.action('reset')
+  await fixture.exchange()
+  expect(fixture.generated.mock.calls.filter((call) => call[5] === 'intent')).toHaveLength(2)
+  expect((await fixture.read())?.exchanges).toBe(1)
+}, 60000)
+
+it.each(['newer', 'reset', 'spawn'] as const)(
+  'rejects a held initial intent after %s',
+  async (change) => {
+    const fixture = await launch(false, true)
+    let release!: () => void
+    const gate = new Promise<void>((done) => {
+      release = done
+    })
+    fixture.generated.mockImplementationOnce(async () => {
+      await gate
+      return { assessment: 'neutral', activity: '', title: 'Stale intent', summary: 'Stale intent' }
+    })
+    // Hold the main request too, so the intent starts before any reply can supersede it.
+    let resume!: () => void
+    const main = new Promise<void>((done) => {
+      resume = done
+    })
+    fixture.server.host.registry.install(
+      defineExtension({
+        ...fixture.server.host.registry.snapshot().extension('conversations')!,
+        hooks: [
+          ...fixture.server.host.registry.snapshot().extension('conversations')!.hooks!,
+          hook(GenerationTask, {
+            beforeRequest: async () => {
+              await main
+              return undefined
+            },
+          }),
+        ],
+      }),
+    )
+    fixture.server.host.faux!.setResponses([fauxAssistantMessage('Final reply.')])
+    const submitted = await fixture.server.root.submit(
+      { type: 'input', content: 'Initial goal' },
+      context,
+    )
+    await until(() => fixture.generated.mock.calls.length === 1)
+    try {
+      if (change === 'newer')
+        await fixture.server.root.submit({ type: 'input', content: 'Changed goal' }, context)
+      else if (change === 'spawn') {
+        const entries = await fixture.server.root.context(context)
+        await fixture.spawn(entries.entries.find((entry) => entry.kind === 'pi.user')!.id)
+      } else {
+        // A reset is only allowed while idle. Let the main reply supersede the intent first.
+        resume()
+        await submitted.wait(context)
+        await until(async () => (await fixture.read())?.exchanges === 1)
+        await fixture.action('reset')
+      }
+      release()
+      await until(
+        async () =>
+          Object.values((await fixture.server.harness.inspect(context)).tasks).filter(
+            (task) => task.record.kind === 'conversations.summary',
+          ).length === 0,
+      )
+      const entries = await fixture.server.harness.commit(
+        (tx) => tx.scanEntries({ conversationId: fixture.server.root.id }, 100),
+        context,
+      )
+      expect(entries.items.filter((entry) => IntentSummarized.is(entry))).toEqual([])
+      expect((await fixture.read())?.summary).not.toBe('Stale intent')
+    } finally {
+      release()
+      resume()
+      fixture.server.host.faux!.appendResponses([
+        fauxAssistantMessage('Final reply.'),
+        fauxAssistantMessage('Final reply.'),
+      ])
+    }
+  },
+  60000,
+)
