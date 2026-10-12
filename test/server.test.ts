@@ -39,7 +39,7 @@ async function fixture(
   agents = false,
   sources?: Record<string, string>,
   empty = false,
-  workspaceCandidate?: 'subagents' | 'instance',
+  workspaceCandidate?: 'subagents' | 'instance' | 'automations',
 ) {
   const directory = await temp()
   directories.push(directory)
@@ -103,9 +103,14 @@ async function fixture(
       join(folder, 'candidate.ts'),
       await readFile(resolvePath(`extensions/${workspaceCandidate}/server.ts`), 'utf8'),
     )
-    if (workspaceCandidate === 'subagents')
+    if (workspaceCandidate === 'subagents' || workspaceCandidate === 'automations') {
+      const helpers = join(ultimateRoot, 'extensions/subagents')
+      await mkdir(helpers, { recursive: true })
       for (const file of ['agents.ts', 'children.ts'])
-        await cp(resolvePath('extensions/subagents', file), join(folder, file))
+        await cp(resolvePath('extensions/subagents', file), join(helpers, file))
+    }
+    if (workspaceCandidate === 'automations')
+      await cp(resolvePath('extensions/automations/schedule.ts'), join(folder, 'schedule.ts'))
   }
   if (empty) {
     await rm(join(ultimateRoot, 'extensions'), { recursive: true })
@@ -1040,9 +1045,14 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     expect(entry().server!.loadedAt).toBe(successful)
     expect(server.host.registry.snapshot().extension('counter')).toBe(installed)
   })
-  it.each(['subagents', 'instance'] as const)(
-    'retains the installed %s facet when its actual replacement requires an unavailable workspace core',
-    async (name) => {
+  it.each([
+    ['subagents', false],
+    ['instance', false],
+    ['automations', false],
+    ['automations', true],
+  ] as const)(
+    'retains the installed %s facet when its actual replacement requires an unavailable workspace core (partial service: %s)',
+    async (name, partial) => {
       const legacy = `import { defineDoc, defineExtension, section } from '@earendil-works/pi-durable'
 export const Doc = defineDoc({ kind: 'test.${name}-legacy', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', initial: () => ({ version: 'legacy' }) })
 export const docs = [Doc]
@@ -1062,13 +1072,17 @@ export const actions = { ping: async (_args, ctx) => ({ version: 'legacy', dispo
         path,
         `import candidate from './candidate.ts'
 export const actions = { replacement: async () => 'new' }
-export default host => { const { workspaces, ...oldCore } = host; return candidate(oldCore) }`,
+export default host => { const { workspaces, ...oldCore } = host; ${partial ? 'const { blockingLifecycle, ...previousService } = workspaces; return candidate({ ...oldCore, workspaces: previousService })' : 'return candidate(oldCore)'} }`,
       )
+      const requirement =
+        name === 'automations'
+          ? 'automations requires core workspace admission'
+          : `${name} requires host.workspaces`
       await expect
         .poll(() => server.extensions.info().find((entry) => entry.name === name)?.server?.error)
-        .toContain(`${name} requires host.workspaces`)
+        .toContain(requirement)
       const record = server.extensions.info().find((entry) => entry.name === name)!
-      expect(record.server!.error).toContain(`${name} requires host.workspaces`)
+      expect(record.server!.error).toContain(requirement)
       expect(record.server!.loadedAt).toBe(loadedAt)
       expect(server.host.registry.snapshot().extension(name)).toBe(installed)
       expect(server.extensions.doc(`test.${name}-legacy`)).toBe(doc)
@@ -1092,7 +1106,9 @@ export default host => { const { workspaces, ...oldCore } = host; return candida
           .snapshot()
           .extension(name)!
           .tools?.map((tool) => tool.name),
-      ).toContain(name === 'subagents' ? 'subagent' : 'instance')
+      ).toContain(
+        name === 'subagents' ? 'subagent' : name === 'automations' ? 'automation' : 'instance',
+      )
     },
   )
   it('keeps hot reloading extensions after a Vite config change restarts Vite', async () => {

@@ -315,6 +315,121 @@ it('persists one background preparation failure report across reopen without sub
   expect(childView.value.entries.filter((entry) => entry.kind === 'pi.user')).toHaveLength(0)
   childView.dispose()
 })
+it.each(['pending', 'failed'] as const)(
+  'explicit child stop during %s preparation suppresses the reporter across failure and reopen',
+  async (phase) => {
+    const f = await fixture()
+    new ProjectTrustStore(join(f.prepared.userHome, '.ultimate')).set(f.project, true)
+    await mkdir(join(f.project, '.ultimate'))
+    const release = join(f.home, 'release-failed-setup')
+    await writeFile(
+      join(f.project, '.ultimate/settings.json'),
+      JSON.stringify({
+        isolates: {
+          worktree: {
+            setup: [
+              `while [ ! -f '${release}' ]; do sleep 0.05; done; echo stopped-setup-failed >&2; exit 1`,
+            ],
+          },
+        },
+      }),
+    )
+    const gate = await f.opened.harness.commit(
+      (tx) =>
+        tx.createTask(Gate, null, {
+          conversationId: f.opened.root.id,
+          ownership: { kind: 'conversation' },
+          background: true,
+        }),
+      context,
+    )
+    const phases = f.prepared.registry
+      .snapshot()
+      .extension('subagents')!
+      .tasks!.find((task) => task.definition.name === 'ultimate.subagent-reporter')!.definition
+      .phases as TaskDefinition<
+      { conversationId: ConversationId; text: string; steer: boolean },
+      { phase: 'deliver' } | { phase: 'report'; report?: string; answer?: EntryId },
+      null,
+      object
+    >['phases']
+    const delayed = vi
+      .spyOn(phases, 'report')
+      .mockImplementationOnce(async (task, runtime, ctx) => {
+        await runtime.commit(
+          () => ({
+            status: 'waiting',
+            on: [gate],
+            policy: 'allSettled',
+            checkpoint: task.state.checkpoint,
+          }),
+          ctx,
+        )
+      })
+    await f.call({
+      action: 'start',
+      agent: 'worker',
+      task: 'never deliver this input',
+      background: true,
+    })
+    const child = (await f.children())[0]
+    const reporter = Object.values(
+      (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!.actions,
+    )[0].reporter!
+    if (phase === 'failed') {
+      await writeFile(release, '')
+      await until(
+        async () => (await f.opened.harness.getTask(reporter, context))?.state.status === 'waiting',
+      )
+    }
+    expect((await f.prepared.workspaces.snapshot(child.conversationId, context))!.preparation).toBe(
+      phase === 'pending' ? 'pending' : 'error',
+    )
+    expect((await f.opened.harness.getTask(reporter, context))!.state).toMatchObject({
+      checkpoint: { phase: phase === 'pending' ? 'deliver' : 'report' },
+    })
+    expect(await f.call({ action: 'stop', id: child.conversationId })).toContain(
+      `Stopped ${child.conversationId}`,
+    )
+    expect((await f.opened.harness.waitForTask(reporter, context)).state.outcome.status).toBe(
+      'aborted',
+    )
+    await writeFile(release, '')
+    await until(
+      async () =>
+        (await f.prepared.workspaces.snapshot(child.conversationId, context))?.preparation ===
+        'error',
+    )
+    expect(delayed).toHaveBeenCalledTimes(phase === 'pending' ? 0 : 1)
+    delayed.mockRestore()
+    await f.opened.harness.abortTask(gate, context)
+    await f.opened.close()
+    hosts.splice(hosts.indexOf(f.opened), 1)
+    f.opened = await f.prepared.open()
+    hosts.push(f.opened)
+    await f.opened.root.waitForIdle(context)
+    const parentView = await f.opened.root.viewState(context)
+    expect(
+      parentView.value.entries.filter(
+        (entry) =>
+          entry.kind === 'pi.user' &&
+          JSON.stringify(entry.model).includes(`[subagent ${child.conversationId} failed:`),
+      ),
+    ).toHaveLength(0)
+    parentView.dispose()
+    const childView = await (await f.opened.harness.conversation(
+      child.conversationId,
+      context,
+    ))!.viewState(context)
+    expect(childView.value.entries.filter((entry) => entry.kind === 'pi.user')).toHaveLength(0)
+    childView.dispose()
+    expect(
+      Object.values(
+        (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!.actions,
+      )[0].status,
+    ).toBe('unanswered')
+  },
+)
 it('runs setup once with source env and removes a failed worktree', async () => {
   const f = await fixture()
   await mkdir(join(f.project, '.ultimate'))
