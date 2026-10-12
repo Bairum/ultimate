@@ -77,6 +77,28 @@ it('automatically renders a timestamped title action and keeps it after reload',
     expect(await row.locator('..').evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(
       true,
     )
+    await page.setViewportSize({ width: 1280, height: 800 })
+    const summary = page.getByRole('region', { name: 'Conversation summary' })
+    expect(await summary.textContent()).toContain('Reviewed accessibility.')
+    const conversation = page.locator(`[data-conversation="${server.root.id}"]`)
+    await conversation.hover()
+    await conversation.getByRole('button', { name: 'Conversation actions' }).click()
+    await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
+    await expect
+      .poll(
+        () => page.getByRole('navigation', { name: 'Conversations', exact: true }).textContent(),
+        timeout,
+      )
+      .toBe('')
+    await expect.poll(() => summary.count(), timeout).toBe(0)
+    await page.reload()
+    await untilInput(page)
+    expect(await summary.count()).toBe(0)
+    await page.getByRole('button', { name: /^Archived/ }).click()
+    await conversation.hover()
+    await conversation.getByRole('button', { name: 'Conversation actions' }).click()
+    await page.getByRole('menuitem', { name: 'Unarchive', exact: true }).click()
+    await expect.poll(() => summary.textContent(), timeout).toContain('Reviewed accessibility.')
     expect(errors).toEqual([])
   } finally {
     await browser.close()
