@@ -5,7 +5,7 @@ import { createServer } from 'vite-plus'
 import { expect, it } from 'vitest'
 import { linkDependencies, skipWithoutChromium, temp } from './helpers.ts'
 
-it('preserves the shared server rate on navigation/remount, explains instance scope and cleans up stale/error requests', async (test) => {
+it('preserves the shared server rate on navigation/remount, explains it and cleans up stale/error requests', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const base = await temp('ultimate-status-line-browser-')
@@ -117,16 +117,8 @@ window.fixture = {
       'Output ↓123.0',
       'Cache read 369.0',
       'Cache write 492.0',
-      'entire instance · all conversations and subagents',
-      'parallel/background additive',
-      'Rolling 30s',
-      '1.0s observed',
-      'reporting may arrive late',
-      'not instantaneous decoding',
-      'Historical tokens',
-      'new conversations count from creation',
-      'tool usage excluded',
-      'Reasoning is not added again',
+      'across all conversations, averaged over the last 30 seconds',
+      'tool usage is excluded',
     ])
       expect(tip).toContain(text)
     await page.mouse.move(700, 500)

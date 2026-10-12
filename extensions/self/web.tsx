@@ -160,10 +160,8 @@ function CoreStale() {
         </button>
       </TooltipTrigger>
       <TooltipContent className="max-w-80 font-mono text-[11px]" side="bottom">
-        Restart the shared Ultimate host for all conversations, not an isolated checkout. server/ or
-        shared/ changed since generation {system?.process.generation} booted. This manual action
-        type-checks and boots a new core; if it fails, this one keeps serving. Landing changes does
-        not automatically restart the host.
+        server/ or shared/ changed since generation {system?.process.generation} booted. Restart
+        type-checks and boots a new core next to this one; if it fails, this one keeps serving.
       </TooltipContent>
     </Tooltip>
   )

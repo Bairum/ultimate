@@ -151,13 +151,13 @@ it('expands real agent roles and outcomes, separates Replied from Luna Done, and
     expect(await childRow(scout).textContent()).toContain('coordinator to choose')
     expect(
       await childRow(scout)
-        .getByRole('img', { name: /Needs coordinator\/input/ })
+        .getByRole('img', { name: /May need input \(Luna's opinion, not verified\)/ })
         .count(),
     ).toBe(1)
     expect(await childRow(worker).textContent()).toContain('Replied')
     expect(
       await childRow(worker)
-        .getByRole('img', { name: /Done · Luna assessment/ })
+        .getByRole('img', { name: /Done \(Luna's opinion, not verified\)/ })
         .count(),
     ).toBe(1)
     expect(await childRow(reviewer).getByRole('img').count()).toBe(0)
@@ -189,13 +189,13 @@ it('expands real agent roles and outcomes, separates Replied from Luna Done, and
       .toBe(1)
     expect(
       await childRow(worker)
-        .getByRole('img', { name: /Done · Luna/ })
+        .getByRole('img', { name: /Done \(Luna/ })
         .count(),
     ).toBe(0)
     expect(
       await page
         .locator('[data-conversation="1"]')
-        .getByRole('img', { name: /Done · Luna/ })
+        .getByRole('img', { name: /Done \(Luna/ })
         .count(),
     ).toBe(0)
     release()

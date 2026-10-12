@@ -9,21 +9,8 @@ import {
 import type { ConversationId, Cursor, EntryId, TaskId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { currentAnswer, Summaries } from './summary.ts'
-import type { Assessment } from './summary.ts'
+import type { OverviewRow, OverviewState } from './types.ts'
 
-export type OverviewRow = {
-  parentId?: number
-  role?: string
-  runState: 'working' | 'queued' | 'idle' | 'done' | 'error'
-  inputId?: number
-  answerId?: number
-  summary?: string
-  summaryStatus?: 'pending' | 'ready' | 'error'
-  activity?: string
-  assessment?: Assessment
-  assessmentStatus?: 'pending' | 'ready' | 'error'
-}
-export type OverviewState = { conversations: Record<string, OverviewRow> }
 export const Overview = defineDoc<OverviewState>({
   kind: 'ultimate.conversation-overview',
   version: 1,
@@ -35,7 +22,7 @@ export const Overview = defineDoc<OverviewState>({
 
 /** A single root index; hydrate once, then read only rows affected by meaningful commits. */
 export function overviewBehavior(
-  host: Pick<ExtensionHost, 'harness' | 'metadata' | 'onOpen' | 'onClose' | 'notice'>,
+  host: Pick<ExtensionHost, 'harness' | 'onOpen' | 'onClose' | 'notice'>,
 ) {
   let stop: (() => void) | undefined
   let closed = false
@@ -49,9 +36,7 @@ export function overviewBehavior(
     await harness.commit(async (tx) => {
       const index = await tx.doc(Overview, ROOT_CONVERSATION_ID)
       for (const [position, id] of ids.entries()) {
-        const own = await tx.conversation(id)
-        if (!own) continue
-        const metadata = await tx.doc(host.metadata, id)
+        if (!(await tx.conversation(id))) continue
         const state = states[position]
         const live = await tx.doc(LiveDoc, id)
         const inbox = await tx.doc(InboxDoc, id)
@@ -77,8 +62,6 @@ export function overviewBehavior(
             ? state.assessment
             : undefined
         const row: OverviewRow = {
-          ...(own.owner ? { parentId: own.owner.conversationId } : {}),
-          ...(metadata.label ? { role: metadata.label } : {}),
           runState: live.run
             ? 'working'
             : inbox.items.some((item) => item.mode !== 'write')
@@ -149,8 +132,6 @@ export function overviewBehavior(
           change.type === 'document' &&
           change.conversationId !== undefined &&
           (change.record.kind === Summaries.definition.kind ||
-            (change.record.kind === host.metadata.definition.kind &&
-              change.ops.some((op) => op[0] === 'r' || op[1][0] === 'label')) ||
             (change.record.kind === LiveDoc.definition.kind &&
               change.ops.some((op) => op[0] === 'r' || op[1][0] === 'run')) ||
             change.record.kind === InboxDoc.definition.kind)

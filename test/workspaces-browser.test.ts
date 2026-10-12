@@ -57,7 +57,7 @@ it('opts in without model input, keeps shared reuse and manages every isolated d
     await untilInput(page)
     await page.getByRole('button', { name: 'Conversation creation options', exact: true }).click()
     await page.getByRole('menuitem', { name: 'New isolated conversation…', exact: true }).click()
-    await page.getByRole('button', { name: 'Create isolated conversation', exact: true }).click()
+    await page.getByRole('dialog').getByRole('button', { name: 'Create', exact: true }).click()
     await until(() => receivedId > 0)
     await expect
       .poll(
@@ -133,7 +133,6 @@ it('opts in without model input, keeps shared reuse and manages every isolated d
     expect(await panel.textContent()).toContain('Setting up…')
     await page.getByRole('button', { name: `Workspace W${fixtures.error}`, exact: true }).click()
     expect(await panel.textContent()).toContain('Recorded setup failure for inspection')
-    expect(await panel.textContent()).toContain('create a new isolated conversation')
     expect(await panel.textContent()).toContain('Removed')
     // Close presentation fixtures so only the real active workspace's controls are selected below.
     await page.getByRole('button', { name: `Workspace W${fixtures.pending}`, exact: true }).click()
@@ -164,40 +163,36 @@ it('opts in without model input, keeps shared reuse and manages every isolated d
       context,
     )
     await expect
-      .poll(
-        () => card.getByRole('button', { name: 'Land verified tip', exact: true }).isDisabled(),
-        timeout,
-      )
+      .poll(() => card.getByRole('button', { name: 'Land', exact: true }).isDisabled(), timeout)
       .toBe(true)
-    expect(await panel.textContent()).toContain('Conversation is busy')
+    expect(await panel.textContent()).toContain('Conversation is running')
     release()
     await server.harness.waitForTask(task, context)
     await expect
-      .poll(
-        () => card.getByRole('button', { name: 'Land verified tip', exact: true }).isDisabled(),
-        timeout,
-      )
+      .poll(() => card.getByRole('button', { name: 'Land', exact: true }).isDisabled(), timeout)
       .toBe(false)
     await writeFile(join(active.path, 'change.txt'), 'change')
-    await card.getByRole('button', { name: 'Remove checkout…', exact: true }).click()
-    expect(await panel.textContent()).toContain('branch, commits and conversation history stay')
-    await card.getByRole('button', { name: 'Confirm clean-only removal', exact: true }).click()
+    await card.getByRole('button', { name: 'Remove…', exact: true }).click()
+    expect(await panel.textContent()).toContain(
+      'Remove this checkout? Its branch and commits stay.',
+    )
+    await card.getByRole('button', { name: 'Remove', exact: true }).click()
     await expect
       .poll(() => panel.getByRole('alert').textContent(), timeout)
       .toContain('contains modified or untracked files')
     await git(active.path, 'add', '.')
     await git(active.path, 'commit', '-m', 'workspace change')
     const firstTip = await git(active.path, 'rev-parse', 'HEAD')
-    await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-    await card.getByRole('button', { name: 'Land verified tip', exact: true }).click()
-    await expect.poll(() => panel.textContent(), timeout).toContain(firstTip)
+    await card.getByRole('button', { name: 'Land', exact: true }).click()
+    await expect.poll(() => panel.textContent(), timeout).toContain('Landed 1 commit.')
+    await expect.poll(() => panel.textContent(), timeout).toContain(firstTip.slice(0, 7))
     await writeFile(join(active.path, 'later.txt'), 'later')
     await git(active.path, 'add', '.')
     await git(active.path, 'commit', '-m', 'later workspace change')
     await page.getByRole('button', { name: `Refresh W${receivedId}`, exact: true }).click()
-    await expect.poll(() => panel.textContent(), timeout).toContain('1 commit ahead')
+    await expect.poll(() => card.textContent(), timeout).toContain('Ahead1 commit')
     expect(await panel.textContent()).toContain('Ready')
-    expect(await panel.textContent()).toContain('not a claim that the current tip is applied')
+    expect(await panel.textContent()).toContain('Last landed')
     // Archive and reset do not invoke removal or alter the saved branch tip.
     const laterTip = await git(active.path, 'rev-parse', 'HEAD')
     await row(page, receivedId).hover()
@@ -208,8 +203,8 @@ it('opts in without model input, keeps shared reuse and manages every isolated d
     expect(await git(active.path, 'rev-parse', 'HEAD')).toBe(laterTip)
     await post(server, '/api/extensions/conversations/actions/reset', { args: { id: receivedId } })
     expect(await git(active.path, 'rev-parse', 'HEAD')).toBe(laterTip)
-    await card.getByRole('button', { name: 'Remove checkout…', exact: true }).click()
-    await card.getByRole('button', { name: 'Confirm clean-only removal', exact: true }).click()
+    await card.getByRole('button', { name: 'Remove…', exact: true }).click()
+    await card.getByRole('button', { name: 'Remove', exact: true }).click()
     await until(async () => (await info(receivedId))?.state === 'removed')
     expect(await git(projectRoot, 'rev-parse', active.branch)).toBe(laterTip)
     expect(errors).toEqual([])

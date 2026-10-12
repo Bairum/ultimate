@@ -25,9 +25,8 @@ import type {
   Usage,
 } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import type { Assessment, AssessmentValue } from './types.ts'
 
-export type AssessmentValue = 'needs_input' | 'done' | 'neutral'
-export type Assessment = { inputId: EntryId; answerId: EntryId; value: AssessmentValue }
 export type SummaryResult = {
   assessment: AssessmentValue
   activity: string

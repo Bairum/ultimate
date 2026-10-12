@@ -259,57 +259,8 @@ async function waitInterruptibly(
   }
 }
 
-async function runLifecycle(
-  host: ExtensionHost,
-  parent: ConversationId,
-  child: ConversationId,
-  operation: 'land' | 'discard',
-) {
-  const index = await host.harness().snapshot(Subagents, parent, BACKGROUND_CONTEXT)
-  if (!index?.agents[String(child)])
-    throw new Error('id must identify a child of this conversation')
-  return workspaces(host)[operation](child, BACKGROUND_CONTEXT)
-}
-function childId(args: JsonValue, conversationId?: number) {
-  if (
-    !conversationId ||
-    !args ||
-    typeof args !== 'object' ||
-    Array.isArray(args) ||
-    typeof args.id !== 'number'
-  )
-    throw new Error('conversationId and child id are required')
-  return args.id as ConversationId
-}
-/** Isolate operations and definitions for the Agents tab. */
+/** Definitions for the Agents tab. */
 export const actions = {
-  async land(args: JsonValue, { host, conversationId }: ActionContext) {
-    return runLifecycle(
-      host,
-      conversationId as ConversationId,
-      childId(args, conversationId),
-      'land',
-    )
-  },
-  async discard(args: JsonValue, { host, conversationId }: ActionContext) {
-    return runLifecycle(
-      host,
-      conversationId as ConversationId,
-      childId(args, conversationId),
-      'discard',
-    )
-  },
-  /** `{parent, id}`: the child's isolate and its commits ahead of the parent checkout, or null without one. */
-  async isolate(args: JsonValue, { host }: ActionContext) {
-    // The Agents tab may show another conversation, so the parent comes with the args.
-    const parent = (args as { parent?: JsonValue } | null)?.parent
-    const id = childId(args, typeof parent === 'number' ? parent : undefined)
-    const harness = host.harness()
-    const conversationId = parent as ConversationId
-    const index = await harness.snapshot(Subagents, conversationId, BACKGROUND_CONTEXT)
-    if (!index?.agents[String(id)]) throw new Error('id must identify a child of this conversation')
-    return workspaces(host).info(id, BACKGROUND_CONTEXT)
-  },
   /**
    * The definitions without their instructions and the files that failed to parse, and for the config view the main
    * conversation's model and tools (a definition may list a subset), where each scope saves, and whether the

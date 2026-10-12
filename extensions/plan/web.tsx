@@ -26,16 +26,16 @@ import {
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
-  api,
   cn,
   defineWebExtension,
-  errorMessage,
   useAction,
   useConversations,
   useToolDuration,
   useUltimate,
 } from '@/sdk'
 import type { ConversationSummary, DocumentProps, ToolCallView } from '@/sdk'
+import { stateLabel, useWorkspaceAction } from '../workspaces/data.tsx'
+import type { WorkspaceInfo } from '../workspaces/types.ts'
 
 /** The `ultimate.plan` document, as `server.ts` defines it. */
 type Task = {
@@ -57,15 +57,6 @@ type Epic = {
   tasks: Record<string, Task>
 }
 type Plan = { next: number; epics: Record<string, Epic> }
-
-/** A child's isolate, as the subagents extension's `isolate` action returns it. */
-type Isolate = {
-  branch: string
-  path: string
-  state: 'active' | 'discarded'
-  landed?: string
-  ahead: number | null
-}
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 
@@ -138,49 +129,18 @@ function useRefresh(refetch: () => unknown, key: string) {
 }
 
 /**
- * The linked child's worktree isolate: branch, state, commits ahead, and Land, which acts for the child's parent
- * through the subagents extension. Refetched when the child or its parent settles, since either may have committed or
- * landed.
+ * The linked child's workspace: branch, state, commits ahead, and Land through the `workspaces` actions. Refetched
+ * when the child or its parent settles, since either may have committed or landed.
  */
 function IsolateRow({ child, parent }: { child: ConversationSummary; parent: number }) {
   const conversations = useConversations()
   const parentBusy = conversations.find((conversation) => conversation.id === parent)?.busy
-  const { data: isolate, refetch } = useAction<Isolate | null>('subagents', 'isolate', {
-    parent,
+  const { data: isolate, refetch } = useAction<WorkspaceInfo | null>('workspaces', 'info', {
     id: child.id,
   })
   useRefresh(refetch, `${child.busy} ${parentBusy}`)
-  const [landing, setLanding] = useState(false)
-  const [outcome, setOutcome] = useState<{ tone: 'error' | 'info' | 'warning'; text: string }[]>()
+  const { pending, outcome, land } = useWorkspaceAction(child.id, refetch)
   if (!isolate) return null
-  const land = async () => {
-    setLanding(true)
-    setOutcome(undefined)
-    try {
-      const result = await api.action<{ text: string; paths?: string[]; needsRestart?: boolean }>(
-        'subagents',
-        'land',
-        { id: child.id },
-        { conversationId: parent },
-      )
-      setOutcome([
-        {
-          tone: 'info',
-          text: result.paths
-            ? `Landed ${result.paths.length} changed path${result.paths.length === 1 ? '' : 's'}.`
-            : result.text,
-        },
-        ...(result.needsRestart
-          ? [{ tone: 'warning' as const, text: 'Changed server/ or shared/: restart to apply.' }]
-          : []),
-      ])
-    } catch (error) {
-      setOutcome([{ tone: 'error', text: errorMessage(error) }])
-    } finally {
-      setLanding(false)
-      await refetch()
-    }
-  }
   return (
     <div className="font-mono text-[11px] text-muted-foreground">
       <div className="flex h-6 min-w-0 items-center gap-1.5">
@@ -190,18 +150,16 @@ function IsolateRow({ child, parent }: { child: ConversationSummary; parent: num
         </span>
         <Tag
           className={cn(
-            isolate.state === 'discarded'
+            isolate.state === 'removed'
               ? 'text-muted-foreground/70'
               : isolate.landed
                 ? 'border-success/40 text-success'
                 : 'border-brand/40 text-brand',
           )}
         >
-          {isolate.state === 'discarded'
-            ? 'discarded'
-            : isolate.landed
-              ? `landed ${isolate.landed.slice(0, 7)}`
-              : 'active'}
+          {isolate.state === 'ready' && isolate.landed
+            ? `Landed ${isolate.landed.slice(0, 7)}`
+            : stateLabel(isolate)}
         </Tag>
         {isolate.ahead !== null && (
           <span
@@ -212,36 +170,29 @@ function IsolateRow({ child, parent }: { child: ConversationSummary; parent: num
           </span>
         )}
         {/* A landed branch with nothing new needs no button; later commits bring it back. */}
-        {isolate.state === 'active' && !(isolate.landed && isolate.ahead === 0) && (
+        {isolate.state === 'ready' && !(isolate.landed && isolate.ahead === 0) && (
           <Button
             className="ml-auto h-5 shrink-0 gap-1 px-1.5 text-[11px]"
-            disabled={child.busy || landing}
+            disabled={child.busy || pending !== undefined}
             onClick={() => void land()}
             size="xs"
-            title={
-              child.busy
-                ? 'The child is running: wait or stop it first'
-                : 'Rebase its commits onto the parent checkout and fast-forward'
-            }
             variant="ghost"
           >
             <GitMergeIcon className="size-3" />
-            {landing ? 'Landing…' : 'Land'}
+            {pending ? 'Landing…' : 'Land'}
           </Button>
         )}
       </div>
-      {outcome?.map((line) => (
+      {outcome && (
         <p
           className={cn(
             'leading-snug break-words whitespace-pre-wrap',
-            line.tone === 'error' && 'text-error',
-            line.tone === 'warning' && 'text-warning',
+            outcome.error && 'text-error',
           )}
-          key={line.text}
         >
-          {line.text}
+          {outcome.text}
         </p>
-      ))}
+      )}
     </div>
   )
 }

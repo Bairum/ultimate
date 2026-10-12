@@ -15,8 +15,8 @@ solid when an answer arrived since you last looked at it. Actual foreground task
 Working, not the potentially lagging title/timestamp list. While working, old assessment marks are suppressed.
 
 Idle, currently assessed replies may show a circular question (needs input) or green circular check (Done). These are
-**Luna assessments, not verified completion**; the tooltips say so. For a child, a question means it needs
-coordinator/input, not necessarily a human. Unknown, neutral, stale or failed assessments never show a success mark.
+**Luna assessments, not verified completion**; the tooltips say so. For a child, a question means it may need its
+coordinator, not necessarily a human. Unknown, neutral, stale or failed assessments never show a success mark.
 There is no third red blocked/unfinished assessment.
 
 A conversation with genuinely owned children has an expandable Agents group. Rows show the recorded agent role/name,
@@ -86,8 +86,9 @@ When Luna is unavailable in the model runtime, summaries and assessments are ski
 ## Shared sidebar index
 
 `ultimate.conversation-overview` keeps sidebar rows in the root conversation document.
-Rows include child links, roles, run state, summaries, activity and assessments tied to their input and answer.
+Rows include run state, summaries, activity and assessments tied to their input and answer.
 Replied means an answer arrived; Done is Luna's opinion, not proof of completion.
-One root-document stream serves all rows. Titles and timestamps come from the core conversation list.
+One root-document stream serves all rows. Titles, timestamps, child links and agent labels come from the core
+conversation list.
 On open, the extension rebuilds rows from stored conversations without requesting old assessments.
 Afterwards it updates affected rows when work or summaries change, ignoring live stream chunks.

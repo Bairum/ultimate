@@ -46,20 +46,7 @@ import {
   getWorkspaces,
   useWorkspaceConversations as useConversations,
 } from '../workspaces/data.tsx'
-type Assessment = { inputId: number; answerId: number; value: 'needs_input' | 'done' | 'neutral' }
-type OverviewRow = {
-  parentId?: number
-  role?: string
-  runState: 'working' | 'queued' | 'idle' | 'done' | 'error'
-  inputId?: number
-  answerId?: number
-  summary?: string
-  summaryStatus?: 'pending' | 'ready' | 'error'
-  activity?: string
-  assessment?: Assessment
-  assessmentStatus?: 'pending' | 'ready' | 'error'
-}
-type OverviewState = { conversations: Record<string, OverviewRow> }
+import type { Assessment, OverviewRow, OverviewState } from './types.ts'
 
 const newKeys = 'mod+alt+n'
 const resetDialog = 'conversations.reset'
@@ -218,12 +205,10 @@ function Mark({
   working,
   unseen,
   assessment,
-  child,
 }: {
   working?: 'self' | 'subagents'
   unseen: boolean
   assessment?: Assessment
-  child?: boolean
 }) {
   const assessed = !working && assessment?.value !== 'neutral' ? assessment?.value : undefined
   const label = working
@@ -231,11 +216,9 @@ function Mark({
       ? 'Working'
       : 'Subagents working'
     : assessed === 'done'
-      ? 'Done · Luna assessment, not verified'
+      ? "Done (Luna's opinion, not verified)"
       : assessed === 'needs_input'
-        ? child
-          ? 'Needs coordinator/input · Luna assessment'
-          : 'Needs input · Luna assessment'
+        ? "May need input (Luna's opinion, not verified)"
         : 'New answer'
   return (
     <span className="flex size-3 shrink-0 items-center justify-center">
@@ -378,7 +361,7 @@ function Row({
           {conversation.workspace && (
             <span
               className="shrink-0 font-mono text-[10px] text-muted-foreground"
-              title="Isolated workspace · details in Workspaces"
+              title="Isolated checkout"
             >
               W{conversation.id}
             </span>
@@ -487,12 +470,11 @@ function ChildRow({
       <span className="flex w-full items-center gap-1.5">
         <Mark
           assessment={currentAssessment(row)}
-          child
           unseen={false}
           working={working ? 'self' : undefined}
         />
         <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-foreground/80">
-          {row?.role ?? 'Agent'} · #{conversation.id}
+          {conversation.label ?? 'Agent'} · #{conversation.id}
         </span>
         {conversation.workspace && (
           <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
@@ -593,7 +575,7 @@ function Conversations() {
 
   const childrenByParent = new Map<number, ConversationSummary[]>()
   for (const candidate of conversations) {
-    const parent = overview[candidate.id]?.parentId
+    const parent = candidate.parentConversationId
     if (candidate.ownerTaskId === undefined || parent === undefined) continue
     const children = childrenByParent.get(parent) ?? []
     children.push(candidate)
@@ -672,7 +654,7 @@ function Conversations() {
               className="cursor-pointer text-xs"
               onSelect={() => actions.runCommand('conversations.new')}
             >
-              New shared conversation
+              New conversation
             </DropdownMenuItem>
             <DropdownMenuItem
               className="cursor-pointer text-xs"
@@ -834,13 +816,11 @@ function IsolatedDialog() {
       >
         <DialogTitle className="text-sm font-medium">New isolated conversation</DialogTitle>
         <DialogDescription className="text-xs leading-relaxed">
-          Create a separate Git checkout. No model starts until you send a message. Existing shared
-          drafts are unchanged.
+          The conversation gets its own Git checkout of this project.
         </DialogDescription>
         {error && (
           <p role="alert" className="text-xs text-error break-words">
-            {error} Resolve the reported problem and retry; the same creation request is retained,
-            so a lost response will not create a second workspace.
+            {error}
           </p>
         )}
         <div className="flex justify-end gap-2">
@@ -859,7 +839,7 @@ function IsolatedDialog() {
             onClick={() => void create()}
             size="sm"
           >
-            {pending ? 'Creating…' : error ? 'Retry creation' : 'Create isolated conversation'}
+            {pending ? 'Creating…' : 'Create'}
           </Button>
         </div>
       </DialogContent>

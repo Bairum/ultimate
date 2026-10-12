@@ -20,20 +20,15 @@ import {
   ToolSection,
 } from '@/components/ai/tool'
 import { Button } from '@/components/ui/button'
-import {
-  api,
-  cn,
-  defineWebExtension,
-  errorMessage,
-  useAction,
-  useTasks,
-  useToolDuration,
-  useUltimate,
-} from '@/sdk'
+import { cn, defineWebExtension, useAction, useTasks, useToolDuration, useUltimate } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
-import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
-import type { Workspace as Isolate } from '../workspaces/types.ts'
+import {
+  stateLabel,
+  useWorkspaceAction,
+  useWorkspaceConversations as useConversations,
+} from '../workspaces/data.tsx'
+import type { Workspace as Isolate, WorkspaceInfo } from '../workspaces/types.ts'
 import { DefinitionDialog, Definitions } from './definitions.tsx'
 import { Heading, Tag, useRefresh } from './parts.tsx'
 
@@ -45,9 +40,6 @@ function BusyDot({ className }: { className?: string }) {
   )
 }
 
-const isolateState = (isolate: Isolate) =>
-  isolate.state === 'removed' ? 'discarded' : isolate.state
-
 function StateTag({ isolate }: { isolate: Isolate }) {
   return (
     <Tag
@@ -56,12 +48,8 @@ function StateTag({ isolate }: { isolate: Isolate }) {
         isolate.state === 'removed' ? 'text-muted-foreground/70' : 'border-brand/40 text-brand',
       )}
     >
-      <span
-        title={
-          isolate.landed ? `Last landed ${isolate.landed}; the current tip may differ` : undefined
-        }
-      >
-        {isolateState(isolate)}
+      <span title={isolate.landed ? `Last landed ${isolate.landed.slice(0, 7)}` : undefined}>
+        {stateLabel(isolate)}
       </span>
     </Tag>
   )
@@ -210,77 +198,21 @@ function ChildList({ output }: { output: string }) {
   )
 }
 
-/** What `land` returns; `discard` returns only `text`. */
-interface Outcome {
-  text: string
-  landed?: string
-  paths?: string[]
-  needsRestart?: boolean
-}
-/** The `isolate` action: the record and the branch's commits ahead of the parent checkout (null once deleted). */
-type IsolateView = Isolate & { ahead: number | null }
-
-/** Below a child's row: its branch, and Land and Discard, which act for the parent. Results stay inline. */
+/** Below a child's row: its checkout, and Land and Remove. Results stay inline. */
 function IsolateActions({
   child,
-  parent,
   isolate,
   refetch,
   depth,
 }: {
   child: ConversationSummary
-  parent: ConversationSummary
-  isolate: IsolateView
+  isolate: WorkspaceInfo
   refetch: () => unknown
   depth: number
 }) {
-  const [pending, setPending] = useState<'land' | 'discard'>()
   const [confirming, setConfirming] = useState(false)
-  const [outcome, setOutcome] = useState<{ tone: 'error' | 'info' | 'warning'; text: string }[]>()
-  const act = async (action: 'land' | 'discard') => {
-    setConfirming(false)
-    setPending(action)
-    setOutcome(undefined)
-    try {
-      const result = await api.action<Outcome>(
-        'subagents',
-        action,
-        { id: child.id },
-        { conversationId: parent.id },
-      )
-      setOutcome(
-        action === 'discard'
-          ? undefined
-          : [
-              {
-                tone: 'info',
-                text: result.paths
-                  ? `Landed ${result.paths.length} changed path${result.paths.length === 1 ? '' : 's'}.`
-                  : result.text,
-              },
-              ...(result.needsRestart
-                ? [
-                    {
-                      tone: 'warning' as const,
-                      text: 'Changed server/ or shared/: restart to apply.',
-                    },
-                  ]
-                : []),
-            ],
-      )
-    } catch (error) {
-      setOutcome([{ tone: 'error', text: errorMessage(error) }])
-    } finally {
-      setPending(undefined)
-      await refetch()
-    }
-  }
+  const { pending, outcome, land, remove } = useWorkspaceAction(child.id, refetch)
   const disabled = child.busy || pending !== undefined || isolate.state === 'preparing'
-  const reason = child.busy
-    ? 'The child is running: wait or stop it first'
-    : isolate.state === 'preparing'
-      ? 'Workspace preparation is pending'
-      : undefined
   // Under the row's icon.
   const indent = { paddingLeft: `${1.3 + depth}rem` }
   return (
@@ -290,17 +222,13 @@ function IsolateActions({
         <span className="min-w-0 truncate" title={`${isolate.branch}\n${isolate.path}`}>
           W{child.id}
         </span>
-        {isolate.state === 'removed' && (
-          <span className="shrink-0 text-muted-foreground/60">kept</span>
-        )}
         {isolate.state !== 'removed' && !confirming && (
           <span className="ml-auto flex shrink-0 items-center gap-0.5 pl-1">
             <Button
               className="h-5 gap-1 px-1.5 text-[11px]"
               disabled={disabled || isolate.state !== 'ready'}
-              onClick={() => void act('land')}
+              onClick={() => void land()}
               size="xs"
-              title={reason ?? 'Fast-forward the verified SHA into the original target checkout'}
               variant="ghost"
             >
               <GitMergeIcon className="size-3" />
@@ -311,11 +239,10 @@ function IsolateActions({
               disabled={disabled}
               onClick={() => setConfirming(true)}
               size="xs"
-              title={reason ?? 'Remove the worktree; the branch is kept'}
               variant="ghost"
             >
               <Trash2Icon className="size-3" />
-              {pending === 'discard' ? 'Discarding…' : 'Discard'}
+              {pending === 'discard' ? 'Removing…' : 'Remove'}
             </Button>
           </span>
         )}
@@ -328,17 +255,20 @@ function IsolateActions({
       {confirming && (
         <div className="flex min-w-0 items-center gap-1.5 pr-2" style={indent}>
           <span className="min-w-0 font-sans text-[12px] leading-snug text-foreground/85">
-            Remove the worktree? The branch is kept.
+            Remove this checkout? Its branch and commits stay.
           </span>
           <span className="ml-auto flex shrink-0 items-center gap-0.5 pl-1">
             <Button
               className="h-5 px-1.5 text-[11px] text-error hover:bg-error/10 hover:text-error"
               disabled={child.busy}
-              onClick={() => void act('discard')}
+              onClick={() => {
+                setConfirming(false)
+                void remove()
+              }}
               size="xs"
               variant="ghost"
             >
-              Discard
+              Remove
             </Button>
             <Button
               className="h-5 px-1.5 text-[11px]"
@@ -351,19 +281,17 @@ function IsolateActions({
           </span>
         </div>
       )}
-      {outcome?.map((line) => (
+      {outcome && (
         <p
           className={cn(
             'pr-3 leading-snug break-words whitespace-pre-wrap',
-            line.tone === 'error' && 'text-error',
-            line.tone === 'warning' && 'text-warning',
+            outcome.error && 'text-error',
           )}
-          key={line.text}
           style={indent}
         >
-          {line.text}
+          {outcome.text}
         </p>
-      ))}
+      )}
     </div>
   )
 }
@@ -423,10 +351,8 @@ function Row({
 }
 
 /**
- * A subagent's row, with its isolate's state and commits ahead in it and the branch and actions below. Refetched
- * when the child or its parent settles, since either may have committed or landed, and as soon as the parent's
- * `ultimate.subagents` document records a land or discard, such as one by the `subagent` tool. The stream carries
- * the shown conversation's documents only, so the last refresh needs the parent on screen.
+ * A subagent's row, with its workspace's state and commits ahead and the checkout and actions below. Refetched when
+ * the child or its parent settles, since either may have committed or landed, and when its workspace record changes.
  */
 function Child({
   conversation,
@@ -437,8 +363,7 @@ function Child({
   parent: ConversationSummary
   depth: number
 }) {
-  const { data: isolate, refetch } = useAction<IsolateView | null>('subagents', 'isolate', {
-    parent: parent.id,
+  const { data: isolate, refetch } = useAction<WorkspaceInfo | null>('workspaces', 'info', {
     id: conversation.id,
   })
   const recorded = conversation.workspace
@@ -468,13 +393,7 @@ function Child({
         }
       />
       {isolate && (
-        <IsolateActions
-          child={conversation}
-          depth={depth}
-          isolate={isolate}
-          parent={parent}
-          refetch={refetch}
-        />
+        <IsolateActions child={conversation} depth={depth} isolate={isolate} refetch={refetch} />
       )}
     </>
   )

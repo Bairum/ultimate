@@ -1,9 +1,9 @@
-import { useSyncExternalStore } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
-import { useConversations } from '@/sdk'
+import { api, errorMessage, useConversations } from '@/sdk'
 import type { ConversationSummary } from '@/sdk'
-import type { Workspace, WorkspaceIndex } from './types.ts'
+import type { LandResult, Workspace, WorkspaceIndex } from './types.ts'
 
 export type WorkspaceConversation = ConversationSummary & { workspace?: Workspace }
 let items: WorkspaceIndex['items'] = {}
@@ -47,4 +47,37 @@ export function useWorkspaceConversations(): WorkspaceConversation[] {
     ...conversation,
     workspace: records[String(conversation.id)],
   }))
+}
+
+export const stateLabel = (workspace: Workspace) =>
+  ({ preparing: 'Setting up…', ready: 'Ready', failed: 'Setup failed', removed: 'Removed' })[
+    workspace.state
+  ]
+
+/** Land or remove the workspace of conversation `id`, then call `done`; the outcome stays until the next attempt. */
+export function useWorkspaceAction(id: number, done: () => unknown) {
+  const [pending, setPending] = useState<'land' | 'discard'>()
+  const [outcome, setOutcome] = useState<{ error?: boolean; text: string }>()
+  const run = async (operation: 'land' | 'discard') => {
+    setPending(operation)
+    setOutcome(undefined)
+    try {
+      const result = await api.action<LandResult>('workspaces', operation, {
+        id,
+        ...(operation === 'discard' && { confirm: true }),
+      })
+      if (operation === 'land') {
+        const count = result.commits?.length ?? 0
+        setOutcome({
+          text: `${count ? `Landed ${count} commit${count === 1 ? '' : 's'}.` : 'Nothing to land.'}${result.needsRestart ? ' Restart to apply server/ or shared/ changes.' : ''}`,
+        })
+      }
+    } catch (error) {
+      setOutcome({ error: true, text: errorMessage(error) })
+    } finally {
+      setPending(undefined)
+      await done()
+    }
+  }
+  return { pending, outcome, land: () => run('land'), remove: () => run('discard') }
 }

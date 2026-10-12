@@ -205,7 +205,6 @@ function Tokens() {
             ))}
           </div>
           <div className="mt-1 border-t border-border pt-1">
-            <div>Provider-reported model rates · tok/s</div>
             <div>
               Input ↑{speed ? speed.rates.input.toFixed(1) : '?'} · Output ↓
               {speed ? speed.rates.output.toFixed(1) : '?'}
@@ -214,20 +213,10 @@ function Tokens() {
               Cache read {speed ? speed.rates.cacheRead.toFixed(1) : '?'} · Cache write{' '}
               {speed ? speed.rates.cacheWrite.toFixed(1) : '?'}
             </div>
-            <div>
-              Scope: entire instance · all conversations and subagents (parallel/background
-              additive)
+            <div className="mt-1 max-w-72">
+              Model tokens per second across all conversations, averaged over the last 30 seconds.
+              Provider reports may arrive late, and tool usage is excluded.
             </div>
-            <div>
-              Rolling 30s window ·{' '}
-              {speed ? `${speed.elapsed.toFixed(1)}s observed` : 'warming up / unavailable'}
-            </div>
-            <div>Provider reporting may arrive late; not instantaneous decoding speed.</div>
-            <div>
-              Historical tokens before server observation excluded; new conversations count from
-              creation.
-            </div>
-            <div>Model only; tool usage excluded. Reasoning is not added again.</div>
           </div>
         </>
       }

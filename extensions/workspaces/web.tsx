@@ -2,37 +2,20 @@ import { ChevronRightIcon, CopyIcon, GitBranchIcon, RefreshCwIcon } from 'lucide
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { defineWebExtension, useAction, useConversation, useTasks, useUltimate } from '@/sdk'
 import {
-  api,
-  defineWebExtension,
-  errorMessage,
-  useAction,
-  useConversation,
-  useTasks,
-  useUltimate,
-} from '@/sdk'
-import { useWorkspaceConversations as useConversations } from './data.tsx'
+  stateLabel,
+  useWorkspaceAction,
+  useWorkspaceConversations as useConversations,
+} from './data.tsx'
 import type { WorkspaceConversation as ConversationSummary } from './data.tsx'
-import type { Workspace, WorkspaceInfo } from './types.ts'
-
-/** A saved landing is historical, never proof that the current branch tip is applied. */
-const stateLabel = (workspace: Workspace) =>
-  workspace.state === 'removed'
-    ? 'Removed'
-    : workspace.state === 'preparing'
-      ? 'Setting up…'
-      : workspace.state === 'failed'
-        ? 'Setup failed'
-        : 'Ready'
+import type { WorkspaceInfo } from './types.ts'
 
 function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) {
   const actions = useUltimate()
   const shown = useConversation().id === conversation.id
   const [open, setOpen] = useState(shown)
-  const [pending, setPending] = useState<'land' | 'discard'>()
   const [confirming, setConfirming] = useState(false)
-  const [message, setMessage] = useState<string>()
-  const [error, setError] = useState<string>()
   const tasks = useTasks()
   const busy =
     conversation.busy ||
@@ -48,6 +31,7 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
       onError: () => undefined,
     },
   )
+  const { pending, outcome, land, remove } = useWorkspaceAction(conversation.id, info.refetch)
   const recorded = conversation.workspace!
   const workspace =
     info.data && info.data.state === recorded.state && info.data.landed === recorded.landed
@@ -59,45 +43,20 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
   useEffect(() => {
     if (open) void info.refetch()
   }, [recorded.state, recorded.landed, conversation.busy, open, info.refetch])
-  const mutate = async (operation: 'land' | 'discard') => {
-    setPending(operation)
-    setError(undefined)
-    setMessage(undefined)
-    try {
-      await api.action(
-        'workspaces',
-        operation,
-        {
-          id: conversation.id,
-          ...(operation === 'discard' ? { confirm: true } : {}),
-        },
-        { conversationId: conversation.id },
-      )
-      setMessage(
-        operation === 'land'
-          ? 'Landing completed. Refresh details before another operation.'
-          : 'Checkout removed. Branch and history kept.',
-      )
-      setConfirming(false)
-      await info.refetch()
-    } catch (failure) {
-      setError(errorMessage(failure))
-    } finally {
-      setPending(undefined)
-    }
-  }
   const disabled =
     busy ||
     pending !== undefined ||
     workspace.state === 'removed' ||
     workspace.state === 'preparing'
+  const ahead = info.data?.ahead
   const fields = [
     ['Path', workspace.path],
     ['Branch', workspace.branch],
-    ['Source', workspace.source],
-    ['Target', workspace.target],
-    ...(workspace.landed ? [['Last landed', workspace.landed]] : []),
+    ['Target', `${workspace.target} in ${workspace.source}`],
+    ...(typeof ahead === 'number' ? [['Ahead', `${ahead} commit${ahead === 1 ? '' : 's'}`]] : []),
+    ...(workspace.landed ? [['Last landed', workspace.landed.slice(0, 7)]] : []),
   ]
+  const error = outcome?.error ? outcome.text : info.error?.message
   return (
     <Collapsible
       className="border-b border-border/60"
@@ -145,72 +104,47 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
                 <span className="min-w-0 flex-1 font-mono text-[11px] break-all select-text">
                   {value}
                 </span>
-                <button
-                  aria-label={`Copy ${label.toLowerCase()} of W${conversation.id}`}
-                  className="shrink-0 cursor-pointer text-muted-foreground hover:text-foreground"
-                  onClick={() =>
-                    void navigator.clipboard.writeText(value).then(
-                      () => setMessage(`${label} copied.`),
-                      (failure: unknown) => setError(errorMessage(failure)),
-                    )
-                  }
-                  type="button"
-                >
-                  <CopyIcon className="size-3" />
-                </button>
+                {(label === 'Path' || label === 'Branch') && (
+                  <button
+                    aria-label={`Copy ${label.toLowerCase()} of W${conversation.id}`}
+                    className="shrink-0 cursor-pointer text-muted-foreground hover:text-foreground"
+                    onClick={() => void navigator.clipboard.writeText(value)}
+                    type="button"
+                  >
+                    <CopyIcon className="size-3" />
+                  </button>
+                )}
               </dd>
             </div>
           ))}
         </dl>
-        {workspace.landed && (
-          <p className="text-muted-foreground">
-            Last landed is a saved SHA, not a claim that the current tip is applied.
-          </p>
-        )}
-        {info.data?.ahead !== undefined && info.data.ahead !== null && (
-          <p className="text-muted-foreground">
-            {info.data.ahead} commit{info.data.ahead === 1 ? '' : 's'} ahead of the source checkout.
-          </p>
-        )}
         {busy && (
           <p role="status" className="text-muted-foreground">
-            Conversation is busy. Wait for its run to settle or stop it before changing the
-            checkout.
-          </p>
-        )}
-        {workspace.state === 'preparing' && (
-          <p role="status" className="text-muted-foreground">
-            Setup is pending. Refresh to check progress; do not send input until Ready.
+            Conversation is running.
           </p>
         )}
         {workspace.state === 'failed' && (
-          <p role="alert" className="text-error break-words">
-            {workspace.error ?? 'Workspace setup failed.'} Refresh details, then remove the clean
-            checkout or create a new isolated conversation.
+          <p role="alert" className="break-words whitespace-pre-wrap text-error">
+            {workspace.error}
           </p>
         )}
-        {(error || info.error) && (
-          <p role="alert" className="text-error break-words">
-            {error ?? info.error?.message} Resolve the reported blocker, then refresh and retry. No
-            force cleanup is available.
+        {error && (
+          <p role="alert" className="break-words whitespace-pre-wrap text-error">
+            {error}
           </p>
         )}
-        {message && (
+        {outcome && !outcome.error && (
           <p role="status" className="text-muted-foreground">
-            {message}
+            {outcome.text}
           </p>
         )}
         {workspace.state !== 'removed' &&
           (confirming ? (
             <div className="space-y-2 rounded-md border border-border/70 p-3">
-              <p>
-                Remove only this clean checkout? The branch, commits and conversation history stay.
-                Uncommitted changes, active dependents and previews prevent removal.
-              </p>
+              <p>Remove this checkout? Its branch and commits stay.</p>
               <div className="flex gap-2">
                 <Button
                   className="cursor-pointer"
-                  disabled={pending !== undefined}
                   onClick={() => setConfirming(false)}
                   size="sm"
                   variant="ghost"
@@ -220,11 +154,14 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
                 <Button
                   className="cursor-pointer"
                   disabled={disabled}
-                  onClick={() => void mutate('discard')}
+                  onClick={() => {
+                    setConfirming(false)
+                    void remove()
+                  }}
                   size="sm"
                   variant="outline"
                 >
-                  {pending === 'discard' ? 'Removing…' : 'Confirm clean-only removal'}
+                  Remove
                 </Button>
               </div>
             </div>
@@ -233,11 +170,11 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
               <Button
                 className="cursor-pointer"
                 disabled={disabled || workspace.state !== 'ready'}
-                onClick={() => void mutate('land')}
+                onClick={() => void land()}
                 size="sm"
                 variant="outline"
               >
-                {pending === 'land' ? 'Landing…' : 'Land verified tip'}
+                {pending === 'land' ? 'Landing…' : 'Land'}
               </Button>
               <Button
                 className="cursor-pointer"
@@ -246,7 +183,7 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
                 size="sm"
                 variant="ghost"
               >
-                Remove checkout…
+                {pending === 'discard' ? 'Removing…' : 'Remove…'}
               </Button>
             </div>
           ))}
@@ -259,10 +196,6 @@ function WorkspacesPanel() {
   const conversations = useConversations().filter((conversation) => conversation.workspace)
   return (
     <div className="flex flex-col pb-4">
-      <p className="border-b border-border/60 px-4 py-3 text-xs leading-relaxed text-muted-foreground">
-        Isolated checkouts, including empty and archived drafts. Archive and clear context never
-        remove a checkout or commits.
-      </p>
       {conversations.length ? (
         conversations
           .toSorted((a, b) => b.id - a.id)
@@ -270,9 +203,7 @@ function WorkspacesPanel() {
             <WorkspaceCard conversation={conversation} key={conversation.id} />
           ))
       ) : (
-        <p className="px-4 py-4 text-xs text-muted-foreground">
-          No isolated workspaces. Use New → New isolated conversation to opt in.
-        </p>
+        <p className="px-4 py-4 text-xs text-muted-foreground">No isolated conversations yet.</p>
       )}
     </div>
   )
