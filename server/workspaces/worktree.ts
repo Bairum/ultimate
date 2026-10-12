@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, readlink, realpath, rename, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, readlink, realpath, rename, writeFile } from 'node:fs/promises'
 import {
   basename,
   dirname,
@@ -47,6 +47,9 @@ export async function target(cwd: string): Promise<Pick<Workspace, 'targetBranch
     return { targetBranch: null, targetHead: await git(cwd, 'rev-parse', 'HEAD') }
   }
 }
+export function requestName(request: string) {
+  return `w-${createHash('sha256').update(request).digest('hex').slice(0, 10)}`
+}
 export async function create(
   parent: string,
   home: string,
@@ -57,39 +60,89 @@ export async function create(
   prepared?: Workspace,
 ) {
   const key = createHash('sha256').update(call).digest('hex')
-  const path = await worktreePath(home, key)
-  const branch = `ultimate/${agent}-${key.slice(0, 16)}`
-  let base: string
+  const name = requestName(call)
+  const defaultPath = await worktreePath(home, name)
+  const legacyMarker = join(dirname(defaultPath), `${key}.ready`)
+  const legacyPrepared =
+    prepared?.path === join(dirname(defaultPath), key) &&
+    prepared.branch === `ultimate/${agent}-${key.slice(0, 16)}`
+  let marker = legacyMarker
+  let saved: (Workspace & { request?: string }) | undefined
   try {
-    base = prepared?.base ?? (await git(parent, 'rev-parse', 'HEAD'))
+    saved = JSON.parse(await readFile(marker, 'utf8'))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    if (!legacyPrepared) {
+      marker = join(dirname(defaultPath), `${name}.ready`)
+      try {
+        saved = JSON.parse(await readFile(marker, 'utf8'))
+      } catch (failure) {
+        if ((failure as NodeJS.ErrnoException).code !== 'ENOENT') throw failure
+      }
+    }
+  }
+  // Persisted identities, including old long names, are authoritative on resume.
+  const path = prepared?.path ?? saved?.path ?? defaultPath
+  const branch = prepared?.branch ?? saved?.branch ?? `ultimate/${name}`
+  let base: string
+  let source: string
+  try {
+    base = prepared?.base ?? saved?.base ?? (await git(parent, 'rev-parse', 'HEAD'))
+    source = await realpath(await git(parent, 'rev-parse', '--show-toplevel'))
   } catch {
     throw new Error(`Worktree isolate requires a git repository with a HEAD: ${parent}`)
   }
+  const conflict = () =>
+    new Error(`Workspace ownership conflict: ${path} (${branch}); marker ${marker}`)
+  if (saved) {
+    const legacy =
+      marker === legacyMarker &&
+      saved.request === undefined &&
+      saved.path === join(dirname(defaultPath), key) &&
+      (prepared !== undefined || saved.branch === `ultimate/${agent}-${key.slice(0, 16)}`)
+    if (
+      (!legacy && saved.request !== call) ||
+      saved.path !== path ||
+      saved.branch !== branch ||
+      saved.base !== base ||
+      saved.source !== source ||
+      saved.kind !== 'worktree' ||
+      saved.state !== 'active' ||
+      (saved.preparation !== 'pending' && saved.preparation !== 'ready')
+    )
+      throw conflict()
+  }
+  if (
+    prepared &&
+    (prepared.source !== source ||
+      prepared.state !== 'active' ||
+      (saved &&
+        (prepared.targetBranch !== saved.targetBranch || prepared.targetHead !== saved.targetHead)))
+  )
+    throw conflict()
+  if (!contains(dirname(defaultPath), await canonicalPath(path))) throw conflict()
   const registered = (await git(parent, 'worktree', 'list', '--porcelain'))
-    .split('\n')
-    .includes(`worktree ${path}`)
-  if (!registered) {
-    if (await stat(path).catch(() => undefined))
+    .split('\n\n')
+    .find((entry) => entry.split('\n').includes(`worktree ${path}`))
+  if (registered) {
+    if (
+      (!saved && !legacyPrepared) ||
+      !registered.split('\n').includes(`branch refs/heads/${branch}`)
+    )
+      throw conflict()
+  } else {
+    if (
+      await lstat(path).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error
+        return undefined
+      })
+    )
       throw new Error(
         `Unregistered workspace path exists; inspect it before explicit cleanup: ${path}`,
       )
-    const branches = await git(parent, 'branch', '--list', branch)
-    if (branches) base = await git(parent, 'rev-parse', branch)
-    await git(
-      parent,
-      'worktree',
-      'add',
-      ...(branches ? [] : ['-b', branch]),
-      path,
-      branches ? branch : base,
-    )
-  }
-  const marker = join(home, 'worktrees', `${key}.ready`)
-  try {
-    const record = JSON.parse(await readFile(marker, 'utf8')) as Workspace
-    return { cwd: record.path, record }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    // A retained or unrelated branch is never adopted, even after a failed setup.
+    if (await git(parent, 'branch', '--list', branch)) throw conflict()
+    if (saved?.preparation === 'ready') throw conflict()
   }
   const record: Workspace = prepared
     ? { ...prepared, preparation: 'ready' }
@@ -99,19 +152,29 @@ export async function create(
         branch,
         base,
         state: 'active',
-        source: await realpath(await git(parent, 'rev-parse', '--show-toplevel')),
-        ...(await target(parent)),
+        source,
+        ...(saved
+          ? { targetBranch: saved.targetBranch, targetHead: saved.targetHead }
+          : await target(parent)),
         preparation: 'ready',
       }
+  if (saved?.preparation === 'ready') return { cwd: path, record }
+  if (!saved) {
+    // Claim the full request identity before Git mutation, so interrupted add/setup can resume.
+    await writeFile(marker, JSON.stringify({ ...record, preparation: 'pending', request: call }), {
+      flag: 'wx',
+    })
+  }
+  if (!registered) await git(parent, 'worktree', 'add', '-b', branch, path, base)
   try {
     await setupWorktree(projectSettings, parent, path, signal)
-    await writeFile(`${marker}.tmp`, JSON.stringify(record))
-    await rename(`${marker}.tmp`, marker)
   } catch (error) {
     // A failed setup may have valuable untracked output; never force-remove it.
     await git(parent, 'worktree', 'remove', path).catch(() => undefined)
     throw error
   }
+  await writeFile(`${marker}.tmp`, JSON.stringify({ ...record, request: call }), { flag: 'wx' })
+  await rename(`${marker}.tmp`, marker)
   return { cwd: path, record }
 }
 async function setupWorktree(
