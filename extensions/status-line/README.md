@@ -2,4 +2,4 @@ Pi's footer in the status line: cwd and git branch, `↑input ↓output R cacheR
 
 The Tokens item shows model output tokens per second across all conversations over the last 30 seconds; hover for input and cache rates. Provider reports may arrive late, and tool usage is excluded. Beside the rate, a live count shows running agents across all conversations in this project, including subagents; it remains visible at zero.
 
-Conversation totals come from `pi.usage`, the model and thinking level from `pi.agent`, the context window from `GET /api/models`, and cwd, branch, and process from system info. Hover an item for details; clicking the model runs the `model.pick` command when an extension provides it.
+Conversation totals come from `pi.usage`, the model and thinking level from `pi.agent`, the context window from `GET /api/models`, and cwd, branch, and process from system info. The context and totals helpers live in `context.ts`, shared with the canvas feed so both count alike. Hover an item for details; clicking the model runs the `model.pick` command when an extension provides it.

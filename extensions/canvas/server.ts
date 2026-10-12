@@ -6,17 +6,20 @@ import {
   defineExtension,
   LiveDoc,
   ROOT_CONVERSATION_ID,
+  UsageDoc,
 } from '@earendil-works/pi-durable'
 import type {
+  AgentState,
   CommitPublication,
   ConversationId,
   Cursor,
   EntryRecord,
   LiveState,
   Tx,
+  UsageState,
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { active, applyEntry, applyLive, newFeed } from './feed.ts'
+import { active, applyAgent, applyEntry, applyLive, applyUsage, newFeed } from './feed.ts'
 import type { Feed, Place } from './feed.ts'
 import type { CanvasState } from './types.ts'
 
@@ -65,6 +68,8 @@ async function rebuild(tx: Tx, id: ConversationId, place: Place) {
     applyEntry(feed, entry, entry.model?.[0]?.timestamp ?? feed.agent.updatedAt, () => place)
   const live = await tx.doc(LiveDoc, id)
   applyLive(feed, live, live.generation ? Date.now() : feed.agent.updatedAt)
+  applyUsage(feed, await tx.doc(UsageDoc, id))
+  applyAgent(feed, await tx.doc(AgentDoc, id))
   return feed
 }
 
@@ -157,9 +162,10 @@ export default (host: ExtensionHost) => {
   const update = (id: ConversationId, apply: (feed: Feed) => boolean) => {
     if (hidden(id)) return
     const feed = feeds.get(id) ?? newFeed()
-    if (!apply(feed) || !active(feed.agent)) return
+    if (!apply(feed)) return
+    // Kept before it has activity too: the model and spend arrive before the first answer does.
     feeds.set(id, feed)
-    touch(id)
+    if (active(feed.agent)) touch(id)
   }
   /** Rebuild rows a batch per transaction, adopting each inside it: later commits apply on top. */
   const hydrate = async (ids: ConversationId[]) => {
@@ -204,6 +210,8 @@ export default (host: ExtensionHost) => {
       const now = Date.now()
       const entries: EntryRecord[] = []
       const lives: [ConversationId, LiveState][] = []
+      const usages: [ConversationId, UsageState][] = []
+      const models: [ConversationId, AgentState][] = []
       for (const change of publication.changes) {
         if (change.type === 'conversation')
           parents.set(
@@ -214,6 +222,10 @@ export default (host: ExtensionHost) => {
         else if (change.type === 'document' && change.conversationId !== undefined && change.value)
           if (change.record.kind === LiveDoc.definition.kind)
             lives.push([change.conversationId, change.value])
+          else if (change.record.kind === UsageDoc.definition.kind)
+            usages.push([change.conversationId, change.value as UsageState])
+          else if (change.record.kind === AgentDoc.definition.kind)
+            models.push([change.conversationId, change.value])
           else if (
             change.record.kind === 'ultimate.ui' &&
             change.conversationId === ROOT_CONVERSATION_ID
@@ -226,6 +238,8 @@ export default (host: ExtensionHost) => {
           applyEntry(feed, entry, now, () => place(entry.conversationId)),
         )
       for (const [id, live] of lives) update(id, (feed) => applyLive(feed, live, now))
+      for (const [id, usage] of usages) update(id, (feed) => applyUsage(feed, usage))
+      for (const [id, agent] of models) update(id, (feed) => applyAgent(feed, agent))
       evict()
     } catch (error) {
       host.notice(`Canvas: ${String(error)}`)
