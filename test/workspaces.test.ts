@@ -19,7 +19,7 @@ import automations, {
 } from '../extensions/automations/server.ts'
 import type { Automation } from '../extensions/automations/server.ts'
 import type { ConversationId, EntryId, TaskId } from '@earendil-works/pi-durable'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import { WorkspaceDoc, LifecycleQueue } from '../server/workspaces/doc.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -29,6 +29,7 @@ import { fauxServer, post, temp, removeTemp, until, attach } from './helpers.ts'
 
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => {
+  vi.restoreAllMocks()
   for (const close of cleanup.splice(0).toReversed()) await close()
 })
 async function repository() {
@@ -150,6 +151,54 @@ it('main isolated creation is opt-in, deduplicated and shares the core lifecycle
   expect(refused.status).toBe(409)
   expect(refused.data.error).toContain('discarded')
 })
+it.each([undefined, 'Explicit isolated title', 'First isolated input'] as const)(
+  'marks isolated first-input provenance only when the fallback writes, before core admission (title: %s)',
+  async (title) => {
+    const paths = await repository()
+    const server = await fauxServer({
+      ...paths,
+      userHome: paths.directory,
+      ultimateRoot: resolve('.'),
+    })
+    cleanup.push(() => server.close())
+    const created = await post(server, '/api/conversations', {
+      isolate: 'worktree',
+      requestId: 'first-input-provenance',
+      ...(title === undefined ? {} : { title }),
+    })
+    expect(created.status).toBe(201)
+    const id = created.data.id as ConversationId
+    await server.host.workspaces.ready(id, context)
+    expect(await server.harness.snapshot(Metadata, id, context)).toEqual(
+      title === undefined ? {} : { title },
+    )
+    let admitted: { title?: string; titleSource?: 'input' } | undefined
+    const original = server.host.workspaces.submit.bind(server.host.workspaces)
+    const submit = vi
+      .spyOn(server.host.workspaces, 'submit')
+      .mockImplementation(async (conversationId, draft, caller) => {
+        admitted = await server.harness.snapshot(Metadata, conversationId, caller)
+        return original(conversationId, draft, caller)
+      })
+    server.host.faux!.setResponses([fauxAssistantMessage([fauxText('Verified isolated input.')])])
+    const response = await post(server, `/api/conversations/${id}/submit`, {
+      text: '  First\n isolated   input  ',
+    })
+    expect(response.status).toBe(202)
+    expect(submit).toHaveBeenCalledTimes(1)
+    expect(admitted).toEqual(
+      title === undefined ? { title: 'First isolated input', titleSource: 'input' } : { title },
+    )
+    const submission = await server.harness.submission(response.data.submissionId, context)
+    expect((await submission!.wait(context)).status).toBe('done')
+    const workspace = (await server.host.workspaces.snapshot(id, context))!
+    const conversation = (await server.harness.conversation(id, context))!
+    expect((await conversation.agent(context)).cwd).toBe(workspace.path)
+    const view = await conversation.viewState(context)
+    expect(view.value.entries.filter((entry) => entry.kind === 'pi.user')).toHaveLength(1)
+    view.dispose()
+  },
+)
 it('pending and failed preparation fail closed and survive restart without another identity', async () => {
   const paths = await repository()
   await mkdir(join(paths.projectRoot, '.ultimate'))

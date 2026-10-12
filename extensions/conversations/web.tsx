@@ -1,7 +1,11 @@
+import { applyImmutable } from '@earendil-works/chord/delta'
+import type { Op } from '@earendil-works/chord/delta'
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
   ChevronRightIcon,
+  CircleCheckIcon,
+  CircleHelpIcon,
   EllipsisIcon,
   EraserIcon,
   PencilIcon,
@@ -32,12 +36,55 @@ import {
   useExtensionUiState,
   useNow,
   useStore,
+  useTasks,
   useUltimate,
 } from '@/sdk'
 import type { ConversationSummary, UltimateActions } from '@/sdk'
+type Assessment = { inputId: number; answerId: number; value: 'needs_input' | 'done' | 'neutral' }
+type OverviewRow = {
+  parentId?: number
+  role?: string
+  runState: 'working' | 'queued' | 'idle' | 'done' | 'error'
+  inputId?: number
+  answerId?: number
+  summary?: string
+  summaryStatus?: 'pending' | 'ready' | 'error'
+  activity?: string
+  assessment?: Assessment
+  assessmentStatus?: 'pending' | 'ready' | 'error'
+}
+type OverviewState = { conversations: Record<string, OverviewRow> }
 
 const newKeys = 'mod+alt+n'
 const resetDialog = 'conversations.reset'
+const overviewKind = 'ultimate.conversation-overview'
+
+/** One root stream for all rows, unchanged when selection or expansion changes. */
+function useOverview() {
+  const [overview, setOverview] = useState<OverviewState | null>()
+  useEffect(() => {
+    const stream = new EventSource(`/api/events?conversation=1&docs=${overviewKind}`)
+    stream.addEventListener('doc', (event) => {
+      const data = JSON.parse(event.data) as { kind: string; value: OverviewState | null }
+      if (data.kind === overviewKind) setOverview(data.value)
+    })
+    stream.addEventListener('docOps', (event) => {
+      const data = JSON.parse(event.data) as { kind: string; ops: Op[] }
+      if (data.kind === overviewKind)
+        setOverview((previous) => (previous ? applyImmutable(previous, data.ops) : previous))
+    })
+    return () => stream.close()
+  }, [])
+  return overview?.conversations ?? {}
+}
+
+function currentAssessment(row: OverviewRow | undefined) {
+  return row?.runState === 'done' &&
+    row.assessment?.answerId === row.answerId &&
+    row.assessment?.inputId === row.inputId
+    ? row.assessment
+    : undefined
+}
 
 /** The shown conversation, also while its snapshot is still on the way. */
 const useShownId = () => useStore((state) => state.view?.conversation.id ?? state.requested)
@@ -56,7 +103,11 @@ function topOf(id: number | undefined, conversations: readonly ConversationSumma
 function workingByTop(conversations: readonly ConversationSummary[]) {
   const working = new Map<number, 'self' | 'subagents'>()
   for (const conversation of conversations) {
-    if (!conversation.busy) continue
+    if (
+      !conversation.busy ||
+      (conversation.parentConversationId !== undefined && conversation.ownerTaskId === undefined)
+    )
+      continue
     const top = topOf(conversation.id, conversations)
     if (!top) continue
     working.set(top.id, top.id === conversation.id ? 'self' : (working.get(top.id) ?? 'subagents'))
@@ -155,18 +206,52 @@ function Shortcut({ keys }: { keys: string }) {
 }
 
 /** The leading mark: working (pulsing), an unseen answer (solid), or an empty slot that keeps titles aligned. */
-function Mark({ working, unseen }: { working?: 'self' | 'subagents'; unseen: boolean }) {
-  const label = working ? (working === 'self' ? 'Working' : 'Subagents working') : 'New answer'
+function Mark({
+  working,
+  unseen,
+  assessment,
+  child,
+}: {
+  working?: 'self' | 'subagents'
+  unseen: boolean
+  assessment?: Assessment
+  child?: boolean
+}) {
+  const assessed = !working && assessment?.value !== 'neutral' ? assessment?.value : undefined
+  const label = working
+    ? working === 'self'
+      ? 'Working'
+      : 'Subagents working'
+    : assessed === 'done'
+      ? 'Done · Luna assessment, not verified'
+      : assessed === 'needs_input'
+        ? child
+          ? 'Needs coordinator/input · Luna assessment'
+          : 'Needs input · Luna assessment'
+        : 'New answer'
   return (
     <span className="flex size-3 shrink-0 items-center justify-center">
-      {(working || unseen) && (
+      {(working || unseen || assessed) && (
         <Tooltip>
           <TooltipTrigger asChild>
             <span
               aria-label={label}
-              className={cn('size-1.5 rounded-full bg-brand', working && 'animate-pulse-dot')}
               role="img"
-            />
+              className={cn(
+                'flex items-center justify-center',
+                assessed === 'done' ? 'text-success' : 'text-muted-foreground',
+              )}
+            >
+              {assessed === 'done' ? (
+                <CircleCheckIcon className="size-3.5" />
+              ) : assessed === 'needs_input' ? (
+                <CircleHelpIcon className="size-3.5" />
+              ) : (
+                <span
+                  className={cn('size-1.5 rounded-full bg-brand', working && 'animate-pulse-dot')}
+                />
+              )}
+            </span>
           </TooltipTrigger>
           <TooltipContent side="right">{label}</TooltipContent>
         </Tooltip>
@@ -185,6 +270,7 @@ function Row({
   archived,
   now,
   onArchive,
+  assessment,
 }: {
   conversation: ConversationSummary
   shown: boolean
@@ -194,6 +280,7 @@ function Row({
   archived: boolean
   now: number
   onArchive: (archive: boolean) => void
+  assessment?: Assessment
 }) {
   const actions = useUltimate()
   const [editing, setEditing] = useState(false)
@@ -212,7 +299,6 @@ function Row({
     setEditing(false)
     if (cancelled.current) return
     const title = value.trim()
-    if (title === (conversation.title ?? '')) return
     void api.action('conversations', 'rename', { id: conversation.id, title })
   }
   const title = (
@@ -241,7 +327,7 @@ function Row({
     >
       {editing ? (
         <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-1.5">
-          <Mark unseen={unseen} working={working} />
+          <Mark assessment={assessment} unseen={unseen} working={working} />
           <input
             aria-label="Conversation title"
             autoFocus
@@ -267,7 +353,7 @@ function Row({
       ) : (
         <button
           aria-current={shown ? 'true' : undefined}
-          className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md pr-2 pl-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+          className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md pr-2 pl-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
           onClick={() => actions.switchConversation(conversation.id)}
           ref={(element) => {
             if (!element || !refocus.current) return
@@ -276,7 +362,7 @@ function Row({
           }}
           type="button"
         >
-          <Mark unseen={unseen} working={working} />
+          <Mark assessment={assessment} unseen={unseen} working={working} />
           {title}
           {latest > 0 && (
             <span
@@ -333,18 +419,89 @@ function Row({
   )
 }
 
+function ChildRow({
+  conversation,
+  row,
+  shown,
+}: {
+  conversation: ConversationSummary
+  row?: OverviewRow
+  shown: boolean
+}) {
+  const actions = useUltimate()
+  const working = conversation.busy || row?.runState === 'working'
+  const state = working
+    ? 'Working'
+    : row?.runState === 'done'
+      ? 'Replied'
+      : row?.runState === 'error'
+        ? 'Run failed'
+        : row?.runState === 'queued'
+          ? 'Queued'
+          : 'Idle'
+  return (
+    <button
+      aria-current={shown ? 'true' : undefined}
+      className={cn(
+        'mx-1 flex w-[calc(100%-0.5rem)] cursor-pointer flex-col gap-1 rounded-md px-2 py-1.5 text-left outline-none hover:bg-sidebar-accent/50 focus-visible:ring-1 focus-visible:ring-ring',
+        shown && 'bg-sidebar-accent',
+      )}
+      data-child-conversation={conversation.id}
+      onClick={() => actions.switchConversation(conversation.id)}
+      title={conversation.title}
+      type="button"
+    >
+      <span className="flex w-full items-center gap-1.5">
+        <Mark
+          assessment={currentAssessment(row)}
+          child
+          unseen={false}
+          working={working ? 'self' : undefined}
+        />
+        <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-foreground/80">
+          {row?.role ?? 'Agent'} · #{conversation.id}
+        </span>
+        <span className="shrink-0 text-[10px] text-muted-foreground">{state}</span>
+      </span>
+      <span className="line-clamp-2 pl-[18px] text-[11px] leading-relaxed break-words text-muted-foreground">
+        {row?.activity
+          ? `${working ? 'Last reply: ' : ''}${row.activity}`
+          : (conversation.title ?? 'No reply yet')}
+      </span>
+      {row?.assessmentStatus === 'error' && !working && (
+        <span className="pl-[18px] text-[10px] text-muted-foreground/70">
+          Assessment unavailable
+        </span>
+      )}
+    </button>
+  )
+}
+
 /**
  * The project's top-level conversations that have a message, newest input first, under the shown one when it is an
  * empty draft; archived ones in a collapsed group at the bottom.
  */
 function Conversations() {
-  const conversations = useConversations()
+  const overview = useOverview()
+  const tasks = useTasks()
+  const foreground = new Set<number>(
+    Object.values(tasks?.tasks ?? {})
+      .filter((task) => !task.background)
+      .map((task) => task.conversationId),
+  )
+  // The task graph is authoritative; the timestamp/title list can lag a finished run.
+  const conversations = useConversations().map((conversation) => ({
+    ...conversation,
+    busy: foreground.has(conversation.id) || overview[conversation.id]?.runState === 'working',
+  }))
   const actions = useUltimate()
   const shownId = useShownId()
   const now = useNow(60_000)
   const [archived, setArchived] = useExtensionUiState<number[]>('archived', [])
   const [seen] = useExtensionUiState<Record<string, number>>('seen', {})
   const shownTop = topOf(shownId, conversations)
+  const summary = shownTop ? overview[shownTop.id] : undefined
+  const [expanded, setExpanded] = useExtensionUiState<number[]>('expanded', [])
   const working = workingByTop(conversations)
   const topLevel = conversations.filter(
     (conversation) => conversation.parentConversationId === undefined,
@@ -375,6 +532,7 @@ function Conversations() {
     const state = working.get(conversation.id)
     return (
       <Row
+        assessment={tasks ? currentAssessment(overview[conversation.id]) : undefined}
         archived={archived.includes(conversation.id)}
         conversation={conversation}
         draft={conversation.inputAt === undefined}
@@ -390,6 +548,54 @@ function Conversations() {
         }
         working={state}
       />
+    )
+  }
+
+  const childrenByParent = new Map<number, ConversationSummary[]>()
+  for (const candidate of conversations) {
+    const parent = overview[candidate.id]?.parentId
+    if (candidate.ownerTaskId === undefined || parent === undefined) continue
+    const children = childrenByParent.get(parent) ?? []
+    children.push(candidate)
+    childrenByParent.set(parent, children)
+  }
+  const tree = (conversation: ConversationSummary, nested = false) => {
+    const children = childrenByParent.get(conversation.id) ?? []
+    const open = expanded.includes(conversation.id)
+    return (
+      <div key={conversation.id}>
+        {nested ? (
+          <ChildRow
+            conversation={conversation}
+            row={overview[conversation.id]}
+            shown={shownId === conversation.id}
+          />
+        ) : (
+          row(conversation)
+        )}
+        {children.length > 0 && (
+          <Collapsible
+            open={open}
+            onOpenChange={(next) =>
+              setExpanded((previous) => [
+                ...previous.filter((id) => id !== conversation.id),
+                ...(next ? [conversation.id] : []),
+              ])
+            }
+          >
+            <CollapsibleTrigger
+              aria-label={`Agents of conversation ${conversation.id}`}
+              className="group/agents ml-5 flex cursor-pointer items-center gap-1 py-1 text-[10.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/agents:rotate-90" />
+              Agents · {children.length}
+            </CollapsibleTrigger>
+            <CollapsibleContent className="ml-4 border-l border-border/60">
+              {children.map((child) => tree(child, true))}
+            </CollapsibleContent>
+          </Collapsible>
+        )}
+      </div>
     )
   }
 
@@ -416,8 +622,30 @@ function Conversations() {
         </Tooltip>
       </div>
       <nav aria-label="Conversations" className="flex flex-col gap-px">
-        {listed.map(row)}
+        {listed.map((conversation) => tree(conversation))}
       </nav>
+      {(summary?.summary || summary?.summaryStatus || summary?.assessmentStatus) && (
+        <section
+          aria-label="Conversation summary"
+          className="mx-4 mt-4 border-t border-border/60 pt-3"
+          data-summary-conversation={shownTop?.id}
+        >
+          <p className="text-xs leading-relaxed break-words text-muted-foreground">
+            {summary.summary}
+          </p>
+          {(summary.summaryStatus === 'pending' || summary.assessmentStatus === 'pending') && (
+            <p className="mt-1 text-[10.5px] text-muted-foreground/70" role="status">
+              {summary.summaryStatus === 'pending' ? 'Updating summary…' : 'Assessing reply…'}
+            </p>
+          )}
+          {(summary.summaryStatus === 'error' || summary.assessmentStatus === 'error') && (
+            <p className="mt-1 text-[10.5px] text-muted-foreground/70" role="status">
+              {summary.summaryStatus === 'error' ? 'Summary unavailable' : 'Assessment unavailable'}{' '}
+              · retries after next reply
+            </p>
+          )}
+        </section>
+      )}
       {hidden.length > 0 && (
         <Collapsible className="mt-auto pt-3">
           <CollapsibleTrigger className="group/archived flex w-full items-center gap-1 px-4 py-1 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase outline-none hover:text-foreground focus-visible:text-foreground">
@@ -429,7 +657,7 @@ function Conversations() {
             className="flex flex-col gap-px pt-1"
             role="region"
           >
-            {hidden.map(row)}
+            {hidden.map((conversation) => tree(conversation))}
           </CollapsibleContent>
         </Collapsible>
       )}
