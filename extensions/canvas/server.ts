@@ -2,7 +2,6 @@ import type { JsonValue } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import {
   AgentDoc,
-  defineDoc,
   defineExtension,
   LiveDoc,
   ROOT_CONVERSATION_ID,
@@ -18,22 +17,26 @@ import type {
   Tx,
   UsageState,
 } from '@earendil-works/pi-durable'
+import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { conclusionBehavior, watchConclusions } from './conclusion.ts'
+import { Canvas, Conclusions } from './documents.ts'
 import { active, applyAgent, applyEntry, applyLive, applyUsage, newFeed } from './feed.ts'
 import type { Feed, Place } from './feed.ts'
-import type { CanvasState } from './types.ts'
 
-export const Canvas = defineDoc<CanvasState>({
-  kind: 'ultimate.canvas',
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({ agents: {} }),
-  // Streaming rewrites a few fields several times a second; store a complete base now and then.
-  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 200,
-})
+export { Canvas }
 export const docs = [Canvas]
+
+export const actions = {
+  /** `{id}`: the latest conclusion of a top-level conversation's tree, with its thumbnail; null before the first. */
+  async conclusion(args: JsonValue, { host }: ActionContext) {
+    const id = args && typeof args === 'object' && !Array.isArray(args) ? args.id : undefined
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1)
+      throw new Error('Expected a conversation id')
+    const state = await host.harness().snapshot(Conclusions, id as ConversationId, context)
+    return (state?.conclusion ?? null) as JsonValue
+  },
+}
 
 /** Milliseconds between commits of the document: at most about four a second. */
 const INTERVAL = 250
@@ -73,7 +76,7 @@ async function rebuild(tx: Tx, id: ConversationId, place: Place) {
   return feed
 }
 
-/** Keeps `ultimate.canvas` on the root conversation: a small live activity row per agent. */
+/** Keeps `ultimate.canvas` on the root conversation: a small live activity row per agent, and how each tree settled. */
 export default (host: ExtensionHost) => {
   const feeds = new Map<ConversationId, Feed>()
   /** Every known conversation with its owner or fork source, so an archived one hides its subagents too. */
@@ -300,5 +303,6 @@ export default (host: ExtensionHost) => {
     timer = undefined
     await work
   })
-  return defineExtension({ name: 'canvas' })
+  watchConclusions(host)
+  return defineExtension({ name: 'canvas', ...conclusionBehavior(host) })
 }

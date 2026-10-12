@@ -40,5 +40,60 @@ export type CanvasAgent = {
   /** The latest change (ms). */
   updatedAt: number
 }
-/** `ultimate.canvas` on the root conversation: the activity of each agent, keyed by conversation id. */
-export type CanvasState = { agents: Record<string, CanvasAgent> }
+/** Why an idle tree waits for a decision: Luna thinks one of its conversations needs input, or a checkout holds commits never landed. */
+export type CanvasReason = {
+  kind: 'needs_input' | 'unlanded'
+  conversationId: number
+  /** `needs input`, or `W12: 3 commits not landed`. */
+  detail: string
+}
+/** The small fields of a tree's latest conclusion the map needs; the full one comes from the `conclusion` action. */
+export type CanvasConclusion = {
+  headline: string
+  commits: number
+  pushed: boolean
+  /** Names of the features or fixes that landed, in Luna's words. */
+  landed: string[]
+  subagents: number
+  files: number
+  screenshot: boolean
+  /** The newest entry it covers. */
+  through: number
+  /** When it concluded (ms). */
+  at: number
+  /** The tree has worked since; a new conclusion follows once it settles. */
+  stale?: true
+}
+/** A top-level conversation's tree: what it waits for, or how it concluded. */
+export type CanvasTree = { decision?: { reasons: CanvasReason[] }; conclusion?: CanvasConclusion }
+/** `ultimate.canvas` on the root conversation: the activity of each agent and the state of each tree, keyed by conversation id. */
+export type CanvasState = { agents: Record<string, CanvasAgent>; trees: Record<string, CanvasTree> }
+
+/** A commit made in the tree, from `git commit` output or a land result. */
+export type ConclusionCommit = {
+  sha: string
+  subject: string
+  /** The branch `git commit` reported. */
+  branch?: string
+  /** It appeared in a land result. */
+  landed?: true
+}
+/** What a concluded tree asked for, did and produced; stored on its top-level conversation. */
+export type Conclusion = {
+  headline: string
+  /** Two to four sentences: what was asked, what was done, the outcome. */
+  summary: string
+  landed: string[]
+  commits: ConclusionCommit[]
+  /** A `git push` succeeded. */
+  pushed: boolean
+  /** Edited and written paths, and landed paths. */
+  files: string[]
+  subagents: { id: number; label?: string }[]
+  /** From the first message to the last (ms). */
+  duration: number
+  /** The tree's last screenshot, about 480 pixels wide. */
+  thumbnail?: { mimeType: string; data: string; width: number; height: number }
+  through: number
+  at: number
+}

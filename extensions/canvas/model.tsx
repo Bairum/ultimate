@@ -1,7 +1,7 @@
 import type { ConversationSummary, TaskGraph } from '@/sdk'
 import type { AssessmentValue, OverviewRow } from '../conversations/types.ts'
 import type { Workspace } from '../workspaces/types.ts'
-import type { CanvasAgent } from './types.ts'
+import type { CanvasAgent, CanvasConclusion, CanvasReason, CanvasTree } from './types.ts'
 
 /** What a panel's outline says: the sidebar's states, waiting on a subagent, and a pending decision. */
 export type Status =
@@ -24,8 +24,13 @@ export type Agent = {
   status: Status
   row?: OverviewRow
   workspace?: Workspace
-  /** Why it waits for a decision: its own reasons, and for a top-level conversation those of its whole tree. */
-  reasons: string[]
+  /**
+   * Why it waits for a decision, once it is idle: its own reasons, and for a top-level conversation those of its whole
+   * tree, once the whole tree is idle.
+   */
+  reasons: CanvasReason[]
+  /** A top-level conversation's latest conclusion. */
+  conclusion?: CanvasConclusion
   shape: Shape
   archived: boolean
   /** Agents folded into a conclusion card. */
@@ -101,12 +106,11 @@ export const STATUS: Record<
   },
 }
 /** What a decision reason means, for its tooltip. */
-export const REASON_TIPS: Record<string, string> = {
-  'needs input':
+export const REASON_TIPS: Record<CanvasReason['kind'], string> = {
+  needs_input:
     "May need input (Luna's opinion, not verified); a subagent's question may be for its coordinator",
+  unlanded: 'Its isolated checkout holds commits that were never landed',
 }
-export const reasonTip = (reason: string) =>
-  REASON_TIPS[reason] ?? 'Its isolated checkout is ready and has never been landed'
 
 export const isActive = (status: Status) =>
   status === 'working' || status === 'waiting' || status === 'queued'
@@ -120,28 +124,6 @@ export function assessmentOf(row: OverviewRow | undefined): AssessmentValue | un
     assessment.inputId === row.inputId
     ? assessment.value
     : undefined
-}
-
-/**
- * Why conversations still wait for a decision, so their tree must not fold away: Luna's current assessment says one
- * needs input, or its isolated checkout is ready and was never landed. The workspaces document has no current tip, so
- * a checkout landed once counts as landed even if it moved on since.
- */
-export function decisions(
-  members: readonly {
-    id: number
-    top: boolean
-    assessment?: AssessmentValue
-    workspace?: Pick<Workspace, 'state' | 'landed'>
-  }[],
-): string[] {
-  const reasons = new Set<string>()
-  for (const member of members) {
-    if (member.assessment === 'needs_input') reasons.add('needs input')
-    if (member.workspace?.state === 'ready' && member.workspace.landed === undefined)
-      reasons.add(member.top ? 'workspace not landed' : `worktree #${member.id} not landed`)
-  }
-  return [...reasons]
 }
 
 function statusOf(busy: boolean, row: OverviewRow | undefined, feed: CanvasAgent | undefined) {
@@ -158,6 +140,8 @@ export type Inputs = {
   agents: Readonly<Record<string, CanvasAgent>>
   rows: Readonly<Record<string, OverviewRow>>
   workspaces: Readonly<Record<string, Workspace>>
+  /** Each tree's decision and conclusion, from the canvas document. */
+  trees: Readonly<Record<string, CanvasTree>>
   archived: readonly number[]
   showArchived: boolean
   /** The shown conversation: its tree stays open and it keeps a full panel. */
@@ -169,10 +153,12 @@ export type Inputs = {
  * (or shown), and below them the conversations they own (a subagent has an owner task; a history fork does not, and
  * stays off the map). Ordered by id, so a newcomer always comes last among its siblings. Active agents and those
  * waiting for a decision keep full panels; finished subagents shrink to pills, and a tree with nothing active and
- * nothing to decide folds into its conclusion card, unless it holds the shown conversation.
+ * nothing to decide folds into its conclusion card, unless it holds the shown conversation. Decisions come from the
+ * server, which records them once a tree is idle; while an agent works, unlanded work is expected and shows nothing.
  */
 export function agentsOf(inputs: Inputs): Agent[] {
-  const { conversations, tasks, agents, rows, workspaces, archived, showArchived, shown } = inputs
+  const { conversations, tasks, agents, rows, workspaces, trees, archived, showArchived, shown } =
+    inputs
   const foreground = new Set<number>(
     Object.values(tasks?.tasks ?? {})
       .filter((task) => !task.background)
@@ -192,13 +178,15 @@ export function agentsOf(inputs: Inputs): Agent[] {
     if (top.parentConversationId !== undefined || (top.inputAt === undefined && !busy(top)))
       continue
     const tree: Agent[] = []
+    const known = trees[top.id]
+    const reasons = known?.decision?.reasons ?? []
     const visit = (summary: ConversationSummary, parent?: number) => {
       const row = rows[summary.id]
       const workspace = workspaces[String(summary.id)]
-      const own = decisions([
-        { id: summary.id, top: parent === undefined, assessment: assessmentOf(row), workspace },
-      ])
       const base = statusOf(busy(summary), row, agents[summary.id])
+      const own = isActive(base)
+        ? []
+        : reasons.filter((reason) => reason.conversationId === summary.id)
       tree.push({
         id: summary.id,
         parent,
@@ -225,11 +213,12 @@ export function agentsOf(inputs: Inputs): Agent[] {
     head.archived = archived.includes(top.id)
     if (head.archived && !showArchived && !holdsShown) continue
     head.members = tree.map((agent) => agent.id)
-    head.reasons = [...new Set(tree.flatMap((agent) => agent.reasons))]
+    const idle = !tree.some((agent) => isActive(agent.status))
+    head.reasons = idle ? reasons : []
+    head.conclusion = known?.conclusion
     if (!isActive(head.status) && head.status !== 'failed' && head.reasons.length)
       head.status = 'decision'
-    const settled = !tree.some((agent) => isActive(agent.status)) && !head.reasons.length
-    if (settled && !holdsShown) {
+    if (idle && !head.reasons.length && !holdsShown) {
       result.push({ ...head, shape: 'card', folded: rest.length })
       continue
     }

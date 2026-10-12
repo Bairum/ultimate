@@ -5,8 +5,12 @@ export type Point = { x: number; y: number }
 
 /** Sizes on the map, in flow units (pixels at zoom 1). */
 export const PANEL: Size = { width: 360, height: 248 }
-/** A concluded top-level conversation, folded with everything it owns. */
+/** A settled top-level conversation, folded with everything it owns. */
 export const CARD: Size = { width: 320, height: 132 }
+/** A folded tree with its conclusion: headline, summary, thumbnail and chips. */
+export const CONCLUDED: Size = { width: 380, height: 264 }
+/** A folded tree whose conclusion is only words: no screenshot, nothing it produced. */
+export const ANSWERED: Size = { width: 380, height: 204 }
 /** A finished subagent. */
 export const PILL: Size = { width: 236, height: 60 }
 export const HUB: Size = { width: 440, height: 168 }

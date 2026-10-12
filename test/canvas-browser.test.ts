@@ -2,15 +2,18 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
+import { defineExtension } from '@earendil-works/pi-durable'
 import { chromium } from 'playwright-core'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
+import { Metadata } from '../server/metadata.ts'
+import { conclusionBehavior } from '../extensions/canvas/conclusion.ts'
 import { fauxServer, post, skipWithoutChromium, temp, untilInput } from './helpers.ts'
 
 const timeout = { timeout: 15000 }
 // An edge can be a straight vertical or horizontal line: present, though its box has no width or height.
 const present = { state: 'attached', timeout: 15000 } as const
 
-it('starts a conversation at the hub and follows its tools, writing, subagent and wait, then opens it and comes back', async (test) => {
+it('starts a conversation at the hub and follows its tools, writing, subagent and wait, opens it and comes back, and folds it into its conclusion', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const userHome = await temp('ultimate-canvas-browser-')
@@ -27,6 +30,27 @@ it('starts a conversation at the hub and follows its tools, writing, subagent an
     home: join(userHome, 'state'),
   })
   server.vite.config.server.fs.allow.push(resolve('node_modules'))
+  // Luna concludes a settled tree after a short quiet.
+  vi.stubEnv('ULTIMATE_CANVAS_QUIET_MS', '300')
+  vi.spyOn(server.host.modelRuntime, 'getAvailableSnapshot').mockReturnValue(
+    server.host.modelRuntime
+      .getModels()
+      .filter((model) => model.provider === 'openai' && model.id === 'gpt-6-luna'),
+  )
+  const registry = server.host.registry
+  registry.install(
+    defineExtension({
+      ...registry.snapshot().extension('canvas')!,
+      ...conclusionBehavior(
+        { harness: () => server.harness, metadata: Metadata, userHome },
+        async () => ({
+          headline: 'Counted twelve files twice',
+          summary: 'The user asked for a double count. A scout recounted; both counts agree.',
+          landed: ['File count'],
+        }),
+      ),
+    }),
+  )
   // The parent's command runs until the test creates `go`; the scout answers when the test releases it.
   const go = join(project, 'go')
   let release!: () => void
@@ -99,6 +123,19 @@ it('starts a conversation at the hub and follows its tools, writing, subagent an
       .toBeDefined()
     const child = server.api.conversations().find((summary) => summary.label === 'scout')!.id
     await page.locator(`[data-agent="${child}"]`).waitFor(timeout)
+    // The camera follows the spawn: the shown tree is re-framed so the child is in view.
+    await expect
+      .poll(async () => {
+        const map = (await page.locator('[data-canvas-map]').boundingBox())!
+        const box = (await page.locator(`[data-agent="${child}"]`).boundingBox())!
+        return (
+          box.x >= map.x &&
+          box.y >= map.y &&
+          box.x + box.width <= map.x + map.width &&
+          box.y + box.height <= map.y + map.height
+        )
+      }, timeout)
+      .toBe(true)
     const edge = page.getByTestId(`rf__edge-${parent}-${child}`)
     await edge.waitFor(present)
     await expect.poll(() => panel.getAttribute('data-status'), timeout).toBe('waiting')
@@ -126,6 +163,22 @@ it('starts a conversation at the hub and follows its tools, writing, subagent an
     await page.keyboard.press('Escape')
     await focused.waitFor({ state: 'detached', ...timeout })
     await panel.locator('[data-tail], [data-summary]').first().waitFor(timeout)
+
+    // Another conversation from the hub: the first tree, settled and concluded, folds into its card with its outcome.
+    await page.keyboard.press('n')
+    await expect.poll(() => hub.evaluate((input) => input === document.activeElement)).toBe(true)
+    await hub.fill('Anything else?')
+    await hub.press('Enter')
+    const card = page.locator(`[data-agent="${parent}"][data-shape="card"]`)
+    await card.waitFor(timeout)
+    await card.locator('[data-headline]').getByText('Counted twelve files twice').waitFor(timeout)
+    await card.locator('[data-chip="subagents"]').getByText('1 subagent').waitFor(timeout)
+    await card.locator('[data-chip="landed"]').getByText('landed: File count').waitFor(timeout)
+    await card
+      .locator('[data-summary]')
+      .getByText('both counts agree', { exact: false })
+      .waitFor(timeout)
+    expect(await card.locator('[data-stale]').count()).toBe(0)
     expect(errors).toEqual([])
   } finally {
     release()

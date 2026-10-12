@@ -33,7 +33,17 @@ import { FlowLine, HubLine } from './edges.tsx'
 import type { HubData, HubNode } from './hub.tsx'
 import { HUB_INPUT, Hub } from './hub.tsx'
 import type { Point, Ring, Size } from './layout.tsx'
-import { CARD, HUB, PANEL, PILL, assignRing, radial, useGlide } from './layout.tsx'
+import {
+  ANSWERED,
+  CARD,
+  CONCLUDED,
+  HUB,
+  PANEL,
+  PILL,
+  assignRing,
+  radial,
+  useGlide,
+} from './layout.tsx'
 import type { Agent, Shape } from './model.tsx'
 import { agentsOf } from './model.tsx'
 import type { CanvasActions, PanelData, PanelNode } from './panel.tsx'
@@ -45,7 +55,24 @@ const ARCHIVED = 'ext.conversations.archived'
 const MARGIN = 20
 const nodeTypes = { agent: AgentPanel, hub: Hub }
 const edgeTypes = { flow: FlowLine, hub: HubLine }
-const sizes: Record<Shape, Size> = { panel: PANEL, card: CARD, pill: PILL }
+/** How much room an agent takes: its shape, and a card grows to hold a conclusion and what it produced. */
+type Box = Shape | 'concluded' | 'answered'
+const sizes: Record<Box, Size> = {
+  panel: PANEL,
+  card: CARD,
+  pill: PILL,
+  concluded: CONCLUDED,
+  answered: ANSWERED,
+}
+function boxOf({ shape, conclusion }: Agent): Box {
+  if (shape !== 'card' || !conclusion) return shape
+  const { screenshot, landed, commits, pushed, subagents, files } = conclusion
+  return screenshot || landed.length || commits || pushed || subagents || files
+    ? 'concluded'
+    : 'answered'
+}
+/** After the user moves the map, it is theirs this long (ms): the camera does not follow spawns. */
+const HANDS_OFF = 4000
 
 export type Direction = 'left' | 'right' | 'up' | 'down'
 /** What the commands drive; set while the map is mounted. */
@@ -119,7 +146,8 @@ const sameAgent = (a: Agent, b: Agent) =>
   a.parent === b.parent &&
   a.row === b.row &&
   a.workspace === b.workspace &&
-  a.reasons.join() === b.reasons.join() &&
+  a.conclusion === b.conclusion &&
+  JSON.stringify(a.reasons) === JSON.stringify(b.reasons) &&
   a.members.join() === b.members.join() &&
   JSON.stringify(a.summary) === JSON.stringify(b.summary)
 
@@ -205,6 +233,7 @@ export function CanvasMap() {
         agents: feed.agents,
         rows: feed.rows,
         workspaces: feed.workspaces,
+        trees: feed.trees,
         archived,
         showArchived,
         shown,
@@ -215,11 +244,11 @@ export function CanvasMap() {
 
   // Lay out only when the tree or a shape changes, not on every feed update.
   const structure = JSON.stringify(
-    agents.map((agent) => [agent.id, agent.parent ?? 0, agent.shape]),
+    agents.map((agent) => [agent.id, agent.parent ?? 0, boxOf(agent)]),
   )
   const ring = useRef<Ring>({ count: 8, slots: new Map() })
   const targets = useMemo(() => {
-    const list = JSON.parse(structure) as [number, number, Shape][]
+    const list = JSON.parse(structure) as [number, number, Box][]
     const top = new Map<number, number>()
     const branches = new Map<number, number[]>()
     for (const [id, parent] of list) {
@@ -310,7 +339,7 @@ export function CanvasMap() {
     for (const agent of agents) {
       const isFocused = agent.id === focused
       const expanded = !isFocused && hovered === agent.id && agent.shape !== 'panel'
-      const size = isFocused ? focusSize : expanded ? PANEL : sizes[agent.shape]
+      const size = isFocused ? focusSize : expanded ? PANEL : sizes[boxOf(agent)]
       const flags = {
         selected: agent.id === shown,
         focused: isFocused,
@@ -378,15 +407,15 @@ export function CanvasMap() {
   )
 
   // Camera.
-  const boxOf = (id: number) => {
+  const placeOf = (id: number) => {
     const point = latest.current.targets.get(id)
     const agent = latest.current.byId.get(id)
-    return point && agent ? { point, size: sizes[agent.shape] } : undefined
+    return point && agent ? { point, size: sizes[boxOf(agent)] } : undefined
   }
   const fitAll = (duration = 500) => {
     const boxes = [
       { point: { x: 0, y: 0 }, size: HUB },
-      ...latest.current.agents.flatMap((agent) => boxOf(agent.id) ?? []),
+      ...latest.current.agents.flatMap((agent) => placeOf(agent.id) ?? []),
     ]
     frame(bounds(boxes), 0.08, duration)
   }
@@ -412,7 +441,7 @@ export function CanvasMap() {
   }
   /** Ease `id` into view, centring it, unless it is already well inside. */
   const show = (id: number) => {
-    const box = boxOf(id)
+    const box = placeOf(id)
     if (!box) return
     const view = latest.current
     const { x, y, zoom } = flow.getViewport()
@@ -440,12 +469,54 @@ export function CanvasMap() {
   // A new conversation springs out of the hub: keep both in view.
   useEffect(() => {
     const id = reveal.current
-    const box = id === undefined ? undefined : boxOf(id)
+    const box = id === undefined ? undefined : placeOf(id)
     if (!box) return
     reveal.current = undefined
     revealed.current = id
     frame(bounds([{ point: { x: 0, y: 0 }, size: HUB }, box]), 0.15, 700)
   })
+  // A subagent springing out of the shown tree: re-frame the tree gently, unless the user just moved the map.
+  const moved = useRef(0)
+  const known = useRef<ReadonlySet<number>>(new Set())
+  useEffect(() => {
+    const fresh = [...targets.keys()].filter((id) => !known.current.has(id))
+    known.current = new Set(targets.keys())
+    const now = latest.current
+    if (!settled || now.focus || Date.now() - moved.current < HANDS_OFF) return
+    const topOf = (id: number) => {
+      let agent = now.byId.get(id)
+      while (agent?.parent !== undefined) agent = now.byId.get(agent.parent)
+      return agent?.id
+    }
+    const tree = now.shown === undefined ? undefined : topOf(now.shown)
+    if (
+      tree === undefined ||
+      !fresh.some((id) => now.byId.get(id)?.parent !== undefined && topOf(id) === tree)
+    )
+      return
+    const rect = bounds(
+      now.agents.flatMap((agent) => (topOf(agent.id) === tree ? (placeOf(agent.id) ?? []) : [])),
+    )
+    const { x, y, zoom } = flow.getViewport()
+    const margin = 32
+    if (
+      rect.x * zoom + x > margin &&
+      rect.y * zoom + y > margin &&
+      (rect.x + rect.width) * zoom + x < now.width - margin &&
+      (rect.y + rect.height) * zoom + y < now.height - margin
+    )
+      return
+    // Never closer than now: the tree comes into view, the user's zoom stays unless it must give.
+    const fit = Math.min(zoom, (now.width * 0.9) / rect.width, (now.height * 0.9) / rect.height)
+    void flow.setViewport(
+      {
+        x: now.width / 2 - (rect.x + rect.width / 2) * fit,
+        y: now.height / 2 - (rect.y + rect.height / 2) * fit,
+        zoom: Math.max(0.05, fit),
+      },
+      { duration: 600 },
+    )
+  }, [targets, settled, flow])
   // The first layout: the stored viewport, else everything; a deep-linked conversation eases into view.
   const placed = useRef(false)
   useEffect(() => {
@@ -559,7 +630,7 @@ export function CanvasMap() {
         for (const agent of now.agents)
           if (agent.parent !== undefined && members.has(agent.parent)) members.add(agent.id)
         setFocus(false)
-        frame(bounds([...members].flatMap((id) => boxOf(id) ?? [])), 0.1, 500)
+        frame(bounds([...members].flatMap((id) => placeOf(id) ?? [])), 0.1, 500)
       },
       move,
       open: () => {
@@ -654,6 +725,7 @@ export function CanvasMap() {
           nodesDraggable={false}
           nodesFocusable={false}
           onMove={(event, viewport) => {
+            if (event) moved.current = Date.now()
             // Zooming out of a focused panel returns to the map.
             if (event && latest.current.focus && viewport.zoom < 0.92) setFocus(false)
           }}

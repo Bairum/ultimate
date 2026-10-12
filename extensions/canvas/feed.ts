@@ -39,7 +39,8 @@ function lineCount(value: string) {
   if (!value) return 0
   return value.split('\n').length - (value.endsWith('\n') ? 1 : 0)
 }
-function shorten(path: string, { cwd, home }: Place) {
+/** A path relative to the cwd when inside it, else with `~` for the home. */
+export function shorten(path: string, { cwd, home }: Place) {
   if (!isAbsolute(path)) return path
   const inner = relative(cwd, path)
   if (inner && !inner.startsWith('..') && !isAbsolute(inner)) return inner

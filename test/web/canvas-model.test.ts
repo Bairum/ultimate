@@ -1,45 +1,25 @@
 import { expect, it } from 'vitest'
-import { agentsOf, decisions } from '../../extensions/canvas/model.tsx'
+import { agentsOf } from '../../extensions/canvas/model.tsx'
 import type { Inputs } from '../../extensions/canvas/model.tsx'
+import type { CanvasConclusion, CanvasReason } from '../../extensions/canvas/types.ts'
 import type { OverviewRow } from '../../extensions/conversations/types.ts'
-import type { Workspace } from '../../extensions/workspaces/types.ts'
 
-const checkout = (state: Workspace['state'], landed?: string): Workspace => ({
-  path: '/w',
-  branch: 'b',
-  base: 'a',
-  source: '/s',
-  target: 'main',
-  state,
-  ...(landed ? { landed } : {}),
-})
-
-it('needs a decision for Luna’s needs-input and for ready checkouts never landed', () => {
-  expect(decisions([{ id: 1, top: true, assessment: 'done' }])).toEqual([])
-  expect(decisions([{ id: 1, top: true, assessment: 'needs_input' }])).toEqual(['needs input'])
-  expect(decisions([{ id: 1, top: true, workspace: checkout('ready') }])).toEqual([
-    'workspace not landed',
-  ])
-  expect(decisions([{ id: 12, top: false, workspace: checkout('ready') }])).toEqual([
-    'worktree #12 not landed',
-  ])
-  // Landed, being prepared, failed or removed: nothing waits on it.
-  for (const workspace of [
-    checkout('ready', 'abc123'),
-    checkout('preparing'),
-    checkout('failed'),
-    checkout('removed'),
-  ])
-    expect(decisions([{ id: 3, top: false, workspace }])).toEqual([])
-  // A tree's reasons, each once.
-  expect(
-    decisions([
-      { id: 1, top: true, assessment: 'needs_input' },
-      { id: 2, top: false, assessment: 'needs_input', workspace: checkout('ready') },
-      { id: 3, top: false, workspace: checkout('ready', 'abc123') },
-    ]),
-  ).toEqual(['needs input', 'worktree #2 not landed'])
-})
+const unlanded: CanvasReason = {
+  kind: 'unlanded',
+  conversationId: 2,
+  detail: 'W2: 1 commit not landed',
+}
+const concluded: CanvasConclusion = {
+  headline: 'Reviewed and landed',
+  commits: 2,
+  pushed: false,
+  landed: ['Review fixes'],
+  subagents: 2,
+  files: 3,
+  screenshot: false,
+  through: 31,
+  at: 1,
+}
 
 const replied = (
   inputId: number,
@@ -63,6 +43,7 @@ const inputs = (overrides: Partial<Inputs>): Inputs => ({
   agents: {},
   rows: { 1: replied(10, 11, 'done'), 2: replied(20, 21), 3: replied(30, 31) },
   workspaces: {},
+  trees: {},
   archived: [],
   showArchived: false,
   shown: undefined,
@@ -86,10 +67,27 @@ it('folds a settled tree into its conclusion card, but not while a decision wait
       members: [1, 2, 3],
     }),
   ])
-  // A finished worker's checkout was never landed: the tree stays open, the worker keeps its panel and says why.
-  expect(shapes({ workspaces: { 2: checkout('ready') } })).toEqual([
-    { id: 1, shape: 'panel', status: 'decision', reasons: ['worktree #2 not landed'] },
-    { id: 2, shape: 'panel', status: 'decision', reasons: ['worktree #2 not landed'] },
+  // Its conclusion rides on the card.
+  expect(agentsOf(inputs({ trees: { 1: { conclusion: concluded } } }))[0]).toMatchObject({
+    shape: 'card',
+    conclusion: concluded,
+  })
+  // A finished worker's commits were never landed: the tree stays open, the worker keeps its panel and says why.
+  const decision = { 1: { decision: { reasons: [unlanded] }, conclusion: concluded } }
+  expect(shapes({ trees: decision })).toEqual([
+    { id: 1, shape: 'panel', status: 'decision', reasons: [unlanded] },
+    { id: 2, shape: 'panel', status: 'decision', reasons: [unlanded] },
+    { id: 3, shape: 'pill', status: 'replied', reasons: [] },
+  ])
+  // While anything in the tree works, unlanded work is expected: no reasons show, not even a stale record's.
+  expect(
+    shapes({
+      trees: decision,
+      tasks: { tasks: { 9: { conversationId: 2 } } } as unknown as Inputs['tasks'],
+    }),
+  ).toEqual([
+    { id: 1, shape: 'panel', status: 'done', reasons: [] },
+    { id: 2, shape: 'panel', status: 'working', reasons: [] },
     { id: 3, shape: 'pill', status: 'replied', reasons: [] },
   ])
   // Shown, the tree opens; its finished subagents are pills.

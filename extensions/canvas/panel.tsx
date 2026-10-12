@@ -11,13 +11,18 @@ import {
   CircleAlertIcon,
   CircleCheckIcon,
   ClockIcon,
+  CloudUploadIcon,
   EllipsisIcon,
   EraserIcon,
+  FileDiffIcon,
   FilePenIcon,
   FilePlus2Icon,
   FileTextIcon,
   GitBranchIcon,
+  GitCommitHorizontalIcon,
+  GitMergeIcon,
   GlobeIcon,
+  HistoryIcon,
   ListTodoIcon,
   Maximize2Icon,
   PencilIcon,
@@ -27,7 +32,7 @@ import {
   WrenchIcon,
 } from 'lucide-react'
 import type { ComponentType, ReactNode } from 'react'
-import { createContext, memo, useContext, useLayoutEffect, useRef, useState } from 'react'
+import { createContext, memo, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Shimmer } from '@/components/ai/shimmer'
 import {
   DropdownMenu,
@@ -38,10 +43,16 @@ import {
 import { Kbd } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Conversation, api, cn, formatKeys } from '@/sdk'
-import { useAgentFeed } from './data.tsx'
+import { useAgentFeed, useConclusion } from './data.tsx'
 import type { Agent, Status } from './model.tsx'
-import { STATUS, activityOf, isActive, nameOf, reasonTip } from './model.tsx'
-import type { CanvasAgent, CanvasEdit, CanvasTool } from './types.ts'
+import { REASON_TIPS, STATUS, activityOf, isActive, nameOf } from './model.tsx'
+import type {
+  CanvasAgent,
+  CanvasConclusion,
+  CanvasEdit,
+  CanvasReason,
+  CanvasTool,
+} from './types.ts'
 import { ContextBar, UsageDetails, UsageLine } from './usage.tsx'
 
 /** Below this zoom panels are far cards: big title, state colour, one line. */
@@ -151,18 +162,24 @@ function StateLabel({ status, className }: { status: Status; className?: string 
   )
 }
 
+/** A reason in a few words; another conversation's question names it. */
+const reasonLabel = (reason: CanvasReason, id: number) =>
+  reason.kind === 'needs_input' && reason.conversationId !== id
+    ? `#${reason.conversationId} ${reason.detail}`
+    : reason.detail
+
 /** Why it waits for a decision, in the warm colour of needs-input. */
-function Reasons({ reasons, className }: { reasons: readonly string[]; className?: string }) {
-  return reasons.map((reason) => (
-    <Tip key={reason} tip={reasonTip(reason)}>
+function Reasons({ agent, className }: { agent: Agent; className?: string }) {
+  return agent.reasons.map((reason) => (
+    <Tip key={`${reason.kind}-${reason.conversationId}`} tip={REASON_TIPS[reason.kind]}>
       <span
         className={cn(
           'shrink-0 rounded-sm bg-warning/12 px-1 whitespace-nowrap text-warning',
           className,
         )}
-        data-reason={reason}
+        data-reason={reason.kind}
       >
-        {reason}
+        {reasonLabel(reason, agent.id)}
       </span>
     </Tip>
   ))
@@ -309,8 +326,25 @@ function Menu({ agent }: { agent: Agent }) {
 function Chips({ tools }: { tools: readonly CanvasTool[] }) {
   const seen = useRef<Set<string>>(null)
   seen.current ??= new Set(tools.map((tool) => tool.id))
+  const row = useRef<HTMLDivElement>(null)
+  const [over, setOver] = useState(false)
+  // Measured by the chips' own widths, so the alignment it picks cannot change the answer.
+  useLayoutEffect(() => {
+    const element = row.current!
+    const chips = [...element.children] as HTMLElement[]
+    const width = chips.reduce((sum, chip) => sum + chip.offsetWidth, 0) + 4 * (chips.length - 1)
+    setOver(width > element.clientWidth)
+  }, [tools])
   return (
-    <div className="flex h-6 items-center gap-1 overflow-hidden">
+    <div
+      className={cn(
+        'flex h-6 items-center gap-1 overflow-hidden',
+        // Too many to fit: the newest stay whole at the right, the oldest fade out at the left.
+        over && 'justify-end [mask-image:linear-gradient(to_right,transparent,black_2.5rem)]',
+      )}
+      data-chips-overflow={over || undefined}
+      ref={row}
+    >
       {tools.slice(-6).map((tool) => {
         const Icon = icons[tool.name] ?? WrenchIcon
         // A subagent call names the agent it starts (`start scout: …`), else its action.
@@ -394,6 +428,54 @@ function Tail({ text, thinking }: { text: string; thinking?: boolean }) {
   )
 }
 
+/**
+ * The end of a finished answer, under a label: as much as fits its box, starting at a word with `…` when it does not
+ * all fit, so it never starts mid-sentence unmarked.
+ */
+function LastAnswer({ text }: { text: string }) {
+  const box = useRef<HTMLParagraphElement>(null)
+  const measure = useRef<HTMLParagraphElement>(null)
+  const words = useMemo(() => plain(text).replace(/^…/, '').split(' '), [text])
+  const [start, setStart] = useState(0)
+  const cut = text.startsWith('…')
+  useLayoutEffect(() => {
+    // The measuring copy has no React children, so writing its text is safe.
+    const copy = measure.current!
+    const room = box.current!.clientHeight + 1
+    const fits = (from: number) => {
+      copy.textContent = `${cut || from ? '…' : ''}${words.slice(from).join(' ')}`
+      return copy.scrollHeight <= room
+    }
+    let low = 0
+    let high = words.length - 1
+    while (low < high) {
+      const middle = (low + high) >> 1
+      if (fits(middle)) high = middle
+      else low = middle + 1
+    }
+    setStart(low)
+  }, [words, cut])
+  const className = 'text-[12.5px] leading-relaxed break-words text-foreground/85'
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-1" data-tail="answer">
+      <span className="shrink-0 text-[10px] font-medium tracking-wider text-muted-foreground/70 uppercase">
+        Last answer
+      </span>
+      <div className="relative min-h-0 flex-1">
+        <p className={cn('absolute inset-0 overflow-hidden', className)} ref={box}>
+          {cut || start ? '…' : ''}
+          {words.slice(start).join(' ')}
+        </p>
+        <p
+          aria-hidden
+          className={cn('invisible absolute inset-x-0 top-0', className)}
+          ref={measure}
+        />
+      </div>
+    </div>
+  )
+}
+
 function Edits({ edits }: { edits: readonly CanvasEdit[] }) {
   return (
     <div className="flex flex-col gap-0.5 font-mono text-[11px]">
@@ -433,9 +515,13 @@ function Mid({ agent, feed, renaming }: { agent: Agent; feed?: CanvasAgent; rena
       : undefined
   const writing = active ? feed?.writing : undefined
   const waiting = agent.status === 'waiting' ? feed?.waitingOn : undefined
-  // Idle: Luna's summary (or what the subagent did), then the end of the last answer, which a decision needs.
+  // Idle: Luna's summary (or what the subagent did), or the end of the last answer when a decision needs it.
   const summary =
-    agent.parent === undefined ? (agent.row?.summary ?? agent.row?.activity) : agent.row?.activity
+    agent.status === 'decision'
+      ? undefined
+      : agent.parent === undefined
+        ? (agent.row?.summary ?? agent.row?.activity)
+        : agent.row?.activity
   return (
     <>
       <Header agent={agent} renaming={renaming} />
@@ -446,7 +532,7 @@ function Mid({ agent, feed, renaming }: { agent: Agent; feed?: CanvasAgent; rena
             on {waiting.map((id) => `#${id}`).join(', ')}
           </span>
         )}
-        <Reasons reasons={agent.reasons} />
+        <Reasons agent={agent} />
         {agent.archived && <span className="text-muted-foreground">· archived</span>}
       </div>
       {latest && (
@@ -465,16 +551,15 @@ function Mid({ agent, feed, renaming }: { agent: Agent; feed?: CanvasAgent; rena
           <Tail text={thinking.text} thinking />
         ) : writing ? (
           <Tail text={writing.text} />
-        ) : summary && feed?.writing ? (
-          <>
-            <p
-              className="line-clamp-2 shrink-0 text-[12px] leading-snug text-muted-foreground"
-              data-summary
-            >
-              {summary}
-            </p>
-            <Tail text={feed.writing.text} />
-          </>
+        ) : summary ? (
+          <p
+            className="line-clamp-6 text-[12.5px] leading-relaxed text-muted-foreground"
+            data-summary
+          >
+            {summary}
+          </p>
+        ) : feed?.writing ? (
+          <LastAnswer text={feed.writing.text} />
         ) : (
           <p
             className="line-clamp-4 text-[12.5px] leading-relaxed text-muted-foreground"
@@ -499,31 +584,124 @@ function Mid({ agent, feed, renaming }: { agent: Agent; feed?: CanvasAgent; rena
   )
 }
 
+/** `45s`, `14m`, `2h 5m`, `3d`. */
+function duration(ms: number) {
+  const minutes = Math.round(ms / 60_000)
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`
+  if (minutes < 60) return `${minutes}m`
+  if (minutes < 24 * 60)
+    return `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ''}`
+  return `${Math.round(minutes / (24 * 60))}d`
+}
+
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
+
+/** What a conclusion produced, as chips: what landed, commits, pushed, subagents, files. */
+function outcomeOf(conclusion: CanvasConclusion) {
+  return [
+    conclusion.landed.length > 0 && {
+      key: 'landed',
+      icon: GitMergeIcon,
+      text: `landed: ${conclusion.landed.join(', ')}`,
+    },
+    conclusion.commits > 0 && {
+      key: 'commits',
+      icon: GitCommitHorizontalIcon,
+      text: plural(conclusion.commits, 'commit'),
+    },
+    conclusion.pushed && { key: 'pushed', icon: CloudUploadIcon, text: 'pushed' },
+    conclusion.subagents > 0 && {
+      key: 'subagents',
+      icon: BotIcon,
+      text: plural(conclusion.subagents, 'subagent'),
+    },
+    conclusion.files > 0 && {
+      key: 'files',
+      icon: FileDiffIcon,
+      text: plural(conclusion.files, 'file'),
+    },
+  ].filter((chip) => chip !== false)
+}
+
+/** Its chips, wrapping onto a second row at most. */
+function Outcome({ conclusion }: { conclusion: CanvasConclusion }) {
+  return (
+    <div className="flex max-h-11 shrink-0 flex-wrap gap-1 overflow-hidden" data-outcome>
+      {outcomeOf(conclusion).map(({ key, icon: Icon, text }) => (
+        <span
+          className={cn(
+            'flex h-5 max-w-full min-w-0 items-center gap-1 rounded-md border px-1.5 font-mono text-[10.5px] whitespace-nowrap',
+            key === 'landed' || key === 'pushed'
+              ? 'border-success/35 bg-success/10 text-success'
+              : 'border-border bg-muted/60 text-muted-foreground',
+          )}
+          data-chip={key}
+          key={key}
+          title={text}
+        >
+          <Icon className="size-3 shrink-0" />
+          <span className="truncate">{text}</span>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/** A conclusion the tree has worked past: still shown, dimmed, until the next one replaces it. */
+function Outdated() {
+  return (
+    <Tip tip="The tree worked since; a new conclusion follows once it settles">
+      <span className="flex items-center gap-1 text-muted-foreground" data-outdated>
+        <HistoryIcon className="size-3" />
+        outdated
+      </span>
+    </Tip>
+  )
+}
+
 /** The far card: readable from afar, so few and big. */
 function Far({ agent, feed }: { agent: Agent; feed?: CanvasAgent }) {
-  if (agent.shape === 'card')
+  if (agent.shape === 'card') {
+    const { conclusion } = agent
     return (
       <>
         <div className="flex shrink-0 items-center gap-3 text-[20px]">
           <Mark className="size-5" status={agent.status} />
           <StateLabel status={agent.status} />
+          {conclusion?.stale && <span className="text-muted-foreground">· outdated</span>}
           <span className="ml-auto font-mono text-muted-foreground/70">#{agent.id}</span>
         </div>
-        <p className="mt-1 shrink-0 truncate text-[30px] leading-tight font-medium">
-          {nameOf(agent.summary)}
+        <p
+          className={cn(
+            'mt-1 line-clamp-2 shrink-0 text-[30px] leading-tight font-medium break-words',
+            conclusion?.stale && 'opacity-60',
+          )}
+        >
+          {conclusion?.headline ?? nameOf(agent.summary)}
         </p>
+        {conclusion && (
+          <p className="mt-2 line-clamp-2 shrink-0 text-[20px] text-muted-foreground">
+            {outcomeOf(conclusion)
+              .map((chip) => (chip.key === 'landed' ? 'landed' : chip.text))
+              .join(' · ')}
+          </p>
+        )}
         <ContextBar className="mt-auto h-2.5 w-full shrink-0" usage={feed?.usage} />
       </>
     )
+  }
   if (agent.shape === 'pill')
     return (
       <>
-        <p className="flex items-center gap-3 truncate text-[26px]">
+        {/* The role gives way before the id does. */}
+        <p className="flex min-w-0 items-center gap-3 text-[26px]">
           <Mark className="size-5" status={agent.status} />
-          <span className="font-mono text-brand">{agent.summary.label ?? 'agent'}</span>
-          <span className="text-muted-foreground">#{agent.id}</span>
+          <span className="min-w-0 truncate font-mono text-brand">
+            {agent.summary.label ?? 'agent'}
+          </span>
+          <span className="shrink-0 text-muted-foreground">#{agent.id}</span>
         </p>
-        <ContextBar className="absolute inset-x-8 bottom-1.5 h-1.5" usage={feed?.usage} />
+        <ContextBar className="absolute inset-x-6 bottom-1.5 h-1.5" usage={feed?.usage} />
       </>
     )
   return (
@@ -540,7 +718,9 @@ function Far({ agent, feed }: { agent: Agent; feed?: CanvasAgent }) {
         {nameOf(agent.summary)}
       </p>
       <p className="mt-auto shrink-0 truncate text-[22px] text-muted-foreground">
-        {agent.reasons.length ? agent.reasons.join(' · ') : activityOf(agent, feed)}
+        {agent.reasons.length
+          ? agent.reasons.map((reason) => reasonLabel(reason, agent.id)).join(' · ')
+          : activityOf(agent, feed)}
       </p>
       <ContextBar className="mt-3 h-2.5 w-full shrink-0" usage={feed?.usage} />
     </>
@@ -548,41 +728,75 @@ function Far({ agent, feed }: { agent: Agent; feed?: CanvasAgent }) {
 }
 
 /**
- * A concluded conversation folded with everything it owns: its title, state and Luna summary. `conclusion` is the
- * place for a richer outcome (commits, what landed, a screenshot), rendered under the summary once something provides
- * it.
+ * A settled conversation folded with everything it owns. Once concluded: the headline, Luna's summary of the whole
+ * tree, the last screenshot, and what it produced as chips; dimmed while the tree has worked past it. Before its first
+ * conclusion (or without Luna), its title, state and summary.
  */
 export function ConclusionCard({
   agent,
   feed,
   renaming,
-  conclusion,
 }: {
   agent: Agent
   feed?: CanvasAgent
   renaming: boolean
-  conclusion?: ReactNode
 }) {
+  const brief = agent.conclusion
+  // The summary and the thumbnail come with the full conclusion, fetched while the card shows.
+  const full = useConclusion(agent.id, brief?.at)
   return (
     <>
       <Header agent={agent} renaming={renaming} />
       <div className="flex h-4.5 shrink-0 items-center gap-1.5 pl-4 text-[11px] text-muted-foreground">
         <StateLabel status={agent.status} />
-        {agent.folded > 0 && (
-          <span>
-            · {agent.folded} subagent{agent.folded === 1 ? '' : 's'}
-          </span>
-        )}
+        {!brief && agent.folded > 0 && <span>· {plural(agent.folded, 'subagent')}</span>}
+        {full && full.duration > 0 && <span>· {duration(full.duration)}</span>}
+        {brief?.stale && <Outdated />}
         {agent.archived && <span>· archived</span>}
       </div>
-      <p
-        className="mt-1.5 line-clamp-3 pl-4 text-[12px] leading-snug text-muted-foreground"
-        data-summary
-      >
-        {agent.row?.summary ?? agent.row?.activity ?? 'No summary yet'}
-      </p>
-      {conclusion && <div className="mt-2 pl-4">{conclusion}</div>}
-      <div className="mt-auto pl-4">
+      {brief ? (
+        <div
+          className={cn(
+            'mt-1.5 flex min-h-0 flex-1 flex-col gap-1.5 pl-4 transition-opacity',
+            brief.stale && 'opacity-55',
+          )}
+          data-conclusion
+          data-stale={brief.stale}
+        >
+          <p className="line-clamp-2 shrink-0 text-[13px] leading-snug font-medium" data-headline>
+            {brief.headline}
+          </p>
+          <div className="flex min-h-0 flex-1 gap-2.5">
+            {brief.screenshot &&
+              (full?.thumbnail ? (
+                <img
+                  alt="The tree's last screenshot"
+                  className="h-[68px] w-[108px] shrink-0 rounded-md border border-border object-cover object-top"
+                  data-thumbnail
+                  src={`data:${full.thumbnail.mimeType};base64,${full.thumbnail.data}`}
+                />
+              ) : (
+                <span className="h-[68px] w-[108px] shrink-0 rounded-md bg-muted" />
+              ))}
+            {/* At its own height: stretched, a flex item shows the lines its clamp hides. */}
+            <p
+              className="line-clamp-4 self-start text-[12px] leading-snug text-muted-foreground"
+              data-summary
+            >
+              {full?.summary ?? agent.row?.summary ?? ''}
+            </p>
+          </div>
+          <Outcome conclusion={brief} />
+        </div>
+      ) : (
+        <p
+          className="mt-1.5 line-clamp-3 pl-4 text-[12px] leading-snug text-muted-foreground"
+          data-summary
+        >
+          {agent.row?.summary ?? agent.row?.activity ?? 'No summary yet'}
+        </p>
+      )}
+      <div className="mt-auto pt-1 pl-4">
         <UsageLine members={agent.members} usage={feed?.usage} />
       </div>
     </>
@@ -595,9 +809,11 @@ function Pill({ agent, feed }: { agent: Agent; feed?: CanvasAgent }) {
     <>
       <div className="flex h-5 items-center gap-1.5 text-[11.5px]">
         <Mark status={agent.status} />
-        <span className="truncate font-mono text-foreground/85">
-          {agent.summary.label ?? 'agent'} · #{agent.id}
+        {/* The role gives way before the id does. */}
+        <span className="min-w-0 truncate font-mono text-foreground/85">
+          {agent.summary.label ?? 'agent'}
         </span>
+        <span className="shrink-0 font-mono text-muted-foreground">#{agent.id}</span>
         <StateLabel className="ml-auto text-[10.5px]" status={agent.status} />
       </div>
       <p className="truncate pl-3.5 text-[11.5px] text-muted-foreground" data-summary>
@@ -628,7 +844,7 @@ function Focused({ agent, feed }: { agent: Agent; feed?: CanvasAgent }) {
         </button>
         <Mark status={agent.status} />
         <Title agent={agent} className="flex-1" />
-        <Reasons className="text-[11px]" reasons={agent.reasons} />
+        <Reasons agent={agent} className="text-[11px]" />
         <StateLabel className="text-[12px]" status={agent.status} />
         <WorkspaceBadge agent={agent} />
         <span className="font-mono text-[11px] text-muted-foreground/70">#{agent.id}</span>
@@ -676,7 +892,7 @@ export const AgentPanel = memo(function AgentPanel({ data }: NodeProps<PanelNode
             ? cn(
                 'border-4',
                 shape === 'pill'
-                  ? 'justify-center rounded-full px-8'
+                  ? 'justify-center rounded-full px-6'
                   : shape === 'card'
                     ? 'rounded-3xl p-5'
                     : 'rounded-3xl p-6',

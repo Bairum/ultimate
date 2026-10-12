@@ -15,23 +15,29 @@ page is open, so a new conversation or subagent never moves another branch. Move
 conversations and empty drafts stay off the map.
 
 A panel's outline is its state: Working (purple, pulsing), Waiting on subagent (blue), Queued (dashed), Needs decision
-(warm), Done (green, Luna's opinion), Replied (green), Run failed (red), Idle. A tree **needs a decision** while Luna
-says one of its conversations needs input, or a workspace in it is ready and was never landed (`decisions()` in
-[model.tsx](model.tsx); the workspaces document has no tip, so a checkout landed once counts as landed). Its panels
-name the reasons ("needs input", "workspace not landed", "worktree #12 not landed").
+(warm), Done (green, Luna's opinion), Replied (green), Run failed (red), Idle. A tree **needs a decision** when the
+server says so (see [Conclusions](#conclusions)): once the whole tree is idle, Luna says one of its conversations needs
+input, or a checkout in it holds commits that were never landed. Its panels name the reasons ("needs input",
+"W12: 3 commits not landed"; a subagent's question shows as "#49 needs input" on its top-level panel). While anything in
+the tree works, nothing shows: unlanded work is expected then.
 
-Finished work shrinks: a finished subagent with nothing to decide becomes a pill, and a tree with nothing working and
-nothing to decide folds into a **conclusion card** (title, state, Luna summary, how many subagents it folded, and the
-spend of the whole tree). `ConclusionCard` takes `conclusion?: ReactNode`, rendered under the summary: the place for a
-richer outcome (commits, what landed, a screenshot). Hovering a card or pill opens it to a full panel; the shown
-conversation always keeps its full panel and its tree.
+Finished work shrinks: a finished subagent with nothing to decide becomes a pill (its role gives way before its id), and
+a tree with nothing working and nothing to decide folds into a **conclusion card**. Once concluded, the card shows the
+headline, Luna's summary of the whole tree, the tree's last screenshot, and chips for what it produced ("landed: …",
+"3 commits", "pushed", "2 subagents", "12 files"); before its first conclusion, or without Luna, its title, state and
+summary. New work dims the card and marks it "outdated" until the next conclusion replaces it. Hovering a card or pill
+opens it to a full panel; the shown conversation always keeps its full panel and its tree.
 
-Zoomed out (below 60 %), panels are far cards: big title, state colour, one line. Closer, a panel shows its latest
-calls as chips (running ones shimmer), the streaming thinking (dim) or answer, its latest edits, and when idle Luna's
-summary with the end of its last answer. Every panel has a context bar; a panel's line reads
+Zoomed out (below 60 %), panels are far cards: big title (a card's headline), state colour, one line. Closer, a panel
+shows its latest calls as chips (running ones shimmer; when they do not fit, the oldest fade out at the left), the
+streaming thinking (dim) or answer, its latest edits, and when idle Luna's summary, or, when it has none or a decision
+waits, its last answer under a label, starting with `…` when cut. Every panel has a context bar; a panel's line reads
 `42% of 272k · ↑26k ↓1.7k · $0.50 · model`, with the spend of the whole tree on a top-level panel, and the hub adds up
 everything on the map. Edges from a parent that waits on a subagent carry dots toward it, and one dot runs back when
 the wait ends.
+
+When the shown tree spawns a subagent, the view re-frames the tree gently so the newcomer is in sight, never zooming
+in, unless you moved the map in the last four seconds.
 
 Click selects a panel, which shows its conversation; the selection follows the shown conversation and its URL. Enter
 or a double-click zooms the panel to fill the view with the real transcript and composer. Escape goes back to the map,
@@ -58,7 +64,10 @@ Everything arrives over one stream on the root conversation, whatever the number
 `/api/events?conversation=1&docs=ultimate.canvas`. Its shape is in [types.ts](types.ts):
 
 ```ts
-type CanvasState = { agents: Record<string, CanvasAgent> } // keyed by conversation id
+type CanvasState = {
+  agents: Record<string, CanvasAgent> // keyed by conversation id
+  trees: Record<string, CanvasTree> // keyed by top-level conversation id
+}
 type CanvasAgent = {
   tools: CanvasTool[] // the last 8 calls, newest last
   thinking?: { text: string; at: number } // tail (240 characters) of the latest or streaming thinking
@@ -79,6 +88,23 @@ type CanvasUsage = {
 }
 type CanvasTool = { id; name; label; status: 'running' | 'done' | 'error'; at }
 type CanvasEdit = { path; added; removed; at }
+type CanvasTree = {
+  decision?: { reasons: CanvasReason[] } // what the idle tree waits for
+  conclusion?: CanvasConclusion // its latest conclusion, small
+}
+type CanvasReason = { kind: 'needs_input' | 'unlanded'; conversationId; detail } // `needs input`, `W12: 3 commits not landed`
+type CanvasConclusion = {
+  headline: string
+  commits: number
+  pushed: boolean
+  landed: string[] // names of what landed, in Luna's words
+  subagents: number
+  files: number
+  screenshot: boolean
+  through: number // the newest entry it covers
+  at: number
+  stale?: true // the tree worked since
+}
 ```
 
 Times are Unix milliseconds. A tail longer than its limit starts with `…`. A tool's `at` is when it was called; a
@@ -96,7 +122,8 @@ model list in the browser.
 `wait`. It clears when the call ends. Calls made from inside codemode are not seen.
 
 Titles, labels, parent links, busy and run state, and assessments are not repeated here: they come from the core
-conversation list and `ultimate.conversation-overview`.
+conversation list and `ultimate.conversation-overview`. Version 2 added `trees`; a version 1 document gains an empty
+one.
 
 ## How it stays current
 
@@ -108,3 +135,44 @@ of the changed rows.
 
 Rows exist only for agents with activity. Archived conversations (`ext.conversations.archived`) and their subagents
 are dropped, and rebuilt when unarchived. At most 150 rows are kept; the least recently active go first.
+
+## Conclusions
+
+A tree is a top-level conversation and every conversation it owns (subagents, at any depth; history forks are not in
+it). The server follows commits and, about 300 ms after something touches a tree (an answer, a tool result, a run
+starting or ending, queued input, a Luna assessment, a landed or removed checkout), evaluates it:
+
+- **Active**: a run, queued input, or a Luna assessment still coming. Its decision clears, a pending conclusion is
+  called off, and its conclusion turns `stale` when there is work newer than it.
+- **Settled with a decision**: the reasons go into `trees[id].decision`, and no conclusion is made. `needs_input` is
+  Luna's current assessment of a conversation's latest answer; a subagent's counts only while its owner has not
+  answered since (its question was for the coordinator). `unlanded` comes from Git at evaluation time: a ready
+  checkout whose branch tip is not the tip it last landed, and whose target lacks commits of it
+  (`rev-list --count target..branch`). On open, trees that waited for a decision are evaluated again, in case a
+  checkout was landed by hand meanwhile.
+- **Settled with nothing to decide**, and work newer than its last conclusion: when Luna (`openai/gpt-6-luna`, as the
+  conversation summaries use) is available, a durable background task (`canvas.conclusion`) on the top-level
+  conversation sleeps through 30 seconds of quiet, then concludes. Activity or a decision meanwhile clears the task's
+  `pending` mark and it ends without a word. Without Luna nothing is started and nothing is shown.
+
+Nothing is backfilled: only trees that change are evaluated. The task collects, from the stored entries of every
+conversation in the tree:
+
+- commits from `git commit` output in bash results (`[branch sha] subject`), and the commits of `workspace` and
+  `subagent` land results, marked landed;
+- pushed, when a bash `git push` succeeded;
+- files: the paths of successful edits and writes, and landed paths;
+- subagents with their roles; the duration from the first message to the last; the last screenshot (`screenshot` or
+  `browser` image).
+
+Luna reads each conversation's visible text (the top-level one's last 8000 characters, a share of 6000 for the
+subagents), as source text, never instructions, plus the artifact list, and returns `headline`, `summary` (2–4
+sentences: what was asked, what was done, the outcome) and `landed` (names, possibly none). Its response is memoized,
+so a restart mid-request resumes without asking again, and its usage counts toward the top-level conversation's
+`pi.usage`, as summaries do. Provider or format errors keep the previous conclusion.
+
+The full conclusion, with a thumbnail of the screenshot (at most 480 pixels wide, Pi's `resizeImage` as the browser
+tools use), is the conversation document `ultimate.canvas-conclusion` on the top-level conversation; `trees[id]`
+carries only what the map needs. A card fetches the full one through the `conclusion` action
+(`POST /api/extensions/canvas/actions/conclusion` with `{ args: { id } }`) while it is on screen.
+`ULTIMATE_CANVAS_QUIET_MS` shortens the quiet, for tests only.

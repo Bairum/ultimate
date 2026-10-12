@@ -1,10 +1,11 @@
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
-import { useEffect, useMemo, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { api } from '@/sdk'
 import type { JsonObject } from '@/sdk'
 import type { OverviewRow } from '../conversations/types.ts'
 import type { Workspace } from '../workspaces/types.ts'
-import type { CanvasAgent } from './types.ts'
+import type { CanvasAgent, CanvasTree, Conclusion } from './types.ts'
 
 const CANVAS = 'ultimate.canvas'
 const OVERVIEW = 'ultimate.conversation-overview'
@@ -13,12 +14,13 @@ const WORKSPACES = 'ultimate.workspaces'
 /** The root documents the map reads, replaced immutably: a row that did not change keeps its identity. */
 export type Feed = {
   agents: Readonly<Record<string, CanvasAgent>>
+  trees: Readonly<Record<string, CanvasTree>>
   rows: Readonly<Record<string, OverviewRow>>
   workspaces: Readonly<Record<string, Workspace>>
   /** Every streamed document has arrived. */
   loaded: boolean
 }
-const empty: Feed = { agents: {}, rows: {}, workspaces: {}, loaded: false }
+const empty: Feed = { agents: {}, trees: {}, rows: {}, workspaces: {}, loaded: false }
 let feed = empty
 let docs: Record<string, JsonObject | null> = {}
 let kinds: string[] = []
@@ -28,6 +30,7 @@ let stream: EventSource | undefined
 function publish() {
   feed = {
     agents: (docs[CANVAS]?.agents ?? {}) as Feed['agents'],
+    trees: (docs[CANVAS]?.trees ?? {}) as Feed['trees'],
     rows: (docs[OVERVIEW]?.conversations ?? {}) as Feed['rows'],
     workspaces: (docs[WORKSPACES]?.items ?? {}) as Feed['workspaces'],
     loaded: kinds.length > 0 && kinds.every((kind) => kind in docs),
@@ -113,3 +116,32 @@ export const useFeed = () => useSyncExternalStore(subscribe, getFeed)
 /** One agent's activity; re-renders only when its own row changes. */
 export const useAgentFeed = (id: number): CanvasAgent | undefined =>
   useSyncExternalStore(subscribe, () => feed.agents[id])
+
+/** Full conclusions fetched so far, by conversation, with when each concluded. */
+const conclusions = new Map<number, { at: number; value: Promise<Conclusion | null> }>()
+/**
+ * A tree's full conclusion (summary, commits, thumbnail), fetched once per conclusion while its card shows: the map
+ * document carries only the small fields.
+ */
+export function useConclusion(id: number, at: number | undefined) {
+  const [value, setValue] = useState<Conclusion | null>()
+  useEffect(() => {
+    if (at === undefined) return undefined
+    let known = conclusions.get(id)
+    if (known?.at !== at) {
+      known = {
+        at,
+        value: api.action<Conclusion | null>('canvas', 'conclusion', { id }).catch(() => null),
+      }
+      conclusions.set(id, known)
+    }
+    let current = true
+    void known.value.then((fetched) => {
+      if (current) setValue(fetched)
+    })
+    return () => {
+      current = false
+    }
+  }, [id, at])
+  return at === undefined || value?.at !== at ? undefined : value
+}
