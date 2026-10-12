@@ -1,9 +1,12 @@
+import { awaitWithContext } from '@earendil-works/chord/context'
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import {
   createRegistry,
   defineExtension,
+  GenerationTask,
+  hook,
   Harness,
   MemoryStorage,
   UsageDoc,
@@ -11,7 +14,12 @@ import {
 import { afterEach, expect, it } from 'vitest'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
-import { Summaries, summaryBehavior, TitleChanged } from '../extensions/conversations/summary.ts'
+import {
+  IntentSummarized,
+  Summaries,
+  summaryBehavior,
+  TitleChanged,
+} from '../extensions/conversations/summary.ts'
 import { until } from './helpers.ts'
 
 const reported = {
@@ -30,7 +38,12 @@ afterEach(async () => {
   for (const close of cleanups.splice(0)) await close()
 })
 
-async function launch({ interrupt = false, long = false, assessment = 'done' } = {}) {
+async function launch({
+  interrupt = false,
+  long = false,
+  assessment = 'done',
+  initialIntent = false,
+} = {}) {
   const models = createModels()
   const main = fauxProvider({ tokensPerSecond: 100000 })
   const luna = fauxProvider({
@@ -81,7 +94,29 @@ async function launch({ interrupt = false, long = false, assessment = 'done' } =
       getAvailableSnapshot: () => models.getModels().filter((model) => model.provider === 'openai'),
     },
   })
-  registry.install(defineExtension({ name: 'conversations', ...behavior }))
+  let release!: () => void
+  const gate = new Promise<void>((done) => {
+    release = done
+  })
+  registry.install(
+    defineExtension({
+      name: 'conversations',
+      ...behavior,
+      hooks: [
+        ...behavior.hooks,
+        ...(initialIntent
+          ? [
+              hook(GenerationTask, {
+                beforeRequest: async (_request, _api, caller) => {
+                  await awaitWithContext(gate, caller)
+                  return undefined
+                },
+              }),
+            ]
+          : []),
+      ],
+    }),
+  )
   harness = await Harness.open(storage, { models, registry }, context)
   let interruption: Promise<void> | undefined
   harness.subscribeCommits((publication) => {
@@ -97,7 +132,19 @@ async function launch({ interrupt = false, long = false, assessment = 'done' } =
   let root = await harness.root(context, {
     agent: { model: { provider: 'faux', modelId: 'faux-1' } },
   })
-  cleanups.push(() => harness.close(context))
+  if (!initialIntent)
+    await harness.commit(
+      (tx) =>
+        tx.appendEntry(root.id, {
+          kind: 'pi.user',
+          model: [{ role: 'user', content: 'Established context', timestamp: 1 }],
+        }),
+      context,
+    )
+  cleanups.push(async () => {
+    release()
+    await harness.close(context)
+  })
   const read = () => harness.snapshot(Summaries, root.id, context)
   const ledger = () => harness.snapshot(UsageDoc, root.id, context)
   const submit = async () => {
@@ -113,6 +160,13 @@ async function launch({ interrupt = false, long = false, assessment = 'done' } =
   return {
     read,
     ledger,
+    release,
+    begin: () => {
+      main.setResponses([fauxAssistantMessage('Implemented the change.')])
+      return root.submit({ type: 'input', content: 'Implement this change.' }, context)
+    },
+    intents: async () =>
+      (await root.context(context)).entries.filter((entry) => IntentSummarized.is(entry)),
     titleChanges: async () =>
       (await root.context(context)).entries.filter((entry) => TitleChanged.is(entry)),
     submit,
@@ -171,4 +225,24 @@ it('a response with usage after a long stream still counts', async () => {
   await until(async () => (await f.read())?.status === 'ready')
   expect((await f.ledger())?.models[key]).toEqual(reported)
   expect((await f.read())?.summary).toHaveLength(420)
+})
+
+it('replays an initial intent response receipt once while the main generation remains blocked', async () => {
+  const f = await launch({ interrupt: true, initialIntent: true })
+  await f.begin()
+  await until(f.interrupted)
+  await f.reopen()
+  await until(async () => (await f.read())?.status === 'ready')
+  expect((await f.read())?.exchanges).toBe(0)
+  expect((await f.ledger())?.models[key]).toEqual(reported)
+  const entries = await f.intents()
+  expect(entries).toHaveLength(1)
+  expect(entries[0].model).toBeUndefined()
+  await f.reopen()
+  expect(await f.intents()).toEqual(entries)
+  expect((await f.ledger())?.models[key]).toEqual(reported)
+  f.release()
+  await until(async () => (await f.read())?.exchanges === 1 && !(await f.read())?.pending)
+  expect((await f.ledger())?.models[key].totalTokens).toBe(820)
+  expect(await f.intents()).toEqual(entries)
 })

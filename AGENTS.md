@@ -136,20 +136,19 @@ cases, not inflate coverage or merely restate the implementation.
 
 The coordinator owns review sequencing and the final verdict. Resolve immutable full commit SHAs for one explicit
 `base..head`; every reviewer must review that exact range, never a directory or moving branch. Supply the acceptance
-criteria, full `git log base..head` and full `git diff base..head` to all three independent reviewers. Claude's
-read-only tools cannot run Git, so include the complete log and diff in each Claude prompt, without truncation.
+criteria and the same range to both independent reviewers. Native reviewers inspect Git directly, including the
+complete `git log base..head` and `git diff base..head`; do not require copying the log or diff into prompts.
 
-1. Launch these three independent reviews in parallel from the coordinator: `subagent` with `agent: reviewer-astra`
-   (Astra 6, high), and two direct `claude_code` calls with `model: claude-fable-5-1` and `model: claude-opus-5-5`.
-   For each Claude call set `tools: [Read, Glob, Grep]`, `allowedTools: [Read, Glob, Grep]`, and
-   `permissionMode: dontAsk`. Give all three the same review quality rules and require concrete file:line findings,
-   impact, evidence, verification limits, and the reviewed range. Do not share reports between independent reviewers.
-2. Wait for all three reports and check completion, range, and actual returned model identity. A missing or failed
-   report, ambiguous model identity, or unexpected returned model blocks approval; never substitute another model
-   or silently reduce the team. Report the blocker.
-3. Only then launch `subagent` with `agent: reviewer` (Sol 6.1, xhigh), supplying the same range, criteria, log, diff,
-   and all three complete reports with their model identities. Sol verifies and synthesizes them, not another
-   independent parallel review. No nested subagents, reviewer delegation, or wrappers around Claude calls.
+1. Launch two independent native reviews in parallel from the coordinator: `subagent` with
+   `agent: reviewer-astra` (`openai/gpt-6-astra`, high) and `agent: reviewer-sol` (`openai/gpt-5.6-sol`, high).
+   Give both the same review quality rules and require concrete file:line findings, impact, evidence, verification
+   limits, and the reviewed range. Do not share reports between independent reviewers.
+2. Wait for both reports and check completion, range, and actual returned model identity. A missing, failed, or
+   wrong-range report, ambiguous model identity, or unexpected returned model blocks approval; never substitute
+   another model or silently reduce the team. Report the blocker.
+3. Only then launch `subagent` with `agent: reviewer` (`openai/gpt-6.1-sol`, xhigh), supplying the same range,
+   criteria, and BOTH complete reports with their model identities. It inspects Git directly to verify and synthesize
+   them, not to perform another independent parallel review. No nested subagents or reviewer delegation.
 4. The coordinator verifies the synthesis and findings, routes confirmed fixes, and owns acceptance. After changes,
    select a new immutable range and repeat the full sequence before approval.
 

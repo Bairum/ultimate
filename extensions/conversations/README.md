@@ -76,6 +76,22 @@ Actions, each on a top-level conversation; bad args, unknown conversations, suba
 
 ## Automatic summaries and reply assessments
 
+All three triggers request work through the typed, transaction-scoped `requestSummary(tx, host, id, request)`
+helper in `summary.ts`: `intent`, `spawn`, and `reply`. The existing version-1 task inputs/checkpoints are preserved;
+initial intent adds an optional input field, so live reply and spawn tasks remain resumable.
+
+`GenerationTask.beforeRequest` requests an initial title and intent summary before the main model request.
+It inspects stored entries since the current head marker: exactly one user input and no assistant reply,
+only in top-level conversations. A durable `intentRequested` flag prevents tools, request retries and recovery
+from requesting it again. Established conversations are not backfilled on later inputs, including when Luna
+becomes available later. Clear context removes the flag so a new context can request its own intent.
+Intent describes the requested goal, not completed work; it can publish while the main agent is busy.
+It does not assess a reply, increment exchanges, or consume the 1/4/7 cadence. New input (including queued input),
+reset, compaction past the input, or a superseding spawn/reply request makes a held result stale.
+Accepted intent appends `conversations.intent-summarized` with `{ summary, at }` (Unix milliseconds), atomically
+with summary/title acceptance and task settlement. The transcript shows a quiet “Intent: …” row with local time
+and a full-date tooltip. This custom system entry has no model contribution; it survives replay without duplication.
+
 The `GenerationTask.onYield` hook schedules a background observer. It waits for generation to settle and
 only counts an exchange when an input submission completed with that answer (not an intermediate yield).
 Luna uses `openai/gpt-6-luna` through the current OpenAI provider (including Sign in with ChatGPT), not the
@@ -107,6 +123,22 @@ The task saves the provider response before parsing it and adds reported usage e
 Replaying a saved response does not count it again. Crashing before it is saved can repeat the request.
 State survives reloads and restarts. Failed requests preserve the last summary and retry on the next reply.
 When Luna is unavailable in the model runtime, summaries and assessments are skipped quietly, without a task.
+
+## Token-free browser fixture
+
+The initial-intent fixture uses the existing faux server, an injected summary generator and a blocked
+main-generation hook; it does not add a production test API or use provider tokens. Run:
+
+```sh
+pnpm exec vitest run test/conversations-browser.test.ts -t 'renders initial intent'
+```
+
+To inspect the busy state interactively, run the same command with
+`CONVERSATION_INTENT_PREVIEW_MS=120000`. It prints `Initial intent preview: http://127.0.0.1:<port>` after
+intent/title rows arrive and the browser reload verifies them. Open that URL during the pause: the final answer
+is still blocked. `CONVERSATION_INTENT_SCREENSHOT=/tmp/conversation-intent.png` also saves a desktop screenshot.
+The fixture then releases generation, verifies the narrow layout and browser errors, and closes its temporary server.
+Chromium is discovered through the existing browser-test helper; without Chromium this browser test skips.
 
 ## Shared sidebar index
 

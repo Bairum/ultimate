@@ -1,5 +1,7 @@
 import type { EntryId } from '@earendil-works/pi-durable'
 
+export type IntentSummary = { summary: string; at: number }
+
 export type TitleChange = { title: string; at: number }
 
 export type AssessmentValue = 'needs_input' | 'done' | 'neutral'

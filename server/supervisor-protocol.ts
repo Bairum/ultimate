@@ -1,7 +1,23 @@
 import { randomUUID } from 'node:crypto'
 import type { BuildInfo } from '../shared/protocol.ts'
+import type { ServiceInfo } from './services.ts'
+
+export type CoreReport =
+  | { type: 'log'; level: 'info' | 'warn' | 'error'; source: string; text: string }
+  | { type: 'web'; state: 'preparing' | 'ready' | 'stopped' }
+  | { type: 'services'; services: ServiceInfo[] }
+
+export function reportCore(message: CoreReport) {
+  if (process.send && process.connected) process.send(message, () => {})
+}
+
+/** Presentation never enters the lifecycle acknowledgement queue. */
+export function isCoreReport(message: ChildMessage): message is CoreReport {
+  return message.type === 'log' || message.type === 'web' || message.type === 'services'
+}
 
 export type ChildMessage =
+  | CoreReport
   | { type: 'prepared'; port: number }
   | { type: 'ready' | 'released' }
   | { type: 'failed'; error: string }

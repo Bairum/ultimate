@@ -30,6 +30,60 @@ async function fixture(settings?: string) {
   servers.push(server)
   return { home, projectRoot, server }
 }
+const serviceFacet = (detail: string, fail = false) => `
+import { defineExtension } from '@earendil-works/pi-durable'
+export const actions = { stale: async (_args, { host }) => {
+  const saved = host.resource('service-test:handles', () => [])
+  saved[0].update({ state: 'error', detail: 'stale update' })
+  saved[0].dispose()
+} }
+export default (host) => {
+  const status = host.service('worker', { state: 'starting', detail: '${detail}' })
+  host.resource('service-test:handles', () => []).push(status)
+  ${fail ? "throw new Error('failed service installation')" : ''}
+  host.onOpen(async () => status.update({ state: 'ready', detail: '${detail}' }))
+  return defineExtension({ name: 'service-test' })
+}`
+it('stages service rows, preserves them on failed reload and removes stale handles on replacement and disable', async () => {
+  const { home, projectRoot, server } = await fixture()
+  const folder = join(projectRoot, '.ultimate/extensions/service-test')
+  await mkdir(folder, { recursive: true })
+  const file = join(folder, 'server.ts')
+  await writeFile(file, serviceFacet('first'))
+  await until(() =>
+    server.extensions.services().some((s) => s.detail === 'first' && s.state === 'ready'),
+  )
+  await writeFile(file, serviceFacet('failed', true))
+  server.vite.watcher.emit('change', file)
+  await until(
+    () =>
+      server.extensions
+        .info()
+        .find((e) => e.name === 'service-test')
+        ?.server?.error?.includes('failed service installation') === true,
+  )
+  expect(server.extensions.services().filter((s) => s.extension === 'service-test')).toEqual([
+    { extension: 'service-test', name: 'worker', state: 'ready', detail: 'first' },
+  ])
+  await writeFile(file, serviceFacet('replacement'))
+  server.vite.watcher.emit('change', file)
+  await until(() =>
+    server.extensions.services().some((s) => s.detail === 'replacement' && s.state === 'ready'),
+  )
+  await server.extensions.invoke('service-test', 'stale', {}, new AbortController().signal)
+  expect(server.extensions.services().filter((s) => s.extension === 'service-test')).toEqual([
+    { extension: 'service-test', name: 'worker', state: 'ready', detail: 'replacement' },
+  ])
+  await writeFile(
+    join(home, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { disable: ['service-test'] } }),
+  )
+  await until(
+    () => server.extensions.info().find((e) => e.name === 'service-test')?.enabled === false,
+  )
+  expect(server.extensions.services().some((s) => s.extension === 'service-test')).toBe(false)
+}, 60000)
+
 const tools = async (server: Awaited<ReturnType<typeof fauxServer>>) =>
   (await server.root.agent(context)).tools.map((tool) => tool.name).toSorted()
 const web = async (server: Awaited<ReturnType<typeof fauxServer>>) =>

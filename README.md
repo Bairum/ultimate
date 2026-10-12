@@ -57,6 +57,19 @@ cd ~/Projects/app && ultimate
 - On another machine: `ssh -L 4747:127.0.0.1:4747 <host>`, then open `http://127.0.0.1:4747`. Ultimate only listens on
   loopback.
 
+### Terminal status
+
+`pnpm start` / `ultimate` shows a compact live terminal dashboard: the public URL, supervisor/core lifecycle,
+core generation and PID, embedded Vite readiness, registered extension services, and the last event. Routine
+Vite/HMR output updates the dashboard instead of scrolling; warnings and errors remain in scrollback. Redirected
+output is plain text with no dashboard escape sequences. Detailed, timestamped JSON lines (including routine
+output and diagnostics) are appended to `<state home>/supervisor.log`; this file is not automatically rotated.
+A log-write failure warns once and does not stop supervision.
+
+Services are status reports, not separate processes. Automations reports `ready · durable scheduler` when the
+harness opens; this does not claim that all runs are idle. Process topology and durable scheduling are unchanged.
+Supervisor changes require a **manual stop and restart with `pnpm start`**; a core swap does not reload `bin/`.
+
 ### In your project
 
 `ultimate [dir] [--port N] [--no-open]` starts Ultimate for a project (default: the current directory). Ultimate's own
