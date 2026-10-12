@@ -15,6 +15,9 @@ import { fileURLToPath } from 'node:url'
 import type { BuildInfo } from '../shared/protocol.ts'
 import type { ChildMessage, SupervisorMessage } from '../server/supervisor-protocol.ts'
 import { loopbackAuthority, proxied } from '../server/request-security.ts'
+import { isCoreReport } from '../server/supervisor-protocol.ts'
+import type { CoreReport } from '../server/supervisor-protocol.ts'
+import { dashboard } from './dashboard.ts'
 
 const ultimateRoot = resolvePath(fileURLToPath(new URL('..', import.meta.url)))
 const { values, positionals } = parseArgs({
@@ -50,6 +53,8 @@ if (lock.stale) {
     throw error
   }
 }
+const display = dashboard(join(home, 'supervisor.log'))
+process.on('exit', () => display.close())
 let active: Core | undefined
 let swapping = false
 let stopping = false
@@ -157,6 +162,7 @@ if (!address || typeof address === 'string') throw new Error('No proxy address')
 const publicPort = address.port
 const publicUrl = `http://127.0.0.1:${publicPort}`
 await lock.update({ pid: process.pid, port: address.port, project: projectRoot })
+display.url(publicUrl)
 
 type Core = {
   child: ChildProcess
@@ -164,6 +170,7 @@ type Core = {
   generation: number
   stderr: string
   messages: ChildMessage[]
+  reports: Map<'web' | 'services', CoreReport>
 }
 function wait(
   core: Core,
@@ -238,32 +245,50 @@ function boot(previousBuild?: BuildInfo): Core {
     },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   })
-  const core: Core = { child, generation, port: 0, stderr: '', messages: [] }
+  const core: Core = { child, generation, port: 0, stderr: '', messages: [], reports: new Map() }
+  display.lifecycle('preparing', { generation, pid: child.pid })
   children.add(core)
-  child.stdout?.pipe(process.stdout)
+  child.stdout?.on('data', (chunk) => display.log('info', `core ${core.generation}`, String(chunk)))
   child.stderr?.on('data', (chunk) => {
     core.stderr = tail(core.stderr + chunk)
     stderr = tail(stderr + chunk)
-    process.stderr.write(chunk)
+    display.log('warn', `core ${core.generation}`, String(chunk))
   })
   child.on('error', (error) => {
     core.messages.push({ type: 'failed', error: String(error) })
   })
   child.on('message', (message: ChildMessage) => {
+    if (isCoreReport(message)) {
+      if (message.type === 'log') {
+        display.log(message.level, `${message.source} · core ${core.generation}`, message.text)
+      } else {
+        core.reports.set(message.type, message)
+        if (core === active) display.report(message)
+      }
+      return
+    }
+    if (message.type === 'swap') {
+      if (core === active) void swap(core, message.requestId, message.build)
+      return
+    }
     core.messages.push(message)
-    if (message.type === 'swap' && core === active)
-      void swap(core, message.requestId, message.build)
   })
   child.on('exit', () => {
     children.delete(core)
     if (core === active && !swapping && !stopping) {
       active = undefined
+      display.lifecycle('crashed')
+      display.log('error', 'supervisor', `Core ${core.generation} exited unexpectedly`)
       void recover()
     }
   })
   return core
 }
 async function checkTypes() {
+  display.lifecycle(
+    'checking',
+    active ? { generation: active.generation, pid: active.child.pid } : undefined,
+  )
   const child = spawn(
     join(ultimateRoot, 'node_modules/.bin/tsc'),
     ['--noEmit', '-p', 'tsconfig.swap.json'],
@@ -272,9 +297,11 @@ async function checkTypes() {
   let output = ''
   child.stdout.on('data', (data) => {
     output = tail(output + data)
+    display.log('info', 'typecheck', String(data))
   })
   child.stderr.on('data', (data) => {
     output = tail(output + data)
+    display.log('warn', 'typecheck', String(data))
   })
   const [code] = await once(child, 'exit')
   if (code !== 0) throw new Error(output || `Type check exited ${code}`)
@@ -291,12 +318,14 @@ async function start(core: Core) {
     return
   }
   active = core
+  display.lifecycle('ready', { generation: core.generation, pid: core.child.pid })
+  for (const report of core.reports.values()) display.report(report)
   failures = 0
   crashPage = false
   flush()
   if (!announced) {
     announced = true
-    console.log(`Ultimate: ${publicUrl}`)
+    display.log('info', 'supervisor', `Ultimate: ${publicUrl}`)
     if (!values['no-open'] && process.env.ULTIMATE_NO_OPEN !== '1') {
       const opener = spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [publicUrl], {
         detached: true,
@@ -330,6 +359,7 @@ async function swap(old: Core, requestId: string, previousBuild?: BuildInfo) {
     if (acknowledgement.type === 'swap-ack' && !acknowledgement.ok)
       throw new Error(acknowledgement.error ?? 'Restart memo failed')
     active = undefined
+    display.lifecycle('swapping')
     released = true
     const release = wait(old, 'released', undefined, 10000)
     send(old, { type: 'release' })
@@ -339,6 +369,7 @@ async function swap(old: Core, requestId: string, previousBuild?: BuildInfo) {
   } catch (error) {
     if (next) await kill(next)
     stderr = tail(String(error) + '\n' + (next?.stderr ?? ''))
+    display.log('error', 'supervisor', stderr)
     if (!released && old.child.connected)
       send(old, { type: 'swap-result', requestId, ok: false, error: stderr })
     else {
@@ -347,6 +378,8 @@ async function swap(old: Core, requestId: string, previousBuild?: BuildInfo) {
       try {
         await wait(old, 'ready')
         active = old
+        display.lifecycle('ready', { generation: old.generation, pid: old.child.pid })
+        for (const report of old.reports.values()) display.report(report)
         flush()
       } catch {
         await kill(old)
@@ -357,6 +390,10 @@ async function swap(old: Core, requestId: string, previousBuild?: BuildInfo) {
     swapping = false
     if (active && (active.child.exitCode !== null || active.child.signalCode !== null))
       active = undefined
+    if (active) {
+      display.lifecycle('ready', { generation: active.generation, pid: active.child.pid })
+      for (const report of active.reports.values()) display.report(report)
+    }
     if (!active && !stopping) void recover()
   }
 }
@@ -366,6 +403,7 @@ async function recover() {
   recovering = true
   try {
     while (!active && failures < 3) {
+      display.lifecycle(failures ? 'recovering' : 'starting')
       await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** failures))
       if (stopping) break
       let core: Core | undefined
@@ -376,11 +414,13 @@ async function recover() {
       } catch (error) {
         if (core) await kill(core)
         stderr = tail(String(error) + '\n' + (core?.stderr ?? ''))
+        display.log('error', 'supervisor', stderr)
         failures++
       }
     }
     if (!active && !stopping) {
       crashPage = true
+      display.lifecycle('failed · waiting for changes')
       flush()
     }
   } finally {
@@ -409,6 +449,7 @@ const stopRoots = watchRoots([projectConfig], watchConfig)
 async function shutdown() {
   if (stopping) return
   stopping = true
+  display.lifecycle('stopping')
   stopRoots()
   configWatcher?.close()
   for (const watcher of watchers) watcher.close()
@@ -416,6 +457,8 @@ async function shutdown() {
   proxy.close()
   await Promise.all([...children].map(exit))
   await lock.close()
+  display.lifecycle('stopped')
+  display.close()
   process.exit(0)
 }
 process.on('SIGINT', () => {
