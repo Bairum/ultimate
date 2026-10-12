@@ -79,7 +79,7 @@ function ModelRow({
 export function ModelPicker() {
   const [open, setOpen] = useDialog(dialogs.picker)
   const actions = useUltimate()
-  const { ref, models } = useCurrentModel()
+  const { ref, models, loading } = useCurrentModel()
   const [query, setQuery] = useState('')
   const [error, setError] = useState<string>()
   const providers = useMemo(
@@ -106,6 +106,7 @@ export function ModelPicker() {
   const total = models?.models.length ?? 0
 
   function choose(model: ModelInfo) {
+    if (loading) return
     if (!model.available) {
       openLogin(actions, model.provider)
       return

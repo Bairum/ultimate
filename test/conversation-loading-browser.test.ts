@@ -63,15 +63,21 @@ it('keeps a delayed conversation switch neutral and inert, then restores target 
         await gate
       await route.continue()
     })
+    await page.getByTitle('Pick a model').click()
+    const picker = page.getByRole('dialog', { name: 'Pick a model', exact: true })
+    await picker.waitFor()
     await page.evaluate(
       `import('/src/sdk/client.ts').then(({ uiState }) => uiState.set('shell.conversation', ${target}))`,
     )
     const input = page.locator('#composer-input')
     expect(await page.locator('main').textContent()).not.toContain('No model configured')
     await expect.poll(() => input.getAttribute('readonly')).toBe('')
-    const model = page.getByRole('button', { name: 'Loading model' })
-    const thinking = page.getByRole('button', { name: 'Loading thinking level' })
-    const send = page.getByRole('button', { name: 'Loading conversation' })
+    const model = page.getByRole('button', { name: 'Loading model', includeHidden: true })
+    const thinking = page.getByRole('button', {
+      name: 'Loading thinking level',
+      includeHidden: true,
+    })
+    const send = page.getByRole('button', { name: 'Loading conversation', includeHidden: true })
     expect(await model.isDisabled()).toBe(true)
     expect(await thinking.isDisabled()).toBe(true)
     expect(await send.isDisabled()).toBe(true)
@@ -81,6 +87,27 @@ it('keeps a delayed conversation switch neutral and inert, then restores target 
     )
     expect(await model.textContent()).not.toContain('no model')
     expect(await thinking.textContent()).not.toContain('low')
+    // A picker opened before the switch must not configure the requested target while pending.
+    const targetOption = picker.locator('[cmdk-item][data-value="faux/faux-1"]')
+    await targetOption.click()
+    expect(actions).toEqual([])
+    await picker.getByRole('combobox').fill('faux-1')
+    await picker.getByRole('combobox').press('Enter')
+    expect(actions).toEqual([])
+    expect(await picker.count()).toBe(1)
+    await page.keyboard.press('Escape')
+    await picker.waitFor({ state: 'detached' })
+
+    // The command palette must not reopen the picker until the snapshot arrives.
+    const pickFromPalette = async () => {
+      await page.keyboard.press('Control+k')
+      await page.getByPlaceholder('Run a command…').fill('model.pick')
+      await page.getByRole('option', { name: 'Pick a model', exact: true }).click()
+      await page.getByPlaceholder('Run a command…').waitFor({ state: 'detached' })
+    }
+    await pickFromPalette()
+    expect(await picker.count()).toBe(0)
+    expect(actions).toEqual([])
     await input.press('a')
     await input.press('Enter')
     await input.press('Shift+Tab')
@@ -97,12 +124,23 @@ it('keeps a delayed conversation switch neutral and inert, then restores target 
     expect(actions).toEqual([])
     expect(await page.getByAltText('Pasted image 1').count()).toBe(0)
     expect(await input.inputValue()).toBe('')
+
     release()
     await expect
       .poll(() => page.getByTitle('Thinking level (Shift+Tab cycles)').textContent())
       .toBe('high')
     expect(await page.getByTitle('Pick a model').textContent()).toContain('faux-1')
     expect(await input.getAttribute('readonly')).toBeNull()
+    await pickFromPalette()
+    await targetOption.click()
+    await expect
+      .poll(() => actions)
+      .toEqual([`${server.url}/api/conversations/${target}/configure`])
+    await picker.waitFor({ state: 'detached' })
+    expect((await conversation.agent(context)).model).toEqual({
+      provider: 'faux',
+      modelId: 'faux-1',
+    })
     await input.fill('Ready draft')
     expect(await page.getByRole('button', { name: 'Send', exact: true }).isEnabled()).toBe(true)
 

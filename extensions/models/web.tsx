@@ -121,7 +121,9 @@ export default defineWebExtension({
     {
       id: 'model.pick',
       title: 'Pick a model',
-      run: (context) => context.open(dialogs.picker),
+      run: (context) => {
+        if (!getConversation().loading) context.open(dialogs.picker)
+      },
     },
     {
       id: 'model.thinking',
