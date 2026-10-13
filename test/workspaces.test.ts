@@ -5,16 +5,17 @@ import { join } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { defineExtension, defineTool } from '@earendil-works/pi-durable'
-import type { ConversationId } from '@earendil-works/pi-durable'
+import { defineExtension, defineTool, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import type { ConversationId, JsonObject } from '@earendil-works/pi-durable'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { ActionContext } from '../server/actions.ts'
 import workspaceExtension, { actions } from '../extensions/workspaces/server.ts'
-import { workspaces } from '../extensions/workspaces/workspaces.ts'
+import { Workspaces, workspaces } from '../extensions/workspaces/workspaces.ts'
 import { git, setup } from '../extensions/workspaces/git.ts'
+import { exclusiveSlot } from '../extensions/exclusive-commands/slot.ts'
 import self from '../extensions/self/server.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
 import { prepareFauxServer, post, temp, until } from './helpers.ts'
@@ -434,7 +435,7 @@ exec /usr/bin/git "$@"
   await landing
   expect(await queued).toMatchObject({ message: 'Workspace is removed' })
 })
-it('refuses dirty workspaces, dirty targets, changed branches and diverged targets', async () => {
+it('refuses dirty workspaces, changed branches and diverged targets', async () => {
   const f = await fixture()
   const id = await f.create()
   await f.service.ready(id, context)
@@ -444,7 +445,6 @@ it('refuses dirty workspaces, dirty targets, changed branches and diverged targe
   await git(workspace.path, 'add', '.')
   await git(workspace.path, 'commit', '-m', 'change')
   await writeFile(join(f.projectRoot, 'source.txt'), 'dirty')
-  await expect(f.service.land(id, context)).rejects.toThrow('Target checkout is dirty')
   await git(f.projectRoot, 'add', '.')
   await git(f.projectRoot, 'commit', '-m', 'source')
   await expect(f.service.land(id, context)).rejects.toThrow(
@@ -551,4 +551,180 @@ it('starts a worker isolate, commits in the child and lands it through the paren
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(
     await git(workspace.path, 'rev-parse', 'HEAD'),
   )
+})
+async function submitted(f: Awaited<ReturnType<typeof fixture>>, id: ConversationId) {
+  await until(async () => {
+    const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+    return !index.queue.length && !Object.keys(index.landers).length
+  })
+  const conversation = (await f.opened.harness.conversation(id, context))!
+  await conversation.waitForIdle(context)
+  const view = await conversation.viewState(context)
+  try {
+    return view.value.entries
+      .filter((entry) => entry.kind === 'pi.user')
+      .map((entry) => JSON.stringify(entry.model))
+      .filter((text) => text.includes('[lander]'))
+  } finally {
+    view.dispose()
+  }
+}
+async function lander(settings: JsonObject, existing?: Awaited<ReturnType<typeof repository>>) {
+  const f = await fixture([], existing)
+  f.host.projectSettings = async () => ({ lander: settings })
+  return f
+}
+it('lands two submissions in order onto a moved target and reports both', async () => {
+  const f = await lander({ checks: ['test -f base.txt'] })
+  const first = await f.create()
+  const second = await f.create()
+  await f.service.ready(first, context)
+  await f.service.ready(second, context)
+  const one = (await f.service.get(first, context))!
+  const two = (await f.service.get(second, context))!
+  await commit(one.path, 'one.txt')
+  await commit(two.path, 'two.txt')
+  await commit(f.projectRoot, 'moved.txt')
+  const submittedFirst = await f.call(first, 'workspace', { action: 'submit' })
+  expect(JSON.stringify(submittedFirst)).toContain('position')
+  await f.service.submit(second, context)
+  const [reportOne] = await submitted(f, first)
+  const [reportTwo] = await submitted(f, second)
+  expect(reportOne).toContain('landed as')
+  expect(reportOne).toContain('one.txt')
+  expect(reportOne).toContain('Not pushed.')
+  expect(reportTwo).toContain('two.txt')
+  expect(await git(f.projectRoot, 'log', '--first-parent', '--format=%s', '-3')).toMatch(
+    new RegExp(
+      `^Merge .* from W${second} into main\nMerge .* from W${first} into main\nmoved.txt$`,
+    ),
+  )
+  expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
+  for (const name of ['one.txt', 'two.txt', 'moved.txt'])
+    expect(await readFile(join(f.projectRoot, name), 'utf8')).toBe(name)
+  expect((await f.service.get(second, context))!.landed).toBe(
+    await git(f.projectRoot, 'rev-parse', 'HEAD'),
+  )
+})
+it('reports a conflicting submission and leaves the target untouched', async () => {
+  const f = await lander({})
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  await writeFile(join(workspace.path, 'base.txt'), 'workspace')
+  await commit(workspace.path)
+  await writeFile(join(f.projectRoot, 'base.txt'), 'target')
+  const head = await commit(f.projectRoot)
+  await f.service.submit(id, context)
+  const [report] = await submitted(f, id)
+  expect(report).toContain('conflicts with main in:')
+  expect(report).toContain('base.txt')
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  expect((await f.service.get(id, context))!.landed).toBeUndefined()
+})
+it('reports a failing check with its output, reruns flaky checks, and leaves a failed target untouched', async () => {
+  const f = await lander({ checks: ['echo CHECK_OUTPUT_TAIL; test ! -f fail.txt'] })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  const head = await git(f.projectRoot, 'rev-parse', 'HEAD')
+  await commit(workspace.path, 'fail.txt')
+  await f.service.submit(id, context)
+  const [report] = await submitted(f, id)
+  expect(report).toContain('check failed twice')
+  expect(report).toContain('CHECK_OUTPUT_TAIL')
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  const marker = join(f.directory, 'flaky')
+  f.host.projectSettings = async () => ({
+    lander: { checks: [`if [ -f '${marker}' ]; then exit 0; fi; touch '${marker}'; exit 1`] },
+  })
+  await git(workspace.path, 'rm', '-q', 'fail.txt')
+  await git(workspace.path, 'commit', '-qm', 'fix')
+  await f.service.submit(id, context)
+  const reports = await submitted(f, id)
+  expect(reports.at(-1)).toContain('landed as')
+  expect(reports.at(-1)).toContain('Flaky: if [')
+})
+it('fetches, merges and pushes the target to the configured remote', async () => {
+  const paths = await repository()
+  const bare = join(paths.directory, 'remote.git')
+  await git(paths.directory, 'init', '-q', '--bare', '-b', 'main', bare)
+  await git(paths.projectRoot, 'remote', 'add', 'origin', bare)
+  await git(paths.projectRoot, 'push', '-q', 'origin', 'main')
+  const other = join(paths.directory, 'other')
+  await git(paths.directory, 'clone', '-q', bare, other)
+  await git(other, 'config', 'user.email', 'test@example.com')
+  await git(other, 'config', 'user.name', 'Test')
+  const remoteTip = await commit(other, 'remote.txt')
+  await git(other, 'push', '-q', 'origin', 'main')
+  const f = await lander({ push: 'origin' }, paths)
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path, 'local.txt')
+  await f.service.submit(id, context)
+  const [report] = await submitted(f, id)
+  expect(report).toContain('Pushed to origin/main.')
+  const pushed = await git(bare, 'rev-parse', 'main')
+  expect(pushed).toBe(await git(f.projectRoot, 'rev-parse', 'HEAD'))
+  await git(bare, 'merge-base', '--is-ancestor', remoteTip, pushed)
+  expect(await git(bare, 'show', `${pushed}:local.txt`)).toBe('local.txt')
+})
+it('lands past unrelated dirty files in the target but not over overlapping ones', async () => {
+  const f = await lander({})
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  await writeFile(join(f.projectRoot, 'unrelated.txt'), 'dirty')
+  const tip = await commit(workspace.path)
+  await f.service.submit(id, context)
+  expect((await submitted(f, id))[0]).toContain('landed as')
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(tip)
+  expect(await readFile(join(f.projectRoot, 'unrelated.txt'), 'utf8')).toBe('dirty')
+  await writeFile(join(f.projectRoot, 'overlap.txt'), 'dirty')
+  await commit(workspace.path, 'overlap.txt')
+  await expect(f.service.land(id, context)).rejects.toThrow('overlap.txt')
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(tip)
+  await f.service.submit(id, context)
+  const reports = await submitted(f, id)
+  expect(reports.at(-1)).toContain('refused the fast-forward')
+  expect(reports.at(-1)).toContain('overlap.txt')
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(tip)
+})
+it('runs lander checks only while holding the exclusive command slot', async () => {
+  const f = await lander({ checks: ['true'] })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const head = await git(f.projectRoot, 'rev-parse', 'HEAD')
+  const tip = await commit((await f.service.get(id, context))!.path)
+  const slot = exclusiveSlot(f.host)
+  await slot.acquire('pnpm test')
+  try {
+    await f.service.submit(id, context)
+    await until(() => slot.queue.some((waiter) => waiter.command === 'lander: true'))
+    const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+    expect(index.queue[0]).toMatchObject({ state: 'landing', step: 'checking: true' })
+    expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  } finally {
+    slot.release()
+  }
+  expect((await submitted(f, id))[0]).toContain('landed as')
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(tip)
+})
+it('removes only clean, idle checkouts with commits the target contains, never fresh ones', async () => {
+  const f = await fixture()
+  const landed = await f.create()
+  const ahead = await f.create()
+  const dirty = await f.create()
+  const fresh = await f.create()
+  for (const id of [landed, ahead, dirty, fresh]) await f.service.ready(id, context)
+  await commit((await f.service.get(landed, context))!.path)
+  await f.service.land(landed, context)
+  await commit((await f.service.get(ahead, context))!.path, 'ahead.txt')
+  await writeFile(join((await f.service.get(dirty, context))!.path, 'dirty.txt'), 'dirty')
+  const result = await actions.removeLanded({}, { host: f.host } as ActionContext)
+  expect(result.removed).toEqual([landed])
+  expect((await f.service.get(landed, context))!.state).toBe('removed')
+  expect((await f.service.get(ahead, context))!.state).toBe('ready')
+  expect((await f.service.get(dirty, context))!.state).toBe('ready')
+  expect((await f.service.get(fresh, context))!.state).toBe('ready')
 })

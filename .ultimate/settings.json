@@ -23,6 +23,10 @@
       "setup": ["pnpm install --frozen-lockfile --prefer-offline"]
     }
   },
+  "lander": {
+    "checks": ["pnpm check", "pnpm test"],
+    "push": "origin"
+  },
   "githubTriage": {
     "writableRepos": ["HazAT/ultimate"]
   }

@@ -53,15 +53,21 @@ export const actions = {
   land(args: JsonValue, { host }: ActionContext) {
     return workspaces(host).land(workspaceId(args), context)
   },
+  submit(args: JsonValue, { host }: ActionContext) {
+    return workspaces(host).submit(workspaceId(args), context)
+  },
   discard(args: JsonValue, { host }: ActionContext) {
     return workspaces(host).discard(workspaceId(args), context)
+  },
+  removeLanded(_args: JsonValue, { host }: ActionContext) {
+    return workspaces(host).removeLanded(context)
   },
 }
 export default function workspaceExtension(host: ExtensionHost) {
   const service = workspaces(host)
   return defineExtension({
     name: 'workspaces',
-    tasks: [service.Preparation],
+    tasks: [service.Preparation, service.Lander],
     hooks: [
       hook(ToolTask, {
         beforeTool: async (_call, api, caller) => {
@@ -78,9 +84,13 @@ export default function workspaceExtension(host: ExtensionHost) {
       defineTool({
         name: 'workspace',
         description:
-          'Inspect your workspace and source tips, or land your clean, verified tip into its saved destination branch. Never rebases or pushes.',
+          'Inspect your workspace and source tips; submit your clean, verified tip to the lander, which merges it into the target branch, runs the configured checks, fast-forwards the target, pushes when configured, and reports back; or land it synchronously by fast-forward (never rebases or pushes).',
         parameters: Type.Object({
-          action: Type.Union([Type.Literal('status'), Type.Literal('land')]),
+          action: Type.Union([
+            Type.Literal('status'),
+            Type.Literal('submit'),
+            Type.Literal('land'),
+          ]),
         }),
         async execute({ action }, api, caller) {
           if (action === 'status')
@@ -91,8 +101,9 @@ export default function workspaceExtension(host: ExtensionHost) {
           await api.commit(async (tx) => {
             const row = await tx.conversation(api.conversationId)
             if (!row || row.owner || row.parent)
-              throw new Error('Only a top-level main conversation can land its own workspace')
+              throw new Error(`Only a top-level main conversation can ${action} its own workspace`)
           }, caller)
+          if (action === 'submit') return finish(await service.submit(api.conversationId, caller))
           return finish(await service.land(api.conversationId, caller, true))
         },
       }),
@@ -102,7 +113,7 @@ export default function workspaceExtension(host: ExtensionHost) {
         await service.ready(input.conversationId, caller)
         const own = await service.get(input.conversationId, caller)
         if (!own) return undefined
-        return `Workspace: ${own.path} (branch ${own.branch}).\nSource: ${own.source}, target: ${own.target}.\n\`workspace status\` shows both tips; \`workspace land\` fast-forwards ${own.target} to your clean, verified tip; it never rebases or pushes.`
+        return `Workspace: ${own.path} (branch ${own.branch}).\nSource: ${own.source}, target: ${own.target}.\n\`workspace status\` shows both tips. Finish with \`workspace submit\` once your tip is committed and verified: the lander merges it into ${own.target} with whatever landed meanwhile, runs the project's checks, fast-forwards ${own.target}, pushes when configured, and reports the outcome back to you as a message; keep working meanwhile and do not merge ${own.target} yourself first. \`workspace land\` is the synchronous alternative: it only fast-forwards ${own.target} to your tip and never rebases or pushes.`
       }),
     ],
   })

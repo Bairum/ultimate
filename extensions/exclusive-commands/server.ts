@@ -1,43 +1,10 @@
 import { defineExtension, wrapTool } from '@earendil-works/pi-durable'
 import { createBashTool } from '@earendil-works/pi-durable/tools'
 import type { ExtensionHost } from '../../server/extensions.ts'
-
-class Slot {
-  command?: string
-  queue: { command: string; grant: () => void }[] = []
-
-  async acquire(command: string, signal?: AbortSignal) {
-    signal?.throwIfAborted()
-    if (this.command === undefined) {
-      this.command = command
-      return
-    }
-    await new Promise<void>((resolve, reject) => {
-      const waiter = {
-        command,
-        grant: () => {
-          signal?.removeEventListener('abort', abort)
-          resolve()
-        },
-      }
-      const abort = () => {
-        this.queue.splice(this.queue.indexOf(waiter), 1)
-        reject(signal!.reason)
-      }
-      this.queue.push(waiter)
-      signal?.addEventListener('abort', abort, { once: true })
-    })
-  }
-
-  release() {
-    const next = this.queue.shift()
-    this.command = next?.command
-    next?.grant()
-  }
-}
+import { exclusiveSlot } from './slot.ts'
 
 export default function exclusiveCommands(host: ExtensionHost) {
-  const slot = host.resource('exclusive-commands.slot', () => new Slot())
+  const slot = exclusiveSlot(host)
   return defineExtension({
     name: 'exclusive-commands',
     wraps: [
