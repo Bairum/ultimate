@@ -218,6 +218,8 @@ it('retains valid enablement through invalid edits and delivers startup diagnost
       async () =>
         !(await tools(server)).includes('subagent') && (await tools(server)).includes('plan'),
     )
+    // Registry changes happen before the refreshed system snapshot is published.
+    await until(() => server.system.current().extensionDiagnostics.length === 0)
     expect(server.system.current().extensionDiagnostics).toEqual([])
   } finally {
     await connection.close()
