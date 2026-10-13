@@ -8,13 +8,13 @@ import {
   ToolOutput,
 } from '@/components/ai/tool'
 import { useExtensions, useToolDuration } from '../sdk/hooks.ts'
-import { rendererFor } from '../sdk/registry.ts'
+import { toolRenderer } from '../sdk/registry.ts'
 import type { ToolCallView } from '../sdk/types.ts'
 import { ExtensionBoundary } from './boundary.tsx'
 
 /** A tool call through its extension renderer, or the generic one. */
 export function ToolCallBlock({ call }: { call: ToolCallView }) {
-  const renderer = rendererFor(useExtensions(), 'tools', call.name)
+  const renderer = toolRenderer(useExtensions(), call.name)
   const Renderer = renderer?.component
   return (
     <div className="empty:hidden" data-tool-call-id={call.id}>

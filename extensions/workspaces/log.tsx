@@ -22,7 +22,7 @@ const time = (at: number) =>
   new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
 /** "open #id", with a dot while that conversation works. */
-function Open({ id, className }: { id: number; className?: string }) {
+function Open({ id, className, label }: { id: number; className?: string; label?: string }) {
   const { switchConversation } = useUltimate()
   const busy = useConversations().find((conversation) => conversation.id === id)?.busy
   return (
@@ -38,7 +38,7 @@ function Open({ id, className }: { id: number; className?: string }) {
     >
       {busy && <span className="size-1.5 shrink-0 animate-pulse-dot rounded-full bg-brand" />}
       <SquareArrowOutUpRightIcon className="size-3" />
-      open #{id}
+      open {label ? `${label} ` : ''}#{id}
     </Button>
   )
 }
@@ -74,6 +74,7 @@ function OutcomeBody({ outcome }: { outcome: LanderOutcome }) {
         </p>
       ))}
       {outcome.needsRestart && <p className="text-warning">Needs restart.</p>}
+      {outcome.hint && <p className="text-muted-foreground">{outcome.hint}</p>}
       {outcome.output && (
         <Collapsible className="group/tail">
           <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 text-muted-foreground hover:text-foreground">
@@ -86,6 +87,72 @@ function OutcomeBody({ outcome }: { outcome: LanderOutcome }) {
         </Collapsible>
       )}
     </>
+  )
+}
+
+const tone = {
+  landed: ['border-l-success/70', 'text-success', CheckIcon],
+  pushFailed: ['border-l-warning/70', 'text-warning', TriangleAlertIcon],
+  failed: ['border-l-error/70', 'text-error', XIcon],
+} as const
+
+/**
+ * The lander's report in the submitter's transcript, as a card: landed (success), landed locally but the push failed
+ * (warning), or not landed (error), from the stored outcome; the message text once that outcome was pruned.
+ */
+export function LanderReport({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
+  const results = useWorkspaceIndex().results
+  const message = entry.model?.[0]
+  const text =
+    message?.role !== 'user'
+      ? ''
+      : typeof message.content === 'string'
+        ? message.content
+        : message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n')
+  const report =
+    /^\[lander\] Submission (\S+) \(W\d+, \w+\) ([\s\S]*?)\nLog: lander conversation #(\d+)\.$/.exec(
+      text,
+    )
+  if (!report) return core
+  const [, id, body, lander] = report
+  const outcome = results[id]
+  const kind = !outcome
+    ? /^(had nothing new to land|landed as)/.test(body) && !body.includes('\nPush failed')
+      ? 'landed'
+      : body.startsWith('landed locally')
+        ? 'pushFailed'
+        : 'failed'
+    : outcome.outcome === 'failed'
+      ? 'failed'
+      : outcome.reason
+        ? 'pushFailed'
+        : 'landed'
+  const [border, color, Icon] = tone[kind]
+  return (
+    <section
+      className={cn(
+        'min-w-0 space-y-1.5 rounded-md border border-l-2 border-border bg-muted/20 px-3 py-2.5 font-mono text-[12px]',
+        border,
+      )}
+      data-lander-report={kind}
+    >
+      <header className="flex items-start gap-2">
+        <Icon className={cn('mt-0.5 size-3.5 shrink-0', color)} />
+        <span className="min-w-0 flex-1 break-words text-foreground">
+          {outcome ? headline(outcome, outcome.target) : body.split('\n')[0]}
+        </span>
+        <Open className="-my-0.5" id={Number(lander)} label="lander" />
+      </header>
+      <div className="space-y-1.5 pl-5.5">
+        {outcome ? (
+          <OutcomeBody outcome={outcome} />
+        ) : (
+          <p className="whitespace-pre-wrap text-muted-foreground">
+            {body.split('\n').slice(1).join('\n')}
+          </p>
+        )}
+      </div>
+    </section>
   )
 }
 

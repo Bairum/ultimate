@@ -184,7 +184,7 @@ export function createLander(
             const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
             draft.queue = draft.queue.filter((item) => item.id !== id)
             if (outcome.sha) draft.items[String(entry.conversationId)].landed = outcome.sha
-            draft.results[id] = outcome
+            draft.results[id] = { ...outcome, target: entry.target, lander: runtime.conversationId }
             for (const old of Object.keys(draft.results).slice(0, -kept)) delete draft.results[old]
             await log(tx, runtime.conversationId, entry, outcome)
             return {
@@ -217,6 +217,7 @@ export function createLander(
           const facts = {
             reason: landed ? `Push failed: ${reason}` : reason,
             ...(output ? { output } : {}),
+            ...(hint ? { hint } : {}),
           }
           return landed
             ? finish(`${summary(landed, landed.sha, ' locally')}\nPush failed: ${detail}`, {

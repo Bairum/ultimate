@@ -256,15 +256,18 @@ header would toggle it.
 ### Entry renderers
 
 How an entry kind looks in the transcript. Extensions that append their own entries render them here; a renderer for a
-`pi.*` kind replaces the core one (which then serves as the fallback if yours throws). Unknown kinds show as JSON.
+`pi.*` kind takes over from the core one. Unknown kinds show as JSON.
 
 ```tsx
 entries: { 'notes.pinned': ({ entry }) => <div className="text-muted-foreground">📌 {String(entry.data)}</div> }
 ```
 
-A renderer also gets `core`, the core's rendering of the same entry: return it for the entries you leave alone, wrap
-it, or return `null` to hide the entry. `self` renders `pi.system` entries that change the build section as a reload
-marker and returns `core` for the rest.
+A renderer also gets `core`, the rendering of the same entry so far: return it for the entries you leave alone, wrap
+it, or return `null` to hide the entry. Several extensions can render one kind: they compose in folder order, each
+receiving the rendering of the one before it as `core`, down to the core's own. Each runs in its own error boundary,
+which falls back to its `core` when it throws. `self` renders `pi.system` entries that change the build section as a
+reload marker and returns `core` for the rest; `subagents` and `workspaces` both render `pi.user`, each only the inputs
+it owns (agent messages, lander reports).
 
 ### Documents
 

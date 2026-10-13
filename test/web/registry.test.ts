@@ -6,10 +6,11 @@ import {
   documentItems,
   extensionName,
   panelItems,
-  rendererFor,
+  entryRenderers,
   resolveSurface,
   slotItems,
   surfaceItems,
+  toolRenderer,
 } from '../../web/src/sdk/registry.ts'
 import type { ExtensionLoader, SurfaceItem } from '../../web/src/sdk/registry.ts'
 import type { WebExtension } from '../../web/src/sdk/types.ts'
@@ -231,6 +232,7 @@ describe('web extension registry', () => {
       [path('a')]: async () =>
         module({
           tools: { bash: First },
+          entries: { 'pi.user': First },
           panels: [{ id: 'info', title: 'Info', component: First, order: 2 }],
           documents: [
             { kind: 'ultimate.plan', title: 'Plan', component: First },
@@ -240,15 +242,23 @@ describe('web extension registry', () => {
       [path('b')]: async () =>
         module({
           tools: { bash: Second },
-          entries: { 'pi.compaction': Second },
+          entries: { 'pi.compaction': Second, 'pi.user': Second },
           panels: [{ id: 'tasks', title: 'Tasks', component: Second, order: 1 }],
           documents: [{ kind: 'ultimate.plan', title: 'My plan', component: Second }],
         }),
     })
     const records = registry.getSnapshot()
-    expect(rendererFor(records, 'tools', 'bash')?.extension).toBe('b')
-    expect(rendererFor(records, 'entries', 'pi.compaction')?.component).toBe(Second)
-    expect(rendererFor(records, 'tools', 'read')).toBeUndefined()
+    expect(toolRenderer(records, 'bash')?.extension).toBe('b')
+    expect(toolRenderer(records, 'read')).toBeUndefined()
+    // Entry renderers compose instead of replacing each other: all of them, in folder order.
+    expect(entryRenderers(records, 'pi.user').map((renderer) => renderer.extension)).toEqual([
+      'a',
+      'b',
+    ])
+    expect(entryRenderers(records, 'pi.compaction').map((renderer) => renderer.component)).toEqual([
+      Second,
+    ])
+    expect(entryRenderers(records, 'pi.system')).toEqual([])
     expect(panelItems(records).map((panel) => panel.id)).toEqual(['tasks', 'info'])
     const documents = documentItems(records)
     expect(documents.get('ultimate.plan')).toMatchObject({ extension: 'b', title: 'My plan' })

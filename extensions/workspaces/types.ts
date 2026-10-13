@@ -32,6 +32,8 @@ export type LanderOutcome = {
   reason?: string
   /** Output tail behind the reason: conflicting paths, a check's output, git's error. */
   output?: string
+  /** What the submitter does next, for a failure. */
+  hint?: string
 }
 /** One line of a lander conversation's log (entry kind `ultimate.lander`): a step, a check result, or the outcome. */
 export type LanderEntry = {
@@ -50,8 +52,8 @@ export type WorkspaceIndex = {
   landers: Record<string, number>
   /** The lander conversation per source checkout, where its task runs and logs. */
   landerConversations: Record<string, number>
-  /** Outcomes of the latest submissions by id, for their submit cards. */
-  results: Record<string, LanderOutcome>
+  /** Outcomes of the latest submissions by id, with their target and lander conversation, for the submitter's cards. */
+  results: Record<string, LanderOutcome & { target: string; lander: number }>
 }
 export type WorkspaceInfo = Workspace & {
   ahead: number | null
