@@ -269,7 +269,7 @@ function Title({
 function Menu({ agent }: { agent: Agent }) {
   const { actions, conversations } = useCanvas()
   const top = agent.parent === undefined
-  const busy = isActive(agent.status)
+  const busy = isActive(agent.status) && agent.status !== 'subagents'
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger
