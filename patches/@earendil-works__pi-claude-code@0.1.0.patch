@@ -1,0 +1,48 @@
+diff --git a/src/claude-cli.ts b/src/claude-cli.ts
+index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..2dfa7877769bc8cf58de207756d129852424ca86 100644
+--- a/src/claude-cli.ts
++++ b/src/claude-cli.ts
+@@ -544,15 +544,23 @@ function setReplayCacheBreakpoints(messages: NativeRequestMessage[]): void {
+   const userIndexes = messages
+     .map((message, index) => (message.role === "user" ? index : -1))
+     .filter((index) => index >= 0);
+-  if (userIndexes.length >= 3) {
+-    // Claude permits four cache breakpoints. Its two system-prompt markers
+-    // consume half of them, so once a prior queried user exists, move the
+-    // native environment marker to that exact previous query boundary. This
+-    // avoids relying on automatic lookback (notably unreliable with images).
+-    for (const message of messages) {
+-      if (message.role === "system") message.content = withoutCacheControl(message.content);
++  // Rebuild message breakpoints, including markers nested in tool results or
++  // retained in the initial user prefix. Together with one tool and one leading
++  // system marker, these two message boundaries exhaust Claude's four slots.
++  for (const message of messages) {
++    if (!Array.isArray(message.content)) continue;
++    for (const block of message.content) {
++      if (!block || typeof block !== "object") continue;
++      const content = block as Record<string, unknown>;
++      delete content.cache_control;
++      if (content.type === "tool_result") content.content = withoutCacheControl(content.content);
+     }
++  }
++  if (userIndexes.length >= 3) {
+     setCacheBreakpoint(messages[userIndexes.at(-2)!]!);
++  } else {
++    const environment = messages.find((message) => message.role === "system");
++    if (environment) setCacheBreakpoint(environment);
+   }
+   const final = messages.at(-1);
+   if (final) setCacheBreakpoint(final);
+@@ -666,9 +674,11 @@ export function rewriteInitialRequest(
+   if (nativeSystemInjections) {
+     messages = injectNativeSystemMessages(messages!, nativeSystemInjections);
+     payload.messages = messages;
++  }
++  if (initialSystemMessages?.length || nativeSystemInjections) {
+     normalizeLeadingSystemCache(payload.system);
++    setReplayCacheBreakpoints(messages!);
+   }
+-  if (initialSystemMessages?.length || nativeSystemInjections) setReplayCacheBreakpoints(messages!);
+ 
+   return Buffer.from(JSON.stringify(payload));
+ }

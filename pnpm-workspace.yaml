@@ -14,5 +14,7 @@ minimumReleaseAgeExclude:
   - '@earendil-works/pi-tui@1.2.0'
 # Pi upstream: @earendil-works/pi-durable@1.2.0 dist/harness/output.js — patched sanitizeOutput to remove whole CSI/OSC/control strings while keeping numeric SGR. Drop when Pi ships equivalent sanitization.
 # patches/@earendil-works__pi-durable@1.2.0.patch: pnpm errors when the versioned patch no longer matches.
+# Pi upstream: @earendil-works/pi-claude-code@0.1.0 src/claude-cli.ts (70abb65186592ca788b29b3db22c3160d629c41f) — rebuild replay cache markers within Claude's four-block limit. Drop when upstream fixes this.
 patchedDependencies:
+  '@earendil-works/pi-claude-code@0.1.0': patches/@earendil-works__pi-claude-code@0.1.0.patch
   '@earendil-works/pi-durable@1.2.0': patches/@earendil-works__pi-durable@1.2.0.patch
