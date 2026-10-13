@@ -7,6 +7,7 @@ import {
   ChevronRightIcon,
   ChevronDownIcon,
   GitBranchIcon,
+  GitMergeIcon,
   CircleCheckIcon,
   CircleHelpIcon,
   EllipsisIcon,
@@ -42,6 +43,7 @@ import {
   defineWebExtension,
   errorMessage,
   formatKeys,
+  formatTime,
   getConversation,
   getState,
   useDialog,
@@ -327,7 +329,8 @@ function Row({
   const afterMenu = useRef<() => void>(undefined)
   const name = conversation.title ?? (draft ? 'New conversation' : `#${conversation.id}`)
   const latest = Math.max(conversation.inputAt ?? 0, conversation.answerAt ?? 0)
-  const hasMetadata = feature || conversation.workspace || latest > 0
+  const lander = conversation.label === 'lander'
+  const hasMetadata = feature || conversation.workspace || latest > 0 || lander
   const rename = () => {
     cancelled.current = false
     setEditing(true)
@@ -342,6 +345,7 @@ function Row({
     <span
       className={cn(
         'min-w-0 flex-1 truncate text-[13px]',
+        lander && 'font-semibold text-foreground',
         conversation.title || !draft
           ? shown
             ? 'text-foreground'
@@ -401,12 +405,26 @@ function Row({
           type="button"
         >
           <span className="flex w-full min-w-0 items-center gap-1.5">
-            <Mark assessment={assessment} unseen={unseen} working={working} />
+            {lander ? (
+              <GitMergeIcon
+                aria-label="Lander"
+                className="size-3 shrink-0 text-brand"
+                strokeWidth={2.5}
+              />
+            ) : (
+              <Mark assessment={assessment} unseen={unseen} working={working} />
+            )}
             {title}
           </span>
           {hasMetadata && (
             <span className="flex w-full items-center gap-2 pr-5 pl-[18px] font-mono text-[10px] leading-4 text-muted-foreground">
               {feature && <FeatureTag feature={feature} />}
+              {lander && working && (
+                <span className="flex shrink-0 items-center gap-1 text-brand">
+                  <span className="size-1.5 animate-pulse-dot rounded-full bg-brand" />
+                  landing
+                </span>
+              )}
               {conversation.workspace && (
                 <span className="shrink-0" title="Isolated checkout">
                   W{conversation.id}
@@ -1026,7 +1044,7 @@ function SummaryAction({ entry }: { entry: EntryRecord }) {
         dateTime={date.toISOString()}
         title={date.toLocaleString()}
       >
-        {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        {formatTime(date)}
       </time>
     </div>
   )

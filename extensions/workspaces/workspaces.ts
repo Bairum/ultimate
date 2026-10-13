@@ -46,6 +46,17 @@ export const Workspaces = defineDoc<WorkspaceIndex>({
     }
   },
 })
+/**
+ * Lander tasks started by this version of the code. A reload that changes it imports this module anew with an empty
+ * set, so a fault of a task outside it is the previous code's.
+ */
+const started = new Set<number>()
+/** Whether `source` has no live lander task: none recorded, or one that ended (finished, faulted, aborted). */
+async function landerIdle(tx: Tx, index: WorkspaceIndex, source: string) {
+  const running = index.landers[source]
+  const live = running === undefined ? undefined : await tx.task(running as TaskId)
+  return !live || live.state.status === 'terminal' || live.state.status === 'completing'
+}
 type Host = Pick<
   ExtensionHost,
   'harness' | 'home' | 'ultimateRoot' | 'projectSettings' | 'resource' | 'extensions' | 'metadata'
@@ -63,6 +74,43 @@ export function workspaces(host: Host) {
     }
   }
   const Lander = createLander(host, Workspaces, serial)
+  /** Start the lander task of `source` in its lander conversation. Call only after `landerIdle`, before any write. */
+  const startLander = async (tx: Tx, index: WorkspaceIndex, source: string) => {
+    // Not background: the task is the lander conversation's work, so it shows as working while it lands.
+    index.landers[source] = await tx.createTask(
+      Lander,
+      { source },
+      {
+        conversationId: index.landerConversations[source] as ConversationId,
+        ownership: { kind: 'conversation' },
+      },
+    )
+    started.add(index.landers[source])
+  }
+  /**
+   * Restart the lander of every source whose queue holds submissions but whose task ended without draining it, as a
+   * task faulted by a reload of this code does. Idempotent: a source with a live task keeps it.
+   */
+  async function resume(context: Context) {
+    const restarted = await host.harness().commit(async (tx) => {
+      const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+      const sources = [...new Set(index.queue.map((item) => item.source))].filter(
+        (source) => index.landerConversations[source] !== undefined,
+      )
+      const stopped: string[] = []
+      for (const source of sources) if (await landerIdle(tx, index, source)) stopped.push(source)
+      for (const source of stopped) {
+        for (const item of index.queue)
+          if (item.source === source) {
+            item.state = 'queued'
+            delete item.step
+          }
+        await startLander(tx, index, source)
+      }
+      return stopped.length
+    }, context)
+    if (restarted) host.harness().resume()
+  }
   const get = async (id: ConversationId, context: Context) =>
     (await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context))?.items[String(id)]
   const Preparation = defineTask<{ id: ConversationId }, { phase: 'prepare' }, null>({
@@ -193,7 +241,13 @@ export function workspaces(host: Host) {
         () => true,
         () => false,
       )
-      let result: LandResult = { text: 'Nothing to land.', landed: tip, commits: [], paths: [] }
+      let result: LandResult = {
+        text: 'Nothing to land.',
+        landed: tip,
+        commits: [],
+        paths: [],
+        files: [],
+      }
       if (!integrated) {
         if (
           !(await git(source, 'merge-base', '--is-ancestor', head, tip).then(
@@ -207,18 +261,24 @@ export function workspaces(host: Host) {
         const commits = (await git(workspace.path, 'log', '--oneline', `${head}..${tip}`))
           .split('\n')
           .filter(Boolean)
-        const paths = (await git(workspace.path, 'diff', '--name-only', head, tip))
+        const files = (await git(workspace.path, 'diff', '--numstat', '--no-renames', head, tip))
           .split('\n')
           .filter(Boolean)
+          .map((line) => {
+            // Binary files count `-` lines.
+            const [added, removed, path] = line.split('\t')
+            return { path, added: Number(added) || 0, removed: Number(removed) || 0 }
+          })
         const needsRestart =
           (await realpath(source)) === (await realpath(host.ultimateRoot)) &&
-          paths.some((path) => /^(server|shared)\//.test(path))
+          files.some(({ path }) => /^(server|shared)\//.test(path))
         await git(source, 'merge', '--ff-only', tip)
         result = {
-          text: `Landed commits:\n${commits.join('\n')}\nChanged paths:\n${paths.join('\n')}${needsRestart ? '\nNeeds restart.' : ''}`,
+          text: `Landed commits:\n${commits.join('\n')}\nChanged files:\n${files.map((file) => `${file.path} +${file.added} -${file.removed}`).join('\n')}${needsRestart ? '\nNeeds restart.' : ''}`,
           landed: tip,
           commits,
-          paths,
+          paths: files.map((file) => file.path),
+          files,
           ...(needsRestart ? { needsRestart: true } : {}),
         }
       }
@@ -248,8 +308,7 @@ export function workspaces(host: Host) {
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       const { source, target } = index.items[String(id)]
       // Reads first: a transaction cannot read tables after its first write.
-      const running = index.landers[source]
-      const live = running && (await tx.task(running as TaskId))
+      const stopped = await landerIdle(tx, index, source)
       const known = index.landerConversations[source] as ConversationId | undefined
       const existing = known !== undefined && (await tx.conversation(known))
       const queued = index.queue.find(
@@ -280,13 +339,7 @@ export function workspaces(host: Host) {
         await log(tx, lander, entry, { step: 'queued' })
         index.queue.push(entry)
       }
-      // Not background: the task is the lander conversation's work, so it shows as working while it lands.
-      if (!live || live.state.status === 'terminal' || live.state.status === 'completing')
-        index.landers[source] = await tx.createTask(
-          Lander,
-          { source },
-          { conversationId: lander, ownership: { kind: 'conversation' } },
-        )
+      if (stopped) await startLander(tx, index, source)
       const position = index.queue
         .filter((item) => item.source === source)
         .findIndex((item) => item.id === entry.id)
@@ -303,6 +356,8 @@ export function workspaces(host: Host) {
   return {
     Preparation,
     Lander,
+    resume,
+    started,
     get,
     land,
     submit,

@@ -65,6 +65,39 @@ export const actions = {
 }
 export default function workspaceExtension(host: ExtensionHost) {
   const service = workspaces(host)
+  const resume = () =>
+    service.resume(context).catch((error: unknown) => {
+      host.notice(`Lander resume failed: ${String(error)}`)
+    })
+  let unsubscribe: (() => void) | undefined
+  // A lander task that faults leaves its queue behind. One run by older code, as on a reload of this code that changed
+  // the Workspaces document, is replaced at once; a fault of this code's own task would only repeat, so it waits for
+  // the next submit or open. Opening (and each reload while open) picks up any such queue. An aborted task stays
+  // stopped until then too.
+  host.onOpen(async () => {
+    unsubscribe?.()
+    unsubscribe = host.harness().subscribeCommits((publication) => {
+      for (const change of publication.changes) {
+        if (
+          change.type !== 'task' ||
+          change.value.kind !== service.Lander.definition.name ||
+          change.value.state.status !== 'terminal' ||
+          change.value.state.outcome.status !== 'faulted'
+        )
+          continue
+        if (service.started.has(change.value.id))
+          host.notice(
+            `Lander task ${change.value.id} faulted: ${change.value.state.outcome.error.message}; its queue resumes on the next submit or restart`,
+          )
+        else void resume()
+      }
+    })
+    await resume()
+  })
+  host.onClose(async () => {
+    unsubscribe?.()
+    unsubscribe = undefined
+  })
   return defineExtension({
     name: 'workspaces',
     tasks: [service.Preparation, service.Lander],

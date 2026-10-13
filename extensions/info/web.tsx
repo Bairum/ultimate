@@ -6,6 +6,7 @@ import {
   defineWebExtension,
   elidePath,
   formatBytes,
+  formatTime,
   formatTokens,
   shortenPath,
   useConversation,
@@ -89,7 +90,7 @@ function Process({ system }: { system: SystemInfo }) {
         <Row label="uptime">
           <span className="tabular-nums">{uptime(now - Date.parse(process.startedAt))}</span>
           <span className="truncate text-muted-foreground/60">
-            since {new Date(process.startedAt).toLocaleTimeString()}
+            since {formatTime(process.startedAt, true)}
           </span>
         </Row>
         <Row label="generation">
@@ -423,7 +424,7 @@ function Extensions({ system }: { system: SystemInfo }) {
                       className="ml-auto text-[10.5px] text-muted-foreground/60"
                       title={`server facet loaded ${server.loadedAt}`}
                     >
-                      {new Date(server.loadedAt).toLocaleTimeString()}
+                      {formatTime(server.loadedAt, true)}
                     </span>
                   )}
                 </div>

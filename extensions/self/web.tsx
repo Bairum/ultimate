@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import {
   cn,
   defineWebExtension,
+  formatTime,
   useConversation,
   useRestart,
   useSystem,
@@ -218,7 +219,7 @@ function Build() {
               .slice(0, 8)
               .map((entry) => (
                 <div className="flex gap-2" key={`${entry.id}-${entry.at}`}>
-                  <span className="opacity-60">{new Date(entry.at).toLocaleTimeString()}</span>
+                  <span className="opacity-60">{formatTime(entry.at, true)}</span>
                   <span>{short(entry.id)}</span>
                   <span className="truncate opacity-80">
                     {entry.changed.length ? entry.changed.join(', ') : `gen ${entry.generation}`}

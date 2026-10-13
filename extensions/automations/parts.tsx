@@ -1,6 +1,6 @@
 import { CheckIcon, LoaderCircleIcon, MinusCircleIcon, SkipForwardIcon, XIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { cn } from '@/sdk'
+import { cn, formatTime } from '@/sdk'
 
 /** The shapes the server facet's actions return (`server.ts`, which the browser does not import). */
 export type Schedule =
@@ -70,13 +70,14 @@ export function ago(at: number, now: number) {
 export function clock(at: number, now: number) {
   const date = new Date(at)
   return date.toDateString() === new Date(now).toDateString()
-    ? date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    ? formatTime(date, true)
     : date.toLocaleString(undefined, {
         weekday: 'short',
         month: 'short',
         day: 'numeric',
         hour: '2-digit',
         minute: '2-digit',
+        hourCycle: 'h23',
       })
 }
 

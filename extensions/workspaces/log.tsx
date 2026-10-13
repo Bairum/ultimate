@@ -14,14 +14,13 @@ import type { ReactNode } from 'react'
 import { Tool, ToolContent, ToolHeader, ToolOutput, ToolSection } from '@/components/ai/tool'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { useConversation, useConversations, useToolDuration, useUltimate } from '@/sdk'
+import { formatTime, useConversation, useConversations, useToolDuration, useUltimate } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import { useWorkspaceIndex } from './data.tsx'
 import type { LanderEntry, LanderOutcome, LanderStep, SubmitResult } from './types.ts'
 
 const short = (sha: string) => sha.slice(0, 7)
-const time = (at: number) =>
-  new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+const time = (at: number) => formatTime(at, true)
 
 /** "open #id", with a dot while that conversation works. */
 function Open({ id, className, label }: { id: number; className?: string; label?: string }) {
