@@ -781,3 +781,20 @@ it('runs worktree setup on the merged revision before the checks of every submis
   expect(reports.at(-1)).toContain('landed as')
   expect(reports.at(-1)).not.toContain('Flaky')
 })
+it('fast-forwards the target inside the worktree that has it checked out', async () => {
+  const f = await lander({})
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path)
+  await git(f.projectRoot, 'switch', '-q', '-c', 'other')
+  const elsewhere = join(f.directory, 'elsewhere')
+  await git(f.projectRoot, 'worktree', 'add', '-q', elsewhere, 'main')
+  await f.service.submit(id, context)
+  expect((await submitted(f, id))[0]).toContain('landed as')
+  expect(await readFile(join(elsewhere, 'change.txt'), 'utf8')).toBe('change.txt')
+  expect(await git(elsewhere, 'status', '--porcelain')).toBe('')
+  expect(await git(elsewhere, 'rev-parse', 'HEAD')).toBe(
+    await git(f.projectRoot, 'rev-parse', 'main'),
+  )
+  expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
+})

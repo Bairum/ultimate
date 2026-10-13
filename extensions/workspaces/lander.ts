@@ -260,11 +260,13 @@ export function createLander(
             const current = await git(source, 'rev-parse', `refs/heads/${target}`)
             if (current !== base) return !(await contains(source, integrated, current))
             try {
-              if (
-                (await git(source, 'symbolic-ref', '-q', '--short', 'HEAD').catch(() => '')) ===
-                target
-              )
-                await git(source, 'merge', '-q', '--ff-only', integrated)
+              // Fast-forward the checkout that has the target checked out, so its files follow the branch.
+              const worktree = (await git(source, 'worktree', 'list', '--porcelain'))
+                .split('\n\n')
+                .map((record) => record.split('\n'))
+                .find((record) => record.includes(`branch refs/heads/${target}`))?.[0]
+                .slice('worktree '.length)
+              if (worktree) await git(worktree, 'merge', '-q', '--ff-only', integrated)
               else await git(source, 'update-ref', `refs/heads/${target}`, integrated, base)
             } catch (error) {
               refused = failure(error)
@@ -273,7 +275,7 @@ export function createLander(
           })
           if (refused)
             return finish(
-              `was integrated as ${integrated.slice(0, 7)} but ${target} in ${source} refused the fast-forward:\n${refused}`,
+              `was integrated as ${integrated.slice(0, 7)} but the checkout of ${target} refused the fast-forward:\n${refused}`,
             )
           if (moved) {
             if (attempt < attempts) return retry()
