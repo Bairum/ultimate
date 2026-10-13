@@ -1,12 +1,12 @@
-import { mkdir, readFile, writeFile, access, symlink, realpath } from 'node:fs/promises'
-import { spawn } from 'node:child_process'
+import { mkdir, readdir, readFile, writeFile, access, symlink, realpath } from 'node:fs/promises'
+import { execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { join } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { defineExtension, defineTool, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationId, JsonObject } from '@earendil-works/pi-durable'
+import type { ConversationId, JsonObject, TaskId } from '@earendil-works/pi-durable'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -727,4 +727,192 @@ it('removes only clean, idle checkouts with commits the target contains, never f
   expect((await f.service.get(ahead, context))!.state).toBe('ready')
   expect((await f.service.get(dirty, context))!.state).toBe('ready')
   expect((await f.service.get(fresh, context))!.state).toBe('ready')
+})
+it('kills the whole process group of a running check when the lander is aborted', async () => {
+  const f = await fixture()
+  const pidFile = join(f.directory, 'child.pid')
+  f.host.projectSettings = async () => ({
+    lander: { checks: [`sleep 300 & echo $! > '${pidFile}'; wait`] },
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path)
+  await f.service.submit(id, context)
+  await until(() =>
+    readFile(pidFile, 'utf8').then(
+      (text) => text.trim() !== '',
+      () => false,
+    ),
+  )
+  const pid = Number(await readFile(pidFile, 'utf8'))
+  expect(() => process.kill(pid, 0)).not.toThrow()
+  const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+  await f.opened.harness.abortTask(Object.values(index.landers)[0] as TaskId, context)
+  await until(() => {
+    try {
+      process.kill(pid, 0)
+      return false
+    } catch {
+      return true
+    }
+  }, 5000)
+  expect(exclusiveSlot(f.host).command).toBeUndefined()
+})
+it('runs worktree setup on the merged revision before the checks of every submission', async () => {
+  const f = await fixture()
+  await writeFile(join(f.projectRoot, '.gitignore'), 'have.txt\n')
+  await writeFile(join(f.projectRoot, 'want.txt'), 'one')
+  await git(f.projectRoot, 'add', '.')
+  await git(f.projectRoot, 'commit', '-qm', 'setup inputs')
+  f.host.projectSettings = async () => ({
+    isolates: { worktree: { setup: ['cp want.txt have.txt'] } },
+    lander: { checks: ['cmp want.txt have.txt'] },
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  await commit(workspace.path, 'first.txt')
+  await f.service.submit(id, context)
+  expect((await submitted(f, id))[0]).toContain('landed as')
+  await writeFile(join(workspace.path, 'want.txt'), 'two')
+  await git(workspace.path, 'commit', '-qam', 'needs setup')
+  await f.service.submit(id, context)
+  const reports = await submitted(f, id)
+  expect(reports.at(-1)).toContain('landed as')
+  expect(reports.at(-1)).not.toContain('Flaky')
+})
+it('fast-forwards the target inside the worktree that has it checked out', async () => {
+  const f = await lander({})
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path)
+  await git(f.projectRoot, 'switch', '-q', '-c', 'other')
+  const elsewhere = join(f.directory, 'elsewhere')
+  await git(f.projectRoot, 'worktree', 'add', '-q', elsewhere, 'main')
+  await f.service.submit(id, context)
+  expect((await submitted(f, id))[0]).toContain('landed as')
+  expect(await readFile(join(elsewhere, 'change.txt'), 'utf8')).toBe('change.txt')
+  expect(await git(elsewhere, 'status', '--porcelain')).toBe('')
+  expect(await git(elsewhere, 'rev-parse', 'HEAD')).toBe(
+    await git(f.projectRoot, 'rev-parse', 'main'),
+  )
+  expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
+})
+async function withRemote() {
+  const paths = await repository()
+  const bare = join(paths.directory, 'remote.git')
+  await git(paths.directory, 'init', '-q', '--bare', '-b', 'main', bare)
+  await git(paths.projectRoot, 'remote', 'add', 'origin', bare)
+  await git(paths.projectRoot, 'push', '-q', 'origin', 'main')
+  return { paths, bare }
+}
+/** Git without a PATH wrapper that holds commands. */
+const realGit = (cwd: string, ...args: string[]) => execFileSync('/usr/bin/git', args, { cwd })
+async function holdGit(directory: string, command: string) {
+  const bin = join(directory, 'bin')
+  const started = join(directory, `${command}-started`)
+  const gate = join(directory, `${command}-gate`)
+  await mkdir(bin, { recursive: true })
+  await writeFile(
+    join(bin, 'git'),
+    `#!/bin/sh
+if [ "$1" = "${command}" ] && [ ! -f '${gate}' ]; then
+  touch '${started}'
+  while [ ! -f '${gate}' ]; do sleep 0.05; done
+fi
+exec /usr/bin/git "$@"
+`,
+    { mode: 0o755 },
+  )
+  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+  return {
+    started: () =>
+      until(() =>
+        access(started).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    release: () => writeFile(gate, ''),
+  }
+}
+it('pushes the checked commit even when the target advances before the push', async () => {
+  const { paths, bare } = await withRemote()
+  const f = await lander({ push: 'origin' }, paths)
+  const submitter = await f.create()
+  const other = await f.create()
+  await f.service.ready(submitter, context)
+  await f.service.ready(other, context)
+  await commit((await f.service.get(submitter, context))!.path, 'submitted.txt')
+  const push = await holdGit(f.directory, 'push')
+  await f.service.submit(submitter, context)
+  await push.started()
+  const integrated = await git(f.projectRoot, 'rev-parse', 'main')
+  await commit((await f.service.get(other, context))!.path, 'later.txt')
+  await git((await f.service.get(other, context))!.path, 'merge', '-q', integrated)
+  const later = (await f.service.land(other, context)).landed!
+  expect(later).not.toBe(integrated)
+  await push.release()
+  expect((await submitted(f, submitter))[0]).toContain('Pushed to origin/main.')
+  expect(await git(bare, 'rev-parse', 'main')).toBe(integrated)
+})
+it('reports a local landing whose push retry conflicts as landed locally', async () => {
+  const { paths, bare } = await withRemote()
+  const f = await lander({ push: 'origin' }, paths)
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  await writeFile(join(workspace.path, 'base.txt'), 'workspace')
+  const tip = await commit(workspace.path)
+  const push = await holdGit(f.directory, 'push')
+  await f.service.submit(id, context)
+  await push.started()
+  // The remote moves with a conflicting change while the lander pushes; real git avoids the hold.
+  const other = join(f.directory, 'other')
+  realGit(f.directory, 'clone', '-q', bare, other)
+  await writeFile(join(other, 'base.txt'), 'remote')
+  realGit(other, '-c', 'user.email=t@e.com', '-c', 'user.name=T', 'commit', '-qam', 'remote')
+  realGit(other, 'push', '-q', 'origin', 'main')
+  await push.release()
+  const [report] = await submitted(f, id)
+  const landed = await git(f.projectRoot, 'rev-parse', 'main')
+  expect(report).toContain(`landed locally as ${landed.slice(0, 7)} on main.`)
+  expect(report).toContain('Push failed: origin/main conflicts with local main in:')
+  expect(report).not.toContain('was not landed')
+  expect(
+    await git(f.projectRoot, 'merge-base', '--is-ancestor', tip, landed).then(() => true),
+  ).toBe(true)
+  expect((await f.service.get(id, context))!.landed).toBe(landed)
+})
+it('resumes checks after a restart without rerunning passed ones and keeps flaky notes', async () => {
+  const f = await fixture()
+  const log = join(f.directory, 'runs')
+  const marker = join(f.directory, 'failed-once')
+  const gate = join(f.directory, 'rerun-gate')
+  f.host.projectSettings = async () => ({
+    lander: {
+      checks: [
+        `echo first >> '${log}'`,
+        `echo second >> '${log}'; if [ ! -f '${marker}' ]; then touch '${marker}'; exit 1; fi; while [ ! -f '${gate}' ]; do sleep 0.05; done`,
+      ],
+    },
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path)
+  await f.service.submit(id, context)
+  const runs = () => readFile(log, 'utf8').catch(() => '')
+  await until(async () => (await runs()) === 'first\nsecond\nsecond\n')
+  const merged = await git(
+    join(f.home, 'lander', (await readdir(join(f.home, 'lander')))[0]),
+    'rev-parse',
+    'HEAD',
+  )
+  await f.reopen()
+  await writeFile(gate, '')
+  const [report] = await submitted(f, id)
+  expect(await runs()).toBe('first\nsecond\nsecond\nsecond\n')
+  expect(report).toContain('landed as')
+  expect(report).toContain(`Flaky: echo second`)
+  expect(await git(f.projectRoot, 'rev-parse', 'main')).toBe(merged)
 })
