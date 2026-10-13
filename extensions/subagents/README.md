@@ -7,7 +7,7 @@ Message or stop that ID, or wait again. Follow-ups do not wake waits; steering a
 An answer already completed by the awaited child takes precedence. Only the local wait is cancelled.
 Before each request, a reminder lists running children and inputs waiting to start.
 Each start or message creates a reporter that delivers its answer once, including after restart.
-If a child ends unanswered with `model_error`, the reporter automatically asks it to continue once before reporting failure. The retry attempt and its distinct request ID survive restart; aborted runs and other failure reasons are not retried.
+If a child ends unanswered with `model_error`, the reporter automatically asks it to continue once before reporting failure. The retry request ID is shared by all inputs answered by the same failed child response and survives restart. Explicit stop cancels queued or active recovery along with the original inputs; aborted runs and other failure reasons are not retried.
 Foreground, wait, and asynchronous answers include `Returned model: provider/model` from the stored assistant message (or `unknown` when unavailable), not the configured profile or self-report. Asynchronous report prefixes and provenance remain unchanged. Successful tool answers carry `details.answerId`; completed codemode scripts list these in `details.subagentAnswers`.
 The backend removes queued reports already returned by those tools. Failed or yielded scripts leave reports queued.
 Reports already sent to the model stay there. An explicit `wait` can still return an earlier answer.

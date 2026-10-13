@@ -52,7 +52,13 @@ export const Subagents = defineDoc<{
   >
   actions: Record<
     string,
-    { conversationId: ConversationId; reporter: TaskId; answer?: EntryId; status?: string }
+    {
+      conversationId: ConversationId
+      reporter: TaskId
+      answer?: EntryId
+      status?: string
+      retryRequest?: string
+    }
   >
 }>({
   kind: 'ultimate.subagents',
@@ -86,7 +92,8 @@ const answerText = (message: AssistantMessage | undefined) =>
 function createReporter() {
   return defineTask<
     { conversationId: ConversationId; text: string; steer: boolean; sourceEntry?: EntryId },
-    { phase: 'deliver'; attempt?: 1 } | { phase: 'report'; report?: string; answer?: EntryId },
+    | { phase: 'deliver'; retryRequest?: string }
+    | { phase: 'report'; report?: string; answer?: EntryId },
     null
   >({
     name: 'ultimate.subagent-reporter',
@@ -96,17 +103,17 @@ function createReporter() {
       deliver: async (task, runtime, context) => {
         try {
           const child = (await runtime.conversation(task.input.conversationId, context))!
-          const attempt = task.state.checkpoint.attempt
+          const retryRequest = task.state.checkpoint.retryRequest
           const settled = await (
             await child.submit(
               {
                 type: 'input',
                 content:
-                  attempt === 1
+                  retryRequest !== undefined
                     ? 'Your previous run stopped with a provider error. Continue from where you left off; check what you already did and do not redo it.'
                     : task.input.text,
                 whenBusy: task.input.steer ? 'steer' : 'followUp',
-                requestId: attempt === 1 ? `subagent:${task.id}:retry` : `subagent:${task.id}`,
+                requestId: retryRequest ?? `subagent:${task.id}`,
               },
               context,
             )
@@ -135,9 +142,32 @@ function createReporter() {
             if (
               settled.status === 'unanswered' &&
               settled.reason === 'model_error' &&
-              attempt !== 1
-            )
-              return { status: 'running', checkpoint: { phase: 'deliver', attempt: 1 } }
+              retryRequest === undefined
+            ) {
+              let cursor: Cursor | undefined
+              do {
+                const page = await tx.scanEntries(
+                  { conversationId: child.id, minEntryId: settled.entry },
+                  500,
+                  cursor,
+                )
+                const failure = page.items.find(
+                  (entry) =>
+                    entry.kind === AssistantEntry.kind &&
+                    entry.model?.[0]?.role === 'assistant' &&
+                    entry.model[0].stopReason === 'error',
+                )
+                if (failure) {
+                  action.retryRequest = `subagent-retry:${child.id}:${failure.id}`
+                  return {
+                    status: 'running',
+                    checkpoint: { phase: 'deliver', retryRequest: action.retryRequest },
+                  }
+                }
+                cursor = page.next
+              } while (cursor)
+              throw new Error('Provider failure has no assistant entry')
+            }
             if (settled.status === 'unanswered' && settled.reason !== 'aborted') {
               const report = `[subagent ${child.id} failed: ${settled.reason}]`
               return { status: 'running', checkpoint: { phase: 'report', report } }
@@ -810,15 +840,22 @@ Available definitions:
               await host.harness().abortTask(reporter, context)
               await api.waitForTask(reporter, context)
             }
-            const submissions = await api.commit(
-              (tx) =>
-                Promise.all(
-                  target.reporters.map((reporter) =>
-                    tx.submissionByRequest(id, `subagent:${reporter}`),
-                  ),
-                ),
-              context,
-            )
+            const submissions = await api.commit(async (tx) => {
+              const captured = await tx.doc(Subagents, api.conversationId)
+              const retries = Object.values(captured.actions).flatMap((action) =>
+                target.reporters.includes(action.reporter) && action.retryRequest
+                  ? [action.retryRequest]
+                  : [],
+              )
+              return Promise.all(
+                [
+                  ...new Set([
+                    ...target.reporters.map((reporter) => `subagent:${reporter}`),
+                    ...retries,
+                  ]),
+                ].map((request) => tx.submissionByRequest(id, request)),
+              )
+            }, context)
             for (const submission of submissions)
               if (submission?.status === 'queued')
                 await host.harness().abortSubmission(submission.id, context, id)

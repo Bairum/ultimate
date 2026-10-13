@@ -87,7 +87,7 @@ async function fixture(
             if (task.definition.name !== 'ultimate.subagent-reporter') return task
             const reporter = task as unknown as Task<
               JsonValue,
-              { phase: string; attempt?: 1 },
+              { phase: string; retryRequest?: string },
               JsonValue,
               object
             >
@@ -102,7 +102,7 @@ async function fixture(
                   ) => {
                     if (
                       reportGate.attempt === undefined ||
-                      args[0].state.checkpoint.attempt === reportGate.attempt
+                      args[0].state.checkpoint.retryRequest !== undefined
                     ) {
                       reportGate.entered = true
                       await awaitWithContext(reportGate.promise, args[2])
@@ -524,6 +524,174 @@ describe('provider error recovery', () => {
       expect(f.errors).toEqual([])
     })
 
+  it('shares one continuation across restart for start and steering inputs that fail in the same run', async () => {
+    const held = { ...gate(), entered: false }
+    const recoveryGate = { ...gate(), entered: false, phase: 'deliver', attempt: 1 as const }
+    let continuations = 0
+    const f = await fixture(
+      defineExtension({
+        name: 'hold',
+        tools: [
+          defineTool({
+            name: 'hold',
+            description: 'Hold the child tool round',
+            parameters: Type.Object({}),
+            replay: 'safe',
+            execute: async (_args, _api, toolContext) => {
+              held.entered = true
+              await awaitWithContext(held.promise, toolContext)
+              return { output: [{ type: 'text', text: 'released' }] }
+            },
+          }),
+        ],
+      }),
+      undefined,
+      recoveryGate,
+      (transcript) => {
+        const last = transcript.messages.at(-1)!
+        if (last.role === 'user' && last.content === 'shared failure')
+          return fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
+        if (last.role === 'user' && last.content === retryText) {
+          continuations++
+          return fauxAssistantMessage('Shared recovery')
+        }
+        if (
+          transcript.messages.some(
+            (message) => message.role === 'user' && message.content === 'steer failure',
+          )
+        )
+          return fauxAssistantMessage('', {
+            stopReason: 'error',
+            errorMessage: 'shared provider error',
+          })
+        return undefined
+      },
+    )
+    await call(f.opened, {
+      action: 'start',
+      agent: 'scout',
+      task: 'shared failure',
+      background: true,
+    })
+    await until(async () => held.entered)
+    const [child] = await children(f.opened)
+    await startCall(f.opened, {
+      action: 'message',
+      id: child.conversationId,
+      text: 'steer failure',
+      steer: true,
+    })
+    await until(
+      async () =>
+        (await f.opened.harness.snapshot(InboxDoc, child.conversationId, context))!.items.length ===
+        1,
+    )
+    held.release()
+    await until(async () =>
+      Object.values(
+        (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!.actions,
+      ).every((action) => action.retryRequest !== undefined),
+    )
+    expect(continuations).toBe(0)
+    await f.opened.close()
+    hosts.splice(hosts.indexOf(f.opened), 1)
+    recoveryGate.release()
+    const resumed = await f.reopen()
+    await until(async () =>
+      Object.values(
+        (await resumed.harness.snapshot(Subagents, resumed.root.id, context))!.actions,
+      ).every((action) => action.status === 'done'),
+    )
+    await resumed.harness.waitForIdle(context)
+    expect(continuations).toBe(1)
+    const state = (await resumed.harness.snapshot(Subagents, resumed.root.id, context))!
+    const requests = Object.values(state.actions).map((action) => action.retryRequest)
+    expect(requests).toHaveLength(2)
+    expect(requests[0]).toMatch(/^subagent-retry:/)
+    expect(new Set(requests).size).toBe(1)
+    expect(Object.values(state.actions).map((action) => action.status)).toEqual(['done', 'done'])
+    expect(f.errors).toEqual([])
+  })
+
+  for (const queued of [false, true])
+    it(`stops a ${queued ? 'queued' : 'running'} recovery without a later continuation`, async () => {
+      const held = { ...gate(), entered: false }
+      const recoveryGate = { ...gate(), entered: false, phase: 'deliver', attempt: 1 as const }
+      let continuations = 0
+      const f = await fixture(
+        defineExtension({
+          name: 'hold',
+          tools: [
+            defineTool({
+              name: 'hold',
+              description: 'Hold a child run',
+              parameters: Type.Object({}),
+              replay: 'safe',
+              execute: async (_args, _api, toolContext) => {
+                held.entered = true
+                await awaitWithContext(held.promise, toolContext)
+                return { output: [{ type: 'text', text: 'released' }] }
+              },
+            }),
+          ],
+        }),
+        undefined,
+        queued ? recoveryGate : undefined,
+        (transcript) => {
+          const last = transcript.messages.at(-1)!
+          if (last.role === 'user' && last.content === 'provider failure')
+            return fauxAssistantMessage('', {
+              stopReason: 'error',
+              errorMessage: 'fixture provider error',
+            })
+          if (last.role === 'user' && last.content === retryText) {
+            continuations++
+            return fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
+          }
+          return undefined
+        },
+      )
+      await call(f.opened, {
+        action: 'start',
+        agent: 'scout',
+        task: 'provider failure',
+        background: true,
+      })
+      const [child] = await children(f.opened)
+      if (queued) {
+        await until(async () => recoveryGate.entered)
+        const handle = (await f.opened.harness.conversation(child.conversationId, context))!
+        await handle.submit({ type: 'input', content: 'HOLD' }, context)
+        await until(async () => held.entered)
+        recoveryGate.release()
+        await until(
+          async () =>
+            (await f.opened.harness.snapshot(InboxDoc, child.conversationId, context))!.items
+              .length === 1,
+        )
+      } else await until(async () => held.entered)
+      const state = (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!
+      const request = Object.values(state.actions)[0].retryRequest!
+      await call(f.opened, { action: 'stop', id: child.conversationId })
+      held.release()
+      await f.opened.harness.waitForIdle(context)
+      expect(continuations).toBe(queued ? 0 : 1)
+      expect(
+        (await f.opened.harness.snapshot(InboxDoc, child.conversationId, context))!.items,
+      ).toHaveLength(0)
+      expect(
+        (await f.opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
+      ).toBeUndefined()
+      expect(
+        await f.opened.harness.commit(
+          (tx) => tx.submissionByRequest(child.conversationId, request),
+          context,
+        ),
+      ).toMatchObject({ status: 'unanswered', reason: 'aborted' })
+      expect(await reports(f.opened)).toHaveLength(0)
+      expect(f.errors).toEqual([])
+    })
+
   it('persists the retry checkpoint across restart without retrying a second failure', async () => {
     const retryGate = { ...gate(), entered: false, phase: 'deliver', attempt: 1 as const }
     const inputs: string[] = []
@@ -553,7 +721,7 @@ describe('provider error recovery', () => {
     const reporter = Object.values(state.actions)[0].reporter
     expect((await f.opened.harness.getTask(reporter, context))?.state).toMatchObject({
       status: 'running',
-      checkpoint: { phase: 'deliver', attempt: 1 },
+      checkpoint: { phase: 'deliver', retryRequest: expect.stringMatching(/^subagent-retry:/) },
     })
     await f.opened.close()
     hosts.splice(hosts.indexOf(f.opened), 1)
@@ -567,10 +735,11 @@ describe('provider error recovery', () => {
     expect(delivered[0].model![0].content).toMatch(/failed: model_error/)
     expect(
       await resumed.harness.commit(
-        (tx) =>
+        async (tx) =>
           tx.submissionByRequest(
             Object.values(state.agents)[0].conversationId,
-            `subagent:${reporter}:retry`,
+            (await tx.doc(Subagents, resumed.root.id)).actions[Object.keys(state.actions)[0]]
+              .retryRequest!,
           ),
         context,
       ),
