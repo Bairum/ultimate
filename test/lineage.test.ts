@@ -93,7 +93,8 @@ it('branches with a brief, marks the source, and keeps inherited history reachab
 
   // The branch's model sees the brief reset, then the prompt and its answer.
   const view = await branch.context(context)
-  expect(view.entries.map((entry) => entry.kind)).toEqual([
+  // Display entries (a branch is top-level, so it gets the sidebar summary) carry no model message.
+  expect(view.entries.filter((entry) => entry.model).map((entry) => entry.kind)).toEqual([
     'pi.reset',
     'pi.user',
     'pi.system',
