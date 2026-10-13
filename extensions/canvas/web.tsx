@@ -103,7 +103,7 @@ const commands: CommandContribution[] = [
     title: 'Fly to the hub',
     keys: 'h',
     when: (context) => here(context) && onMap(),
-    run: () => getController()?.hub(false),
+    run: () => getController()?.hub(true),
   },
   {
     id: 'canvas.new',
