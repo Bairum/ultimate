@@ -24,8 +24,5 @@
   "lander": {
     "checks": ["pnpm check", "pnpm test"],
     "push": "origin"
-  },
-  "githubTriage": {
-    "writableRepos": ["HazAT/ultimate"]
   }
 }

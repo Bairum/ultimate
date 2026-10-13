@@ -24,9 +24,8 @@ place.
   built-ins ship in the clone and are switched on per machine or per project (see "Building blocks" below).
 - **One long conversation per project.** Ultimate is a long-running conversation, not a fresh session per task.
   Compaction keeps it going, so it accumulates what it learns about the project.
-- **You can build whole applications in it, too.** A surface is a full-screen app next to the docked agent; this
-  repository's GitHub triage app was built that way, by Ultimate itself. The agent is good at it, but it is not the
-  point. The point is an agent shaped for the project you work on.
+- **You can build whole applications in it, too.** A surface is a full-screen app next to the docked agent.
+  The point is an agent shaped for the project you work on.
 - **Lean and malleable.** Like Pi and Pi Durable, the core stays as small as possible and everything else is
   replaceable, including Ultimate itself: it runs this repository and can change its own code while you talk.
 
@@ -111,19 +110,13 @@ stays docked on every surface and knows which one you are looking at, and the ch
 and restarts land on the same view. Enable `surfaces` for the agent to know which surface you are viewing;
 enable `documents` if the app needs the Documents tab. Surface UI contributions themselves work without either.
 
-**Example: GitHub Triage.** This repository's own `.ultimate/extensions/github-triage/` was built by Ultimate itself
-through its UI: open issues and pull requests of any repository via the `gh` CLI, filters and search, details with the
-body and comments, and buttons that hand an item to the docked agent (summarize, suggest labels, draft a reply). The
-agent can only propose; the UI writes labels or comments after you confirm, and only to repositories listed in
-`githubTriage.writableRepos` in `.ultimate/settings.json`. If `gh` is missing or logged out, it shows how to set it up.
-
 ## What to try
 
 These examples use the full setup above; enable the corresponding building blocks in other projects.
 
 - Ask it anything about this repository; watch tool calls, diffs, and thinking stream in.
 - "Build a surface for …" — a whole app with its UI, server actions, and the agent docked beside it; switch to it while
-  it is being built. The Triage surface was its first.
+  it is being built.
 - "Build a small extension that …" — it reads [extensions/README.md](extensions/README.md), writes
   `extensions/<name>/web.tsx`, and the UI hot-reloads in front of you. The status-line clock was its first one.
 - "Take a screenshot of yourself and tell me what looks off" — it can see and drive its own UI.

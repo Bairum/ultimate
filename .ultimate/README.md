@@ -14,7 +14,6 @@ work, and changes its own code while you talk to it.
 - `exclusive-commands`: one `pnpm test` at a time across conversations.
 - `automations`: prompts that run on a schedule; every run is a conversation you can open.
 - `clock`: the time in the status line.
-- `github-triage`: this repository's own app for its issues and pull requests.
 
 ## How to work with it
 
