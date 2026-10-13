@@ -39,7 +39,7 @@ Discovery is clone built-ins, then `~/.ultimate/`, then `<project>/.ultimate/`; 
 Skills load from clone `skills/`, then Pi's defaults, then `~/.ultimate/skills/`, then
 `<project>/.ultimate/skills/`, with later names winning.
 The default set is `agent`, `conversations`, `workspaces`, `coding-tools`, `prompt`, `models`, `status-line`, `notices`, `theme`,
-`faux` (inert unless `ULTIMATE_FAUX=1`), `codemode`, `browser`, `onboarding`, and `splash`. Other built-ins are opt-in
+`faux` (inert unless `ULTIMATE_FAUX=1`), `codemode`, `browser`, `onboarding`, `splash`, and `lineage` (the conversation tree: root, branches, notes). Other built-ins are opt-in
 building blocks, including `secrets`, `parallel` (web tools; requires `secrets`), `canvas` (the Canvas surface: every agent on a live map around a hub), and `tailscale` (remote access, user-level enablement only). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
 restart. User/project extension folders are on by default; `disable` can turn off those or defaults too. Unknown names
