@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { chromium, type Page } from 'playwright-core'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
@@ -275,3 +275,171 @@ it('reconciles delayed submissions across navigation and preserves keyboard focu
     await server.close()
   }
 }, 30000)
+
+it('shares Hub clipboard validation and preserves attachments through reads, creation and submission failures', async (test) => {
+  const executablePath = await skipWithoutChromium(test)
+  if (!executablePath) return
+  const userHome = await temp('ultimate-hub-paste-')
+  const projectRoot = join(userHome, 'project')
+  await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
+  await writeFile(
+    join(projectRoot, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { enable: ['canvas'] } }),
+  )
+  const server = await fauxServer({
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    userHome,
+    home: join(userHome, 'state'),
+  })
+  const browser = await chromium.launch({ executablePath, headless: true })
+  try {
+    await post(server, '/api/ui', { set: { 'shell.surface': 'canvas' } })
+    const page = await browser.newPage({ viewport: { width: 1400, height: 900 } })
+    page.setDefaultTimeout(10000)
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    await page.goto(server.url)
+    await untilInput(page)
+    const input = page.locator('#canvas-hub-input')
+    const send = page.getByRole('button', { name: 'Start the conversation', exact: true })
+    await input.waitFor()
+    const clipboard = async (mimeTypes: string[], size = 1) =>
+      page.evaluate(
+        ({ types, bytes }) => {
+          const data = new DataTransfer()
+          for (const type of types)
+            data.items.add(new File([new Uint8Array(bytes)], 'shot', { type }))
+          if (!types.length) data.setData('text/plain', 'native text')
+          return document
+            .querySelector('#canvas-hub-input')!
+            .dispatchEvent(
+              new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }),
+            )
+        },
+        { types: mimeTypes, bytes: size },
+      )
+    expect(await clipboard([])).toBe(true)
+    for (const [types, bytes] of [
+      [['image/svg+xml'], 1],
+      [['image/png'], 2 * 1024 * 1024 + 1],
+      [Array(5).fill('image/png'), 1],
+    ] as [string[], number][]) {
+      expect(await clipboard(types, bytes)).toBe(false)
+      await page
+        .getByText('Paste up to 4 PNG, JPEG, WebP or GIF images, at most 2 MiB each.')
+        .waitFor()
+      expect(await page.getByAltText('Pasted image 1').count()).toBe(0)
+    }
+    await clipboard(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+    await page.getByAltText('Pasted image 4').waitFor()
+    await clipboard(['image/png'])
+    expect(await page.getByAltText(/Pasted image/).count()).toBe(4)
+    for (let i = 4; i > 0; i--)
+      await page.getByRole('button', { name: `Remove image ${i}` }).click()
+    expect(await send.isDisabled()).toBe(true)
+    await clipboard(['image/png'], 2 * 1024 * 1024)
+    await page.getByAltText('Pasted image 1').waitFor()
+    await input.fill('Keep this draft')
+    await page.evaluate(
+      `window.originalRead = FileReader.prototype.readAsDataURL; FileReader.prototype.readAsDataURL = function() { this.dispatchEvent(new Event('error')) }`,
+    )
+    await paste(page)
+    await page.getByText('Could not read pasted image', { exact: true }).waitFor()
+    expect(await input.inputValue()).toBe('Keep this draft')
+    expect(await page.getByAltText('Pasted image 1').count()).toBe(1)
+    await page.evaluate('FileReader.prototype.readAsDataURL = window.originalRead')
+    await page.getByRole('button', { name: 'Remove image 1' }).click()
+    await page.evaluate(
+      `window.originalRead = FileReader.prototype.readAsDataURL; FileReader.prototype.readAsDataURL = function(file) { const reader = this; window.finishRead = () => new Promise(resolve => { reader.addEventListener('loadend', resolve); window.originalRead.call(reader, file) }) }`,
+    )
+    await input.fill('Wait for image')
+    await paste(page)
+    expect(await send.isDisabled()).toBe(true)
+    const submissions: { text: string; images: { data: string; mimeType: string }[] }[] = []
+    page.on('request', (request) => {
+      if (request.url().endsWith('/submit')) submissions.push(request.postDataJSON())
+    })
+    await input.press('Enter')
+    expect(submissions).toEqual([])
+    await page.evaluate('window.finishRead()')
+    await page.getByAltText('Pasted image 1').waitFor()
+    await page.evaluate('FileReader.prototype.readAsDataURL = window.originalRead')
+    await page.getByRole('button', { name: 'Remove image 1' }).click()
+    let creations = 0
+    let failCreation = true
+    await page.route('**/api/extensions/workspaces/actions/create', async (route) => {
+      creations++
+      if (failCreation)
+        return route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: '{"error":"Cannot isolate"}',
+        })
+      const id = (await post(server, '/api/conversations', {})).data.id
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ result: { id } }),
+      })
+    })
+    for (const isolated of [true, false]) {
+      if (!isolated) await page.getByRole('switch', { name: 'Isolated' }).click()
+      for (const text of ['Review screenshot', '']) {
+        await input.fill(text)
+        await paste(page)
+        await page.getByAltText('Pasted image 1').waitFor()
+        if (isolated && failCreation) {
+          await input.press('Enter')
+          await page.getByText('Cannot isolate', { exact: true }).waitFor()
+          failCreation = false
+        }
+        expect(await input.inputValue()).toBe(text)
+        expect(await page.getByAltText('Pasted image 1').count()).toBe(1)
+        let release!: () => void
+        const gate = new Promise<void>((done) => {
+          release = done
+        })
+        let requested!: () => void
+        const request = new Promise<void>((done) => {
+          requested = done
+        })
+        await page.route('**/api/conversations/*/submit', async (route) => {
+          requested()
+          await gate
+          await route.fulfill({
+            status: 400,
+            contentType: 'application/json',
+            body: '{"error":"Retry image"}',
+          })
+        })
+        await input.press('Enter')
+        await request
+        expect(await send.isDisabled()).toBe(true)
+        expect(await page.getByRole('button', { name: 'Remove image 1' }).isDisabled()).toBe(true)
+        const count = submissions.length
+        await input.evaluate((element) =>
+          element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
+        )
+        await paste(page)
+        expect(submissions).toHaveLength(count)
+        release()
+        await page.getByText('Retry image', { exact: true }).waitFor()
+        expect(await input.inputValue()).toBe(text)
+        expect(await page.getByAltText('Pasted image 1').count()).toBe(1)
+        await page.unroute('**/api/conversations/*/submit')
+        await input.press('Enter')
+        await expect.poll(() => page.getByAltText('Pasted image 1').count()).toBe(0)
+        expect(await input.inputValue()).toBe('')
+        expect(submissions.at(-1)).toMatchObject({
+          text,
+          images: [{ data: png, mimeType: 'image/png' }],
+        })
+      }
+    }
+    expect(creations).toBe(5)
+    expect(errors).toEqual([])
+  } finally {
+    await browser.close()
+    await server.close()
+  }
+}, 60000)
