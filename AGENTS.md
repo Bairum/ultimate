@@ -106,6 +106,8 @@ A top-level conversation created with New isolated conversation works in its own
 After landing verified workers and checking the combined tip, call `workspace submit` and keep working: the lander
 merges the tip into the original branch with whatever landed meanwhile, runs `lander.checks` (here `pnpm check` and
 `pnpm test`), fast-forwards the branch, pushes to `lander.push` (here `origin`), and reports back as a message.
+Its progress shows live on the submit tool card and in the source's "Lander · <target>" conversation, which logs
+every submission and its outcome and shows as working on the Canvas and in the Agents tab while it lands.
 `workspace land` is the synchronous alternative: it only fast-forwards, refuses moved or diverged targets, and never
 rebases or pushes. Unrelated dirty files in the original checkout block neither.
 For `server/` or `shared/` changes, an authorized `restart` works once the running clone is clean at the landed commit.

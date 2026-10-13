@@ -23,6 +23,7 @@ import {
   useWorkspaceConversations as useConversations,
 } from './data.tsx'
 import type { WorkspaceConversation as ConversationSummary } from './data.tsx'
+import { LanderLogEntry, LanderReport, WorkspaceCall } from './log.tsx'
 import type { WorkspaceInfo } from './types.ts'
 
 function IsolationToggle() {
@@ -337,6 +338,8 @@ function WorkspacesPanel() {
 
 export default defineWebExtension({
   slots: { 'composer.toolbar': [IsolationToggle] },
+  tools: { workspace: WorkspaceCall },
+  entries: { 'ultimate.lander': LanderLogEntry, 'pi.user': LanderReport },
   panels: [
     {
       id: 'workspaces',

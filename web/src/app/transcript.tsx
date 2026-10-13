@@ -36,7 +36,7 @@ import { ToolImage } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { elidePath, formatDuration, formatTokens, shortenPath } from '../sdk/format.ts'
 import { useConversation, useExtensions, useModels, useNow, useSystem } from '../sdk/hooks.ts'
-import { rendererFor } from '../sdk/registry.ts'
+import { entryRenderers } from '../sdk/registry.ts'
 import { ExtensionBoundary } from './boundary.tsx'
 import { column } from './layout.ts'
 import { indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
@@ -368,22 +368,15 @@ const EntryView = memo(function EntryView({
   slots: Map<string, ToolSlot>
   busy: boolean
 }) {
-  const custom = rendererFor(useExtensions(), 'entries', entry.kind)
-  const core = coreEntry(entry, results, slots, busy)
-  if (custom) {
-    const Renderer = custom.component
-    return (
-      <ExtensionBoundary
-        extension={custom.extension}
-        fallback={core}
-        key={custom.extension}
-        version={custom.version}
-      >
-        <Renderer core={core} entry={entry} />
+  // Renderers compose in folder order: each receives the one before it as `core`, and falls back to it.
+  return entryRenderers(useExtensions(), entry.kind).reduce<ReactNode>(
+    (inner, { extension, version, component: Renderer }) => (
+      <ExtensionBoundary extension={extension} fallback={inner} key={extension} version={version}>
+        <Renderer core={inner} entry={entry} />
       </ExtensionBoundary>
-    )
-  }
-  return core
+    ),
+    coreEntry(entry, results, slots, busy),
+  )
 })
 
 function coreEntry(

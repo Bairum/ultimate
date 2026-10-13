@@ -15,6 +15,7 @@ import type { ActionContext } from '../server/actions.ts'
 import workspaceExtension, { actions } from '../extensions/workspaces/server.ts'
 import { Workspaces, workspaces } from '../extensions/workspaces/workspaces.ts'
 import { git, setup } from '../extensions/workspaces/git.ts'
+import type { LanderEntry } from '../extensions/workspaces/types.ts'
 import { exclusiveSlot } from '../extensions/exclusive-commands/slot.ts'
 import self from '../extensions/self/server.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
@@ -569,6 +570,26 @@ async function submitted(f: Awaited<ReturnType<typeof fixture>>, id: Conversatio
     view.dispose()
   }
 }
+/** The lander conversation of the project source and its `ultimate.lander` log. */
+async function landerLog(f: Awaited<ReturnType<typeof fixture>>) {
+  const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+  const id = index.landerConversations[await realpath(f.projectRoot)] as ConversationId
+  const conversation = (await f.opened.harness.conversation(id, context))!
+  const view = await conversation.viewState(context)
+  try {
+    return {
+      id,
+      metadata: await f.opened.harness.snapshot(Metadata, id, context),
+      cwd: (await conversation.agent(context)).cwd,
+      kinds: view.value.entries.map((entry) => entry.kind),
+      log: view.value.entries
+        .filter((entry) => entry.kind === 'ultimate.lander')
+        .map((entry) => entry.data as LanderEntry),
+    }
+  } finally {
+    view.dispose()
+  }
+}
 async function lander(settings: JsonObject, existing?: Awaited<ReturnType<typeof repository>>) {
   const f = await fixture([], existing)
   f.host.projectSettings = async () => ({ lander: settings })
@@ -605,6 +626,46 @@ it('lands two submissions in order onto a moved target and reports both', async 
   expect((await f.service.get(second, context))!.landed).toBe(
     await git(f.projectRoot, 'rev-parse', 'HEAD'),
   )
+  // Both submissions logged into one lander conversation, each ending with its landed outcome.
+  const { id, metadata, cwd, kinds, log } = await landerLog(f)
+  expect(metadata).toEqual({ title: 'Lander · main', label: 'lander' })
+  expect(cwd).toMatch(/\/lander\/[0-9a-f]{12}$/)
+  expect(kinds.every((kind) => kind === 'ultimate.lander')).toBe(true)
+  expect(reportOne).toContain(`lander conversation #${id}`)
+  const [submissionOne, submissionTwo] = [...new Set(log.map((line) => line.submission))]
+  const firstLog = log.filter((line) => line.submission === submissionOne)
+  expect(firstLog.map((line) => line.step ?? line.outcome)).toEqual([
+    'queued',
+    'started',
+    'preparing',
+    'merging',
+    'setting up',
+    'checking: test -f base.txt',
+    'checked: test -f base.txt',
+    'fast-forwarding',
+    'landed',
+  ])
+  expect(firstLog[6].check).toEqual({ command: 'test -f base.txt', result: 'passed' })
+  const landedOne = firstLog.at(-1)!
+  expect(landedOne).toMatchObject({ conversationId: first, outcome: 'landed' })
+  expect(landedOne.commits).toEqual([
+    expect.stringContaining(`from W${first} into main`),
+    expect.stringContaining('one.txt'),
+  ])
+  expect(landedOne.paths).toContain('one.txt')
+  expect(landedOne.pushed).toBeUndefined()
+  expect(log.filter((line) => line.submission === submissionTwo).at(-1)).toMatchObject({
+    conversationId: second,
+    outcome: 'landed',
+    sha: await git(f.projectRoot, 'rev-parse', 'HEAD'),
+  })
+  const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+  expect(index.results[submissionTwo]).toMatchObject({ outcome: 'landed' })
+  // The lander conversation has no workspace and is no main: it can neither submit nor land.
+  for (const action of ['submit', 'land'])
+    expect(JSON.stringify(await f.call(id, 'workspace', { action }))).toContain(
+      'Only a top-level main conversation',
+    )
 })
 it('reports a conflicting submission and leaves the target untouched', async () => {
   const f = await lander({})
@@ -634,6 +695,14 @@ it('reports a failing check with its output, reruns flaky checks, and leaves a f
   expect(report).toContain('check failed twice')
   expect(report).toContain('CHECK_OUTPUT_TAIL')
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  const failed = (await landerLog(f)).log
+  expect(failed.filter((line) => line.check).map((line) => line.check!.result)).toEqual(['failed'])
+  expect(failed.at(-1)).toMatchObject({
+    outcome: 'failed',
+    reason: 'check failed twice: echo CHECK_OUTPUT_TAIL; test ! -f fail.txt',
+    output: expect.stringContaining('CHECK_OUTPUT_TAIL'),
+  })
+  expect(failed.at(-1)!.sha).toBeUndefined()
   const marker = join(f.directory, 'flaky')
   f.host.projectSettings = async () => ({
     lander: { checks: [`if [ -f '${marker}' ]; then exit 0; fi; touch '${marker}'; exit 1`] },
@@ -644,6 +713,12 @@ it('reports a failing check with its output, reruns flaky checks, and leaves a f
   const reports = await submitted(f, id)
   expect(reports.at(-1)).toContain('landed as')
   expect(reports.at(-1)).toContain('Flaky: if [')
+  const flaky = (await landerLog(f)).log
+  expect(flaky.findLast((line) => line.check)!.check).toMatchObject({ result: 'flaky' })
+  expect(flaky.at(-1)).toMatchObject({
+    outcome: 'landed',
+    flaky: [expect.stringContaining('if [')],
+  })
 })
 it('fetches, merges and pushes the target to the configured remote', async () => {
   const paths = await repository()
@@ -664,6 +739,11 @@ it('fetches, merges and pushes the target to the configured remote', async () =>
   await f.service.submit(id, context)
   const [report] = await submitted(f, id)
   expect(report).toContain('Pushed to origin/main.')
+  expect((await landerLog(f)).log.at(-1)).toMatchObject({
+    outcome: 'landed',
+    sha: await git(f.projectRoot, 'rev-parse', 'HEAD'),
+    pushed: 'origin/main',
+  })
   const pushed = await git(bare, 'rev-parse', 'main')
   expect(pushed).toBe(await git(f.projectRoot, 'rev-parse', 'HEAD'))
   await git(bare, 'merge-base', '--is-ancestor', remoteTip, pushed)

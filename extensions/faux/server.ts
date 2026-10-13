@@ -65,6 +65,11 @@ export default async function fauxExtension(host: ExtensionHost) {
       ) {
         return fauxAssistantMessage([fauxToolCall('restart', {})], { stopReason: 'toolUse' })
       }
+      if (last?.role === 'user' && last.content === 'submit workspace') {
+        return fauxAssistantMessage([fauxToolCall('workspace', { action: 'submit' })], {
+          stopReason: 'toolUse',
+        })
+      }
       if (last?.role === 'toolResult' && last.toolName === 'restart') {
         return fauxAssistantMessage([
           fauxText(last.content.map((block) => (block.type === 'text' ? block.text : '')).join('')),

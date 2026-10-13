@@ -6,7 +6,13 @@ import type { ConversationSummary } from '@/sdk'
 import type { LandResult, Workspace, WorkspaceIndex } from './types.ts'
 
 export type WorkspaceConversation = ConversationSummary & { workspace?: Workspace }
-let index: WorkspaceIndex = { items: {}, queue: [], landers: {} }
+let index: WorkspaceIndex = {
+  items: {},
+  queue: [],
+  landers: {},
+  landerConversations: {},
+  results: {},
+}
 const listeners = new Set<() => void>()
 let stream: EventSource | undefined
 export const getWorkspaces = () => index.items
@@ -21,7 +27,13 @@ function subscribe(listener: () => void) {
     stream.addEventListener('doc', (event) => {
       const data = JSON.parse(event.data) as { kind: string; value: WorkspaceIndex | null }
       if (data.kind !== 'ultimate.workspaces') return
-      index = data.value ?? { items: {}, queue: [], landers: {} }
+      index = data.value ?? {
+        items: {},
+        queue: [],
+        landers: {},
+        landerConversations: {},
+        results: {},
+      }
       publish()
     })
     stream.addEventListener('docOps', (event) => {
@@ -41,6 +53,10 @@ function subscribe(listener: () => void) {
 }
 export function useWorkspaces() {
   return useSyncExternalStore(subscribe, getWorkspaces)
+}
+/** The whole root index: queue, lander conversations and recent outcomes. */
+export function useWorkspaceIndex() {
+  return useSyncExternalStore(subscribe, () => index)
 }
 /** Submissions waiting for or being processed by a lander, oldest first. */
 export function useLanderQueue() {

@@ -399,26 +399,25 @@ export function inboxRenderer(
   return undefined
 }
 
-/** The renderer for a tool or entry kind; the last extension in folder order wins. */
-export function rendererFor<K extends 'tools' | 'entries'>(
+/** Every renderer of an entry kind, in folder order: each one wraps the rendering of the one before it. */
+export function entryRenderers(
   records: readonly ExtensionRecord[],
-  kind: K,
-  key: string,
-):
-  | {
-      extension: string
-      version: number
-      component: K extends 'tools' ? ToolRenderer : EntryRenderer
-    }
-  | undefined {
+  kind: string,
+): { extension: string; version: number; component: EntryRenderer }[] {
+  return records.flatMap((record) => {
+    const component = record.extension?.entries?.[kind]
+    return component ? [{ extension: record.name, version: record.version, component }] : []
+  })
+}
+
+/** The renderer for a tool; the last extension in folder order wins. */
+export function toolRenderer(
+  records: readonly ExtensionRecord[],
+  name: string,
+): { extension: string; version: number; component: ToolRenderer } | undefined {
   for (const record of records.toReversed()) {
-    const component = record.extension?.[kind]?.[key]
-    if (component)
-      return {
-        extension: record.name,
-        version: record.version,
-        component: component as K extends 'tools' ? ToolRenderer : EntryRenderer,
-      }
+    const component = record.extension?.tools?.[name]
+    if (component) return { extension: record.name, version: record.version, component }
   }
   return undefined
 }

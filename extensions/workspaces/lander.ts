@@ -5,15 +5,44 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { Context } from '@earendil-works/chord'
 import { withAbortSignal } from '@earendil-works/chord/context'
-import { defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { defineEntry, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import type { ConversationDocToken, ConversationId } from '@earendil-works/pi-durable'
+import type { ConversationDocToken, ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { exclusiveSlot } from '../exclusive-commands/slot.ts'
 import { git, setup } from './git.ts'
-import type { WorkspaceIndex } from './types.ts'
+import type { LanderEntry, LanderOutcome, QueueEntry, WorkspaceIndex } from './types.ts'
 
 const exec = promisify(execFile)
+/** One line of the lander conversation's log; it carries no model message, so no model ever sees it. */
+export const LanderLog = defineEntry<LanderEntry>('ultimate.lander')
+/** Outcomes kept in the index for submit cards; older ones live on in the lander conversation. */
+const kept = 50
+/** The lander's own detached checkout of `source`, also its conversation's cwd. */
+export async function landerPath(home: string, source: string) {
+  await mkdir(join(home, 'lander'), { recursive: true })
+  return join(
+    await realpath(join(home, 'lander')),
+    createHash('sha256').update(source).digest('hex').slice(0, 12),
+  )
+}
+/** Append a log line about `entry` to the lander conversation `id`. */
+export const log = (
+  tx: Tx,
+  id: ConversationId,
+  entry: QueueEntry,
+  data: Omit<LanderEntry, 'submission' | 'conversationId' | 'tip' | 'target' | 'at'>,
+) =>
+  tx.appendEntry(LanderLog, id, {
+    data: {
+      submission: entry.id,
+      conversationId: entry.conversationId,
+      tip: entry.tip,
+      target: entry.target,
+      at: Date.now(),
+      ...data,
+    },
+  })
 type Host = Pick<ExtensionHost, 'home' | 'ultimateRoot' | 'projectSettings' | 'resource'>
 type Settings = { checks: string[]; push?: string }
 /** Bounded retries when the target moves while a submission is integrated. */
@@ -55,6 +84,13 @@ type Prepared = {
 }
 /** What a submission's first fast-forward landed locally. */
 type Landed = { sha: string; commits: string[]; paths: string[]; flaky: string[] }
+const landedOutcome = (landed: Landed): LanderOutcome => ({
+  outcome: 'landed',
+  sha: landed.sha,
+  commits: landed.commits,
+  paths: landed.paths,
+  flaky: landed.flaky,
+})
 type State =
   | { phase: 'next' }
   | { phase: 'land'; id: string; attempt: number; pushRetried?: boolean }
@@ -68,9 +104,7 @@ export function createLander(
 ) {
   const slot = exclusiveSlot(host)
   async function checkout(source: string, tip: string) {
-    const name = createHash('sha256').update(source).digest('hex').slice(0, 12)
-    await mkdir(join(host.home, 'lander'), { recursive: true })
-    const path = join(await realpath(join(host.home, 'lander')), name)
+    const path = await landerPath(host.home, source)
     const registered = (await git(source, 'worktree', 'list', '--porcelain'))
       .split('\n\n')
       .some((entry) => entry.split('\n').includes(`worktree ${path}`))
@@ -125,6 +159,7 @@ export function createLander(
             return { status: 'terminal', outcome: { status: 'completed', result: null } }
           }
           entry.state = 'landing'
+          await log(tx, runtime.conversationId, entry, { step: 'started' })
           return { status: 'running', checkpoint: { phase: 'land', id: entry.id, attempt: 1 } }
         }, context),
       land: async (task, runtime, context) => {
@@ -132,25 +167,33 @@ export function createLander(
         const { signal } = runtime
         const index = (await runtime.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
         const entry = index.queue.find((item) => item.id === id)!
-        const step = (text: string) =>
+        const step = (text: string, result?: LanderEntry['check']) =>
           runtime.commit(async (tx) => {
             const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue.find(
               (item) => item.id === id,
             )
             if (saved) saved.step = text
+            await log(tx, runtime.conversationId, entry, {
+              step: text,
+              ...(result ? { check: result } : {}),
+            })
           }, context)
-        const finish = (text: string, landed?: string) =>
+        /** Record the outcome, log it and report it to the submitter, in one commit. */
+        const finish = (text: string, outcome: LanderOutcome) =>
           runtime.commit(async (tx) => {
             const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
             draft.queue = draft.queue.filter((item) => item.id !== id)
-            if (landed) draft.items[String(entry.conversationId)].landed = landed
+            if (outcome.sha) draft.items[String(entry.conversationId)].landed = outcome.sha
+            draft.results[id] = { ...outcome, target: entry.target, lander: runtime.conversationId }
+            for (const old of Object.keys(draft.results).slice(0, -kept)) delete draft.results[old]
+            await log(tx, runtime.conversationId, entry, outcome)
             return {
               status: 'running',
               checkpoint: {
                 phase: 'report',
                 id,
                 conversationId: entry.conversationId,
-                text: `[lander] Submission ${id} (W${entry.conversationId}, ${entry.tip.slice(0, 7)}) ${text}`,
+                text: `[lander] Submission ${id} (W${entry.conversationId}, ${entry.tip.slice(0, 7)}) ${text}\nLog: lander conversation #${runtime.conversationId}.`,
               },
             }
           }, context)
@@ -160,17 +203,28 @@ export function createLander(
               ? `landed${how} as ${sha.slice(0, 7)} on ${entry.target}.`
               : `had nothing new to land on ${entry.target}.`,
             ...(landed.commits.length ? [`Commits:\n${landed.commits.join('\n')}`] : []),
-            ...(landed.paths.length ? [`Changed paths:\n${landed.paths.join('\n')}`] : []),
             ...landed.flaky.map((command) => `Flaky: ${command}`),
           ].join('\n')
-        /** Once the submission landed locally, a later failure only means its push failed. */
-        const fail = async (reason: string) => {
+        /**
+         * Report `reason`, with `output` (conflicting paths, a check's output tail) and what to do next.
+         * Once the submission landed locally, a later failure only means its push failed.
+         */
+        const fail = async (reason: string, output?: string, hint?: string) => {
           const landed = await runtime.memo<Landed>(`landed:${id}`, context)
-          return finish(
-            landed
-              ? `${summary(landed, landed.sha, ' locally')}\nPush failed: ${reason}`
-              : `was not landed: ${reason}`,
+          const detail = [output ? `${reason}:\n${output}` : reason, ...(hint ? [hint] : [])].join(
+            '\n',
           )
+          const facts = {
+            reason: landed ? `Push failed: ${reason}` : reason,
+            ...(output ? { output } : {}),
+            ...(hint ? { hint } : {}),
+          }
+          return landed
+            ? finish(`${summary(landed, landed.sha, ' locally')}\nPush failed: ${detail}`, {
+                ...landedOutcome(landed),
+                ...facts,
+              })
+            : finish(`was not landed: ${detail}`, { outcome: 'failed', ...facts })
         }
         const retry = (pushRetried = task.state.checkpoint.pushRetried) =>
           runtime.commit(
@@ -230,7 +284,8 @@ export function createLander(
                       const conflicts = await git(path, 'diff', '--name-only', '--diff-filter=U')
                       await git(path, 'merge', '--abort').catch(() => undefined)
                       return fail(
-                        `${settings.push}/${target} conflicts with local ${target} in:\n${conflicts}`,
+                        `${settings.push}/${target} conflicts with local ${target} in`,
+                        conflicts,
                       )
                     }
                   }
@@ -250,7 +305,9 @@ export function createLander(
                 const conflicts = await git(path, 'diff', '--name-only', '--diff-filter=U')
                 await git(path, 'merge', '--abort').catch(() => undefined)
                 return fail(
-                  `it conflicts with ${target} in:\n${conflicts}\nMerge ${target} into your workspace, resolve, verify and submit again.`,
+                  `it conflicts with ${target} in`,
+                  conflicts,
+                  `Merge ${target} into your workspace, resolve, verify and submit again.`,
                 )
               }
               merged = await runtime.memo(
@@ -272,6 +329,8 @@ export function createLander(
               if (!first) {
                 await step(`checking: ${command}`)
                 const failed = (await check(path, command, checkContext)) !== undefined
+                // Logged before the memo: a crash in between reruns the check and logs it again, as it ran.
+                await step(`checked: ${command}`, { command, result: failed ? 'failed' : 'passed' })
                 first = await runtime.memo(key, failed ? 'failed' : 'passed', context)
               }
               if (first === 'passed') continue
@@ -280,8 +339,11 @@ export function createLander(
                 const output = await check(path, command, checkContext)
                 if (output !== undefined)
                   return fail(
-                    `check failed twice: ${command}\n${output}\nFix it, verify and submit again.`,
+                    `check failed twice: ${command}`,
+                    output,
+                    'Fix it, verify and submit again.',
                   )
+                await step(`checked: ${command}`, { command, result: 'flaky' })
                 await runtime.memo(`${key}:rerun`, 'passed', context)
               }
               flaky.push(command)
@@ -321,7 +383,8 @@ export function createLander(
           })
           if (refused)
             return fail(
-              `the checkout of ${target} refused the fast-forward to ${integrated.slice(0, 7)}:\n${refused}`,
+              `the checkout of ${target} refused the fast-forward to ${integrated.slice(0, 7)}`,
+              refused,
             )
           if (moved) {
             if (attempt < attempts) return retry()
@@ -344,6 +407,7 @@ export function createLander(
             ].landed = integrated
           }, context)
           let pushed = 'Not pushed.'
+          let remoteBranch: string | undefined
           if (settings.push) {
             await step(`pushing to ${settings.push}`)
             try {
@@ -356,11 +420,12 @@ export function createLander(
                 settings.push,
                 `${integrated}:refs/heads/${target}`,
               )
-              pushed = `Pushed to ${settings.push}/${target}.`
+              remoteBranch = `${settings.push}/${target}`
+              pushed = `Pushed to ${remoteBranch}.`
             } catch (error) {
               if (signal.aborted) throw error
               if (!task.state.checkpoint.pushRetried) return retry(true)
-              return fail(`${settings.push} rejected the push:\n${failure(error)}`)
+              return fail(`${settings.push} rejected the push`, failure(error))
             }
           }
           const needsRestart =
@@ -370,11 +435,15 @@ export function createLander(
             [summary(landed, integrated), pushed, ...(needsRestart ? ['Needs restart.'] : [])].join(
               '\n',
             ),
-            integrated,
+            {
+              ...landedOutcome(landed),
+              ...(remoteBranch ? { pushed: remoteBranch } : {}),
+              ...(needsRestart ? { needsRestart } : {}),
+            },
           )
         } catch (error) {
           if (signal.aborted) throw error
-          return fail(failure(error))
+          return fail('it failed', failure(error))
         }
       },
       report: async (task, runtime, context) => {

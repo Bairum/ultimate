@@ -100,7 +100,14 @@ export default function workspaceExtension(host: ExtensionHost) {
             })
           await api.commit(async (tx) => {
             const row = await tx.conversation(api.conversationId)
-            if (!row || row.owner || row.parent)
+            if (
+              !row ||
+              row.owner ||
+              row.parent ||
+              Object.values(
+                (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).landerConversations,
+              ).includes(api.conversationId)
+            )
               throw new Error(`Only a top-level main conversation can ${action} its own workspace`)
           }, caller)
           if (action === 'submit') return finish(await service.submit(api.conversationId, caller))
