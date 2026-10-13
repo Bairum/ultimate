@@ -41,12 +41,20 @@ it('respects typing, dialogs, sequences, timeout, composition and listener teard
     override tagName = 'INPUT'
     value = ''
   }
+  class Textarea extends Element {
+    override tagName = 'TEXTAREA'
+    composer = false
+    closest(selector: string) {
+      return selector === '[data-composer-target]' && this.composer ? {} : null
+    }
+  }
   const window = new EventTarget()
   const dialog = vi.fn<() => object | null>(() => null)
   vi.stubGlobal('window', window)
   vi.stubGlobal('document', { querySelector: dialog })
   vi.stubGlobal('HTMLElement', Element)
   vi.stubGlobal('HTMLInputElement', Input)
+  vi.stubGlobal('HTMLTextAreaElement', Textarea)
   commands.mockReturnValue(
     [
       { id: 'plain', keys: 'x' },
@@ -88,9 +96,13 @@ it('respects typing, dialogs, sequences, timeout, composition and listener teard
   const calls = runCommand.mock.calls.length
   expect(send('Tab', input, { shiftKey: true })).toBe(false)
   expect(runCommand).toHaveBeenCalledTimes(calls)
-  const composer = new Element()
-  composer.tagName = 'TEXTAREA'
+  const composer = new Textarea()
+  expect(send('Tab', composer, { shiftKey: true })).toBe(false)
+  composer.composer = true
   composer.id = 'composer-input'
+  expect(send('Tab', composer, { shiftKey: true })).toBe(true)
+  expect(runCommand).toHaveBeenLastCalledWith('thinking')
+  composer.id = 'canvas-hub-input'
   expect(send('Tab', composer, { shiftKey: true })).toBe(true)
   expect(runCommand).toHaveBeenLastCalledWith('thinking')
   dialog.mockReturnValue({})

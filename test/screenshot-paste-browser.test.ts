@@ -400,7 +400,7 @@ it('shares Hub clipboard validation and preserves attachments through reads, cre
       }
     })
     expect(geometry).toMatchObject({
-      height: 168,
+      height: 224,
       imageHeights: [40, 40, 40, 40],
       maxHeights: ['40px', '40px', '40px', '40px'],
       separate: true,

@@ -68,7 +68,7 @@ it('opens external setup from the palette, shows missing CLI and retries status 
       .toBe(1)
     const pickerRow = page.locator('[cmdk-item][data-value="claude-code/claude-sonnet-5"]')
     const checkPicker = async (available: boolean) => {
-      await page.getByTitle('Pick a model', { exact: true }).click()
+      await page.getByTitle(/pick a model$/i).click()
       const input = page.getByPlaceholder(/Search .* models/)
       // Blank search shows only available models; search reveals unavailable ones too.
       await input.fill('')
@@ -101,7 +101,7 @@ it('opens external setup from the palette, shows missing CLI and retries status 
     await checkPicker(false)
     await page.getByRole('button', { name: 'Toggle panel', exact: true }).click()
     await expect.poll(() => panel.getByText(/claude auth login/).count()).toBe(0)
-    await page.getByTitle('Pick a model', { exact: true }).click()
+    await page.getByTitle(/pick a model$/i).click()
     const picker = page.getByRole('dialog', { name: 'Pick a model', exact: true })
     await picker.getByPlaceholder(/Search .* models/).fill('claude-code')
     await expect.poll(() => pickerRow.count()).toBe(1)

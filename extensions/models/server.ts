@@ -95,6 +95,12 @@ function running(host: ExtensionHost, args: JsonValue) {
 const json = <T>(value: T): Json<T> => JSON.parse(JSON.stringify(value))
 
 export const actions = {
+  /** New conversations inherit the root agent, not the conversation currently on screen. */
+  async rootConfiguration(_args: JsonValue, { host }: ActionContext) {
+    const root = (await host.harness().conversation(ROOT_CONVERSATION_ID, context))!
+    const { model, thinkingLevel } = await root.agent(context)
+    return json({ model, thinkingLevel })
+  },
   /** Start a login flow for the calling conversation and resolve with its id; the document shows its progress. */
   async login(args: JsonValue, { host, conversationId }: ActionContext) {
     const provider = text(args, 'provider')

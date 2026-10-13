@@ -188,18 +188,27 @@ in parallel, installing independently; contributions sort by folder name. Give a
 
 Components mounted in named places of the shell, on every surface that renders the primitive holding them.
 
-| Slot               | Where                                                                            |
-| ------------------ | -------------------------------------------------------------------------------- |
-| `sidebar`          | Left column (`<Sidebar />`); it disappears while nothing is in it                |
-| `header.right`     | Right side of the header, before the palette button (`<Header>`)                 |
-| `statusline.left`  | Bottom status line, left; monospace, one line (`<StatusLine />`)                 |
-| `statusline.right` | Bottom status line, right (`<StatusLine />`)                                     |
-| `composer.toolbar` | Left of the composer's footer, beside the send button (`<Conversation />`)       |
-| `overlay`          | Always mounted at the root, above every surface: dialogs, toasts, global effects |
+| Slot               | Where                                                                                    |
+| ------------------ | ---------------------------------------------------------------------------------------- |
+| `sidebar`          | Left column (`<Sidebar />`); it disappears while nothing is in it                        |
+| `header.right`     | Right side of the header, before the palette button (`<Header>`)                         |
+| `statusline.left`  | Bottom status line, left; monospace, one line (`<StatusLine />`)                         |
+| `statusline.right` | Bottom status line, right (`<StatusLine />`)                                             |
+| `composer.toolbar` | Left of the composer's footer, beside the send button (`<Conversation />`)               |
+| `composer.status`  | Line under the composer; conversation-specific, monospace, one line (`<Conversation />`) |
+| `overlay`          | Always mounted at the root, above every surface: dialogs, toasts, global effects         |
 
 ```tsx
 slots: { 'header.right': [Badge], sidebar: { component: Conversations, order: -1 } }
 ```
+
+`useComposer()` returns `{ target: 'conversation' | 'new' }` inside composer slots. The Agent and dock
+composers target the shown conversation; `<NewConversationComposer onStarted={(id) => …} />`
+(with an optional `inputId` for focus control)
+uses the same input, toolbar and status slots to start a conversation. Toolbar contributions can edit pending
+choices for `new`; conversation-specific status items should return `null` there. Pending model and thinking
+choices live in `ultimate.newConversation`; isolation uses `ext.conversations.creationType` so it agrees with
+sidebar New. Choices are applied before the first submission and remembered for the next new conversation.
 
 ### Panels
 

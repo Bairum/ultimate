@@ -17,7 +17,12 @@ const counters = (output: number): Rates => ({
 })
 const message = (output: number) => {
   const value = fauxAssistantMessage([fauxText('not retained by the collector')])
-  value.usage = { ...value.usage, ...counters(output), reasoning: output * 5 }
+  value.usage = {
+    ...value.usage,
+    ...counters(output),
+    reasoning: output * 5,
+    cost: { ...value.usage.cost, total: output / 1000 },
+  }
   return value
 }
 const anchor = defineTask<null, { phase: 'done' }, null>({
@@ -145,7 +150,8 @@ describe('instance commit collector', () => {
       await f.open()
       expect(f.rate()).toBeNull()
       await vi.advanceTimersByTimeAsync(1000)
-      expect(f.rate()).toEqual({ elapsed: 1, rates: counters(0) })
+      expect(f.rate()).toMatchObject({ elapsed: 1, rates: counters(0) })
+      expect(f.rate()?.totals).toEqual({ ...counters(180000), cost: 180 })
       await f.harness.commit(async (tx) => {
         await settled(tx, root, 10120)
         delete (await tx.doc(LiveDoc, root)).generation
@@ -164,7 +170,8 @@ describe('instance commit collector', () => {
         await settled(tx, newChild.id, 40) // Its very first publication counts, not a new-member baseline.
       }, context)
       await vi.advanceTimersByTimeAsync(1000)
-      expect(f.rate()).toEqual({ elapsed: 2, rates: counters(690 / 2) })
+      expect(f.rate()).toMatchObject({ elapsed: 2, rates: counters(690 / 2) })
+      expect(f.rate()?.totals).toEqual({ ...counters(280740), cost: 280.74 })
       for (let index = 0; index < 30; index++) await vi.advanceTimersByTimeAsync(1000)
       expect(f.rate()?.rates.output).toBe(0)
       expect(f.notices).toEqual([])

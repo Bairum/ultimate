@@ -308,21 +308,14 @@ export function CanvasMap() {
 
   const reveal = useRef<number>(undefined)
   const revealed = useRef<number>(undefined)
-  const everyone = useMemo(
-    () => agents.flatMap((agent) => (agent.parent === undefined ? agent.members : [])),
-    [agents],
-  )
-  const everyoneKey = everyone.join()
   const hubData = useMemo<HubData>(
     () => ({
-      isolation,
-      members: everyoneKey ? everyoneKey.split(',').map(Number) : [],
       started: (id) => {
         reveal.current = id
         switchConversation(id)
       },
     }),
-    [isolation, switchConversation, everyoneKey],
+    [switchConversation],
   )
 
   const cache = useRef(new Map<number, PanelData>())

@@ -7,44 +7,28 @@ import {
   elidePath,
   formatTokens,
   shortenPath,
-  useCommands,
   useConnection,
   useConversation,
+  useComposer,
   useConversations as useAllConversations,
   useModels,
   useSystem,
-  useUltimate,
 } from '@/sdk'
 import type { Usage } from '@/sdk'
 import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
 import { lastAssistant, promptTokens as prompt, usageTotals } from './context.ts'
 
-/** A status-line item with a tooltip of details; a button when it has `onClick`. */
+/** A status-line item with a tooltip of details. */
 function Item({
   children,
   tip,
   className,
-  onClick,
 }: {
   children: ReactNode
   tip?: ReactNode
   className?: string
-  onClick?: () => void
 }) {
-  const content = onClick ? (
-    <button
-      className={cn(
-        '-mx-1 flex items-center gap-1.5 rounded-sm px-1 transition-colors hover:bg-accent hover:text-foreground',
-        className,
-      )}
-      onClick={onClick}
-      type="button"
-    >
-      {children}
-    </button>
-  ) : (
-    <span className={cn('flex items-center gap-1.5', className)}>{children}</span>
-  )
+  const content = <span className={cn('flex items-center gap-1.5', className)}>{children}</span>
   if (!tip) return content
   return (
     <Tooltip>
@@ -60,7 +44,8 @@ function Cwd() {
   const system = useSystem()
   const { agent, id } = useConversation()
   const workspace = useConversations().find((conversation) => conversation.id === id)?.workspace
-  if (!system) return null
+  const { target } = useComposer()
+  if (!system || target === 'new') return null
   const cwd = agent.cwd ?? system.execution.defaultCwd
   const shown = workspace ? `W${id}` : shortenPath(cwd, { home: system.machine.home })
   const { branch, dirty, sha } = system.code
@@ -95,6 +80,7 @@ function Cwd() {
 type RateSample = {
   rates: Pick<Usage, 'input' | 'output' | 'cacheRead' | 'cacheWrite'>
   elapsed: number
+  totals: ReturnType<typeof usageTotals>
 }
 
 function useTokenRates() {
@@ -141,9 +127,9 @@ function useTokenRates() {
 
 function Tokens() {
   const { usage, entries, agent } = useConversation()
-  const speed = useTokenRates()
-  const running = useAllConversations().filter((conversation) => conversation.busy).length
   const models = useModels()
+  const { target } = useComposer()
+  if (target === 'new') return null
   const total = usageTotals(usage)
   const latest = lastAssistant(entries).message?.usage
   const hit =
@@ -166,14 +152,7 @@ function Tokens() {
         {subscription && <span className="text-muted-foreground"> (sub)</span>}
       </span>,
     )
-  parts.push(
-    <span aria-label="Output token rate">
-      ↓{speed ? Math.round(speed.rates.output) : '?'} tok/s
-    </span>,
-    <span aria-label="Running agents" className="tabular-nums">
-      {running} {running === 1 ? 'agent' : 'agents'}
-    </span>,
-  )
+  if (!parts.length) return null
   return (
     <Item
       tip={
@@ -186,7 +165,24 @@ function Tokens() {
               <ModelRow bucket={bucket} key={tool} label={`tool ${tool}`} />
             ))}
           </div>
-          <div className="mt-1 border-t border-border pt-1">
+        </>
+      }
+    >
+      {parts.map((part, index) => (
+        <span key={index}>{part}</span>
+      ))}
+    </Item>
+  )
+}
+
+function GlobalUsage() {
+  const speed = useTokenRates()
+  const running = useAllConversations().filter((conversation) => conversation.busy).length
+  return (
+    <>
+      <Item
+        tip={
+          <>
             <div>
               Input ↑{speed ? speed.rates.input.toFixed(1) : '?'} · Output ↓
               {speed ? speed.rates.output.toFixed(1) : '?'}
@@ -202,14 +198,24 @@ function Tokens() {
             <div className="mt-1 max-w-72">
               Running agents across all conversations in this project, including subagents.
             </div>
-          </div>
-        </>
-      }
-    >
-      {parts.map((part, index) => (
-        <span key={index}>{part}</span>
-      ))}
-    </Item>
+          </>
+        }
+      >
+        <span aria-label="Output token rate">
+          ↓{speed ? Math.round(speed.rates.output) : '?'} tok/s
+        </span>
+        <span aria-label="Running agents" className="tabular-nums">
+          {running} {running === 1 ? 'agent' : 'agents'}
+        </span>
+      </Item>
+      <Item tip="Tokens and cost across all conversations in this project">
+        <span aria-label="Global spend">
+          ↑{speed ? formatTokens(speed.totals.input) : '?'} ↓
+          {speed ? formatTokens(speed.totals.output) : '?'} $
+          {speed ? speed.totals.cost.toFixed(3) : '?'}
+        </span>
+      </Item>
+    </>
   )
 }
 
@@ -224,19 +230,15 @@ function ModelRow({ label, bucket }: { label: string; bucket: Usage }) {
   )
 }
 
-function useModel() {
-  const { agent } = useConversation()
-  const models = useModels()
-  const ref = agent.model
-  const model = models?.models.find(
-    (candidate) => candidate.provider === ref?.provider && candidate.id === ref.modelId,
-  )
-  return { ref, model, thinking: agent.thinkingLevel }
-}
-
 function Context() {
-  const { entries } = useConversation()
-  const { model } = useModel()
+  const { entries, agent } = useConversation()
+  const models = useModels()
+  const model = models?.models.find(
+    (candidate) =>
+      candidate.provider === agent.model?.provider && candidate.id === agent.model.modelId,
+  )
+  const { target } = useComposer()
+  if (target === 'new') return null
   const window = model?.contextWindow
   if (!window) return null
   const { message, stale } = lastAssistant(entries)
@@ -265,47 +267,6 @@ function Context() {
         />
       </span>
       {percent === undefined ? '?' : `${percent.toFixed(1)}%`}/{formatTokens(window)}
-    </Item>
-  )
-}
-
-/** Opens the model picker when an extension provides `model.pick`. */
-function usePicker() {
-  const { runCommand } = useUltimate()
-  const available = useCommands().some((command) => command.id === 'model.pick')
-  return available ? () => runCommand('model.pick') : undefined
-}
-
-function Model() {
-  const { ref, model, thinking } = useModel()
-  const pick = usePicker()
-  if (!ref)
-    return (
-      <Item className="text-warning" onClick={pick}>
-        no model
-      </Item>
-    )
-  return (
-    <Item
-      onClick={pick}
-      tip={
-        <>
-          {model ? `${model.name} · ${model.provider}` : `${ref.provider}/${ref.modelId}`}
-          {pick && <div className="text-muted-foreground">click to change</div>}
-        </>
-      }
-    >
-      <span className="text-foreground/85">{ref.modelId}</span>
-      {model?.reasoning && (
-        <>
-          <span className="text-muted-foreground/50">·</span>
-          <span className={thinking && thinking !== 'off' ? 'text-brand' : undefined}>
-            {thinking && thinking !== 'off' ? thinking : 'thinking off'}
-          </span>
-        </>
-      )}
-      <span className="text-muted-foreground/50">·</span>
-      <span>{ref.provider}</span>
     </Item>
   )
 }
@@ -344,7 +305,8 @@ function Connection() {
 
 export default defineWebExtension({
   slots: {
-    'statusline.left': [Cwd, Tokens, Context],
-    'statusline.right': [Model, Connection],
+    'composer.status': [Cwd, Tokens, Context],
+    'statusline.left': [GlobalUsage],
+    'statusline.right': [Connection],
   },
 })

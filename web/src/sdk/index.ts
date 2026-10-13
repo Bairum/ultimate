@@ -109,3 +109,12 @@ export type {
   Usage,
   UserMessage,
 } from '@earendil-works/pi-ai'
+
+export { NewConversationComposer } from '../app/composer.tsx'
+export {
+  useComposer,
+  newConversationKey,
+  useNewConversationConfiguration,
+  getNewConversationConfiguration,
+} from './composer.tsx'
+export type { ComposerTarget, NewConversationChoices } from './composer.tsx'

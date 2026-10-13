@@ -1,6 +1,14 @@
 import { useSyncExternalStore } from 'react'
-import { api, useConversation, useModels } from '@/sdk'
-import type { ModelsResponse, UltimateActions } from '@/sdk'
+import {
+  api,
+  getState,
+  newConversationKey,
+  useComposer,
+  useConversation,
+  useModels,
+  useNewConversationConfiguration,
+} from '@/sdk'
+import type { ComposerTarget, NewConversationChoices, ModelsResponse, UltimateActions } from '@/sdk'
 
 export type ModelInfo = ModelsResponse['models'][number]
 export type ProviderInfo = ModelsResponse['providers'][number]
@@ -13,20 +21,59 @@ export const dialogs = {
   login: 'models.login',
 } as const
 
-/** The shown conversation's model, its catalogue entry, and the thinking level the server configured. */
-export function useCurrentModel() {
+/** The composer's selected model and thinking, or the shown conversation's configuration. */
+export function useCurrentModel(target?: ComposerTarget) {
+  const composer = useComposer()
+  target ??= composer.target
+  const defaults = useNewConversationConfiguration(target === 'new')
   const { agent, loading } = useConversation()
   const models = useModels()
-  const ref = agent.model
+  const configuration = target === 'new' ? defaults.configuration : agent
+  const ref = configuration.model
   const model = models?.models.find(
     (candidate) => candidate.provider === ref?.provider && candidate.id === ref.modelId,
   )
-  return { ref, model, thinking: agent.thinkingLevel, models, loading }
+  return {
+    ref,
+    model,
+    thinking: configuration.thinkingLevel,
+    models,
+    loading: target === 'new' ? defaults.loading : loading,
+  }
 }
 
-/** Configure the shown conversation's model; the server clamps its thinking level to the model as Pi does. */
-export function selectModel(model: ModelInfo) {
-  return api.configure({ model: { provider: model.provider, modelId: model.id } })
+/** Pending choices are remembered; existing conversations are configured immediately. */
+export function configureTarget(change: NewConversationChoices, target: ComposerTarget) {
+  if (target === 'conversation') return api.configure(change)
+  const choices = (getState().shared?.[newConversationKey] ?? {}) as NewConversationChoices
+  return api.updateUi({ set: { [newConversationKey]: { ...choices, ...change } } })
+}
+
+export function selectModel(model: ModelInfo, target: ComposerTarget) {
+  const choices = (getState().shared?.[newConversationKey] ?? {}) as NewConversationChoices
+  const thinkingLevel =
+    choices.thinkingLevel && model.thinkingLevels.includes(choices.thinkingLevel)
+      ? choices.thinkingLevel
+      : model.thinkingLevels[0]
+  return configureTarget(
+    {
+      model: { provider: model.provider, modelId: model.id },
+      ...(target === 'new' && { thinkingLevel }),
+    },
+    target,
+  )
+}
+
+let pickerTarget: ComposerTarget = 'conversation'
+export function openPicker(
+  actions: Pick<UltimateActions, 'open'>,
+  target: ComposerTarget = 'conversation',
+) {
+  pickerTarget = target
+  actions.open(dialogs.picker)
+}
+export function getPickerTarget() {
+  return pickerTarget
 }
 
 /** The supported level after `current` in Pi's order, wrapping around, as Pi's Shift+Tab does. */
@@ -37,9 +84,18 @@ export function nextThinking(current: ThinkingLevel | undefined, model: ModelInf
 
 /** Which provider the login dialog should open on; set just before it opens. */
 let loginProvider: string | undefined
+let loginTarget: ComposerTarget = 'conversation'
+export function getLoginTarget() {
+  return loginTarget
+}
 const listeners = new Set<() => void>()
-export function openLogin(actions: Pick<UltimateActions, 'open' | 'close'>, provider?: string) {
+export function openLogin(
+  actions: Pick<UltimateActions, 'open' | 'close'>,
+  provider?: string,
+  target: ComposerTarget = 'conversation',
+) {
   loginProvider = provider
+  loginTarget = target
   for (const listener of listeners) listener()
   actions.close(dialogs.picker)
   actions.open(dialogs.login)

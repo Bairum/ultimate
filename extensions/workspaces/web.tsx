@@ -1,9 +1,14 @@
 import { ChevronRightIcon, CopyIcon, GitBranchIcon, RefreshCwIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { Switch } from '@/components/ui/switch'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   api,
+  cn,
+  useComposer,
+  useUiState,
   defineWebExtension,
   errorMessage,
   useAction,
@@ -19,6 +24,42 @@ import {
 } from './data.tsx'
 import type { WorkspaceConversation as ConversationSummary } from './data.tsx'
 import type { WorkspaceInfo } from './types.ts'
+
+function IsolationToggle() {
+  const { target } = useComposer()
+  const [creation, setCreation] = useUiState<string>('ext.conversations.creationType', 'isolated')
+  if (target !== 'new') return null
+  const isolated = creation !== 'shared'
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <label
+          className={cn(
+            'flex h-7 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-[12px] transition-colors',
+            isolated
+              ? 'border-brand/60 bg-brand/15 text-foreground'
+              : 'border-transparent text-muted-foreground hover:text-foreground',
+          )}
+          data-isolated={isolated}
+        >
+          <GitBranchIcon className={cn('size-3.5', isolated && 'text-brand')} />
+          Isolated
+          <Switch
+            aria-label="Isolated"
+            checked={isolated}
+            className="ml-0.5"
+            onCheckedChange={(on) => setCreation(on ? 'isolated' : 'shared')}
+          />
+        </label>
+      </TooltipTrigger>
+      <TooltipContent>
+        {isolated
+          ? 'New isolated conversation: its own Git checkout'
+          : 'New shared conversation, in this checkout'}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
 
 function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) {
   const actions = useUltimate()
@@ -295,6 +336,7 @@ function WorkspacesPanel() {
 }
 
 export default defineWebExtension({
+  slots: { 'composer.toolbar': [IsolationToggle] },
   panels: [
     {
       id: 'workspaces',
