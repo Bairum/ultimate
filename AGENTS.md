@@ -107,8 +107,11 @@ After landing verified workers and checking the combined tip, call `workspace su
 merges the tip into the original branch with whatever landed meanwhile, runs `lander.checks` (here `pnpm check` and
 `pnpm test`), fast-forwards the branch, pushes to `lander.push` (here `origin`), and reports back as a message.
 Its progress shows live on the submit tool card, with expandable steps, and its report as an outcome card, both in
-the submitting conversation; the source's "Lander · <target>" conversation keeps the full log and shows as working on
-the Canvas and in the Agents tab while it lands.
+the submitting conversation; the source's "Lander · <target>" conversation, pinned at the top of the sidebar, keeps
+the full log and shows as working on the Canvas and in the Agents tab while it lands. It runs the `lander` agent
+definition: here `.ultimate/agents/lander.md` with `onFailure: fix`, so a conflict or a twice-failing check is
+resolved and committed by its model, every check runs again, and only then does it land and push. Talk to it in its
+conversation about the queue and recent landings.
 `workspace land` is the synchronous alternative: it only fast-forwards, refuses moved or diverged targets, and never
 rebases or pushes. Unrelated dirty files in the original checkout block neither.
 For `server/` or `shared/` changes, an authorized `restart` works once the running clone is clean at the landed commit.

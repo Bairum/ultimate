@@ -6,6 +6,7 @@ import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { defineExtension, defineTool, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { CodingTools } from '@earendil-works/pi-durable/tools'
 import type { ConversationId, JsonObject, TaskId } from '@earendil-works/pi-durable'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
@@ -38,6 +39,8 @@ async function repository() {
   await git(projectRoot, 'commit', '-m', 'base')
   return { directory, projectRoot, home: join(directory, 'state') }
 }
+type Answer = (text: string) => ReturnType<typeof fauxAssistantMessage>
+const noIdea: Answer = () => fauxAssistantMessage('no idea')
 async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<typeof repository>>) {
   const paths = existing ?? (await repository())
   if (!existing) {
@@ -81,7 +84,12 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
   prepared.registry.install(workspaceExtension(host))
   prepared.registry.install(self(host))
   prepared.registry.install(subagents(host))
+  prepared.registry.install(CodingTools)
+  /** How the faux model answers the lander's failure prompt; the default says it found nothing. */
+  let landerAnswer: Answer = noIdea
   let writes = 0
+  /** Requests a user's `ASK …` question started. */
+  const asked: Parameters<FauxResponseFactory>[0][] = []
   prepared.registry.install(
     defineExtension({
       name: 'test-writing',
@@ -109,6 +117,13 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
       typeof last.content === 'string'
         ? last.content
         : last.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
+    // The lander task's question to its model; the submitter's report starts alike but names no mode.
+    if (last.role === 'user' && text.startsWith('[lander] Submission') && text.includes('\nMode: '))
+      return landerAnswer(text)
+    if (last.role === 'user' && text.startsWith('ASK ')) {
+      asked.push(transcript)
+      return fauxAssistantMessage('Nothing landed yet.')
+    }
     if (last.role === 'user' && text.startsWith('CALL ')) {
       const { tool, args } = JSON.parse(text.slice(5))
       return fauxAssistantMessage(fauxToolCall(tool, args), { stopReason: 'toolUse' })
@@ -157,6 +172,10 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
     },
     get writes() {
       return writes
+    },
+    asked,
+    answerLander(answer: Answer) {
+      landerAnswer = answer
     },
     reopen: async () => {
       for (const close of closers) await close()
@@ -1140,4 +1159,161 @@ it('resumes checks after a restart without rerunning passed ones and keeps flaky
   expect(report).toContain('landed as')
   expect(report).toContain(`Flaky: echo second`)
   expect(await git(f.projectRoot, 'rev-parse', 'main')).toBe(merged)
+})
+it('stands a lander conversation for the project from the start, which submit reuses', async () => {
+  const f = await lander({})
+  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+  const source = await realpath(f.projectRoot)
+  const standing = (await index())!.landerConversations[source] as ConversationId
+  expect(standing).toBeDefined()
+  expect(await f.opened.harness.snapshot(Metadata, standing, context)).toEqual({
+    title: 'Lander · main',
+    label: 'lander',
+  })
+  // Opening again keeps it.
+  await f.reopen()
+  expect((await index())!.landerConversations).toEqual({ [source]: standing })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path, 'one.txt')
+  const { lander: used } = await f.service.submit(id, context)
+  expect(used).toBe(standing)
+  expect((await submitted(f, id))[0]).toContain(`lander conversation #${standing}`)
+})
+/** A `lander` definition in the user's agents, as an override of a project would be. */
+async function landerDefinition(
+  f: Awaited<ReturnType<typeof fixture>>,
+  onFailure: 'fix' | 'diagnose',
+) {
+  await mkdir(join(f.directory, '.ultimate/agents'), { recursive: true })
+  await writeFile(
+    join(f.directory, '.ultimate/agents/lander.md'),
+    `---\nname: lander\ndescription: Lands\ntools: [read, bash]\nonFailure: ${onFailure}\n---\nLand it.\n`,
+  )
+  await f.reopen()
+}
+/** A workspace whose change to base.txt conflicts with the target's; returns the target's head. */
+async function conflicting(f: Awaited<ReturnType<typeof fixture>>, id: ConversationId) {
+  const workspace = (await f.service.get(id, context))!
+  await writeFile(join(workspace.path, 'base.txt'), 'workspace')
+  await commit(workspace.path)
+  await writeFile(join(f.projectRoot, 'base.txt'), 'target')
+  return commit(f.projectRoot)
+}
+it('diagnose: the lander model explains a conflict, which the report carries; the target stays', async () => {
+  const f = await lander({})
+  await landerDefinition(f, 'diagnose')
+  let prompt = ''
+  f.answerLander((text) => {
+    prompt = text
+    return fauxAssistantMessage('DIAGNOSIS: both sides rewrote base.txt; keep the workspace line.')
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const head = await conflicting(f, id)
+  const { id: submission, lander: landerId } = await f.service.submit(id, context)
+  const [report] = await submitted(f, id)
+  expect(prompt).toContain('Mode: diagnose')
+  expect(prompt).toContain('base.txt')
+  expect(report).toContain('conflicts with main in:')
+  expect(report).toContain('Diagnosis by lander:\\nDIAGNOSIS: both sides rewrote base.txt')
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+  expect(index.results[submission]).toMatchObject({
+    outcome: 'failed',
+    diagnosis: expect.stringContaining('DIAGNOSIS'),
+  })
+  // The question and the answer sit in the lander conversation between its log lines, and the checkout is reset.
+  const { kinds } = await landerLog(f)
+  expect(kinds).toEqual(expect.arrayContaining(['ultimate.lander-ask', 'pi.assistant']))
+  expect(kinds.indexOf('ultimate.lander-ask')).toBeLessThan(kinds.lastIndexOf('ultimate.lander'))
+  const cwd = (
+    await (await f.opened.harness.conversation(landerId as ConversationId, context))!.agent(context)
+  ).cwd!
+  expect(await git(cwd, 'status', '--porcelain')).toBe('')
+})
+it('fix: the lander model resolves a conflict and commits; every check reruns, it lands and pushes', async () => {
+  const { paths, bare } = await withRemote()
+  const f = await lander({ push: 'origin', checks: ['grep -q resolved base.txt'] }, paths)
+  await landerDefinition(f, 'fix')
+  f.answerLander((text) => {
+    expect(text).toContain('Mode: fix')
+    return fauxAssistantMessage(
+      fauxToolCall('bash', {
+        command: 'echo resolved > base.txt && git add base.txt && git commit -q --no-edit',
+      }),
+      { stopReason: 'toolUse' },
+    )
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await conflicting(f, id)
+  const { id: submission } = await f.service.submit(id, context)
+  const [report] = await submitted(f, id)
+  expect(report).toContain('landed as')
+  expect(report).toContain('Fixed by lander:')
+  expect(report).toContain('Pushed to origin/main.')
+  const landed = await git(f.projectRoot, 'rev-parse', 'HEAD')
+  expect(await readFile(join(f.projectRoot, 'base.txt'), 'utf8')).toBe('resolved\n')
+  expect(await git(bare, 'rev-parse', 'main')).toBe(landed)
+  const result = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+    .results[submission]
+  expect(result).toMatchObject({ outcome: 'landed', sha: landed, pushed: 'origin/main' })
+  expect(result.fixed).toHaveLength(1)
+  // The checks ran on the fixed commit; the steps show the fix between the conflict and the checks.
+  const steps = result.steps.map((row) => row.step)
+  expect(steps.indexOf('fixing')).toBeGreaterThan(-1)
+  expect(steps.indexOf('checking: grep -q resolved base.txt')).toBeGreaterThan(
+    steps.indexOf('fixing'),
+  )
+})
+it('fix: a fix that still fails the check is not landed and leaves the target untouched', async () => {
+  const f = await lander({ checks: ['grep -q good base.txt'] })
+  await landerDefinition(f, 'fix')
+  let asked = 0
+  f.answerLander(() => {
+    asked++
+    return fauxAssistantMessage(
+      fauxToolCall('bash', {
+        command: 'echo bad > base.txt && git add base.txt && git commit -q --no-edit',
+      }),
+      { stopReason: 'toolUse' },
+    )
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const head = await conflicting(f, id)
+  await f.service.submit(id, context)
+  const [report] = await submitted(f, id)
+  expect(report).toContain('was not landed: check failed twice: grep -q good base.txt')
+  expect(report).toContain("The lander's fix (1 commit) did not land it either.")
+  // One fix per submission: the failing check after it is reported, not handed to the model again.
+  expect(asked).toBe(1)
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  expect(await readFile(join(f.projectRoot, 'base.txt'), 'utf8')).toBe('target')
+})
+it('answers the user in the lander conversation with its definition, tools and the lander state', async () => {
+  const f = await lander({})
+  await landerDefinition(f, 'diagnose')
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path, 'one.txt')
+  const { id: submission, lander: landerId } = await f.service.submit(id, context)
+  await submitted(f, id)
+  const conversation = (await f.opened.harness.conversation(landerId as ConversationId, context))!
+  await (
+    await conversation.submit({ type: 'input', content: 'ASK what landed?' }, context)
+  ).wait(context)
+  const [request] = f.asked
+  const system = JSON.stringify(request.messages.filter((message) => message.role === 'system'))
+  expect(system).toContain('Land it.')
+  expect(system).toContain(`${submission} landed`)
+  expect((await conversation.agent(context)).tools.map((tool) => tool.name).toSorted()).toEqual([
+    'bash',
+    'read',
+  ])
+  // Main conversations get no lander state.
+  await f.call(id, 'workspace', { action: 'status' })
+  const main = await (await f.opened.harness.conversation(id, context))!.context(context)
+  expect(JSON.stringify(main.messages)).not.toContain('You are the lander of')
 })

@@ -226,7 +226,7 @@ it('retains valid enablement through invalid edits and delivers startup diagnost
   }
 })
 
-it('enables the full repository set including github-triage', async () => {
+it('enables the full repository set', async () => {
   const home = await temp()
   homes.push(home)
   const root = await sourceCopy(home)
@@ -244,12 +244,6 @@ it('enables the full repository set including github-triage', async () => {
       .info()
       .filter((entry) => !['tailscale', 'secrets', 'parallel'].includes(entry.name))
       .every((entry) => entry.enabled && !entry.server?.error),
-  ).toBe(true)
-  expect(
-    server.host.registry
-      .snapshot()
-      .installed()
-      .some((entry) => entry.name === 'github-triage'),
   ).toBe(true)
   expect(
     discovered

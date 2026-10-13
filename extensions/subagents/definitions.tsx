@@ -39,6 +39,7 @@ interface Definition {
   thinking?: string
   tools?: string[]
   isolate?: 'none' | 'worktree'
+  onFailure?: 'diagnose' | 'fix'
 }
 interface Invalid {
   name: string
@@ -139,6 +140,7 @@ export function Definitions() {
             <span className="shrink-0 text-foreground/85">{definition.name}</span>
             {definition.source !== 'builtin' && <Tag>{definition.source}</Tag>}
             {definition.isolate === 'worktree' && <Tag>worktree</Tag>}
+            {definition.onFailure && <Tag>{definition.onFailure}</Tag>}
             <span className="ml-auto truncate pl-2 text-[10.5px] text-muted-foreground/70">
               {definition.model?.modelId ?? 'inherits model'}
               {definition.thinking && ` · ${definition.thinking}`}
@@ -256,6 +258,7 @@ interface Draft {
   thinking: string | null
   tools: string[] | null
   isolate: 'none' | 'worktree'
+  onFailure: 'diagnose' | 'fix' | null
   instructions: string
 }
 const draftOf = (definition?: Shown['definition'], name = ''): Draft => ({
@@ -265,6 +268,7 @@ const draftOf = (definition?: Shown['definition'], name = ''): Draft => ({
   thinking: definition?.thinking ?? null,
   tools: definition?.tools ?? null,
   isolate: definition?.isolate ?? 'none',
+  onFailure: definition?.onFailure ?? null,
   instructions: definition?.instructions ?? '',
 })
 
@@ -342,6 +346,7 @@ function Form({
           ...(draft.thinking ? { thinking: draft.thinking } : {}),
           ...(draft.tools ? { tools: draft.tools } : {}),
           ...(draft.isolate === 'worktree' ? { isolate: 'worktree' } : {}),
+          ...(draft.onFailure ? { onFailure: draft.onFailure } : {}),
         },
         instructions: draft.instructions,
       })
@@ -498,6 +503,26 @@ function Form({
               value={draft.isolate}
             />
           </Field>
+          {(draft.name === 'lander' || draft.onFailure) && (
+            <Field
+              hint={
+                (draft.onFailure ?? 'diagnose') === 'fix'
+                  ? 'Resolves a conflict or failing check and commits; every check runs again before it lands.'
+                  : 'Explains why a submission did not land and the smallest fix; changes nothing.'
+              }
+              label="On failure"
+            >
+              <Segmented
+                label="On failure"
+                onChange={(onFailure) => set({ onFailure })}
+                options={[
+                  { value: 'diagnose', label: 'diagnose' },
+                  { value: 'fix', label: 'fix' },
+                ]}
+                value={draft.onFailure ?? 'diagnose'}
+              />
+            </Field>
+          )}
           <ToolsField
             onChange={(tools) => set({ tools })}
             tools={discovery.main.tools}
