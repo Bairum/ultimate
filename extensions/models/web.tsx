@@ -29,7 +29,13 @@ function ModelButton() {
       disabled={loading}
       aria-label={loading ? 'Loading model' : undefined}
       onClick={() => actions.open(dialogs.picker)}
-      title={loading ? 'Loading model' : 'Pick a model'}
+      title={
+        loading
+          ? 'Loading model'
+          : ref
+            ? `${ref.modelId} · ${ref.provider} — pick a model`
+            : 'Pick a model'
+      }
       type="button"
     >
       <CpuIcon className="size-3.5 shrink-0" />

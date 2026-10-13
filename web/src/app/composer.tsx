@@ -208,7 +208,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   }
 
   return (
-    <div className={cn(column(dock), 'pb-4')}>
+    <div className={cn(column(dock), 'pb-2')}>
       <Inbox items={inbox} />
       <PromptInput
         onSubmit={(event) => {
@@ -277,6 +277,9 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
           </div>
         </PromptInputFooter>
       </PromptInput>
+      <div className="flex items-center gap-3 overflow-hidden pt-1.5 font-mono text-[11px] whitespace-nowrap text-muted-foreground empty:hidden">
+        <Slot name="composer.status" variant="inline" />
+      </div>
     </div>
   )
 }

@@ -31,13 +31,13 @@ const source = new Source()
 window.EventSource = class { constructor() { return source } }
 window.fetch = async () => ({ ok: true, json: async () => ({ models: [], providers: [] }) })
 let output = null
-api.action = async () => output === null ? null : { elapsed: 30, rates: { input: output * 2, output, cacheRead: output * 3, cacheWrite: output * 4 } }
+api.action = async () => output === null ? null : { elapsed: 30, rates: { input: output * 2, output, cacheRead: output * 3, cacheWrite: output * 4 }, totals: { input: 1000, output: 2000, cost: 0.123 } }
 store.start()
 source.send('open')
 source.send('system', { process: { generation: 1, pid: 1 } })
 source.send('view', { conversation: { id: 1 }, entries: [], docs: { 'pi.agent': {}, 'pi.usage': { models: { 'faux/model': { input: 100, output: 200, cacheRead: 300, cacheWrite: 400, cost: { total: 0.003 } } }, tools: { fixture: { input: 50, output: 60, cacheRead: 0, cacheWrite: 0, cost: { total: 0.005 } } } }, 'pi.live': {} } })
 const root = createRoot(document.querySelector('#app'))
-root.render(h(TooltipProvider, { delayDuration: 0 }, h(extension.slots['statusline.left'][1])))
+root.render(h(TooltipProvider, { delayDuration: 0 }, h('div', {}, h('div', { id: 'global' }, h(extension.slots['statusline.left'][0])), h('div', { id: 'conversation' }, h(extension.slots['composer.status'][1])))))
 window.fixture = { sample: value => { output = value }, conversations: value => source.send('conversations', value), unmount: () => { root.unmount(); store.stop() } }
 `,
   )
@@ -81,6 +81,9 @@ window.fixture = { sample: value => { output = value }, conversations: value => 
       () =>
         document.querySelector('[aria-label="Output token rate"]')?.textContent === '↓123 tok/s',
     )
+    expect(await page.locator('#global').textContent()).not.toContain('$0.008')
+    expect(await page.locator('#conversation').textContent()).not.toContain('tok/s')
+    expect(await page.getByLabel('Global spend').textContent()).toContain('↑1.0k ↓2.0k $0.123')
     await rate.hover()
     await page.clock.runFor(100)
     const tooltip = page.getByRole('tooltip')
