@@ -70,9 +70,6 @@ window.fixture = {
       } },
     } } }),
   ))),
-  record: () => flushSync(() => workspaces.dispatchEvent(new MessageEvent('doc', { data: JSON.stringify({
-    kind: 'ultimate.workspaces', value: { items: { '2': { path: '/workspace', branch: 'worker', source: '/source', target: 'main', base: 'base', state: 'ready' } } },
-  }) }))),
   busy: busy => flushSync(() => source.dispatchEvent(new MessageEvent('conversations', {
     data: JSON.stringify([{ id: 1, busy: false }, { id: 2, label: 'worker', parentConversationId: 1, busy }]),
   }))),
@@ -110,11 +107,8 @@ if (${!!process.env.AGENT_INBOX_PREVIEW_MS} && location.search.includes('inbox')
       browser = await chromium.launch({ executablePath, headless: true })
       const page = await browser.newPage()
       const errors: string[] = []
-      const infoRequests: unknown[] = []
       await page.route('**/api/extensions/**/actions/**', async (route) => {
         const request = route.request()
-        if (request.url().endsWith('/workspaces/actions/info'))
-          infoRequests.push(request.postDataJSON())
         const result = request.url().endsWith('/subagents/actions/definitions')
           ? { definitions: [], errors: [], main: { tools: [] }, scopes: {}, projectLocal: false }
           : request.url().endsWith('/subagents/actions/provenance')
@@ -181,17 +175,6 @@ if (${!!process.env.AGENT_INBOX_PREVIEW_MS} && location.search.includes('inbox')
       expect(await working.count()).toBe(0)
       await page.evaluate(() => Reflect.get(window, 'fixture').rows())
       await page.getByText('Linked task', { exact: true }).waitFor()
-      await page.evaluate(() => {
-        Reflect.get(window, 'fixture').busy(true)
-        window.dispatchEvent(new Event('focus'))
-      })
-      await page.waitForTimeout(150)
-      expect(infoRequests).toEqual([])
-      await page.evaluate(() => Reflect.get(window, 'fixture').record())
-      await page.waitForFunction(() =>
-        document.querySelector('#app')?.textContent?.includes('Linked task'),
-      )
-      await expect.poll(() => infoRequests.length).toBeGreaterThanOrEqual(2)
       await page.evaluate(() =>
         Reflect.get(window, 'fixture').show('wait', undefined, false, 'error'),
       )

@@ -1,6 +1,6 @@
 # Quiet lists preview
 
-This token-free fixture renders the actual Agents and Tasks panels, at 320px wide, without a storage owner or model. It mocks the stream and action responses locally; Land/Remove are displayed but do not alter a real checkout.
+This token-free fixture renders the actual Tasks panel, at 320px wide, without a storage owner or model. It mocks the event stream locally.
 
 From the checkout being reviewed:
 

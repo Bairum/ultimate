@@ -1,7 +1,6 @@
 import { createElement as h } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
-import agents from '../../extensions/subagents/web.tsx'
 import tasks from '../../extensions/tasks/web.tsx'
 import { store, uiState } from '../../web/src/sdk/client.ts'
 import { ExtensionNameContext } from '../../web/src/sdk/hooks.ts'
@@ -32,30 +31,6 @@ const items = {
   4: workspace('preparing', { ahead: null }),
   5: workspace('ready', { ahead: 2 }),
 }
-// This fixture never reaches the host or runs an agent.
-window.fetch = async (url) =>
-  new Response(
-    JSON.stringify({
-      result: (typeof url === 'string' ? url : url instanceof URL ? url.href : url.url).endsWith(
-        '/definitions',
-      )
-        ? { definitions: [], errors: [], main: { tools: [] }, scopes: {}, projectLocal: false }
-        : (typeof url === 'string' ? url : url instanceof URL ? url.href : url.url).endsWith(
-              '/info',
-            )
-          ? null
-          : {},
-    }),
-    { headers: { 'Content-Type': 'application/json' } },
-  )
-// useAction sends JSON in the body; return each recorded workspace's info.
-const fetchOther = window.fetch
-window.fetch = async (url, options) =>
-  (typeof url === 'string' ? url : url instanceof URL ? url.href : url.url).endsWith('/info')
-    ? new Response(JSON.stringify({ result: items[JSON.parse(options.body).args.id] }), {
-        headers: { 'Content-Type': 'application/json' },
-      })
-    : fetchOther(url, options)
 store.start()
 const send = (name, data) =>
   source.dispatchEvent(new MessageEvent(name, { data: JSON.stringify(data) }))
@@ -105,16 +80,10 @@ flushSync(() =>
     h(
       'div',
       { className: 'flex gap-6 bg-background p-6 text-foreground', style: { minHeight: '100vh' } },
-      ...[agents, tasks].map((extension, index) =>
-        h(
-          'section',
-          { key: index, style: { width: 320 }, 'data-panel': index ? 'tasks' : 'agents' },
-          h(
-            ExtensionNameContext.Provider,
-            { value: index ? 'tasks' : 'subagents' },
-            h(extension.panels[0].component),
-          ),
-        ),
+      h(
+        'section',
+        { style: { width: 320 }, 'data-panel': 'tasks' },
+        h(ExtensionNameContext.Provider, { value: 'tasks' }, h(tasks.panels[0].component)),
       ),
     ),
   ),

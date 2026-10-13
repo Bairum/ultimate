@@ -97,7 +97,7 @@ export function Definitions() {
   if (!data) return null
   const { definitions, errors } = data
   return (
-    <div className="pt-4">
+    <div className="py-2">
       <Heading
         meta={
           <>

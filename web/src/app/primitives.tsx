@@ -58,7 +58,7 @@ export function Sidebar() {
   const empty = slotItems(useExtensions(), 'sidebar').length === 0
   if (empty || !open) return null
   return (
-    <aside className="flex w-64 shrink-0 flex-col overflow-y-auto border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+    <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
       <Slot name="sidebar" />
     </aside>
   )

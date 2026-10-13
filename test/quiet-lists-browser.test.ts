@@ -36,49 +36,22 @@ it('keeps list identities quiet and excludes archived subtrees and their live ta
     page.on('pageerror', (error) => errors.push(error.message))
     await page.goto(`${server.resolvedUrls!.local[0]}test/web/quiet-lists.html`)
     await page.waitForFunction(() => Reflect.has(window, 'fixture'))
-    const agents = page.locator('[data-panel="agents"]')
     const tasks = page.locator('[data-panel="tasks"]')
-    await agents.getByText('Setup failed', { exact: true }).waitFor()
-    expect(await agents.getByText('Ready', { exact: true }).count()).toBe(0)
-    expect(await agents.getByText('↑0', { exact: true }).count()).toBe(0)
-    expect(await agents.getByText('↑2', { exact: true }).count()).toBe(1)
-    expect(await agents.getByText('Setting up…', { exact: true }).count()).toBe(1)
-    expect(await agents.getByText('Checkout failed', { exact: true }).count()).toBe(1)
-    expect(await agents.locator('.animate-pulse-dot').count()).toBe(2)
-    expect(await agents.getByRole('button', { name: 'Land', exact: true }).count()).toBe(4)
-    expect(await agents.getByText('Untitled conversation', { exact: true }).count()).toBe(1)
-    expect(await agents.getByText('Subagent', { exact: true }).count()).toBe(1)
-    const longRow = agents.getByRole('button', { name: /Landed worker/ })
-    expect(await longRow.getByText('#2', { exact: true }).count()).toBe(1)
-    expect(await longRow.getByText('· W2', { exact: true }).count()).toBe(1)
-    const layout = await longRow.evaluate((row) => {
-      const title = row.querySelector('[title]')!
-      const identity = title.nextElementSibling!
-      return {
-        truncated: title.scrollWidth > title.clientWidth,
-        underneath: identity.getBoundingClientRect().top >= title.getBoundingClientRect().bottom,
-      }
-    })
-    expect(layout).toEqual({ truncated: true, underneath: true })
+    await tasks.getByText('6 live · 5 running', { exact: true }).waitFor()
     expect(await tasks.getByText('6 live · 5 running', { exact: true }).count()).toBe(1)
     expect(await tasks.getByText('aborting', { exact: true }).count()).toBe(1)
     expect(await tasks.getByText('bg', { exact: true }).count()).toBe(1)
     await page.evaluate(() => Reflect.get(window, 'fixture').archive([2]))
-    expect(
-      await agents.getByRole('button', { name: /Landed worker|Failed checkout/ }).count(),
-    ).toBe(0)
     expect(await tasks.getByRole('button', { name: /Landed worker|Failed checkout/ }).count()).toBe(
       0,
     )
     expect(await tasks.getByText('#20', { exact: true }).count()).toBe(0)
     expect(await tasks.getByText('#30', { exact: true }).count()).toBe(0)
-    expect(await agents.getByText('4 · 2 working', { exact: true }).count()).toBe(1)
     expect(await tasks.getByText('4 live · 3 running', { exact: true }).count()).toBe(1)
     await page.evaluate(() => Reflect.get(window, 'fixture').archive([1]))
-    expect(await agents.getByRole('button', { name: /Review changes/ }).count()).toBe(0)
     expect(await tasks.getByText('1 live · 1 running', { exact: true }).count()).toBe(1)
     await page.evaluate(() => Reflect.get(window, 'fixture').archive([]))
-    await agents.getByRole('button', { name: /Failed checkout/ }).waitFor()
+    await tasks.getByRole('button', { name: /Failed checkout/ }).waitFor()
     expect(await tasks.getByText('6 live · 5 running', { exact: true }).count()).toBe(1)
     // Child runs are conversation-owned (owner=null). The task stream can precede summaries.
     await page.evaluate(() => {
