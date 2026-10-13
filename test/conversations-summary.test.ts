@@ -208,7 +208,7 @@ it.each([false, true])(
             execute: async (_args, api, toolContext) => {
               holding.add(api.conversationId)
               await awaitWithContext(gate, toolContext)
-              return { content: [{ type: 'text', text: 'Released' }] }
+              return { output: [{ type: 'text', text: 'Released' }] }
             },
           }),
         ],
@@ -413,7 +413,7 @@ it('summarizes the first, fourth and seventh completed exchanges, not tools, str
           name: 'summary_probe',
           description: 'Probe',
           parameters: Type.Object({}),
-          execute: async () => ({ content: [{ type: 'text', text: 'SECRET_TOOL_OUTPUT' }] }),
+          execute: async () => ({ output: [{ type: 'text', text: 'SECRET_TOOL_OUTPUT' }] }),
         }),
       ],
     }),
@@ -868,7 +868,7 @@ it('publishes initial intent while the main model request is blocked, once acros
           name: 'intent_probe',
           description: 'Probe another model round',
           parameters: Type.Object({}),
-          execute: async () => ({ content: [{ type: 'text', text: 'Continue' }] }),
+          execute: async () => ({ output: [{ type: 'text', text: 'Continue' }] }),
         }),
       ],
       hooks: [
@@ -1028,7 +1028,7 @@ it('keeps an exchange answered across a mid-run compaction and reopen; only a re
           execute: async (_args, _api, toolContext) => {
             holding = true
             await awaitWithContext(gate, toolContext)
-            return { content: [{ type: 'text', text: 'Released' }] }
+            return { output: [{ type: 'text', text: 'Released' }] }
           },
         }),
       ],

@@ -56,7 +56,7 @@ export default function self(host: ExtensionHost) {
             return {
               isError: true,
               details: { refused: true, error },
-              content: [{ type: 'text', text: error }],
+              output: [{ type: 'text', text: error }],
             }
           }
           const key = `restart:${api.taskId}`
@@ -76,7 +76,7 @@ export default function self(host: ExtensionHost) {
                 rolledBack: true,
                 error: host.system().process.activationError ?? 'Activation failed',
               },
-              content: [
+              output: [
                 {
                   type: 'text',
                   text: `Restart failed during activation; rolled back to generation ${process.env.ULTIMATE_GENERATION}. ${host.system().process.activationError ?? ''}`,
@@ -91,7 +91,7 @@ export default function self(host: ExtensionHost) {
                 fromBuild: done.build,
                 toBuild: host.build().id,
               },
-              content: [
+              output: [
                 {
                   type: 'text',
                   text: `Restarted. Now running generation ${process.env.ULTIMATE_GENERATION ?? done.generation} (pid ${process.pid}), build ${done.build} → ${host.build().id}.`,
@@ -121,7 +121,7 @@ export default function self(host: ExtensionHost) {
               toBuild: host.build().id,
               error,
             },
-            content: [{ type: 'text', text: error }],
+            output: [{ type: 'text', text: error }],
           }
         },
       }),

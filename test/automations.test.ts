@@ -51,7 +51,7 @@ async function fixture() {
               }),
               ctx,
             )
-            return { content: [{ type: 'text', text: 'Released' }] }
+            return { output: [{ type: 'text', text: 'Released' }] }
           },
         }),
       ],

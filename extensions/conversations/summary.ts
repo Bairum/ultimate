@@ -457,7 +457,7 @@ export function summaryBehavior(
           return
         }
         const answer = task.state.checkpoint.answer
-        const view = await runtime.context(runtime.conversationId, context, answer)
+        const view = await runtime.context(runtime.conversationId, context, { at: answer })
         // Compaction can remove the request from the model context; it stays in storage.
         const request =
           task.input.intent ??

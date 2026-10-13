@@ -89,7 +89,7 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
             await writeFile(join(cwd, 'change.txt'), 'change')
             await git(cwd, 'add', '.')
             await git(cwd, 'commit', '-m', 'workspace change')
-            return { content: [{ type: 'text', text: 'committed' }] }
+            return { output: [{ type: 'text', text: 'committed' }] }
           },
         }),
       ],

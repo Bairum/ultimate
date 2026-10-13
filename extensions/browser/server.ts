@@ -225,7 +225,7 @@ export default function browserExtension(host: ExtensionHost) {
             : {}),
           outcomes,
         },
-        content: [
+        output: [
           ...(result?.note ? [{ type: 'text' as const, text: result.note }] : []),
           ...(result?.image ? [result.image] : []),
           {
@@ -239,7 +239,7 @@ export default function browserExtension(host: ExtensionHost) {
     } catch (error) {
       return {
         isError: true,
-        content: [{ type: 'text' as const, text: [...outcomes, String(error)].join('\n') }],
+        output: [{ type: 'text' as const, text: [...outcomes, String(error)].join('\n') }],
       }
     } finally {
       context.abortSignal?.removeEventListener('abort', abort)

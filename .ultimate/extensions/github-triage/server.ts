@@ -66,10 +66,10 @@ export default defineExtension({
         if (!labels && !args.reply?.trim())
           return {
             isError: true,
-            content: [{ type: 'text', text: 'Propose labels to add or remove, or a reply.' }],
+            output: [{ type: 'text', text: 'Propose labels to add or remove, or a reply.' }],
           }
         return {
-          content: [
+          output: [
             {
               type: 'text',
               text: `Proposed for ${args.repo}#${args.number}. The user applies or discards it in the Triage surface; do not apply it yourself.`,

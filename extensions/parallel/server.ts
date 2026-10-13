@@ -122,7 +122,7 @@ export default function parallel(host: ExtensionHost) {
                     `${index + 1}. ${result.title || 'Untitled page'}\nURL: ${result.url}${result.publish_date ? `\nPublished: ${result.publish_date}` : ''}\n${result.excerpts.join('\n\n')}`,
                 )
                 .join('\n\n---\n\n')
-            return { content: [{ type: 'text', text: truncateToolOutput(text) }] }
+            return { output: [{ type: 'text', text: truncateToolOutput(text) }] }
           } catch (error) {
             const result = failure(error)
             await api.details(result.details, context)
@@ -210,7 +210,7 @@ export default function parallel(host: ExtensionHost) {
                 .join('\n\n---\n\n') || 'No page content was extracted.'
             return {
               isError: !response.results.length && !!errors.length,
-              content: [
+              output: [
                 {
                   type: 'text',
                   text: truncateToolOutput(
@@ -244,7 +244,7 @@ function failure(error: unknown) {
       httpStatus: error instanceof ParallelApiError ? (error.status ?? null) : null,
       ref_id: error instanceof ParallelApiError ? (error.referenceId ?? null) : null,
     },
-    output: { isError: true, content: [{ type: 'text' as const, text }] },
+    output: { isError: true, output: [{ type: 'text' as const, text }] },
   }
 }
 function summarize(results: ParallelResultItem[]) {

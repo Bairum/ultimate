@@ -333,11 +333,9 @@ export default function codemode(host: ExtensionHost) {
               return undefined
             }
             const text =
-              result.content === undefined
+              result.output === undefined
                 ? output
-                : result.content
-                    .map((block) => (block.type === 'text' ? block.text : ''))
-                    .join('\n')
+                : result.output.map((block) => (block.type === 'text' ? block.text : '')).join('\n')
             const error = [
               text,
               ...(result.diagnostics ?? []).map((diagnostic) => diagnostic.message),
@@ -427,7 +425,7 @@ export default function codemode(host: ExtensionHost) {
           }
         if (scriptYielded)
           return {
-            content,
+            output: content,
             details: { calls, yielded: true, pendingSubagents } as JsonObject,
           }
         if (result.ok) {
@@ -440,7 +438,7 @@ export default function codemode(host: ExtensionHost) {
             }, context)
           }
           return {
-            content,
+            output: content,
             details: {
               calls,
               subagentAnswers: [...subagentAnswers],
@@ -450,11 +448,11 @@ export default function codemode(host: ExtensionHost) {
         }
         const error = result.error.stack ?? `${result.error.kind}: ${result.error.message}`
         content.push({ type: 'text', text: error })
-        return { content, isError: true, details: { calls, error } as JsonObject }
+        return { output: content, isError: true, details: { calls, error } as JsonObject }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         return {
-          content: [{ type: 'text', text: `Script failed\n${message}` }],
+          output: [{ type: 'text', text: `Script failed\n${message}` }],
           isError: true,
           details: { calls, error: message } as JsonObject,
         }

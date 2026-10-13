@@ -204,7 +204,7 @@ it('expands real agent roles and outcomes, separates Replied from Luna Done, and
           parameters: Type.Object({}),
           execute: async () => {
             await gate
-            return { content: [{ type: 'text', text: 'Released.' }] }
+            return { output: [{ type: 'text', text: 'Released.' }] }
           },
         }),
       ],

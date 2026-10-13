@@ -121,7 +121,7 @@ async function fixture() {
       } as never,
       ctx,
     )
-    return result.content!.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
+    return result.output!.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
   }
   async function main() {
     const conversation = await opened.harness.createConversation(

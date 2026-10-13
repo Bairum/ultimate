@@ -35,7 +35,7 @@ const Receipt = defineDoc<{ text?: string }>({
   scope: 'task',
   initial: () => ({}),
 })
-const reply = (text: string) => ({ content: [{ type: 'text' as const, text }] })
+const reply = (text: string) => ({ output: [{ type: 'text' as const, text }] })
 const required = (value: string | undefined, field: string) => {
   if (value === undefined) throw new Error(`${field} is required`)
   return value

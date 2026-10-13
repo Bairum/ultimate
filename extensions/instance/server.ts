@@ -266,9 +266,9 @@ export default function instanceExtension(
                 throw error
               }
             }
-            return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+            return { output: [{ type: 'text', text: JSON.stringify(result) }] }
           } catch (error) {
-            return { isError: true, content: [{ type: 'text', text: String(error) }] }
+            return { isError: true, output: [{ type: 'text', text: String(error) }] }
           } finally {
             if (reserved) starts.pending--
           }

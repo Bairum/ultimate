@@ -461,7 +461,7 @@ export default function automations(host: Host & Pick<ExtensionHost, 'onOpen' | 
           runId: Type.Optional(Type.String()),
         }),
         execute: async (args, tool, context: Context) => {
-          const cached = await tool.memo<{ content: { type: 'text'; text: string }[] }>(
+          const cached = await tool.memo<{ output: { type: 'text'; text: string }[] }>(
             'result',
             context,
           )
@@ -478,7 +478,7 @@ export default function automations(host: Host & Pick<ExtensionHost, 'onOpen' | 
           if (receipt.abort) await host.harness().abortTask(receipt.abort, context)
           return tool.memo(
             'result',
-            { content: [{ type: 'text' as const, text: concise(receipt.result) }] },
+            { output: [{ type: 'text' as const, text: concise(receipt.result) }] },
             context,
           )
         },

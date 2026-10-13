@@ -507,7 +507,7 @@ async function gatedFixture(reportGate?: { promise: Promise<void>; entered: bool
               api.conversationId === 1 ? parentGate.promise : childGate.promise,
               toolContext,
             )
-            return { content: [{ type: 'text', text: 'released' }] }
+            return { output: [{ type: 'text', text: 'released' }] }
           },
         }),
       ],
@@ -1393,7 +1393,7 @@ describe('subagents', () => {
                 childHolding = true
                 await childGate
               }
-              return { content: [{ type: 'text', text: 'released' }] }
+              return { output: [{ type: 'text', text: 'released' }] }
             },
           }),
         ],
@@ -1449,7 +1449,7 @@ describe('subagents', () => {
                 childHolding = true
                 await childGate
               }
-              return { content: [{ type: 'text', text: 'released' }] }
+              return { output: [{ type: 'text', text: 'released' }] }
             },
           }),
         ],

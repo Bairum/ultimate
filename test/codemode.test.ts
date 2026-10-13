@@ -119,7 +119,7 @@ it('composes read and bash with private nested results and final JSON details', 
             parameters: Type.Object({ answer: Type.Number() }),
             execute: async ({ answer }) => ({
               structuredContent: { answer },
-              content: [{ type: 'text', text: 'private fallback' }],
+              output: [{ type: 'text', text: 'private fallback' }],
             }),
           }),
           outputSchema: { type: 'object' },
@@ -148,7 +148,7 @@ it('composes read and bash with private nested results and final JSON details', 
           execute: async () => {
             if (++entered === 2) release()
             await barrier
-            return { content: [{ type: 'text', text: 'overlapped' }] }
+            return { output: [{ type: 'text', text: 'overlapped' }] }
           },
         }),
       ],
@@ -272,11 +272,11 @@ it.each([
           execute: async ({ id }): Promise<ToolExecutionResult> =>
             id === 1
               ? {
-                  content: [{ type: 'text', text: 'earlier-private-answer' }],
+                  output: [{ type: 'text', text: 'earlier-private-answer' }],
                   details: { conversationId: 1, answerId: 101 },
                 }
               : {
-                  content: [{ type: 'text', text: 'Unfinished; yielded to steering' }],
+                  output: [{ type: 'text', text: 'Unfinished; yielded to steering' }],
                   details: { yielded: true, conversationId: id ?? 41, background: true },
                 },
         }),
@@ -286,7 +286,7 @@ it.each([
           parameters: Type.Object({}),
           execute: async () => {
             effects++
-            return { content: [{ type: 'text', text: 'effect' }] }
+            return { output: [{ type: 'text', text: 'effect' }] }
           },
         }),
       ],
@@ -353,7 +353,7 @@ it('yields Promise.all, cancels pending host work, and preserves other waiting c
             if (id === 41) {
               await barrier
               return {
-                content: [{ type: 'text', text: 'Still running' }],
+                output: [{ type: 'text', text: 'Still running' }],
                 details: { yielded: true, conversationId: id },
               }
             }
@@ -387,7 +387,7 @@ it('yields Promise.all, cancels pending host work, and preserves other waiting c
               )
             })
             effects++
-            return { content: [{ type: 'text', text: 'effect' }] }
+            return { output: [{ type: 'text', text: 'effect' }] }
           },
         }),
       ],

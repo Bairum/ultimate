@@ -1,6 +1,6 @@
 Run an async JavaScript function body in a fresh QuickJS/WASM sandbox. Only injected functions can access the host. Prefer it for dependent or parallel tool calls, filtering large outputs, and inspecting Ultimate; use ordinary tools for a single simple operation.
 
-`await tools.<name>(args)` calls the conversation's currently resolved tools, except codemode. Nested calls share the parent durable task (no separate durable tool task), bypass `beforeTool`/`afterTool` hooks, and capture their output privately. Failures reject with the tool's error text. Tools declaring an `outputSchema` and returning `structuredContent` resolve to that JSON; other tools resolve to text. Durable 1.0 does not declare these optional structured fields itself.
+`await tools.<name>(args)` calls the conversation's currently resolved tools, except codemode. Nested calls share the parent durable task (no separate durable tool task), bypass `beforeTool`/`afterTool` hooks, and capture their output privately. Failures reject with the tool's error text. Tools declaring an `outputSchema` and returning `structuredContent` resolve to that JSON; other tools resolve to text. These are Ultimate's own fields, separate from Pi Durable's `structuredOutputSchema` and `structuredOutput`.
 
 `tools.screenshot` and `tools.browser` resolve to `{ title, image?, file?, outcomes }`. `image` is missing when the PNG cannot be resized under the inline image limit; only the saved `file` path comes back, and `image(undefined)` throws. Check it first: `if (shot.image) image(shot.image)`.
 

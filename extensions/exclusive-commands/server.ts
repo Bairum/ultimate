@@ -75,9 +75,9 @@ export default function exclusiveCommands(host: ExtensionHost) {
             return warnings.length
               ? {
                   ...result,
-                  content: [
+                  output: [
                     { type: 'text' as const, text: warnings.join('') },
-                    ...(result.content ?? []),
+                    ...(result.output ?? []),
                   ],
                 }
               : result

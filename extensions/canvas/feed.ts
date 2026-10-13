@@ -1,4 +1,4 @@
-// Pi upstream: @earendil-works/pi-durable@1.0.3 src/tools/edit.ts — internal untyped details.patch counts an edit's lines. Drop when Pi exports structured diff rows for rendering.
+// Pi upstream: @earendil-works/pi-durable@1.2.0 src/tools/edit.ts — internal untyped details.patch counts an edit's lines. Drop when Pi exports structured diff rows for rendering.
 import { isAbsolute, relative } from 'node:path'
 import type { JsonValue } from '@earendil-works/chord'
 import type { AssistantMessage, ToolResultMessage } from '@earendil-works/pi-ai'

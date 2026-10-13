@@ -17,7 +17,7 @@ import { Workspaces, workspaces } from './workspaces.ts'
 export const order = -200
 export const docs = [Workspaces]
 const finish = (value: unknown) => ({
-  content: [{ type: 'text' as const, text: JSON.stringify(value) }],
+  output: [{ type: 'text' as const, text: JSON.stringify(value) }],
 })
 function workspaceId(args: JsonValue) {
   const id = args && typeof args === 'object' && !Array.isArray(args) ? args.id : undefined

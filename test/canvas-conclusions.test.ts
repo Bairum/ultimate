@@ -161,7 +161,7 @@ async function launch({ repository = false, available = true } = {}) {
             description: 'Screenshot the UI',
             parameters: Type.Object({}),
             execute: async () => ({
-              content: [
+              output: [
                 { type: 'image' as const, mimeType: 'image/png', data: SCREENSHOT },
                 { type: 'text' as const, text: 'Title: Demo' },
               ],
@@ -590,7 +590,7 @@ it('concludes a tree with many screenshots a page at a time, keeping only the ne
           description: 'Screenshot the UI',
           parameters: Type.Object({}),
           execute: async () => ({
-            content: [
+            output: [
               {
                 type: 'image' as const,
                 mimeType: 'image/png',

@@ -1,4 +1,4 @@
-// Pi upstream: @earendil-works/pi-durable@1.0.3 src/tools/bash.ts and src/tools/edit.ts — internal bash error wording drives exitOf and untyped details.patch/details.diff drive Edit. Drop when Pi exports structured bash outcomes and structured diff rows for rendering.
+// Pi upstream: @earendil-works/pi-durable@1.2.0 src/tools/bash.ts and src/tools/edit.ts — internal bash exit_code diagnostic message drives exitOf and untyped details.patch/details.diff drive Edit. Drop when Pi exports structured bash outcomes and structured diff rows for rendering.
 import { useEffect, useRef } from 'react'
 import { AnsiOutput } from '@/components/ai/ansi-output'
 import { CodeBlock, languageFromPath } from '@/components/ai/code-block'
@@ -182,9 +182,10 @@ function exitOf(call: ToolCallView): { label: string; ok: boolean } | undefined 
   if (call.status === 'done') return { label: 'exit 0', ok: true }
   if (call.status === 'interrupted') return { label: 'interrupted', ok: false }
   if (call.status !== 'error') return undefined
-  const messages = call.diagnostics.map((diagnostic) => diagnostic.message).join('\n')
-  const code = /exited with code (\d+)/.exec(messages)?.[1]
+  const exited = call.diagnostics.find((diagnostic) => diagnostic.code === 'exit_code')
+  const code = exited && /\d+/.exec(exited.message)?.[0]
   if (code) return { label: `exit ${code}`, ok: false }
+  const messages = call.diagnostics.map((diagnostic) => diagnostic.message).join('\n')
   if (/timed out/.test(messages)) return { label: 'timeout', ok: false }
   if (/aborted/i.test(messages)) return { label: 'aborted', ok: false }
   return { label: 'failed', ok: false }
