@@ -137,10 +137,10 @@ cases, not inflate coverage or merely restate the implementation.
 
 ## Fixed review team
 
-The coordinator owns review sequencing and the final verdict. Resolve immutable full commit SHAs for one explicit
-`base..head`; every reviewer must review that exact range, never a directory or moving branch. Supply the acceptance
-criteria and the same range to both independent reviewers. Native reviewers inspect Git directly, including the
-complete `git log base..head` and `git diff base..head`; do not require copying the log or diff into prompts.
+The review lead owns review sequencing; the coordinator owns final acceptance. The coordinator supplies acceptance
+criteria and immutable full commit SHAs for one explicit `base..head` to the lead, which passes the same criteria and
+range to both independent reviewers. Every reviewer must review that exact range, never a directory or moving branch.
+Native reviewers inspect Git directly, including the complete `git log base..head` and `git diff base..head`; do not require copying the log or diff into prompts.
 
 1. The coordinator launches `subagent` with `agent: reviewer` (`openai/gpt-6.1-sol`, xhigh), supplying the
    immutable range and acceptance criteria. This review lead explicitly retains `subagent`.
