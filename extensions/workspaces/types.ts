@@ -88,6 +88,7 @@ export type LandResult = {
   landed?: string
   commits?: string[]
   paths?: string[]
+  files?: { path: string; added: number; removed: number }[]
   needsRestart?: boolean
 }
 export type SubmitResult = { text: string; id: string; position: number; lander: number }
