@@ -86,7 +86,7 @@ const answerText = (message: AssistantMessage | undefined) =>
 function createReporter() {
   return defineTask<
     { conversationId: ConversationId; text: string; steer: boolean; sourceEntry?: EntryId },
-    { phase: 'deliver' } | { phase: 'report'; report?: string; answer?: EntryId },
+    { phase: 'deliver'; attempt?: 1 } | { phase: 'report'; report?: string; answer?: EntryId },
     null
   >({
     name: 'ultimate.subagent-reporter',
@@ -96,13 +96,17 @@ function createReporter() {
       deliver: async (task, runtime, context) => {
         try {
           const child = (await runtime.conversation(task.input.conversationId, context))!
+          const attempt = task.state.checkpoint.attempt
           const settled = await (
             await child.submit(
               {
                 type: 'input',
-                content: task.input.text,
+                content:
+                  attempt === 1
+                    ? 'Your previous run stopped with a provider error. Continue from where you left off; check what you already did and do not redo it.'
+                    : task.input.text,
                 whenBusy: task.input.steer ? 'steer' : 'followUp',
-                requestId: `subagent:${task.id}`,
+                requestId: attempt === 1 ? `subagent:${task.id}:retry` : `subagent:${task.id}`,
               },
               context,
             )
@@ -128,6 +132,12 @@ function createReporter() {
                 checkpoint: { phase: 'report', report, answer: settled.answer },
               }
             }
+            if (
+              settled.status === 'unanswered' &&
+              settled.reason === 'model_error' &&
+              attempt !== 1
+            )
+              return { status: 'running', checkpoint: { phase: 'deliver', attempt: 1 } }
             if (settled.status === 'unanswered' && settled.reason !== 'aborted') {
               const report = `[subagent ${child.id} failed: ${settled.reason}]`
               return { status: 'running', checkpoint: { phase: 'report', report } }
