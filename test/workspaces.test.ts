@@ -87,6 +87,8 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
   prepared.registry.install(CodingTools)
   /** How the faux model answers the lander's failure prompt; the default says it found nothing. */
   let landerAnswer: Answer = noIdea
+  /** How the faux model continues the lander's failure run after a tool result; by default it echoes the result. */
+  let landerAfterTool: Answer | undefined
   let writes = 0
   /** Requests a user's `ASK …` question started. */
   const asked: Parameters<FauxResponseFactory>[0][] = []
@@ -128,7 +130,12 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
       const { tool, args } = JSON.parse(text.slice(5))
       return fauxAssistantMessage(fauxToolCall(tool, args), { stopReason: 'toolUse' })
     }
-    if (last.role === 'toolResult') return fauxAssistantMessage(text)
+    if (last.role === 'toolResult') {
+      const prompt = transcript.messages.findLast((message) => message.role === 'user')
+      if (landerAfterTool && JSON.stringify(prompt?.content).includes('\\nMode: '))
+        return landerAfterTool(text)
+      return fauxAssistantMessage(text)
+    }
     return fauxAssistantMessage('finished')
   }
   prepared.faux!.setResponses([route])
@@ -174,8 +181,9 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
       return writes
     },
     asked,
-    answerLander(answer: Answer) {
+    answerLander(answer: Answer, afterTool?: Answer) {
       landerAnswer = answer
+      landerAfterTool = afterTool
     },
     reopen: async () => {
       for (const close of closers) await close()
@@ -1326,4 +1334,29 @@ it('gives the standing lander a checkout at the target tip before any submission
   await writeFile(join(cwd!, 'kept.txt'), 'kept')
   await f.reopen()
   expect(await readFile(join(cwd!, 'kept.txt'), 'utf8')).toBe('kept')
+})
+it('fix: a model run that fails after committing lands nothing', async () => {
+  const f = await lander({})
+  await landerDefinition(f, 'fix')
+  f.answerLander(
+    () =>
+      fauxAssistantMessage(
+        fauxToolCall('bash', {
+          command: 'echo resolved > base.txt && git add base.txt && git commit -q --no-edit',
+        }),
+        { stopReason: 'toolUse' },
+      ),
+    () => fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'provider failed' }),
+  )
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const head = await conflicting(f, id)
+  const { id: submission } = await f.service.submit(id, context)
+  const [report] = await submitted(f, id)
+  expect(report).toContain("was not landed: the lander's model did not finish (model_error)")
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  const result = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+    .results[submission]
+  expect(result).toMatchObject({ outcome: 'failed' })
+  expect(result.fixed).toBeUndefined()
 })

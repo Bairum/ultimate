@@ -169,6 +169,8 @@ type Failure = {
   prompt: string
   /** The model's final answer, once its run settled. */
   answer?: string
+  /** Why the model's run ended without an answer (`model_error`, `aborted`, …); its changes never land. */
+  unfinished?: string
 }
 type Prepared = {
   base: string
@@ -424,6 +426,14 @@ export function createLander(
         }
         /** The model's run on a failure settled: report its diagnosis, or check its fix and run every check again. */
         const answered = async (handed: Failure) => {
+          if (handed.unfinished) {
+            await reset()
+            return fail(
+              `the lander's model did not finish (${handed.unfinished})`,
+              [handed.reason, handed.output].filter(Boolean).join('\n'),
+              handed.hint,
+            )
+          }
           if (handed.mode === 'diagnose') {
             await reset()
             return fail(handed.reason, handed.output, handed.hint, handed.answer)
@@ -724,10 +734,14 @@ export function createLander(
             context,
           )
         ).wait(context)
-        const answer =
+        const outcome: Pick<Failure, 'answer' | 'unfinished'> =
           settled.status === 'done' && settled.type === 'input'
-            ? textOf((await runtime.entry(AssistantEntry, settled.answer, context))?.model?.[0])
-            : `The lander's model did not answer (${settled.status === 'unanswered' ? settled.reason : settled.status}).`
+            ? {
+                answer: textOf(
+                  (await runtime.entry(AssistantEntry, settled.answer, context))?.model?.[0],
+                ),
+              }
+            : { unfinished: settled.status === 'unanswered' ? settled.reason : settled.status }
         await runtime.commit(async (tx) => {
           const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue.find(
             (item) => item.id === id,
@@ -738,7 +752,7 @@ export function createLander(
             checkpoint: {
               ...task.state.checkpoint,
               phase: 'land',
-              failure: { ...handed, answer },
+              failure: { ...handed, ...outcome },
             },
           }
         }, context)
