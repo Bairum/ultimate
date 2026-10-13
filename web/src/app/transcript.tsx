@@ -13,6 +13,8 @@ import {
   ChevronRightIcon,
   CircleAlertIcon,
   CircleStopIcon,
+  CopyIcon,
+  LinkIcon,
   RotateCwIcon,
 } from 'lucide-react'
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -393,10 +395,16 @@ function coreEntry(
   const message = entry.model?.[0]
   switch (entry.kind) {
     case 'pi.user':
-      return message?.role === 'user' ? <UserView message={message} /> : null
+      return message?.role === 'user' ? <UserView entry={entry} message={message} /> : null
     case 'pi.assistant':
       return message?.role === 'assistant' ? (
-        <AssistantView busy={busy} message={message} results={results} slots={slots} />
+        <AssistantView
+          busy={busy}
+          entry={entry}
+          message={message}
+          results={results}
+          slots={slots}
+        />
       ) : null
     case 'pi.system':
       return message?.role === 'system' ? <SystemDivider message={message} /> : null
@@ -423,15 +431,87 @@ function coreEntry(
   }
 }
 
-function UserView({ message }: { message: UserMessage }) {
+/** Hover actions on a stored message: its time, and copies of its text or of a reference another conversation can follow. */
+function MessageActions({
+  entry,
+  text,
+  timestamp,
+  className,
+  children,
+}: {
+  entry: EntryRecord
+  text: string
+  timestamp: number
+  className?: string
+  children?: ReactNode
+}) {
+  const { conversationId: conversation, id } = entry
+  const reference = `Ultimate conversation #${conversation}, message #${id}. Read it in codemode with ultimate.entries(${conversation}, { before: ${id + 1}, limit: 1 }).`
+  const date = new Date(timestamp)
+  return (
+    <div
+      className={cn(
+        'flex items-center gap-2 font-mono text-[11px] text-muted-foreground/60 opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100',
+        className,
+      )}
+    >
+      {children}
+      <time className="tabular-nums" dateTime={date.toISOString()} title={date.toLocaleString()}>
+        {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}
+      </time>
+      {text && (
+        <CopyButton label="Copy message" value={text}>
+          <CopyIcon />
+        </CopyButton>
+      )}
+      <CopyButton label={`Copy reference to message #${id}`} value={reference}>
+        <LinkIcon />
+      </CopyButton>
+    </div>
+  )
+}
+
+function CopyButton({
+  value,
+  label,
+  children,
+}: {
+  value: string
+  label: string
+  children: ReactNode
+}) {
+  const [copied, setCopied] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(timer.current), [])
+  return (
+    <button
+      aria-label={label}
+      className="cursor-pointer rounded p-0.5 transition-colors hover:text-foreground [&_svg]:size-3"
+      onClick={() =>
+        void navigator.clipboard.writeText(value).then(() => {
+          setCopied(true)
+          clearTimeout(timer.current)
+          timer.current = setTimeout(() => setCopied(false), 1200)
+        })
+      }
+      title={label}
+      type="button"
+    >
+      {copied ? <CheckIcon className="text-success" /> : children}
+    </button>
+  )
+}
+
+function UserView({ entry, message }: { entry: EntryRecord; message: UserMessage }) {
   const images =
     typeof message.content === 'string'
       ? []
       : message.content.filter((block) => block.type === 'image')
+  const text = textOf(message.content)
   return (
-    <Message className="mt-3 first:mt-0" from="user">
+    <Message className="group/message mt-3 first:mt-0" from="user">
       <MessageContent>
-        <p className="break-words whitespace-pre-wrap">{textOf(message.content)}</p>
+        <p className="break-words whitespace-pre-wrap">{text}</p>
         {images.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {images.map((image, index) => (
@@ -440,17 +520,25 @@ function UserView({ message }: { message: UserMessage }) {
           </div>
         )}
       </MessageContent>
+      <MessageActions
+        className="-mt-1 justify-end"
+        entry={entry}
+        text={text}
+        timestamp={message.timestamp}
+      />
     </Message>
   )
 }
 
 function AssistantView({
+  entry,
   message,
   results,
   slots,
   busy,
   streaming = false,
 }: {
+  entry?: EntryRecord
   message: AssistantMessage
   results: Map<string, ToolResult>
   slots: Map<string, ToolSlot>
@@ -463,10 +551,14 @@ function AssistantView({
     message.stopReason === 'stop' &&
     !message.content.some((block) => block.type === 'toolCall') &&
     message.content.some((block) => block.type === 'text' && block.text.trim())
+  const ended = !streaming && message.stopReason !== 'toolUse'
+  const text = message.content
+    .flatMap((block) => (block.type === 'text' && block.text.trim() ? [block.text] : []))
+    .join('\n\n')
   return (
     <Message
       className={cn(
-        'group/assistant gap-3',
+        'group/message gap-3',
         final && 'rounded-lg border border-success/40 bg-success/5 px-3.5 py-2.5',
       )}
       from="assistant"
@@ -510,14 +602,30 @@ function AssistantView({
         return null
       })}
       {!streaming && (message.stopReason !== 'toolUse' || message.errorMessage) && (
-        <AssistantFooter message={message} />
+        <AssistantNotice message={message} />
+      )}
+      {entry && (text || ended) && (
+        <MessageActions entry={entry} text={text} timestamp={message.timestamp}>
+          {ended && <Usage message={message} />}
+        </MessageActions>
       )}
     </Message>
   )
 }
 
-function AssistantFooter({ message }: { message: AssistantMessage }) {
-  const { usage, stopReason } = message
+function Usage({ message: { model, usage } }: { message: AssistantMessage }) {
+  const tokens = usage.input + usage.cacheRead + usage.cacheWrite
+  if (tokens === 0) return null
+  return (
+    <span className="truncate">
+      {model} · ↑{formatTokens(tokens)} ↓{formatTokens(usage.output)}
+      {usage.cost.total > 0 ? ` · $${usage.cost.total.toFixed(4)}` : ''}
+    </span>
+  )
+}
+
+function AssistantNotice({ message }: { message: AssistantMessage }) {
+  const { stopReason } = message
   const notice =
     stopReason === 'error' ? (
       <div className="flex items-start gap-1.5 text-error">
@@ -535,18 +643,7 @@ function AssistantFooter({ message }: { message: AssistantMessage }) {
         <CircleAlertIcon className="size-3.5" /> stopped at the output limit
       </div>
     ) : null
-  const tokens = usage.input + usage.cacheRead + usage.cacheWrite
-  return (
-    <div className="flex flex-col gap-1 font-mono text-[11px]">
-      {notice}
-      {tokens > 0 && (
-        <div className="text-muted-foreground/60 opacity-0 transition-opacity group-hover/assistant:opacity-100">
-          {message.model} · ↑{formatTokens(tokens)} ↓{formatTokens(usage.output)}
-          {usage.cost.total > 0 ? ` · $${usage.cost.total.toFixed(4)}` : ''}
-        </div>
-      )}
-    </div>
-  )
+  return notice && <div className="font-mono text-[11px]">{notice}</div>
 }
 
 function Divider({ children, className }: { children: ReactNode; className?: string }) {

@@ -8,7 +8,7 @@ import { linkDependencies, skipWithoutChromium, temp } from './helpers.ts'
 const user = (id: number) => ({
   id,
   kind: 'pi.user',
-  model: [{ role: 'user', content: `Message ${id}: full original text.` }],
+  model: [{ role: 'user', timestamp: 0, content: `Message ${id}: full original text.` }],
 })
 
 it('keeps history separate, anchors paging, retries, and ignores switched-conversation responses', async (test) => {
@@ -71,6 +71,7 @@ window.fixture = {
       model: [
         {
           role: 'user',
+          timestamp: 0,
           content:
             'The conversation history before this point was compacted into the following summary:\n\n<summary>\n## Goal\nKeep **original messages** available.\n\n- Preserve history\n- Keep context small\n</summary>',
         },

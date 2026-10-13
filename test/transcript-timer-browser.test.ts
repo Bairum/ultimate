@@ -68,7 +68,11 @@ window.fixture = {
       Reflect.get(window, 'fixture').show({
         run: { taskId: 1 },
         generation: {
-          message: { role: 'assistant', content: [{ type: 'thinking', thinking: '' }] },
+          message: {
+            role: 'assistant',
+            timestamp: 0,
+            content: [{ type: 'thinking', thinking: '' }],
+          },
         },
       }),
     )
@@ -100,7 +104,7 @@ window.fixture = {
       await page.evaluate((thinking) => {
         Reflect.get(window, 'fixture').show({
           run: { taskId: 2 },
-          generation: { message: { role: 'assistant', content: [thinking] } },
+          generation: { message: { role: 'assistant', timestamp: 0, content: [thinking] } },
         })
       }, reasoning)
       expect(await page.getByText(`Thinking${suffix}…`, { exact: true }).count()).toBe(1)
@@ -113,7 +117,9 @@ window.fixture = {
           ({ thinking, next }) => {
             Reflect.get(window, 'fixture').show({
               run: { taskId: 2 },
-              generation: { message: { role: 'assistant', content: [thinking, next] } },
+              generation: {
+                message: { role: 'assistant', timestamp: 0, content: [thinking, next] },
+              },
             })
           },
           { thinking: reasoning, next: following },
@@ -127,7 +133,9 @@ window.fixture = {
           {
             id: 1,
             kind: 'pi.assistant',
-            model: [{ role: 'assistant', content: [thinking], stopReason: 'toolUse' }],
+            model: [
+              { role: 'assistant', timestamp: 0, content: [thinking], stopReason: 'toolUse' },
+            ],
           },
         ])
       }, reasoning)

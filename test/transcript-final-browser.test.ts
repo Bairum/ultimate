@@ -72,6 +72,7 @@ if (saved) window.fixture.show(saved.id, saved.entries, saved.live)
     }
     const message = {
       role: 'assistant',
+      timestamp: 0,
       content: [{ type: 'text', text: 'Completed parent answer.' }],
       stopReason: 'stop',
       usage,
@@ -122,7 +123,7 @@ if (saved) window.fixture.show(saved.id, saved.entries, saved.live)
     const followup = {
       id: 3,
       kind: 'pi.user',
-      model: [{ role: 'user', content: 'Follow-up question.' }],
+      model: [{ role: 'user', timestamp: 0, content: 'Follow-up question.' }],
     }
     const parent = [entry, followup]
     await page.evaluate(

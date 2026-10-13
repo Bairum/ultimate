@@ -8,12 +8,18 @@ import { linkDependencies, skipWithoutChromium, temp } from './helpers.ts'
 const user = (id: number) => ({
   id,
   kind: 'pi.user',
-  model: [{ role: 'user', content: `Original message ${id}.` }],
+  model: [{ role: 'user', timestamp: 0, content: `Original message ${id}.` }],
 })
 const marker = (id: number, kind = 'pi.compaction') => ({
   id,
   kind,
-  model: [{ role: 'user', content: '<summary>\n## Goal\nKeep history accessible.\n</summary>' }],
+  model: [
+    {
+      role: 'user',
+      timestamp: 0,
+      content: '<summary>\n## Goal\nKeep history accessible.\n</summary>',
+    },
+  ],
 })
 
 async function fixture(test: TestContext, run: (page: Page) => Promise<void>) {
@@ -101,7 +107,7 @@ for (const state of ['exhausted', 'partial', 'in-flight']) {
             {
               id: 110,
               kind: 'pi.user',
-              model: [{ role: 'user', content: 'Original message 110.' }],
+              model: [{ role: 'user', timestamp: 0, content: 'Original message 110.' }],
             },
           ])
         },
@@ -126,7 +132,7 @@ for (const state of ['exhausted', 'partial', 'in-flight']) {
           entries: Array.from({ length: 56 }, (_, n) => ({
             id: 56 - n,
             kind: 'pi.user',
-            model: [{ role: 'user', content: `Original message ${56 - n}.` }],
+            model: [{ role: 'user', timestamp: 0, content: `Original message ${56 - n}.` }],
           })),
         })
         // Reconnect snapshots keep the conversation ID, replacing its active context.
@@ -134,7 +140,9 @@ for (const state of ['exhausted', 'partial', 'in-flight']) {
           {
             id: 121,
             kind: 'pi.compaction',
-            model: [{ role: 'user', content: '<summary>\nNew checkpoint\n</summary>' }],
+            model: [
+              { role: 'user', timestamp: 0, content: '<summary>\nNew checkpoint\n</summary>' },
+            ],
           },
           entries[0],
         ])
@@ -168,7 +176,7 @@ for (const state of ['exhausted', 'partial', 'in-flight']) {
               {
                 id: 122,
                 kind: 'pi.user',
-                model: [{ role: 'user', content: 'Missed before reset' }],
+                model: [{ role: 'user', timestamp: 0, content: 'Missed before reset' }],
               },
             ],
           })
@@ -202,6 +210,7 @@ it('anchors a surviving row when paging joins a standalone tool result to its ea
       model: [
         {
           role: 'assistant',
+          timestamp: 0,
           content: [{ type: 'toolCall', id: 'split-call', name: 'read', arguments: {} }],
           stopReason: 'toolUse',
         },
@@ -217,7 +226,7 @@ it('anchors a surviving row when paging joins a standalone tool result to its ea
             ...Array.from({ length: 63 }, (_, n) => ({
               id: 64 - n,
               kind: 'pi.user',
-              model: [{ role: 'user', content: `Earlier message ${64 - n}` }],
+              model: [{ role: 'user', timestamp: 0, content: `Earlier message ${64 - n}` }],
             })),
           ],
         })
@@ -277,6 +286,7 @@ for (const prefix of ['text and thinking', 'multiple earlier calls']) {
           model: [
             {
               role: 'assistant',
+              timestamp: 0,
               content: [
                 {
                   type: 'thinking',
@@ -319,7 +329,7 @@ for (const prefix of ['text and thinking', 'multiple earlier calls']) {
             ...Array.from({ length: 63 }, (_, n) => ({
               id: 64 - n,
               kind: 'pi.user',
-              model: [{ role: 'user', content: `Earlier message ${64 - n}` }],
+              model: [{ role: 'user', timestamp: 0, content: `Earlier message ${64 - n}` }],
             })),
           ],
         })
