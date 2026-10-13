@@ -50,6 +50,8 @@ The submitter follows the lander in its own transcript, from that document. The 
 rows and ends in a quiet "full log in #<lander>" link. The lander's report message renders as an outcome card with
 a success, warning (landed, push failed) or error accent and the same collapsed steps. Nobody has to open the lander
 conversation; it keeps the full log, grouped by submission, and shows on the Canvas and in the Agents tab.
+With lineage enabled, the report phase also leaves a replay-safe landing note in the project's root, unless the
+submitter is that root. Failed submissions leave no root note; notes never wake the root.
 
 1. Resets its own detached checkout, `<home>/lander/<hash of source>`, to the target branch tip. `isolates.worktree.setup`
    runs once when the checkout is created. With `lander.push`, it fetches the remote branch and merges it when it is ahead.

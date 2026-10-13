@@ -12,7 +12,8 @@ A project is one tree of conversations: a root that holds the idea, and branches
   the root") moves it; `info` returns `{ root }`.
 - **Notes**: the `note` tool `{ to: id | 'root', text }` writes a `lineage.note` entry in the target without waking it;
   its model reads `Note from #N: …` with its next input. Other extensions call `leaveNote(host, to, text, source?)`;
-  `source: { source: 'lander' }` renders as a landing.
+  Landings from workspaces use `source: 'lander'` with structured `sha`, `target`, `commits`, and `paths`: a compact
+  success card links to the submitter and keeps the root's tally (up to 10 commits and 8 changed paths).
 - **Prompt**: the `lineage` section tells each top-level conversation where it sits in the tree and how to read the
   others (codemode `ultimate.entries(id)`, `ultimate.search()`).
 - **Compaction**: top-level conversations summarize with their own model and a lineage focus (root: idea, principles,

@@ -15,7 +15,7 @@ import {
   section,
   UsageDoc,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, EntryId, ModelRef, Tx } from '@earendil-works/pi-durable'
+import type { ConversationId, EntryId, JsonObject, ModelRef, Tx } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { workspaces } from '../workspaces/workspaces.ts'
@@ -136,7 +136,7 @@ async function ask(
   return { text: result, budget: model.contextWindow }
 }
 
-async function rootOf(host: Pick<ExtensionHost, 'harness'>, ctx: Context) {
+export async function rootOf(host: Pick<ExtensionHost, 'harness'>, ctx: Context) {
   return ((await host.harness().snapshot(Root, ROOT_CONVERSATION_ID, ctx))?.root ??
     ROOT_CONVERSATION_ID) as ConversationId
 }
@@ -295,7 +295,7 @@ export async function leaveNote(
   host: Pick<ExtensionHost, 'harness'>,
   to: number | 'root',
   text: string,
-  source?: { from?: number; source?: 'lander' },
+  source?: { from?: number; source?: 'lander'; data?: JsonObject; requestId?: string },
 ) {
   const target = to === 'root' ? await rootOf(host, context) : (to as ConversationId)
   const conversation = await host.harness().conversation(target, context)
@@ -304,9 +304,11 @@ export async function leaveNote(
   await conversation.submit(
     {
       type: 'write',
+      ...(source?.requestId ? { requestId: source.requestId } : {}),
       entry: {
         kind: 'lineage.note',
         data: {
+          ...source?.data,
           text,
           ...(from === undefined ? {} : { from }),
           ...(source?.source ? { source: source.source } : {}),
