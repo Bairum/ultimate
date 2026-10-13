@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { access, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, realpath, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { Context } from '@earendil-works/chord'
@@ -67,29 +67,18 @@ export function createLander(
   serial: <T>(source: string, operation: () => Promise<T>) => Promise<T>,
 ) {
   const slot = exclusiveSlot(host)
-  async function checkout(source: string, tip: string, signal: AbortSignal) {
+  async function checkout(source: string, tip: string) {
     const name = createHash('sha256').update(source).digest('hex').slice(0, 12)
     await mkdir(join(host.home, 'lander'), { recursive: true })
     const path = join(await realpath(join(host.home, 'lander')), name)
-    const ready = `${path}.ready`
     const registered = (await git(source, 'worktree', 'list', '--porcelain'))
       .split('\n\n')
       .some((entry) => entry.split('\n').includes(`worktree ${path}`))
     if (!registered) {
       // The directory is the lander's own; a crash may have left it half created.
       await rm(path, { recursive: true, force: true })
-      await rm(ready, { force: true })
       await git(source, 'worktree', 'prune')
       await git(source, 'worktree', 'add', '--detach', path, tip)
-    }
-    if (
-      !(await access(ready).then(
-        () => true,
-        () => false,
-      ))
-    ) {
-      await setup(source, path, await host.projectSettings(), signal)
-      await writeFile(ready, '')
     }
     // Every attempt starts from a clean checkout at the target tip; ignored files such as installs stay.
     await git(path, 'reset', '--hard', '-q')
@@ -187,7 +176,7 @@ export function createLander(
           if (!prepared) {
             await step('preparing')
             const base = await git(source, 'rev-parse', `refs/heads/${target}`)
-            const path = await checkout(source, base, signal)
+            const path = await checkout(source, base)
             if (settings.push) {
               const { stdout } = await remote(
                 path,
@@ -237,6 +226,9 @@ export function createLander(
                 `was not landed: it conflicts with ${target} in:\n${conflicts}\nMerge ${target} into your workspace, resolve, verify and submit again.`,
               )
             }
+            // Setup prepares the merged revision, for example installs its lockfile.
+            await step('setting up')
+            await setup(source, path, await host.projectSettings(), signal)
             const flaky: string[] = []
             for (const command of settings.checks) {
               await step(`checking: ${command}`)

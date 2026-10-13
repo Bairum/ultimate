@@ -758,3 +758,26 @@ it('kills the whole process group of a running check when the lander is aborted'
   }, 5000)
   expect(exclusiveSlot(f.host).command).toBeUndefined()
 })
+it('runs worktree setup on the merged revision before the checks of every submission', async () => {
+  const f = await fixture()
+  await writeFile(join(f.projectRoot, '.gitignore'), 'have.txt\n')
+  await writeFile(join(f.projectRoot, 'want.txt'), 'one')
+  await git(f.projectRoot, 'add', '.')
+  await git(f.projectRoot, 'commit', '-qm', 'setup inputs')
+  f.host.projectSettings = async () => ({
+    isolates: { worktree: { setup: ['cp want.txt have.txt'] } },
+    lander: { checks: ['cmp want.txt have.txt'] },
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  await commit(workspace.path, 'first.txt')
+  await f.service.submit(id, context)
+  expect((await submitted(f, id))[0]).toContain('landed as')
+  await writeFile(join(workspace.path, 'want.txt'), 'two')
+  await git(workspace.path, 'commit', '-qam', 'needs setup')
+  await f.service.submit(id, context)
+  const reports = await submitted(f, id)
+  expect(reports.at(-1)).toContain('landed as')
+  expect(reports.at(-1)).not.toContain('Flaky')
+})
