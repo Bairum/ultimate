@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, realpath, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { copyJson } from '@earendil-works/chord'
 import type { Context } from '@earendil-works/chord'
 import { withAbortSignal } from '@earendil-works/chord/context'
 import { defineEntry, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
@@ -11,7 +12,7 @@ import type { ConversationDocToken, ConversationId, Tx } from '@earendil-works/p
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { exclusiveSlot } from '../exclusive-commands/slot.ts'
 import { git, setup } from './git.ts'
-import type { LanderEntry, LanderOutcome, QueueEntry, WorkspaceIndex } from './types.ts'
+import type { Landed, LanderEntry, LanderOutcome, QueueEntry, WorkspaceIndex } from './types.ts'
 
 const exec = promisify(execFile)
 /** One line of the lander conversation's log; it carries no model message, so no model ever sees it. */
@@ -89,8 +90,6 @@ type Prepared = {
   integrated: string
   flaky: string[]
 }
-/** What a submission's first fast-forward landed locally. */
-type Landed = { sha: string; commits: string[]; paths: string[]; flaky: string[] }
 const landedOutcome = (landed: Landed): LanderOutcome => ({
   outcome: 'landed',
   sha: landed.sha,
@@ -174,6 +173,11 @@ export function createLander(
         const { signal } = runtime
         const index = (await runtime.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
         const entry = index.queue.find((item) => item.id === id)!
+        /** What this submission's fast-forward landed, if it happened yet. */
+        const recorded = async () =>
+          (await runtime.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!.queue.find(
+            (item) => item.id === id,
+          )?.landed
         const step = (text: string, result?: LanderEntry['check']) =>
           runtime.commit(async (tx) => {
             const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue.find(
@@ -224,7 +228,7 @@ export function createLander(
          * Once the submission landed locally, a later failure only means its push failed.
          */
         const fail = async (reason: string, output?: string, hint?: string) => {
-          const landed = await runtime.memo<Landed>(`landed:${id}`, context)
+          const landed = await recorded()
           const detail = [output ? `${reason}:\n${output}` : reason, ...(hint ? [hint] : [])].join(
             '\n',
           )
@@ -255,8 +259,52 @@ export function createLander(
           )
         const { source, target } = entry
         const checkContext = withAbortSignal(signal, context)
+        /** Push `sha` when configured; on a rejection retry the integration once, then report it. */
+        const push = async (settings: Settings, sha: string) => {
+          if (!settings.push) return { text: 'Not pushed.' }
+          await step(`pushing to ${settings.push}`)
+          try {
+            // Push the checked commit, not whatever the branch points to by now.
+            await remote(source, signal, 'push', '-q', settings.push, `${sha}:refs/heads/${target}`)
+            return {
+              remote: `${settings.push}/${target}`,
+              text: `Pushed to ${settings.push}/${target}.`,
+            }
+          } catch (error) {
+            if (signal.aborted) throw error
+            if (!task.state.checkpoint.pushRetried) return { retry: retry(true) }
+            return { retry: fail(`${settings.push} rejected the push`, failure(error)) }
+          }
+        }
+        /** Push what landed and report it: commits, flaky checks, push, restart hint. */
+        const landedReport = async (settings: Settings, landed: Landed, sha: string) => {
+          const pushed = await push(settings, sha)
+          if (pushed.retry) return pushed.retry
+          const needsRestart =
+            (await realpath(source)) === (await realpath(host.ultimateRoot)) &&
+            landed.paths.some((path) => /^(server|shared)\//.test(path))
+          return finish(
+            [summary(landed, sha), pushed.text, ...(needsRestart ? ['Needs restart.'] : [])].join(
+              '\n',
+            ),
+            {
+              ...landedOutcome(landed),
+              ...(pushed.remote ? { pushed: pushed.remote } : {}),
+              ...(needsRestart ? { needsRestart } : {}),
+            },
+          )
+        }
         try {
           const settings = await landerSettings(host)
+          // An earlier lander task fast-forwarded this submission and then ended (a reload or fault before its push):
+          // nothing to merge or check again, push exactly what landed and report that landing.
+          if (
+            entry.landed &&
+            attempt === 1 &&
+            !task.state.checkpoint.pushRetried &&
+            (await contains(source, entry.landed.sha, `refs/heads/${target}`))
+          )
+            return await landedReport(settings, entry.landed, entry.landed.sha)
           // A crash after the checks keeps the integrated commit: go straight to fast-forwarding it.
           let prepared = await runtime.memo<Prepared>(`prepared:${id}:${attempt}`, context)
           if (!prepared) {
@@ -404,57 +452,25 @@ export function createLander(
             if (attempt < attempts) return retry()
             return fail(`${target} kept moving during ${attempts} attempts.`)
           }
-          // The first fast-forward decides what the submission landed; a push retry integrates again from there.
-          const landed = await runtime.memo<Landed>(
-            `landed:${id}`,
-            {
-              sha: integrated,
-              commits: lines(await git(source, 'log', '--oneline', `${base}..${integrated}`)),
-              paths: lines(await git(source, 'diff', '--name-only', base, integrated)),
-              flaky,
-            },
-            context,
-          )
-          await runtime.commit(async (tx) => {
-            ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[
-              String(entry.conversationId)
-            ].landed = integrated
-          }, context)
-          let pushed = 'Not pushed.'
-          let remoteBranch: string | undefined
-          if (settings.push) {
-            await step(`pushing to ${settings.push}`)
-            try {
-              // Push the checked commit, not whatever the branch points to by now.
-              await remote(
-                source,
-                signal,
-                'push',
-                '-q',
-                settings.push,
-                `${integrated}:refs/heads/${target}`,
-              )
-              remoteBranch = `${settings.push}/${target}`
-              pushed = `Pushed to ${remoteBranch}.`
-            } catch (error) {
-              if (signal.aborted) throw error
-              if (!task.state.checkpoint.pushRetried) return retry(true)
-              return fail(`${settings.push} rejected the push`, failure(error))
-            }
+          // The first fast-forward decides what the submission landed, durably on its queue entry with the target's
+          // new tip, so any later lander task reports that landing; a push retry integrates again from there.
+          const candidate: Landed = {
+            sha: integrated,
+            base,
+            commits: lines(await git(source, 'log', '--oneline', `${base}..${integrated}`)),
+            paths: lines(await git(source, 'diff', '--name-only', base, integrated)),
+            flaky,
           }
-          const needsRestart =
-            (await realpath(source)) === (await realpath(host.ultimateRoot)) &&
-            landed.paths.some((path) => /^(server|shared)\//.test(path))
-          return finish(
-            [summary(landed, integrated), pushed, ...(needsRestart ? ['Needs restart.'] : [])].join(
-              '\n',
-            ),
-            {
-              ...landedOutcome(landed),
-              ...(remoteBranch ? { pushed: remoteBranch } : {}),
-              ...(needsRestart ? { needsRestart } : {}),
-            },
-          )
+          let landed = candidate
+          await runtime.commit(async (tx) => {
+            const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+            const saved = draft.queue.find((item) => item.id === id)!
+            saved.landed ??= candidate
+            // A copy: the draft is gone once the commit settles.
+            landed = copyJson(saved.landed) as Landed
+            draft.items[String(entry.conversationId)].landed = integrated
+          }, context)
+          return await landedReport(settings, landed, integrated)
         } catch (error) {
           if (signal.aborted) throw error
           return fail('it failed', failure(error))
