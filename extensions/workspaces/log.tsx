@@ -159,7 +159,11 @@ export function LanderReport({ entry, core }: { entry: EntryRecord; core: ReactN
             {body.split('\n').slice(1).join('\n')}
           </p>
         )}
-        <Steps lander={Number(lander)} steps={outcome?.steps ?? []} />
+        <Steps
+          ended={outcome?.outcome === 'failed' ? 'failed' : 'landed'}
+          lander={Number(lander)}
+          steps={outcome?.steps ?? []}
+        />
       </div>
     </section>
   )
@@ -206,7 +210,21 @@ function Elapsed({ since }: { since: number }) {
  * A step or a check result, as one quiet line. `took` is how long it ran (until the next step); the running step
  * spins and counts up instead.
  */
-function StepLine({ row, took, active }: { row: LanderStep; took?: number; active?: boolean }) {
+function StepLine({
+  row,
+  took,
+  active,
+  done = true,
+  failed,
+}: {
+  row: LanderStep
+  took?: number
+  active?: boolean
+  /** A later step followed this one; false for a step still open, such as queued. */
+  done?: boolean
+  /** The submission failed here. */
+  failed?: boolean
+}) {
   if (active)
     return (
       <Line
@@ -241,7 +259,15 @@ function StepLine({ row, took, active }: { row: LanderStep; took?: number; activ
   return (
     <Line
       at={row.at}
-      icon={<CircleDotIcon className="size-3 shrink-0 text-muted-foreground/60" />}
+      icon={
+        failed ? (
+          <XIcon className="size-3 shrink-0 text-error" />
+        ) : done ? (
+          <CheckIcon className="size-3 shrink-0 text-success/70" />
+        ) : (
+          <CircleDotIcon className="size-3 shrink-0 text-muted-foreground/60" />
+        )
+      }
       took={duration}
     >
       {row.step}
@@ -266,6 +292,7 @@ function Steps({
   open,
   onOpenChange,
   running,
+  ended,
 }: {
   steps: readonly LanderStep[]
   lander: number
@@ -273,6 +300,8 @@ function Steps({
   onOpenChange?: (open: boolean) => void
   /** The submission is landing: its last step is the one in progress. */
   running?: boolean
+  /** The submission ended and how: its last step is done when it landed, where it stopped when it failed. */
+  ended?: 'landed' | 'failed'
 }) {
   const { switchConversation } = useUltimate()
   const rows = steps.filter((row, index) => !superseded(row, steps.slice(index + 1)))
@@ -297,6 +326,8 @@ function Steps({
         {rows.map((row, index) => (
           <StepLine
             active={running && index === rows.length - 1}
+            done={index < rows.length - 1 || ended === 'landed'}
+            failed={ended === 'failed' && index === rows.length - 1}
             key={index}
             row={row}
             took={took(row, index)}
@@ -317,19 +348,24 @@ function Steps({
 /** One `ultimate.lander` entry: a submission header, a step, a check result, or the outcome card. */
 export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
   const data = entry.data as LanderEntry
-  const { entries } = useConversation()
+  const { entries, busy } = useConversation()
   const own = (other: EntryRecord) =>
     other.kind === 'ultimate.lander' && (other.data as LanderEntry).submission === data.submission
+  const after = entries.filter((other) => other.id > entry.id && own(other))
   if (
     data.step &&
     superseded(
       data as LanderStep,
-      entries
-        .filter((later) => later.id > entry.id && own(later))
-        .map((later) => later.data as LanderStep),
+      after.map((other) => other.data as LanderStep),
     )
   )
     return null
+  // A step is done once its submission logged another step; the last one spins while the lander works, and the step
+  // right before a failed outcome is where it stopped.
+  const next = after[0]?.data as LanderEntry | undefined
+  const failed = next?.outcome === 'failed'
+  const done = next !== undefined && !failed
+  const landing = !next && busy
   if (data.outcome) {
     const outcome = data as LanderEntry & LanderOutcome
     const landed = data.outcome === 'landed'
@@ -371,11 +407,11 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
           <Open id={data.conversationId} />
         </div>
         {queued && <StepLine row={queued.data as LanderStep} />}
-        <StepLine row={data as LanderStep} />
+        <StepLine active={landing} done={done} failed={failed} row={data as LanderStep} />
       </div>
     )
   }
-  return <StepLine row={data as LanderStep} />
+  return <StepLine active={landing} done={done} failed={failed} row={data as LanderStep} />
 }
 
 type Submission = {
@@ -480,6 +516,7 @@ export function WorkspaceCall({ call }: { call: ToolCallView }) {
             lander={submitted.lander}
             onOpenChange={setOpen}
             open={open ?? !state.outcome}
+            ended={state.outcome?.outcome}
             running={state.landing}
             steps={state.steps}
           />
