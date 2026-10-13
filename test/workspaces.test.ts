@@ -1316,3 +1316,14 @@ it('answers the user in the lander conversation with its definition, tools and t
   const main = await (await f.opened.harness.conversation(id, context))!.context(context)
   expect(JSON.stringify(main.messages)).not.toContain('You are the lander of')
 })
+it('gives the standing lander a checkout at the target tip before any submission', async () => {
+  const f = await lander({})
+  const { id, cwd } = await landerLog(f)
+  expect(cwd).toMatch(/\/lander\/[0-9a-f]{12}$/)
+  const result = JSON.stringify(await f.call(id, 'bash', { command: 'git log -1 --format=%H' }))
+  expect(result).toContain(await git(f.projectRoot, 'rev-parse', 'HEAD'))
+  // Opening again keeps the checkout as it is.
+  await writeFile(join(cwd!, 'kept.txt'), 'kept')
+  await f.reopen()
+  expect(await readFile(join(cwd!, 'kept.txt'), 'utf8')).toBe('kept')
+})

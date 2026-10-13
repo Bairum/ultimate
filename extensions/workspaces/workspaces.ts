@@ -15,7 +15,7 @@ import {
 import type { ConversationId, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { git, setup } from './git.ts'
-import { createLander, landerAgent, landerPath, log } from './lander.ts'
+import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
 import type {
   LandResult,
   SubmitResult,
@@ -140,7 +140,8 @@ export function workspaces(host: Host) {
     const target =
       source && (await git(source, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => ''))
     const { change } = await landerAgent(host, context)
-    const path = source && (await landerPath(host.home, source))
+    // The conversation's cwd exists from the start, at the target tip, so it can answer before any submission.
+    const path = source && target && (await landerCheckout(host.home, source))
     await host.harness().commit(async (tx) => {
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       const landers: ConversationId[] = []

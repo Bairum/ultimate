@@ -49,6 +49,23 @@ export async function landerPath(home: string, source: string) {
   )
 }
 /**
+ * The lander's checkout of `source`, created detached at `tip` when it is not a registered worktree yet; an existing one
+ * stays as it is.
+ */
+export async function landerCheckout(home: string, source: string, tip = 'HEAD') {
+  const path = await landerPath(home, source)
+  const registered = (await git(source, 'worktree', 'list', '--porcelain'))
+    .split('\n\n')
+    .some((entry) => entry.split('\n').includes(`worktree ${path}`))
+  if (!registered) {
+    // The directory is the lander's own; a crash may have left it half created.
+    await rm(path, { recursive: true, force: true })
+    await git(source, 'worktree', 'prune')
+    await git(source, 'worktree', 'add', '--detach', path, tip)
+  }
+  return path
+}
+/**
  * Append a log line about `entry`, a draft of its queue entry, to the lander conversation `id`; a step also joins the
  * entry's `steps`, which the submitter's cards show.
  */
@@ -186,16 +203,7 @@ export function createLander(
 ) {
   const slot = exclusiveSlot(host)
   async function checkout(source: string, tip: string) {
-    const path = await landerPath(host.home, source)
-    const registered = (await git(source, 'worktree', 'list', '--porcelain'))
-      .split('\n\n')
-      .some((entry) => entry.split('\n').includes(`worktree ${path}`))
-    if (!registered) {
-      // The directory is the lander's own; a crash may have left it half created.
-      await rm(path, { recursive: true, force: true })
-      await git(source, 'worktree', 'prune')
-      await git(source, 'worktree', 'add', '--detach', path, tip)
-    }
+    const path = await landerCheckout(host.home, source, tip)
     // Every attempt starts from a clean checkout at the target tip; ignored files such as installs stay.
     await git(path, 'reset', '--hard', '-q')
     await git(path, 'checkout', '-q', '--detach', '--force', tip)
