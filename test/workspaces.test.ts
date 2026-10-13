@@ -1543,3 +1543,49 @@ exec /usr/bin/git "$@"
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
   expect((await index())!.results[submission]).toMatchObject({ outcome: 'failed' })
 })
+it('fix: the lander model resolves a conflict with the remote target, then the submission merges, checks and lands', async () => {
+  const { paths, bare } = await withRemote()
+  const f = await lander({ push: 'origin', checks: ['grep -q resolved base.txt'] }, paths)
+  await landerDefinition(f, 'fix')
+  let prompt = ''
+  f.answerLander((text) => {
+    prompt = text
+    return fauxAssistantMessage(
+      fauxToolCall('bash', {
+        command: 'echo resolved > base.txt && git add base.txt && git commit -q --no-edit',
+      }),
+      { stopReason: 'toolUse' },
+    )
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path, 'submitted.txt')
+  // Local main and origin/main both rewrite base.txt.
+  const other = join(f.directory, 'other')
+  await git(f.directory, 'clone', '-q', bare, other)
+  await writeFile(join(other, 'base.txt'), 'remote')
+  await git(other, '-c', 'user.email=t@e.com', '-c', 'user.name=T', 'commit', '-qam', 'remote')
+  await git(other, 'push', '-q', 'origin', 'main')
+  const remoteTip = await git(other, 'rev-parse', 'HEAD')
+  await writeFile(join(f.projectRoot, 'base.txt'), 'local')
+  await git(f.projectRoot, 'commit', '-qam', 'local')
+  const { id: submission } = await f.service.submit(id, context)
+  const [report] = await submitted(f, id)
+  expect(prompt).toContain('failed: origin/main conflicts with local main in\nbase.txt')
+  expect(prompt).toContain(`Merging origin/main (${remoteTip}) into main`)
+  expect(report).toContain('landed as')
+  expect(report).toContain('Fixed by lander:')
+  expect(report).toContain('Pushed to origin/main.')
+  const landed = await git(f.projectRoot, 'rev-parse', 'HEAD')
+  expect(await readFile(join(f.projectRoot, 'base.txt'), 'utf8')).toBe('resolved\n')
+  expect(await readFile(join(f.projectRoot, 'submitted.txt'), 'utf8')).toBe('submitted.txt')
+  expect(await git(bare, 'rev-parse', 'main')).toBe(landed)
+  const steps = (await f.opened.harness.snapshot(
+    Workspaces,
+    ROOT_CONVERSATION_ID,
+    context,
+  ))!.results[submission].steps.map((row) => row.step)
+  expect(steps.slice(steps.indexOf('fixing'))).toEqual(
+    expect.arrayContaining(['merging', 'checking: grep -q resolved base.txt']),
+  )
+})
