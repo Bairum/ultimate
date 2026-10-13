@@ -1,5 +1,5 @@
 import { resolve } from 'node:path'
-import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
@@ -209,4 +209,134 @@ it('compacts a top-level conversation with its lineage focus', async () => {
   expect(textOf(marker.model?.[0]?.content)).toContain(
     'LINEAGE SUMMARY of This is the root conversation',
   )
+})
+
+/** A faux server where `NOTIFY {json}` calls the notify tool and `HOLD` answers only once released. */
+async function notifyFixture(reopen?: string) {
+  const home = reopen ?? (await temp('ultimate-lineage-'))
+  const server = await fauxServer({ ultimateRoot: resolve('.'), home, userHome: home })
+  servers.push(server)
+  const hold = Promise.withResolvers<void>()
+  const route: FauxResponseFactory = async (transcript, options) => {
+    server.host.faux!.appendResponses([route])
+    const last = transcript.messages.at(-1)!
+    const text = textOf(last.content)
+    if (last.role === 'toolResult') return fauxAssistantMessage(`Tool: ${text}`)
+    if (text.startsWith('NOTIFY '))
+      return fauxAssistantMessage([fauxToolCall('notify', JSON.parse(text.slice(7)))], {
+        stopReason: 'toolUse',
+      })
+    if (text === 'HOLD')
+      await Promise.race([
+        hold.promise,
+        new Promise((_, fail) =>
+          options?.signal?.addEventListener('abort', () => fail(new Error('aborted'))),
+        ),
+      ])
+    return fauxAssistantMessage(`echo ${text}`)
+  }
+  server.host.faux!.setResponses([route])
+  return { server, home, release: () => hold.resolve() }
+}
+
+/** A second top-level conversation with the root's model. */
+async function second(server: Server) {
+  const { model } = await server.root.agent(context)
+  return server.harness.createConversation(
+    { ownership: { kind: 'ownerless' }, agent: { model } },
+    context,
+  )
+}
+
+const ask = async (server: Server, id: ConversationId, content: string) =>
+  (
+    await (await server.harness.conversation(id, context))!.submit(
+      { type: 'input', content },
+      context,
+    )
+  ).wait(context)
+
+const pendingNotifies = (server: Server) =>
+  server.harness.commit(
+    async (tx) =>
+      (
+        await tx.scanTasks({ conversationId: ROOT_CONVERSATION_ID, kind: 'lineage.notify' }, 50)
+      ).items.filter((task) => task.state.status !== 'terminal'),
+    context,
+  )
+
+const kinds = async (server: Server, id: ConversationId) =>
+  (await (await server.harness.conversation(id, context))!.context(context)).entries.map(
+    (entry) => entry.kind,
+  )
+
+it('wakes the caller once when the conversation it waits on finishes', async () => {
+  const { server, release } = await notifyFixture()
+  const other = await second(server)
+  const held = (await server.harness.conversation(other.id, context))!.submit(
+    { type: 'input', content: 'HOLD' },
+    context,
+  )
+  await held
+  await ask(server, ROOT_CONVERSATION_ID, `NOTIFY ${JSON.stringify({ id: other.id })}`)
+  expect(await pendingNotifies(server)).toHaveLength(1)
+  expect(await kinds(server, ROOT_CONVERSATION_ID)).not.toContain('lineage.finished')
+  release()
+  await until(async () => (await pendingNotifies(server)).length === 0)
+  await server.root.waitForIdle(context)
+  const view = await server.root.context(context)
+  const finished = view.entries.filter((entry) => entry.kind === 'lineage.finished')
+  expect(finished).toHaveLength(1)
+  expect(finished[0].data).toEqual({ from: other.id, title: 'HOLD', text: 'echo HOLD' })
+  expect(textOf(finished[0].model?.[0]?.content)).toBe(
+    `#${other.id} finished · HOLD\n\nIts last answer:\necho HOLD`,
+  )
+  // The delivery started a run that answered it.
+  expect(view.entries.at(-1)!.kind).toBe('pi.assistant')
+  expect(textOf(view.entries.at(-1)!.model?.[0]?.content)).toContain(`#${other.id} finished`)
+})
+
+it('leaves a note without waking the caller when wake is false', async () => {
+  const { server } = await notifyFixture()
+  const other = await second(server)
+  await ask(server, other.id, 'Done already')
+  await ask(server, ROOT_CONVERSATION_ID, `NOTIFY ${JSON.stringify({ id: other.id, wake: false })}`)
+  await until(async () => (await kinds(server, ROOT_CONVERSATION_ID)).includes('lineage.note'))
+  await until(async () => (await pendingNotifies(server)).length === 0)
+  const view = await server.root.context(context)
+  const note = view.entries.at(-1)!
+  expect(note.kind).toBe('lineage.note')
+  expect(note.data).toEqual({
+    text: 'echo Done already',
+    from: other.id,
+    source: 'finished',
+    title: 'Done already',
+  })
+  expect(
+    (await server.harness.snapshot(LiveDoc, ROOT_CONVERSATION_ID, context))?.run,
+  ).toBeUndefined()
+})
+
+it('keeps one pending notify per target and delivers it once across a reopen', async () => {
+  const { server, home } = await notifyFixture()
+  const other = await second(server)
+  await (await server.harness.conversation(other.id, context))!.submit(
+    { type: 'input', content: 'HOLD' },
+    context,
+  )
+  await ask(server, ROOT_CONVERSATION_ID, `NOTIFY ${JSON.stringify({ id: other.id })}`)
+  await ask(server, ROOT_CONVERSATION_ID, `NOTIFY ${JSON.stringify({ id: other.id, wake: false })}`)
+  const pending = await pendingNotifies(server)
+  expect(pending.map((task) => task.input)).toEqual([{ target: other.id, wake: false }])
+
+  await server.close()
+  servers.splice(servers.indexOf(server), 1)
+  const { server: reopened, release } = await notifyFixture(home)
+  expect(await pendingNotifies(reopened)).toHaveLength(1)
+  release()
+  await until(async () => (await pendingNotifies(reopened)).length === 0)
+  await reopened.root.waitForIdle(context)
+  const entries = await kinds(reopened, ROOT_CONVERSATION_ID)
+  expect(entries.filter((kind) => kind === 'lineage.note')).toHaveLength(1)
+  expect(entries).not.toContain('lineage.finished')
 })

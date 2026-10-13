@@ -1,6 +1,7 @@
 import {
   CheckIcon,
   ChevronRightIcon,
+  CircleCheckIcon,
   GitBranchIcon,
   GitForkIcon,
   LoaderCircleIcon,
@@ -80,10 +81,42 @@ function Branched({ entry }: { entry: EntryRecord }) {
   )
 }
 
+/** A conversation this one asked `notify` about has finished: its title and last answer. */
+function Finished({ entry }: { entry: EntryRecord }) {
+  const { switchConversation } = useUltimate()
+  const { from, title, text } = entry.data as { from: number; title?: string; text: string }
+  return (
+    <section
+      className="min-w-0 rounded-md border border-l-2 border-border border-l-success/70 bg-muted/20"
+      data-lineage-finished={from}
+    >
+      <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+        <CircleCheckIcon className="size-3.5 shrink-0 text-success" />
+        <button
+          className="min-w-0 cursor-pointer truncate text-left text-foreground hover:underline"
+          onClick={() => switchConversation(from)}
+          title={`Open #${from}`}
+          type="button"
+        >
+          #{from} finished{title ? ` · ${title}` : ''}
+        </button>
+      </header>
+      <div className="min-w-0 px-3 py-2.5 text-[13px] leading-relaxed">
+        <MessageResponse>{text}</MessageResponse>
+      </div>
+    </section>
+  )
+}
+
 /** A note another conversation (or the lander) left here. */
 function Note({ entry }: { entry: EntryRecord }) {
   const { switchConversation } = useUltimate()
-  const { from, text, source } = entry.data as { from?: number; text: string; source?: 'lander' }
+  const { from, text, source } = entry.data as {
+    from?: number
+    text: string
+    source?: 'lander' | 'finished'
+  }
+  if (source === 'finished') return <Finished entry={entry} />
   const landed = source === 'lander'
   return (
     <section
@@ -333,6 +366,7 @@ export default defineWebExtension({
   entries: {
     'lineage.branched': Branched,
     'lineage.note': Note,
+    'lineage.finished': Finished,
     'pi.reset': Brief,
   },
   slots: { 'composer.status': [BriefStatus], overlay: [BranchDialog] },

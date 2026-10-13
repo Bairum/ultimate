@@ -13,6 +13,12 @@ A project is one tree of conversations: a root that holds the idea, and branches
 - **Notes**: the `note` tool `{ to: id | 'root', text }` writes a `lineage.note` entry in the target without waking it;
   its model reads `Note from #N: …` with its next input. Other extensions call `leaveNote(host, to, text, source?)`;
   `source: { source: 'lander' }` renders as a landing.
+- **Notify**: the `notify` tool `{ id, wake? }` starts a background task `lineage.notify` in the caller that waits
+  until #id is idle (`waitForIdle`: its runs and its subagents), then delivers `#id finished · <title>` with its last
+  answer (≤1500 chars). `wake` (default) submits it as a follow-up input placed as a `lineage.finished` entry, so it
+  starts the caller's next run; `wake: false` leaves a `lineage.note` with `source: 'finished'`. Both use request id
+  `lineage:notify:<target>:<task>`, so a resumed task delivers once; calling `notify` again for the same id aborts the
+  pending one.
 - **Prompt**: the `lineage` section tells each top-level conversation where it sits in the tree and how to read the
   others (codemode `ultimate.entries(id)`, `ultimate.search()`).
 - **Compaction**: top-level conversations summarize with their own model and a lineage focus (root: idea, principles,

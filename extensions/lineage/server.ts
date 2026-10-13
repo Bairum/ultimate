@@ -15,7 +15,14 @@ import {
   section,
   UsageDoc,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, EntryId, ModelRef, Tx } from '@earendil-works/pi-durable'
+import type {
+  ConversationId,
+  Cursor,
+  EntryId,
+  ModelRef,
+  TaskId,
+  Tx,
+} from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { workspaces } from '../workspaces/workspaces.ts'
@@ -242,8 +249,80 @@ function lineage(host: ExtensionHost) {
       { id },
       { conversationId: id, ownership: { kind: 'conversation' }, background: true },
     )
-  return { Brief, startBrief }
+  const Notify = defineTask<
+    { target: ConversationId; wake: boolean },
+    { phase: 'wait' } | { phase: 'deliver'; title?: string; text: string },
+    null
+  >({
+    name: 'lineage.notify',
+    version: 1,
+    initial: () => ({ phase: 'wait' }),
+    phases: {
+      wait: async (task, runtime, ctx) => {
+        const { target } = task.input
+        await (await runtime.conversation(target, ctx))?.waitForIdle(ctx)
+        const answer = (await runtime.context(target, ctx)).messages.findLast(
+          (message) => message.role === 'assistant' && contentText(message.content).trim(),
+        )
+        const said = answer ? contentText(answer.content).trim() : ''
+        const title = host.conversations().find((summary) => summary.id === target)?.title
+        await runtime.commit(
+          () => ({
+            status: 'running',
+            checkpoint: {
+              phase: 'deliver',
+              ...(title ? { title } : {}),
+              text: said
+                ? said.length > FINISHED_CHARS
+                  ? `${said.slice(0, FINISHED_CHARS)}…`
+                  : said
+                : 'It gave no answer.',
+            },
+          }),
+          ctx,
+        )
+      },
+      deliver: async (task, runtime, ctx) => {
+        const { target, wake } = task.input
+        const { title, text } = task.state.checkpoint as { title?: string; text: string }
+        const requestId = `lineage:notify:${target}:${task.id}`
+        if (wake)
+          await (await runtime.conversation(runtime.conversationId, ctx))!.submit(
+            {
+              type: 'input',
+              content: finishedText(target, title, text),
+              whenBusy: 'followUp',
+              requestId,
+              entry: {
+                kind: 'lineage.finished',
+                data: { from: target, text, ...(title ? { title } : {}) },
+              },
+            },
+            ctx,
+          )
+        else
+          await leaveNote(host, runtime.conversationId, text, {
+            from: target,
+            source: 'finished',
+            ...(title ? { title } : {}),
+            requestId,
+          })
+        await runtime.commit(
+          () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
+          ctx,
+        )
+      },
+    },
+    abort: (_task, runtime, ctx) =>
+      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+  })
+  return { Brief, startBrief, Notify }
 }
+
+/** How much of the finished conversation's last answer a notify delivers. */
+const FINISHED_CHARS = 1500
+const finishedText = (id: number, title: string | undefined, text: string) =>
+  `#${id} finished${title ? ` · ${title}` : ''}\n\nIts last answer:\n${text}`
 
 export type BranchInput = {
   from?: number
@@ -295,7 +374,7 @@ export async function leaveNote(
   host: Pick<ExtensionHost, 'harness'>,
   to: number | 'root',
   text: string,
-  source?: { from?: number; source?: 'lander' },
+  source?: { from?: number; source?: 'lander' | 'finished'; title?: string; requestId?: string },
 ) {
   const target = to === 'root' ? await rootOf(host, context) : (to as ConversationId)
   const conversation = await host.harness().conversation(target, context)
@@ -304,12 +383,14 @@ export async function leaveNote(
   await conversation.submit(
     {
       type: 'write',
+      ...(source?.requestId ? { requestId: source.requestId } : {}),
       entry: {
         kind: 'lineage.note',
         data: {
           text,
           ...(from === undefined ? {} : { from }),
           ...(source?.source ? { source: source.source } : {}),
+          ...(source?.title ? { title: source.title } : {}),
         },
         model: [
           {
@@ -317,7 +398,9 @@ export async function leaveNote(
             content:
               source?.source === 'lander'
                 ? `Note from the lander: ${text}`
-                : `Note from #${from ?? '?'}: ${text}`,
+                : source?.source === 'finished'
+                  ? finishedText(from!, source.title, text)
+                  : `Note from #${from ?? '?'}: ${text}`,
             timestamp: Date.now(),
           },
         ],
@@ -417,10 +500,10 @@ export const actions = {
 }
 
 export default function lineageExtension(host: ExtensionHost) {
-  const { Brief } = lineage(host)
+  const { Brief, Notify } = lineage(host)
   return defineExtension({
     name: 'lineage',
-    tasks: [Brief],
+    tasks: [Brief, Notify],
     sections: [section('lineage', (input, ctx) => lineageSection(host, input.conversationId, ctx))],
     hooks: [
       hook(CompactionTask, {
@@ -471,6 +554,55 @@ export default function lineageExtension(host: ExtensionHost) {
         async execute({ to, text }, api) {
           const target = await leaveNote(host, to, text, { from: api.conversationId })
           return { output: [{ type: 'text', text: `Left a note in #${target}.` }] }
+        },
+      }),
+      defineTool({
+        name: 'notify',
+        description:
+          'Get told when conversation `id` finishes: once it and its subagents are idle (at once if it already is), you receive "#id finished" with its title and last answer. `wake` (default true) starts your next run with it; `wake: false` leaves it as a note you read with your next input. Calling it again for the same id replaces the earlier request.',
+        parameters: Type.Object({
+          id: Type.Integer({ minimum: 1 }),
+          wake: Type.Optional(Type.Boolean()),
+        }),
+        async execute({ id, wake = true }, api, ctx) {
+          const target = id as ConversationId
+          if (target === api.conversationId)
+            throw new Error('A conversation cannot notify on itself')
+          const replaced = await api.commit(async (tx) => {
+            if (!(await tx.conversation(target))) throw new Error(`No conversation #${target}`)
+            const pending: TaskId[] = []
+            let cursor: Cursor | undefined
+            do {
+              const page = await tx.scanTasks(
+                { conversationId: api.conversationId, kind: Notify.definition.name },
+                100,
+                cursor,
+              )
+              for (const task of page.items)
+                if (
+                  task.state.status !== 'terminal' &&
+                  (task.input as { target: number }).target === target
+                )
+                  pending.push(task.id)
+              cursor = page.next
+            } while (cursor)
+            await tx.createTask(
+              Notify,
+              { target, wake },
+              { ownership: { kind: 'conversation' }, background: true },
+            )
+            return pending
+          }, ctx)
+          for (const task of replaced) await host.harness().abortTask(task, ctx)
+          host.harness().resume()
+          return {
+            output: [
+              {
+                type: 'text',
+                text: `You will ${wake ? 'be woken' : 'get a note'} when #${target} finishes.`,
+              },
+            ],
+          }
         },
       }),
     ],
