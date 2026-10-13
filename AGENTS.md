@@ -136,6 +136,10 @@ This standing permission does not authorize releases, publishing, deployments, o
 - Core server/web contracts live in `shared/protocol.ts`; extension-local types live with their extension.
 - Pin `@earendil-works/*` packages to exact versions; Pi Durable is experimental.
 - Checks: `pnpm check` (format, lint, types) and `pnpm test` must pass before a commit.
+- Every user-visible result is designed, not dumped: status and outcomes (a subagent report, a landing, a failure) get a
+  renderer that matches the existing cards (see `extensions/subagents/messages.tsx`, `extensions/workspaces/log.tsx`),
+  never plain Markdown in a message. Look at the running app and recent screenshots first, write the expected look into
+  task descriptions, and check a worker's screenshots against it before accepting.
 
 ## Review quality
 
