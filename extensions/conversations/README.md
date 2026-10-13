@@ -87,7 +87,7 @@ from requesting it again. Established conversations are not backfilled on later 
 becomes available later. Clear context removes the flag so a new context can request its own intent.
 Intent describes the requested goal, not completed work; it can publish while the main agent is busy.
 It does not assess a reply, increment exchanges, or consume the 1/4/7 cadence. New input (including queued input),
-reset, compaction past the input, or a superseding spawn/reply request makes a held result stale.
+a reset, or a superseding spawn/reply request makes a held result stale; compaction does not.
 Accepted intent appends `conversations.intent-summarized` with `{ summary, at }` (Unix milliseconds), atomically
 with summary/title acceptance and task settlement. The transcript shows a quiet “Intent: …” row with local time
 and a full-date tooltip. This custom system entry has no model contribution; it survives replay without duplication.
@@ -106,9 +106,10 @@ exchange, or consuming the 1/4/7 reply cadence. The durable action receipt dedup
 messages and waits do not schedule it. If conversations or Luna is unavailable, child creation proceeds without it.
 Spawn refreshes share the summary task, response receipt and usage accounting. They may publish while the parent
 is busy, but reset, newer input or a superseding summary request invalidates them; manual titles stay protected.
-The request reads recent user/assistant text and the previous summary, not tools, images or thinking.
+The request reads the original request (kept even when compaction removed it from context), recent
+user/assistant text and the previous summary, not tools, images or thinking.
 It times out after 60 seconds. Assessment, activity, title and summary are checked and shortened for display.
-Assessments describe the reply, not verified completion. New work, reset or compaction can make a result stale.
+Assessments describe the reply, not verified completion. New work or a reset can make a result stale; only a reset ends an exchange.
 Subagents get assessments and activity only; history forks are excluded.
 Luna can name an untitled conversation or update its own last generated title.
 API titles, renames and creator-given labels are kept. A blank rename restores automatic naming.

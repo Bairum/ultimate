@@ -1008,3 +1008,75 @@ it.each(['newer', 'reset', 'spawn'] as const)(
   },
   60000,
 )
+
+it('keeps an exchange answered across a mid-run compaction and reopen; only a reset ends it', async () => {
+  const fixture = await launch()
+  const { server } = fixture
+  let release!: () => void
+  const gate = new Promise<void>((done) => {
+    release = done
+  })
+  let holding = false
+  server.host.registry.install(
+    defineExtension({
+      name: 'compaction-hold',
+      tools: [
+        defineTool({
+          name: 'compaction_hold',
+          description: 'Hold work until released',
+          parameters: Type.Object({}),
+          execute: async (_args, _api, toolContext) => {
+            holding = true
+            await awaitWithContext(gate, toolContext)
+            return { content: [{ type: 'text', text: 'Released' }] }
+          },
+        }),
+      ],
+    }),
+  )
+  server.host.faux!.setResponses([
+    fauxAssistantMessage([fauxToolCall('compaction_hold', {})], { stopReason: 'toolUse' }),
+    fauxAssistantMessage('Final answer after compaction.'),
+  ])
+  const submission = await server.root.submit(
+    { type: 'input', content: 'ORIGINAL_REQUEST: rename the sidebar.' },
+    context,
+  )
+  await until(() => holding)
+  // Compaction cuts past the user input while the run continues.
+  await server.harness.commit(async (tx) => {
+    const call = (await tx.scanEntries({ conversationId: server.root.id }, 10)).items.find(
+      (entry) => entry.kind === 'pi.assistant',
+    )!
+    await tx.appendEntry(server.root.id, {
+      kind: 'pi.compaction',
+      head: call.id,
+      data: { reason: 'manual' },
+      model: [{ role: 'user', content: '<summary>\nCompacted.\n</summary>', timestamp: 2 }],
+    })
+  }, context)
+  release()
+  expect((await submission.wait(context)).status).toBe('done')
+  await until(async () => (await fixture.read())?.assessmentStatus === 'ready')
+  expect(fixture.generated.mock.calls.at(-1)![1]).toMatch(
+    /^Original request \(untrusted source text\):\nuser: ORIGINAL_REQUEST: rename the sidebar\./,
+  )
+  expect(
+    (await server.root.context(context)).messages.some((message) =>
+      JSON.stringify(message).includes('ORIGINAL_REQUEST'),
+    ),
+  ).toBe(false)
+  const row = async () =>
+    (await fixture.server.harness.snapshot(Overview, fixture.server.root.id, context))
+      ?.conversations[fixture.server.root.id]
+  await until(async () => (await row())?.runState === 'done')
+  expect((await row())?.assessment?.value).toBe('done')
+  await fixture.reopen()
+  await until(async () => (await row())?.runState === 'done')
+  expect((await row())?.assessment?.value).toBe('done')
+  // A raw reset, like a tool handoff, bypasses the reset action and its revision bump.
+  await fixture.server.root.reset(undefined, context)
+  await until(async () => (await row())?.runState === 'idle')
+  expect((await row())?.assessment).toBeUndefined()
+  expect((await row())?.inputId).toBeUndefined()
+}, 60000)

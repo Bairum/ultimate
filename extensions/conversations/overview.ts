@@ -8,7 +8,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, EntryId, TaskId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { currentAnswer, Summaries } from './summary.ts'
+import { currentAnswer, exchangeUser, resetAfter, Summaries } from './summary.ts'
 import type { OverviewRow, OverviewState } from './types.ts'
 
 export const Overview = defineDoc<OverviewState>({
@@ -40,9 +40,8 @@ export function overviewBehavior(
         const state = states[position]
         const live = await tx.doc(LiveDoc, id)
         const inbox = await tx.doc(InboxDoc, id)
-        const head = await tx.latestHeadMarker(id)
         const userId = latestUser.get(id)
-        const active = userId !== undefined && (!head || head.head <= userId)
+        const active = userId !== undefined && !(await resetAfter(tx, id, userId))
         const taskId = latestRun.get(id)
         const run = taskId === undefined ? undefined : await tx.task(taskId)
         const outcome = run?.state.status === 'terminal' ? run.state.outcome : undefined
@@ -140,7 +139,7 @@ export function overviewBehavior(
       }
       if (pending.size) schedule()
     })
-    // Task receipts and the newest visible user entry establish actual state without Luna/backfill.
+    // Task receipts and the newest user entry since a reset establish actual state without Luna/backfill.
     await host.harness().commit(async (tx) => {
       let cursor: Cursor | undefined
       do {
@@ -156,21 +155,9 @@ export function overviewBehavior(
         const page = await tx.scanConversations({}, 256, cursor)
         for (const own of page.items) {
           pending.add(own.id)
-          const head = await tx.latestHeadMarker(own.id)
-          let before: Cursor | undefined
-          do {
-            const entries = await tx.scanEntries(
-              { conversationId: own.id, ...(head ? { minEntryId: head.head } : {}) },
-              64,
-              before,
-            )
-            const user = entries.items.find((entry) => entry.kind === 'pi.user')
-            if (user) {
-              latestUser.set(own.id, Math.max(user.id, latestUser.get(own.id) ?? 0) as EntryId)
-              break
-            }
-            before = entries.next
-          } while (before !== undefined)
+          const user = await exchangeUser(tx, own.id)
+          if (user)
+            latestUser.set(own.id, Math.max(user.id, latestUser.get(own.id) ?? 0) as EntryId)
         }
         cursor = page.next
       } while (cursor !== undefined)

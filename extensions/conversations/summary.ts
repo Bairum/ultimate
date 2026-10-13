@@ -251,10 +251,35 @@ export async function generateSummary(
   return { ...result, title, summary }
 }
 
-/** A reset or compaction that cut past this answer makes its result stale. */
-async function visible(tx: Tx, id: Parameters<Tx['conversation']>[0], answer: EntryId) {
+/** Only a reset ends an exchange; a compaction past this entry keeps it current. */
+export async function resetAfter(tx: Tx, id: ConversationId, entry: EntryId) {
   const head = await tx.latestHeadMarker(id)
-  return !head || head.head <= answer
+  if (!head || head.head <= entry) return false
+  let cursor: Cursor | undefined
+  do {
+    const page = await tx.scanEntries(
+      { conversationId: id, minEntryId: (entry + 1) as EntryId },
+      64,
+      cursor,
+    )
+    if (page.items.some((item) => item.kind === 'pi.reset')) return true
+    cursor = page.next
+  } while (cursor !== undefined)
+  return false
+}
+
+/** The newest user entry since the newest reset, including entries a compaction removed from context. */
+export async function exchangeUser(tx: Tx, id: ConversationId) {
+  let cursor: Cursor | undefined
+  do {
+    const page = await tx.scanEntries({ conversationId: id }, 64, cursor)
+    for (const entry of page.items) {
+      if (entry.kind === 'pi.reset') return undefined
+      if (entry.kind === 'pi.user') return entry
+    }
+    cursor = page.next
+  } while (cursor !== undefined)
+  return undefined
 }
 
 /** A current, idle answer only: queued input and newer context invalidate assessments too. */
@@ -268,7 +293,7 @@ export async function currentAnswer(
 }
 
 async function currentContext(tx: Tx, id: ConversationId, answer: EntryId) {
-  if (!(await visible(tx, id, answer))) return false
+  if (await resetAfter(tx, id, answer)) return false
   if ((await tx.doc(InboxDoc, id)).items.some((item) => item.mode !== 'write')) return false
   let cursor: Cursor | undefined
   do {
@@ -433,9 +458,27 @@ export function summaryBehavior(
         }
         const answer = task.state.checkpoint.answer
         const view = await runtime.context(runtime.conversationId, context, answer)
+        // Compaction can remove the request from the model context; it stays in storage.
+        const request =
+          task.input.intent ??
+          (task.input.generation === undefined
+            ? undefined
+            : submissionsForAnswer(
+                await Promise.all(
+                  task.input.inputs.map(async (id) =>
+                    (await host.harness().submission(id, context))?.status(context),
+                  ),
+                ),
+                answer,
+              ))
         await runtime.commit(async (tx) => {
           const state = await tx.doc(Summaries, runtime.conversationId)
           if (state.pending !== task.id || state.revision !== task.input.revision) return terminal
+          const original =
+            request === undefined
+              ? await exchangeUser(tx, runtime.conversationId)
+              : await tx.entry(request)
+          const requestText = transcriptText(original?.model ?? []).slice(0, 2400)
           return {
             status: 'running',
             checkpoint: {
@@ -443,6 +486,9 @@ export function summaryBehavior(
               answer,
               summary: task.state.checkpoint.summary,
               input:
+                (requestText
+                  ? `Original request (untrusted source text):\n${requestText}\n\n`
+                  : '') +
                 summaryInput(view.messages, state.summary) +
                 (task.input.spawn
                   ? `\n\nDelegation just started (untrusted source text):\n${task.input.spawn.agent}: ${task.input.spawn.task.slice(0, 2400)}`
