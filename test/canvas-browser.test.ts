@@ -147,8 +147,22 @@ it('starts a conversation at the hub and follows its tools, writing, subagent an
 
     // The scout answers: the wait ends, a dot runs back to the parent, and the parent replies; the finished scout
     // shrinks to a pill.
+    // Observe before release: the answer pulse lasts only 1.2 seconds, so polling afterwards can miss it.
+    await edge.evaluate((element) => {
+      const map = element.closest('[data-canvas-map]')!
+      const selector = `[data-testid="${element.getAttribute('data-testid')}"] [data-edge-answer]`
+      Reflect.set(window, 'canvasAnswerObserved', false)
+      const observer = new MutationObserver(() => {
+        if (!map.querySelector(selector)) return
+        Reflect.set(window, 'canvasAnswerObserved', true)
+        observer.disconnect()
+      })
+      observer.observe(map, { childList: true, subtree: true })
+    })
     release()
-    await edge.locator('[data-edge-answer]').waitFor(present)
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, 'canvasAnswerObserved')), timeout)
+      .toBe(true)
     await expect.poll(() => panel.getAttribute('data-status'), timeout).toBe('replied')
     await edge.locator('[data-edge-flow="waiting"]').waitFor({ state: 'detached', ...timeout })
     await expect

@@ -40,13 +40,14 @@ When the shown tree spawns a subagent, the view re-frames the tree gently so the
 in, unless you moved the map in the last four seconds.
 
 Click selects a panel, which shows its conversation; the selection follows the shown conversation and its URL. Enter
-or a double-click zooms the panel to fill the view with the real transcript and composer. Escape goes back to the map,
-except while the agent works: then Escape stops the run, as in the agent view, and the Map button or zooming out goes
-back. The viewport is kept in this browser (`localStorage`).
+or a double-click zooms the panel to fill the view with the real transcript and composer. Escape always goes back to
+the map without stopping the run, even from the composer while the agent works. Use the explicit Stop button to stop
+a run; Escape still stops runs on the Agent surface. The Map button or zooming out also goes back. The viewport is
+kept in this browser (`localStorage`).
 
-Keys, all in ⌘K under Canvas and only on this surface, never while typing: `=` or `+`, and `-` (or mod+wheel) zoom, `0` fits
-everything, `f` fits the selected tree, arrows select the nearest panel that way, Enter opens, Escape goes back, `h`
-flies to the hub, `n` starts a conversation there. The commands also rename, archive or unarchive the selected
+Keys, all in ⌘K under Canvas and only on this surface, not while typing except Escape from the composer: `=` or `+`,
+and `-` (or mod+wheel) zoom, `0` fits everything, `f` fits the selected tree, arrows select the nearest panel that way,
+Enter opens, Escape goes back, `h` flies to the hub, `n` starts a conversation there. The commands also rename, archive or unarchive the selected
 conversation, show or hide archived conversations (the toolbar's archive toggle), and open its workspace details.
 
 A panel's `…` menu offers what the sidebar row and the agent view did: open, stop the run, workspace details, and for a

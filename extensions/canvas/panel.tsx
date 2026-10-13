@@ -841,8 +841,7 @@ function Focused({ agent, feed }: { agent: Agent; feed?: CanvasAgent }) {
         >
           <ArrowLeftIcon className="size-3.5" />
           Map
-          {/* While it works, Escape stops the run, as in the agent view. */}
-          {!isActive(agent.status) && <Kbd>{formatKeys('escape')[0].join(' ')}</Kbd>}
+          <Kbd>{formatKeys('escape')[0].join(' ')}</Kbd>
         </button>
         <Mark status={agent.status} />
         <Title agent={agent} className="flex-1" />

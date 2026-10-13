@@ -35,7 +35,7 @@ const commands: CommandContribution[] = [
     title: 'Stop the run',
     keys: 'escape',
     whileTyping: true,
-    when: () => getConversation().busy,
+    when: (context) => context.surface !== 'canvas' && getConversation().busy,
     run: () => api.abort(),
   },
   {
