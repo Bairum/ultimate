@@ -6,7 +6,11 @@ import {
   getSupportedThinkingLevels,
   isModelType,
 } from '@earendil-works/pi-ai/models'
-import { fauxServer, temp, until } from './helpers.ts'
+import { fauxServer, temp, until, attach, post, sourceCopy } from './helpers.ts'
+import { createServer } from '../server/main.ts'
+import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
+import { context } from '../server/harness.ts'
+import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 
 it('loads pinned TypeScript upstream through Vite, tracks external auth, and cleans up reload/disable', async () => {
   const home = await temp()
@@ -144,3 +148,170 @@ if (process.argv.includes('status')) {
     await server.close()
   }
 }, 60000)
+
+for (const lifecycle of ['reload', 'reopen', 'swap', 'cancel', 'permanent'] as const) {
+  it(`preserves Claude Code requests across ${lifecycle}`, async () => {
+    const home = await temp()
+    const cli = join(home, 'claude')
+    const started = join(home, 'started')
+    const release = join(home, 'release')
+    const workers = join(home, 'workers')
+    await writeFile(
+      cli,
+      `#!${process.execPath}
+import { existsSync, appendFileSync } from 'node:fs'
+import { createInterface } from 'node:readline'
+if (process.argv.includes('status')) {
+  console.log(JSON.stringify({ loggedIn: true, subscriptionType: 'max' }))
+} else {
+  appendFileSync(${JSON.stringify(workers)}, process.pid + '\\n')
+  const emit = (event) => console.log(JSON.stringify(event))
+  for await (const line of createInterface({ input: process.stdin })) {
+    const frame = JSON.parse(line)
+    if (frame.type !== 'user') continue
+    if (frame.shouldQuery === false) {
+      emit({ type: 'result', subtype: 'success', num_turns: 0 })
+      continue
+    }
+    emit({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: 'Recovered.' } } })
+    emit({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 } })
+    appendFileSync(${JSON.stringify(started)}, 'request\\n')
+    while (!existsSync(${JSON.stringify(release)})) await new Promise(r => setTimeout(r, 20))
+    const message = { id: 'msg_test', role: 'assistant', content: [{ type: 'text', text: 'Recovered.' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }
+    emit({ type: 'assistant', message })
+    emit({ type: 'stream_event', event: { type: 'message_stop' } })
+    emit({ type: 'result', subtype: ${JSON.stringify(lifecycle)} === 'permanent' ? 'invalid_request' : 'success', is_error: ${JSON.stringify(lifecycle)} === 'permanent', usage: message.usage })
+  }
+}
+`,
+    )
+    await chmod(cli, 0o755)
+    vi.stubEnv('PI_CLAUDE_CODE_COMMAND', cli)
+    const projectRoot = join(home, 'project')
+    await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
+    await writeFile(
+      join(projectRoot, '.ultimate/settings.json'),
+      JSON.stringify({ extensions: { enable: ['claude-code'] } }),
+    )
+    new ProjectTrustStore(join(home, '.ultimate')).set(projectRoot, true)
+    const root = await sourceCopy(home)
+    const options = {
+      ultimateRoot: root,
+      projectRoot,
+      home: join(home, 'state'),
+      userHome: home,
+      port: 0,
+      faux: false,
+    }
+    let server = await createServer(options)
+    const messages = async () =>
+      (await server.root.entries({}, 100, undefined, context)).items.flatMap(
+        (entry) => entry.model ?? [],
+      )
+    const model = server.host.modelRuntime.getModel('claude-code', 'claude-sonnet-5')!
+    if (!isModelType(model, 'chat')) throw new Error('Expected chat model')
+    try {
+      await server.root.configure(
+        { model: { provider: 'claude-code', modelId: 'claude-sonnet-5' } },
+        context,
+      )
+      await server.host.modelRuntime.refresh({ allowNetwork: false })
+      expect(server.host.modelRuntime.getModel('claude-code', 'claude-sonnet-5')).toBeDefined()
+      const submitted = await server.root.submit(
+        { type: 'input', content: 'Wait for release.' },
+        context,
+      )
+      await until(async () => {
+        const terminal = (await messages()).find(
+          (message) => message.role === 'assistant' && message.stopReason !== 'pending',
+        )
+        if (terminal) throw new Error(JSON.stringify(terminal))
+        return !!(await readFile(started, 'utf8').catch(() => ''))
+      })
+      // A browser refresh disconnects its event subscription, not the durable run.
+      const browser = await attach(server)
+      await browser.close()
+      const reconnected = await attach(server)
+      await reconnected.close()
+      expect(
+        (await post(server, '/api/extensions/claude-code/actions/status', { args: null })).status,
+      ).toBe(200)
+      expect((await messages()).filter((message) => message.role === 'assistant')).toHaveLength(0)
+      let streamsShared = true
+      let cancelStatus: number | undefined
+      let cancelOutcome: unknown
+      if (lifecycle === 'reload') {
+        const provider = server.host.modelRuntime.getProvider('claude-code')
+        const file = join(root, 'extensions/claude-code/server.ts')
+        await writeFile(file, (await readFile(file, 'utf8')) + '\n')
+        server.vite.watcher.emit('change', file)
+        await until(() => server.host.modelRuntime.getProvider('claude-code') !== provider)
+        const replacement = server.host.modelRuntime.getProvider('claude-code')!
+        streamsShared =
+          replacement.stream === provider?.stream &&
+          replacement.streamSimple === provider?.streamSimple
+      } else if (lifecycle === 'reopen' || lifecycle === 'swap') {
+        // Supervised swaps release the harness before extension cleanup; ordinary
+        // close does the reverse. Exercise both orders against the same durable home.
+        if (lifecycle === 'swap') await server.release()
+        await server.close()
+        server = await createServer(options)
+        await until(async () => (await readFile(started, 'utf8')).trim().split('\n').length === 2)
+      } else if (lifecycle === 'cancel') {
+        cancelStatus = (await post(server, '/api/conversations/1/abort')).status
+        const outcome = await submitted.wait(context)
+        cancelOutcome = {
+          status: outcome.status,
+          reason: 'reason' in outcome ? outcome.reason : undefined,
+        }
+      }
+      await writeFile(release, 'ready')
+      await server.harness.waitForIdle(context)
+      const assistants = (await messages()).filter((message) => message.role === 'assistant')
+      expect(streamsShared).toBe(true)
+      expect(cancelStatus).toBe(lifecycle === 'cancel' ? 200 : undefined)
+      expect(cancelOutcome).toEqual(
+        lifecycle === 'cancel' ? { status: 'unanswered', reason: 'aborted' } : undefined,
+      )
+      expect(assistants.at(0)).toMatchObject({
+        stopReason:
+          lifecycle === 'cancel' ? 'aborted' : lifecycle === 'permanent' ? 'error' : 'stop',
+        content: [{ type: 'text', text: 'Recovered.' }],
+        ...(lifecycle === 'permanent'
+          ? { errorMessage: 'Claude Code request failed: invalid_request' }
+          : {}),
+      })
+      if (lifecycle === 'cancel' || lifecycle === 'permanent') {
+        await server.close()
+        server = await createServer(options)
+        await server.harness.waitForIdle(context)
+      }
+      expect((await readFile(started, 'utf8')).trim().split('\n')).toHaveLength(
+        lifecycle === 'reopen' || lifecycle === 'swap' ? 2 : 1,
+      )
+    } finally {
+      const captured = server.host.modelRuntime.getProvider('claude-code')!
+      await server.close()
+      // Captured registrations must not start workers after resource cleanup began.
+      expect(() => captured.streamSimple(model, normalizeContext({ messages: [] }))).toThrow(
+        'provider is closing',
+      )
+      expect(() => captured.stream(model, normalizeContext({ messages: [] }))).toThrow(
+        'provider is closing',
+      )
+      await until(async () =>
+        (await readFile(workers, 'utf8'))
+          .trim()
+          .split('\n')
+          .every((pid) => {
+            try {
+              process.kill(Number(pid), 0)
+              return false
+            } catch {
+              return true
+            }
+          }),
+      )
+    }
+  }, 60000)
+}
