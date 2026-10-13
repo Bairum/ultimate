@@ -834,6 +834,7 @@ it.each(['none', 'legacy'])(
 it.each([
   ['  Conversation\n sidebar\t rendering extra words  ', 'Conversation sidebar rendering'],
   ['ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 extra words', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ123456'],
+  ['Conversation-specific Rendering UI', 'Conversation-specific Rendering'],
   ['', undefined],
   [' \n\t ', undefined],
   [null, undefined],

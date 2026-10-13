@@ -859,6 +859,9 @@ function Focused({ agent, feed }: { agent: Agent; feed?: CanvasAgent }) {
         </button>
         <Mark status={agent.status} />
         <Title agent={agent} className="flex-1" />
+        {agent.parent === undefined && agent.row?.feature && (
+          <FeatureTag className="shrink-0" feature={agent.row.feature} />
+        )}
         <Reasons agent={agent} className="text-[11px]" />
         <StateLabel className="text-[12px]" status={agent.status} />
         <WorkspaceBadge agent={agent} />

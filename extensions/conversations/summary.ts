@@ -287,7 +287,14 @@ export async function generateSummary(
   const summary = parsed.summary.replace(/\s+/g, ' ').trim().slice(0, 420)
   const feature =
     'feature' in parsed && typeof parsed.feature === 'string'
-      ? parsed.feature.replace(/\s+/g, ' ').trim().split(' ').slice(0, 3).join(' ').slice(0, 32)
+      ? parsed.feature
+          .replace(/\s+/g, ' ')
+          .trim()
+          .split(' ')
+          .slice(0, 3)
+          .join(' ')
+          .slice(0, 32)
+          .trim()
       : undefined
   return { ...result, title, summary, ...(feature ? { feature } : {}) }
 }
