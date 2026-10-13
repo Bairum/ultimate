@@ -178,6 +178,28 @@ export function workspaces(host: Host) {
     }, context)
     if (restarted) host.harness().resume()
   }
+  /**
+   * Why a tool call in conversation `id` must not run: it is a lander conversation whose task owns the checkout for a
+   * submission, and the call is not part of that task's own run on the submission's failure.
+   */
+  async function landerOwnsCheckout(id: ConversationId, context: Context) {
+    const harness = host.harness()
+    const index = await harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+    const source = Object.entries(index?.landerConversations ?? {}).find(
+      ([, lander]) => lander === id,
+    )?.[0]
+    const entry = index?.queue.find((item) => item.source === source && item.state === 'landing')
+    if (!entry) return undefined
+    if (entry.agent)
+      for (const input of (await harness.snapshot(LiveDoc, id, context))?.run?.inputs ?? [])
+        if (
+          (
+            await (await harness.submission(input, context))?.status(context)
+          )?.requestId?.startsWith(`lander-agent:${entry.id}:`)
+        )
+          return undefined
+    return `The lander is landing W${entry.conversationId}; ask again when it is idle`
+  }
   const get = async (id: ConversationId, context: Context) =>
     (await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context))?.items[String(id)]
   const Preparation = defineTask<{ id: ConversationId }, { phase: 'prepare' }, null>({
@@ -412,6 +434,7 @@ export function workspaces(host: Host) {
     Lander,
     resume,
     standLander,
+    landerOwnsCheckout,
     started,
     get,
     land,

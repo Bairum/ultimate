@@ -155,7 +155,8 @@ export default function workspaceExtension(host: ExtensionHost) {
             return { block: `Workspace setup failed: ${workspace.error}; start a new conversation` }
           if (workspace?.state === 'removed')
             return { block: 'This workspace was removed; start a new conversation' }
-          return undefined
+          const landing = await service.landerOwnsCheckout(api.conversationId, caller)
+          return landing ? { block: landing } : undefined
         },
       }),
     ],

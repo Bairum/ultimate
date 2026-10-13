@@ -641,14 +641,19 @@ export function createLander(
               }
               flaky.push(command)
             }
-            const integrated = await git(path, 'rev-parse', 'HEAD')
+            // Only the commit every check ran on lands: nothing may have moved or touched the checkout meanwhile.
+            if (
+              (await git(path, 'rev-parse', 'HEAD')) !== merged.sha ||
+              (await git(path, 'status', '--porcelain'))
+            )
+              return await fail(
+                'the integration checkout changed during checks',
+                `${await git(path, 'log', '--oneline', '-3')}\n${await git(path, 'status', '--short')}`.trim(),
+                'Submit again.',
+              )
             prepared = await runtime.memo<Prepared>(
               `prepared:${id}:${attempt}`,
-              {
-                base,
-                integrated,
-                flaky,
-              },
+              { base, integrated: merged.sha, flaky },
               context,
             )
           }
