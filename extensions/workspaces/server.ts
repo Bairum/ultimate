@@ -62,6 +62,9 @@ export const actions = {
   stats(_args: JsonValue, { host }: ActionContext) {
     return workspaces(host).stats(context)
   },
+  disk(_args: JsonValue, { host }: ActionContext) {
+    return workspaces(host).disk()
+  },
 }
 export default function workspaceExtension(host: ExtensionHost) {
   const service = workspaces(host)

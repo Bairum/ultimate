@@ -24,7 +24,7 @@ import {
 } from './data.tsx'
 import type { WorkspaceConversation as ConversationSummary } from './data.tsx'
 import { LanderLogEntry, LanderReport, WorkspaceCall } from './log.tsx'
-import type { WorkspaceInfo, WorkspaceStats } from './types.ts'
+import type { WorkspaceDisk, WorkspaceInfo, WorkspaceStats } from './types.ts'
 import { Row, Rows } from '../info/rows.tsx'
 
 function IsolationToggle() {
@@ -295,6 +295,7 @@ const parts = (entries: [number, string][]) =>
 function Stats() {
   const records = useWorkspaces()
   const { data, error, refetch } = useAction<WorkspaceStats>('workspaces', 'stats')
+  const disk = useAction<WorkspaceDisk>('workspaces', 'disk')
   const states = Object.entries(records)
     .map(([id, workspace]) => `${id}:${workspace.state}:${workspace.landed ?? ''}`)
     .join()
@@ -302,10 +303,13 @@ function Stats() {
     void refetch()
   }, [states, refetch])
   useEffect(() => {
-    const refresh = () => void refetch()
+    const refresh = () => {
+      void refetch()
+      void disk.refetch()
+    }
     window.addEventListener('focus', refresh)
     return () => window.removeEventListener('focus', refresh)
-  }, [refetch])
+  }, [refetch, disk.refetch])
   if (error) return <p className="px-4 py-3 text-xs text-error">{error.message}</p>
   if (!data) return null
   return (
@@ -341,11 +345,26 @@ function Stats() {
         <Row label="disk">
           <span
             className="truncate"
-            title="Allocated size of the worktrees directory; copy-on-write filesystems share part of it"
+            title="Each checkout's blocks added up; copy-on-write checkouts share many of them"
           >
-            {data.bytes === null ? 'unknown' : formatBytes(data.bytes)}
+            {disk.data ? (
+              disk.data.bytes === null ? (
+                'unknown'
+              ) : (
+                formatBytes(disk.data.bytes)
+              )
+            ) : (
+              <span className="text-muted-foreground/70">measuring…</span>
+            )}
           </span>
         </Row>
+        {disk.data?.real != null && (
+          <Row label="real">
+            <span className="truncate" title="Blocks shared between checkouts counted once (btrfs)">
+              {formatBytes(disk.data.real)}
+            </span>
+          </Row>
+        )}
       </Rows>
     </section>
   )

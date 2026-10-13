@@ -90,9 +90,9 @@ export type WorkspaceStats = Record<Workspace['state'], number> & {
   ahead: number
   fresh: number
   dirty: number
-  /** Disk the worktrees directory takes, or null when it could not be measured. */
-  bytes: number | null
 }
+/** Disk the worktrees directory takes: every checkout's blocks, and on btrfs the blocks they share counted once. */
+export type WorkspaceDisk = { bytes: number | null; real: number | null; at: number }
 export type LandResult = {
   text: string
   landed?: string

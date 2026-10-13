@@ -19,7 +19,8 @@ Unrelated dirty files in the source checkout do not block; `git merge --ff-only`
 If the target changed or diverged, update the workspace onto it and verify again; landing never rebases or pushes.
 `discard {id}` removes a clean checkout and keeps its branch and history.
 `stats` counts checkouts by state, ready ones by commits (landed on the target, ahead, none yet) and uncommitted
-changes, and measures the worktrees directory with `du` (copy-on-write filesystems share part of that).
+changes; `disk` measures the worktrees directory with `du`, and on btrfs also the real size with shared blocks counted
+once (`btrfs filesystem du`). Measuring takes seconds, so one runs at a time and its result is reused for a minute.
 
 ## Lander
 

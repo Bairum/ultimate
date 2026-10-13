@@ -854,7 +854,7 @@ it('runs lander checks only while holding the exclusive command slot', async () 
   expect((await submitted(f, id))[0]).toContain('landed as')
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(tip)
 })
-it('counts checkouts by state, commits and uncommitted changes, and measures their disk', async () => {
+it('counts checkouts by state, commits and uncommitted changes, and measures their disk once a minute', async () => {
   const f = await fixture()
   const landed = await f.create()
   const ahead = await f.create()
@@ -867,7 +867,7 @@ it('counts checkouts by state, commits and uncommitted changes, and measures the
   await writeFile(join((await f.service.get(dirty, context))!.path, 'dirty.txt'), 'dirty')
   await f.service.discard(removed, context)
   const stats = await actions.stats({}, { host: f.host } as ActionContext)
-  expect({ ...stats, bytes: undefined }).toEqual({
+  expect(stats).toEqual({
     total: 4,
     ready: 3,
     preparing: 0,
@@ -877,9 +877,10 @@ it('counts checkouts by state, commits and uncommitted changes, and measures the
     ahead: 1,
     fresh: 1,
     dirty: 1,
-    bytes: undefined,
   })
-  expect(stats.bytes).toBeGreaterThan(0)
+  const disk = await actions.disk({}, { host: f.host } as ActionContext)
+  expect(disk.bytes).toBeGreaterThan(0)
+  expect(await actions.disk({}, { host: f.host } as ActionContext)).toBe(disk)
   // Counting never removes anything.
   expect((await f.service.get(landed, context))!.state).toBe('ready')
 })
