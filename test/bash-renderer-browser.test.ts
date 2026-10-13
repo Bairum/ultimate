@@ -8,6 +8,7 @@ import { linkDependencies, skipWithoutChromium, temp } from './helpers.ts'
 it('renders command context separately from Bash output and preserves the original', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
+  const reported = String.raw`cd /home/haza/Projects/ultimate && rg -n "no_model" node_modules/@earendil-works/pi-durable/dist -l | head; rg -n -B8 "reason: \"no_model\"" node_modules/@earendil-works/pi-durable/dist/harness/compaction.js | head -30`
   const base = await temp('ultimate-bash-renderer-')
   let server: ViteDevServer | undefined
   let browser: Browser | undefined
@@ -33,7 +34,7 @@ window.show = (command, output = '', status = 'done', dropped) => flushSync(() =
     images: [], diagnostics: status === 'error' ? [{code: 'exit_code', message: 'exit code 2'}] : [],
   } })
 ))
-window.show('cd /home/haza/.ultimate/projects/ultimate-80acb577/worktrees/26077 && git status && git diff', 'On branch ultimate/47c790-26077\\nWorking tree clean')
+window.show(${JSON.stringify(reported)}, 'On branch ultimate/47c790-26077\\nWorking tree clean')
 `,
     )
     server = await createServer({
@@ -49,22 +50,23 @@ window.show('cd /home/haza/.ultimate/projects/ultimate-80acb577/worktrees/26077 
     const errors: string[] = []
     page.on('pageerror', (error) => errors.push(error.message))
     await page.goto(server.resolvedUrls!.local[0])
-    const header = page.getByRole('button', { name: /git status/ })
+    const header = page.getByRole('button', { name: /rg -n/ })
     await header.waitFor()
-    expect(await header.innerText()).toContain('git status · +1')
+    expect(await header.innerText()).toContain('rg -n "no_model"')
+    expect(await header.innerText()).toContain(' · +1')
     expect(await header.innerText()).not.toContain('/home/haza')
     expect(await page.getByText('cd /home/haza', { exact: false }).first().isVisible()).toBe(true)
-    const original =
-      'cd /home/haza/.ultimate/projects/ultimate-80acb577/worktrees/26077 && git status && git diff'
     await page.getByText('Original command', { exact: true }).click()
-    expect(await page.locator('details pre').innerText()).toBe(original)
+    expect(await page.locator('details pre').innerText()).toBe(reported)
     expect(await page.locator('pre.overflow-auto').innerText()).toBe(
       'On branch ultimate/47c790-26077\nWorking tree clean',
     )
-    expect(
-      await page.locator('pre.overflow-auto').getByText('git diff', { exact: true }).count(),
-    ).toBe(0)
-    expect(await page.getByText('&&', { exact: true }).count()).toBe(2)
+    expect(await page.locator('pre.overflow-auto').innerText()).not.toContain('rg -n')
+    expect(await page.getByText('&&', { exact: true }).count()).toBe(1)
+    expect(await page.getByText(';', { exact: true }).count()).toBe(1)
+    const rows = page.locator('div.flex > pre')
+    expect(await rows.allTextContents()).toContain(reported.split(' && ')[1].split('; ')[0])
+    expect(await rows.allTextContents()).toContain(reported.split('; ')[1])
 
     for (const width of [1200, 390]) {
       await page.setViewportSize({ width, height: 800 })
@@ -96,10 +98,11 @@ window.show('cd /home/haza/.ultimate/projects/ultimate-80acb577/worktrees/26077 
     )
     expect(await page.getByText('printf "a && b"', { exact: true }).isVisible()).toBe(true)
     await show('cd /workspace && pwd\necho done', 'done')
-    expect(await page.locator('summary').count()).toBe(0)
-    expect(
-      await page.getByText('cd /workspace && pwd\necho done', { exact: true }).isVisible(),
-    ).toBe(true)
+    expect(await page.getByRole('button', { name: /pwd/ }).innerText()).not.toContain(
+      'cd /workspace',
+    )
+    expect(await page.locator('summary').count()).toBe(1)
+    expect(await page.getByText('pwd\necho done', { exact: true }).isVisible()).toBe(true)
     await show(
       'cd /workspace && git status && git diff',
       Array.from({ length: 200 }, (_, i) => `line ${i}`).join('\n'),

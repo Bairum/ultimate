@@ -1,19 +1,30 @@
 export interface BashCommand {
   commands: string[]
+  operators: ('&&' | ';')[]
   directory?: string
 }
 
-/** Display only: recognize simple chains, not general shell grammar. */
+/** Display only: recognize ordinary lists, not general shell grammar. */
 export function formatBashCommand(command: string): BashCommand {
-  const intact = { commands: [command] }
-  if (/[\r\n]/.test(command)) return intact
+  // Extract a literal cd independently: an unsupported tail must not hide the work.
+  const cd =
+    /^[ \t]*cd[ \t]+(?:([^ \t\r\n'"\\|&;(){}<>$`#*?[\]]+)|'([^'\r\n]+)'|"([^"\\$`\r\n]+)")[ \t]*&&[ \t]*/.exec(
+      command,
+    )
+  const path = cd && (cd[1] ?? cd[2] ?? cd[3])
+  const directory = path && !/^[-~]/.test(path) ? path : undefined
+  const tail = directory ? command.slice(cd![0].length) : command
+  const context = directory ? { directory } : {}
+  const intact: BashCommand = { ...context, commands: [tail], operators: [] }
+  if (!tail || /[\r\n]/.test(tail)) return intact
   const commands: string[] = []
+  const operators: BashCommand['operators'] = []
   let quote = ''
   let start = 0
-  for (let i = 0; i < command.length; i++) {
-    const char = command[i]
+  for (let i = 0; i < tail.length; i++) {
+    const char = tail[i]
     if (char === '\\' && quote !== "'") {
-      if (++i === command.length || /\s/.test(command[i])) return intact
+      if (++i === tail.length || /\s/.test(tail[i])) return intact
       continue
     }
     if (quote) {
@@ -25,30 +36,36 @@ export function formatBashCommand(command: string): BashCommand {
       quote = char
       continue
     }
-    if (char === '&' && command[i + 1] === '&') {
-      commands.push(command.slice(start, i).trim())
+    if (char === '&' && tail[i + 1] === '&') {
+      commands.push(tail.slice(start, i).replace(/^[ \t]+|[ \t]+$/g, ''))
+      operators.push('&&')
       start = ++i + 1
-    } else if (/[|&;(){}<>$`#]/.test(char)) return intact
+    } else if (char === ';') {
+      commands.push(tail.slice(start, i).replace(/^[ \t]+|[ \t]+$/g, ''))
+      operators.push(';')
+      start = i + 1
+    } else if (char === '&') {
+      // Descriptor duplication belongs to a redirect, not a command separator.
+      if (!(/[<>]/.test(tail[i - 1] ?? '') && /[\d-]/.test(tail[i + 1] ?? ''))) return intact
+    } else if (
+      /[(){}$`#]/.test(char) ||
+      (char === '<' && tail[i + 1] === '<') ||
+      (char === '|' && tail[i + 1] === '|')
+    )
+      return intact
   }
   if (quote) return intact
-  commands.push(command.slice(start).trim())
+  commands.push(tail.slice(start).replace(/^[ \t]+|[ \t]+$/g, ''))
   if (
     commands.some(
       (part) =>
         !part ||
-        /^(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|select|function|!|time|coproc|\[\[)(?:\s|$)/.test(
+        /(?:^|\|\s*)(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|select|function|!|time|coproc|\[\[)(?:\s|$)/.test(
           part,
         ),
     )
   )
     return intact
   if (commands.length < 2) return intact
-
-  // Only strip cd with one literal path; options, expansions and escapes stay visible.
-  const cd = /^cd\s+(?:([^\s'"\\]+)|'([^']+)'|"([^"\\]+)")$/.exec(commands[0])
-  const directory = cd && (cd[1] ?? cd[2] ?? cd[3])
-  if (directory && !/^[-~]/.test(directory) && !(cd[1] && /[*?[\]]/.test(cd[1]))) {
-    return { directory, commands: commands.slice(1) }
-  }
-  return { commands }
+  return { ...context, commands, operators }
 }
