@@ -36,8 +36,6 @@ const inputs = (overrides: Partial<Inputs>): Inputs => ({
     { id: 1, busy: false, inputAt: 1, title: 'Review' },
     { id: 2, busy: false, inputAt: 2, parentConversationId: 1, ownerTaskId: 7, label: 'worker' },
     { id: 3, busy: false, inputAt: 3, parentConversationId: 1, ownerTaskId: 8, label: 'scout' },
-    // A history fork has a parent but no owner task: it stays off the map.
-    { id: 4, busy: false, inputAt: 4, parentConversationId: 1 },
   ],
   tasks: { tasks: {} },
   agents: {},
@@ -56,6 +54,21 @@ const shapes = (overrides: Partial<Inputs>) =>
     status,
     reasons,
   }))
+
+it('gives an ownerless history fork its own ray, not a place in its source tree', () => {
+  const original = inputs({})
+  const agents = agentsOf({
+    ...original,
+    conversations: [
+      ...original.conversations,
+      { id: 4, busy: false, inputAt: 4, branchOf: { conversationId: 1, at: 10 } },
+    ],
+  })
+  expect(agents.map((agent) => agent.id)).toEqual([1, 4])
+  expect(agents[0].members).toEqual([1, 2, 3])
+  expect(agents[1]).toMatchObject({ id: 4, members: [4] })
+  expect(agents[1].parent).toBeUndefined()
+})
 
 it('folds a settled tree into its conclusion card, but not while a decision waits or it is shown', () => {
   expect(agentsOf(inputs({}))).toEqual([

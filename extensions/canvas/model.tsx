@@ -160,8 +160,8 @@ export type Inputs = {
 /**
  * The agents on the map: top-level conversations that have a message or work (a lander shows only while it lands),
  * without archived ones unless asked for
- * (or shown), and below them the conversations they own (a subagent has an owner task; a history fork does not, and
- * stays off the map). Ordered by id, so a newcomer always comes last among its siblings. Active agents and those
+ * (or shown), and below them the conversations they own. Ownerless history forks have their own ray.
+ * Ordered by id, so a newcomer always comes last among its siblings. Active agents and those
  * waiting for a decision keep full panels; finished subagents shrink to pills, and a tree with nothing active and
  * nothing to decide folds into its conclusion card, unless it holds the shown conversation. Decisions come from the
  * server, which records them once a tree is idle; while an agent works, unlanded work is expected and shows nothing.

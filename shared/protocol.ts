@@ -39,7 +39,10 @@ export interface EmptyResponse {
 }
 export interface ConversationSummary {
   id: number
+  /** The conversation that owns this subagent or lander. */
   parentConversationId?: number
+  /** The source and history entry of an ownerless branch. */
+  branchOf?: { conversationId: number; at: number }
   ownerTaskId?: number
   /** A short name its creator gave it, shown before its title. */
   label?: string

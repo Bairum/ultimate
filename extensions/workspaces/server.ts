@@ -136,7 +136,6 @@ export default function workspaceExtension(host: ExtensionHost) {
             if (
               !row ||
               row.owner ||
-              row.parent ||
               Object.values(
                 (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).landerConversations,
               ).includes(api.conversationId)

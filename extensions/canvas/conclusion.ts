@@ -65,11 +65,11 @@ async function membersOf(tx: Tx, top: ConversationId) {
   return members
 }
 
-/** The top-level conversation whose tree holds `id`; none for a history fork, which is on no tree. */
+/** The top-level conversation whose ownership tree holds `id`. */
 async function topOf(tx: Tx, id: ConversationId) {
   for (let at = id; ;) {
     const record = await tx.conversation(at)
-    if (!record || (record.parent && !record.owner)) return undefined
+    if (!record) return undefined
     if (!record.owner) return at
     at = record.owner.conversationId
   }
@@ -731,7 +731,7 @@ export function watchConclusions(
       do {
         const page = await tx.scanConversations({}, 256, cursor)
         for (const record of page.items)
-          if (!record.owner && !record.parent && !archived.has(record.id)) found.add(record.id)
+          if (!record.owner && !archived.has(record.id)) found.add(record.id)
         cursor = page.next
       } while (cursor !== undefined)
       const { trees } = await tx.doc(Canvas, ROOT_CONVERSATION_ID)

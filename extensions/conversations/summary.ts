@@ -376,8 +376,7 @@ export async function requestSummary(
   generate = generateSummary,
 ) {
   const own = await tx.conversation(id)
-  if (!own || (request.reason === 'reply' ? !own.owner && own.parent : own.owner || own.parent))
-    return
+  if (!own || (request.reason !== 'reply' && own.owner)) return
   const state = await tx.doc(Summaries, id)
   let intent: EntryId | undefined
   if (request.reason === 'intent') {
