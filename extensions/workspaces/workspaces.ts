@@ -15,11 +15,12 @@ import {
 import type { ConversationId, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { git, setup } from './git.ts'
-import { createLander, landerPath, log } from './lander.ts'
+import { createLander, landerAgent, landerPath, log } from './lander.ts'
 import type {
   LandResult,
   SubmitResult,
   WorkspaceIndex,
+  WorkspaceDisk,
   WorkspaceInfo,
   WorkspaceStats,
 } from './types.ts'
@@ -69,7 +70,16 @@ async function landerIdle(tx: Tx, index: WorkspaceIndex, source: string) {
 }
 type Host = Pick<
   ExtensionHost,
-  'harness' | 'home' | 'ultimateRoot' | 'projectSettings' | 'resource' | 'extensions' | 'metadata'
+  | 'harness'
+  | 'home'
+  | 'ultimateRoot'
+  | 'projectRoot'
+  | 'userHome'
+  | 'modelRuntime'
+  | 'projectSettings'
+  | 'resource'
+  | 'extensions'
+  | 'metadata'
 >
 export function workspaces(host: Host) {
   const queues = host.resource('workspaces.land', () => new Map<string, Promise<unknown>>())
@@ -83,6 +93,10 @@ export function workspaces(host: Host) {
       if (queues.get(source) === queued) queues.delete(source)
     }
   }
+  const disk = host.resource(
+    'workspaces.disk',
+    (): { last?: WorkspaceDisk; running?: Promise<WorkspaceDisk> } => ({}),
+  )
   const Lander = createLander(host, Workspaces, serial)
   /** Start the lander task of `source` in its lander conversation. Call only after `landerIdle`, before any write. */
   const startLander = async (tx: Tx, index: WorkspaceIndex, source: string) => {
@@ -96,6 +110,53 @@ export function workspaces(host: Host) {
       },
     )
     started.add(index.landers[source])
+  }
+  /**
+   * The lander conversation of `source`, created once with title "Lander · <target>" and label `lander`; its cwd is the
+   * lander's checkout. Reads before writes, as a transaction requires: call it before anything else writes.
+   */
+  async function ensureLander(
+    tx: Tx,
+    index: WorkspaceIndex,
+    source: string,
+    target: string,
+    /** `landerPath()` of `source`, resolved before the transaction. */
+    path: string,
+  ) {
+    const known = index.landerConversations[source] as ConversationId | undefined
+    if (known !== undefined && (await tx.conversation(known))) return known
+    const lander = (await tx.createConversation({ ownership: { kind: 'ownerless' } })).id
+    await configure(tx, lander, { cwd: path })
+    Object.assign(await tx.doc(host.metadata, lander), {
+      title: `Lander · ${target}`,
+      label: 'lander',
+    })
+    index.landerConversations[source] = lander
+    return lander
+  }
+  /**
+   * Make sure the project's checkout has its lander conversation, configured from the effective `lander` definition;
+   * every lander conversation follows the definition as it is now. Idempotent; a project outside git has none.
+   */
+  async function standLander(context: Context) {
+    const source = await git(host.projectRoot, 'rev-parse', '--show-toplevel')
+      .then((path) => realpath(path))
+      .catch(() => undefined)
+    const target =
+      source && (await git(source, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => ''))
+    const { change } = await landerAgent(host, context)
+    const path = source && (await landerPath(host.home, source))
+    await host.harness().commit(async (tx) => {
+      const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+      const landers: ConversationId[] = []
+      for (const id of Object.values(index.landerConversations) as ConversationId[])
+        if (await tx.conversation(id)) landers.push(id)
+      if (source && target && path) {
+        const own = await ensureLander(tx, index, source, target, path)
+        if (!landers.includes(own)) landers.push(own)
+      }
+      for (const id of landers) await configure(tx, id, change)
+    }, context)
   }
   /**
    * Restart the lander of every source whose queue holds submissions but whose task ended without draining it, as a
@@ -308,9 +369,7 @@ export function workspaces(host: Host) {
       throw new Error('Workspace branch changed')
     const tip = await git(workspace.path, 'rev-parse', 'HEAD')
     const path = await landerPath(host.home, workspace.source)
-    const { model, thinkingLevel } = await (await host
-      .harness()
-      .conversation(ROOT_CONVERSATION_ID, context))!.agent(context)
+    const { change } = await landerAgent(host, context)
     const result = await host.harness().commit(async (tx) => {
       const row = await tx.conversation(id)
       if (!row || row.owner)
@@ -319,8 +378,7 @@ export function workspaces(host: Host) {
       const { source, target } = index.items[String(id)]
       // Reads first: a transaction cannot read tables after its first write.
       const stopped = await landerIdle(tx, index, source)
-      const known = index.landerConversations[source] as ConversationId | undefined
-      const existing = known !== undefined && (await tx.conversation(known))
+      const lander = await ensureLander(tx, index, source, target, path)
       const queued = index.queue.find(
         (item) => item.conversationId === id && item.tip === tip && item.state === 'queued',
       )
@@ -334,17 +392,7 @@ export function workspaces(host: Host) {
         state: 'queued' as const,
         steps: [],
       }
-      // One lander conversation per source: its log of every submission, busy while its task lands.
-      let lander = known
-      if (lander === undefined || !existing) {
-        lander = (await tx.createConversation({ ownership: { kind: 'ownerless' } })).id
-        await configure(tx, lander, { cwd: path, model, thinkingLevel })
-        Object.assign(await tx.doc(host.metadata, lander), {
-          title: `Lander · ${target}`,
-          label: 'lander',
-        })
-        index.landerConversations[source] = lander
-      }
+      await configure(tx, lander, change)
       if (!queued) {
         await log(tx, lander, entry, { step: 'queued' })
         index.queue.push(entry)
@@ -367,6 +415,7 @@ export function workspaces(host: Host) {
     Preparation,
     Lander,
     resume,
+    standLander,
     started,
     get,
     land,
@@ -458,7 +507,6 @@ export function workspaces(host: Host) {
         ahead: 0,
         fresh: 0,
         dirty: 0,
-        bytes: null,
       }
       await Promise.all(
         items.map(async (workspace) => {
@@ -483,14 +531,37 @@ export function workspaces(host: Host) {
           else stats.ahead++
         }),
       )
-      // Allocated blocks counted per checkout: copy-on-write filesystems share some of them.
-      stats.bytes = await exec('du', ['-sk', join(host.home, 'worktrees')], {
-        timeout: 30000,
-      }).then(
-        ({ stdout }) => Number(stdout.split('\t')[0]) * 1024,
-        () => null,
-      )
       return stats
+    },
+    /**
+     * The disk the worktrees directory takes: `bytes` counts every checkout's blocks, `real` counts blocks shared
+     * between them once (btrfs only, null elsewhere). Measuring takes seconds, so one runs at a time and its result is
+     * reused for a minute.
+     */
+    disk(): Promise<WorkspaceDisk> {
+      if (disk.last && Date.now() - disk.last.at < 60_000) return Promise.resolve(disk.last)
+      if (disk.running) return disk.running
+      const directory = join(host.home, 'worktrees')
+      const promise: Promise<WorkspaceDisk> = Promise.all([
+        exec('du', ['-sk', directory], { timeout: 120_000 }).then(
+          ({ stdout }) => Number(stdout.split('\t')[0]) * 1024,
+          () => null,
+        ),
+        exec('btrfs', ['filesystem', 'du', '-s', '--raw', directory], {
+          timeout: 120_000,
+        }).then(
+          ({ stdout }) => {
+            // Total, Exclusive, Set shared, Filename.
+            const [, exclusive, shared] = stdout.trim().split('\n').at(-1)!.trim().split(/\s+/)
+            return Number(exclusive) + Number(shared)
+          },
+          () => null,
+        ),
+      ])
+        .then(([bytes, real]) => (disk.last = { bytes, real, at: Date.now() }))
+        .finally(() => (disk.running = undefined))
+      disk.running = promise
+      return promise
     },
   }
 }

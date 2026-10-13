@@ -1,4 +1,29 @@
+import { applyImmutable } from '@earendil-works/chord/delta'
+import type { Op } from '@earendil-works/chord/delta'
+import { useEffect, useState } from 'react'
 import { cn } from '@/sdk'
+import type { OverviewState } from './types.ts'
+
+const overviewKind = 'ultimate.conversation-overview'
+
+/** One root stream for all rows, unchanged when selection or expansion changes. */
+export function useOverview() {
+  const [overview, setOverview] = useState<OverviewState | null>()
+  useEffect(() => {
+    const stream = new EventSource(`/api/events?conversation=1&docs=${overviewKind}`)
+    stream.addEventListener('doc', (event) => {
+      const data = JSON.parse(event.data) as { kind: string; value: OverviewState | null }
+      if (data.kind === overviewKind) setOverview(data.value)
+    })
+    stream.addEventListener('docOps', (event) => {
+      const data = JSON.parse(event.data) as { kind: string; ops: Op[] }
+      if (data.kind === overviewKind)
+        setOverview((previous) => (previous ? applyImmutable(previous, data.ops) : previous))
+    })
+    return () => stream.close()
+  }, [])
+  return overview?.conversations ?? {}
+}
 
 const hues = [
   'bg-sky-500/15 text-sky-700 dark:text-sky-300',

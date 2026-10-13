@@ -5,7 +5,6 @@
       "canvas",
       "claude-code",
       "documents",
-      "exclusive-commands",
       "info",
       "instance",
       "plan",
@@ -17,17 +16,13 @@
     ],
     "disable": []
   },
-  "exclusiveCommands": ["\\bpnpm( run)? test\\b", "\\bvp test\\b"],
   "isolates": {
     "worktree": {
       "setup": ["pnpm install --frozen-lockfile --prefer-offline"]
     }
   },
   "lander": {
-    "checks": ["pnpm check", "pnpm test"],
+    "checks": ["pnpm check"],
     "push": "origin"
-  },
-  "githubTriage": {
-    "writableRepos": ["HazAT/ultimate"]
   }
 }

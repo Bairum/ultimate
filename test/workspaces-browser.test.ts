@@ -83,7 +83,10 @@ it('defaults to isolated without model input, keeps shared reuse and manages eve
     expect(
       server.api
         .conversations()
-        .filter((conversation) => conversation.parentConversationId === undefined),
+        .filter(
+          (conversation) =>
+            conversation.parentConversationId === undefined && conversation.label !== 'lander',
+        ),
     ).toHaveLength(3)
     for (const id of [shared, receivedId]) {
       const conversation = await server.harness.conversation(id as ConversationId, context)

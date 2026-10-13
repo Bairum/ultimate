@@ -110,8 +110,11 @@ and reports back, landed or not, with findings.
 It fixes small failures when the project configures it to; on success it fast-forwards the branch and pushes to
 `lander.push` (here `origin`), so keep working while it runs.
 Its progress shows live on the submit tool card, with expandable steps, and its report as an outcome card, both in
-the submitting conversation; the source's "Lander · <target>" conversation keeps the full log and shows as working on
-the Canvas and in the Agents tab while it lands.
+the submitting conversation; the source's "Lander · <target>" conversation, pinned at the top of the sidebar, keeps
+the full log and shows as working on the Canvas and in the Agents tab while it lands. It runs the `lander` agent
+definition: here `.ultimate/agents/lander.md` with `onFailure: fix`, so a conflict or a twice-failing check is
+resolved and committed by its model, every check runs again, and only then does it land and push. Talk to it in its
+conversation about the queue and recent landings.
 `workspace land` is the synchronous alternative: it only fast-forwards, refuses moved or diverged targets, and never
 rebases or pushes. Unrelated dirty files in the original checkout block neither.
 For `server/` or `shared/` changes, an authorized `restart` works once the running clone is clean at the landed commit.
@@ -125,8 +128,8 @@ lander pushes after its checks because `lander.push` is set. After a synchronous
 push the landed branch explicitly (for example, `git -C /home/haza/Projects/ultimate push origin main`). Subagents commit and report; only the top-level agent pushes after verification and integration.
 
 Use normal, non-force pushes only. Remote advancement or a non-fast-forward rejection is normal: fetch, inspect the
-incoming log and diff, and merge non-destructively in an isolated workspace, preserving both histories. Rerun checks
-and the required reviews, then land and push normally without asking again. Stop and report ambiguous conflicts,
+incoming log and diff, and merge non-destructively in an isolated workspace, preserving both histories. Rerun checks,
+then land and push normally without asking again. Stop and report ambiguous conflicts,
 failing checks, security concerns, or a situation requiring a force push or history rewrite—not ordinary remote
 advancement. Do not push secrets or unrelated unverified work.
 This standing permission does not authorize releases, publishing, deployments, or GitHub issue/PR changes.
@@ -151,28 +154,6 @@ This standing permission does not authorize releases, publishing, deployments, o
 Reject slop and jargon: keep code and explanations direct, minimal, and grounded in evidence. No backward-compatibility
 shims or speculative fallbacks; move forward and update callers. Tests must exercise meaningful behaviour and failure
 cases, not inflate coverage or merely restate the implementation.
-
-## Fixed review team
-
-The review lead owns review sequencing; the coordinator owns final acceptance. The coordinator supplies acceptance
-criteria and immutable full commit SHAs for one explicit `base..head` to the lead, which passes the same criteria and
-range to both independent reviewers. Every reviewer must review that exact range, never a directory or moving branch.
-Native reviewers inspect Git directly, including the complete `git log base..head` and `git diff base..head`; do not require copying the log or diff into prompts.
-
-1. The coordinator launches `subagent` with `agent: reviewer` (`openai/gpt-6.1-sol`, xhigh), supplying the
-   immutable range and acceptance criteria. This review lead explicitly retains `subagent`.
-2. The lead launches `reviewer-astra` (`openai/gpt-6-astra`, high) and `reviewer-sol` (`openai/gpt-6.1-sol`, high)
-   independently in parallel with the same range, criteria, and quality rules. Require concrete file:line findings,
-   impact, evidence, verification limits, and the reviewed range. Never share reports between independent reviewers.
-3. The lead validates both reports' completion, range, and actual returned model identities from stored assistant
-   messages exposed by subagent results/reports. Missing, failed, wrong-range, unexpected-model, or ambiguous-identity
-   reports block approval; never substitute models or reduce the team. Only then inspect Git and synthesize.
-   Return one synthesis including BOTH complete original reports, actual model identities, and child IDs.
-   Leaves remain read/bash-only and cannot delegate.
-4. The coordinator verifies the synthesis, evidence, and findings, routes confirmed fixes, and owns acceptance.
-   Each change set gets one team review. Fixes for its findings are not re-reviewed: the coordinator checks the fix
-   diff against each finding, reruns the checks, and records the evidence. Work beyond the findings is a new change
-   set with its own review.
 
 ## Subagents
 

@@ -50,17 +50,20 @@ export default function claudeCode(host: ExtensionHost) {
       if (closing) throw new Error('Claude Code provider is closing')
       return track(provider.streamSimple(...args))
     }
-    return { ...provider, stream, streamSimple }
+    return { provider: { ...provider, stream, streamSimple }, facets: new Set<symbol>() }
   })
-  const provider = { ...shared }
+  const provider = { ...shared.provider }
   // Keep subscription accounting, but do not offer an in-app login for external auth.
   if (provider.auth.oauth) Reflect.deleteProperty(provider.auth.oauth, 'login')
-  host.onOpen(async () => {
-    host.modelRuntime.registerNativeProvider(provider)
-  })
+  const facet = Symbol('claude-code')
+  shared.facets.add(facet)
   host.onClose(async () => {
-    host.modelRuntime.unregisterProvider(provider.id)
+    shared.facets.delete(facet)
+    if (!shared.facets.size) host.modelRuntime.unregisterProvider(provider.id)
   })
+  // The replacement factory runs before the old facet closes. Keep its models
+  // registered throughout that handoff, including disposal of a failed reload.
+  host.modelRuntime.registerNativeProvider(provider)
   return { name: 'claude-code' }
 }
 

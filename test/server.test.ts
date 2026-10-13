@@ -1012,6 +1012,29 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     expect(entry().server!.loadedAt).toBe(successful)
     expect(server.host.registry.snapshot().extension('counter')).toBe(installed)
   })
+  it('reloads only the owning extension when files or directories are added or removed', async () => {
+    const { server } = await fixture(false, false, {
+      a: orderedSource('a'),
+      b: orderedSource('b'),
+    })
+    const loadedAt = (name: string) =>
+      server.extensions.info().find((extension) => extension.name === name)!.server!.loadedAt
+    const bLoaded = loadedAt('b')
+    const folder = join(server.host.ultimateRoot, 'extensions/a')
+    const file = join(folder, 'new.ts')
+    const nested = join(folder, 'nested')
+    for (const change of [
+      () => writeFile(file, 'export const value = 1'),
+      () => rm(file),
+      () => mkdir(nested),
+      () => rm(nested, { recursive: true }),
+    ]) {
+      const aLoaded = loadedAt('a')
+      await change()
+      await until(() => loadedAt('a') !== aLoaded)
+      expect(loadedAt('b')).toBe(bLoaded)
+    }
+  })
   it('keeps hot reloading extensions after a Vite config change restarts Vite', async () => {
     const { server } = await fixture(true)
     const entry = () => server.extensions.info().find((extension) => extension.name === 'counter')!

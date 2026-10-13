@@ -26,6 +26,7 @@ export default function instanceExtension(
     | 'ultimateRoot'
     | 'projectRoot'
     | 'userHome'
+    | 'modelRuntime'
     | 'harness'
     | 'projectSettings'
     | 'extensions'

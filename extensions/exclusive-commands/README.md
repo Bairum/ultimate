@@ -13,10 +13,16 @@ output and ignored. Only matching commands acquire the shared FIFO slot; other c
 streams one line naming the command holding the slot. Aborting a waiter removes it without releasing another call's
 slot; the holder releases in `finally`, including on error or cancellation.
 
+A matching call's `timeout` covers waiting plus execution. Without one, it uses coding-tools' default bash tripwire
+(3600 seconds, overridden by `ULTIMATE_BASH_TIMEOUT`). A deadline while waiting fails with an error naming the
+current holder and the limit; the waiting command never starts. After acquisition, bash receives the remaining
+seconds rounded up, with a minimum of one second. The exclusive wrapper runs outside coding-tools in folder order
+and reports the tripwire if that remaining default budget expires during execution.
+
 The slot uses `host.resource`, so every conversation shares it and extension reloads preserve it. It is in memory:
 a process crash frees it, and Pi reports interrupted calls as usual. There is no cross-process or durable lock.
 
-This wraps the resolved bash tool, composing with other wrappers such as github-triage rather than replacing them.
+This wraps the resolved bash tool, composing with other wrappers rather than replacing them.
 Codemode's nested `tools.bash` also goes through the wrap: it resolves `api.agent().tools` and invokes the resolved
 tool's `execute`. Nested output (including the waiting line) is collected privately by codemode, not streamed to the
 outer call. Nested tool hooks do not run, but this is a tool wrapper, not a hook.

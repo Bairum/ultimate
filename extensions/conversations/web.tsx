@@ -1,5 +1,3 @@
-import { applyImmutable } from '@earendil-works/chord/delta'
-import type { Op } from '@earendil-works/chord/delta'
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
@@ -56,12 +54,13 @@ import {
 } from '@/sdk'
 import type { EntryRecord, UltimateActions } from '@/sdk'
 import { ModelRow } from '../models/picker.tsx'
-import { FeatureTag } from './feature.tsx'
+import { FeatureTag, useOverview } from './feature.tsx'
 import { parseSummaryModel } from './summary-model-ref.ts'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import {
   getWorkspaces,
   useWorkspaceConversations as useConversations,
+  useWorkspaceIndex,
 } from '../workspaces/data.tsx'
 import type {
   Assessed,
@@ -69,7 +68,6 @@ import type {
   IntentSummary,
   SpawnSummary,
   OverviewRow,
-  OverviewState,
   SummaryDiscard,
   TitleChange,
 } from './types.ts'
@@ -79,26 +77,6 @@ const resetDialog = 'conversations.reset'
 const summaryModelDialog = 'conversations.summary-model'
 let creationType = 'isolated'
 let creating = false
-const overviewKind = 'ultimate.conversation-overview'
-
-/** One root stream for all rows, unchanged when selection or expansion changes. */
-function useOverview() {
-  const [overview, setOverview] = useState<OverviewState | null>()
-  useEffect(() => {
-    const stream = new EventSource(`/api/events?conversation=1&docs=${overviewKind}`)
-    stream.addEventListener('doc', (event) => {
-      const data = JSON.parse(event.data) as { kind: string; value: OverviewState | null }
-      if (data.kind === overviewKind) setOverview(data.value)
-    })
-    stream.addEventListener('docOps', (event) => {
-      const data = JSON.parse(event.data) as { kind: string; ops: Op[] }
-      if (data.kind === overviewKind)
-        setOverview((previous) => (previous ? applyImmutable(previous, data.ops) : previous))
-    })
-    return () => stream.close()
-  }, [])
-  return overview?.conversations ?? {}
-}
 
 function currentAssessment(row: OverviewRow | undefined) {
   return row?.runState === 'answered' &&
@@ -331,6 +309,7 @@ function Row({
   const latest = Math.max(conversation.inputAt ?? 0, conversation.answerAt ?? 0)
   const lander = conversation.label === 'lander'
   const hasMetadata = feature || conversation.workspace || latest > 0 || lander
+  const index = useWorkspaceIndex()
   const rename = () => {
     cancelled.current = false
     setEditing(true)
@@ -419,18 +398,16 @@ function Row({
           {hasMetadata && (
             <span className="flex w-full items-center gap-2 pr-5 pl-[18px] font-mono text-[10px] leading-4 text-muted-foreground">
               {feature && <FeatureTag feature={feature} />}
-              {lander && working && (
-                <span className="flex shrink-0 items-center gap-1 text-brand">
-                  <span className="size-1.5 animate-pulse-dot rounded-full bg-brand" />
-                  landing
-                </span>
+              {lander ? (
+                <LanderState id={conversation.id} index={index} now={now} working={!!working} />
+              ) : (
+                conversation.workspace && (
+                  <span className="shrink-0" title="Isolated checkout">
+                    W{conversation.id}
+                  </span>
+                )
               )}
-              {conversation.workspace && (
-                <span className="shrink-0" title="Isolated checkout">
-                  W{conversation.id}
-                </span>
-              )}
-              {latest > 0 && (
+              {latest > 0 && !lander && (
                 <span
                   className="shrink-0 text-muted-foreground/80"
                   title={new Date(latest).toLocaleString()}
@@ -490,14 +467,64 @@ function Row({
               <EraserIcon />
               Clear context…
             </DropdownMenuItem>
-            <DropdownMenuItem className="text-[12.5px]" onSelect={() => onArchive(!archived)}>
-              {archived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
-              {archived ? 'Unarchive' : 'Archive'}
-            </DropdownMenuItem>
+            {!lander && (
+              <DropdownMenuItem className="text-[12.5px]" onSelect={() => onArchive(!archived)}>
+                {archived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
+                {archived ? 'Unarchive' : 'Archive'}
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       )}
     </div>
+  )
+}
+
+/**
+ * The lander's line: "fixing" or "diagnosing" while its model works on a failure, a pulsing "landing" while it lands,
+ * "working" while it answers someone, else "idle" with its latest landing.
+ */
+function LanderState({
+  id,
+  index,
+  now,
+  working,
+}: {
+  id: number
+  index: ReturnType<typeof useWorkspaceIndex>
+  now: number
+  working: boolean
+}) {
+  const source = Object.entries(index.landerConversations).find(([, lander]) => lander === id)?.[0]
+  const current = index.queue.find((item) => item.source === source && item.state === 'landing')
+  const label =
+    current?.agent === 'fix'
+      ? 'fixing'
+      : current?.agent
+        ? 'diagnosing'
+        : current
+          ? 'landing'
+          : working
+            ? 'working'
+            : undefined
+  if (label)
+    return (
+      <span className={cn('flex items-center gap-1', label !== 'diagnosing' && 'text-brand')}>
+        <span
+          className={cn(
+            'size-1.5 animate-pulse-dot rounded-full',
+            label === 'diagnosing' ? 'bg-muted-foreground' : 'bg-brand',
+          )}
+        />
+        {label}
+      </span>
+    )
+  const last = Object.values(index.results).findLast((result) => result.lander === id && result.sha)
+  const at = last?.steps.at(-1)?.at
+  return (
+    <span className="truncate" title={at ? new Date(at).toLocaleString() : undefined}>
+      idle{last?.sha && ` · last ${last.sha.slice(0, 7)}${at ? ` ${ago(at, now)}` : ''}`}
+    </span>
   )
 }
 
@@ -593,18 +620,22 @@ function Conversations() {
   const topLevel = conversations.filter(
     (conversation) => conversation.parentConversationId === undefined,
   )
+  // Lander conversations are always there, pinned above the rest and never archived.
+  const landers = topLevel
+    .filter((conversation) => conversation.label === 'lander')
+    .toSorted((a, b) => a.id - b.id)
   const listed = topLevel
     .filter(
       (conversation) =>
+        conversation.label !== 'lander' &&
         !archived.includes(conversation.id) &&
         (conversation.inputAt !== undefined ||
-          (conversation.label === 'lander' && conversation.busy) ||
           conversation.id === shownTop?.id ||
           conversation.workspace !== undefined),
     )
     .toSorted(byInput)
   const hidden = topLevel
-    .filter((conversation) => archived.includes(conversation.id))
+    .filter((conversation) => conversation.label !== 'lander' && archived.includes(conversation.id))
     .toSorted(byInput)
 
   const setArchive = (id: number, archive: boolean) => {
@@ -744,6 +775,11 @@ function Conversations() {
         </DropdownMenu>
       </div>
       <nav aria-label="Conversations" className="flex flex-col gap-px">
+        {landers.length > 0 && (
+          <div className="mb-1 flex flex-col gap-px border-b border-border/60 pb-1">
+            {landers.map((conversation) => tree(conversation))}
+          </div>
+        )}
         {listed.map((conversation) => tree(conversation))}
       </nav>
       {summary &&

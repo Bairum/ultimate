@@ -17,6 +17,8 @@ export interface AgentDefinition {
   thinking?: ModelThinkingLevel
   tools?: string[]
   isolate?: 'none' | 'worktree'
+  /** What the lander does when a submission fails: explain it, or fix it and land. Only the lander reads it. */
+  onFailure?: 'diagnose' | 'fix'
 }
 export function definitionAgent(
   definition: AgentDefinition | undefined,
@@ -66,7 +68,15 @@ const levels = {
   xhigh: true,
   max: true,
 } satisfies Record<ModelThinkingLevel, true>
-const fields = new Set(['name', 'description', 'model', 'thinking', 'tools', 'isolate'])
+const fields = new Set([
+  'name',
+  'description',
+  'model',
+  'thinking',
+  'tools',
+  'isolate',
+  'onFailure',
+])
 
 /** A definition file: Pi's YAML frontmatter with Ultimate's fields, and the instructions as its body. */
 export function parseDefinition(
@@ -81,7 +91,7 @@ export function parseDefinition(
     !Object.keys(frontmatter).length
   )
     throw new Error('Expected frontmatter fields between --- lines')
-  const { name, description, model, thinking, tools, isolate } = frontmatter
+  const { name, description, model, thinking, tools, isolate, onFailure } = frontmatter
   const unknown = Object.keys(frontmatter).find((key) => !fields.has(key))
   if (unknown) throw new Error(`Unknown field: ${unknown}`)
   if (typeof name !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(name))
@@ -99,6 +109,8 @@ export function parseDefinition(
     throw new Error('tools must be a list of tool names')
   if (isolate !== undefined && isolate !== 'none' && isolate !== 'worktree')
     throw new Error('isolate must be none or worktree')
+  if (onFailure !== undefined && onFailure !== 'diagnose' && onFailure !== 'fix')
+    throw new Error('onFailure must be diagnose or fix')
   if (!body) throw new Error('Instructions are required')
   return {
     name,
@@ -109,6 +121,7 @@ export function parseDefinition(
     ...(thinking ? { thinking: thinking as ModelThinkingLevel } : {}),
     ...(tools ? { tools } : {}),
     ...(isolate ? { isolate } : {}),
+    ...(onFailure ? { onFailure } : {}),
   }
 }
 
@@ -181,6 +194,7 @@ export interface DefinitionFields {
   thinking?: string
   tools?: string[]
   isolate?: 'none' | 'worktree'
+  onFailure?: 'diagnose' | 'fix'
 }
 
 /** A YAML scalar: plain when it reads back as the same string, else JSON, which YAML reads as a quoted string. */
@@ -209,6 +223,7 @@ export function serializeDefinition(
         ]
       : []),
     ...(frontmatter.isolate === 'worktree' ? ['isolate: worktree'] : []),
+    ...(frontmatter.onFailure ? [`onFailure: ${frontmatter.onFailure}`] : []),
   ]
   return `---\n${lines.join('\n')}\n---\n\n${instructions.trim()}\n`
 }

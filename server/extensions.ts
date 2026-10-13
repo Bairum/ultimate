@@ -326,7 +326,7 @@ export async function loadExtensions(
     for (const { name, path, source, enabled, files, error: discoveryError } of winners) {
       const previous = records.get(name)
       const layer = settings.layers.get(name) ?? (source === 'builtin' ? 'default' : 'folder')
-      if (selected && !selected.has(name)) {
+      if (selected && !selected.has(name) && previous) {
         if (previous) previous.layer = layer
         continue
       }
@@ -489,8 +489,15 @@ export async function loadExtensions(
       })
   }
   const onStructure = (file: string) => {
-    if (!directories.some((directory) => file.startsWith(directory + '/'))) return onChange(file)
-    chain = chain.then(() => reload()).catch(() => changed())
+    const directory = directories.find((root) => file.startsWith(root + '/'))
+    if (!directory) return onChange(file)
+    if (graphLost) {
+      graphLost = false
+      chain = chain.then(() => reload()).catch(() => changed())
+      return
+    }
+    const name = file.slice(directory.length + 1).split('/')[0]
+    chain = chain.then(() => reload(new Set([name]), new Set([name]))).catch(() => changed())
   }
   const structure = ['add', 'unlink', 'addDir', 'unlinkDir'] as const
   let attached = false

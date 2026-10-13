@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import { fauxServer, temp, removeTemp, until } from './helpers.ts'
 
@@ -109,6 +109,114 @@ it('serializes matching commands across conversations without delaying other bas
       invalid.dispose()
     }
   } finally {
+    await server.close()
+    await removeTemp(directory)
+  }
+})
+
+it('bounds exclusive waits by explicit and default limits without starting the waiter', async () => {
+  const directory = await temp('ultimate-exclusive-deadline-')
+  const server = await fauxServer({
+    ultimateRoot: resolve('.'),
+    home: join(directory, 'home'),
+    userHome: directory,
+  })
+  try {
+    await mkdir(join(server.host.projectRoot, '.ultimate'), { recursive: true })
+    await writeFile(
+      join(server.host.projectRoot, '.ultimate/settings.json'),
+      JSON.stringify({
+        extensions: { enable: ['exclusive-commands'] },
+        exclusiveCommands: ['# heavy'],
+      }),
+    )
+    const log = join(directory, 'holder')
+    const marker = join(directory, 'waiter')
+    const route: FauxResponseFactory = (transcript) => {
+      server.host.faux!.appendResponses([route])
+      const last = transcript.messages.findLast((message) => message.role !== 'system')!
+      if (last.role === 'user') {
+        const input =
+          typeof last.content === 'string'
+            ? last.content
+            : last.content.map((part) => (part.type === 'text' ? part.text : '')).join('')
+        return fauxAssistantMessage([fauxToolCall('bash', JSON.parse(input))], {
+          stopReason: 'toolUse',
+        })
+      }
+      return fauxAssistantMessage('Complete')
+    }
+    server.host.faux!.setResponses([route])
+    const agent = await server.root.agent(context)
+    const second = await server.harness.createConversation(
+      {
+        ownership: { kind: 'ownerless' },
+        agent: { model: agent.model, cwd: server.host.projectRoot },
+      },
+      context,
+    )
+    const holder = `echo start > '${log}'; sleep 5; echo end >> '${log}' # heavy`
+    const first = await server.root.submit(
+      { type: 'input', content: JSON.stringify({ command: holder, timeout: 10 }) },
+      context,
+    )
+    await until(async () => (await readFile(log, 'utf8').catch(() => '')).includes('start'))
+    for (const explicit of [true, false]) {
+      vi.stubEnv('ULTIMATE_BASH_TIMEOUT', '1')
+      const started = performance.now()
+      const queued = await second.submit(
+        {
+          type: 'input',
+          content: JSON.stringify({
+            command: `echo ran > '${marker}' # heavy`,
+            ...(explicit ? { timeout: 1 } : {}),
+          }),
+        },
+        context,
+      )
+      await queued.wait(context)
+      expect(performance.now() - started).toBeLessThan(2500)
+      const view = await second.viewState(context)
+      try {
+        const result = view.value.entries.filter((entry) => entry.kind === 'pi.tool-result').at(-1)
+          ?.model?.[0]
+        expect(result?.role === 'toolResult' && result.isError).toBe(true)
+        expect(JSON.stringify(result)).toContain(
+          'Timed out after 1 s waiting for exclusive command:',
+        )
+        expect(JSON.stringify(result)).toContain(holder)
+      } finally {
+        view.dispose()
+      }
+      await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    }
+    await first.wait(context)
+    expect(await readFile(log, 'utf8')).toBe('start\nend\n')
+    const view = await server.root.viewState(context)
+    try {
+      const result = view.value.entries.filter((entry) => entry.kind === 'pi.tool-result').at(-1)
+        ?.model?.[0]
+      expect(result?.role === 'toolResult' && result.isError).toBe(false)
+    } finally {
+      view.dispose()
+    }
+    await (
+      await second.submit(
+        { type: 'input', content: JSON.stringify({ command: 'sleep 10 # heavy' }) },
+        context,
+      )
+    ).wait(context)
+    const timed = await second.viewState(context)
+    try {
+      const result = timed.value.entries.filter((entry) => entry.kind === 'pi.tool-result').at(-1)
+        ?.model?.[0]
+      expect(result?.role === 'toolResult' && result.isError).toBe(true)
+      expect(JSON.stringify(result)).toContain('Tripwire: bash ran past the 1 s default limit')
+    } finally {
+      timed.dispose()
+    }
+  } finally {
+    vi.unstubAllEnvs()
     await server.close()
     await removeTemp(directory)
   }
