@@ -3,6 +3,7 @@
     "enable": [
       "automations",
       "canvas",
+      "claude-code",
       "documents",
       "exclusive-commands",
       "info",

@@ -1,0 +1,13 @@
+Claude Code is an opt-in experimental provider that uses the external CLI login, with a setup panel and no in-app OAuth flow.
+
+Enable `claude-code` in `extensions.enable` in user or project settings. It is enabled in this repository's suggested setup, not in Ultimate's defaults. Existing Anthropic models and the default model are unchanged.
+
+Install the CLI with `npm install -g @anthropic-ai/claude-code`, then run `claude auth login` in a terminal. Open **Claude Code setup…** in the command palette and refresh status. Select a Claude Code model in the existing model picker once the CLI reports a login. Login/logout remain external (`claude auth logout`); refresh after changing them. Unreadable CLI status is reported as an unconfirmed login by upstream. Status action failures have a retry state.
+
+The dependency is `earendil-works/pi-claude-code` at immutable commit `70abb65186592ca788b29b3db22c3160d629c41f`. Its source-only TypeScript package is loaded by Ultimate's existing Vite server-facet loader (not a direct Node import from node_modules). We reuse its provider, status/environment helpers, process cleanup, streaming transport and billing guard. The only auth adaptation removes its throwing OAuth login function while retaining subscription metadata and ambient CLI auth. No credentials are read, copied or logged by this extension. Status responses expose only availability, login, subscription and plan, not account identity or raw CLI output.
+
+`PI_CLAUDE_CODE_COMMAND` selects the CLI executable; `PI_CLAUDE_CODE_CONFIG_DIR` selects its config directory. Upstream also supports provider-scoped environment settings; the panel uses the same environment remembered by its auth checks. On facet replacement/disable the host runs cleanup before opening the replacement: unregister the provider and close warm CLI processes.
+
+This is experimental and depends on Claude Code's protocol and account limits. Subscription coverage is not guaranteed. Displayed costs are list-price accounting, not your bill. Upstream rejects conflicting API/backend overrides and stops further requests when usage-credit overage is reported, but the first response may already be charged. This extension does not enable `PI_CLAUDE_CODE_ALLOW_USAGE_CREDITS` or alter the guard. Read [upstream documentation](https://github.com/earendil-works/pi-claude-code) before using it.
+
+Verification: `pnpm check`, `pnpm test`. The focused lifecycle test uses a temporary fake CLI and isolated server to exercise real provider availability, subscription accounting, refresh, source reload, disable, missing CLI, unreadable auth status and cancellation without making model requests.
