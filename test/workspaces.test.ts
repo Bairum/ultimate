@@ -386,7 +386,11 @@ it('lands fast-forward, lists commits and paths, and is idempotent', async () =>
   const workspace = (await f.service.get(id, context))!
   const tip = await commit(workspace.path)
   const result = await f.service.land(id, context)
-  expect(result).toMatchObject({ landed: tip, paths: ['change.txt'] })
+  expect(result).toMatchObject({
+    landed: tip,
+    paths: ['change.txt'],
+    files: [{ path: 'change.txt', added: 1, removed: 0 }],
+  })
   expect(result.commits).toHaveLength(1)
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(tip)
   expect((await f.service.land(id, context)).text).toBe('Nothing to land.')

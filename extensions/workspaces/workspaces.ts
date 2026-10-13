@@ -193,7 +193,13 @@ export function workspaces(host: Host) {
         () => true,
         () => false,
       )
-      let result: LandResult = { text: 'Nothing to land.', landed: tip, commits: [], paths: [] }
+      let result: LandResult = {
+        text: 'Nothing to land.',
+        landed: tip,
+        commits: [],
+        paths: [],
+        files: [],
+      }
       if (!integrated) {
         if (
           !(await git(source, 'merge-base', '--is-ancestor', head, tip).then(
@@ -207,18 +213,24 @@ export function workspaces(host: Host) {
         const commits = (await git(workspace.path, 'log', '--oneline', `${head}..${tip}`))
           .split('\n')
           .filter(Boolean)
-        const paths = (await git(workspace.path, 'diff', '--name-only', head, tip))
+        const files = (await git(workspace.path, 'diff', '--numstat', '--no-renames', head, tip))
           .split('\n')
           .filter(Boolean)
+          .map((line) => {
+            // Binary files count `-` lines.
+            const [added, removed, path] = line.split('\t')
+            return { path, added: Number(added) || 0, removed: Number(removed) || 0 }
+          })
         const needsRestart =
           (await realpath(source)) === (await realpath(host.ultimateRoot)) &&
-          paths.some((path) => /^(server|shared)\//.test(path))
+          files.some(({ path }) => /^(server|shared)\//.test(path))
         await git(source, 'merge', '--ff-only', tip)
         result = {
-          text: `Landed commits:\n${commits.join('\n')}\nChanged paths:\n${paths.join('\n')}${needsRestart ? '\nNeeds restart.' : ''}`,
+          text: `Landed commits:\n${commits.join('\n')}\nChanged files:\n${files.map((file) => `${file.path} +${file.added} -${file.removed}`).join('\n')}${needsRestart ? '\nNeeds restart.' : ''}`,
           landed: tip,
           commits,
-          paths,
+          paths: files.map((file) => file.path),
+          files,
           ...(needsRestart ? { needsRestart: true } : {}),
         }
       }

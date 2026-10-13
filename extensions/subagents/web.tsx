@@ -213,7 +213,10 @@ function Landed({ output }: { output: string }) {
       </ToolSection>
     )
   const commits = result.commits ?? []
-  const paths = result.paths ?? []
+  const files: { path: string; added?: number; removed?: number }[] =
+    result.files ?? result.paths?.map((path) => ({ path })) ?? []
+  const added = files.reduce((sum, file) => sum + (file.added ?? 0), 0)
+  const removed = files.reduce((sum, file) => sum + (file.removed ?? 0), 0)
   return (
     <>
       <ToolSection className="border-l-2 border-l-success/70">
@@ -239,15 +242,32 @@ function Landed({ output }: { output: string }) {
           </ul>
         </ToolSection>
       )}
-      {paths.length > 0 && (
-        <ToolSection label={`${paths.length} changed path${paths.length === 1 ? '' : 's'}`}>
+      {files.length > 0 && (
+        <ToolSection>
+          <div className="flex items-center gap-2 text-[10px] tracking-wider text-muted-foreground/80 uppercase">
+            {files.length} changed file{files.length === 1 ? '' : 's'}
+            {result.files && (
+              <span className="normal-case">
+                <span className="text-diff-add">+{added}</span>{' '}
+                <span className="text-diff-del">−{removed}</span>
+              </span>
+            )}
+          </div>
           <ul className="space-y-0.5">
-            {paths.map((path) => {
-              const slash = path.lastIndexOf('/') + 1
+            {files.map((file) => {
+              const slash = file.path.lastIndexOf('/') + 1
               return (
-                <li className="truncate" key={path} title={path}>
-                  <span className="text-muted-foreground">{path.slice(0, slash)}</span>
-                  {path.slice(slash)}
+                <li className="flex min-w-0 items-center gap-2" key={file.path} title={file.path}>
+                  <span className="min-w-0 flex-1 truncate">
+                    <span className="text-muted-foreground">{file.path.slice(0, slash)}</span>
+                    {file.path.slice(slash)}
+                  </span>
+                  {'added' in file && (
+                    <span className="shrink-0 tabular-nums">
+                      <span className="text-diff-add">+{file.added}</span>{' '}
+                      <span className="text-diff-del">−{file.removed}</span>
+                    </span>
+                  )}
                 </li>
               )
             })}
