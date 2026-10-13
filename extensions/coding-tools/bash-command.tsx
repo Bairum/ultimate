@@ -8,7 +8,7 @@ export interface BashCommand {
 export function formatBashCommand(command: string): BashCommand {
   // Extract a literal cd independently: an unsupported tail must not hide the work.
   const cd =
-    /^\s*cd[ \t]+(?:([^\s'"\\|&;(){}<>$`#*?[\]]+)|'([^'\r\n]+)'|"([^"\\$`\r\n]+)")[ \t]*&&[ \t]*/.exec(
+    /^[ \t]*cd[ \t]+(?:([^ \t\r\n'"\\|&;(){}<>$`#*?[\]]+)|'([^'\r\n]+)'|"([^"\\$`\r\n]+)")[ \t]*&&[ \t]*/.exec(
       command,
     )
   const path = cd && (cd[1] ?? cd[2] ?? cd[3])
@@ -37,11 +37,11 @@ export function formatBashCommand(command: string): BashCommand {
       continue
     }
     if (char === '&' && tail[i + 1] === '&') {
-      commands.push(tail.slice(start, i).trim())
+      commands.push(tail.slice(start, i).replace(/^[ \t]+|[ \t]+$/g, ''))
       operators.push('&&')
       start = ++i + 1
     } else if (char === ';') {
-      commands.push(tail.slice(start, i).trim())
+      commands.push(tail.slice(start, i).replace(/^[ \t]+|[ \t]+$/g, ''))
       operators.push(';')
       start = i + 1
     } else if (char === '&') {
@@ -55,7 +55,7 @@ export function formatBashCommand(command: string): BashCommand {
       return intact
   }
   if (quote) return intact
-  commands.push(tail.slice(start).trim())
+  commands.push(tail.slice(start).replace(/^[ \t]+|[ \t]+$/g, ''))
   if (
     commands.some(
       (part) =>

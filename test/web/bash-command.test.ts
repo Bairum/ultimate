@@ -51,6 +51,39 @@ it('keeps quoted and escaped operators within their commands', () => {
   })
 })
 
+it('trims only shell blanks at row boundaries, preserving literal NBSP', () => {
+  for (const operator of [';', '&&'] as const) {
+    expect(formatBashCommand(`rg needle\u00a0${operator} pwd`)).toEqual({
+      commands: ['rg needle\u00a0', 'pwd'],
+      operators: [operator],
+    })
+    expect(formatBashCommand(`pwd${operator} rg needle\u00a0`)).toEqual({
+      commands: ['pwd', 'rg needle\u00a0'],
+      operators: [operator],
+    })
+    expect(formatBashCommand(`pwd${operator} \u00a0rg needle`)).toEqual({
+      commands: ['pwd', '\u00a0rg needle'],
+      operators: [operator],
+    })
+    expect(formatBashCommand(` \trg needle \t${operator} \tpwd \t`)).toEqual({
+      commands: ['rg needle', 'pwd'],
+      operators: [operator],
+    })
+  }
+})
+
+it('does not consume literal NBSP when recognizing a leading cd', () => {
+  expect(formatBashCommand('\u00a0cd /workspace && pwd')).toEqual({
+    commands: ['\u00a0cd /workspace', 'pwd'],
+    operators: ['&&'],
+  })
+  expect(formatBashCommand(' \tcd /workspace\u00a0 && pwd')).toEqual({
+    directory: '/workspace\u00a0',
+    commands: ['pwd'],
+    operators: [],
+  })
+})
+
 it('preserves escaped whitespace instead of trimming it at chain boundaries', () => {
   for (const whitespace of [' ', '\t']) {
     for (const command of [
