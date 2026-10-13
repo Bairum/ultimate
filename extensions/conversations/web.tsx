@@ -1,5 +1,3 @@
-import { applyImmutable } from '@earendil-works/chord/delta'
-import type { Op } from '@earendil-works/chord/delta'
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
@@ -56,7 +54,7 @@ import {
 } from '@/sdk'
 import type { EntryRecord, UltimateActions } from '@/sdk'
 import { ModelRow } from '../models/picker.tsx'
-import { FeatureTag } from './feature.tsx'
+import { FeatureTag, useOverview } from './feature.tsx'
 import { parseSummaryModel } from './summary-model-ref.ts'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import {
@@ -69,7 +67,6 @@ import type {
   IntentSummary,
   SpawnSummary,
   OverviewRow,
-  OverviewState,
   SummaryDiscard,
   TitleChange,
 } from './types.ts'
@@ -79,26 +76,6 @@ const resetDialog = 'conversations.reset'
 const summaryModelDialog = 'conversations.summary-model'
 let creationType = 'isolated'
 let creating = false
-const overviewKind = 'ultimate.conversation-overview'
-
-/** One root stream for all rows, unchanged when selection or expansion changes. */
-function useOverview() {
-  const [overview, setOverview] = useState<OverviewState | null>()
-  useEffect(() => {
-    const stream = new EventSource(`/api/events?conversation=1&docs=${overviewKind}`)
-    stream.addEventListener('doc', (event) => {
-      const data = JSON.parse(event.data) as { kind: string; value: OverviewState | null }
-      if (data.kind === overviewKind) setOverview(data.value)
-    })
-    stream.addEventListener('docOps', (event) => {
-      const data = JSON.parse(event.data) as { kind: string; ops: Op[] }
-      if (data.kind === overviewKind)
-        setOverview((previous) => (previous ? applyImmutable(previous, data.ops) : previous))
-    })
-    return () => stream.close()
-  }, [])
-  return overview?.conversations ?? {}
-}
 
 function currentAssessment(row: OverviewRow | undefined) {
   return row?.runState === 'answered' &&

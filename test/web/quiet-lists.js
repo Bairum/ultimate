@@ -6,12 +6,13 @@ import { store, uiState } from '../../web/src/sdk/client.ts'
 import { ExtensionNameContext } from '../../web/src/sdk/hooks.ts'
 import '../../web/src/index.css'
 
-let source, workspaces
+let source, workspaces, overview
 window.EventSource = class extends EventTarget {
   readyState = 1
   constructor(url) {
     super()
     if (url.includes('ultimate.workspaces')) workspaces = this
+    else if (url.includes('ultimate.conversation-overview')) overview = this
     else source = this
   }
   close() {}
@@ -31,6 +32,9 @@ const items = {
   4: workspace('preparing', { ahead: null }),
   5: workspace('ready', { ahead: 2 }),
 }
+// Task 10 has run for 12 minutes, past the stuck hint; the others have not started.
+window.fetch = async () =>
+  Response.json({ result: { 10: Date.now() - 12 * 60_000, 60: Date.now() - 65_000 } })
 store.start()
 const send = (name, data) =>
   source.dispatchEvent(new MessageEvent(name, { data: JSON.stringify(data) }))
@@ -92,6 +96,16 @@ flushSync(() =>
   workspaces.dispatchEvent(
     new MessageEvent('doc', {
       data: JSON.stringify({ kind: 'ultimate.workspaces', value: { items } }),
+    }),
+  ),
+)
+flushSync(() =>
+  overview.dispatchEvent(
+    new MessageEvent('doc', {
+      data: JSON.stringify({
+        kind: 'ultimate.conversation-overview',
+        value: { conversations: { 1: { runState: 'working', feature: 'Release planning' } } },
+      }),
     }),
   ),
 )
