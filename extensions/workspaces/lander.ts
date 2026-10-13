@@ -192,70 +192,98 @@ export function createLander(
           // A crash after the checks keeps the integrated commit: go straight to fast-forwarding it.
           let prepared = await runtime.memo<Prepared>(`prepared:${id}:${attempt}`, context)
           if (!prepared) {
-            await step('preparing')
-            const base = await git(source, 'rev-parse', `refs/heads/${target}`)
-            const path = await checkout(source, base)
-            if (settings.push) {
-              const { stdout } = await remote(
-                path,
-                signal,
-                'ls-remote',
-                settings.push,
-                `refs/heads/${target}`,
-              )
-              if (stdout.trim()) {
-                await remote(path, signal, 'fetch', '-q', settings.push, target)
-                const fetched = await git(path, 'rev-parse', 'FETCH_HEAD')
-                if (!(await contains(path, fetched, 'HEAD'))) {
-                  await step(`merging ${settings.push}/${target}`)
-                  try {
-                    await git(
-                      path,
-                      'merge',
-                      '--no-edit',
-                      '-m',
-                      `Merge ${settings.push}/${target}`,
-                      fetched,
-                    )
-                  } catch {
-                    const conflicts = await git(path, 'diff', '--name-only', '--diff-filter=U')
-                    await git(path, 'merge', '--abort').catch(() => undefined)
-                    return fail(
-                      `${settings.push}/${target} conflicts with local ${target} in:\n${conflicts}`,
-                    )
+            // A crash after the merges resumes on the same merged commit instead of merging again.
+            let merged = await runtime.memo<{ base: string; sha: string }>(
+              `merged:${id}:${attempt}`,
+              context,
+            )
+            const path = await checkout(
+              source,
+              merged?.sha ?? (await git(source, 'rev-parse', `refs/heads/${target}`)),
+            )
+            if (!merged) {
+              await step('preparing')
+              const base = await git(path, 'rev-parse', 'HEAD')
+              if (settings.push) {
+                const { stdout } = await remote(
+                  path,
+                  signal,
+                  'ls-remote',
+                  settings.push,
+                  `refs/heads/${target}`,
+                )
+                if (stdout.trim()) {
+                  await remote(path, signal, 'fetch', '-q', settings.push, target)
+                  const fetched = await git(path, 'rev-parse', 'FETCH_HEAD')
+                  if (!(await contains(path, fetched, 'HEAD'))) {
+                    await step(`merging ${settings.push}/${target}`)
+                    try {
+                      await git(
+                        path,
+                        'merge',
+                        '--no-edit',
+                        '-m',
+                        `Merge ${settings.push}/${target}`,
+                        fetched,
+                      )
+                    } catch {
+                      const conflicts = await git(path, 'diff', '--name-only', '--diff-filter=U')
+                      await git(path, 'merge', '--abort').catch(() => undefined)
+                      return fail(
+                        `${settings.push}/${target} conflicts with local ${target} in:\n${conflicts}`,
+                      )
+                    }
                   }
                 }
               }
-            }
-            await step('merging')
-            try {
-              await git(
-                path,
-                'merge',
-                '--no-edit',
-                '-m',
-                `Merge ${entry.tip.slice(0, 7)} from W${entry.conversationId} into ${target}`,
-                entry.tip,
+              await step('merging')
+              try {
+                await git(
+                  path,
+                  'merge',
+                  '--no-edit',
+                  '-m',
+                  `Merge ${entry.tip.slice(0, 7)} from W${entry.conversationId} into ${target}`,
+                  entry.tip,
+                )
+              } catch {
+                const conflicts = await git(path, 'diff', '--name-only', '--diff-filter=U')
+                await git(path, 'merge', '--abort').catch(() => undefined)
+                return fail(
+                  `it conflicts with ${target} in:\n${conflicts}\nMerge ${target} into your workspace, resolve, verify and submit again.`,
+                )
+              }
+              merged = await runtime.memo(
+                `merged:${id}:${attempt}`,
+                { base, sha: await git(path, 'rev-parse', 'HEAD') },
+                context,
               )
-            } catch {
-              const conflicts = await git(path, 'diff', '--name-only', '--diff-filter=U')
-              await git(path, 'merge', '--abort').catch(() => undefined)
-              return fail(
-                `it conflicts with ${target} in:\n${conflicts}\nMerge ${target} into your workspace, resolve, verify and submit again.`,
-              )
             }
+            const { base } = merged
             // Setup prepares the merged revision, for example installs its lockfile.
             await step('setting up')
             await setup(source, path, await host.projectSettings(), signal)
             const flaky: string[] = []
-            for (const command of settings.checks) {
-              await step(`checking: ${command}`)
-              if ((await check(path, command, checkContext)) === undefined) continue
-              const output = await check(path, command, checkContext)
-              if (output !== undefined)
-                return fail(
-                  `check failed twice: ${command}\n${output}\nFix it, verify and submit again.`,
-                )
+            for (const [position, command] of settings.checks.entries()) {
+              // Outcomes are durable (memos are first-writer-wins, so the rerun has its own key): a resume
+              // neither reruns a passed check nor grants another rerun, and keeps the flaky note.
+              const key = `check:${id}:${attempt}:${position}`
+              let first = await runtime.memo<'passed' | 'failed'>(key, context)
+              if (!first) {
+                await step(`checking: ${command}`)
+                const failed = (await check(path, command, checkContext)) !== undefined
+                first = await runtime.memo(key, failed ? 'failed' : 'passed', context)
+              }
+              if (first === 'passed') continue
+              if (!(await runtime.memo<'passed'>(`${key}:rerun`, context))) {
+                await step(`rerunning: ${command}`)
+                const output = await check(path, command, checkContext)
+                if (output !== undefined)
+                  return fail(
+                    `check failed twice: ${command}\n${output}\nFix it, verify and submit again.`,
+                  )
+                await runtime.memo(`${key}:rerun`, 'passed', context)
+              }
               flaky.push(command)
             }
             const integrated = await git(path, 'rev-parse', 'HEAD')

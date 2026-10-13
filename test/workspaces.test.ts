@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, access, symlink, realpath } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile, access, symlink, realpath } from 'node:fs/promises'
 import { execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { join } from 'node:path'
@@ -883,4 +883,36 @@ it('reports a local landing whose push retry conflicts as landed locally', async
     await git(f.projectRoot, 'merge-base', '--is-ancestor', tip, landed).then(() => true),
   ).toBe(true)
   expect((await f.service.get(id, context))!.landed).toBe(landed)
+})
+it('resumes checks after a restart without rerunning passed ones and keeps flaky notes', async () => {
+  const f = await fixture()
+  const log = join(f.directory, 'runs')
+  const marker = join(f.directory, 'failed-once')
+  const gate = join(f.directory, 'rerun-gate')
+  f.host.projectSettings = async () => ({
+    lander: {
+      checks: [
+        `echo first >> '${log}'`,
+        `echo second >> '${log}'; if [ ! -f '${marker}' ]; then touch '${marker}'; exit 1; fi; while [ ! -f '${gate}' ]; do sleep 0.05; done`,
+      ],
+    },
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path)
+  await f.service.submit(id, context)
+  const runs = () => readFile(log, 'utf8').catch(() => '')
+  await until(async () => (await runs()) === 'first\nsecond\nsecond\n')
+  const merged = await git(
+    join(f.home, 'lander', (await readdir(join(f.home, 'lander')))[0]),
+    'rev-parse',
+    'HEAD',
+  )
+  await f.reopen()
+  await writeFile(gate, '')
+  const [report] = await submitted(f, id)
+  expect(await runs()).toBe('first\nsecond\nsecond\nsecond\n')
+  expect(report).toContain('landed as')
+  expect(report).toContain(`Flaky: echo second`)
+  expect(await git(f.projectRoot, 'rev-parse', 'main')).toBe(merged)
 })
