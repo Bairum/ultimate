@@ -1,5 +1,28 @@
 import { expect, it } from 'vitest'
-import { formatBashCommand } from '../../extensions/coding-tools/bash-command.tsx'
+import { formatBashCommand, pythonHeredoc } from '../../extensions/coding-tools/bash-command.tsx'
+
+it('recognizes a complete leading Python heredoc while retaining its shell wrapper', () => {
+  const body = 'from pathlib import Path\nif True:\n    print(Path("web"))\n'
+  for (const opening of ["python3 - <<'EOF'", 'python <<EOF', 'python3 - <<"EOF"']) {
+    const ending = 'EOF\nrg -n "Path" web | head; npx tsc --noEmit'
+    const command = `${opening}\n${body}${ending}`
+    expect(pythonHeredoc(command)).toEqual({ opening, body, ending })
+    const display = formatBashCommand(`cd /workspace && ${command}`)
+    expect(display.directory).toBe('/workspace')
+    expect(pythonHeredoc(display.commands[0])).toEqual({ opening, body, ending })
+  }
+})
+
+it('leaves incomplete and unsupported Python heredocs plain', () => {
+  for (const command of [
+    "python3 - <<'EOF'\nprint(1)",
+    "python3 - <<'EOF'\nprint(1)\n EOF",
+    "python3 - <<'EOF' <<'OTHER'\nprint(1)\nEOF\nOTHER",
+    "python3 -u - <<'EOF'\nprint(1)\nEOF",
+    "cat <<'EOF'\nprint(1)\nEOF",
+  ])
+    expect(pythonHeredoc(command)).toBeUndefined()
+})
 
 it('formats the reported rg pipelines and semicolon list', () => {
   const first = 'rg -n "no_model" node_modules/@earendil-works/pi-durable/dist -l | head'

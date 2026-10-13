@@ -20,7 +20,7 @@ import {
   useToolDuration,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
-import { formatBashCommand } from './bash-command.tsx'
+import { formatBashCommand, pythonHeredoc } from './bash-command.tsx'
 import { countChanges, Diff, editRows, parseDisplayDiff, parsePatch } from './diff.tsx'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
@@ -196,7 +196,8 @@ function Bash({ call }: { call: ToolCallView }) {
   const command = text(call.args.command)
   const display = formatBashCommand(command)
   const directory = usePath(display.directory ?? '')
-  const formatted = !!display.directory || display.commands.length > 1
+  const heredoc = pythonHeredoc(display.commands[0])
+  const formatted = !!display.directory || display.commands.length > 1 || !!heredoc
   const duration = useToolDuration(call)
   const exit = exitOf(call)
   const output = call.output
@@ -241,7 +242,19 @@ function Bash({ call }: { call: ToolCallView }) {
                   <span className="w-4 shrink-0 text-muted-foreground/50">
                     {index === 0 ? '$' : display.operators[index - 1]}
                   </span>
-                  <pre className="min-w-0 whitespace-pre-wrap break-words">{part}</pre>
+                  {index === 0 && heredoc ? (
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <pre className="whitespace-pre-wrap break-words">{heredoc.opening}</pre>
+                      <CodeBlock
+                        className="rounded-none border-none"
+                        code={heredoc.body}
+                        language="python"
+                      />
+                      <pre className="whitespace-pre-wrap break-words">{heredoc.ending}</pre>
+                    </div>
+                  ) : (
+                    <pre className="min-w-0 whitespace-pre-wrap break-words">{part}</pre>
+                  )}
                 </div>
               ))}
             </div>
