@@ -10,18 +10,20 @@ import {
   LiveDoc,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, Tx } from '@earendil-works/pi-durable'
+import type { ConversationId, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { git, setup } from './git.ts'
-import type { LandResult, WorkspaceIndex, WorkspaceInfo } from './types.ts'
+import { createLander } from './lander.ts'
+import type { LandResult, SubmitResult, WorkspaceIndex, WorkspaceInfo } from './types.ts'
 
 export const Workspaces = defineDoc<WorkspaceIndex>({
   kind: 'ultimate.workspaces',
-  version: 1,
+  version: 2,
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
-  initial: () => ({ items: {} }),
+  initial: () => ({ items: {}, queue: [], landers: {} }),
+  migrate: (value) => ({ ...(value as Pick<WorkspaceIndex, 'items'>), queue: [], landers: {} }),
 })
 type Host = Pick<
   ExtensionHost,
@@ -29,6 +31,17 @@ type Host = Pick<
 >
 export function workspaces(host: Host) {
   const queues = host.resource('workspaces.land', () => new Map<string, Promise<unknown>>())
+  /** Runs writes to one source checkout one at a time, across synchronous landing and the lander. */
+  async function serial<T>(source: string, operation: () => Promise<T>): Promise<T> {
+    const queued = (queues.get(source) ?? Promise.resolve()).catch(() => undefined).then(operation)
+    queues.set(source, queued)
+    try {
+      return await queued
+    } finally {
+      if (queues.get(source) === queued) queues.delete(source)
+    }
+  }
+  const Lander = createLander(host, Workspaces, serial)
   const get = async (id: ConversationId, context: Context) =>
     (await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context))?.items[String(id)]
   const Preparation = defineTask<{ id: ConversationId }, { phase: 'prepare' }, null>({
@@ -140,76 +153,118 @@ export function workspaces(host: Host) {
   async function land(id: ConversationId, context: Context, own = false): Promise<LandResult> {
     const record = await get(id, context)
     if (!record) throw new Error('Conversation has no workspace')
-    const source = record.source
-    const previous = queues.get(source) ?? Promise.resolve()
-    const operation = previous
-      .catch(() => undefined)
-      .then(async () => {
-        const workspace = (await get(id, context))!
-        await idle(id, context, own)
-        if (workspace.state !== 'ready') throw new Error(`Workspace is ${workspace.state}`)
-        const dirty = await git(workspace.path, 'status', '--porcelain')
-        if (dirty) throw new Error(`Worktree is dirty:\n${dirty}`)
-        const targetDirty = await git(source, 'status', '--porcelain')
-        if (targetDirty) throw new Error(`Target checkout is dirty:\n${targetDirty}`)
+    return serial(record.source, async () => {
+      const workspace = (await get(id, context))!
+      const source = workspace.source
+      await idle(id, context, own)
+      if (workspace.state !== 'ready') throw new Error(`Workspace is ${workspace.state}`)
+      const dirty = await git(workspace.path, 'status', '--porcelain')
+      if (dirty) throw new Error(`Worktree is dirty:\n${dirty}`)
+      if (
+        (await git(source, 'symbolic-ref', '--short', 'HEAD').catch(() => '')) !== workspace.target
+      )
+        throw new Error(`Target branch changed; check out ${workspace.target} first`)
+      if ((await git(workspace.path, 'symbolic-ref', '--short', 'HEAD')) !== workspace.branch)
+        throw new Error('Workspace branch changed')
+      const tip = await git(workspace.path, 'rev-parse', 'HEAD')
+      const head = await git(source, 'rev-parse', 'HEAD')
+      const integrated = await git(source, 'merge-base', '--is-ancestor', tip, head).then(
+        () => true,
+        () => false,
+      )
+      let result: LandResult = { text: 'Nothing to land.', landed: tip, commits: [], paths: [] }
+      if (!integrated) {
         if (
-          (await git(source, 'symbolic-ref', '--short', 'HEAD').catch(() => '')) !==
-          workspace.target
+          !(await git(source, 'merge-base', '--is-ancestor', head, tip).then(
+            () => true,
+            () => false,
+          ))
         )
-          throw new Error(`Target branch changed; check out ${workspace.target} first`)
-        if ((await git(workspace.path, 'symbolic-ref', '--short', 'HEAD')) !== workspace.branch)
-          throw new Error('Workspace branch changed')
-        const tip = await git(workspace.path, 'rev-parse', 'HEAD')
-        const head = await git(source, 'rev-parse', 'HEAD')
-        const integrated = await git(source, 'merge-base', '--is-ancestor', tip, head).then(
-          () => true,
-          () => false,
-        )
-        let result: LandResult = { text: 'Nothing to land.', landed: tip, commits: [], paths: [] }
-        if (!integrated) {
-          if (
-            !(await git(source, 'merge-base', '--is-ancestor', head, tip).then(
-              () => true,
-              () => false,
-            ))
+          throw new Error(
+            `Target moved or diverged; update the workspace onto ${workspace.target} and verify again`,
           )
-            throw new Error(
-              `Target moved or diverged; update the workspace onto ${workspace.target} and verify again`,
-            )
-          const commits = (await git(workspace.path, 'log', '--oneline', `${head}..${tip}`))
-            .split('\n')
-            .filter(Boolean)
-          const paths = (await git(workspace.path, 'diff', '--name-only', head, tip))
-            .split('\n')
-            .filter(Boolean)
-          const needsRestart =
-            (await realpath(source)) === (await realpath(host.ultimateRoot)) &&
-            paths.some((path) => /^(server|shared)\//.test(path))
-          await git(source, 'merge', '--ff-only', tip)
-          result = {
-            text: `Landed commits:\n${commits.join('\n')}\nChanged paths:\n${paths.join('\n')}${needsRestart ? '\nNeeds restart.' : ''}`,
-            landed: tip,
-            commits,
-            paths,
-            ...(needsRestart ? { needsRestart: true } : {}),
-          }
+        const commits = (await git(workspace.path, 'log', '--oneline', `${head}..${tip}`))
+          .split('\n')
+          .filter(Boolean)
+        const paths = (await git(workspace.path, 'diff', '--name-only', head, tip))
+          .split('\n')
+          .filter(Boolean)
+        const needsRestart =
+          (await realpath(source)) === (await realpath(host.ultimateRoot)) &&
+          paths.some((path) => /^(server|shared)\//.test(path))
+        await git(source, 'merge', '--ff-only', tip)
+        result = {
+          text: `Landed commits:\n${commits.join('\n')}\nChanged paths:\n${paths.join('\n')}${needsRestart ? '\nNeeds restart.' : ''}`,
+          landed: tip,
+          commits,
+          paths,
+          ...(needsRestart ? { needsRestart: true } : {}),
         }
-        await host.harness().commit(async (tx) => {
-          ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].landed = tip
-        }, context)
-        return result
-      })
-    queues.set(source, operation)
-    try {
-      return await operation
-    } finally {
-      if (queues.get(source) === operation) queues.delete(source)
-    }
+      }
+      await host.harness().commit(async (tx) => {
+        ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].landed = tip
+      }, context)
+      return result
+    })
+  }
+  async function submit(id: ConversationId, context: Context): Promise<SubmitResult> {
+    const workspace = await get(id, context)
+    if (!workspace) throw new Error('Conversation has no workspace')
+    if (workspace.state !== 'ready') throw new Error(`Workspace is ${workspace.state}`)
+    const dirty = await git(workspace.path, 'status', '--porcelain')
+    if (dirty) throw new Error(`Worktree is dirty:\n${dirty}`)
+    if ((await git(workspace.path, 'symbolic-ref', '--short', 'HEAD')) !== workspace.branch)
+      throw new Error('Workspace branch changed')
+    const tip = await git(workspace.path, 'rev-parse', 'HEAD')
+    const result = await host.harness().commit(async (tx) => {
+      const row = await tx.conversation(id)
+      if (!row || row.owner || row.parent)
+        throw new Error('Only a top-level main conversation submits its own workspace')
+      const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+      const { source, target } = index.items[String(id)]
+      const queued = index.queue.find(
+        (item) => item.conversationId === id && item.tip === tip && item.state === 'queued',
+      )
+      const entry = queued ?? {
+        id: `${id}-${tip.slice(0, 7)}-${Date.now().toString(36)}`,
+        conversationId: id,
+        source,
+        target,
+        tip,
+        at: Date.now(),
+        state: 'queued' as const,
+      }
+      if (!queued) index.queue.push(entry)
+      const running = index.landers[source]
+      const live = running && (await tx.task(running as TaskId))
+      if (!live || live.state.status === 'terminal' || live.state.status === 'completing')
+        index.landers[source] = await tx.createTask(
+          Lander,
+          { source },
+          {
+            conversationId: ROOT_CONVERSATION_ID,
+            ownership: { kind: 'conversation' },
+            background: true,
+          },
+        )
+      const position = index.queue
+        .filter((item) => item.source === source)
+        .findIndex((item) => item.id === entry.id)
+      return {
+        id: entry.id,
+        position: position + 1,
+        text: `Submitted ${tip.slice(0, 7)} as ${entry.id}, position ${position + 1} in the ${target} queue. The lander reports back here when it lands or fails; keep working.`,
+      }
+    }, context)
+    host.harness().resume()
+    return result
   }
   return {
     Preparation,
+    Lander,
     get,
     land,
+    submit,
     async create(tx: Tx, id: ConversationId, cwd: string) {
       if (
         !host.extensions().some((extension) => extension.name === 'workspaces' && extension.enabled)
@@ -281,6 +336,44 @@ export function workspaces(host: Host) {
         }, context)
       }
       return { text: `Discarded isolate; kept branch ${workspace.branch}.` }
+    },
+    /** Discard every clean, idle, ready checkout whose tip its target branch already contains. */
+    async removeLanded(context: Context) {
+      const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+      const removed: number[] = []
+      for (const [key, workspace] of Object.entries(index?.items ?? {})) {
+        const id = Number(key) as ConversationId
+        if (workspace.state !== 'ready') continue
+        if (index!.queue.some((item) => item.conversationId === id)) continue
+        const tip = await git(workspace.path, 'rev-parse', 'HEAD').catch(() => '')
+        if (
+          !tip ||
+          !(await git(
+            workspace.source,
+            'merge-base',
+            '--is-ancestor',
+            tip,
+            `refs/heads/${workspace.target}`,
+          ).then(
+            () => true,
+            () => false,
+          )) ||
+          (await git(workspace.path, 'status', '--porcelain'))
+        )
+          continue
+        try {
+          await this.discard(id, context)
+          removed.push(id)
+        } catch {
+          // Running or queued conversations keep their checkout.
+        }
+      }
+      return {
+        removed,
+        text: removed.length
+          ? `Removed ${removed.map((id) => `W${id}`).join(', ')}.`
+          : 'No landed checkouts to remove.',
+      }
     },
   }
 }

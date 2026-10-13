@@ -103,16 +103,20 @@ Start a subagent with `isolate: "worktree"` (the worker default) to give its too
 
 A top-level conversation created with New isolated conversation works in its own worktree.
 `workspace status` shows its tip and the original checkout's tip.
-After landing verified workers and checking the combined tip, call `workspace land` to fast-forward the original branch; it refuses dirty, changed or diverged targets and never rebases or pushes.
+After landing verified workers and checking the combined tip, call `workspace submit` and keep working: the lander
+merges the tip into the original branch with whatever landed meanwhile, runs `lander.checks` (here `pnpm check` and
+`pnpm test`), fast-forwards the branch, pushes to `lander.push` (here `origin`), and reports back as a message.
+`workspace land` is the synchronous alternative: it only fast-forwards, refuses moved or diverged targets, and never
+rebases or pushes. Unrelated dirty files in the original checkout block neither.
 For `server/` or `shared/` changes, an authorized `restart` works once the running clone is clean at the landed commit.
 
 ### Standing permission to push this repository
 
 The user authorizes the top-level agent to commit verified changes, land them, and push the destination branch
 (normally `main`) to this repository's GitHub remote, `origin` (`HazAT/ultimate`), without asking again. This permission
-applies to this repository whether public or private, not to other repositories. After a successful land, push the
-landed branch explicitly (for example, `git -C /home/haza/Projects/ultimate push origin main`); `workspace land` itself
-still never pushes. Subagents commit and report; only the top-level agent pushes after verification and integration.
+applies to this repository whether public or private, not to other repositories. `workspace submit` covers this: the
+lander pushes after its checks because `lander.push` is set. After a synchronous `workspace land`, which never pushes,
+push the landed branch explicitly (for example, `git -C /home/haza/Projects/ultimate push origin main`). Subagents commit and report; only the top-level agent pushes after verification and integration.
 
 Use normal, non-force pushes only. Remote advancement or a non-fast-forward rejection is normal: fetch, inspect the
 incoming log and diff, and merge non-destructively in an isolated workspace, preserving both histories. Rerun checks

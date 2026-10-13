@@ -571,9 +571,7 @@ export function watchConclusions(
     const settled = !active && !summaries.some((state) => state?.assessmentStatus === 'pending')
     const reasons: CanvasReason[] = []
     if (settled) {
-      const { items } = (await harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)) ?? {
-        items: {},
-      }
+      const items = (await harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))?.items ?? {}
       for (const id of members) {
         const workspace = items[String(id)]
         const count = workspace ? await unlandedCommits(workspace) : 0

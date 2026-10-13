@@ -8,7 +8,23 @@ export type Workspace = {
   error?: string
   landed?: string
 }
-export type WorkspaceIndex = { items: Record<string, Workspace> }
+/** One `workspace submit`, waiting for or being processed by its source's lander. */
+export type QueueEntry = {
+  id: string
+  conversationId: number
+  source: string
+  target: string
+  tip: string
+  at: number
+  state: 'queued' | 'landing'
+  step?: string
+}
+export type WorkspaceIndex = {
+  items: Record<string, Workspace>
+  queue: QueueEntry[]
+  /** Live lander task per source checkout. */
+  landers: Record<string, number>
+}
 export type WorkspaceInfo = Workspace & {
   ahead: number | null
   tip: string | null
@@ -23,3 +39,4 @@ export type LandResult = {
   paths?: string[]
   needsRestart?: boolean
 }
+export type SubmitResult = { text: string; id: string; position: number }

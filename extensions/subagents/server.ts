@@ -533,7 +533,7 @@ An epic means the full flow: tasks, isolated workers, land, and review before it
    Rerun the meaningful checks yourself in the isolate before landing.
 6. Epic commits come from workers in isolates and reach the checkout only through land.
    Land verified workers into your current checkout and rerun meaningful combined checks there.
-   An isolated main then verifies the combined tip and uses workspace land to reach its source.
+   An isolated main then verifies the combined tip and uses workspace submit to reach its source.
    Use restart only for required server/ and shared/ changes after verification and authorization.
    Discard a child's clean isolate only when explicitly requested; never auto-clean up.
 7. Record verification evidence with plan and set the task done; only you do this.

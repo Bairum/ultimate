@@ -6,10 +6,11 @@ import type { ConversationSummary } from '@/sdk'
 import type { LandResult, Workspace, WorkspaceIndex } from './types.ts'
 
 export type WorkspaceConversation = ConversationSummary & { workspace?: Workspace }
-let items: WorkspaceIndex['items'] = {}
+let index: WorkspaceIndex = { items: {}, queue: [], landers: {} }
 const listeners = new Set<() => void>()
 let stream: EventSource | undefined
-export const getWorkspaces = () => items
+export const getWorkspaces = () => index.items
+const getQueue = () => index.queue
 function subscribe(listener: () => void) {
   listeners.add(listener)
   if (!stream) {
@@ -20,13 +21,13 @@ function subscribe(listener: () => void) {
     stream.addEventListener('doc', (event) => {
       const data = JSON.parse(event.data) as { kind: string; value: WorkspaceIndex | null }
       if (data.kind !== 'ultimate.workspaces') return
-      items = data.value?.items ?? {}
+      index = data.value ?? { items: {}, queue: [], landers: {} }
       publish()
     })
     stream.addEventListener('docOps', (event) => {
       const data = JSON.parse(event.data) as { kind: string; ops: Op[] }
       if (data.kind !== 'ultimate.workspaces') return
-      items = applyImmutable({ items }, data.ops).items
+      index = applyImmutable(index, data.ops)
       publish()
     })
   }
@@ -41,6 +42,10 @@ function subscribe(listener: () => void) {
 export function useWorkspaces() {
   return useSyncExternalStore(subscribe, getWorkspaces)
 }
+/** Submissions waiting for or being processed by a lander, oldest first. */
+export function useLanderQueue() {
+  return useSyncExternalStore(subscribe, getQueue)
+}
 export function useWorkspaceConversations(): WorkspaceConversation[] {
   const records = useWorkspaces()
   return useConversations().map((conversation) => ({
@@ -54,11 +59,11 @@ export const stateLabel = (workspace: Workspace) =>
     workspace.state
   ]
 
-/** Land or remove the workspace of conversation `id`, then call `done`; the outcome stays until the next attempt. */
+/** Land, submit or remove the workspace of conversation `id`, then call `done`; the outcome stays until the next attempt. */
 export function useWorkspaceAction(id: number, done: () => unknown) {
-  const [pending, setPending] = useState<'land' | 'discard'>()
+  const [pending, setPending] = useState<'land' | 'submit' | 'discard'>()
   const [outcome, setOutcome] = useState<{ error?: boolean; text: string }>()
-  const run = async (operation: 'land' | 'discard') => {
+  const run = async (operation: 'land' | 'submit' | 'discard') => {
     setPending(operation)
     setOutcome(undefined)
     try {
@@ -71,6 +76,7 @@ export function useWorkspaceAction(id: number, done: () => unknown) {
           text: `${count ? `Landed ${count} commit${count === 1 ? '' : 's'}.` : 'Nothing to land.'}${result.needsRestart ? ' Restart to apply server/ or shared/ changes.' : ''}`,
         })
       }
+      if (operation === 'submit') setOutcome({ text: result.text })
     } catch (error) {
       setOutcome({ error: true, text: errorMessage(error) })
     } finally {
@@ -78,5 +84,11 @@ export function useWorkspaceAction(id: number, done: () => unknown) {
       await done()
     }
   }
-  return { pending, outcome, land: () => run('land'), remove: () => run('discard') }
+  return {
+    pending,
+    outcome,
+    land: () => run('land'),
+    submit: () => run('submit'),
+    remove: () => run('discard'),
+  }
 }

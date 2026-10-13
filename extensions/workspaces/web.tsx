@@ -2,9 +2,18 @@ import { ChevronRightIcon, CopyIcon, GitBranchIcon, RefreshCwIcon } from 'lucide
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { defineWebExtension, useAction, useConversation, useTasks, useUltimate } from '@/sdk'
+import {
+  api,
+  defineWebExtension,
+  errorMessage,
+  useAction,
+  useConversation,
+  useTasks,
+  useUltimate,
+} from '@/sdk'
 import {
   stateLabel,
+  useLanderQueue,
   useWorkspaceAction,
   useWorkspaceConversations as useConversations,
 } from './data.tsx'
@@ -31,7 +40,11 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
       onError: () => undefined,
     },
   )
-  const { pending, outcome, land, remove } = useWorkspaceAction(conversation.id, info.refetch)
+  const { pending, outcome, land, submit, remove } = useWorkspaceAction(
+    conversation.id,
+    info.refetch,
+  )
+  const queued = useLanderQueue().find((item) => item.conversationId === conversation.id)
   const recorded = conversation.workspace!
   const workspace =
     info.data && info.data.state === recorded.state && info.data.landed === recorded.landed
@@ -73,7 +86,9 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
         <span className="min-w-0 flex-1 truncate text-muted-foreground">
           {conversation.title ?? 'Isolated draft'}
         </span>
-        <span className="shrink-0 text-[10.5px] text-muted-foreground">{stateLabel(recorded)}</span>
+        <span className="shrink-0 text-[10.5px] text-muted-foreground">
+          {queued ? (queued.state === 'landing' ? 'Landing…' : 'Queued') : stateLabel(recorded)}
+        </span>
       </CollapsibleTrigger>
       <CollapsibleContent className="space-y-3 px-4 pb-4 text-xs">
         <div className="flex items-center gap-2">
@@ -167,12 +182,25 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
             </div>
           ) : (
             <div className="flex flex-wrap gap-2">
+              {!conversation.parentConversationId && conversation.ownerTaskId === undefined && (
+                <Button
+                  className="cursor-pointer"
+                  disabled={
+                    pending !== undefined || workspace.state !== 'ready' || queued !== undefined
+                  }
+                  onClick={() => void submit()}
+                  size="sm"
+                  variant="outline"
+                >
+                  {pending === 'submit' ? 'Submitting…' : 'Submit'}
+                </Button>
+              )}
               <Button
                 className="cursor-pointer"
                 disabled={disabled || workspace.state !== 'ready'}
                 onClick={() => void land()}
                 size="sm"
-                variant="outline"
+                variant="ghost"
               >
                 {pending === 'land' ? 'Landing…' : 'Land'}
               </Button>
@@ -192,10 +220,67 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
   )
 }
 
+/** The lander's queue, oldest first: what each submission waits for or is doing now. */
+function LanderQueue() {
+  const queue = useLanderQueue()
+  if (!queue.length) return null
+  return (
+    <section aria-label="Lander queue" className="border-b border-border/60 px-4 py-3 text-xs">
+      <h3 className="mb-2 text-[10.5px] text-muted-foreground">Lander queue</h3>
+      <ol className="space-y-1">
+        {queue.map((item) => (
+          <li className="flex items-center gap-2" key={item.id}>
+            <span className="shrink-0 font-mono">W{item.conversationId}</span>
+            <span className="shrink-0 font-mono text-muted-foreground">{item.tip.slice(0, 7)}</span>
+            <span className="min-w-0 flex-1 truncate text-muted-foreground">
+              {item.state === 'landing' ? (item.step ?? 'landing') : `queued for ${item.target}`}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
+}
+
 function WorkspacesPanel() {
   const conversations = useConversations().filter((conversation) => conversation.workspace)
+  const [removing, setRemoving] = useState(false)
+  const [removed, setRemoved] = useState<{ error?: boolean; text: string }>()
+  const removeLanded = async () => {
+    setRemoving(true)
+    setRemoved(undefined)
+    try {
+      setRemoved(await api.action<{ text: string }>('workspaces', 'removeLanded', {}))
+    } catch (error) {
+      setRemoved({ error: true, text: errorMessage(error) })
+    } finally {
+      setRemoving(false)
+    }
+  }
   return (
     <div className="flex flex-col pb-4">
+      <LanderQueue />
+      {(removed ||
+        conversations.some((conversation) => conversation.workspace!.state === 'ready')) && (
+        <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2 text-xs">
+          <span
+            className={`min-w-0 flex-1 truncate ${removed?.error ? 'text-error' : 'text-muted-foreground'}`}
+            role={removed?.error ? 'alert' : 'status'}
+          >
+            {removed?.text}
+          </span>
+          <Button
+            className="cursor-pointer"
+            disabled={removing}
+            onClick={() => void removeLanded()}
+            size="sm"
+            title="Remove clean, idle checkouts whose commits are already on their target"
+            variant="ghost"
+          >
+            {removing ? 'Removing…' : 'Remove landed'}
+          </Button>
+        </div>
+      )}
       {conversations.length ? (
         conversations
           .toSorted((a, b) => b.id - a.id)
