@@ -136,7 +136,8 @@ function Mark({ status, className }: { status: Status; className?: string }) {
       className={cn(
         'size-2 shrink-0 rounded-full',
         style.fill,
-        (status === 'working' || status === 'waiting') && 'animate-pulse-dot',
+        (status === 'working' || status === 'waiting' || status === 'subagents') &&
+          'animate-pulse-dot',
         className,
       )}
     />
@@ -880,7 +881,7 @@ export const AgentPanel = memo(function AgentPanel({ data }: NodeProps<PanelNode
   const feed = useAgentFeed(agent.id)
   const far = useFlow((state) => state.transform[2] < FAR) && !focused && !expanded
   const style = STATUS[agent.status]
-  const active = agent.status === 'working' || agent.status === 'waiting'
+  const active = isActive(agent.status) && agent.status !== 'queued'
   const shape = focused || expanded ? 'panel' : agent.shape
   const card = useSpawn(born)
   return (
@@ -905,7 +906,9 @@ export const AgentPanel = memo(function AgentPanel({ data }: NodeProps<PanelNode
         expanded && 'shadow-2xl',
         selected && !focused && 'ring-2 ring-foreground/20 ring-offset-4 ring-offset-background',
         agent.status === 'working' && !focused && 'shadow-[0_0_32px_-10px_var(--color-brand)]',
-        agent.status === 'waiting' && !focused && 'shadow-[0_0_32px_-10px_var(--color-sky-400)]',
+        (agent.status === 'waiting' || agent.status === 'subagents') &&
+          !focused &&
+          'shadow-[0_0_32px_-10px_var(--color-sky-400)]',
         agent.status === 'decision' &&
           !focused &&
           'bg-[color-mix(in_oklab,var(--color-warning)_6%,var(--color-card))]',
@@ -922,7 +925,7 @@ export const AgentPanel = memo(function AgentPanel({ data }: NodeProps<PanelNode
           className={cn(
             'pointer-events-none absolute animate-pulse border-2',
             far ? '-inset-3 rounded-[2rem]' : '-inset-1.5 rounded-[1rem]',
-            agent.status === 'waiting'
+            agent.status === 'waiting' || agent.status === 'subagents'
               ? 'border-sky-500/45 dark:border-sky-400/45'
               : 'border-brand/40',
           )}
