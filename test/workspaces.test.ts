@@ -18,6 +18,8 @@ import { Workspaces, workspaces } from '../extensions/workspaces/workspaces.ts'
 import { git, setup } from '../extensions/workspaces/git.ts'
 import type { LanderEntry } from '../extensions/workspaces/types.ts'
 import { exclusiveSlot } from '../extensions/exclusive-commands/slot.ts'
+import { createLander } from '../extensions/workspaces/lander.ts'
+import { leaveNote, Root } from '../extensions/lineage/server.ts'
 import self from '../extensions/self/server.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
 import { prepareFauxServer, post, temp, until } from './helpers.ts'
@@ -625,6 +627,117 @@ async function landerLog(f: Awaited<ReturnType<typeof fixture>>) {
     view.dispose()
   }
 }
+async function rootNotes(f: Awaited<ReturnType<typeof fixture>>) {
+  const root = (await f.opened.harness.conversation(ROOT_CONVERSATION_ID, context))!
+  const view = await root.viewState(context)
+  try {
+    return view.value.entries.filter((entry) => entry.kind === 'lineage.note')
+  } finally {
+    view.dispose()
+  }
+}
+
+it('notes the root once for a landing even when its report phase is replayed', async () => {
+  const f = await lander({})
+  f.host.extensions = () =>
+    [
+      { name: 'workspaces', enabled: true },
+      { name: 'lineage', enabled: true },
+    ] as ReturnType<ExtensionHost['extensions']>
+  const task = createLander(f.host, Workspaces, (_source, operation) => operation())
+  const report = task.definition.phases.report
+  let replays = 0
+  f.prepared.registry.install(
+    defineExtension({
+      ...workspaceExtension(f.host),
+      tasks: [
+        ...(workspaceExtension(f.host).tasks ?? []).filter(
+          (item) => item.definition.name !== task.definition.name,
+        ),
+        {
+          definition: {
+            ...task.definition,
+            phases: {
+              ...task.definition.phases,
+              report: async (...args: Parameters<typeof report>) => {
+                const [current, runtime, ctx] = args
+                // Simulate resuming the persisted report checkpoint after its deliveries, before advancing.
+                await report(current, { ...runtime, commit: async () => undefined }, ctx)
+                replays++
+                await report(current, runtime, ctx)
+              },
+            },
+          },
+        },
+      ],
+    }),
+  )
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const sha = await commit((await f.service.get(id, context))!.path, 'landed.txt')
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Metadata, id)).title = 'Write the feature'
+  }, context)
+  const { id: submission } = await f.service.submit(id, context)
+  await submitted(f, id)
+  expect(replays).toBe(1)
+  // A crash after admitting the note but before memoizing it reuses the same write request.
+  await leaveNote(f.host, 'root', 'duplicate delivery', {
+    source: 'lander',
+    from: id,
+    requestId: `lander-root:${submission}`,
+  })
+  const notes = await rootNotes(f)
+  expect(notes).toHaveLength(1)
+  expect(notes[0].data).toMatchObject({
+    source: 'lander',
+    from: id,
+    sha,
+    target: 'main',
+    title: 'Write the feature',
+    commits: [{ sha: sha.slice(0, 7), subject: 'landed.txt' }],
+    paths: ['landed.txt'],
+  })
+  expect((notes[0].data as { text: string }).text).toContain(
+    `Landed ${sha.slice(0, 7)} on main from #${id} Write the feature:`,
+  )
+  await f.reopen()
+  expect(await rootNotes(f)).toHaveLength(1)
+})
+
+it('does not note failed landings, root submissions, or disabled lineage', async () => {
+  const f = await lander({ checks: ['false'] })
+  f.host.extensions = () =>
+    [
+      { name: 'lineage', enabled: true },
+      { name: 'workspaces', enabled: true },
+    ] as ReturnType<ExtensionHost['extensions']>
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path)
+  await f.service.submit(id, context)
+  expect((await submitted(f, id))[0]).toContain('was not landed')
+  expect(await rootNotes(f)).toHaveLength(0)
+  f.host.projectSettings = async () => ({ lander: {} })
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Root, ROOT_CONVERSATION_ID)).root = id
+  }, context)
+  await f.service.submit(id, context)
+  expect((await submitted(f, id)).at(-1)).toContain('landed as')
+  const view = await (await f.opened.harness.conversation(id, context))!.viewState(context)
+  expect(view.value.entries.filter((entry) => entry.kind === 'lineage.note')).toHaveLength(0)
+  view.dispose()
+  await f.opened.harness.commit(async (tx) => {
+    delete (await tx.doc(Root, ROOT_CONVERSATION_ID)).root
+  }, context)
+  f.host.extensions = () =>
+    [{ name: 'workspaces', enabled: true }] as ReturnType<ExtensionHost['extensions']>
+  await commit((await f.service.get(id, context))!.path, 'another.txt')
+  await f.service.submit(id, context)
+  await submitted(f, id)
+  expect(await rootNotes(f)).toHaveLength(0)
+})
+
 async function lander(settings: JsonObject, existing?: Awaited<ReturnType<typeof repository>>) {
   const f = await fixture([], existing)
   f.host.projectSettings = async () => ({ lander: settings })

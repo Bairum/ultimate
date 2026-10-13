@@ -108,6 +108,61 @@ function Finished({ entry }: { entry: EntryRecord }) {
   )
 }
 
+function LandingNote({ entry }: { entry: EntryRecord }) {
+  const { switchConversation } = useUltimate()
+  const {
+    from,
+    sha,
+    target: branch,
+    title,
+    commits,
+    paths,
+    more,
+  } = entry.data as {
+    from: number
+    sha: string
+    target: string
+    title: string
+    commits: { sha: string; subject: string }[]
+    paths: string[]
+    more: number
+  }
+  return (
+    <section
+      className="min-w-0 rounded-md border border-l-2 border-border border-l-success/70 bg-muted/20"
+      data-lineage-note="lander"
+    >
+      <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px]">
+        <CheckIcon className="size-3.5 shrink-0 text-success" />
+        <span className="shrink-0">Landed {sha.slice(0, 7)} ·</span>
+        <button
+          className="min-w-0 cursor-pointer truncate text-muted-foreground hover:text-foreground hover:underline"
+          onClick={() => switchConversation(from)}
+          title={`Open #${from}`}
+          type="button"
+        >
+          #{from} {title}
+        </button>
+      </header>
+      <div className="space-y-2 px-3 py-2.5 font-mono text-[11px]">
+        <div className="text-muted-foreground">on {branch}</div>
+        <div>
+          {commits.map((commit) => (
+            <div className="flex gap-2" key={commit.sha}>
+              <span className="shrink-0 text-muted-foreground">{commit.sha.slice(0, 7)}</span>
+              <span className="min-w-0 break-words">{commit.subject}</span>
+            </div>
+          ))}
+          {more > 0 && <div className="text-muted-foreground">and {more} more</div>}
+        </div>
+        {paths.length > 0 && (
+          <div className="break-words text-muted-foreground">Changed: {paths.join(', ')}</div>
+        )}
+      </div>
+    </section>
+  )
+}
+
 /** A note another conversation (or the lander) left here. */
 function Note({ entry }: { entry: EntryRecord }) {
   const { switchConversation } = useUltimate()
@@ -116,27 +171,16 @@ function Note({ entry }: { entry: EntryRecord }) {
     text: string
     source?: 'lander' | 'finished'
   }
+  if (source === 'lander') return <LandingNote entry={entry} />
   if (source === 'finished') return <Finished entry={entry} />
-  const landed = source === 'lander'
   return (
     <section
-      className={cn(
-        'min-w-0 rounded-md border border-l-2 border-border bg-muted/20',
-        landed ? 'border-l-success/70' : 'border-l-brand/50',
-      )}
-      data-lineage-note={landed ? 'lander' : 'note'}
+      className="min-w-0 rounded-md border border-l-2 border-border border-l-brand/50 bg-muted/20"
+      data-lineage-note="note"
     >
       <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-        {landed ? (
-          <CheckIcon className="size-3.5 text-success" />
-        ) : (
-          <StickyNoteIcon className="size-3.5 text-brand" />
-        )}
-        {landed ? (
-          <span className="text-foreground">Landed</span>
-        ) : (
-          <span className="text-foreground">Note from</span>
-        )}
+        <StickyNoteIcon className="size-3.5 text-brand" />
+        <span className="text-foreground">Note from</span>
         {from !== undefined && (
           <button
             className="cursor-pointer text-foreground hover:underline"

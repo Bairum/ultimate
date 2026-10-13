@@ -12,7 +12,8 @@ A project is one tree of conversations: a root that holds the idea, and branches
   the root") moves it; `info` returns `{ root }`.
 - **Notes**: the `note` tool `{ to: id | 'root', text }` writes a `lineage.note` entry in the target without waking it;
   its model reads `Note from #N: …` with its next input. Other extensions call `leaveNote(host, to, text, source?)`;
-  `source: { source: 'lander' }` renders as a landing.
+  Landings from workspaces use `source: 'lander'` with structured `sha`, `target`, `commits`, and `paths`: a compact
+  success card links to the submitter and keeps the root's tally (up to 10 commits and 8 changed paths).
 - **Notify**: the `notify` tool `{ id, wake? }` starts a background task `lineage.notify` in the caller that waits
   until #id is idle (`waitForIdle`: its runs and its subagents), then delivers `#id finished · <title>` with its last
   answer (≤1500 chars). `wake` (default) submits it as a follow-up input placed as a `lineage.finished` entry, so it
