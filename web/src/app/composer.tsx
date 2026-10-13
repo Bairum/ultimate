@@ -1,9 +1,8 @@
 import type { AgentState, InboxItem } from '@earendil-works/pi-durable'
 import { cn } from 'cn'
 import { CornerDownRightIcon, ListPlusIcon, LoaderCircleIcon, XIcon } from 'lucide-react'
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { ToolImage } from '@/components/ai/tool'
-import { imageMimeTypes, maxImageBytes, maxImages } from '../../../shared/protocol.ts'
+import { useEffect, useState, useSyncExternalStore } from 'react'
+import { ImagePreviews, useImagePaste } from '@/components/image-paste'
 import type { KeyboardEvent } from 'react'
 import {
   PromptInput,
@@ -156,15 +155,12 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   const setError = (message: string | undefined) => draft.set({ error: message })
   const setImages = (change: (images: Draft['images']) => Draft['images']) =>
     draft.set({ images: change(draft.get().images), revision: draft.get().revision + 1 })
-  const [reading, setReading] = useState(false)
-  const pending = useRef(false)
-  const alive = useRef(true)
-  useEffect(() => {
-    alive.current = true
-    return () => {
-      alive.current = false
-    }
-  }, [])
+  const { paste, reading, pending } = useImagePaste({
+    images,
+    setImages,
+    setError,
+    disabled: () => loading || draft.get().sending,
+  })
   const models = useModels()
   const key = draft.key
   useEffect(() => {
@@ -179,57 +175,6 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   }
   const blocked = loading ? undefined : blockedBy(agent, models)
   const empty = !text.trim() && images.length === 0
-
-  async function paste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
-    if (loading) {
-      event.preventDefault()
-      return
-    }
-    const files = Array.from(event.clipboardData.items)
-      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
-      .flatMap((item) => {
-        const file = item.getAsFile()
-        return file ? [file] : []
-      })
-    if (!files.length) return
-    event.preventDefault()
-    if (pending.current || draft.get().sending) return
-    if (
-      images.length + files.length > maxImages ||
-      files.some((file) => file.size > maxImageBytes || !imageMimeTypes.includes(file.type))
-    ) {
-      setError('Paste up to 4 PNG, JPEG, WebP or GIF images, at most 2 MiB each.')
-      return
-    }
-    pending.current = true
-    setReading(true)
-    setError(undefined)
-    try {
-      const added = await Promise.all(
-        files.map(
-          (file) =>
-            new Promise<{ data: string; mimeType: string }>((resolve, reject) => {
-              const reader = new FileReader()
-              reader.addEventListener('load', () => {
-                if (typeof reader.result !== 'string')
-                  return reject(new Error('Could not read pasted image'))
-                resolve({ data: reader.result.split(',')[1], mimeType: file.type })
-              })
-              reader.addEventListener('error', () =>
-                reject(new Error('Could not read pasted image')),
-              )
-              reader.readAsDataURL(file)
-            }),
-        ),
-      )
-      if (alive.current) setImages((current) => [...current, ...added])
-    } catch (failure) {
-      if (alive.current) setError(errorMessage(failure))
-    } finally {
-      pending.current = false
-      if (alive.current) setReading(false)
-    }
-  }
 
   async function send(whenBusy?: 'steer' | 'followUp') {
     if (loading || empty || blocked || draft.get().sending || pending.current || id === undefined)
@@ -270,28 +215,11 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
           void send()
         }}
       >
-        {images.length > 0 && (
-          <div className="flex flex-wrap gap-2 px-3 pt-3">
-            {images.map((image, index) => (
-              <div className="relative" key={index}>
-                <ToolImage
-                  alt={`Pasted image ${index + 1}`}
-                  className="max-w-36 [&_img]:max-h-24"
-                  image={image}
-                />
-                <button
-                  aria-label={`Remove image ${index + 1}`}
-                  className="absolute -top-2 -right-2 flex size-5 cursor-pointer items-center justify-center rounded-full border bg-background hover:bg-accent"
-                  disabled={loading || sending || reading}
-                  onClick={() => setImages((current) => current.filter((_, i) => i !== index))}
-                  type="button"
-                >
-                  <XIcon className="size-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+        <ImagePreviews
+          images={images}
+          disabled={loading || sending || reading}
+          remove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
+        />
         <PromptInputTextarea
           autoFocus
           readOnly={loading || sending}
