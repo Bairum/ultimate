@@ -69,6 +69,7 @@ export {
   errorMessage,
   formatBytes,
   formatDuration,
+  formatTime,
   formatTokens,
   shortenPath,
 } from './format.ts'

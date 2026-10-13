@@ -28,6 +28,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import {
   cn,
   defineWebExtension,
+  formatTime,
   useAction,
   useConversations,
   useToolDuration,
@@ -95,8 +96,7 @@ function StatusIcon({ status }: { status: string }) {
   return <Icon aria-label={status} className={cn('size-3.5 shrink-0', tone)} />
 }
 
-const time = (at: string) =>
-  new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+const time = (at: string) => formatTime(at)
 
 function Note({ note, clamp }: { note: Task['notes'][number]; clamp?: boolean }) {
   return (

@@ -43,6 +43,7 @@ import {
   defineWebExtension,
   errorMessage,
   formatKeys,
+  formatTime,
   getConversation,
   getState,
   useDialog,
@@ -1034,7 +1035,7 @@ function SummaryAction({ entry }: { entry: EntryRecord }) {
         dateTime={date.toISOString()}
         title={date.toLocaleString()}
       >
-        {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        {formatTime(date)}
       </time>
     </div>
   )

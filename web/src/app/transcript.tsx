@@ -34,7 +34,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai/r
 import { Shimmer } from '@/components/ai/shimmer'
 import { ToolImage } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { elidePath, formatDuration, formatTokens, shortenPath } from '../sdk/format.ts'
+import { elidePath, formatDuration, formatTime, formatTokens, shortenPath } from '../sdk/format.ts'
 import { useConversation, useExtensions, useModels, useNow, useSystem } from '../sdk/hooks.ts'
 import { entryRenderers } from '../sdk/registry.ts'
 import { ExtensionBoundary } from './boundary.tsx'
@@ -450,7 +450,7 @@ function MessageActions({
     >
       {children}
       <time className="tabular-nums" dateTime={date.toISOString()} title={date.toLocaleString()}>
-        {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}
+        {formatTime(date)}
       </time>
       {text && (
         <CopyButton label="Copy message" value={text}>

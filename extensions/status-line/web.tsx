@@ -5,11 +5,12 @@ import {
   cn,
   defineWebExtension,
   elidePath,
+  formatTime,
   formatTokens,
   shortenPath,
+  useComposer,
   useConnection,
   useConversation,
-  useComposer,
   useConversations as useAllConversations,
   useModels,
   useSystem,
@@ -283,7 +284,7 @@ function Connection() {
             {system.process.url} · pid {system.process.pid} · node {system.process.node}
             <div>
               generation {system.process.generation} · since{' '}
-              {new Date(system.process.startedAt).toLocaleTimeString()}
+              {formatTime(system.process.startedAt, true)}
             </div>
           </>
         )

@@ -1,9 +1,7 @@
-import { defineWebExtension, useNow } from '@/sdk'
+import { defineWebExtension, formatTime, useNow } from '@/sdk'
 
 function Clock() {
-  const now = new Date(useNow(60_000))
-  const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-  return <span>{time}</span>
+  return <span>{formatTime(useNow(60_000))}</span>
 }
 
 export default defineWebExtension({
