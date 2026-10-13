@@ -25,7 +25,34 @@ export function createUltimateClaudeCodeProvider() {
 }
 
 export default function claudeCode(host: ExtensionHost) {
-  const provider = createUltimateClaudeCodeProvider()
+  const shared = host.resource('claude-code.provider', () => {
+    const provider = createUltimateClaudeCodeProvider()
+    const active = new Set<Promise<unknown>>()
+    let closing = false
+    const track = (response: ReturnType<typeof provider.streamSimple>) => {
+      const settled = response.result()
+      active.add(settled)
+      void settled.finally(() => active.delete(settled))
+      return response
+    }
+    host.onClose(async () => {
+      closing = true
+      // Extension cleanup precedes harness suspension. Let its signal stop active
+      // requests before closing warm workers; never turn suspension into an error.
+      if (active.size) void Promise.allSettled(active).then(() => closeClaudeProcesses())
+      else await closeClaudeProcesses()
+    })
+    const stream: typeof provider.stream = (...args) => {
+      if (closing) throw new Error('Claude Code provider is closing')
+      return track(provider.stream(...args))
+    }
+    const streamSimple: typeof provider.streamSimple = (...args) => {
+      if (closing) throw new Error('Claude Code provider is closing')
+      return track(provider.streamSimple(...args))
+    }
+    return { ...provider, stream, streamSimple }
+  })
+  const provider = { ...shared }
   // Keep subscription accounting, but do not offer an in-app login for external auth.
   if (provider.auth.oauth) Reflect.deleteProperty(provider.auth.oauth, 'login')
   host.onOpen(async () => {
@@ -33,7 +60,6 @@ export default function claudeCode(host: ExtensionHost) {
   })
   host.onClose(async () => {
     host.modelRuntime.unregisterProvider(provider.id)
-    await closeClaudeProcesses()
   })
   return { name: 'claude-code' }
 }
