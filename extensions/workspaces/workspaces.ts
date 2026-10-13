@@ -1,4 +1,6 @@
+import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { promisify } from 'node:util'
 import { lstat, mkdir, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Context } from '@earendil-works/chord'
@@ -14,7 +16,15 @@ import type { ConversationId, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { git, setup } from './git.ts'
 import { createLander, landerPath, log } from './lander.ts'
-import type { LandResult, SubmitResult, WorkspaceIndex, WorkspaceInfo } from './types.ts'
+import type {
+  LandResult,
+  SubmitResult,
+  WorkspaceIndex,
+  WorkspaceInfo,
+  WorkspaceStats,
+} from './types.ts'
+
+const exec = promisify(execFile)
 
 export const Workspaces = defineDoc<WorkspaceIndex>({
   kind: 'ultimate.workspaces',
@@ -433,45 +443,54 @@ export function workspaces(host: Host) {
       }
       return { text: `Discarded isolate; kept branch ${workspace.branch}.` }
     },
-    /** Discard every clean, idle, ready checkout with its own commits that its target branch already contains. */
-    async removeLanded(context: Context) {
-      const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
-      const removed: number[] = []
-      for (const [key, workspace] of Object.entries(index?.items ?? {})) {
-        const id = Number(key) as ConversationId
-        if (workspace.state !== 'ready') continue
-        if (index!.queue.some((item) => item.conversationId === id)) continue
-        const tip = await git(workspace.path, 'rev-parse', 'HEAD').catch(() => '')
-        // A checkout without commits of its own is not landed; its conversation may still start work.
-        if (
-          !tip ||
-          tip === workspace.base ||
-          !(await git(
-            workspace.source,
-            'merge-base',
-            '--is-ancestor',
-            tip,
-            `refs/heads/${workspace.target}`,
-          ).then(
-            () => true,
-            () => false,
-          )) ||
-          (await git(workspace.path, 'status', '--porcelain'))
-        )
-          continue
-        try {
-          await this.discard(id, context)
-          removed.push(id)
-        } catch {
-          // Running or queued conversations keep their checkout.
-        }
+    /** Counts of the checkouts by state and by what their commits are, and the disk the worktrees directory takes. */
+    async stats(context: Context): Promise<WorkspaceStats> {
+      const items = Object.values(
+        (await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context))?.items ?? {},
+      )
+      const stats: WorkspaceStats = {
+        total: items.length,
+        ready: 0,
+        preparing: 0,
+        failed: 0,
+        removed: 0,
+        landed: 0,
+        ahead: 0,
+        fresh: 0,
+        dirty: 0,
+        bytes: null,
       }
-      return {
-        removed,
-        text: removed.length
-          ? `Removed ${removed.map((id) => `W${id}`).join(', ')}.`
-          : 'No landed checkouts to remove.',
-      }
+      await Promise.all(
+        items.map(async (workspace) => {
+          stats[workspace.state]++
+          if (workspace.state !== 'ready') return
+          const tip = await git(workspace.path, 'rev-parse', 'HEAD').catch(() => '')
+          if (await git(workspace.path, 'status', '--porcelain').catch(() => '')) stats.dirty++
+          if (!tip || tip === workspace.base) stats.fresh++
+          else if (
+            await git(
+              workspace.source,
+              'merge-base',
+              '--is-ancestor',
+              tip,
+              `refs/heads/${workspace.target}`,
+            ).then(
+              () => true,
+              () => false,
+            )
+          )
+            stats.landed++
+          else stats.ahead++
+        }),
+      )
+      // Allocated blocks counted per checkout: copy-on-write filesystems share some of them.
+      stats.bytes = await exec('du', ['-sk', join(host.home, 'worktrees')], {
+        timeout: 30000,
+      }).then(
+        ({ stdout }) => Number(stdout.split('\t')[0]) * 1024,
+        () => null,
+      )
+      return stats
     },
   }
 }

@@ -5,12 +5,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
-  api,
   cn,
   useComposer,
   useUiState,
   defineWebExtension,
-  errorMessage,
+  formatBytes,
   useAction,
   useConversation,
   useTasks,
@@ -21,10 +20,12 @@ import {
   useLanderQueue,
   useWorkspaceAction,
   useWorkspaceConversations as useConversations,
+  useWorkspaces,
 } from './data.tsx'
 import type { WorkspaceConversation as ConversationSummary } from './data.tsx'
 import { LanderLogEntry, LanderReport, WorkspaceCall } from './log.tsx'
-import type { WorkspaceInfo } from './types.ts'
+import type { WorkspaceInfo, WorkspaceStats } from './types.ts'
+import { Row, Rows } from '../info/rows.tsx'
 
 function IsolationToggle() {
   const { target } = useComposer()
@@ -284,53 +285,88 @@ function LanderQueue() {
   )
 }
 
+const parts = (entries: [number, string][]) =>
+  entries
+    .filter(([count]) => count > 0)
+    .map(([count, label]) => `${count} ${label}`)
+    .join(' · ') || 'none'
+
+/** How many checkouts there are, what their commits are, and the disk they take. */
+function Stats() {
+  const records = useWorkspaces()
+  const { data, error, refetch } = useAction<WorkspaceStats>('workspaces', 'stats')
+  const states = Object.entries(records)
+    .map(([id, workspace]) => `${id}:${workspace.state}:${workspace.landed ?? ''}`)
+    .join()
+  useEffect(() => {
+    void refetch()
+  }, [states, refetch])
+  useEffect(() => {
+    const refresh = () => void refetch()
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [refetch])
+  if (error) return <p className="px-4 py-3 text-xs text-error">{error.message}</p>
+  if (!data) return null
+  return (
+    <section aria-label="Workspace statistics" className="border-b border-border/60 px-4 py-3">
+      <Rows>
+        <Row label="checkouts">
+          <span className="truncate">
+            {data.total - data.removed}
+            {data.removed > 0 && (
+              <span className="text-muted-foreground/70"> · {data.removed} removed</span>
+            )}
+          </span>
+        </Row>
+        <Row label="state">
+          <span className="truncate">
+            {parts([
+              [data.ready, 'ready'],
+              [data.preparing, 'setting up'],
+              [data.failed, 'failed'],
+            ])}
+          </span>
+        </Row>
+        <Row label="commits">
+          <span className="truncate">
+            {parts([
+              [data.landed, 'landed'],
+              [data.ahead, 'ahead'],
+              [data.fresh, 'none yet'],
+            ])}
+          </span>
+        </Row>
+        <Row label="uncommitted">{data.dirty}</Row>
+        <Row label="disk">
+          <span
+            className="truncate"
+            title="Allocated size of the worktrees directory; copy-on-write filesystems share part of it"
+          >
+            {data.bytes === null ? 'unknown' : formatBytes(data.bytes)}
+          </span>
+        </Row>
+      </Rows>
+    </section>
+  )
+}
+
+/** The lander queue, the statistics, and the shown conversation's checkout with its actions. */
 function WorkspacesPanel() {
-  const conversations = useConversations().filter((conversation) => conversation.workspace)
-  const [removing, setRemoving] = useState(false)
-  const [removed, setRemoved] = useState<{ error?: boolean; text: string }>()
-  const removeLanded = async () => {
-    setRemoving(true)
-    setRemoved(undefined)
-    try {
-      setRemoved(await api.action<{ text: string }>('workspaces', 'removeLanded', {}))
-    } catch (error) {
-      setRemoved({ error: true, text: errorMessage(error) })
-    } finally {
-      setRemoving(false)
-    }
-  }
+  const shownId = useConversation().id
+  const shown = useConversations().find(
+    (conversation) => conversation.id === shownId && conversation.workspace,
+  )
   return (
     <div className="flex flex-col pb-4">
       <LanderQueue />
-      {(removed ||
-        conversations.some((conversation) => conversation.workspace!.state === 'ready')) && (
-        <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2 text-xs">
-          <span
-            className={`min-w-0 flex-1 truncate ${removed?.error ? 'text-error' : 'text-muted-foreground'}`}
-            role={removed?.error ? 'alert' : 'status'}
-          >
-            {removed?.text}
-          </span>
-          <Button
-            className="cursor-pointer"
-            disabled={removing}
-            onClick={() => void removeLanded()}
-            size="sm"
-            title="Remove clean, idle checkouts whose commits are already on their target"
-            variant="ghost"
-          >
-            {removing ? 'Removing…' : 'Remove landed'}
-          </Button>
-        </div>
-      )}
-      {conversations.length ? (
-        conversations
-          .toSorted((a, b) => b.id - a.id)
-          .map((conversation) => (
-            <WorkspaceCard conversation={conversation} key={conversation.id} />
-          ))
+      <Stats />
+      {shown ? (
+        <WorkspaceCard conversation={shown} key={shown.id} />
       ) : (
-        <p className="px-4 py-4 text-xs text-muted-foreground">No isolated conversations yet.</p>
+        <p className="px-4 py-3 text-xs text-muted-foreground">
+          The shown conversation has no checkout of its own.
+        </p>
       )}
     </div>
   )

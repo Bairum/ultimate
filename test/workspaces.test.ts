@@ -854,23 +854,34 @@ it('runs lander checks only while holding the exclusive command slot', async () 
   expect((await submitted(f, id))[0]).toContain('landed as')
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(tip)
 })
-it('removes only clean, idle checkouts with commits the target contains, never fresh ones', async () => {
+it('counts checkouts by state, commits and uncommitted changes, and measures their disk', async () => {
   const f = await fixture()
   const landed = await f.create()
   const ahead = await f.create()
   const dirty = await f.create()
-  const fresh = await f.create()
-  for (const id of [landed, ahead, dirty, fresh]) await f.service.ready(id, context)
+  const removed = await f.create()
+  for (const id of [landed, ahead, dirty, removed]) await f.service.ready(id, context)
   await commit((await f.service.get(landed, context))!.path)
   await f.service.land(landed, context)
   await commit((await f.service.get(ahead, context))!.path, 'ahead.txt')
   await writeFile(join((await f.service.get(dirty, context))!.path, 'dirty.txt'), 'dirty')
-  const result = await actions.removeLanded({}, { host: f.host } as ActionContext)
-  expect(result.removed).toEqual([landed])
-  expect((await f.service.get(landed, context))!.state).toBe('removed')
-  expect((await f.service.get(ahead, context))!.state).toBe('ready')
-  expect((await f.service.get(dirty, context))!.state).toBe('ready')
-  expect((await f.service.get(fresh, context))!.state).toBe('ready')
+  await f.service.discard(removed, context)
+  const stats = await actions.stats({}, { host: f.host } as ActionContext)
+  expect({ ...stats, bytes: undefined }).toEqual({
+    total: 4,
+    ready: 3,
+    preparing: 0,
+    failed: 0,
+    removed: 1,
+    landed: 1,
+    ahead: 1,
+    fresh: 1,
+    dirty: 1,
+    bytes: undefined,
+  })
+  expect(stats.bytes).toBeGreaterThan(0)
+  // Counting never removes anything.
+  expect((await f.service.get(landed, context))!.state).toBe('ready')
 })
 it('kills the whole process group of a running check when the lander is aborted', async () => {
   const f = await fixture()

@@ -14,7 +14,15 @@ import type { ReactNode } from 'react'
 import { Tool, ToolContent, ToolHeader, ToolOutput, ToolSection } from '@/components/ai/tool'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { formatTime, useConversation, useConversations, useToolDuration, useUltimate } from '@/sdk'
+import {
+  formatDuration,
+  formatTime,
+  useConversation,
+  useConversations,
+  useNow,
+  useToolDuration,
+  useUltimate,
+} from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import { useWorkspaceIndex } from './data.tsx'
 import type { LanderEntry, LanderOutcome, LanderStep, SubmitResult } from './types.ts'
@@ -157,22 +165,65 @@ export function LanderReport({ entry, core }: { entry: EntryRecord; core: ReactN
   )
 }
 
-function Line({ icon, children, at }: { icon: ReactNode; children: ReactNode; at: number }) {
+function Line({
+  icon,
+  children,
+  at,
+  took,
+  active,
+}: {
+  icon: ReactNode
+  children: ReactNode
+  at: number
+  took?: ReactNode
+  active?: boolean
+}) {
   return (
-    <div className="flex items-center gap-2 pl-4 font-mono text-[11px] leading-5 text-muted-foreground">
+    <div
+      className={cn(
+        'flex items-center gap-2 pl-4 font-mono text-[11px] leading-5',
+        active ? 'text-brand' : 'text-muted-foreground',
+      )}
+    >
       {icon}
       <span className="min-w-0 flex-1 truncate">{children}</span>
+      {took && (
+        <span className={cn('shrink-0 tabular-nums', !active && 'text-muted-foreground/60')}>
+          {took}
+        </span>
+      )}
       <time className="shrink-0 text-muted-foreground/60">{time(at)}</time>
     </div>
   )
 }
 
-/** A step or a check result, as one quiet line. */
-function StepLine({ row }: { row: LanderStep }) {
+/** How long the running step has taken so far, ticking every second. */
+function Elapsed({ since }: { since: number }) {
+  return formatDuration(Math.max(0, useNow(1000) - since))
+}
+
+/**
+ * A step or a check result, as one quiet line. `took` is how long it ran (until the next step); the running step
+ * spins and counts up instead.
+ */
+function StepLine({ row, took, active }: { row: LanderStep; took?: number; active?: boolean }) {
+  if (active)
+    return (
+      <Line
+        active
+        at={row.at}
+        icon={<LoaderCircleIcon className="size-3 shrink-0 animate-spin" />}
+        took={<Elapsed since={row.at} />}
+      >
+        <span className="animate-pulse">{row.step}</span>
+      </Line>
+    )
+  const duration = took !== undefined && took >= 1000 ? formatDuration(took) : undefined
   if (row.check)
     return (
       <Line
         at={row.at}
+        took={duration}
         icon={
           row.check.result === 'passed' ? (
             <CheckIcon className="size-3 shrink-0 text-success" />
@@ -188,16 +239,20 @@ function StepLine({ row }: { row: LanderStep }) {
       </Line>
     )
   return (
-    <Line at={row.at} icon={<CircleDotIcon className="size-3 shrink-0 text-muted-foreground/60" />}>
+    <Line
+      at={row.at}
+      icon={<CircleDotIcon className="size-3 shrink-0 text-muted-foreground/60" />}
+      took={duration}
+    >
       {row.step}
     </Line>
   )
 }
 
 /** A running check's line gives way to its result, which follows it. */
-const running = /^(?:checking|rerunning): (.*)$/s
+const runningStep = /^(?:checking|rerunning): (.*)$/s
 const superseded = (row: LanderStep, later: readonly LanderStep[]) => {
-  const command = running.exec(row.step)?.[1]
+  const command = runningStep.exec(row.step)?.[1]
   return command !== undefined && later.some((next) => next.check?.command === command)
 }
 
@@ -210,14 +265,28 @@ function Steps({
   lander,
   open,
   onOpenChange,
+  running,
 }: {
   steps: readonly LanderStep[]
   lander: number
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /** The submission is landing: its last step is the one in progress. */
+  running?: boolean
 }) {
   const { switchConversation } = useUltimate()
   const rows = steps.filter((row, index) => !superseded(row, steps.slice(index + 1)))
+  // A step runs until the next one starts; a check result's time is its whole check, from its "checking" step.
+  const took = (row: LanderStep, index: number) => {
+    if (row.check) {
+      const start = steps.findLast(
+        (other) => other.at <= row.at && runningStep.exec(other.step)?.[1] === row.check!.command,
+      )
+      return start ? row.at - start.at : undefined
+    }
+    const next = rows[index + 1]
+    return next && (next.check ? undefined : next.at - row.at)
+  }
   return (
     <Collapsible className="group/steps" onOpenChange={onOpenChange} open={open}>
       <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 font-mono text-[11px] text-muted-foreground hover:text-foreground">
@@ -226,7 +295,12 @@ function Steps({
       </CollapsibleTrigger>
       <CollapsibleContent className="pt-1">
         {rows.map((row, index) => (
-          <StepLine key={index} row={row} />
+          <StepLine
+            active={running && index === rows.length - 1}
+            key={index}
+            row={row}
+            took={took(row, index)}
+          />
         ))}
         <button
           className="cursor-pointer pt-1 pl-4 font-mono text-[11px] text-muted-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
@@ -347,6 +421,11 @@ function StatusChip({ state }: { state: Submission }) {
         <span className={cn(chip, 'text-brand')}>
           <LoaderCircleIcon className="size-3 shrink-0 animate-spin" />
           <span className="truncate">{state.step ?? 'landing'}</span>
+          {state.steps.at(-1) && (
+            <span className="shrink-0 text-brand/70 tabular-nums">
+              <Elapsed since={state.steps.at(-1)!.at} />
+            </span>
+          )}
         </span>
       )
     return <span className={chip}>queued #{state.position}</span>
@@ -401,6 +480,7 @@ export function WorkspaceCall({ call }: { call: ToolCallView }) {
             lander={submitted.lander}
             onOpenChange={setOpen}
             open={open ?? !state.outcome}
+            running={state.landing}
             steps={state.steps}
           />
         </div>

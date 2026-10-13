@@ -103,9 +103,12 @@ Start a subagent with `isolate: "worktree"` (the worker default) to give its too
 
 A top-level conversation created with New isolated conversation works in its own worktree.
 `workspace status` shows its tip and the original checkout's tip.
-After landing verified workers and checking the combined tip, call `workspace submit` and keep working: the lander
-merges the tip into the original branch with whatever landed meanwhile, runs `lander.checks` (here `pnpm check` and
-`pnpm test`), fast-forwards the branch, pushes to `lander.push` (here `origin`), and reports back as a message.
+Read worker reports and diffs; rerun checks only for missing or thin evidence, reported failures, changes crossing
+workers, `server/` or `shared/` changes, or surprises in the diff, then land and call `workspace submit`.
+The lander is the final gate: it runs every configured check (here `pnpm check` and `pnpm test`) on the merged result
+and reports back, landed or not, with findings.
+It fixes small failures when the project configures it to; on success it fast-forwards the branch and pushes to
+`lander.push` (here `origin`), so keep working while it runs.
 Its progress shows live on the submit tool card, with expandable steps, and its report as an outcome card, both in
 the submitting conversation; the source's "Lander · <target>" conversation keeps the full log and shows as working on
 the Canvas and in the Agents tab while it lands.

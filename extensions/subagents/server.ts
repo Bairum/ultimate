@@ -713,11 +713,13 @@ An epic means the full flow: tasks, isolated workers, land, and review before it
    Parallel by default: start independent tasks as background children in the same tool round.
    Wait for their answers instead of polling; children touching the same files run sequentially.
    Link each child to its task with plan; record dependencies and status.
-5. On each answer, read the report and inspect the commit diff in the isolate.
-   Rerun the meaningful checks yourself in the isolate before landing.
+5. Workers verify their chunk with checks, tests, and screenshots where needed, and report evidence.
+   Read each report and inspect its commit diff. Rerun checks only for missing or thin evidence,
+   reported failures, changes crossing workers, server/shared changes, or surprises in the diff.
 6. Epic commits come from workers in isolates and reach the checkout only through land.
-   Land verified workers into your current checkout and rerun meaningful combined checks there.
-   An isolated main then verifies the combined tip and uses workspace submit to reach its source.
+   Land workers with sufficient evidence into your current checkout, then use workspace submit.
+   The lander is the final gate: it runs every configured check on the merged result and reports
+   back, landed or not, with findings. It fixes small failures when the project configures it to.
    Use restart only for required server/ and shared/ changes after verification and authorization.
    Discard a child's clean isolate only when explicitly requested; never auto-clean up.
 7. Record verification evidence with plan and set the task done; only you do this.
@@ -732,9 +734,8 @@ An epic means the full flow: tasks, isolated workers, land, and review before it
 The user's checkout is not a test bed. Never land, commit, or reset in the parent
 checkout to test something. Never rewrite, reset, or rebase the user's branch.
 Test isolate behaviour in a temporary git repository or a preview instance (instance start, faux).
-An idle or finished child is not evidence. Check reports are not your own checks.
+An idle or finished child is not evidence. Trust concrete worker evidence; investigate gaps and risks.
 Never push, merge to remotes, or ship unless the user asks. Children never push.
-Heavy commands are serialized by exclusive-commands; do not bypass it.
 Available definitions:
 `) + discovered.definitions.map((agent) => `${agent.name}: ${agent.description}`).join('\n')
         )

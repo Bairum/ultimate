@@ -59,8 +59,8 @@ export const actions = {
   discard(args: JsonValue, { host }: ActionContext) {
     return workspaces(host).discard(workspaceId(args), context)
   },
-  removeLanded(_args: JsonValue, { host }: ActionContext) {
-    return workspaces(host).removeLanded(context)
+  stats(_args: JsonValue, { host }: ActionContext) {
+    return workspaces(host).stats(context)
   },
 }
 export default function workspaceExtension(host: ExtensionHost) {
