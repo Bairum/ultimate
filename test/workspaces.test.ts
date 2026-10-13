@@ -798,3 +798,59 @@ it('fast-forwards the target inside the worktree that has it checked out', async
   )
   expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
 })
+async function withRemote() {
+  const paths = await repository()
+  const bare = join(paths.directory, 'remote.git')
+  await git(paths.directory, 'init', '-q', '--bare', '-b', 'main', bare)
+  await git(paths.projectRoot, 'remote', 'add', 'origin', bare)
+  await git(paths.projectRoot, 'push', '-q', 'origin', 'main')
+  return { paths, bare }
+}
+async function holdGit(directory: string, command: string) {
+  const bin = join(directory, 'bin')
+  const started = join(directory, `${command}-started`)
+  const gate = join(directory, `${command}-gate`)
+  await mkdir(bin, { recursive: true })
+  await writeFile(
+    join(bin, 'git'),
+    `#!/bin/sh
+if [ "$1" = "${command}" ] && [ ! -f '${gate}' ]; then
+  touch '${started}'
+  while [ ! -f '${gate}' ]; do sleep 0.05; done
+fi
+exec /usr/bin/git "$@"
+`,
+    { mode: 0o755 },
+  )
+  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+  return {
+    started: () =>
+      until(() =>
+        access(started).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    release: () => writeFile(gate, ''),
+  }
+}
+it('pushes the checked commit even when the target advances before the push', async () => {
+  const { paths, bare } = await withRemote()
+  const f = await lander({ push: 'origin' }, paths)
+  const submitter = await f.create()
+  const other = await f.create()
+  await f.service.ready(submitter, context)
+  await f.service.ready(other, context)
+  await commit((await f.service.get(submitter, context))!.path, 'submitted.txt')
+  const push = await holdGit(f.directory, 'push')
+  await f.service.submit(submitter, context)
+  await push.started()
+  const integrated = await git(f.projectRoot, 'rev-parse', 'main')
+  await commit((await f.service.get(other, context))!.path, 'later.txt')
+  await git((await f.service.get(other, context))!.path, 'merge', '-q', integrated)
+  const later = (await f.service.land(other, context)).landed!
+  expect(later).not.toBe(integrated)
+  await push.release()
+  expect((await submitted(f, submitter))[0]).toContain('Pushed to origin/main.')
+  expect(await git(bare, 'rev-parse', 'main')).toBe(integrated)
+})

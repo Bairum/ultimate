@@ -258,7 +258,9 @@ export function createLander(
           let refused: string | undefined
           const moved = await serial(source, async () => {
             const current = await git(source, 'rev-parse', `refs/heads/${target}`)
-            if (current !== base) return !(await contains(source, integrated, current))
+            // A replay after the fast-forward finds exactly the integrated commit; anything else moved.
+            if (current === integrated) return false
+            if (current !== base) return true
             try {
               // Fast-forward the checkout that has the target checked out, so its files follow the branch.
               const worktree = (await git(source, 'worktree', 'list', '--porcelain'))
@@ -291,7 +293,15 @@ export function createLander(
           if (settings.push) {
             await step(`pushing to ${settings.push}`)
             try {
-              await remote(source, signal, 'push', '-q', settings.push, target)
+              // Push the checked commit, not whatever the branch points to by now.
+              await remote(
+                source,
+                signal,
+                'push',
+                '-q',
+                settings.push,
+                `${integrated}:refs/heads/${target}`,
+              )
               pushed = `Pushed to ${settings.push}/${target}.`
             } catch (error) {
               if (signal.aborted) throw error
