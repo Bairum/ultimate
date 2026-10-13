@@ -1,7 +1,9 @@
 import { Handle, Position, useStore as useFlow } from '@xyflow/react'
 import type { Node, NodeProps } from '@xyflow/react'
 import { ArrowUpIcon, GitBranchIcon, LoaderCircleIcon, PlusIcon } from 'lucide-react'
-import { memo, useState } from 'react'
+import { memo, useRef, useState } from 'react'
+import { ImagePreviews, useImagePaste } from '@/components/image-paste'
+import type { PastedImage } from '@/components/image-paste'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import { Switch } from '@/components/ui/switch'
@@ -29,10 +31,10 @@ export const HUB_INPUT = 'canvas-hub-input'
  * extension; shared ones reuse the shown empty draft as the sidebar's New does, else a new conversation takes the shown
  * top-level conversation's model and thinking level.
  */
-async function start(text: string, isolated: boolean) {
+async function start(text: string, isolated: boolean, images: PastedImage[]) {
   if (isolated) {
     const { id } = await api.action<{ id: number }>('workspaces', 'create', {})
-    await api.submit(text, undefined, id)
+    await api.submit(text, undefined, id, images)
     return id
   }
   const { conversations, models } = getState()
@@ -57,7 +59,7 @@ async function start(text: string, isolated: boolean) {
         id,
       )
       .catch(() => undefined)
-  await api.submit(text, undefined, id)
+  await api.submit(text, undefined, id, images)
   return id
 }
 
@@ -70,18 +72,33 @@ export const Hub = memo(function Hub({ data }: NodeProps<HubNode>) {
   const [text, setText] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string>()
+  const [images, setImages] = useState<PastedImage[]>([])
+  const sending = useRef(false)
+  const {
+    paste,
+    reading,
+    pending: readingImage,
+  } = useImagePaste({
+    images,
+    setImages,
+    setError,
+    disabled: () => sending.current,
+  })
   const submit = async () => {
     const message = text.trim()
-    if (!message || pending) return
+    if ((!message && !images.length) || sending.current || readingImage.current) return
+    sending.current = true
     setPending(true)
     setError(undefined)
     try {
-      const id = await start(message, isolated)
+      const id = await start(message, isolated, images)
       setText('')
+      setImages([])
       started(id)
     } catch (failure) {
       setError(errorMessage(failure))
     } finally {
+      sending.current = false
       setPending(false)
     }
   }
@@ -108,12 +125,19 @@ export const Hub = memo(function Hub({ data }: NodeProps<HubNode>) {
               <HubTotals ids={members} />
             </span>
           </div>
+          <ImagePreviews
+            images={images}
+            disabled={pending || reading}
+            remove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
+            className="nodrag nowheel max-h-14 shrink-0 flex-nowrap overflow-auto px-1 py-2 [&_img]:max-h-10!"
+          />
           <textarea
             aria-label="Start a conversation"
             className="nodrag nowheel min-h-0 flex-1 resize-none bg-transparent px-1 text-[14px] leading-relaxed outline-none placeholder:text-muted-foreground/70"
             disabled={pending}
             id={HUB_INPUT}
             onChange={(event) => setText(event.target.value)}
+            onPaste={(event) => void paste(event)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault()
@@ -166,7 +190,7 @@ export const Hub = memo(function Hub({ data }: NodeProps<HubNode>) {
             <Button
               aria-label="Start the conversation"
               className="nodrag size-7 cursor-pointer"
-              disabled={!text.trim() || pending}
+              disabled={(!text.trim() && !images.length) || pending || reading}
               onClick={() => void submit()}
               size="icon"
             >
