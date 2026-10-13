@@ -20,7 +20,11 @@ import type { ModelsResponse } from '../../../shared/protocol.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
 import { inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
-import { ComposerContext, newConversationKey } from '../sdk/composer.tsx'
+import {
+  ComposerContext,
+  newConversationKey,
+  useNewConversationConfiguration,
+} from '../sdk/composer.tsx'
 import type { NewConversationChoices } from '../sdk/composer.tsx'
 
 const alt = isMac ? '⌥' : 'Alt'
@@ -174,7 +178,8 @@ function ConversationComposer({
   const isNew = target === 'new'
   const { id, agent } = conversation
   const busy = !isNew && conversation.busy
-  const loading = !isNew && conversation.loading
+  const defaults = useNewConversationConfiguration(isNew)
+  const loading = isNew ? defaults.loading : conversation.loading
   const inbox = isNew ? [] : conversation.inbox
   const [choices] = useUiState<NewConversationChoices>(newConversationKey, {})
   const [creation] = useUiState<string>('ext.conversations.creationType', 'isolated')
@@ -208,9 +213,11 @@ function ConversationComposer({
     else localStorage.removeItem(key)
   }
   const blocked =
-    loading || (isNew && !choices.model)
+    loading || (isNew && !defaults.available)
       ? undefined
-      : blockedBy(isNew ? { ...agent, model: choices.model } : agent, models)
+      : isNew && defaults.error
+        ? errorMessage(defaults.error)
+        : blockedBy(isNew ? defaults.configuration : agent, models)
   const empty = !text.trim() && images.length === 0
 
   async function send(whenBusy?: 'steer' | 'followUp') {

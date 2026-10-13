@@ -8,9 +8,9 @@ import {
   errorMessage,
   getConversation,
   getState,
+  getNewConversationConfiguration,
   useDialog,
   useComposer,
-  newConversationKey,
   useUltimate,
 } from '@/sdk'
 import { LoginDialog } from './login.tsx'
@@ -23,7 +23,6 @@ import {
   openPicker,
   useCurrentModel,
 } from './state.tsx'
-import type { NewConversationChoices } from '@/sdk'
 import type { ThinkingLevel } from './state.tsx'
 
 const toolbarButton =
@@ -141,13 +140,7 @@ export default defineWebExtension({
       id: 'model.pick',
       title: 'Pick a model',
       run: (context) => {
-        if (!getConversation().loading)
-          openPicker(
-            context,
-            document.activeElement?.closest('[data-composer-target="new"]')
-              ? 'new'
-              : 'conversation',
-          )
+        if (!getConversation().loading) openPicker(context)
       },
     },
     {
@@ -165,19 +158,15 @@ export default defineWebExtension({
       title: 'Cycle the thinking level',
       keys: 'shift+tab',
       whileTyping: true,
-      run: () => {
-        const { agent, loading, id } = getConversation()
+      run: async () => {
+        const { agent, loading } = getConversation()
         const target = document.activeElement?.closest('[data-composer-target="new"]')
           ? 'new'
           : 'conversation'
-        const choices = (getState().shared?.[newConversationKey] ?? {}) as NewConversationChoices
-        const ref =
-          target === 'new' ? (choices.model ?? (id === 1 ? agent.model : undefined)) : agent.model
-        const thinking =
-          target === 'new'
-            ? (choices.thinkingLevel ?? (id === 1 ? agent.thinkingLevel : undefined))
-            : agent.thinkingLevel
         if (loading) return undefined
+        const configuration = target === 'new' ? await getNewConversationConfiguration() : agent
+        const ref = configuration.model
+        const thinking = configuration.thinkingLevel
         const model = getState().models?.models.find(
           (candidate) => candidate.provider === ref?.provider && candidate.id === ref.modelId,
         )

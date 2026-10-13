@@ -6,7 +6,7 @@ import {
   useComposer,
   useConversation,
   useModels,
-  useUiState,
+  useNewConversationConfiguration,
 } from '@/sdk'
 import type { ComposerTarget, NewConversationChoices, ModelsResponse, UltimateActions } from '@/sdk'
 
@@ -25,23 +25,20 @@ export const dialogs = {
 export function useCurrentModel(target?: ComposerTarget) {
   const composer = useComposer()
   target ??= composer.target
-  const [choices] = useUiState<NewConversationChoices>(newConversationKey, {})
-  const { agent, loading, id } = useConversation()
+  const defaults = useNewConversationConfiguration(target === 'new')
+  const { agent, loading } = useConversation()
   const models = useModels()
-  const ref =
-    target === 'new' ? (choices.model ?? (id === 1 ? agent.model : undefined)) : agent.model
+  const configuration = target === 'new' ? defaults.configuration : agent
+  const ref = configuration.model
   const model = models?.models.find(
     (candidate) => candidate.provider === ref?.provider && candidate.id === ref.modelId,
   )
   return {
     ref,
     model,
-    thinking:
-      target === 'new'
-        ? (choices.thinkingLevel ?? (id === 1 ? agent.thinkingLevel : undefined))
-        : agent.thinkingLevel,
+    thinking: configuration.thinkingLevel,
     models,
-    loading: target === 'conversation' && loading,
+    loading: target === 'new' ? defaults.loading : loading,
   }
 }
 
@@ -68,7 +65,10 @@ export function selectModel(model: ModelInfo, target: ComposerTarget) {
 }
 
 let pickerTarget: ComposerTarget = 'conversation'
-export function openPicker(actions: Pick<UltimateActions, 'open'>, target: ComposerTarget) {
+export function openPicker(
+  actions: Pick<UltimateActions, 'open'>,
+  target: ComposerTarget = 'conversation',
+) {
   pickerTarget = target
   actions.open(dialogs.picker)
 }
@@ -84,9 +84,18 @@ export function nextThinking(current: ThinkingLevel | undefined, model: ModelInf
 
 /** Which provider the login dialog should open on; set just before it opens. */
 let loginProvider: string | undefined
+let loginTarget: ComposerTarget = 'conversation'
+export function getLoginTarget() {
+  return loginTarget
+}
 const listeners = new Set<() => void>()
-export function openLogin(actions: Pick<UltimateActions, 'open' | 'close'>, provider?: string) {
+export function openLogin(
+  actions: Pick<UltimateActions, 'open' | 'close'>,
+  provider?: string,
+  target: ComposerTarget = 'conversation',
+) {
   loginProvider = provider
+  loginTarget = target
   for (const listener of listeners) listener()
   actions.close(dialogs.picker)
   actions.open(dialogs.login)

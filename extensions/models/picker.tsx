@@ -118,7 +118,7 @@ export function ModelPicker() {
         actions.openPanel('claude-code')
         return
       }
-      openLogin(actions, model.provider)
+      openLogin(actions, model.provider, target)
       return
     }
     setError(undefined)
@@ -182,7 +182,7 @@ export function ModelPicker() {
             <CommandGroup heading="Accounts">
               <CommandItem
                 className="gap-2 py-1 font-mono text-[12px]"
-                onSelect={() => openLogin(actions)}
+                onSelect={() => openLogin(actions, undefined, target)}
                 value="login"
               >
                 <LogInIcon className="size-3.5" />
