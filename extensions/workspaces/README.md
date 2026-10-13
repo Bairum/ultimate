@@ -25,13 +25,16 @@ changes, and measures the worktrees directory with `du` (copy-on-write filesyste
 
 `workspace submit` (and the `submit {id}` action) queues a top-level main's clean tip in the root document's `queue`
 and returns its position and lander conversation at once; the main keeps working. One `workspaces.lander` task per
-source checkout (`landers`) processes that source's entries in order, without a model.
+source checkout (`landers`) processes that source's entries in order; merging, checks, fast-forward and push are
+code, and a model runs only on a failure or when someone writes to the lander.
 
-The task runs in that source's lander conversation (`landerConversations`), created by the first submit in the same
-commit as the queue entry: ownerless, titled "Lander · <target>", labelled `lander`, its cwd the lander checkout. It
-has no workspace and is no main, so `workspace submit` and `land` refuse it. The task is its conversation's
-foreground work, so the conversation list, the Agents tab and the Canvas show it working while it lands; the
-conversation list and the Canvas show it only then (open it from a "full log" link otherwise). It logs
+The task runs in that source's lander conversation (`landerConversations`): ownerless, titled "Lander · <target>",
+labelled `lander`, its cwd the lander checkout. The project's checkout has one from the moment the extension opens
+(idempotently, the same record submit uses); another source gets its own on its first submit. It has no workspace and
+is no main, so `workspace submit` and `land` refuse it. The task is its conversation's foreground work, so the Agents
+tab and the Canvas show it working while it lands; the Canvas shows it only then. The sidebar pins every lander
+conversation above the others, never archived, with "idle · last <sha> <time>", a pulsing "landing", or "fixing" /
+"diagnosing" while its model works on a failure. It logs
 every submission as `ultimate.lander` entries, which carry no model message, so no model run in that conversation
 sees them: `queued`, `started`, each step, each check with `passed`, `failed` or `flaky`, and the outcome (`landed`
 with `sha`, `commits`, `paths`, `flaky`, `pushed`, or `failed` with `reason` and the `output` tail). Each line is
@@ -60,6 +63,31 @@ conversation; it keeps the full log, grouped by submission, and shows on the Can
    conversation id for the full log (changed paths and output tails live there).
 
 Settings (`.ultimate/settings.json`): `"lander": { "checks": ["pnpm check"], "push": "origin" }`; both are optional.
+
+### The lander's model
+
+The lander conversation is configured from the effective agent definition named `lander` (built-in
+`agents/lander.md`, overridable in `~/.ultimate/agents/` or the project's `.ultimate/agents/`, editable in the Agents
+tab): its model (else the main conversation's), thinking, tools (minus `workspace`) and instructions. Opening applies
+it to every lander conversation, and so does any change to a definition folder, so the next message or failure uses
+the definition as it is now. Its composer works like any conversation's: ask it what landed or why W12 failed. A
+`lander_state` prompt section, only in lander conversations, lists that source's queue (id, W#, tip, state, step) and
+its latest results (outcome, sha, push, reason).
+
+`onFailure: diagnose | fix` (default `diagnose`) decides what happens on a merge conflict or a check that failed
+twice. The checkout stays as it failed (a merge in progress, or the merged commit), the queue entry's `agent` and step
+read `fixing` or `diagnosing`, and the task submits a prompt with the reason, output and mode to the lander
+conversation (request `lander-agent:<submission>:<attempt>`, placed as an `ultimate.lander-ask` entry) and waits for
+it to settle; a resume waits for the same run.
+
+- diagnose: the checkout is reset and the submission fails with the model's answer as `diagnosis`, shown on the
+  outcome cards and appended to the report as "Diagnosis by lander".
+- fix: the checkout must be clean, without a merge in progress, with new commits on top of the failed merge. Then the
+  next attempt starts from that commit and runs every check again; landing reports "Fixed by lander" with the
+  model's commits (`fixed`). Anything else, or a fix that still fails, is reported as not landed. A submission gets
+  one fix.
+
+Without a `lander` definition, failures are reported as before.
 Each attempt starts from a reset checkout, and the integrated commit is memoized after the checks, so a crash resumes
 safely. Failed submissions are dropped from the queue after their report.
 

@@ -185,7 +185,10 @@ export function agentsOf(inputs: Inputs): Agent[] {
   }
   const result: Agent[] = []
   for (const top of conversations.toSorted((a, b) => a.id - b.id)) {
-    if (top.parentConversationId !== undefined || (top.inputAt === undefined && !busy(top)))
+    if (
+      top.parentConversationId !== undefined ||
+      ((top.inputAt === undefined || top.label === 'lander') && !busy(top))
+    )
       continue
     const tree: Agent[] = []
     const known = trees[top.id]

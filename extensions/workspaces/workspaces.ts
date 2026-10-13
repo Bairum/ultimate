@@ -15,7 +15,7 @@ import {
 import type { ConversationId, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { git, setup } from './git.ts'
-import { createLander, landerPath, log } from './lander.ts'
+import { createLander, landerAgent, landerPath, log } from './lander.ts'
 import type {
   LandResult,
   SubmitResult,
@@ -69,7 +69,16 @@ async function landerIdle(tx: Tx, index: WorkspaceIndex, source: string) {
 }
 type Host = Pick<
   ExtensionHost,
-  'harness' | 'home' | 'ultimateRoot' | 'projectSettings' | 'resource' | 'extensions' | 'metadata'
+  | 'harness'
+  | 'home'
+  | 'ultimateRoot'
+  | 'projectRoot'
+  | 'userHome'
+  | 'modelRuntime'
+  | 'projectSettings'
+  | 'resource'
+  | 'extensions'
+  | 'metadata'
 >
 export function workspaces(host: Host) {
   const queues = host.resource('workspaces.land', () => new Map<string, Promise<unknown>>())
@@ -96,6 +105,53 @@ export function workspaces(host: Host) {
       },
     )
     started.add(index.landers[source])
+  }
+  /**
+   * The lander conversation of `source`, created once with title "Lander · <target>" and label `lander`; its cwd is the
+   * lander's checkout. Reads before writes, as a transaction requires: call it before anything else writes.
+   */
+  async function ensureLander(
+    tx: Tx,
+    index: WorkspaceIndex,
+    source: string,
+    target: string,
+    /** `landerPath()` of `source`, resolved before the transaction. */
+    path: string,
+  ) {
+    const known = index.landerConversations[source] as ConversationId | undefined
+    if (known !== undefined && (await tx.conversation(known))) return known
+    const lander = (await tx.createConversation({ ownership: { kind: 'ownerless' } })).id
+    await configure(tx, lander, { cwd: path })
+    Object.assign(await tx.doc(host.metadata, lander), {
+      title: `Lander · ${target}`,
+      label: 'lander',
+    })
+    index.landerConversations[source] = lander
+    return lander
+  }
+  /**
+   * Make sure the project's checkout has its lander conversation, configured from the effective `lander` definition;
+   * every lander conversation follows the definition as it is now. Idempotent; a project outside git has none.
+   */
+  async function standLander(context: Context) {
+    const source = await git(host.projectRoot, 'rev-parse', '--show-toplevel')
+      .then((path) => realpath(path))
+      .catch(() => undefined)
+    const target =
+      source && (await git(source, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => ''))
+    const { change } = await landerAgent(host, context)
+    const path = source && (await landerPath(host.home, source))
+    await host.harness().commit(async (tx) => {
+      const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+      const landers: ConversationId[] = []
+      for (const id of Object.values(index.landerConversations) as ConversationId[])
+        if (await tx.conversation(id)) landers.push(id)
+      if (source && target && path) {
+        const own = await ensureLander(tx, index, source, target, path)
+        if (!landers.includes(own)) landers.push(own)
+      }
+      for (const id of landers) await configure(tx, id, change)
+    }, context)
   }
   /**
    * Restart the lander of every source whose queue holds submissions but whose task ended without draining it, as a
@@ -308,9 +364,7 @@ export function workspaces(host: Host) {
       throw new Error('Workspace branch changed')
     const tip = await git(workspace.path, 'rev-parse', 'HEAD')
     const path = await landerPath(host.home, workspace.source)
-    const { model, thinkingLevel } = await (await host
-      .harness()
-      .conversation(ROOT_CONVERSATION_ID, context))!.agent(context)
+    const { change } = await landerAgent(host, context)
     const result = await host.harness().commit(async (tx) => {
       const row = await tx.conversation(id)
       if (!row || row.owner || row.parent)
@@ -319,8 +373,7 @@ export function workspaces(host: Host) {
       const { source, target } = index.items[String(id)]
       // Reads first: a transaction cannot read tables after its first write.
       const stopped = await landerIdle(tx, index, source)
-      const known = index.landerConversations[source] as ConversationId | undefined
-      const existing = known !== undefined && (await tx.conversation(known))
+      const lander = await ensureLander(tx, index, source, target, path)
       const queued = index.queue.find(
         (item) => item.conversationId === id && item.tip === tip && item.state === 'queued',
       )
@@ -334,17 +387,7 @@ export function workspaces(host: Host) {
         state: 'queued' as const,
         steps: [],
       }
-      // One lander conversation per source: its log of every submission, busy while its task lands.
-      let lander = known
-      if (lander === undefined || !existing) {
-        lander = (await tx.createConversation({ ownership: { kind: 'ownerless' } })).id
-        await configure(tx, lander, { cwd: path, model, thinkingLevel })
-        Object.assign(await tx.doc(host.metadata, lander), {
-          title: `Lander · ${target}`,
-          label: 'lander',
-        })
-        index.landerConversations[source] = lander
-      }
+      await configure(tx, lander, change)
       if (!queued) {
         await log(tx, lander, entry, { step: 'queued' })
         index.queue.push(entry)
@@ -367,6 +410,7 @@ export function workspaces(host: Host) {
     Preparation,
     Lander,
     resume,
+    standLander,
     started,
     get,
     land,
