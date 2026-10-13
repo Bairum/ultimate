@@ -1,5 +1,6 @@
 import { cn } from 'cn'
 import {
+  BotIcon,
   CheckIcon,
   ChevronRightIcon,
   CircleDotIcon,
@@ -17,7 +18,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { formatTime, useConversation, useConversations, useToolDuration, useUltimate } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import { useWorkspaceIndex } from './data.tsx'
-import type { LanderEntry, LanderOutcome, LanderStep, SubmitResult } from './types.ts'
+import type { LanderAsk, LanderEntry, LanderOutcome, LanderStep, SubmitResult } from './types.ts'
 
 const short = (sha: string) => sha.slice(0, 7)
 const time = (at: number) => formatTime(at, true)
@@ -69,6 +70,22 @@ function OutcomeBody({ outcome }: { outcome: LanderOutcome }) {
           ))}
         </ul>
       )}
+      {outcome.fixed && outcome.fixed.length > 0 && (
+        <div className="space-y-0.5">
+          <p className="flex items-center gap-1.5 text-brand">
+            <BotIcon className="size-3" />
+            fixed by lander
+          </p>
+          <ul className="space-y-0.5">
+            {outcome.fixed.map((commit) => (
+              <li className="truncate" key={commit} title={commit}>
+                <span className="text-muted-foreground">{commit.split(' ')[0]}</span>{' '}
+                {commit.slice(commit.indexOf(' ') + 1)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {outcome.flaky?.map((command) => (
         <p className="text-warning" key={command}>
           flaky: {command}
@@ -76,6 +93,17 @@ function OutcomeBody({ outcome }: { outcome: LanderOutcome }) {
       ))}
       {outcome.needsRestart && <p className="text-warning">Needs restart.</p>}
       {outcome.hint && <p className="text-muted-foreground">{outcome.hint}</p>}
+      {outcome.diagnosis && (
+        <div className="space-y-0.5 border-l border-border pl-2">
+          <p className="flex items-center gap-1.5 text-muted-foreground">
+            <BotIcon className="size-3" />
+            lander's diagnosis
+          </p>
+          <p className="font-sans text-[12.5px] leading-relaxed whitespace-pre-wrap text-foreground/90">
+            {outcome.diagnosis}
+          </p>
+        </div>
+      )}
       {outcome.output && (
         <Collapsible className="group/tail">
           <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 text-muted-foreground hover:text-foreground">
@@ -282,6 +310,8 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
   }
   // A later submission is queued while an earlier one lands: its group starts when it starts, with its queued line.
   if (data.step === 'queued') return null
+  // The question to the model follows with the reason.
+  if (data.step === 'fixing' || data.step === 'diagnosing') return null
   if (data.step === 'started') {
     const queued = entries.find(
       (other) => own(other) && (other.data as LanderEntry).step === 'queued',
@@ -302,6 +332,20 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
     )
   }
   return <StepLine row={data as LanderStep} />
+}
+
+/** The lander task handing a failure to its model: a quiet line naming the mode, above the model's run. */
+export function LanderAskEntry({ entry }: { entry: EntryRecord }) {
+  const data = entry.data as LanderAsk
+  return (
+    <div className="flex items-center gap-2 pl-4 font-mono text-[11px] leading-5 text-brand">
+      <BotIcon className="size-3 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">
+        {data.mode === 'fix' ? 'fixing' : 'diagnosing'}: {data.reason}
+      </span>
+      <time className="shrink-0 text-muted-foreground/60">{time(data.at)}</time>
+    </div>
+  )
 }
 
 type Submission = {

@@ -1644,6 +1644,13 @@ describe('subagents', () => {
       thinking: 'max',
       tools: ['read', 'bash'],
     })
+    for (const onFailure of ['fix', 'diagnose'])
+      expect(
+        parseDefinition(
+          definition().replace('tools: [read, bash]', `onFailure: ${onFailure}`),
+          'test',
+        ),
+      ).toMatchObject({ onFailure })
     for (const [from, to, error] of [
       [
         'tools: [read, bash]',
@@ -1656,6 +1663,7 @@ describe('subagents', () => {
       ['tools: [read, bash]', 'model: " "', 'model must be a nonempty string'],
       ['tools: [read, bash]', 'tool: [read]', 'Unknown field: tool'],
       ['tools: [read, bash]', 'isolate: remote', 'isolate must be none or worktree'],
+      ['tools: [read, bash]', 'onFailure: land', 'onFailure must be diagnose or fix'],
       ['Original instructions', '', 'Instructions are required'],
     ])
       expect(() => parseDefinition(definition().replace(from, to), 'test')).toThrow(error)

@@ -6,17 +6,38 @@ import { promisify } from 'node:util'
 import { copyJson } from '@earendil-works/chord'
 import type { Context } from '@earendil-works/chord'
 import { withAbortSignal } from '@earendil-works/chord/context'
-import { defineEntry, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import {
+  AssistantEntry,
+  configure,
+  defineEntry,
+  defineTask,
+  ROOT_CONVERSATION_ID,
+} from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import type { ConversationDocToken, ConversationId, Tx } from '@earendil-works/pi-durable'
+import type {
+  AgentChange,
+  ConversationDocToken,
+  ConversationId,
+  Tx,
+} from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { exclusiveSlot } from '../exclusive-commands/slot.ts'
+import { definitionAgent, discoverAgents } from '../subagents/agents.ts'
 import { git, setup } from './git.ts'
-import type { Landed, LanderEntry, LanderOutcome, QueueEntry, WorkspaceIndex } from './types.ts'
+import type {
+  Landed,
+  LanderAsk,
+  LanderEntry,
+  LanderOutcome,
+  QueueEntry,
+  WorkspaceIndex,
+} from './types.ts'
 
 const exec = promisify(execFile)
 /** One line of the lander conversation's log; it carries no model message, so no model ever sees it. */
 export const LanderLog = defineEntry<LanderEntry>('ultimate.lander')
+/** The entry kind of the lander task's question to its model; the model reads the prompt. */
+export const LanderAskEntry = 'ultimate.lander-ask'
 /** Outcomes kept in the index for submit cards; older ones live on in the lander conversation. */
 const kept = 50
 /** The lander's own detached checkout of `source`, also its conversation's cwd. */
@@ -51,7 +72,42 @@ export const log = (
     },
   })
 }
-type Host = Pick<ExtensionHost, 'home' | 'ultimateRoot' | 'projectSettings' | 'resource'>
+type Host = Pick<
+  ExtensionHost,
+  | 'home'
+  | 'ultimateRoot'
+  | 'projectRoot'
+  | 'userHome'
+  | 'modelRuntime'
+  | 'harness'
+  | 'projectSettings'
+  | 'resource'
+>
+/**
+ * The lander conversation's agent from the effective `lander` definition (model, thinking, tools, instructions) over
+ * the main conversation's; without a definition only the main conversation's model, and no model work on failures.
+ */
+export async function landerAgent(
+  host: Pick<Host, 'ultimateRoot' | 'projectRoot' | 'userHome' | 'modelRuntime' | 'harness'>,
+  context: Context,
+): Promise<{ onFailure?: 'fix' | 'diagnose'; change: AgentChange }> {
+  const definition = (
+    await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
+  ).definitions.find((candidate) => candidate.name === 'lander')
+  const main = await (await host.harness().conversation(ROOT_CONVERSATION_ID, context))!.agent(
+    context,
+  )
+  if (!definition)
+    return { change: { model: main.model ?? null, thinkingLevel: main.thinkingLevel } }
+  const delegates = definition.tools?.includes('subagent')
+  return {
+    onFailure: definition.onFailure ?? 'diagnose',
+    change: definitionAgent(definition, main, host.modelRuntime, {
+      excludeTools: ['workspace', ...(delegates ? [] : ['subagent'])],
+      excludeExtensions: delegates ? [] : ['subagents'],
+    }),
+  }
+}
 type Settings = { checks: string[]; push?: string }
 /** Bounded retries when the target moves while a submission is integrated. */
 const attempts = 3
@@ -85,6 +141,18 @@ const failure = (error: unknown) => {
 const remote = (cwd: string, signal: AbortSignal, ...args: string[]) =>
   exec('git', args, { cwd, signal, timeout: 300000, maxBuffer: 1024 * 1024 })
 
+/** A failure the lander's model works on: the checkout stays as it failed, at `head` on top of target `base`. */
+type Failure = {
+  mode: 'fix' | 'diagnose'
+  reason: string
+  output?: string
+  hint?: string
+  base: string
+  head: string
+  prompt: string
+  /** The model's final answer, once its run settled. */
+  answer?: string
+}
 type Prepared = {
   base: string
   integrated: string
@@ -97,10 +165,18 @@ const landedOutcome = (landed: Landed): LanderOutcome => ({
   paths: landed.paths,
   flaky: landed.flaky,
 })
+/** Carried across attempts: a rejected push retries once, and a submission gets at most one fix by the model. */
+type Carry = { pushRetried?: boolean; fixed?: { commits: string[]; head: string } }
 type State =
   | { phase: 'next' }
-  | { phase: 'land'; id: string; attempt: number; pushRetried?: boolean }
+  | ({ phase: 'land'; id: string; attempt: number; failure?: Failure } & Carry)
+  | ({ phase: 'agent'; id: string; attempt: number; failure: Failure } & Carry)
   | { phase: 'report'; id: string; conversationId: number; text: string }
+const textOf = (message: unknown) =>
+  ((message as { content?: { type: string; text?: string }[] } | undefined)?.content ?? [])
+    .flatMap((part) => (part.type === 'text' && part.text ? [part.text] : []))
+    .join('')
+    .trim()
 
 export function createLander(
   host: Host,
@@ -169,7 +245,11 @@ export function createLander(
           return { status: 'running', checkpoint: { phase: 'land', id: entry.id, attempt: 1 } }
         }, context),
       land: async (task, runtime, context) => {
-        const { id, attempt } = task.state.checkpoint
+        const { id, attempt, pushRetried, fixed } = task.state.checkpoint
+        const carry: Carry = {
+          ...(pushRetried ? { pushRetried } : {}),
+          ...(fixed ? { fixed } : {}),
+        }
         const { signal } = runtime
         const index = (await runtime.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
         const entry = index.queue.find((item) => item.id === id)!
@@ -221,21 +301,25 @@ export function createLander(
               ? `landed${how} as ${sha.slice(0, 7)} on ${entry.target}.`
               : `had nothing new to land on ${entry.target}.`,
             ...(landed.commits.length ? [`Commits:\n${landed.commits.join('\n')}`] : []),
+            ...(fixed ? [`Fixed by lander:\n${fixed.commits.join('\n')}`] : []),
             ...landed.flaky.map((command) => `Flaky: ${command}`),
           ].join('\n')
         /**
          * Report `reason`, with `output` (conflicting paths, a check's output tail) and what to do next.
          * Once the submission landed locally, a later failure only means its push failed.
          */
-        const fail = async (reason: string, output?: string, hint?: string) => {
+        const fail = async (reason: string, output?: string, hint?: string, diagnosis?: string) => {
           const landed = await recorded()
-          const detail = [output ? `${reason}:\n${output}` : reason, ...(hint ? [hint] : [])].join(
-            '\n',
-          )
+          const detail = [
+            output ? `${reason}:\n${output}` : reason,
+            ...(hint ? [hint] : []),
+            ...(diagnosis ? [`Diagnosis by lander:\n${diagnosis}`] : []),
+          ].join('\n')
           const facts = {
             reason: landed ? `Push failed: ${reason}` : reason,
             ...(output ? { output } : {}),
             ...(hint ? { hint } : {}),
+            ...(diagnosis ? { diagnosis } : {}),
           }
           return landed
             ? finish(`${summary(landed, landed.sha, ' locally')}\nPush failed: ${detail}`, {
@@ -244,7 +328,7 @@ export function createLander(
               })
             : finish(`was not landed: ${detail}`, { outcome: 'failed', ...facts })
         }
-        const retry = (pushRetried = task.state.checkpoint.pushRetried) =>
+        const retry = (retried = pushRetried) =>
           runtime.commit(
             () => ({
               status: 'running',
@@ -252,11 +336,137 @@ export function createLander(
                 phase: 'land',
                 id,
                 attempt: attempt + 1,
-                ...(pushRetried ? { pushRetried } : {}),
+                ...carry,
+                ...(retried ? { pushRetried: retried } : {}),
               },
             }),
             context,
           )
+        const integration = await landerPath(host.home, entry.source)
+        /** Reset the lander's checkout after a failure the model looked at. */
+        const reset = async () => {
+          await git(integration, 'merge', '--abort').catch(() => undefined)
+          await git(integration, 'reset', '--hard', '-q')
+          await git(integration, 'clean', '-fdq')
+        }
+        /**
+         * A conflict or a check that failed twice: the lander's model diagnoses or fixes it while the checkout stays as it
+         * failed, once per submission; otherwise, or without a lander definition, report it.
+         */
+        const handOver = async (
+          reason: string,
+          output: string,
+          hint: string,
+          failing: { base: string; conflict: boolean },
+        ) => {
+          const { onFailure, change } = fixed
+            ? { onFailure: undefined, change: undefined }
+            : await landerAgent(host, context)
+          if (!onFailure || !change) {
+            await git(integration, 'merge', '--abort').catch(() => undefined)
+            return fail(
+              reason,
+              output,
+              fixed
+                ? `The lander's fix (${fixed.commits.length} commit${fixed.commits.length === 1 ? '' : 's'}) did not land it either. ${hint}`
+                : hint,
+            )
+          }
+          const head = await git(integration, 'rev-parse', 'HEAD')
+          const state = failing.conflict
+            ? `Merging ${entry.tip} (W${entry.conversationId}) into ${target} at ${head} stopped with conflicts; the merge is in progress.`
+            : `HEAD ${head} is the merge of ${entry.tip} (W${entry.conversationId}) into ${target}, set up as the checks run it.`
+          const prompt = [
+            `[lander] Submission ${id} failed: ${reason}`,
+            output,
+            '',
+            `Your checkout ${integration} is left as it failed. ${state}`,
+            onFailure === 'fix'
+              ? 'Mode: fix. Resolve or fix it here with the smallest change and commit it (Conventional Commits). Leave the checkout clean. Never push or touch other checkouts. Every check then runs again before it lands. If it cannot be fixed safely, change nothing and explain why.'
+              : `Mode: diagnose. Explain the cause and the smallest fix for the submitter. Change nothing.`,
+          ].join('\n')
+          return runtime.commit(async (tx) => {
+            const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue.find(
+              (item) => item.id === id,
+            )!
+            saved.agent = onFailure
+            saved.step = onFailure === 'fix' ? 'fixing' : 'diagnosing'
+            await log(tx, runtime.conversationId, saved, { step: saved.step })
+            // The definition as it is now: an edit applies to the next failure.
+            await configure(tx, runtime.conversationId, change)
+            return {
+              status: 'running',
+              checkpoint: {
+                phase: 'agent',
+                id,
+                attempt,
+                ...carry,
+                failure: {
+                  mode: onFailure,
+                  reason,
+                  ...(output ? { output } : {}),
+                  ...(hint ? { hint } : {}),
+                  base: failing.base,
+                  head,
+                  prompt,
+                },
+              },
+            }
+          }, context)
+        }
+        /** The model's run on a failure settled: report its diagnosis, or check its fix and run every check again. */
+        const answered = async (handed: Failure) => {
+          if (handed.mode === 'diagnose') {
+            await reset()
+            return fail(handed.reason, handed.output, handed.hint, handed.answer)
+          }
+          const head = await git(integration, 'rev-parse', 'HEAD')
+          const problem = (await git(integration, 'status', '--porcelain'))
+            ? 'left uncommitted changes'
+            : (await git(integration, 'rev-parse', '-q', '--verify', 'MERGE_HEAD').then(
+                  () => true,
+                  () => false,
+                ))
+              ? 'left the merge unfinished'
+              : head === handed.head
+                ? 'added no commits'
+                : !(await contains(integration, handed.head, head)) ||
+                    !(await contains(integration, entry.tip, head))
+                  ? 'did not build on the failed merge'
+                  : undefined
+          if (problem) {
+            await reset()
+            return fail(
+              handed.reason,
+              handed.output,
+              `The lander's fix ${problem}. ${handed.hint ?? ''}`.trim(),
+              handed.answer,
+            )
+          }
+          const commits = lines(
+            // A resolved conflict is one merge commit; its second parent's commits are the submission's own.
+            await git(integration, 'log', '--oneline', '--first-parent', `${handed.head}..${head}`),
+          )
+          // The next attempt starts from the fixed commit and runs every check on it.
+          await runtime.memo(
+            `merged:${id}:${attempt + 1}`,
+            { base: handed.base, sha: head },
+            context,
+          )
+          return runtime.commit(
+            () => ({
+              status: 'running',
+              checkpoint: {
+                phase: 'land',
+                id,
+                attempt: attempt + 1,
+                ...(pushRetried ? { pushRetried } : {}),
+                fixed: { commits, head },
+              },
+            }),
+            context,
+          )
+        }
         const { source, target } = entry
         const checkContext = withAbortSignal(signal, context)
         /** Push `sha` when configured; on a rejection retry the integration once, then report it. */
@@ -272,7 +482,7 @@ export function createLander(
             }
           } catch (error) {
             if (signal.aborted) throw error
-            if (!task.state.checkpoint.pushRetried) return { retry: retry(true) }
+            if (!pushRetried) return { retry: retry(true) }
             return { retry: fail(`${settings.push} rejected the push`, failure(error)) }
           }
         }
@@ -291,17 +501,19 @@ export function createLander(
               ...landedOutcome(landed),
               ...(pushed.remote ? { pushed: pushed.remote } : {}),
               ...(needsRestart ? { needsRestart } : {}),
+              ...(fixed ? { fixed: fixed.commits } : {}),
             },
           )
         }
         try {
           const settings = await landerSettings(host)
+          if (task.state.checkpoint.failure) return await answered(task.state.checkpoint.failure)
           // An earlier lander task fast-forwarded this submission and then ended (a reload or fault before its push):
           // nothing to merge or check again, push exactly what landed and report that landing.
           if (
             entry.landed &&
             attempt === 1 &&
-            !task.state.checkpoint.pushRetried &&
+            !pushRetried &&
             (await contains(source, entry.landed.sha, `refs/heads/${target}`))
           )
             return await landedReport(settings, entry.landed, entry.landed.sha)
@@ -361,15 +573,15 @@ export function createLander(
                   '--no-edit',
                   '-m',
                   `Merge ${entry.tip.slice(0, 7)} from W${entry.conversationId} into ${target}`,
-                  entry.tip,
+                  // After a fix, a retry onto a moved target brings the fixed merge along.
+                  fixed?.head ?? entry.tip,
                 )
               } catch {
-                const conflicts = await git(path, 'diff', '--name-only', '--diff-filter=U')
-                await git(path, 'merge', '--abort').catch(() => undefined)
-                return fail(
+                return handOver(
                   `it conflicts with ${target} in`,
-                  conflicts,
+                  await git(path, 'diff', '--name-only', '--diff-filter=U'),
                   `Merge ${target} into your workspace, resolve, verify and submit again.`,
+                  { base, conflict: true },
                 )
               }
               merged = await runtime.memo(
@@ -400,10 +612,11 @@ export function createLander(
                 await step(`rerunning: ${command}`)
                 const output = await check(path, command, checkContext)
                 if (output !== undefined)
-                  return fail(
+                  return handOver(
                     `check failed twice: ${command}`,
                     output,
                     'Fix it, verify and submit again.',
+                    { base, conflict: false },
                   )
                 await step(`checked: ${command}`, { command, result: 'flaky' })
                 await runtime.memo(`${key}:rerun`, 'passed', context)
@@ -476,6 +689,52 @@ export function createLander(
           return fail('it failed', failure(error))
         }
       },
+      agent: async (task, runtime, context) => {
+        const { id, failure: handed } = task.state.checkpoint
+        const index = (await runtime.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+        const entry = index.queue.find((item) => item.id === id)!
+        const ask: LanderAsk = {
+          submission: id,
+          conversationId: entry.conversationId,
+          tip: entry.tip,
+          target: entry.target,
+          at: Date.now(),
+          mode: handed.mode,
+          reason: handed.reason,
+        }
+        const conversation = (await runtime.conversation(runtime.conversationId, context))!
+        // One request per submission and attempt: a resume waits for the same run.
+        const settled = await (
+          await conversation.submit(
+            {
+              type: 'input',
+              content: handed.prompt,
+              entry: { kind: LanderAskEntry, data: ask },
+              whenBusy: 'followUp',
+              requestId: `lander-agent:${id}:${task.state.checkpoint.attempt}`,
+            },
+            context,
+          )
+        ).wait(context)
+        const answer =
+          settled.status === 'done' && settled.type === 'input'
+            ? textOf((await runtime.entry(AssistantEntry, settled.answer, context))?.model?.[0])
+            : `The lander's model did not answer (${settled.status === 'unanswered' ? settled.reason : settled.status}).`
+        await runtime.commit(async (tx) => {
+          const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue.find(
+            (item) => item.id === id,
+          )!
+          delete saved.agent
+          return {
+            status: 'running',
+            checkpoint: {
+              ...task.state.checkpoint,
+              phase: 'land',
+              failure: { ...handed, answer },
+            },
+          }
+        }, context)
+      },
       report: async (task, runtime, context) => {
         const { id, conversationId, text } = task.state.checkpoint
         await (
@@ -495,6 +754,7 @@ export function createLander(
           if (item.source === task.input.source) {
             item.state = 'queued'
             delete item.step
+            delete item.agent
           }
         return { status: 'terminal', outcome: { status: 'aborted' } }
       }, context),
