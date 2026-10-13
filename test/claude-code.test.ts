@@ -109,12 +109,39 @@ if (process.argv.includes('status')) {
 
     const file = join(server.host.ultimateRoot, 'extensions/claude-code/server.ts')
     const source = await readFile(file, 'utf8')
-    // ultimateRoot is an isolated source copy; never mutate the working checkout here.
-    await writeFile(file, source + '\n')
-    server.vite.watcher.emit('change', file)
-    await until(
-      () => runtime.getProvider('claude-code') !== provider && !!runtime.getProvider('claude-code'),
-    )
+    // Hook both registration boundaries deterministically as well as polling:
+    // even an unregister/re-register gap shorter than the timer must fail.
+    const samples: boolean[] = []
+    const sample = () => samples.push(!!runtime.getModel('claude-code', 'claude-sonnet-5'))
+    const register = runtime.registerNativeProvider.bind(runtime)
+    const unregister = runtime.unregisterProvider.bind(runtime)
+    const registration = vi.spyOn(runtime, 'registerNativeProvider').mockImplementation((next) => {
+      sample()
+      register(next)
+      sample()
+    })
+    const removal = vi.spyOn(runtime, 'unregisterProvider').mockImplementation((id) => {
+      unregister(id)
+      sample()
+    })
+    const polling = setInterval(sample, 2)
+    try {
+      // ultimateRoot is an isolated source copy; never mutate the working checkout here.
+      await writeFile(file, source + '\n')
+      server.vite.watcher.emit('change', file)
+      await until(
+        () =>
+          runtime.getProvider('claude-code') !== provider && !!runtime.getProvider('claude-code'),
+      )
+      expect(registration).toHaveBeenCalled()
+      expect(removal).not.toHaveBeenCalledWith('claude-code')
+      expect(samples.length).toBeGreaterThan(1)
+      expect(samples.every(Boolean)).toBe(true)
+    } finally {
+      clearInterval(polling)
+      registration.mockRestore()
+      removal.mockRestore()
+    }
     await status()
     expect(runtime.isUsingSubscription('claude-code')).toBe(true)
     expect(runtime.getProvider('anthropic')).toBe(anthropic)
