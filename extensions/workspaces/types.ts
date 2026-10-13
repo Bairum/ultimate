@@ -83,6 +83,16 @@ export type WorkspaceInfo = Workspace & {
   currentBranch: string | null
   sourceBranch: string | null
 }
+/** Checkouts by record state; ready ones by their commits (fresh: none of their own) and uncommitted changes. */
+export type WorkspaceStats = Record<Workspace['state'], number> & {
+  total: number
+  landed: number
+  ahead: number
+  fresh: number
+  dirty: number
+  /** Disk the worktrees directory takes, or null when it could not be measured. */
+  bytes: number | null
+}
 export type LandResult = {
   text: string
   landed?: string

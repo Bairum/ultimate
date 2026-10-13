@@ -129,14 +129,10 @@ it('defaults to isolated without model input, keeps shared reuse and manages eve
       .toBe(active.path)
     expect(await panel.textContent()).toContain(active.branch)
     expect(await panel.textContent()).toContain(active.source)
-    await page.getByRole('button', { name: `Workspace W${fixtures.pending}`, exact: true }).click()
-    expect(await panel.textContent()).toContain('Setting up…')
-    await page.getByRole('button', { name: `Workspace W${fixtures.error}`, exact: true }).click()
-    expect(await panel.textContent()).toContain('Recorded setup failure for inspection')
-    expect(await panel.textContent()).toContain('Removed')
-    // Close presentation fixtures so only the real active workspace's controls are selected below.
-    await page.getByRole('button', { name: `Workspace W${fixtures.pending}`, exact: true }).click()
-    await page.getByRole('button', { name: `Workspace W${fixtures.error}`, exact: true }).click()
+    const stats = page.getByRole('region', { name: 'Workspace statistics' })
+    await expect.poll(() => stats.textContent(), timeout).toContain('1 removed')
+    expect(await stats.textContent()).toContain('1 ready · 1 setting up · 1 failed')
+    expect(await page.locator('[data-workspace]').count()).toBe(1)
     const holding = defineTask<null, { phase: 'wait' }, null>({
       name: 'workspace-ui-hold',
       version: 1,
@@ -203,8 +199,9 @@ it('defaults to isolated without model input, keeps shared reuse and manages eve
     expect(await git(active.path, 'rev-parse', 'HEAD')).toBe(laterTip)
     await post(server, '/api/extensions/conversations/actions/reset', { args: { id: receivedId } })
     expect(await git(active.path, 'rev-parse', 'HEAD')).toBe(laterTip)
-    await card.getByRole('button', { name: 'Remove…', exact: true }).click()
-    await card.getByRole('button', { name: 'Remove', exact: true }).click()
+    // Archiving showed another conversation, so its card left the panel.
+    expect(await card.count()).toBe(0)
+    await post(server, '/api/extensions/workspaces/actions/discard', { args: { id: receivedId } })
     await until(async () => (await info(receivedId))?.state === 'removed')
     expect(await git(projectRoot, 'rev-parse', active.branch)).toBe(laterTip)
     expect(errors).toEqual([])

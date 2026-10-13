@@ -11,14 +11,15 @@ Setup commands must be safe to repeat after interruption.
 The first model request waits for preparation; failed or removed workspaces block tools with the reason.
 Failed setup keeps its output tail and never force-removes dirty output. Start a new conversation to try again.
 
-The Workspaces panel shows every checkout, including empty, archived and removed conversations.
+The Workspaces panel shows the lander queue, statistics over every checkout, and the shown conversation's checkout.
 `info {id}` reads the record and current tips; `create {cwd?, title?}` returns a new conversation ID.
 `land {id}` fast-forwards the saved source branch to the clean, verified workspace tip.
 The workspace must be clean; another running conversation or queued input prevents landing.
 Unrelated dirty files in the source checkout do not block; `git merge --ff-only` refuses only real overlap.
 If the target changed or diverged, update the workspace onto it and verify again; landing never rebases or pushes.
 `discard {id}` removes a clean checkout and keeps its branch and history.
-`removeLanded` discards every clean, idle, ready checkout whose tip its target branch already contains.
+`stats` counts checkouts by state, ready ones by commits (landed on the target, ahead, none yet) and uncommitted
+changes, and measures the worktrees directory with `du` (copy-on-write filesystems share part of that).
 
 ## Lander
 
@@ -75,5 +76,5 @@ of the current code's own task waits for the next submit or open, so a determini
 Top-level mains use `workspace status`, `workspace submit` and `workspace land` for their own checkout.
 Own tool landing skips the calling conversation's run and inbox checks; UI landing does not.
 Landing reports commits and changed paths, with a restart hint for core changes to the running clone.
-The Workspaces panel shows the lander queue, Submit and Land per checkout, and Remove landed.
+The shown conversation's checkout card has Submit, Land and Remove.
 Archive and clear context never remove a checkout. Landing never restarts Ultimate.
