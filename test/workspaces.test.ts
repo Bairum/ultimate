@@ -68,6 +68,8 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
       return resources.get(key) as T
     },
     restart,
+    onOpen: () => {},
+    onClose: () => {},
     build: () => ({ id: 'test-build' }),
     system: () => ({ process: {} }),
   } as unknown as ExtensionHost
