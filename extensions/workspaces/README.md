@@ -34,9 +34,16 @@ every submission as `ultimate.lander` entries, which carry no model message, so 
 sees them: `queued`, `started`, each step, each check with `passed`, `failed` or `flaky`, and the outcome (`landed`
 with `sha`, `commits`, `paths`, `flaky`, `pushed`, or `failed` with `reason` and the `output` tail). Each line is
 committed with the task state change or doc update it describes; a check result is logged right after the check
-runs, so a crash before its memo logs the rerun too. The outcome also goes into the root document's `results` (the
-latest 50), which the `workspace` tool card reads to show the submission live: queued, the current step, then
-landed, pushed or failed, with a link to the lander conversation.
+runs, so a crash before its memo logs the rerun too. The same commits record each step as `{ step, at, check? }` in
+the queue entry's `steps`; when the submission ends, its steps, outcome, tip and target move into the root document's
+`results` (the latest 50).
+
+The submitter follows the lander in its own transcript, from that document. The `workspace submit` card shows
+`submit · <tip> → <target>` and a status chip (`queued #2`, the current step with a spinner, `Landed <sha> · pushed`,
+`Not landed`); below it an "N steps" toggle, open while queued or landing and closed once finished, lists the step
+rows and ends in a quiet "full log in #<lander>" link. The lander's report message renders as an outcome card with
+a success, warning (landed, push failed) or error accent and the same collapsed steps. Nobody has to open the lander
+conversation; it keeps the full log, grouped by submission, and shows on the Canvas and in the Agents tab.
 
 1. Resets its own detached checkout, `<home>/lander/<hash of source>`, to the target branch tip. `isolates.worktree.setup`
    runs once when the checkout is created. With `lander.push`, it fetches the remote branch and merges it when it is ahead.

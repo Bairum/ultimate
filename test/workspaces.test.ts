@@ -675,14 +675,44 @@ it('accepts a second submission while the lander is still landing the first', as
   await f.service.ready(second, context)
   await commit((await f.service.get(first, context))!.path, 'one.txt')
   await commit((await f.service.get(second, context))!.path, 'two.txt')
-  await f.service.submit(first, context)
+  const one = await f.service.submit(first, context)
+  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+  // While it lands, the queue entry records each step as it happens.
   await until(async () =>
-    (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!.queue.some(
-      (item) => item.state === 'landing',
+    (await index())!.queue.some(
+      (item) => item.state === 'landing' && item.step === 'checking: sleep 2',
     ),
   )
-  expect((await f.service.submit(second, context)).position).toBe(2)
+  expect((await index())!.queue[0].steps.map((row) => row.step)).toEqual([
+    'queued',
+    'started',
+    'preparing',
+    'merging',
+    'setting up',
+    'checking: sleep 2',
+  ])
+  const two = await f.service.submit(second, context)
+  expect(two.position).toBe(2)
+  expect((await index())!.queue[1]).toMatchObject({
+    state: 'queued',
+    steps: [{ step: 'queued' }],
+  })
   expect((await submitted(f, second))[0]).toContain('landed as')
+  // Finished, the steps move into the result, with the check's outcome.
+  const results = (await index())!.results
+  for (const { id } of [one, two]) {
+    expect(results[id].steps.at(-1)).toMatchObject({ step: 'fast-forwarding' })
+    expect(results[id].steps).toContainEqual(
+      expect.objectContaining({ check: { command: 'sleep 2', result: 'passed' } }),
+    )
+  }
+  // The second was queued while the first landed: its log lines still name their own submission.
+  const { log } = await landerLog(f)
+  const queuedTwo = log.findIndex((line) => line.submission === two.id)
+  expect(log.slice(queuedTwo).some((line) => line.submission === one.id)).toBe(true)
+  expect(
+    log.filter((line) => line.submission === two.id).map((line) => line.step ?? line.outcome),
+  ).toEqual(results[two.id].steps.map((row) => row.step).concat('landed'))
 })
 
 it('reports a conflicting submission and leaves the target untouched', async () => {
