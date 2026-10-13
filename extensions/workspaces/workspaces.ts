@@ -18,18 +18,33 @@ import type { LandResult, SubmitResult, WorkspaceIndex, WorkspaceInfo } from './
 
 export const Workspaces = defineDoc<WorkspaceIndex>({
   kind: 'ultimate.workspaces',
-  version: 3,
+  version: 4,
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
   initial: () => ({ items: {}, queue: [], landers: {}, landerConversations: {}, results: {} }),
-  migrate: (value, from) => ({
-    ...(from < 2
-      ? { items: (value as Pick<WorkspaceIndex, 'items'>).items, queue: [], landers: {} }
-      : (value as Pick<WorkspaceIndex, 'items' | 'queue' | 'landers'>)),
-    landerConversations: {},
-    results: {},
-  }),
+  migrate: (value, from) => {
+    if (from < 3)
+      return {
+        ...(from < 2
+          ? { items: (value as Pick<WorkspaceIndex, 'items'>).items, queue: [], landers: {} }
+          : (value as Pick<WorkspaceIndex, 'items' | 'queue' | 'landers'>)),
+        landerConversations: {},
+        results: {},
+      }
+    // Version 4 records each submission's steps; earlier ones start without.
+    const index = value as WorkspaceIndex
+    return {
+      ...index,
+      queue: index.queue.map((item) => ({ ...item, steps: [] })),
+      results: Object.fromEntries(
+        Object.entries(index.results).map(([id, result]) => [
+          id,
+          { ...result, tip: id.split('-')[1], steps: [] },
+        ]),
+      ),
+    }
+  },
 })
 type Host = Pick<
   ExtensionHost,
@@ -248,6 +263,7 @@ export function workspaces(host: Host) {
         tip,
         at: Date.now(),
         state: 'queued' as const,
+        steps: [],
       }
       // One lander conversation per source: its log of every submission, busy while its task lands.
       let lander = known
@@ -261,8 +277,8 @@ export function workspaces(host: Host) {
         index.landerConversations[source] = lander
       }
       if (!queued) {
-        index.queue.push(entry)
         await log(tx, lander, entry, { step: 'queued' })
+        index.queue.push(entry)
       }
       // Not background: the task is the lander conversation's work, so it shows as working while it lands.
       if (!live || live.state.status === 'terminal' || live.state.status === 'completing')

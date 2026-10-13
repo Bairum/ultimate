@@ -4,10 +4,12 @@ import {
   ChevronRightIcon,
   CircleDotIcon,
   GitMergeIcon,
+  LoaderCircleIcon,
   SquareArrowOutUpRightIcon,
   TriangleAlertIcon,
   XIcon,
 } from 'lucide-react'
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Tool, ToolContent, ToolHeader, ToolOutput, ToolSection } from '@/components/ai/tool'
 import { Button } from '@/components/ui/button'
@@ -15,7 +17,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { useConversation, useConversations, useToolDuration, useUltimate } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import { useWorkspaceIndex } from './data.tsx'
-import type { LanderEntry, LanderOutcome, SubmitResult } from './types.ts'
+import type { LanderEntry, LanderOutcome, LanderStep, SubmitResult } from './types.ts'
 
 const short = (sha: string) => sha.slice(0, 7)
 const time = (at: number) =>
@@ -141,7 +143,6 @@ export function LanderReport({ entry, core }: { entry: EntryRecord; core: ReactN
         <span className="min-w-0 flex-1 break-words text-foreground">
           {outcome ? headline(outcome, outcome.target) : body.split('\n')[0]}
         </span>
-        <Open className="-my-0.5" id={Number(lander)} label="lander" />
       </header>
       <div className="space-y-1.5 pl-5.5">
         {outcome ? (
@@ -151,6 +152,7 @@ export function LanderReport({ entry, core }: { entry: EntryRecord; core: ReactN
             {body.split('\n').slice(1).join('\n')}
           </p>
         )}
+        <Steps lander={Number(lander)} steps={outcome?.steps ?? []} />
       </div>
     </section>
   )
@@ -158,7 +160,7 @@ export function LanderReport({ entry, core }: { entry: EntryRecord; core: ReactN
 
 function Line({ icon, children, at }: { icon: ReactNode; children: ReactNode; at: number }) {
   return (
-    <div className="flex items-center gap-2 pl-4 font-mono text-[11px] text-muted-foreground">
+    <div className="flex items-center gap-2 pl-4 font-mono text-[11px] leading-5 text-muted-foreground">
       {icon}
       <span className="min-w-0 flex-1 truncate">{children}</span>
       <time className="shrink-0 text-muted-foreground/60">{time(at)}</time>
@@ -166,19 +168,92 @@ function Line({ icon, children, at }: { icon: ReactNode; children: ReactNode; at
   )
 }
 
+/** A step or a check result, as one quiet line. */
+function StepLine({ row }: { row: LanderStep }) {
+  if (row.check)
+    return (
+      <Line
+        at={row.at}
+        icon={
+          row.check.result === 'passed' ? (
+            <CheckIcon className="size-3 shrink-0 text-success" />
+          ) : row.check.result === 'flaky' ? (
+            <TriangleAlertIcon className="size-3 shrink-0 text-warning" />
+          ) : (
+            <XIcon className="size-3 shrink-0 text-error" />
+          )
+        }
+      >
+        {row.check.command}
+        {row.check.result !== 'passed' && ` · ${row.check.result}`}
+      </Line>
+    )
+  return (
+    <Line at={row.at} icon={<CircleDotIcon className="size-3 shrink-0 text-muted-foreground/60" />}>
+      {row.step}
+    </Line>
+  )
+}
+
+/** A running check's line gives way to its result, which follows it. */
+const running = /^(?:checking|rerunning): (.*)$/s
+const superseded = (row: LanderStep, later: readonly LanderStep[]) => {
+  const command = running.exec(row.step)?.[1]
+  return command !== undefined && later.some((next) => next.check?.command === command)
+}
+
+/**
+ * A submission's steps behind an "N steps" toggle, ending in a quiet link to the lander conversation's full log.
+ * `open` and `onOpenChange` control it; without them it starts collapsed.
+ */
+function Steps({
+  steps,
+  lander,
+  open,
+  onOpenChange,
+}: {
+  steps: readonly LanderStep[]
+  lander: number
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+}) {
+  const { switchConversation } = useUltimate()
+  const rows = steps.filter((row, index) => !superseded(row, steps.slice(index + 1)))
+  return (
+    <Collapsible className="group/steps" onOpenChange={onOpenChange} open={open}>
+      <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 font-mono text-[11px] text-muted-foreground hover:text-foreground">
+        <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/steps:rotate-90" />
+        {rows.length ? `${rows.length} step${rows.length === 1 ? '' : 's'}` : 'Steps'}
+      </CollapsibleTrigger>
+      <CollapsibleContent className="pt-1">
+        {rows.map((row, index) => (
+          <StepLine key={index} row={row} />
+        ))}
+        <button
+          className="cursor-pointer pt-1 pl-4 font-mono text-[11px] text-muted-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
+          onClick={() => switchConversation(lander)}
+          type="button"
+        >
+          full log in #{lander}
+        </button>
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
 /** One `ultimate.lander` entry: a submission header, a step, a check result, or the outcome card. */
 export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
   const data = entry.data as LanderEntry
   const { entries } = useConversation()
-  // A running check's line gives way to its result.
-  const command = /^(?:checking|rerunning): (.*)$/s.exec(data.step ?? '')?.[1]
+  const own = (other: EntryRecord) =>
+    other.kind === 'ultimate.lander' && (other.data as LanderEntry).submission === data.submission
   if (
-    command !== undefined &&
-    entries.some(
-      (later) =>
-        later.id > entry.id &&
-        (later.data as LanderEntry | undefined)?.submission === data.submission &&
-        (later.data as LanderEntry).check?.command === command,
+    data.step &&
+    superseded(
+      data as LanderStep,
+      entries
+        .filter((later) => later.id > entry.id && own(later))
+        .map((later) => later.data as LanderStep),
     )
   )
     return null
@@ -206,60 +281,54 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
       </div>
     )
   }
-  if (data.step === 'queued')
+  // A later submission is queued while an earlier one lands: its group starts when it starts, with its queued line.
+  if (data.step === 'queued') return null
+  if (data.step === 'started') {
+    const queued = entries.find(
+      (other) => own(other) && (other.data as LanderEntry).step === 'queued',
+    )
     return (
-      <div className="flex items-center gap-2 border-t border-border/60 pt-3 font-mono text-[12px]">
-        <GitMergeIcon className="size-3.5 shrink-0 text-brand" />
-        <span className="min-w-0 flex-1 truncate">
-          W{data.conversationId} · {short(data.tip)} → {data.target}
-          <span className="text-muted-foreground"> · {data.submission}</span>
-        </span>
-        <Open id={data.conversationId} />
+      <div className="space-y-0.5 border-t border-border/60 pt-3">
+        <div className="flex items-center gap-2 font-mono text-[12px]">
+          <GitMergeIcon className="size-3.5 shrink-0 text-brand" />
+          <span className="min-w-0 flex-1 truncate">
+            W{data.conversationId} · {short(data.tip)} → {data.target}
+            <span className="text-muted-foreground"> · {data.submission}</span>
+          </span>
+          <Open id={data.conversationId} />
+        </div>
+        {queued && <StepLine row={queued.data as LanderStep} />}
+        <StepLine row={data as LanderStep} />
       </div>
     )
-  if (data.check)
-    return (
-      <Line
-        at={data.at}
-        icon={
-          data.check.result === 'passed' ? (
-            <CheckIcon className="size-3 shrink-0 text-success" />
-          ) : data.check.result === 'flaky' ? (
-            <TriangleAlertIcon className="size-3 shrink-0 text-warning" />
-          ) : (
-            <XIcon className="size-3 shrink-0 text-error" />
-          )
-        }
-      >
-        {data.check.command}
-        {data.check.result !== 'passed' && ` · ${data.check.result}`}
-      </Line>
-    )
-  return (
-    <Line
-      at={data.at}
-      icon={<CircleDotIcon className="size-3 shrink-0 text-muted-foreground/60" />}
-    >
-      {data.step}
-    </Line>
-  )
+  }
+  return <StepLine row={data as LanderStep} />
 }
 
-/** The submission's state now: queued, its current step, or how it ended. */
-function useSubmission(id: string | undefined) {
+type Submission = {
+  tip: string
+  target: string
+  steps: readonly LanderStep[]
+  /** Place in its source's queue while waiting. */
+  position?: number
+  /** The current step while landing. */
+  step?: string
+  landing?: boolean
+  outcome?: LanderOutcome
+}
+/** The submission now: queued with its place, landing with its current step, or how it ended. */
+function useSubmission(id: string | undefined): Submission | undefined {
   const index = useWorkspaceIndex()
   if (!id) return undefined
   const queued = index.queue.find((item) => item.id === id)
-  if (queued) {
-    const position = index.queue
-      .filter((item) => item.source === queued.source)
-      .findIndex((item) => item.id === id)
-    return queued.state === 'landing'
-      ? { text: queued.step ?? 'landing' }
-      : { text: position ? `queued · ${position} ahead` : 'queued' }
-  }
+  if (queued)
+    return {
+      ...queued,
+      landing: queued.state === 'landing',
+      position: index.queue.filter((item) => item.source === queued.source).indexOf(queued) + 1,
+    }
   const outcome = index.results[id]
-  return outcome ? { outcome } : undefined
+  return outcome && { ...outcome, outcome }
 }
 
 const parse = (output: string) => {
@@ -270,41 +339,73 @@ const parse = (output: string) => {
   }
 }
 
-/** `workspace` calls; a submit shows its submission live and links to the lander conversation. */
+/** The submission's state as a short chip: queued, the current step, or how it ended. */
+function StatusChip({ state }: { state: Submission }) {
+  const chip = 'flex min-w-0 items-center gap-1 truncate'
+  if (!state.outcome) {
+    if (state.landing)
+      return (
+        <span className={cn(chip, 'text-brand')}>
+          <LoaderCircleIcon className="size-3 shrink-0 animate-spin" />
+          <span className="truncate">{state.step ?? 'landing'}</span>
+        </span>
+      )
+    return <span className={chip}>queued #{state.position}</span>
+  }
+  const { outcome } = state
+  if (outcome.outcome === 'failed')
+    return <span className={cn(chip, 'text-error')}>Not landed</span>
+  const landed = outcome.commits?.length ? `Landed ${short(outcome.sha!)}` : 'Nothing new'
+  if (outcome.reason)
+    return <span className={cn(chip, 'text-warning')}>{landed} · push failed</span>
+  return (
+    <span className={cn(chip, 'text-success')}>
+      {landed}
+      {outcome.pushed ? ' · pushed' : ''}
+    </span>
+  )
+}
+
+/** `workspace` calls; a submit follows its submission inline: status chip, live steps, outcome. */
 export function WorkspaceCall({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
   const action = typeof call.args.action === 'string' ? call.args.action : ''
   const result = call.status === 'done' ? parse(call.output) : undefined
   const submitted = action === 'submit' ? (result as SubmitResult | undefined) : undefined
   const state = useSubmission(submitted?.id)
-  const status = state?.outcome ? headline(state.outcome) : state?.text
+  // Open while it is queued or lands, closed once it ends, unless toggled.
+  const [open, setOpen] = useState<boolean>()
   return (
-    <Tool defaultOpen={call.status === 'error' || state?.outcome?.outcome === 'failed'}>
-      <div className="flex items-center">
-        <ToolHeader
-          className="min-w-0 flex-1"
-          meta={<>{duration && <span>{duration}</span>}</>}
-          name="workspace"
-          state={call.status}
-          title={
+    <Tool defaultOpen={call.status === 'error'}>
+      <ToolHeader
+        meta={
+          <>
+            {state && <StatusChip state={state} />}
+            {duration && !state && <span>{duration}</span>}
+          </>
+        }
+        name="workspace"
+        state={call.status}
+        title={
+          state ? (
             <>
-              {action}
-              {status && (
-                <span
-                  className={cn(
-                    'ml-2',
-                    state?.outcome?.outcome === 'failed' && 'text-error',
-                    state?.outcome?.outcome === 'landed' && !state.outcome.reason && 'text-success',
-                  )}
-                >
-                  {status}
-                </span>
-              )}
+              {action} · {short(state.tip)} → {state.target}
             </>
-          }
-        />
-        {submitted && <Open className="mr-1 h-6" id={submitted.lander} />}
-      </div>
+          ) : (
+            action
+          )
+        }
+      />
+      {submitted && state && (
+        <div className="border-t border-border/80 px-2.5 py-1.5">
+          <Steps
+            lander={submitted.lander}
+            onOpenChange={setOpen}
+            open={open ?? !state.outcome}
+            steps={state.steps}
+          />
+        </div>
+      )}
       <ToolContent>
         {state?.outcome && (
           <ToolSection className="space-y-1.5" label="Lander">
