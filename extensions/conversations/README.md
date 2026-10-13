@@ -141,12 +141,43 @@ is still blocked. `CONVERSATION_INTENT_SCREENSHOT=/tmp/conversation-intent.png` 
 The fixture then releases generation, verifies the narrow layout and browser errors, and closes its temporary server.
 Chromium is discovered through the existing browser-test helper; without Chromium this browser test skips.
 
+## How status and summaries flow
+
+Every displayed status traces back to committed Pi Durable records. Hooks and tasks write records; documents are
+projections that can be rebuilt from those records at any time; no process-local state decides what a row shows.
+
+```text
+GenerationTask hooks ─▶ conversations.summary task ─▶ entries + Summaries doc ─┐
+ (beforeRequest, onYield)   (byTaskId on its entries)                          ├─▶ Overview doc ─▶ sidebar, canvas
+input submission (done/unanswered) · pi.live · pi.inbox · pi.reset ────────────┘
+```
+
+- **Exchange**: the newest input submission placed in the transcript, read newest first with the host's
+  `scanSubmissions`. `done` carries its `answer`: the row is `answered`, with or without a summary model. `unanswered`
+  is `error`, except when the user aborted it or a reset or stale write ended it. A later `pi.reset` entry ends the
+  exchange; compaction does not.
+- **Run state**: `pi.live.run` is `working`; a user item in `pi.inbox` is `queued`.
+- **Summary task outcomes** are entries appended in the commit that settles the task, so each carries `byTaskId`
+  (the summary task, whose input names the generation it observed). None contributes to the model context:
+  - `conversations.assessed` `{ inputId, answerId, value, activity, model?, at }`: an accepted reply assessment.
+  - `conversations.summary-discarded` `{ reason: 'stale' | 'error', cause, at }`: a received result superseded by newer
+    work or a reset (`stale`), or a failed or aborted request (`error`). A task superseded before it asked Luna
+    leaves no entry.
+  - `conversations.title-changed` and `conversations.intent-summarized`, as above.
+    The transcript shows each as one quiet line with its local time.
+- **Summaries** (`ultimate.conversation-summaries`) keeps the current summary, activity, assessment and their statuses
+  (`pending`, `ready`, `stale`, `error`) plus the cadence. Stale shows nothing in the sidebar; error shows
+  "unavailable · retries after next reply".
+
 ## Shared sidebar index
 
 `ultimate.conversation-overview` keeps sidebar rows in the root conversation document.
-Rows include run state, summaries, activity and assessments tied to their input and answer.
-Replied means an answer arrived; Done is Luna's opinion, not proof of completion.
+Each row's `runState` is `working`, `queued`, `answered`, `error` or `idle`, with the input and answer ids of the
+exchange, the summary, activity, and an assessment only while it belongs to that exact input and answer.
+Answered means a reply arrived; Done is Luna's opinion, not proof of completion.
 One root-document stream serves all rows. Titles, timestamps, child links and agent labels come from the core
 conversation list.
-On open, the extension rebuilds rows from stored conversations without requesting old assessments.
-Afterwards it updates affected rows when work or summaries change, ignoring live stream chunks.
+A commit only selects which rows to derive again: any committed submission, `pi.user`, `pi.reset` or `pi.compaction`
+entry, `pi.live.run` or `pi.inbox` change, or `Summaries` change. Derivation reads the records themselves, so a row
+built live equals the row a fresh open builds. On open, every conversation is derived anew without requesting old
+assessments.

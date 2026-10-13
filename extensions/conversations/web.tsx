@@ -48,7 +48,15 @@ import {
   getWorkspaces,
   useWorkspaceConversations as useConversations,
 } from '../workspaces/data.tsx'
-import type { Assessment, IntentSummary, OverviewRow, OverviewState, TitleChange } from './types.ts'
+import type {
+  Assessed,
+  Assessment,
+  IntentSummary,
+  OverviewRow,
+  OverviewState,
+  SummaryDiscard,
+  TitleChange,
+} from './types.ts'
 
 const newKeys = 'mod+alt+n'
 const resetDialog = 'conversations.reset'
@@ -76,7 +84,7 @@ function useOverview() {
 }
 
 function currentAssessment(row: OverviewRow | undefined) {
-  return row?.runState === 'done' &&
+  return row?.runState === 'answered' &&
     row.assessment?.answerId === row.answerId &&
     row.assessment?.inputId === row.inputId
     ? row.assessment
@@ -466,7 +474,7 @@ function ChildRow({
   const working = conversation.busy || row?.runState === 'working'
   const state = working
     ? 'Working'
-    : row?.runState === 'done'
+    : row?.runState === 'answered'
       ? 'Replied'
       : row?.runState === 'error'
         ? 'Run failed'
@@ -696,28 +704,34 @@ function Conversations() {
       <nav aria-label="Conversations" className="flex flex-col gap-px">
         {listed.map((conversation) => tree(conversation))}
       </nav>
-      {(summary?.summary || summary?.summaryStatus || summary?.assessmentStatus) && (
-        <section
-          aria-label="Conversation summary"
-          className="mx-4 mt-4 border-t border-border/60 pt-3"
-          data-summary-conversation={shownTop?.id}
-        >
-          <p className="text-xs leading-relaxed break-words text-muted-foreground">
-            {summary.summary}
-          </p>
-          {(summary.summaryStatus === 'pending' || summary.assessmentStatus === 'pending') && (
-            <p className="mt-1 text-[10.5px] text-muted-foreground/70" role="status">
-              {summary.summaryStatus === 'pending' ? 'Updating summary…' : 'Assessing reply…'}
+      {summary &&
+        (summary.summary ||
+          [summary.summaryStatus, summary.assessmentStatus].some(
+            (status) => status === 'pending' || status === 'error',
+          )) && (
+          <section
+            aria-label="Conversation summary"
+            className="mx-4 mt-4 border-t border-border/60 pt-3"
+            data-summary-conversation={shownTop?.id}
+          >
+            <p className="text-xs leading-relaxed break-words text-muted-foreground">
+              {summary.summary}
             </p>
-          )}
-          {(summary.summaryStatus === 'error' || summary.assessmentStatus === 'error') && (
-            <p className="mt-1 text-[10.5px] text-muted-foreground/70" role="status">
-              {summary.summaryStatus === 'error' ? 'Summary unavailable' : 'Assessment unavailable'}{' '}
-              · retries after next reply
-            </p>
-          )}
-        </section>
-      )}
+            {(summary.summaryStatus === 'pending' || summary.assessmentStatus === 'pending') && (
+              <p className="mt-1 text-[10.5px] text-muted-foreground/70" role="status">
+                {summary.summaryStatus === 'pending' ? 'Updating summary…' : 'Assessing reply…'}
+              </p>
+            )}
+            {(summary.summaryStatus === 'error' || summary.assessmentStatus === 'error') && (
+              <p className="mt-1 text-[10.5px] text-muted-foreground/70" role="status">
+                {summary.summaryStatus === 'error'
+                  ? 'Summary unavailable'
+                  : 'Assessment unavailable'}{' '}
+                · retries after next reply
+              </p>
+            )}
+          </section>
+        )}
       {hidden.length > 0 && (
         <Collapsible className="mt-auto pt-3">
           <CollapsibleTrigger className="group/archived flex w-full items-center gap-1 px-4 py-1 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase outline-none hover:text-foreground focus-visible:text-foreground">
@@ -805,12 +819,31 @@ function ResetDialog() {
   )
 }
 
+const assessmentLabel = { needs_input: 'may need input', done: 'Done', neutral: 'neutral' }
+
+/** What a summary task concluded, as one quiet line; each entry traces to its task by `byTaskId`. */
+function summaryText(entry: EntryRecord) {
+  switch (entry.kind) {
+    case 'conversations.intent-summarized':
+      return `Intent: ${(entry.data as IntentSummary).summary}`
+    case 'conversations.title-changed':
+      return `Title changed to “${(entry.data as TitleChange).title}”`
+    case 'conversations.assessed': {
+      const data = entry.data as Assessed
+      return `Assessed: ${assessmentLabel[data.value]} (Luna's opinion) · ${data.activity}`
+    }
+    default: {
+      const data = entry.data as SummaryDiscard
+      return data.reason === 'stale'
+        ? 'Summary superseded by newer work'
+        : `Summary unavailable: ${data.cause}`
+    }
+  }
+}
+
 function SummaryAction({ entry }: { entry: EntryRecord }) {
-  const intent = entry.kind === 'conversations.intent-summarized'
-  const text = intent
-    ? `Intent: ${(entry.data as IntentSummary).summary}`
-    : `Title changed to “${(entry.data as TitleChange).title}”`
-  const date = new Date((entry.data as IntentSummary | TitleChange).at)
+  const text = summaryText(entry)
+  const date = new Date((entry.data as { at: number }).at)
   return (
     <div className="flex items-baseline gap-2 font-mono text-[11px] text-muted-foreground">
       <PencilIcon aria-hidden className="size-3 shrink-0 self-center" />
@@ -830,6 +863,8 @@ export default defineWebExtension({
   entries: {
     'conversations.title-changed': SummaryAction,
     'conversations.intent-summarized': SummaryAction,
+    'conversations.assessed': SummaryAction,
+    'conversations.summary-discarded': SummaryAction,
   },
   slots: { sidebar: Conversations, overlay: [ResetDialog, Seen] },
   commands: [

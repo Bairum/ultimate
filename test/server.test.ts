@@ -415,6 +415,32 @@ export default host => { host.resource('cleanup.process',()=>{
       code: 'ENOENT',
     })
   })
+  it('scans committed submissions newest first, filtered and paged', async () => {
+    const { server } = await fixture(false, false, undefined, true)
+    server.host.faux!.setResponses([fauxAssistantMessage('One'), fauxAssistantMessage('Two')])
+    const ids = []
+    for (const content of ['one', 'two']) {
+      const submitted = await server.root.submit({ type: 'input', content }, context)
+      await submitted.wait(context)
+      ids.push(submitted.id)
+    }
+    const query = { conversationId: server.root.id, status: 'done', order: 'descending' } as const
+    const first = await server.host.scanSubmissions(query, 1, undefined, context)
+    expect(first.items.map((item) => item.id)).toEqual([ids[1]])
+    const second = await server.host.scanSubmissions(query, 1, first.next, context)
+    expect(second.items.map((item) => item.id)).toEqual([ids[0]])
+    expect(second.next).toBeUndefined()
+    expect(
+      (await server.host.scanSubmissions({ ...query, status: 'queued' }, 10, undefined, context))
+        .items,
+    ).toEqual([])
+    servers.splice(servers.indexOf(server), 1)
+    await server.vite.watcher.close()
+    await server.close()
+    expect(() => server.host.scanSubmissions(query, 1, undefined, context)).toThrow(
+      'Harness is not open',
+    )
+  })
   it('does not inherit the supervisor public URL in an embedded server', async () => {
     vi.stubEnv('ULTIMATE_PUBLIC_URL', 'http://127.0.0.1:1')
     try {

@@ -1,14 +1,8 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import {
-  defineDoc,
-  GenerationTask,
-  InboxDoc,
-  LiveDoc,
-  ROOT_CONVERSATION_ID,
-} from '@earendil-works/pi-durable'
-import type { ConversationId, Cursor, EntryId, TaskId } from '@earendil-works/pi-durable'
+import { defineDoc, InboxDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import type { ConversationId, Cursor, SubmissionRecord } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { currentAnswer, exchangeUser, resetAfter, Summaries } from './summary.ts'
+import { currentAnswer, resetAfter, Summaries } from './summary.ts'
 import type { OverviewRow, OverviewState } from './types.ts'
 
 export const Overview = defineDoc<OverviewState>({
@@ -20,43 +14,63 @@ export const Overview = defineDoc<OverviewState>({
   initial: () => ({ conversations: {} }),
 })
 
-/** A single root index; hydrate once, then read only rows affected by meaningful commits. */
+/** Settlement reasons that end an input without a failure: the user stopped it or a reset cut it. */
+const quiet = new Set(['aborted', 'reset', 'stale'])
+
+/** The newest input placed in the transcript; writes and withdrawn inputs are skipped. */
+async function latestInput(
+  host: Pick<ExtensionHost, 'scanSubmissions'>,
+  id: ConversationId,
+): Promise<SubmissionRecord | undefined> {
+  let cursor: Cursor | undefined
+  do {
+    const page = await host.scanSubmissions(
+      { conversationId: id, order: 'descending' },
+      8,
+      cursor,
+      context,
+    )
+    const input = page.items.find((item) => item.type === 'input' && item.entry !== undefined)
+    if (input) return input
+    cursor = page.next
+  } while (cursor !== undefined)
+  return undefined
+}
+
+/**
+ * A root index of rows, each derived only from committed records: the newest input submission, `pi.live`,
+ * `pi.inbox`, and the `Summaries` projection. Commits only choose which rows to derive again.
+ */
 export function overviewBehavior(
-  host: Pick<ExtensionHost, 'harness' | 'onOpen' | 'onClose' | 'notice'>,
+  host: Pick<ExtensionHost, 'harness' | 'scanSubmissions' | 'onOpen' | 'onClose' | 'notice'>,
 ) {
   let stop: (() => void) | undefined
   let closed = false
   let draining: Promise<void> | undefined
   const pending = new Set<ConversationId>()
-  const latestUser = new Map<ConversationId, EntryId>()
-  const latestRun = new Map<ConversationId, TaskId>()
   const reconcile = async (ids: ConversationId[]) => {
     const harness = host.harness()
-    const states = await Promise.all(ids.map((id) => harness.snapshot(Summaries, id, context)))
+    // Read outside the commit: a commit that changes them afterwards schedules this row again.
+    const [states, inputs] = await Promise.all([
+      Promise.all(ids.map((id) => harness.snapshot(Summaries, id, context))),
+      Promise.all(ids.map((id) => latestInput(host, id))),
+    ])
     await harness.commit(async (tx) => {
       const index = await tx.doc(Overview, ROOT_CONVERSATION_ID)
       for (const [position, id] of ids.entries()) {
         if (!(await tx.conversation(id))) continue
         const state = states[position]
+        const input = inputs[position]
         const live = await tx.doc(LiveDoc, id)
         const inbox = await tx.doc(InboxDoc, id)
-        const userId = latestUser.get(id)
-        const active = userId !== undefined && !(await resetAfter(tx, id, userId))
-        const taskId = latestRun.get(id)
-        const run = taskId === undefined ? undefined : await tx.task(taskId)
-        const outcome = run?.state.status === 'terminal' ? run.state.outcome : undefined
-        const result = outcome?.status === 'completed' ? outcome.result : undefined
-        const answerId =
-          result &&
-          typeof result === 'object' &&
-          'entryId' in result &&
-          typeof result.entryId === 'number'
-            ? (result.entryId as EntryId)
-            : undefined
-        const answered = active && answerId !== undefined && answerId > userId
+        // Only a reset ends an exchange; compaction keeps it.
+        const active = input !== undefined && !(await resetAfter(tx, id, input.entry!))
+        const answerId = active && input.status === 'done' ? input.answer : undefined
+        const failed = active && input.status === 'unanswered' && !quiet.has(input.reason)
         const assessment =
-          answered &&
+          answerId !== undefined &&
           state?.assessment?.answerId === answerId &&
+          state.assessment.inputId === input!.entry &&
           (await currentAnswer(tx, id, answerId))
             ? state.assessment
             : undefined
@@ -65,14 +79,13 @@ export function overviewBehavior(
             ? 'working'
             : inbox.items.some((item) => item.mode !== 'write')
               ? 'queued'
-              : answered
-                ? 'done'
-                : active && outcome && ['failed', 'faulted', 'orphaned'].includes(outcome.status)
+              : answerId !== undefined
+                ? 'answered'
+                : failed
                   ? 'error'
                   : 'idle',
-          // Continuations add transcript users without submissions; retain the settled input identity.
-          ...(active ? { inputId: assessment?.inputId ?? userId } : {}),
-          ...(answered ? { answerId } : {}),
+          ...(active ? { inputId: input.entry } : {}),
+          ...(answerId !== undefined ? { answerId } : {}),
           ...(state?.summary ? { summary: state.summary } : {}),
           ...(state?.status ? { summaryStatus: state.status } : {}),
           ...(state?.activity ? { activity: state.activity } : {}),
@@ -107,25 +120,11 @@ export function overviewBehavior(
     stop = host.harness().subscribeCommits((publication) => {
       for (const change of publication.changes) {
         if (change.type === 'conversation') pending.add(change.value.id)
-        if (change.type === 'entry' && change.value.kind === 'pi.user') {
-          latestUser.set(
-            change.value.conversationId,
-            Math.max(change.value.id, latestUser.get(change.value.conversationId) ?? 0) as EntryId,
-          )
-          pending.add(change.value.conversationId)
-        }
-        if (change.type === 'task' && change.value.kind === GenerationTask.definition.name) {
-          const run = change.value
-          if (run.id > (latestRun.get(run.conversationId) ?? 0) || run.state.status === 'terminal')
-            pending.add(run.conversationId)
-          latestRun.set(
-            run.conversationId,
-            Math.max(run.id, latestRun.get(run.conversationId) ?? 0) as TaskId,
-          )
-        }
-        if (change.type === 'submission' && change.value.type === 'input')
-          pending.add(change.value.conversationId)
-        if (change.type === 'entry' && ['pi.reset', 'pi.compaction'].includes(change.value.kind))
+        if (change.type === 'submission') pending.add(change.value.conversationId)
+        if (
+          change.type === 'entry' &&
+          ['pi.user', 'pi.reset', 'pi.compaction'].includes(change.value.kind)
+        )
           pending.add(change.value.conversationId)
         if (
           change.type === 'document' &&
@@ -139,26 +138,11 @@ export function overviewBehavior(
       }
       if (pending.size) schedule()
     })
-    // Task receipts and the newest user entry since a reset establish actual state without Luna/backfill.
     await host.harness().commit(async (tx) => {
       let cursor: Cursor | undefined
       do {
-        const page = await tx.scanTasks({ kind: GenerationTask.definition.name }, 256, cursor)
-        for (const run of page.items)
-          latestRun.set(
-            run.conversationId,
-            Math.max(run.id, latestRun.get(run.conversationId) ?? 0) as TaskId,
-          )
-        cursor = page.next
-      } while (cursor !== undefined)
-      do {
         const page = await tx.scanConversations({}, 256, cursor)
-        for (const own of page.items) {
-          pending.add(own.id)
-          const user = await exchangeUser(tx, own.id)
-          if (user)
-            latestUser.set(own.id, Math.max(user.id, latestUser.get(own.id) ?? 0) as EntryId)
-        }
+        for (const own of page.items) pending.add(own.id)
         cursor = page.next
       } while (cursor !== undefined)
     }, context)

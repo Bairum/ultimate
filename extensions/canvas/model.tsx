@@ -119,7 +119,7 @@ export const isActive = (status: Status) =>
 export function assessmentOf(row: OverviewRow | undefined): AssessmentValue | undefined {
   const assessment = row?.assessment
   return assessment &&
-    row.runState === 'done' &&
+    row.runState === 'answered' &&
     assessment.answerId === row.answerId &&
     assessment.inputId === row.inputId
     ? assessment.value
@@ -130,7 +130,7 @@ function statusOf(busy: boolean, row: OverviewRow | undefined, feed: CanvasAgent
   if (busy) return feed?.waitingOn?.length ? 'waiting' : 'working'
   if (row?.runState === 'queued') return 'queued'
   if (row?.runState === 'error') return 'failed'
-  if (row?.runState !== 'done') return 'idle'
+  if (row?.runState !== 'answered') return 'idle'
   return assessmentOf(row) === 'done' ? 'done' : 'replied'
 }
 

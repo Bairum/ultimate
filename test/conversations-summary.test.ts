@@ -4,7 +4,7 @@ import { Subagents } from '../extensions/subagents/server.ts'
 import { join, resolve } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
 import type { Models, JsonObject } from '@earendil-works/pi-ai'
-import type { ConversationId, EntryId, ToolRegistration } from '@earendil-works/pi-durable'
+import type { ConversationId, EntryId, TaskId, ToolRegistration } from '@earendil-works/pi-durable'
 import { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import {
@@ -14,6 +14,7 @@ import {
   GenerationTask,
   hook,
   LiveDoc,
+  ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
@@ -26,6 +27,8 @@ import {
   requestSummary,
   IntentSummarized,
   TitleChanged,
+  AssessmentAccepted,
+  SummaryDiscarded,
 } from '../extensions/conversations/summary.ts'
 import { fauxServer, post, prepareFauxServer, temp, until } from './helpers.ts'
 
@@ -124,6 +127,9 @@ async function launch(subagents = false, initialIntent = false) {
           ),
         context,
       ),
+    entries: async (id = server.root.id) =>
+      (await server.harness.commit((tx) => tx.scanEntries({ conversationId: id }, 200), context))
+        .items,
     titleChanges: async (id = server.root.id) =>
       (
         await server.harness.commit((tx) => tx.scanEntries({ conversationId: id }, 100), context)
@@ -378,12 +384,19 @@ it.each([2, 3])(
       expect(state?.summary).toBe(before.summary)
       expect(state?.summaryOwed).toBeUndefined()
       expect(fixture.generated.mock.calls.at(-1)![3]).toBe(false)
-      expect(state?.status).toBe('error')
+      expect(state?.status).toBe('stale')
     } finally {
       release()
     }
     await until(async () => (await fixture.server.harness.inspect(context)).tasks.length === 0)
-    expect((await fixture.read())?.status).toBe('error')
+    expect((await fixture.read())?.status).toBe('stale')
+    const discarded = (await fixture.entries()).filter((entry) => SummaryDiscarded.is(entry))
+    expect(discarded.map((entry) => entry.data)).toEqual([
+      { reason: 'stale', cause: 'superseded', at: expect.any(Number) },
+    ])
+    const spawnTask = await fixture.server.harness.getTask(discarded[0].byTaskId!, context)
+    expect(spawnTask?.kind).toBe('conversations.summary')
+    expect(spawnTask?.input).toMatchObject({ spawn: { answer: before.lastAnswer } })
     expect((await fixture.read())?.summary).toBe(before.summary)
     for (let count = exchange + 1; count <= 4; count++) await fixture.exchange()
     expect((await fixture.read())?.exchanges).toBe(4)
@@ -603,6 +616,12 @@ it('clears summary and cadence on reset, drops stale completion and isolates pro
   fixture.generated.mockRejectedValueOnce(new Error('Provider offline'))
   await fixture.exchange()
   expect((await fixture.read())?.status).toBe('error')
+  expect((await fixture.read())?.assessmentStatus).toBe('error')
+  expect((await fixture.entries()).filter((entry) => SummaryDiscarded.is(entry))[0]?.data).toEqual({
+    reason: 'error',
+    cause: 'Provider offline',
+    at: expect.any(Number),
+  })
   expect((await fixture.read())?.summary).toBeUndefined()
   expect(await fixture.titleChanges()).toEqual([])
   for (let count = 2; count <= 4; count++) await fixture.exchange()
@@ -1069,14 +1088,164 @@ it('keeps an exchange answered across a mid-run compaction and reopen; only a re
   const row = async () =>
     (await fixture.server.harness.snapshot(Overview, fixture.server.root.id, context))
       ?.conversations[fixture.server.root.id]
-  await until(async () => (await row())?.runState === 'done')
+  await until(async () => (await row())?.runState === 'answered')
   expect((await row())?.assessment?.value).toBe('done')
   await fixture.reopen()
-  await until(async () => (await row())?.runState === 'done')
+  await until(async () => (await row())?.runState === 'answered')
   expect((await row())?.assessment?.value).toBe('done')
   // A raw reset, like a tool handoff, bypasses the reset action and its revision bump.
   await fixture.server.root.reset(undefined, context)
   await until(async () => (await row())?.runState === 'idle')
   expect((await row())?.assessment).toBeUndefined()
   expect((await row())?.inputId).toBeUndefined()
+}, 60000)
+
+it('derives the same overview rows live and from a fresh open, with no summary model available', async () => {
+  const fixture = await launch()
+  const install = () => {
+    const registry = fixture.server.host.registry
+    registry.install(
+      defineExtension({
+        ...registry.snapshot().extension('conversations')!,
+        ...summaryBehavior(
+          {
+            harness: () => fixture.server.harness,
+            metadata: Metadata,
+            modelRuntime: { getAvailableSnapshot: () => [] },
+          },
+          fixture.generated,
+        ),
+      }),
+    )
+  }
+  install()
+  let release!: () => void
+  fixture.server.host.registry.install(
+    defineExtension({
+      name: 'overview-hold',
+      tools: [
+        defineTool({
+          name: 'overview_hold',
+          description: 'Hold work until released',
+          parameters: Type.Object({}),
+          execute: async (_args, _api, toolContext) => {
+            await awaitWithContext(new Promise<void>((done) => (release = done)), toolContext)
+            return { output: [{ type: 'text', text: 'Released' }] }
+          },
+        }),
+      ],
+    }),
+  )
+  const failure = fauxAssistantMessage('', {
+    stopReason: 'error',
+    errorMessage: 'invalid_request_error: deterministic fixture failure',
+  })
+  const hold = fauxAssistantMessage([fauxToolCall('overview_hold', {})], { stopReason: 'toolUse' })
+  const create = async () => {
+    const created = await post(fixture.server, '/api/conversations', {})
+    const id = created.data.id as ConversationId
+    return (await fixture.server.harness.conversation(id, context))!
+  }
+  const live = (id: ConversationId) =>
+    fixture.server.harness.snapshot(LiveDoc, id, context).then((state) => state?.run)
+  const submit = async (
+    conversation: Awaited<ReturnType<typeof create>>,
+    responses: ReturnType<typeof fauxAssistantMessage>[],
+    during?: () => Promise<void>,
+  ) => {
+    fixture.server.host.faux!.setResponses(responses)
+    const submission = await conversation.submit({ type: 'input', content: 'Work' }, context)
+    if (during) {
+      await until(async () => (await live(conversation.id)) !== undefined)
+      await until(async () => (await fixture.server.harness.inspect(context)).tasks.length > 1)
+      await during()
+      release()
+    }
+    await submission.wait(context)
+    await fixture.server.harness.waitForIdle(context)
+  }
+  const answered = await create()
+  await submit(answered, [fauxAssistantMessage('Answered.')])
+  const reset = await create()
+  await submit(reset, [fauxAssistantMessage('Answered before reset.')])
+  await reset.reset(undefined, context)
+  const failed = await create()
+  await submit(failed, [failure])
+  const queued = await create()
+  // The follow-up waits in the inbox; the failed run leaves it there.
+  await submit(queued, [hold, failure], async () => {
+    await queued.submit({ type: 'input', content: 'Later' }, context)
+  })
+  const compacted = await create()
+  await submit(compacted, [hold, fauxAssistantMessage('Answered after compaction.')], () =>
+    fixture.server.harness.commit(async (tx) => {
+      const call = (await tx.scanEntries({ conversationId: compacted.id }, 10)).items.find(
+        (entry) => entry.kind === 'pi.assistant',
+      )!
+      await tx.appendEntry(compacted.id, {
+        kind: 'pi.compaction',
+        head: call.id,
+        data: { reason: 'manual' },
+        model: [{ role: 'user', content: '<summary>\nCompacted.\n</summary>', timestamp: 2 }],
+      })
+    }, context),
+  )
+  const expected = {
+    [answered.id]: 'answered',
+    [reset.id]: 'idle',
+    [failed.id]: 'error',
+    [queued.id]: 'queued',
+    [compacted.id]: 'answered',
+  }
+  const rows = async () => {
+    const all = (await fixture.server.harness.snapshot(Overview, ROOT_CONVERSATION_ID, context))
+      ?.conversations
+    return Object.fromEntries(Object.keys(expected).map((id) => [id, all?.[id]]))
+  }
+  await until(async () =>
+    Object.entries(await rows()).every(([id, row]) => row?.runState === expected[Number(id)]),
+  )
+  const built = await rows()
+  expect(built[answered.id]).toEqual({
+    runState: 'answered',
+    inputId: expect.any(Number),
+    answerId: expect.any(Number),
+  })
+  expect(built[reset.id]).toEqual({ runState: 'idle' })
+  expect(built[failed.id]).toEqual({ runState: 'error', inputId: expect.any(Number) })
+  expect(fixture.generated).not.toHaveBeenCalled()
+  // The index is a projection: discard it, and a fresh open rebuilds it from the records alone.
+  await fixture.server.harness.commit(async (tx) => {
+    ;(await tx.doc(Overview, ROOT_CONVERSATION_ID)).conversations = {}
+  }, context)
+  await fixture.reopen()
+  install()
+  await until(async () => Object.values(await rows()).every((row) => row !== undefined))
+  expect(await rows()).toEqual(built)
+}, 60000)
+
+it('records an accepted assessment as an entry traced to its summary and generation tasks', async () => {
+  const fixture = await launch()
+  await fixture.exchange()
+  const state = (await fixture.read())!
+  const entries = (await fixture.entries()).filter((entry) => AssessmentAccepted.is(entry))
+  expect(entries.map((entry) => entry.data)).toEqual([
+    {
+      ...state.assessment,
+      activity: 'Added concise summaries to the sidebar.',
+      at: expect.any(Number),
+    },
+  ])
+  expect(entries[0].model).toBeUndefined()
+  const task = await fixture.server.harness.getTask(entries[0].byTaskId!, context)
+  expect(task?.kind).toBe('conversations.summary')
+  const generation = (task!.input as { generation: TaskId }).generation
+  const run = await fixture.server.harness.getTask(generation, context)
+  expect(run?.kind).toBe(GenerationTask.definition.name)
+  expect(run?.state).toMatchObject({
+    outcome: { status: 'completed', result: { entryId: state.assessment!.answerId } },
+  })
+  expect((await fixture.entries()).filter((entry) => SummaryDiscarded.is(entry))).toEqual([])
+  const view = await fixture.server.root.context(context)
+  expect(JSON.stringify(view.messages)).not.toContain('Added concise summaries')
 }, 60000)

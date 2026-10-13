@@ -26,7 +26,7 @@ const replied = (
   answerId: number,
   value?: 'done' | 'needs_input',
 ): OverviewRow => ({
-  runState: 'done',
+  runState: 'answered',
   inputId,
   answerId,
   ...(value && { assessment: { inputId, answerId, value } as OverviewRow['assessment'] }),

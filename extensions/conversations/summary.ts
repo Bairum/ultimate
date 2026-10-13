@@ -27,11 +27,25 @@ import type {
   Usage,
 } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { Assessment, AssessmentValue, IntentSummary, TitleChange } from './types.ts'
+import type {
+  Assessed,
+  Assessment,
+  AssessmentValue,
+  IntentSummary,
+  SummaryDiscard,
+  SummaryStatus,
+  TitleChange,
+} from './types.ts'
 
 export const TitleChanged = defineEntry<TitleChange>('conversations.title-changed')
 
 export const IntentSummarized = defineEntry<IntentSummary>('conversations.intent-summarized')
+
+/** An accepted reply assessment; `byTaskId` is the summary task, whose input names the generation. */
+export const AssessmentAccepted = defineEntry<Assessed>('conversations.assessed')
+
+/** A summary task result that was not accepted: superseded (`stale`) or failed (`error`). */
+export const SummaryDiscarded = defineEntry<SummaryDiscard>('conversations.summary-discarded')
 
 export type SummaryResult = {
   assessment: AssessmentValue
@@ -61,8 +75,8 @@ export type SummaryState = {
   summaryOwed?: boolean
   assessment?: Assessment
   activity?: string
-  assessmentStatus?: 'pending' | 'ready' | 'error'
-  status?: 'pending' | 'ready' | 'error'
+  assessmentStatus?: SummaryStatus
+  status?: SummaryStatus
 }
 export const Summaries = defineDoc<SummaryState>({
   kind: 'ultimate.conversation-summaries',
@@ -76,6 +90,12 @@ export const Summaries = defineDoc<SummaryState>({
 const terminal = {
   status: 'terminal' as const,
   outcome: { status: 'completed' as const, result: null },
+}
+
+/** Record why a summary task's result was not accepted, then settle the task. */
+async function discard(tx: Tx, id: ConversationId, data: SummaryDiscard) {
+  await tx.appendEntry(SummaryDiscarded, id, { data })
+  return terminal
 }
 
 function submissionsForAnswer(inputs: (SubmissionRecord | undefined)[], answer: EntryId) {
@@ -443,7 +463,7 @@ export function summaryBehavior(
           delete state.assessment
           if (state.summaryOwed) state.status = 'pending'
           // An assessment-only task supersedes any spawn refresh, but cannot settle its status later.
-          else if (state.status === 'pending') state.status = 'error'
+          else if (state.status === 'pending') state.status = 'stale'
           return {
             status: 'running',
             checkpoint: { phase: 'prepare', answer, summary: !!state.summaryOwed },
@@ -503,12 +523,20 @@ export function summaryBehavior(
         if (current?.pending !== task.id || current.revision !== task.input.revision) {
           await runtime.commit(async (tx) => {
             await accountResponse(tx, runtime.conversationId, response)
-            return terminal
+            // Only a received response is a result; a task superseded before asking leaves no trace.
+            return response
+              ? discard(tx, runtime.conversationId, {
+                  reason: 'stale',
+                  cause: 'superseded',
+                  at: runtime.now(),
+                })
+              : terminal
           }, context)
           return
         }
         const checkpoint = task.state.checkpoint
         let result: Awaited<ReturnType<typeof generate>> | undefined
+        let failure: string | undefined
         try {
           result = await runtime.memo('reply', context)
           if (!result) {
@@ -531,6 +559,7 @@ export function summaryBehavior(
         } catch (error) {
           if (runtime.signal.aborted) throw error
           // Provider errors are local: never turn the main answer into a failed run.
+          failure = error instanceof Error ? error.message : String(error)
         }
         const completed = submissionsForAnswer(
           await Promise.all(
@@ -544,49 +573,62 @@ export function summaryBehavior(
           // Ledger addition and terminal settlement are atomic, even for invalid or stale results.
           await accountResponse(tx, runtime.conversationId, response)
           const state = await tx.doc(Summaries, runtime.conversationId)
-          if (state.pending === task.id && state.revision === task.input.revision) {
-            delete state.pending
-            const usable =
-              result &&
-              (task.input.spawn || task.input.intent
-                ? await currentContext(tx, runtime.conversationId, checkpoint.answer)
-                : completed !== undefined &&
-                  state.lastAnswer === checkpoint.answer &&
-                  (await currentAnswer(tx, runtime.conversationId, checkpoint.answer)))
-            if (!task.input.spawn && !task.input.intent)
-              state.assessmentStatus = usable ? 'ready' : 'error'
-            if (checkpoint.summary) state.status = usable ? 'ready' : 'error'
-            if (result && usable) {
-              if (completed !== undefined) {
-                state.assessment = {
-                  inputId: completed,
-                  answerId: checkpoint.answer,
-                  value: result.assessment,
-                }
-                state.activity = result.activity
+          const now = runtime.now()
+          if (state.pending !== task.id || state.revision !== task.input.revision)
+            return discard(tx, runtime.conversationId, {
+              reason: 'stale',
+              cause: 'superseded',
+              at: now,
+            })
+          delete state.pending
+          const usable =
+            result &&
+            (task.input.spawn || task.input.intent
+              ? await currentContext(tx, runtime.conversationId, checkpoint.answer)
+              : completed !== undefined &&
+                state.lastAnswer === checkpoint.answer &&
+                (await currentAnswer(tx, runtime.conversationId, checkpoint.answer)))
+          const outcome = !result ? 'error' : usable ? 'ready' : 'stale'
+          if (!task.input.spawn && !task.input.intent) state.assessmentStatus = outcome
+          if (checkpoint.summary) state.status = outcome
+          if (!result || !usable)
+            return discard(tx, runtime.conversationId, {
+              reason: result ? 'stale' : 'error',
+              cause: result ? 'newer work or a reset' : (failure ?? 'no result'),
+              at: now,
+            })
+          if (completed !== undefined) {
+            state.assessment = {
+              inputId: completed,
+              answerId: checkpoint.answer,
+              value: result.assessment,
+            }
+            state.activity = result.activity
+            await tx.appendEntry(AssessmentAccepted, runtime.conversationId, {
+              data: {
+                ...state.assessment,
+                activity: result.activity,
+                ...(response ? { model: `${response.provider}/${response.model}` } : {}),
+                at: now,
+              },
+            })
+          }
+          if (checkpoint.summary && result.title !== undefined && result.summary !== undefined) {
+            state.summary = result.summary
+            if (task.input.intent)
+              await tx.appendEntry(IntentSummarized, runtime.conversationId, {
+                data: { summary: result.summary, at: now },
+              })
+            if (!task.input.spawn && !task.input.intent) delete state.summaryOwed
+            const metadata = await tx.doc(host.metadata, runtime.conversationId)
+            if (metadata.title === undefined || metadata.title === state.generatedTitle) {
+              if (metadata.title !== result.title) {
+                metadata.title = result.title
+                await tx.appendEntry(TitleChanged, runtime.conversationId, {
+                  data: { title: result.title, at: now },
+                })
               }
-              if (
-                checkpoint.summary &&
-                result.title !== undefined &&
-                result.summary !== undefined
-              ) {
-                state.summary = result.summary
-                if (task.input.intent)
-                  await tx.appendEntry(IntentSummarized, runtime.conversationId, {
-                    data: { summary: result.summary, at: runtime.now() },
-                  })
-                if (!task.input.spawn && !task.input.intent) delete state.summaryOwed
-                const metadata = await tx.doc(host.metadata, runtime.conversationId)
-                if (metadata.title === undefined || metadata.title === state.generatedTitle) {
-                  if (metadata.title !== result.title) {
-                    metadata.title = result.title
-                    await tx.appendEntry(TitleChanged, runtime.conversationId, {
-                      data: { title: result.title, at: runtime.now() },
-                    })
-                  }
-                  state.generatedTitle = result.title
-                }
-              }
+              state.generatedTitle = result.title
             }
           }
           return terminal
@@ -602,6 +644,9 @@ export function summaryBehavior(
           delete state.pending
           if (!task.input.spawn && !task.input.intent) state.assessmentStatus = 'error'
           if (state.status === 'pending') state.status = 'error'
+          await tx.appendEntry(SummaryDiscarded, runtime.conversationId, {
+            data: { reason: 'error', cause: 'aborted', at: runtime.now() },
+          })
         }
         return { status: 'terminal', outcome: { status: 'aborted' } }
       }, context)

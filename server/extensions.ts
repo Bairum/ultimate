@@ -40,6 +40,7 @@ export type ExtensionHost = Pick<
   | 'settings'
   | 'build'
   | 'uiState'
+  | 'scanSubmissions'
   | 'faux'
   | 'models'
   | 'skills'
@@ -217,6 +218,8 @@ export async function loadExtensions(
     settings: host.settings,
     build: host.build,
     uiState: (caller) => host.uiState(caller),
+    scanSubmissions: (query, limit, cursor, caller) =>
+      host.scanSubmissions(query, limit, cursor, caller),
     faux: host.faux,
     models: () => host.models(),
     skills: (cwd) => host.skills(cwd),

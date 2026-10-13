@@ -15,10 +15,14 @@ import { projectSkills } from './skills.ts'
 import { requestSwap } from './supervisor-protocol.ts'
 import type {
   ConversationId,
+  Cursor,
   EnvTarget,
   Extension,
   HarnessSettings,
   ModelRef,
+  Page,
+  SubmissionQuery,
+  SubmissionRecord,
 } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
@@ -104,11 +108,27 @@ export async function prepareHarness(options: HostOptions) {
     available.find(
       (m) => m.provider === settings.getDefaultProvider() && m.id === settings.getDefaultModel(),
     ) ?? available[0]
-  let active: { harness: Harness; root: { id: ConversationId } } | undefined
+  let active:
+    | {
+        harness: Harness
+        root: { id: ConversationId }
+        storage: Awaited<ReturnType<typeof openNodeSqliteStorage>>
+      }
+    | undefined
   return {
     async uiState(caller: Context) {
       if (!active) throw new Error('Harness is not open')
       return (await active.harness.snapshot(UiState, active.root.id, caller)) ?? {}
+    },
+    /** Committed submission records; exists until Pi Durable exposes submission scans publicly. */
+    scanSubmissions(
+      query: SubmissionQuery,
+      limit: number,
+      cursor: Cursor | undefined,
+      caller: Context,
+    ): Promise<Page<SubmissionRecord, Cursor>> {
+      if (!active) throw new Error('Harness is not open')
+      return active.storage.scanSubmissions(query, limit, cursor, caller)
     },
     models: async () => (await listModels(modelRuntime, fauxHandle)).models,
     model: (ref: ModelRef) => models.getModel(ref.provider, ref.modelId),
@@ -171,7 +191,7 @@ export async function prepareHarness(options: HostOptions) {
         await root.commit(async (tx) => {
           await tx.doc(UiState, root.id)
         }, context)
-        active = { harness, root }
+        active = { harness, root, storage }
         const openedHarness = harness
         if (resume) openedHarness.resume()
         return {

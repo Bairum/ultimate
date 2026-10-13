@@ -15,7 +15,7 @@ page is open, so a new conversation or subagent never moves another branch. Move
 conversations and empty drafts stay off the map.
 
 A panel's outline is its state: Working (purple, pulsing), Waiting on subagent (blue), Queued (dashed), Needs decision
-(warm), Done (green, Luna's opinion), Replied (green), Run failed (red), Idle. A tree **needs a decision** when the
+(warm), Done (green, Luna's opinion), Replied (green; the overview row's `answered` run state), Run failed (red), Idle. A tree **needs a decision** when the
 server says so (see [Conclusions](#conclusions)): once the whole tree is idle, Luna says one of its conversations needs
 input, or a checkout in it holds commits that were never landed. Its panels name the reasons ("needs input",
 "W12: 3 commits not landed"; a subagent's question shows as "#49 needs input" on its top-level panel). While anything in
