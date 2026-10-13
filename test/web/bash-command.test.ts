@@ -27,6 +27,18 @@ it('keeps quoted and escaped operators within their commands', () => {
   })
 })
 
+it('preserves escaped whitespace instead of trimming it at chain boundaries', () => {
+  for (const whitespace of [' ', '\t']) {
+    for (const command of [
+      `echo foo\\${whitespace} && pwd`,
+      `pwd && echo foo\\${whitespace}`,
+      `cd a\\${whitespace}b && pwd`,
+    ]) {
+      expect(formatBashCommand(command)).toEqual({ commands: [command] })
+    }
+  }
+})
+
 it('leaves unsupported or ambiguous shell syntax completely intact', () => {
   for (const command of [
     'cd /path && echo $(pwd)',
@@ -59,7 +71,6 @@ it('does not hide nonliteral cd arguments, options or a standalone command', () 
     'cd -- /path && pwd',
     'cd /path/* && pwd',
     'cd /path/? && pwd',
-    'cd a\\ b && pwd',
   ]) {
     expect(formatBashCommand(command).directory).toBeUndefined()
     expect(formatBashCommand(command).commands[0]).toBe(command.split(' &&')[0])

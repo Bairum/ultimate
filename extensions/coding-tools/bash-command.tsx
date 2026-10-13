@@ -13,7 +13,7 @@ export function formatBashCommand(command: string): BashCommand {
   for (let i = 0; i < command.length; i++) {
     const char = command[i]
     if (char === '\\' && quote !== "'") {
-      if (++i === command.length) return intact
+      if (++i === command.length || /\s/.test(command[i])) return intact
       continue
     }
     if (quote) {
