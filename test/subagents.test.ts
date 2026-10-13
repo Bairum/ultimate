@@ -45,7 +45,7 @@ async function directory() {
 async function fixture(
   extension?: Extension,
   observe?: (transcript: Parameters<FauxResponseFactory>[0]) => void,
-  reportGate?: { promise: Promise<void>; entered: boolean; phase?: string },
+  reportGate?: { promise: Promise<void>; entered: boolean; phase?: string; attempt?: 1 },
   respond?: (
     transcript: Parameters<FauxResponseFactory>[0],
   ) => ReturnType<FauxResponseFactory> | undefined,
@@ -87,7 +87,7 @@ async function fixture(
             if (task.definition.name !== 'ultimate.subagent-reporter') return task
             const reporter = task as unknown as Task<
               JsonValue,
-              { phase: string },
+              { phase: string; attempt?: 1 },
               JsonValue,
               object
             >
@@ -100,8 +100,13 @@ async function fixture(
                   [phase]: async (
                     ...args: Parameters<typeof reporter.definition.phases.report>
                   ) => {
-                    reportGate.entered = true
-                    await awaitWithContext(reportGate.promise, args[2])
+                    if (
+                      reportGate.attempt === undefined ||
+                      args[0].state.checkpoint.attempt === reportGate.attempt
+                    ) {
+                      reportGate.entered = true
+                      await awaitWithContext(reportGate.promise, args[2])
+                    }
                     await reporter.definition.phases[phase](...args)
                   },
                 },
@@ -480,6 +485,99 @@ async function reports(opened: OpenHost) {
   view.dispose()
   return entries
 }
+
+describe('provider error recovery', () => {
+  const retryText =
+    'Your previous run stopped with a provider error. Continue from where you left off; check what you already did and do not redo it.'
+
+  for (const retryFails of [false, true])
+    it(`retries a model error once and ${retryFails ? 'reports the second failure' : 'delivers the answer without a failure report'}`, async () => {
+      const inputs: string[] = []
+      const f = await fixture(undefined, undefined, undefined, (transcript) => {
+        const last = transcript.messages.at(-1)!
+        if (
+          last.role !== 'user' ||
+          (last.content !== 'provider failure' && last.content !== retryText)
+        )
+          return undefined
+        inputs.push(last.content)
+        return last.content === 'provider failure' || retryFails
+          ? fauxAssistantMessage('', {
+              stopReason: 'error',
+              errorMessage: 'fixture provider error',
+            })
+          : fauxAssistantMessage('Recovered answer')
+      })
+      await call(f.opened, {
+        action: 'start',
+        agent: 'scout',
+        task: 'provider failure',
+        background: true,
+      })
+      await f.opened.harness.waitForIdle(context)
+      expect(inputs).toEqual(['provider failure', retryText])
+      const delivered = await reports(f.opened)
+      expect(delivered).toHaveLength(1)
+      const text = delivered[0].model![0].content
+      expect(text).toContain(retryFails ? 'failed: model_error' : 'Recovered answer')
+      expect(JSON.stringify(text).includes('failed:')).toBe(retryFails)
+      expect(f.errors).toEqual([])
+    })
+
+  it('persists the retry checkpoint across restart without retrying a second failure', async () => {
+    const retryGate = { ...gate(), entered: false, phase: 'deliver', attempt: 1 as const }
+    const inputs: string[] = []
+    const f = await fixture(undefined, undefined, retryGate, (transcript) => {
+      const last = transcript.messages.at(-1)!
+      if (
+        last.role !== 'user' ||
+        (last.content !== 'provider failure' && last.content !== retryText)
+      )
+        return undefined
+      inputs.push(last.content)
+      return fauxAssistantMessage('', {
+        stopReason: 'error',
+        errorMessage: 'fixture provider error',
+      })
+    })
+    await call(f.opened, {
+      action: 'start',
+      agent: 'scout',
+      task: 'provider failure',
+      background: true,
+    })
+    await until(async () => retryGate.entered)
+    expect(inputs).toEqual(['provider failure'])
+    expect(await reports(f.opened)).toHaveLength(0)
+    const state = (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!
+    const reporter = Object.values(state.actions)[0].reporter
+    expect((await f.opened.harness.getTask(reporter, context))?.state).toMatchObject({
+      status: 'running',
+      checkpoint: { phase: 'deliver', attempt: 1 },
+    })
+    await f.opened.close()
+    hosts.splice(hosts.indexOf(f.opened), 1)
+    retryGate.release()
+    const resumed = await f.reopen()
+    await until(async () => (await reports(resumed)).length === 1)
+    await resumed.harness.waitForIdle(context)
+    expect(inputs).toEqual(['provider failure', retryText])
+    const delivered = await reports(resumed)
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0].model![0].content).toMatch(/failed: model_error/)
+    expect(
+      await resumed.harness.commit(
+        (tx) =>
+          tx.submissionByRequest(
+            Object.values(state.agents)[0].conversationId,
+            `subagent:${reporter}:retry`,
+          ),
+        context,
+      ),
+    ).toBeDefined()
+    expect(f.errors).toEqual([])
+  })
+})
 
 function gate() {
   let release!: () => void
