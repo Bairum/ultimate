@@ -239,7 +239,7 @@ function Bash({ call }: { call: ToolCallView }) {
               {display.commands.map((part, index) => (
                 <div className="flex gap-2" key={index}>
                   <span className="w-4 shrink-0 text-muted-foreground/50">
-                    {index === 0 ? '$' : '&&'}
+                    {index === 0 ? '$' : display.operators[index - 1]}
                   </span>
                   <pre className="min-w-0 whitespace-pre-wrap break-words">{part}</pre>
                 </div>
