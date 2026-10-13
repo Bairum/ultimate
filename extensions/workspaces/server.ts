@@ -66,6 +66,9 @@ export const actions = {
   stats(_args: JsonValue, { host }: ActionContext) {
     return workspaces(host).stats(context)
   },
+  disk(_args: JsonValue, { host }: ActionContext) {
+    return workspaces(host).disk()
+  },
 }
 /** Call `changed` on any change to a definition folder, also one that appears later. */
 function watchDefinitions(

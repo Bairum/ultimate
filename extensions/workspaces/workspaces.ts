@@ -20,6 +20,7 @@ import type {
   LandResult,
   SubmitResult,
   WorkspaceIndex,
+  WorkspaceDisk,
   WorkspaceInfo,
   WorkspaceStats,
 } from './types.ts'
@@ -92,6 +93,10 @@ export function workspaces(host: Host) {
       if (queues.get(source) === queued) queues.delete(source)
     }
   }
+  const disk = host.resource(
+    'workspaces.disk',
+    (): { last?: WorkspaceDisk; running?: Promise<WorkspaceDisk> } => ({}),
+  )
   const Lander = createLander(host, Workspaces, serial)
   /** Start the lander task of `source` in its lander conversation. Call only after `landerIdle`, before any write. */
   const startLander = async (tx: Tx, index: WorkspaceIndex, source: string) => {
@@ -502,7 +507,6 @@ export function workspaces(host: Host) {
         ahead: 0,
         fresh: 0,
         dirty: 0,
-        bytes: null,
       }
       await Promise.all(
         items.map(async (workspace) => {
@@ -527,14 +531,37 @@ export function workspaces(host: Host) {
           else stats.ahead++
         }),
       )
-      // Allocated blocks counted per checkout: copy-on-write filesystems share some of them.
-      stats.bytes = await exec('du', ['-sk', join(host.home, 'worktrees')], {
-        timeout: 30000,
-      }).then(
-        ({ stdout }) => Number(stdout.split('\t')[0]) * 1024,
-        () => null,
-      )
       return stats
+    },
+    /**
+     * The disk the worktrees directory takes: `bytes` counts every checkout's blocks, `real` counts blocks shared
+     * between them once (btrfs only, null elsewhere). Measuring takes seconds, so one runs at a time and its result is
+     * reused for a minute.
+     */
+    disk(): Promise<WorkspaceDisk> {
+      if (disk.last && Date.now() - disk.last.at < 60_000) return Promise.resolve(disk.last)
+      if (disk.running) return disk.running
+      const directory = join(host.home, 'worktrees')
+      const promise: Promise<WorkspaceDisk> = Promise.all([
+        exec('du', ['-sk', directory], { timeout: 120_000 }).then(
+          ({ stdout }) => Number(stdout.split('\t')[0]) * 1024,
+          () => null,
+        ),
+        exec('btrfs', ['filesystem', 'du', '-s', '--raw', directory], {
+          timeout: 120_000,
+        }).then(
+          ({ stdout }) => {
+            // Total, Exclusive, Set shared, Filename.
+            const [, exclusive, shared] = stdout.trim().split('\n').at(-1)!.trim().split(/\s+/)
+            return Number(exclusive) + Number(shared)
+          },
+          () => null,
+        ),
+      ])
+        .then(([bytes, real]) => (disk.last = { bytes, real, at: Date.now() }))
+        .finally(() => (disk.running = undefined))
+      disk.running = promise
+      return promise
     },
   }
 }

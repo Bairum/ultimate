@@ -242,12 +242,16 @@ it('enables the full repository set', async () => {
   expect(
     server.extensions
       .info()
-      .filter((entry) => !['tailscale', 'secrets', 'parallel'].includes(entry.name))
+      .filter(
+        (entry) => !['tailscale', 'secrets', 'parallel', 'exclusive-commands'].includes(entry.name),
+      )
       .every((entry) => entry.enabled && !entry.server?.error),
   ).toBe(true)
   expect(
     discovered
-      .filter((entry) => !['tailscale', 'secrets', 'parallel'].includes(entry.name))
+      .filter(
+        (entry) => !['tailscale', 'secrets', 'parallel', 'exclusive-commands'].includes(entry.name),
+      )
       .every((entry) => entry.enabled),
   ).toBe(true)
 })
