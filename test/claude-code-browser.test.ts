@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { chromium } from 'playwright-core'
 import { expect, it, vi } from 'vitest'
@@ -8,7 +8,15 @@ it('opens external setup from the palette, shows missing CLI and retries status 
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const home = await temp()
-  vi.stubEnv('PI_CLAUDE_CODE_COMMAND', join(home, 'missing'))
+  const cli = join(home, 'claude')
+  const payload = join(home, 'status.json')
+  await writeFile(
+    cli,
+    `#!${process.execPath}\nimport { readFileSync } from 'node:fs'; process.stdout.write(readFileSync(${JSON.stringify(payload)}, 'utf8'))\n`,
+  )
+  await writeFile(payload, JSON.stringify({ loggedIn: false }))
+  // Initially not executable, then installed externally while the page stays open.
+  vi.stubEnv('PI_CLAUDE_CODE_COMMAND', cli)
   const projectRoot = join(home, 'project')
   await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
   await writeFile(
@@ -59,6 +67,39 @@ it('opens external setup from the palette, shows missing CLI and retries status 
     await expect
       .poll(() => panel.getByText('CLI not installed', { exact: true }).count(), { timeout: 15000 })
       .toBe(1)
+    const pickerRow = page.locator('[cmdk-item][data-value="claude-code/claude-sonnet-5"]')
+    const checkPicker = async (available: boolean) => {
+      await page.getByTitle('Pick a model', { exact: true }).click()
+      const input = page.getByPlaceholder(/Search .* models/)
+      // Blank search shows only available models; search reveals unavailable ones too.
+      await input.fill('')
+      await expect.poll(() => pickerRow.count(), { timeout: 15000 }).toBe(available ? 1 : 0)
+      await page.keyboard.press('Escape')
+    }
+    await checkPicker(false)
+    await chmod(cli, 0o755)
+    await panel.getByRole('button', { name: 'Refresh status' }).click()
+    await expect
+      .poll(() => panel.getByText('Login not confirmed', { exact: true }).count(), {
+        timeout: 15000,
+      })
+      .toBe(1)
+    await writeFile(payload, JSON.stringify({ loggedIn: true, subscriptionType: 'max' }))
+    await panel.getByRole('button', { name: 'Refresh status' }).click()
+    await expect
+      .poll(() => panel.getByText('Subscription connected', { exact: true }).count(), {
+        timeout: 15000,
+      })
+      .toBe(1)
+    await checkPicker(true)
+    await writeFile(payload, JSON.stringify({ loggedIn: false }))
+    await panel.getByRole('button', { name: 'Refresh status' }).click()
+    await expect
+      .poll(() => panel.getByText('Login not confirmed', { exact: true }).count(), {
+        timeout: 15000,
+      })
+      .toBe(1)
+    await checkPicker(false)
     expect(errors).toEqual([])
   } finally {
     await browser.close()

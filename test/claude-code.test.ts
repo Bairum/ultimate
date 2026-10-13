@@ -1,6 +1,11 @@
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expect, it, vi } from 'vitest'
+import {
+  clampThinkingLevel,
+  getSupportedThinkingLevels,
+  isModelType,
+} from '@earendil-works/pi-ai/models'
 import { fauxServer, temp, until } from './helpers.ts'
 
 it('loads pinned TypeScript upstream through Vite, tracks external auth, and cleans up reload/disable', async () => {
@@ -9,7 +14,23 @@ it('loads pinned TypeScript upstream through Vite, tracks external auth, and cle
   const payload = join(home, 'status.json')
   await writeFile(
     cli,
-    `#!${process.execPath}\nimport { readFileSync } from 'node:fs'; process.stdout.write(readFileSync(${JSON.stringify(payload)}, 'utf8'))\n`,
+    `#!${process.execPath}
+import { readFileSync, writeFileSync } from 'node:fs'
+import { createInterface } from 'node:readline'
+if (process.argv.includes('status')) {
+  process.stdout.write(readFileSync(${JSON.stringify(payload)}, 'utf8'))
+} else {
+  writeFileSync(${JSON.stringify(payload + '.discovery')}, 'catalog-only')
+  for await (const line of createInterface({ input: process.stdin })) {
+    const frame = JSON.parse(line)
+    if (frame.type === 'control_request') console.log(JSON.stringify({
+      type: 'control_response', response: { request_id: frame.request_id, subtype: 'success', response: {
+        models: [{ value: 'sonnet', resolvedModel: 'claude-sonnet-5', displayName: 'Sonnet discovered', description: 'Sonnet', supportsAdaptiveThinking: true, supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high'] }]
+      } }
+    }))
+  }
+}
+`,
   )
   await chmod(cli, 0o755)
   await writeFile(payload, JSON.stringify({ loggedIn: false }))
@@ -34,6 +55,33 @@ it('loads pinned TypeScript upstream through Vite, tracks external auth, and cle
     expect(Object.hasOwn(provider.auth.oauth!, 'login')).toBe(false)
     expect(provider.auth.oauth?.isSubscription).toBe(true)
     expect(typeof provider.streamSimple).toBe('function')
+    const staticModels = provider.getModels()
+    const sonnet = staticModels.find((model) => model.id === 'claude-sonnet-5')!
+    expect(sonnet.thinkingLevelMap?.off).toBeNull()
+    expect(getSupportedThinkingLevels(sonnet)).not.toContain('off')
+    expect(clampThinkingLevel(sonnet, 'off')).not.toBe('off')
+    expect(clampThinkingLevel(sonnet, 'low')).toBe('low')
+    const upstream = await server.vite.ssrLoadModule(
+      resolve('node_modules/@earendil-works/pi-claude-code/src/provider.ts'),
+    )
+    expect(staticModels.filter((model) => model.id !== sonnet.id)).toEqual(
+      upstream
+        .createClaudeCodeProvider()
+        .getModels()
+        .filter((model: { id: string }) => model.id !== sonnet.id),
+    )
+    expect(provider.getAllModels!().find((model) => model.id === sonnet.id)).toEqual(sonnet)
+    const discovery = await runtime.refresh({ allowNetwork: true, providers: ['claude-code'] })
+    expect(discovery.errors.size).toBe(0)
+    expect(await readFile(payload + '.discovery', 'utf8')).toBe('catalog-only')
+    const discovered = runtime
+      .getAllModels()
+      .find((model) => model.provider === 'claude-code' && model.id === 'claude-sonnet-5')!
+    if (!isModelType(discovered, 'chat')) throw new Error('Expected discovered chat model')
+    expect(discovered.name).toMatch(/Sonnet/)
+    expect(discovered.thinkingLevelMap?.off).toBeNull()
+    expect(getSupportedThinkingLevels(discovered)).not.toContain('off')
+    expect(clampThinkingLevel(discovered, 'off')).not.toBe('off')
     expect(await status()).toEqual({
       available: true,
       loggedIn: false,

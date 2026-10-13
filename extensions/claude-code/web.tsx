@@ -1,6 +1,7 @@
 import { RefreshCwIcon, TerminalIcon } from 'lucide-react'
+import { useEffect } from 'react'
 import { Button } from '@/components/ui/button'
-import { defineWebExtension, useAction } from '@/sdk'
+import { defineWebExtension, refreshModels, useAction } from '@/sdk'
 
 interface Status {
   available: boolean
@@ -13,6 +14,9 @@ function ClaudeCodePanel() {
   const { data, error, loading, refetch } = useAction<Status>('claude-code', 'status', null, {
     onError: () => {},
   })
+  useEffect(() => {
+    if (data) void refreshModels()
+  }, [data])
   const title = loading
     ? 'Checking CLI…'
     : error

@@ -9,8 +9,23 @@ import {
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ExtensionAction } from '../../server/actions.ts'
 
-export default function claudeCode(host: ExtensionHost) {
+export function createUltimateClaudeCodeProvider() {
   const provider = createClaudeCodeProvider()
+  const getModels = () =>
+    provider
+      .getModels()
+      .map((model) =>
+        model.id === 'claude-sonnet-5'
+          ? { ...model, thinkingLevelMap: { ...model.thinkingLevelMap, off: null } }
+          : model,
+      )
+  // Both getters must adapt the current catalog, including discovered/restored rows.
+  // Upstream exposes only chat models. Keep its transport and refresh implementation intact.
+  return { ...provider, getModels, getAllModels: getModels }
+}
+
+export default function claudeCode(host: ExtensionHost) {
+  const provider = createUltimateClaudeCodeProvider()
   // Keep subscription accounting, but do not offer an in-app login for external auth.
   if (provider.auth.oauth) Reflect.deleteProperty(provider.auth.oauth, 'login')
   host.onOpen(async () => {
