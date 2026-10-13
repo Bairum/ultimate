@@ -146,7 +146,7 @@ Native reviewers inspect Git directly, including the complete `git log base..hea
 
 1. The coordinator launches `subagent` with `agent: reviewer` (`openai/gpt-6.1-sol`, xhigh), supplying the
    immutable range and acceptance criteria. This review lead explicitly retains `subagent`.
-2. The lead launches `reviewer-astra` (`openai/gpt-6-astra`, high) and `reviewer-sol` (`openai/gpt-5.6-sol`, high)
+2. The lead launches `reviewer-astra` (`openai/gpt-6-astra`, high) and `reviewer-sol` (`openai/gpt-6.1-sol`, high)
    independently in parallel with the same range, criteria, and quality rules. Require concrete file:line findings,
    impact, evidence, verification limits, and the reviewed range. Never share reports between independent reviewers.
 3. The lead validates both reports' completion, range, and actual returned model identities from stored assistant
