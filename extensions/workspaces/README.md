@@ -62,6 +62,16 @@ Settings (`.ultimate/settings.json`): `"lander": { "checks": ["pnpm check"], "pu
 Each attempt starts from a reset checkout, and the integrated commit is memoized after the checks, so a crash resumes
 safely. Failed submissions are dropped from the queue after their report.
 
+The fast-forward records `landed: { sha, base, commits, paths, flaky }` on the queue entry in the same commit as the
+workspace's `landed`. A lander task that ends after that and before its report, for example one faulted because a
+reload of this extension changed the Workspaces document, loses its memos but not that record: whichever task picks
+the entry next skips merging and checks, pushes exactly `landed.sha` when the target still contains it, and reports
+the original landing. "Nothing new to land" means the tip was already in the target before this submission.
+
+The extension restarts a lander for every source whose queue holds submissions while its task is missing or ended:
+when the harness opens, on each reload of the extension, and at once when a task of the previous code faults. A fault
+of the current code's own task waits for the next submit or open, so a deterministic fault does not loop.
+
 Top-level mains use `workspace status`, `workspace submit` and `workspace land` for their own checkout.
 Own tool landing skips the calling conversation's run and inbox checks; UI landing does not.
 Landing reports commits and changed paths, with a restart hint for core changes to the running clone.
