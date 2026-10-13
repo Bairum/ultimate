@@ -37,7 +37,7 @@ import {
   useWorkspaceAction,
   useWorkspaceConversations as useConversations,
 } from '../workspaces/data.tsx'
-import type { Workspace as Isolate, WorkspaceInfo } from '../workspaces/types.ts'
+import type { Workspace as Isolate, LandResult, WorkspaceInfo } from '../workspaces/types.ts'
 import { hiddenConversationIds } from '../conversations/visible.tsx'
 import { DefinitionDialog, Definitions } from './definitions.tsx'
 import { Heading, Tag, useRefresh } from './parts.tsx'
@@ -177,6 +177,8 @@ function SubagentCall({ call }: { call: ToolCallView }) {
         )}
         {call.status === 'done' && action === 'list' ? (
           <ChildList output={call.output} />
+        ) : call.status === 'done' && (action === 'land' || action === 'discard') ? (
+          <Landed output={call.output} />
         ) : call.status === 'done' && call.output ? (
           <ToolSection
             label={yielded ? 'Wait status' : background && action !== 'wait' ? 'Result' : 'Answer'}
@@ -190,6 +192,69 @@ function SubagentCall({ call }: { call: ToolCallView }) {
         <ToolDiagnostics diagnostics={call.diagnostics} />
       </ToolContent>
     </Tool>
+  )
+}
+
+/** The `land` and `discard` actions' JSON result: what landed, at which tip, touching which paths. */
+function Landed({ output }: { output: string }) {
+  let result: LandResult
+  try {
+    result = JSON.parse(output)
+  } catch {
+    return <ToolOutput output={output} />
+  }
+  if (!result.landed)
+    return (
+      <ToolSection>
+        <p className="flex items-center gap-1.5 text-muted-foreground">
+          <Trash2Icon className="size-3 shrink-0" />
+          {result.text}
+        </p>
+      </ToolSection>
+    )
+  const commits = result.commits ?? []
+  const paths = result.paths ?? []
+  return (
+    <>
+      <ToolSection className="border-l-2 border-l-success/70">
+        <p className="flex items-center gap-1.5 text-success">
+          <GitMergeIcon className="size-3 shrink-0" />
+          {commits.length
+            ? `Landed ${result.landed.slice(0, 7)} · ${commits.length} commit${commits.length === 1 ? '' : 's'}`
+            : 'Nothing new to land'}
+        </p>
+        {result.needsRestart && (
+          <p className="text-warning">Needs restart to apply server/ or shared/ changes.</p>
+        )}
+      </ToolSection>
+      {commits.length > 0 && (
+        <ToolSection label="Commits">
+          <ul className="space-y-0.5">
+            {commits.map((commit) => (
+              <li className="truncate" key={commit} title={commit}>
+                <span className="text-muted-foreground">{commit.split(' ')[0]}</span>{' '}
+                {commit.slice(commit.indexOf(' ') + 1)}
+              </li>
+            ))}
+          </ul>
+        </ToolSection>
+      )}
+      {paths.length > 0 && (
+        <ToolSection label={`${paths.length} changed path${paths.length === 1 ? '' : 's'}`}>
+          <ul className="space-y-0.5">
+            {paths.map((path) => {
+              const slash = path.lastIndexOf('/') + 1
+              return (
+                <li className="truncate" key={path} title={path}>
+                  <span className="text-muted-foreground">{path.slice(0, slash)}</span>
+                  {path.slice(slash)}
+                </li>
+              )
+            })}
+          </ul>
+        </ToolSection>
+      )}
+    </>
   )
 }
 
