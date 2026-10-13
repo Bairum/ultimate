@@ -20,6 +20,16 @@ export type QueueEntry = {
   step?: string
   /** What the lander did so far, as its conversation logs it. */
   steps: LanderStep[]
+  /** What its fast-forward landed: recorded with it, so any later lander task pushes and reports that. */
+  landed?: Landed
+}
+/** A submission's landing: the target moved from `base` to `sha`, which brought `commits` and `paths`. */
+export type Landed = {
+  sha: string
+  base: string
+  commits: string[]
+  paths: string[]
+  flaky: string[]
 }
 /** One row of a submission's progress: a step, or a check with its result. */
 export type LanderStep = {

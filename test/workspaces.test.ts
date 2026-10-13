@@ -58,6 +58,9 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
   let opened: Awaited<ReturnType<typeof prepared.open>>
   const resources = new Map<string, unknown>()
   const restart = vi.fn<ExtensionHost['restart']>(async () => 'RESTART_CALLED')
+  // As the server: openers run each time the harness opens, cleanups each time it closes.
+  const openers: (() => Promise<void>)[] = []
+  const closers: (() => Promise<void>)[] = []
   const host = {
     ...prepared,
     harness: () => opened.harness,
@@ -69,8 +72,8 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
       return resources.get(key) as T
     },
     restart,
-    onOpen: () => {},
-    onClose: () => {},
+    onOpen: (callback: () => Promise<void>) => openers.push(callback),
+    onClose: (close: () => Promise<void>) => closers.push(close),
     build: () => ({ id: 'test-build' }),
     system: () => ({ process: {} }),
   } as unknown as ExtensionHost
@@ -115,7 +118,11 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
   }
   prepared.faux!.setResponses([route])
   opened = await prepared.open()
-  cleanup.push(() => opened.close())
+  for (const open of openers) await open()
+  cleanup.push(async () => {
+    for (const close of closers) await close()
+    await opened.close()
+  })
   const create = async () => {
     const result = await actions.create({}, { host } as ActionContext)
     return result.id
@@ -152,8 +159,10 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
       return writes
     },
     reopen: async () => {
+      for (const close of closers) await close()
       await opened.close()
       opened = await prepared.open()
+      for (const open of openers) await open()
     },
   }
 }
@@ -285,7 +294,8 @@ it.each(['symlinked home mid-setup', 'branch creation before registration'])(
     const host = { ...prepared, harness: () => opened.harness, metadata: (await import('./server/metadata.ts')).Metadata,
       projectSettings: async () => ({ isolates: { worktree: { setup: ${JSON.stringify(commands)} } } }),
       extensions: () => [{ name: 'workspaces', enabled: true }],
-      resource: (key, create) => { if (!resources.has(key)) resources.set(key, create()); return resources.get(key) } };
+      resource: (key, create) => { if (!resources.has(key)) resources.set(key, create()); return resources.get(key) },
+      onOpen: () => {}, onClose: () => {} };
     prepared.registry.install(extension(host));
     opened = await prepared.open();
     await writeFile(${JSON.stringify(idFile)}, String((await actions.create({}, { host })).id));
@@ -985,6 +995,75 @@ it('pushes the checked commit even when the target advances before the push', as
   await push.release()
   expect((await submitted(f, submitter))[0]).toContain('Pushed to origin/main.')
   expect(await git(bare, 'rev-parse', 'main')).toBe(integrated)
+})
+it('resumes a landing interrupted before its push: pushes and reports what it landed', async () => {
+  const { paths, bare } = await withRemote()
+  const f = await lander({ push: 'origin' }, paths)
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path, 'landed.txt')
+  const push = await holdGit(f.directory, 'push')
+  const { id: submission } = await f.service.submit(id, context)
+  await push.started()
+  // Fast-forwarded, push pending: the lander task ends here, as one faulted by a reload of its code does.
+  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+  const landed = await git(f.projectRoot, 'rev-parse', 'main')
+  expect((await index())!.queue[0].landed).toMatchObject({
+    sha: landed,
+    commits: [expect.stringContaining('landed.txt')],
+  })
+  const first = Object.values((await index())!.landers)[0] as TaskId
+  await f.opened.harness.abortTask(first, context)
+  await until(
+    async () =>
+      (await f.opened.harness.commit((tx) => tx.task(first), context))!.state.status === 'terminal',
+  )
+  await push.release()
+  expect(await git(bare, 'rev-parse', 'main')).not.toBe(landed)
+  expect((await index())!.queue).toMatchObject([{ id: submission, state: 'queued' }])
+  // Opening starts a lander for the queue left behind, without a new submit.
+  await f.reopen()
+  const [report] = await submitted(f, id)
+  expect(report).toContain(`landed as ${landed.slice(0, 7)} on main.`)
+  expect(report).toContain('landed.txt')
+  expect(report).toContain('Pushed to origin/main.')
+  expect(report).not.toContain('nothing new')
+  expect(await git(bare, 'rev-parse', 'main')).toBe(landed)
+  const result = (await index())!.results[submission]
+  expect(result).toMatchObject({ outcome: 'landed', sha: landed, pushed: 'origin/main' })
+  // The resumed task merged and checked nothing again: it pushed what had landed.
+  const steps = result.steps.map((row) => row.step)
+  expect(steps.slice(steps.lastIndexOf('started'))).toEqual(['started', 'pushing to origin'])
+})
+it('starts a lander for queued submissions left by a lander task that ended', async () => {
+  const f = await lander({})
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path, 'left.txt')
+  // A held check keeps the first task landing; then it ends without draining its queue.
+  const gate = join(f.directory, 'gate')
+  f.host.projectSettings = async () => ({
+    lander: { checks: [`while [ ! -f '${gate}' ]; do sleep 0.05; done`] },
+  })
+  await f.service.submit(id, context)
+  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+  await until(async () => (await index())!.queue[0]?.state === 'landing')
+  const first = Object.values((await index())!.landers)[0] as TaskId
+  await f.opened.harness.abortTask(first, context)
+  await until(
+    async () =>
+      (await f.opened.harness.commit((tx) => tx.task(first), context))!.state.status === 'terminal',
+  )
+  expect((await index())!.queue).toMatchObject([{ state: 'queued' }])
+  await writeFile(gate, '')
+  await f.reopen()
+  const second = Object.values((await index())!.landers)[0]
+  expect(second).not.toBe(first)
+  expect((await submitted(f, id))[0]).toContain('landed as')
+  expect(await readFile(join(f.projectRoot, 'left.txt'), 'utf8')).toBe('left.txt')
+  // Opening again with nothing queued starts nothing.
+  await f.reopen()
+  expect((await index())!.landers).toEqual({})
 })
 it('reports a local landing whose push retry conflicts as landed locally', async () => {
   const { paths, bare } = await withRemote()
