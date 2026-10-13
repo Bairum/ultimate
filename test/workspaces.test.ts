@@ -667,6 +667,24 @@ it('lands two submissions in order onto a moved target and reports both', async 
       'Only a top-level main conversation',
     )
 })
+it('accepts a second submission while the lander is still landing the first', async () => {
+  const f = await lander({ checks: ['sleep 2'] })
+  const first = await f.create()
+  const second = await f.create()
+  await f.service.ready(first, context)
+  await f.service.ready(second, context)
+  await commit((await f.service.get(first, context))!.path, 'one.txt')
+  await commit((await f.service.get(second, context))!.path, 'two.txt')
+  await f.service.submit(first, context)
+  await until(async () =>
+    (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!.queue.some(
+      (item) => item.state === 'landing',
+    ),
+  )
+  expect((await f.service.submit(second, context)).position).toBe(2)
+  expect((await submitted(f, second))[0]).toContain('landed as')
+})
+
 it('reports a conflicting submission and leaves the target untouched', async () => {
   const f = await lander({})
   const id = await f.create()

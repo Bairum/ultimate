@@ -232,6 +232,11 @@ export function workspaces(host: Host) {
         throw new Error('Only a top-level main conversation submits its own workspace')
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       const { source, target } = index.items[String(id)]
+      // Reads first: a transaction cannot read tables after its first write.
+      const running = index.landers[source]
+      const live = running && (await tx.task(running as TaskId))
+      const known = index.landerConversations[source] as ConversationId | undefined
+      const existing = known !== undefined && (await tx.conversation(known))
       const queued = index.queue.find(
         (item) => item.conversationId === id && item.tip === tip && item.state === 'queued',
       )
@@ -245,8 +250,8 @@ export function workspaces(host: Host) {
         state: 'queued' as const,
       }
       // One lander conversation per source: its log of every submission, busy while its task lands.
-      let lander = index.landerConversations[source] as ConversationId | undefined
-      if (lander === undefined || !(await tx.conversation(lander))) {
+      let lander = known
+      if (lander === undefined || !existing) {
         lander = (await tx.createConversation({ ownership: { kind: 'ownerless' } })).id
         await configure(tx, lander, { cwd: path, model, thinkingLevel })
         Object.assign(await tx.doc(host.metadata, lander), {
@@ -259,8 +264,6 @@ export function workspaces(host: Host) {
         index.queue.push(entry)
         await log(tx, lander, entry, { step: 'queued' })
       }
-      const running = index.landers[source]
-      const live = running && (await tx.task(running as TaskId))
       // Not background: the task is the lander conversation's work, so it shows as working while it lands.
       if (!live || live.state.status === 'terminal' || live.state.status === 'completing')
         index.landers[source] = await tx.createTask(
