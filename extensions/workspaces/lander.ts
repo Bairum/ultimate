@@ -3,7 +3,10 @@ import { createHash } from 'node:crypto'
 import { access, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import type { Context } from '@earendil-works/chord'
+import { withAbortSignal } from '@earendil-works/chord/context'
 import { defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { ConversationDocToken, ConversationId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { exclusiveSlot } from '../exclusive-commands/slot.ts'
@@ -15,6 +18,8 @@ type Host = Pick<ExtensionHost, 'home' | 'ultimateRoot' | 'projectSettings' | 'r
 type Settings = { checks: string[]; push?: string }
 /** Bounded retries when the target moves while a submission is integrated. */
 const attempts = 3
+/** Seconds one check may run. */
+const checkTimeout = 30 * 60
 
 export const landerSettings = async (host: Pick<Host, 'projectSettings'>): Promise<Settings> => {
   const lander = (await host.projectSettings()).lander as
@@ -92,22 +97,26 @@ export function createLander(
     await git(path, 'clean', '-fdq')
     return path
   }
-  async function check(path: string, command: string, signal: AbortSignal) {
-    await slot.acquire(`lander: ${command}`, signal)
+  /** Run one check; returns its output tail on failure. Abort and timeout kill its whole process group. */
+  async function check(path: string, command: string, context: Context) {
+    await slot.acquire(`lander: ${command}`, context.abortSignal)
     try {
-      const pending = exec('sh', ['-c', command], {
-        cwd: path,
-        signal,
-        timeout: 30 * 60000,
-        killSignal: 'SIGKILL',
-        maxBuffer: 16 * 1024 * 1024,
-      })
-      pending.child.stdin?.end()
-      await pending
-      return undefined
-    } catch (error) {
-      if (signal.aborted) throw error
-      return failure(error)
+      let output = ''
+      const result = await new NodeExecutionEnv({ cwd: path }).exec(
+        command,
+        {
+          timeout: checkTimeout,
+          onOutput: (text) => {
+            output = (output + text).slice(-3000)
+          },
+        },
+        context,
+      )
+      context.abortSignal?.throwIfAborted()
+      if (!result.ok) return `${output}\n${result.error.message}`.trim()
+      return result.value.exitCode === 0
+        ? undefined
+        : `${output}\nexit ${result.value.exitCode}`.trim()
     } finally {
       slot.release()
     }
@@ -170,6 +179,7 @@ export function createLander(
             context,
           )
         const { source, target } = entry
+        const checkContext = withAbortSignal(signal, context)
         try {
           const settings = await landerSettings(host)
           // A crash after the checks keeps the integrated commit: go straight to fast-forwarding it.
@@ -230,8 +240,8 @@ export function createLander(
             const flaky: string[] = []
             for (const command of settings.checks) {
               await step(`checking: ${command}`)
-              if ((await check(path, command, signal)) === undefined) continue
-              const output = await check(path, command, signal)
+              if ((await check(path, command, checkContext)) === undefined) continue
+              const output = await check(path, command, checkContext)
               if (output !== undefined)
                 return finish(
                   `was not landed: check failed twice: ${command}\n${output}\nFix it, verify and submit again.`,

@@ -6,7 +6,7 @@ import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { defineExtension, defineTool, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationId, JsonObject } from '@earendil-works/pi-durable'
+import type { ConversationId, JsonObject, TaskId } from '@earendil-works/pi-durable'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -727,4 +727,34 @@ it('removes only clean, idle checkouts with commits the target contains, never f
   expect((await f.service.get(ahead, context))!.state).toBe('ready')
   expect((await f.service.get(dirty, context))!.state).toBe('ready')
   expect((await f.service.get(fresh, context))!.state).toBe('ready')
+})
+it('kills the whole process group of a running check when the lander is aborted', async () => {
+  const f = await fixture()
+  const pidFile = join(f.directory, 'child.pid')
+  f.host.projectSettings = async () => ({
+    lander: { checks: [`sleep 300 & echo $! > '${pidFile}'; wait`] },
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path)
+  await f.service.submit(id, context)
+  await until(() =>
+    readFile(pidFile, 'utf8').then(
+      (text) => text.trim() !== '',
+      () => false,
+    ),
+  )
+  const pid = Number(await readFile(pidFile, 'utf8'))
+  expect(() => process.kill(pid, 0)).not.toThrow()
+  const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+  await f.opened.harness.abortTask(Object.values(index.landers)[0] as TaskId, context)
+  await until(() => {
+    try {
+      process.kill(pid, 0)
+      return false
+    } catch {
+      return true
+    }
+  }, 5000)
+  expect(exclusiveSlot(f.host).command).toBeUndefined()
 })
