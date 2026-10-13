@@ -20,6 +20,7 @@ import {
   useToolDuration,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
+import { formatBashCommand } from './bash-command.tsx'
 import { countChanges, Diff, editRows, parseDisplayDiff, parsePatch } from './diff.tsx'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
@@ -193,6 +194,9 @@ function exitOf(call: ToolCallView): { label: string; ok: boolean } | undefined 
 
 function Bash({ call }: { call: ToolCallView }) {
   const command = text(call.args.command)
+  const display = formatBashCommand(command)
+  const directory = usePath(display.directory ?? '')
+  const formatted = !!display.directory || display.commands.length > 1
   const duration = useToolDuration(call)
   const exit = exitOf(call)
   const output = call.output
@@ -214,15 +218,46 @@ function Bash({ call }: { call: ToolCallView }) {
         }
         name="$"
         state={call.status}
-        title={<span className="text-foreground/90">{command.split('\n')[0]}</span>}
+        title={
+          <span className="text-foreground/90">
+            {display.commands[0].split('\n')[0]}
+            {display.commands.length > 1 && (
+              <span className="text-muted-foreground/60"> · +{display.commands.length - 1}</span>
+            )}
+          </span>
+        }
       />
       <ToolContent>
+        {(formatted || multiline) && (
+          <ToolSection className="space-y-1">
+            {display.directory && (
+              <div className="truncate text-muted-foreground/70" title={display.directory}>
+                cd {directory} <span className="text-muted-foreground/50">&&</span>
+              </div>
+            )}
+            <div className="space-y-1 text-foreground/85">
+              {display.commands.map((part, index) => (
+                <div className="flex gap-2" key={index}>
+                  <span className="w-4 shrink-0 text-muted-foreground/50">
+                    {index === 0 ? '$' : '&&'}
+                  </span>
+                  <pre className="min-w-0 whitespace-pre-wrap break-words">{part}</pre>
+                </div>
+              ))}
+            </div>
+            {formatted && (
+              <details className="text-muted-foreground/70">
+                <summary className="cursor-pointer">Original command</summary>
+                <pre className="mt-1 whitespace-pre-wrap break-words">{command}</pre>
+              </details>
+            )}
+          </ToolSection>
+        )}
         {(multiline || output || running) && (
           <pre
             className="max-h-80 overflow-auto bg-terminal px-3 py-2 leading-[1.55] whitespace-pre-wrap text-foreground/85"
             ref={scroller}
           >
-            {multiline && <div className="mb-1 text-muted-foreground">$ {command}</div>}
             {call.dropped && (
               <div className="text-muted-foreground/70">
                 … {call.dropped.lines.toLocaleString()} earlier lines dropped
