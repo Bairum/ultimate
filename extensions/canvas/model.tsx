@@ -7,6 +7,7 @@ import type { CanvasAgent, CanvasConclusion, CanvasReason, CanvasTree } from './
 export type Status =
   | 'working'
   | 'waiting'
+  | 'subagents'
   | 'queued'
   | 'decision'
   | 'done'
@@ -53,6 +54,14 @@ export const STATUS: Record<
   },
   waiting: {
     label: 'Waiting on subagent',
+    border: 'border-sky-600 dark:border-sky-400',
+    text: 'text-sky-700 dark:text-sky-300',
+    fill: 'bg-sky-600 dark:bg-sky-400',
+    stroke: 'stroke-sky-600 dark:stroke-sky-400',
+  },
+  subagents: {
+    label: 'Subagents working',
+    tip: 'Its own run settled; subagents it started still work',
     border: 'border-sky-600 dark:border-sky-400',
     text: 'text-sky-700 dark:text-sky-300',
     fill: 'bg-sky-600 dark:bg-sky-400',
@@ -113,7 +122,7 @@ export const REASON_TIPS: Record<CanvasReason['kind'], string> = {
 }
 
 export const isActive = (status: Status) =>
-  status === 'working' || status === 'waiting' || status === 'queued'
+  status === 'working' || status === 'waiting' || status === 'subagents' || status === 'queued'
 
 /** The sidebar's rule: an assessment counts only for the answer it assessed. */
 export function assessmentOf(row: OverviewRow | undefined): AssessmentValue | undefined {
@@ -180,14 +189,15 @@ export function agentsOf(inputs: Inputs): Agent[] {
     const tree: Agent[] = []
     const known = trees[top.id]
     const reasons = known?.decision?.reasons ?? []
-    const visit = (summary: ConversationSummary, parent?: number) => {
+    // Returns whether anything in the subtree is active; a settled agent whose subagents still work says so.
+    const visit = (summary: ConversationSummary, parent?: number): boolean => {
       const row = rows[summary.id]
       const workspace = workspaces[String(summary.id)]
       const base = statusOf(busy(summary), row, agents[summary.id])
       const own = isActive(base)
         ? []
         : reasons.filter((reason) => reason.conversationId === summary.id)
-      tree.push({
+      const agent: Agent = {
         id: summary.id,
         parent,
         summary,
@@ -204,8 +214,15 @@ export function agentsOf(inputs: Inputs): Agent[] {
         archived: false,
         folded: 0,
         members: [],
-      })
-      for (const child of children.get(summary.id) ?? []) visit(child, summary.id)
+      }
+      tree.push(agent)
+      let below = false
+      for (const child of children.get(summary.id) ?? []) below = visit(child, summary.id) || below
+      if (below && !isActive(agent.status) && agent.status !== 'failed') {
+        agent.status = 'subagents'
+        agent.reasons = []
+      }
+      return below || isActive(agent.status)
     }
     visit(top)
     const [head, ...rest] = tree

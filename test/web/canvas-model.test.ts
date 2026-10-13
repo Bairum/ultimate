@@ -79,14 +79,15 @@ it('folds a settled tree into its conclusion card, but not while a decision wait
     { id: 2, shape: 'panel', status: 'decision', reasons: [unlanded] },
     { id: 3, shape: 'pill', status: 'replied', reasons: [] },
   ])
-  // While anything in the tree works, unlanded work is expected: no reasons show, not even a stale record's.
+  // While anything in the tree works, unlanded work is expected: no reasons show, not even a stale record's. The
+  // parent already replied, but the subagent it started still works: the parent stays active on its behalf.
   expect(
     shapes({
       trees: decision,
       tasks: { tasks: { 9: { conversationId: 2 } } } as unknown as Inputs['tasks'],
     }),
   ).toEqual([
-    { id: 1, shape: 'panel', status: 'done', reasons: [] },
+    { id: 1, shape: 'panel', status: 'subagents', reasons: [] },
     { id: 2, shape: 'panel', status: 'working', reasons: [] },
     { id: 3, shape: 'pill', status: 'replied', reasons: [] },
   ])
