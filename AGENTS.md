@@ -142,22 +142,23 @@ The coordinator owns review sequencing and the final verdict. Resolve immutable 
 criteria and the same range to both independent reviewers. Native reviewers inspect Git directly, including the
 complete `git log base..head` and `git diff base..head`; do not require copying the log or diff into prompts.
 
-1. Launch two independent native reviews in parallel from the coordinator: `subagent` with
-   `agent: reviewer-astra` (`openai/gpt-6-astra`, high) and `agent: reviewer-sol` (`openai/gpt-5.6-sol`, high).
-   Give both the same review quality rules and require concrete file:line findings, impact, evidence, verification
-   limits, and the reviewed range. Do not share reports between independent reviewers.
-2. Wait for both reports and check completion, range, and actual returned model identity. A missing, failed, or
-   wrong-range report, ambiguous model identity, or unexpected returned model blocks approval; never substitute
-   another model or silently reduce the team. Report the blocker.
-3. Only then launch `subagent` with `agent: reviewer` (`openai/gpt-6.1-sol`, xhigh), supplying the same range,
-   criteria, and BOTH complete reports with their model identities. It inspects Git directly to verify and synthesize
-   them, not to perform another independent parallel review. No nested subagents or reviewer delegation.
-4. The coordinator verifies the synthesis and findings, routes confirmed fixes, and owns acceptance. After changes,
-   select a new immutable range and repeat the full sequence before approval.
+1. The coordinator launches `subagent` with `agent: reviewer` (`openai/gpt-6.1-sol`, xhigh), supplying the
+   immutable range and acceptance criteria. This review lead explicitly retains `subagent`.
+2. The lead launches `reviewer-astra` (`openai/gpt-6-astra`, high) and `reviewer-sol` (`openai/gpt-5.6-sol`, high)
+   independently in parallel with the same range, criteria, and quality rules. Require concrete file:line findings,
+   impact, evidence, verification limits, and the reviewed range. Never share reports between independent reviewers.
+3. The lead validates both reports' completion, range, and actual returned model identities from stored assistant
+   messages exposed by subagent results/reports. Missing, failed, wrong-range, unexpected-model, or ambiguous-identity
+   reports block approval; never substitute models or reduce the team. Only then inspect Git and synthesize.
+   Return one synthesis including BOTH complete original reports, actual model identities, and child IDs.
+   Leaves remain read/bash-only and cannot delegate.
+4. The coordinator verifies the synthesis, evidence, and findings, routes confirmed fixes, and owns acceptance.
+   After changes, select a new immutable range and repeat the full sequence before approval.
 
 ## Subagents
 
-Use `subagent` to delegate bounded research, recon, review, or isolated implementation; verify the results. Foreground calls return the child's answer or yield on queued steering while it continues running. All new children survive the parent's stop; use explicit child stop. Undelivered answers steer the active run at its next tool-round boundary, or start a run when idle. Start, message/steer, wait, stop, and list all use child conversation IDs. No nested subagents.
+Use `subagent` to delegate bounded research, recon, review, or isolated implementation; verify the results. Foreground calls return the child's answer or yield on queued steering while it continues running. All new children survive the parent's stop; use explicit child stop. Undelivered answers steer the active run at its next tool-round boundary, or start a run when idle. Start, message/steer, wait, stop, and list all use child conversation IDs. Children cannot delegate by default. Only definitions explicitly listing `subagent` in `tools` retain the tool and
+extension, subject to the parent's tool subset; they follow their assigned role, not the generic coordinator flow.
 
 Definitions live in `agents/`, `~/.ultimate/agents/`, and the project root's `.ultimate/agents/` (later wins by name), and are reread at every start; the Agents tab lists them. See `extensions/subagents/README.md` for frontmatter. Shipped models inherit the parent's model.
 

@@ -80,6 +80,8 @@ const textOf = (message: AssistantMessage | undefined) =>
   (message?.content ?? []).flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
 // A report is keyed by its answer, independently of the tool call that may return it.
 const answerRequest = (answer: EntryId) => `subagent-answer:${answer}`
+const answerText = (message: AssistantMessage | undefined) =>
+  `Returned model: ${message?.provider && message?.model ? `${message.provider}/${message.model}` : 'unknown'}\n${textOf(message)}`
 function createReporter() {
   return defineTask<
     { conversationId: ConversationId; text: string; steer: boolean; sourceEntry?: EntryId },
@@ -119,7 +121,7 @@ function createReporter() {
               const answer = (await tx.entry(AssistantEntry, settled.answer))?.model?.[0] as
                 | AssistantMessage
                 | undefined
-              const report = `[subagent ${child.id} (${agent.agent}) answered] ${textOf(answer)}`
+              const report = `[subagent ${child.id} (${agent.agent}) answered] ${answerText(answer)}`
               return {
                 status: 'running',
                 checkpoint: { phase: 'report', report, answer: settled.answer },
@@ -304,9 +306,7 @@ export const actions = {
       main: {
         ...(main.model ? { model: main.model } : {}),
         ...(main.thinkingLevel ? { thinking: main.thinkingLevel } : {}),
-        tools: main.tools
-          .filter((tool) => tool.name !== 'subagent')
-          .map((tool) => ({ name: tool.name, description: tool.description })),
+        tools: main.tools.map((tool) => ({ name: tool.name, description: tool.description })),
       },
       scopes: {
         user: join(host.userHome, '.ultimate/agents'),
@@ -495,15 +495,23 @@ export default function subagents(
           'A yielded wait is not a child answer. Use message, stop, or wait with these IDs; parent stop does not stop them. Queued inputs are delivered only at the normal boundary; do not act on them early.',
         ].join(' ')
       }),
-      section('subagents', async () => {
+      section('subagents', async (input, context) => {
         const discovered = await discoverAgents(
           host.ultimateRoot,
           host.projectRoot,
           host.userHome,
           host.modelRuntime,
         )
+        const conversation = await host
+          .harness()
+          .commit((tx) => tx.conversation(input.conversationId), context)
         return (
-          `You coordinate. Own requirements, the plan, decomposition, acceptance criteria,
+          (conversation?.owner
+            ? `Follow your assigned role and instructions. Delegate only the bounded work that role requires.
+Do not assume the root coordinator's role, create epics, or spawn implementation workers.
+Verify child reports against evidence; never push or ship.
+Available definitions:\n`
+            : `You coordinate. Own requirements, the plan, decomposition, acceptance criteria,
 verification, landing, and the verdict. Delegate bounded execution and reconnaissance,
 never judgment. Never accept a child's claim without evidence.
 Do quick fixes and simple questions directly, without an epic. Orchestrate substantive work:
@@ -542,7 +550,7 @@ An idle or finished child is not evidence. Check reports are not your own checks
 Never push, merge to remotes, or ship unless the user asks. Children never push.
 Heavy commands are serialized by exclusive-commands; do not bypass it.
 Available definitions:
-` + discovered.definitions.map((agent) => `${agent.name}: ${agent.description}`).join('\n')
+`) + discovered.definitions.map((agent) => `${agent.name}: ${agent.description}`).join('\n')
         )
       }),
     ],
@@ -626,14 +634,8 @@ Available definitions:
                 : undefined
             if (args.action === 'start' && !existingAction && !definition)
               throw new Error(`Unknown agent: ${args.agent}`)
-            if (
-              definition?.tools?.some(
-                (name) => name === 'subagent' || !parent.tools.some((tool) => tool.name === name),
-              )
-            )
-              throw new Error(
-                'Definition tools must be a subset of parent tools, excluding subagent',
-              )
+            if (definition?.tools?.some((name) => !parent.tools.some((tool) => tool.name === name)))
+              throw new Error('Definition tools must be a subset of parent tools')
             const isolated =
               definition && (args.isolate ?? definition.isolate ?? 'none') === 'worktree'
             const warning =
@@ -687,8 +689,8 @@ Available definitions:
                   metadata: host.metadata,
                   label: definition.name,
                   title: text,
-                  excludeTools: ['subagent'],
-                  excludeExtensions: ['subagents'],
+                  excludeTools: definition.tools?.includes('subagent') ? [] : ['subagent'],
+                  excludeExtensions: definition.tools?.includes('subagent') ? [] : ['subagents'],
                   ...(forkAt === undefined
                     ? {}
                     : { fork: { conversationId: api.conversationId, at: forkAt } }),
@@ -761,7 +763,7 @@ Available definitions:
                 : await api.commit((tx) => tx.entry(AssistantEntry, settled.answer!), context)
             return finish(
               (answer
-                ? textOf(answer.model?.[0] as AssistantMessage | undefined)
+                ? answerText(answer.model?.[0] as AssistantMessage | undefined)
                 : `Subagent ${action.conversationId}: ${settled.status}`) + isolateInfo,
               details(
                 action.conversationId,
@@ -845,7 +847,7 @@ Available definitions:
             return latest
           }, context)
           return finish(
-            textOf(answer?.model?.[0] as AssistantMessage | undefined),
+            answerText(answer?.model?.[0] as AssistantMessage | undefined),
             details(
               id,
               index.agents[String(id)].background,

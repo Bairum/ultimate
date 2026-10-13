@@ -4,7 +4,13 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { defineExtension, defineTool, InboxDoc, LiveDoc } from '@earendil-works/pi-durable'
+import {
+  AssistantEntry,
+  defineExtension,
+  defineTool,
+  InboxDoc,
+  LiveDoc,
+} from '@earendil-works/pi-durable'
 import type { ConversationId, Extension, Task, ToolRegistration } from '@earendil-works/pi-durable'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
@@ -40,6 +46,9 @@ async function fixture(
   extension?: Extension,
   observe?: (transcript: Parameters<FauxResponseFactory>[0]) => void,
   reportGate?: { promise: Promise<void>; entered: boolean; phase?: string },
+  respond?: (
+    transcript: Parameters<FauxResponseFactory>[0],
+  ) => ReturnType<FauxResponseFactory> | undefined,
 ) {
   const ultimateRoot = await directory()
   const userHome = await directory()
@@ -132,6 +141,10 @@ async function fixture(
   const route: FauxResponseFactory = (transcript) => {
     observe?.(transcript)
     prepared.faux!.appendResponses([route])
+    if (respond) {
+      const response = respond(transcript)
+      if (response) return response
+    }
     const last = transcript.messages.findLast((message) => message.role !== 'system')!
     const text =
       typeof last.content === 'string'
@@ -185,6 +198,215 @@ async function call(opened: OpenHost, args: Record<string, unknown>) {
   view.dispose()
   return { tool, text }
 }
+it('runs root -> forked review lead -> parallel leaves -> lead -> root with scoped ownership', async () => {
+  const range = `${'a'.repeat(40)}..${'b'.repeat(40)}`
+  const task = `Review ${range}; acceptance: read-only review`
+  const seen: Parameters<FauxResponseFactory>[0][] = []
+  const f = await fixture(
+    undefined,
+    (transcript) => seen.push(transcript),
+    undefined,
+    (transcript) => {
+      const last = transcript.messages.findLast((message) => message.role !== 'system')!
+      if (last.role === 'user' && last.content === 'TEAM')
+        return fauxAssistantMessage(
+          ['astra', 'sol'].map((agent) =>
+            fauxToolCall('subagent', {
+              action: 'start',
+              agent,
+              task,
+            }),
+          ),
+          { stopReason: 'toolUse' },
+        )
+      if (last.role === 'user' && last.content === task)
+        return fauxAssistantMessage(`APPROVED ${range}`)
+      if (
+        (last.role === 'toolResult' ||
+          (last.role === 'user' &&
+            typeof last.content === 'string' &&
+            last.content.startsWith('[subagent'))) &&
+        transcript.messages.some((message) => message.role === 'user' && message.content === 'TEAM')
+      ) {
+        const results = transcript.messages.filter((message) => message.role === 'toolResult')
+        const yielded = results.findLast((message) =>
+          JSON.stringify(message.content).includes('Wait yielded'),
+        )
+        const completed = results.filter((message) =>
+          JSON.stringify(message.content).includes(`APPROVED ${range}`),
+        )
+        if (completed.length < 2 && yielded?.role === 'toolResult')
+          return fauxAssistantMessage(
+            [
+              fauxToolCall('subagent', {
+                action: 'wait',
+                id: (yielded.details as { conversationId: number }).conversationId,
+              }),
+            ],
+            { stopReason: 'toolUse' },
+          )
+        return fauxAssistantMessage(`Synthesis ${JSON.stringify(results)}`)
+      }
+      return undefined
+    },
+  )
+  for (const name of ['lead', 'astra', 'sol', 'omitted', 'invalid'])
+    await writeFile(
+      join(f.ultimateRoot, `agents/${name}.md`),
+      `---\nname: ${name}\ndescription: ${name}\n${name === 'omitted' ? '' : `tools: [read, bash${name === 'lead' ? ', subagent' : name === 'invalid' ? ', missing' : ''}]\n`}---\nAssigned ${name} role\n`,
+    )
+  await call(f.opened, { action: 'start', agent: 'scout', task: 'prior child' })
+  const result = await call(f.opened, { action: 'start', agent: 'lead', task: 'TEAM', fork: true })
+  expect(result.text).toContain('Synthesis')
+  expect(result.text).toContain('faux/faux-1')
+  expect(result.text).toContain(range)
+  const rootChildren = await children(f.opened)
+  expect(rootChildren.map((child) => child.agent)).toEqual(['scout', 'lead'])
+  const leadId = rootChildren[1].conversationId
+  const lead = (await f.opened.harness.conversation(leadId, context))!
+  const leadAgent = await lead.agent(context)
+  expect(result.text.match(/APPROVED/g)?.length).toBe(2)
+  expect(leadAgent.tools.map((tool) => tool.name)).toEqual(['read', 'bash', 'subagent'])
+  expect(leadAgent.extensions.some((extension) => extension.name === 'subagents')).toBe(true)
+  const leadIndex = (await f.opened.harness.snapshot(Subagents, leadId, context))!
+  expect(Object.values(leadIndex.agents).map((child) => child.agent)).toEqual(['astra', 'sol'])
+  expect(Object.keys(leadIndex.actions)).toHaveLength(2)
+  for (const child of Object.values(leadIndex.agents)) {
+    const leaf = (await f.opened.harness.conversation(child.conversationId, context))!
+    const agent = await leaf.agent(context)
+    expect(agent.tools.map((tool) => tool.name)).toEqual(['read', 'bash'])
+    expect(agent.extensions.some((extension) => extension.name === 'subagents')).toBe(false)
+    await (
+      await leaf.submit(
+        {
+          type: 'input',
+          content: `CALL ${JSON.stringify({ action: 'start', agent: 'scout', task: 'forbidden' })}`,
+        },
+        context,
+      )
+    ).wait(context)
+    expect(await f.opened.harness.snapshot(Subagents, leaf.id, context)).toBeUndefined()
+    const denial = await call(f.opened, { action: 'wait', id: leaf.id })
+    expect(denial.text).toContain('id must identify a child')
+  }
+  const leadTranscript = seen.find((transcript) =>
+    transcript.messages.some((message) => message.role === 'user' && message.content === 'TEAM'),
+  )!
+  expect(JSON.stringify(leadTranscript.messages)).toContain('Follow your assigned role')
+  expect(
+    JSON.stringify(leadTranscript.messages.findLast((message) => message.role === 'system')),
+  ).not.toContain('You coordinate. Own requirements')
+  const invalid = await call(f.opened, { action: 'start', agent: 'invalid', task: 'reject' })
+  expect(invalid.text).toContain('subset of parent tools')
+  await call(f.opened, { action: 'start', agent: 'omitted', task: 'no delegation' })
+  const omittedId = (await children(f.opened)).at(-1)!.conversationId
+  const omitted = (await f.opened.harness.conversation(omittedId, context))!
+  expect((await omitted.agent(context)).tools.some((tool) => tool.name === 'subagent')).toBe(false)
+  expect(
+    (await omitted.agent(context)).extensions.some((extension) => extension.name === 'subagents'),
+  ).toBe(false)
+  await (
+    await omitted.submit(
+      {
+        type: 'input',
+        content: `CALL ${JSON.stringify({ action: 'start', agent: 'scout', task: 'forbidden' })}`,
+      },
+      context,
+    )
+  ).wait(context)
+  expect(await f.opened.harness.snapshot(Subagents, omittedId, context)).toBeUndefined()
+})
+
+it('routes asynchronous leaf reports only to their lead, not the root', async () => {
+  const f = await fixture()
+  await writeFile(
+    join(f.ultimateRoot, 'agents/lead.md'),
+    '---\nname: lead\ndescription: Lead\ntools: [read, bash, subagent]\n---\nLead role\n',
+  )
+  await call(f.opened, { action: 'start', agent: 'lead', task: 'Ready' })
+  const leadId = (await children(f.opened))[0].conversationId
+  await call(f.opened, {
+    action: 'message',
+    id: leadId,
+    text: `CALL ${JSON.stringify({ action: 'start', agent: 'scout', task: 'Leaf report', background: true })}`,
+  })
+  const lead = (await f.opened.harness.conversation(leadId, context))!
+  await until(async () => {
+    const view = await lead.viewState(context)
+    const delivered = view.value.entries.some(
+      (entry) => entry.kind === 'pi.user' && JSON.stringify(entry.model).includes('answered]'),
+    )
+    view.dispose()
+    return delivered
+  })
+  await lead.waitForIdle(context)
+  const view = await lead.viewState(context)
+  const report = view.value.entries.find(
+    (entry) => entry.kind === 'pi.user' && JSON.stringify(entry.model).includes('answered]'),
+  )!
+  view.dispose()
+  expect(report).toBeDefined()
+  const leafId = Object.values(
+    (await f.opened.harness.snapshot(Subagents, leadId, context))!.agents,
+  )[0].conversationId
+  expect((await provenance(f.opened.harness, leadId, [report.id]))[report.id]).toMatchObject({
+    sender: leafId,
+    kind: 'report',
+  })
+  expect(await reports(f.opened)).toHaveLength(0)
+  expect((await children(f.opened)).map((child) => child.conversationId)).toEqual([leadId])
+})
+
+it('exposes stored returned identity in async reports, foreground messages and waits', async () => {
+  const f = await fixture(undefined, undefined, undefined, (transcript) => {
+    const last = transcript.messages.findLast((message) => message.role !== 'system')!
+    if (last.role === 'user' && last.content === 'identity')
+      return fauxAssistantMessage('Original report')
+    return undefined
+  })
+  await call(f.opened, { action: 'start', agent: 'scout', task: 'identity', background: true })
+  await until(async () => (await reports(f.opened)).length === 1)
+  expect(JSON.stringify(await reports(f.opened))).toContain('Returned model: faux/faux-1')
+  const id = (await children(f.opened))[0].conversationId
+  const child = (await f.opened.harness.conversation(id, context))!
+  expect((await child.agent(context)).model).toEqual({ provider: 'faux', modelId: 'faux-1' })
+  expect((await call(f.opened, { action: 'wait', id })).text).toContain(
+    'Returned model: faux/faux-1\nOriginal report',
+  )
+  await call(f.opened, { action: 'start', agent: 'scout', task: 'identity' })
+  const foregroundId = (await children(f.opened)).at(-1)!.conversationId
+  expect(
+    (await call(f.opened, { action: 'message', id: foregroundId, text: 'identity' })).text,
+  ).toContain('Returned model: faux/faux-1\nOriginal report')
+})
+
+it('wait uses stored answer identity even when it differs from the configured profile', async () => {
+  const f = await fixture()
+  await call(f.opened, { action: 'start', agent: 'scout', task: 'Configured profile' })
+  const id = (await children(f.opened))[0].conversationId
+  // Faux normalizes response identities, so seed the stored answer to exercise a provider mismatch.
+  const answer = await f.opened.harness.commit(
+    (tx) =>
+      tx.appendEntry(AssistantEntry, id, {
+        model: [
+          {
+            ...fauxAssistantMessage('Provider report'),
+            provider: 'actual',
+            model: 'different-model',
+          },
+        ],
+      }),
+    context,
+  )
+  const result = await call(f.opened, { action: 'wait', id })
+  expect(result.text).toBe('Returned model: actual/different-model\nProvider report')
+  expect(result.tool.model?.[0]).toMatchObject({ details: { answerId: answer.id } })
+  expect((await (await f.opened.harness.conversation(id, context))!.agent(context)).model).toEqual({
+    provider: 'faux',
+    modelId: 'faux-1',
+  })
+})
+
 it('attributes durable instructions and reports across reopen and forks, never human lookalikes', async () => {
   const f = await fixture()
   await call(f.opened, {
@@ -529,7 +751,7 @@ describe('subagents', () => {
     await pending.wait(context)
     await followUp.wait(context)
     expect(await latestResult(f.opened)).toMatchObject({
-      content: [{ type: 'text', text: 'Result: released' }],
+      content: [{ type: 'text', text: 'Returned model: faux/faux-1\nResult: released' }],
     })
     expect(await latestResult(f.opened)).not.toMatchObject({ details: { yielded: true } })
     expect(await reports(f.opened)).toHaveLength(0)
@@ -769,7 +991,7 @@ describe('subagents', () => {
     expect(await reports(f.opened)).toHaveLength(0)
     expect(
       (await call(f.opened, { action: 'message', id: child.conversationId, text: 'reuse' })).text,
-    ).toBe('Child: reuse')
+    ).toBe('Returned model: faux/faux-1\nChild: reuse')
     expect(await reports(f.opened)).toHaveLength(0)
   })
 
@@ -973,7 +1195,7 @@ describe('subagents', () => {
     expect(listed.main.tools.map((tool) => tool.name)).toEqual(
       expect.arrayContaining(['read', 'bash', 'codemode']),
     )
-    expect(listed.main.tools.map((tool) => tool.name)).not.toContain('subagent')
+    expect(listed.main.tools.map((tool) => tool.name)).toContain('subagent')
     const builtin = await readFile(join(ultimateRoot, 'agents/scout.md'), 'utf8')
     await actions.saveDefinition(override, ctx)
     const raw = await readFile(join(project, 'scout.md'), 'utf8')
@@ -1056,7 +1278,7 @@ describe('subagents', () => {
   it('foreground returns the answer, exposes child details, inherits the parent and rereads scout on next start', async () => {
     const { opened, ultimateRoot } = await fixture()
     const result = await call(opened, { action: 'start', agent: 'scout', task: 'facts' })
-    expect(result.text).toBe('Child: facts')
+    expect(result.text).toBe('Returned model: faux/faux-1\nChild: facts')
     const [first] = await children(opened)
     expect(result.tool.model?.[0]).toMatchObject({
       details: { conversationId: first.conversationId },
@@ -1091,9 +1313,9 @@ describe('subagents', () => {
           steer: true,
         })
       ).text,
-    ).toBe('Child: next')
+    ).toBe('Returned model: faux/faux-1\nChild: next')
     expect((await call(opened, { action: 'wait', id: first.conversationId })).text).toBe(
-      'Child: next',
+      'Returned model: faux/faux-1\nChild: next',
     )
     const listed = JSON.parse((await call(opened, { action: 'list' })).text)
     expect(listed).toHaveLength(2)
@@ -1263,7 +1485,7 @@ describe('subagents', () => {
           : []
       })
       view.dispose()
-      expect(results.at(-1)).toBe('Result: released')
+      expect(results.at(-1)).toBe('Returned model: faux/faux-1\nResult: released')
       expect(await reports(opened)).toHaveLength(0)
       expect((await opened.harness.snapshot(InboxDoc, opened.root.id, context))?.items).toEqual([])
     } finally {
@@ -1295,7 +1517,7 @@ describe('subagents', () => {
     const results = view.value.entries.filter((entry) => entry.kind === 'pi.tool-result')
     expect(results).toHaveLength(1)
     expect(results[0].model?.[0]).toMatchObject({
-      content: [{ type: 'text', text: 'Working '.repeat(700) }],
+      content: [{ type: 'text', text: 'Returned model: faux/faux-1\n' + 'Working '.repeat(700) }],
       details: { conversationId: before.conversationId },
       isError: false,
     })
