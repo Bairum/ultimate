@@ -87,6 +87,8 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
   prepared.registry.install(CodingTools)
   /** How the faux model answers the lander's failure prompt; the default says it found nothing. */
   let landerAnswer: Answer = noIdea
+  /** How the faux model continues the lander's failure run after a tool result; by default it echoes the result. */
+  let landerAfterTool: Answer | undefined
   let writes = 0
   /** Requests a user's `ASK …` question started. */
   const asked: Parameters<FauxResponseFactory>[0][] = []
@@ -128,7 +130,12 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
       const { tool, args } = JSON.parse(text.slice(5))
       return fauxAssistantMessage(fauxToolCall(tool, args), { stopReason: 'toolUse' })
     }
-    if (last.role === 'toolResult') return fauxAssistantMessage(text)
+    if (last.role === 'toolResult') {
+      const prompt = transcript.messages.findLast((message) => message.role === 'user')
+      if (landerAfterTool && JSON.stringify(prompt?.content).includes('\\nMode: '))
+        return landerAfterTool(text)
+      return fauxAssistantMessage(text)
+    }
     return fauxAssistantMessage('finished')
   }
   prepared.faux!.setResponses([route])
@@ -174,8 +181,9 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
       return writes
     },
     asked,
-    answerLander(answer: Answer) {
+    answerLander(answer: Answer, afterTool?: Answer) {
       landerAnswer = answer
+      landerAfterTool = afterTool
     },
     reopen: async () => {
       for (const close of closers) await close()
@@ -1333,4 +1341,269 @@ it('answers the user in the lander conversation with its definition, tools and t
   await f.call(id, 'workspace', { action: 'status' })
   const main = await (await f.opened.harness.conversation(id, context))!.context(context)
   expect(JSON.stringify(main.messages)).not.toContain('You are the lander of')
+})
+it('gives the standing lander a checkout at the target tip before any submission', async () => {
+  const f = await lander({})
+  const { id, cwd } = await landerLog(f)
+  expect(cwd).toMatch(/\/lander\/[0-9a-f]{12}$/)
+  const result = JSON.stringify(await f.call(id, 'bash', { command: 'git log -1 --format=%H' }))
+  expect(result).toContain(await git(f.projectRoot, 'rev-parse', 'HEAD'))
+  // Opening again keeps the checkout as it is.
+  await writeFile(join(cwd!, 'kept.txt'), 'kept')
+  await f.reopen()
+  expect(await readFile(join(cwd!, 'kept.txt'), 'utf8')).toBe('kept')
+})
+it('fix: a model run that fails after committing lands nothing', async () => {
+  const f = await lander({})
+  await landerDefinition(f, 'fix')
+  f.answerLander(
+    () =>
+      fauxAssistantMessage(
+        fauxToolCall('bash', {
+          command: 'echo resolved > base.txt && git add base.txt && git commit -q --no-edit',
+        }),
+        { stopReason: 'toolUse' },
+      ),
+    () => fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'provider failed' }),
+  )
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const head = await conflicting(f, id)
+  const { id: submission } = await f.service.submit(id, context)
+  const [report] = await submitted(f, id)
+  expect(report).toContain("was not landed: the lander's model did not finish (model_error)")
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  const result = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+    .results[submission]
+  expect(result).toMatchObject({ outcome: 'failed' })
+  expect(result.fixed).toBeUndefined()
+})
+/** A check that marks `started` and waits for `gate`; both files live in the test directory. */
+function heldCheck(f: Awaited<ReturnType<typeof fixture>>, then = 'true') {
+  const started = join(f.directory, 'check-started')
+  const gate = join(f.directory, 'check-gate')
+  return {
+    command: `touch '${started}'; while [ ! -f '${gate}' ]; do sleep 0.05; done; ${then}`,
+    started: () =>
+      until(() =>
+        access(started).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    release: () => writeFile(gate, ''),
+  }
+}
+/** Run `tool` in conversation `id` and return its tool results, without waiting for the lander task to end. */
+async function ask(
+  f: Awaited<ReturnType<typeof fixture>>,
+  id: ConversationId,
+  tool: string,
+  args: object,
+) {
+  const conversation = (await f.opened.harness.conversation(id, context))!
+  await (
+    await conversation.submit(
+      { type: 'input', content: `CALL ${JSON.stringify({ tool, args })}`, whenBusy: 'followUp' },
+      context,
+    )
+  ).wait(context)
+  const view = await conversation.viewState(context)
+  try {
+    return JSON.stringify(view.value.entries.filter((entry) => entry.kind === 'pi.tool-result'))
+  } finally {
+    view.dispose()
+  }
+}
+const commitIn = (name: string) =>
+  `echo ${name} > ${name} && git add ${name} && git commit -qm ${name} && echo COMMITTED`
+it('keeps user tool calls out of the lander checkout while it lands', async () => {
+  const f = await fixture()
+  const held = heldCheck(f)
+  f.host.projectSettings = async () => ({ lander: { checks: [held.command] } })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path, 'submitted.txt')
+  const { lander: landerId } = await f.service.submit(id, context)
+  await held.started()
+  const result = await ask(f, landerId as ConversationId, 'bash', { command: commitIn('user.txt') })
+  expect(result).toContain(`The lander is landing W${id}; ask again when it is idle`)
+  expect(result).not.toContain('COMMITTED')
+  await held.release()
+  expect((await submitted(f, id))[0]).toContain('landed as')
+  await access(join(f.projectRoot, 'submitted.txt'))
+  await expect(access(join(f.projectRoot, 'user.txt'))).rejects.toThrow('ENOENT')
+  // Idle again, the lander conversation works in its checkout.
+  expect(
+    JSON.stringify(await f.call(landerId as ConversationId, 'bash', { command: 'git log -1' })),
+  ).not.toContain('The lander is landing')
+})
+it('lands only the commit every check ran on, never one added to its checkout meanwhile', async () => {
+  const f = await fixture()
+  const held = heldCheck(f)
+  f.host.projectSettings = async () => ({ lander: { checks: [held.command] } })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path, 'submitted.txt')
+  const head = await git(f.projectRoot, 'rev-parse', 'HEAD')
+  await f.service.submit(id, context)
+  await held.started()
+  // As a tool call started before the landing would: no hook stops it.
+  await commit(join(f.home, 'lander', (await readdir(join(f.home, 'lander')))[0]), 'sneaked.txt')
+  await held.release()
+  const [report] = await submitted(f, id)
+  expect(report).toContain('was not landed: the integration checkout changed during checks')
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+})
+it('fix: a follow-up queued behind the failure run gets nothing landed unchecked', async () => {
+  const f = await lander({})
+  await landerDefinition(f, 'fix')
+  const held = heldCheck(f, 'grep -q resolved base.txt')
+  f.host.projectSettings = async () => ({ lander: { checks: [held.command] } })
+  const fixGate = join(f.directory, 'fix-gate')
+  f.answerLander(() =>
+    fauxAssistantMessage(
+      fauxToolCall('bash', {
+        command: `while [ ! -f '${fixGate}' ]; do sleep 0.05; done; echo resolved > base.txt && git add base.txt && git commit -q --no-edit`,
+      }),
+      { stopReason: 'toolUse' },
+    ),
+  )
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await conflicting(f, id)
+  const { lander: landerId } = await f.service.submit(id, context)
+  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+  await until(async () => (await index())!.queue[0]?.agent === 'fix')
+  const conversation = (await f.opened.harness.conversation(landerId as ConversationId, context))!
+  // Waits for the checks on the fixed commit, then commits into the checkout.
+  const followUp = await conversation.submit(
+    {
+      type: 'input',
+      content: `CALL ${JSON.stringify({
+        tool: 'bash',
+        args: {
+          command: `while [ ! -f '${join(f.directory, 'check-started')}' ]; do sleep 0.05; done; ${commitIn('followup.txt')}`,
+        },
+      })}`,
+      whenBusy: 'followUp',
+    },
+    context,
+  )
+  await writeFile(fixGate, '')
+  await held.started()
+  await followUp.wait(context)
+  await held.release()
+  const [report] = await submitted(f, id)
+  expect(report).toContain('landed as')
+  expect(report).toContain('Fixed by lander:')
+  expect(await readFile(join(f.projectRoot, 'base.txt'), 'utf8')).toBe('resolved\n')
+  await expect(access(join(f.projectRoot, 'followup.txt'))).rejects.toThrow('ENOENT')
+  const view = await conversation.viewState(context)
+  try {
+    expect(
+      JSON.stringify(view.value.entries.filter((entry) => entry.kind === 'pi.tool-result')),
+    ).toContain(`The lander is landing W${id}`)
+  } finally {
+    view.dispose()
+  }
+})
+it('fix: a rejected fix stays rejected when the lander crashes during its cleanup', async () => {
+  const f = await lander({})
+  await landerDefinition(f, 'fix')
+  // Resolves and commits the conflict, then leaves base.txt modified: a dirty fix, rejected.
+  f.answerLander(() =>
+    fauxAssistantMessage(
+      fauxToolCall('bash', {
+        command:
+          'echo resolved > base.txt && git add base.txt && git commit -q --no-edit && echo dirty >> base.txt',
+      }),
+      { stopReason: 'toolUse' },
+    ),
+  )
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const head = await conflicting(f, id)
+  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+  const { id: submission } = await f.service.submit(id, context)
+  await until(async () => (await index())!.queue[0]?.agent === 'fix')
+  // The cleanup's reset runs, then the process goes down before the rejection is reported.
+  const bin = join(f.directory, 'bin')
+  const started = join(f.directory, 'reset-started')
+  const gate = join(f.directory, 'reset-gate')
+  await mkdir(bin, { recursive: true })
+  await writeFile(
+    join(bin, 'git'),
+    `#!/bin/sh
+if [ "$1" = "reset" ] && [ ! -f '${started}' ]; then
+  touch '${started}'
+  while [ ! -f '${gate}' ]; do sleep 0.05; done
+  /usr/bin/git "$@"
+  exit 1
+fi
+exec /usr/bin/git "$@"
+`,
+    { mode: 0o755 },
+  )
+  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+  await until(() =>
+    access(started).then(
+      () => true,
+      () => false,
+    ),
+  )
+  const reopening = f.reopen()
+  await new Promise((done) => setTimeout(done, 300))
+  await writeFile(gate, '')
+  await reopening
+  const [report] = await submitted(f, id)
+  expect(report).toContain("The lander's fix left uncommitted changes.")
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  expect((await index())!.results[submission]).toMatchObject({ outcome: 'failed' })
+})
+it('fix: the lander model resolves a conflict with the remote target, then the submission merges, checks and lands', async () => {
+  const { paths, bare } = await withRemote()
+  const f = await lander({ push: 'origin', checks: ['grep -q resolved base.txt'] }, paths)
+  await landerDefinition(f, 'fix')
+  let prompt = ''
+  f.answerLander((text) => {
+    prompt = text
+    return fauxAssistantMessage(
+      fauxToolCall('bash', {
+        command: 'echo resolved > base.txt && git add base.txt && git commit -q --no-edit',
+      }),
+      { stopReason: 'toolUse' },
+    )
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path, 'submitted.txt')
+  // Local main and origin/main both rewrite base.txt.
+  const other = join(f.directory, 'other')
+  await git(f.directory, 'clone', '-q', bare, other)
+  await writeFile(join(other, 'base.txt'), 'remote')
+  await git(other, '-c', 'user.email=t@e.com', '-c', 'user.name=T', 'commit', '-qam', 'remote')
+  await git(other, 'push', '-q', 'origin', 'main')
+  const remoteTip = await git(other, 'rev-parse', 'HEAD')
+  await writeFile(join(f.projectRoot, 'base.txt'), 'local')
+  await git(f.projectRoot, 'commit', '-qam', 'local')
+  const { id: submission } = await f.service.submit(id, context)
+  const [report] = await submitted(f, id)
+  expect(prompt).toContain('failed: origin/main conflicts with local main in\nbase.txt')
+  expect(prompt).toContain(`Merging origin/main (${remoteTip}) into main`)
+  expect(report).toContain('landed as')
+  expect(report).toContain('Fixed by lander:')
+  expect(report).toContain('Pushed to origin/main.')
+  const landed = await git(f.projectRoot, 'rev-parse', 'HEAD')
+  expect(await readFile(join(f.projectRoot, 'base.txt'), 'utf8')).toBe('resolved\n')
+  expect(await readFile(join(f.projectRoot, 'submitted.txt'), 'utf8')).toBe('submitted.txt')
+  expect(await git(bare, 'rev-parse', 'main')).toBe(landed)
+  const steps = (await f.opened.harness.snapshot(
+    Workspaces,
+    ROOT_CONVERSATION_ID,
+    context,
+  ))!.results[submission].steps.map((row) => row.step)
+  expect(steps.slice(steps.indexOf('fixing'))).toEqual(
+    expect.arrayContaining(['merging', 'checking: grep -q resolved base.txt']),
+  )
 })

@@ -49,6 +49,23 @@ export async function landerPath(home: string, source: string) {
   )
 }
 /**
+ * The lander's checkout of `source`, created detached at `tip` when it is not a registered worktree yet; an existing one
+ * stays as it is.
+ */
+export async function landerCheckout(home: string, source: string, tip = 'HEAD') {
+  const path = await landerPath(home, source)
+  const registered = (await git(source, 'worktree', 'list', '--porcelain'))
+    .split('\n\n')
+    .some((entry) => entry.split('\n').includes(`worktree ${path}`))
+  if (!registered) {
+    // The directory is the lander's own; a crash may have left it half created.
+    await rm(path, { recursive: true, force: true })
+    await git(source, 'worktree', 'prune')
+    await git(source, 'worktree', 'add', '--detach', path, tip)
+  }
+  return path
+}
+/**
  * Append a log line about `entry`, a draft of its queue entry, to the lander conversation `id`; a step also joins the
  * entry's `steps`, which the submitter's cards show.
  */
@@ -149,9 +166,13 @@ type Failure = {
   hint?: string
   base: string
   head: string
+  /** What the failed merge brought in, the submitted tip or the remote's target; a fix builds on it. */
+  merging: string
   prompt: string
   /** The model's final answer, once its run settled. */
   answer?: string
+  /** Why the model's run ended without an answer (`model_error`, `aborted`, …); its changes never land. */
+  unfinished?: string
 }
 type Prepared = {
   base: string
@@ -186,16 +207,7 @@ export function createLander(
 ) {
   const slot = exclusiveSlot(host)
   async function checkout(source: string, tip: string) {
-    const path = await landerPath(host.home, source)
-    const registered = (await git(source, 'worktree', 'list', '--porcelain'))
-      .split('\n\n')
-      .some((entry) => entry.split('\n').includes(`worktree ${path}`))
-    if (!registered) {
-      // The directory is the lander's own; a crash may have left it half created.
-      await rm(path, { recursive: true, force: true })
-      await git(source, 'worktree', 'prune')
-      await git(source, 'worktree', 'add', '--detach', path, tip)
-    }
+    const path = await landerCheckout(host.home, source, tip)
     // Every attempt starts from a clean checkout at the target tip; ignored files such as installs stay.
     await git(path, 'reset', '--hard', '-q')
     await git(path, 'checkout', '-q', '--detach', '--force', tip)
@@ -357,7 +369,7 @@ export function createLander(
           reason: string,
           output: string,
           hint: string,
-          failing: { base: string; conflict: boolean },
+          failing: { base: string; conflict?: string; merging: string },
         ) => {
           const { onFailure, change } = fixed
             ? { onFailure: undefined, change: undefined }
@@ -374,7 +386,7 @@ export function createLander(
           }
           const head = await git(integration, 'rev-parse', 'HEAD')
           const state = failing.conflict
-            ? `Merging ${entry.tip} (W${entry.conversationId}) into ${target} at ${head} stopped with conflicts; the merge is in progress.`
+            ? `Merging ${failing.conflict} into ${target} at ${head} stopped with conflicts; the merge is in progress.`
             : `HEAD ${head} is the merge of ${entry.tip} (W${entry.conversationId}) into ${target}, set up as the checks run it.`
           const prompt = [
             `[lander] Submission ${id} failed: ${reason}`,
@@ -408,6 +420,7 @@ export function createLander(
                   ...(hint ? { hint } : {}),
                   base: failing.base,
                   head,
+                  merging: failing.merging,
                   prompt,
                 },
               },
@@ -416,12 +429,20 @@ export function createLander(
         }
         /** The model's run on a failure settled: report its diagnosis, or check its fix and run every check again. */
         const answered = async (handed: Failure) => {
+          if (handed.unfinished) {
+            await reset()
+            return fail(
+              `the lander's model did not finish (${handed.unfinished})`,
+              [handed.reason, handed.output].filter(Boolean).join('\n'),
+              handed.hint,
+            )
+          }
           if (handed.mode === 'diagnose') {
             await reset()
             return fail(handed.reason, handed.output, handed.hint, handed.answer)
           }
           const head = await git(integration, 'rev-parse', 'HEAD')
-          const problem = (await git(integration, 'status', '--porcelain'))
+          const inspected = (await git(integration, 'status', '--porcelain'))
             ? 'left uncommitted changes'
             : (await git(integration, 'rev-parse', '-q', '--verify', 'MERGE_HEAD').then(
                   () => true,
@@ -431,9 +452,11 @@ export function createLander(
               : head === handed.head
                 ? 'added no commits'
                 : !(await contains(integration, handed.head, head)) ||
-                    !(await contains(integration, entry.tip, head))
+                    !(await contains(integration, handed.merging, head))
                   ? 'did not build on the failed merge'
-                  : undefined
+                  : ''
+          // Decided once, before the cleanup changes what a replay would inspect: a reset keeps a fix's commits.
+          const problem = await runtime.memo(`fix-verdict:${id}:${attempt}`, inspected, context)
           if (problem) {
             await reset()
             return fail(
@@ -447,12 +470,7 @@ export function createLander(
             // A resolved conflict is one merge commit; its second parent's commits are the submission's own.
             await git(integration, 'log', '--oneline', '--first-parent', `${handed.head}..${head}`),
           )
-          // The next attempt starts from the fixed commit and runs every check on it.
-          await runtime.memo(
-            `merged:${id}:${attempt + 1}`,
-            { base: handed.base, sha: head },
-            context,
-          )
+          // The next attempt starts from the fixed commit, merges whatever it still lacks and runs every check.
           return runtime.commit(
             () => ({
               status: 'running',
@@ -532,6 +550,40 @@ export function createLander(
             if (!merged) {
               await step('preparing')
               const base = await git(path, 'rev-parse', 'HEAD')
+              /** Merge `commit` into the checkout; true when it conflicted and went to the lander's model. */
+              const merge = async (
+                commit: string,
+                message: string,
+                conflict: string,
+                reason: string,
+                hint: string,
+              ) => {
+                try {
+                  await git(path, 'merge', '--no-edit', '-m', message, commit)
+                  return false
+                } catch {
+                  await handOver(
+                    reason,
+                    await git(path, 'diff', '--name-only', '--diff-filter=U'),
+                    hint,
+                    { base, conflict, merging: commit },
+                  )
+                  return true
+                }
+              }
+              // After a fix the attempt starts from it: onto an unmoved target this fast-forwards to the fixed commit.
+              if (fixed) {
+                if (
+                  await merge(
+                    fixed.head,
+                    `Merge the lander's fix of ${id} into ${target}`,
+                    `the lander's fix ${fixed.head}`,
+                    `the lander's fix conflicts with ${target} in`,
+                    `Merge ${target} into your workspace, resolve, verify and submit again.`,
+                  )
+                )
+                  return
+              }
               if (settings.push) {
                 const { stdout } = await remote(
                   path,
@@ -545,45 +597,30 @@ export function createLander(
                   const fetched = await git(path, 'rev-parse', 'FETCH_HEAD')
                   if (!(await contains(path, fetched, 'HEAD'))) {
                     await step(`merging ${settings.push}/${target}`)
-                    try {
-                      await git(
-                        path,
-                        'merge',
-                        '--no-edit',
-                        '-m',
-                        `Merge ${settings.push}/${target}`,
+                    if (
+                      await merge(
                         fetched,
-                      )
-                    } catch {
-                      const conflicts = await git(path, 'diff', '--name-only', '--diff-filter=U')
-                      await git(path, 'merge', '--abort').catch(() => undefined)
-                      return fail(
+                        `Merge ${settings.push}/${target}`,
+                        `${settings.push}/${target} (${fetched})`,
                         `${settings.push}/${target} conflicts with local ${target} in`,
-                        conflicts,
+                        `Reconcile ${settings.push}/${target} with local ${target}, then submit again.`,
                       )
-                    }
+                    )
+                      return
                   }
                 }
               }
               await step('merging')
-              try {
-                await git(
-                  path,
-                  'merge',
-                  '--no-edit',
-                  '-m',
+              if (
+                await merge(
+                  entry.tip,
                   `Merge ${entry.tip.slice(0, 7)} from W${entry.conversationId} into ${target}`,
-                  // After a fix, a retry onto a moved target brings the fixed merge along.
-                  fixed?.head ?? entry.tip,
-                )
-              } catch {
-                return handOver(
+                  `${entry.tip} (W${entry.conversationId})`,
                   `it conflicts with ${target} in`,
-                  await git(path, 'diff', '--name-only', '--diff-filter=U'),
                   `Merge ${target} into your workspace, resolve, verify and submit again.`,
-                  { base, conflict: true },
                 )
-              }
+              )
+                return
               merged = await runtime.memo(
                 `merged:${id}:${attempt}`,
                 { base, sha: await git(path, 'rev-parse', 'HEAD') },
@@ -616,21 +653,26 @@ export function createLander(
                     `check failed twice: ${command}`,
                     output,
                     'Fix it, verify and submit again.',
-                    { base, conflict: false },
+                    { base, merging: entry.tip },
                   )
                 await step(`checked: ${command}`, { command, result: 'flaky' })
                 await runtime.memo(`${key}:rerun`, 'passed', context)
               }
               flaky.push(command)
             }
-            const integrated = await git(path, 'rev-parse', 'HEAD')
+            // Only the commit every check ran on lands: nothing may have moved or touched the checkout meanwhile.
+            if (
+              (await git(path, 'rev-parse', 'HEAD')) !== merged.sha ||
+              (await git(path, 'status', '--porcelain'))
+            )
+              return await fail(
+                'the integration checkout changed during checks',
+                `${await git(path, 'log', '--oneline', '-3')}\n${await git(path, 'status', '--short')}`.trim(),
+                'Submit again.',
+              )
             prepared = await runtime.memo<Prepared>(
               `prepared:${id}:${attempt}`,
-              {
-                base,
-                integrated,
-                flaky,
-              },
+              { base, integrated: merged.sha, flaky },
               context,
             )
           }
@@ -716,10 +758,14 @@ export function createLander(
             context,
           )
         ).wait(context)
-        const answer =
+        const outcome: Pick<Failure, 'answer' | 'unfinished'> =
           settled.status === 'done' && settled.type === 'input'
-            ? textOf((await runtime.entry(AssistantEntry, settled.answer, context))?.model?.[0])
-            : `The lander's model did not answer (${settled.status === 'unanswered' ? settled.reason : settled.status}).`
+            ? {
+                answer: textOf(
+                  (await runtime.entry(AssistantEntry, settled.answer, context))?.model?.[0],
+                ),
+              }
+            : { unfinished: settled.status === 'unanswered' ? settled.reason : settled.status }
         await runtime.commit(async (tx) => {
           const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue.find(
             (item) => item.id === id,
@@ -730,7 +776,7 @@ export function createLander(
             checkpoint: {
               ...task.state.checkpoint,
               phase: 'land',
-              failure: { ...handed, answer },
+              failure: { ...handed, ...outcome },
             },
           }
         }, context)

@@ -15,7 +15,7 @@ import {
 import type { ConversationId, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { git, setup } from './git.ts'
-import { createLander, landerAgent, landerPath, log } from './lander.ts'
+import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
 import type {
   LandResult,
   SubmitResult,
@@ -145,7 +145,8 @@ export function workspaces(host: Host) {
     const target =
       source && (await git(source, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => ''))
     const { change } = await landerAgent(host, context)
-    const path = source && (await landerPath(host.home, source))
+    // The conversation's cwd exists from the start, at the target tip, so it can answer before any submission.
+    const path = source && target && (await landerCheckout(host.home, source))
     await host.harness().commit(async (tx) => {
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       const landers: ConversationId[] = []
@@ -181,6 +182,28 @@ export function workspaces(host: Host) {
       return stopped.length
     }, context)
     if (restarted) host.harness().resume()
+  }
+  /**
+   * Why a tool call in conversation `id` must not run: it is a lander conversation whose task owns the checkout for a
+   * submission, and the call is not part of that task's own run on the submission's failure.
+   */
+  async function landerOwnsCheckout(id: ConversationId, context: Context) {
+    const harness = host.harness()
+    const index = await harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+    const source = Object.entries(index?.landerConversations ?? {}).find(
+      ([, lander]) => lander === id,
+    )?.[0]
+    const entry = index?.queue.find((item) => item.source === source && item.state === 'landing')
+    if (!entry) return undefined
+    if (entry.agent)
+      for (const input of (await harness.snapshot(LiveDoc, id, context))?.run?.inputs ?? [])
+        if (
+          (
+            await (await harness.submission(input, context))?.status(context)
+          )?.requestId?.startsWith(`lander-agent:${entry.id}:`)
+        )
+          return undefined
+    return `The lander is landing W${entry.conversationId}; ask again when it is idle`
   }
   const get = async (id: ConversationId, context: Context) =>
     (await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context))?.items[String(id)]
@@ -416,6 +439,7 @@ export function workspaces(host: Host) {
     Lander,
     resume,
     standLander,
+    landerOwnsCheckout,
     started,
     get,
     land,

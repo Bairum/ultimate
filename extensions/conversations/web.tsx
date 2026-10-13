@@ -156,7 +156,13 @@ async function newConversation(actions: UltimateActions) {
   const current = conversations.find((conversation) => conversation.id === shown.id)
   const topLevel = current !== undefined && current.parentConversationId === undefined
   // The replica, not the lagging summary: right after a first send, the shown conversation is no draft any longer.
-  if (topLevel && !getWorkspaces()[String(current.id)] && shown.entries.length === 0) {
+  // A lander is never a draft, even before its first submission.
+  if (
+    topLevel &&
+    current.label !== 'lander' &&
+    !getWorkspaces()[String(current.id)] &&
+    shown.entries.length === 0
+  ) {
     focusWhenShown(actions, current.id)
     return
   }
@@ -165,6 +171,7 @@ async function newConversation(actions: UltimateActions) {
     .filter(
       (conversation) =>
         conversation.parentConversationId === undefined &&
+        conversation.label !== 'lander' &&
         conversation.inputAt === undefined &&
         conversation.title === undefined &&
         !getWorkspaces()[String(conversation.id)] &&
