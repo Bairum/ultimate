@@ -54,6 +54,7 @@ import {
 } from '@/sdk'
 import type { EntryRecord, UltimateActions } from '@/sdk'
 import { ModelRow } from '../models/picker.tsx'
+import { FeatureTag } from './feature.tsx'
 import { parseSummaryModel } from './summary-model-ref.ts'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import {
@@ -303,6 +304,7 @@ function Row({
   archived,
   now,
   onArchive,
+  feature,
   assessment,
 }: {
   conversation: ConversationSummary
@@ -314,6 +316,7 @@ function Row({
   now: number
   onArchive: (archive: boolean) => void
   assessment?: Assessment
+  feature?: string
 }) {
   const actions = useUltimate()
   const [editing, setEditing] = useState(false)
@@ -324,7 +327,7 @@ function Row({
   const afterMenu = useRef<() => void>(undefined)
   const name = conversation.title ?? (draft ? 'New conversation' : `#${conversation.id}`)
   const latest = Math.max(conversation.inputAt ?? 0, conversation.answerAt ?? 0)
-  const hasMetadata = conversation.workspace || latest > 0
+  const hasMetadata = feature || conversation.workspace || latest > 0
   const rename = () => {
     cancelled.current = false
     setEditing(true)
@@ -403,10 +406,15 @@ function Row({
           </span>
           {hasMetadata && (
             <span className="flex w-full items-center gap-2 pr-5 pl-[18px] font-mono text-[10px] leading-4 text-muted-foreground">
-              {conversation.workspace && <span title="Isolated checkout">W{conversation.id}</span>}
+              {feature && <FeatureTag feature={feature} />}
+              {conversation.workspace && (
+                <span className="shrink-0" title="Isolated checkout">
+                  W{conversation.id}
+                </span>
+              )}
               {latest > 0 && (
                 <span
-                  className="text-muted-foreground/80"
+                  className="shrink-0 text-muted-foreground/80"
                   title={new Date(latest).toLocaleString()}
                 >
                   {ago(latest, now)}
@@ -600,6 +608,7 @@ function Conversations() {
         archived={archived.includes(conversation.id)}
         conversation={conversation}
         draft={conversation.inputAt === undefined}
+        feature={overview[conversation.id]?.feature}
         key={conversation.id}
         now={now}
         onArchive={(archive) => setArchive(conversation.id, archive)}
