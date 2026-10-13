@@ -45,7 +45,6 @@ it('opens external setup from the palette, shows missing CLI and retries status 
       .poll(() => panel.getByText('CLI not installed', { exact: true }).count(), { timeout: 15000 })
       .toBe(1)
     expect(await panel.getByText(/claude auth login/).count()).toBe(1)
-    expect(await panel.getByText('Billing is not guaranteed').count()).toBe(1)
     expect(await panel.getByRole('button', { name: /login|sign in/i }).count()).toBe(0)
 
     await page.route('**/api/extensions/claude-code/actions/status', (route) =>
@@ -101,7 +100,7 @@ it('opens external setup from the palette, shows missing CLI and retries status 
       .toBe(1)
     await checkPicker(false)
     await page.getByRole('button', { name: 'Toggle panel', exact: true }).click()
-    await expect.poll(() => panel.getByText('Billing is not guaranteed').count()).toBe(0)
+    await expect.poll(() => panel.getByText(/claude auth login/).count()).toBe(0)
     await page.getByTitle('Pick a model', { exact: true }).click()
     const picker = page.getByRole('dialog', { name: 'Pick a model', exact: true })
     await picker.getByPlaceholder(/Search .* models/).fill('claude-code')
@@ -115,7 +114,7 @@ it('opens external setup from the palette, shows missing CLI and retries status 
     ).toBe(1)
     await pickerRow.click()
     await expect.poll(() => picker.count()).toBe(0)
-    await expect.poll(() => panel.getByText('Billing is not guaranteed').count()).toBe(1)
+    await expect.poll(() => panel.getByText(/claude auth login/).count()).toBe(1)
     await expect
       .poll(() => panel.getByText('Login not confirmed', { exact: true }).count(), {
         timeout: 15000,

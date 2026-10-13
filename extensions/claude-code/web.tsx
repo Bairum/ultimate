@@ -72,26 +72,6 @@ function ClaudeCodePanel() {
           login can also mean the CLI returned an unreadable status.
         </p>
       </section>
-      <section className="space-y-2 border-t pt-4 text-xs leading-relaxed text-muted-foreground">
-        <h3 className="font-medium text-foreground">Billing is not guaranteed</h3>
-        <p>
-          This experimental transport uses your CLI account and its limits. Subscription coverage
-          depends on Claude Code. Displayed costs are list-price estimates, not your bill.
-        </p>
-        <p>
-          The upstream guard stops further requests after usage-credit overage is reported; the
-          first charged response may already have incurred a charge. No guard override is enabled
-          here.
-        </p>
-        <a
-          className="inline-block cursor-pointer underline underline-offset-4"
-          href="https://github.com/earendil-works/pi-claude-code"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Upstream documentation
-        </a>
-      </section>
     </div>
   )
 }
