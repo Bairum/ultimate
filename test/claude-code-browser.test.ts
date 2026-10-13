@@ -100,6 +100,30 @@ it('opens external setup from the palette, shows missing CLI and retries status 
       })
       .toBe(1)
     await checkPicker(false)
+    await page.getByRole('button', { name: 'Toggle panel', exact: true }).click()
+    await expect.poll(() => panel.getByText('Billing is not guaranteed').count()).toBe(0)
+    await page.getByTitle('Pick a model', { exact: true }).click()
+    const picker = page.getByRole('dialog', { name: 'Pick a model', exact: true })
+    await picker.getByPlaceholder(/Search .* models/).fill('claude-code')
+    await expect.poll(() => pickerRow.count()).toBe(1)
+    expect(await picker.getByText('external setup · ↵ opens setup', { exact: true }).count()).toBe(
+      1,
+    )
+    expect(await picker.getByText('not logged in · ↵ logs in', { exact: true }).count()).toBe(0)
+    expect(
+      await picker.getByText(/Unavailable Claude Code models open external setup/).count(),
+    ).toBe(1)
+    await pickerRow.click()
+    await expect.poll(() => picker.count()).toBe(0)
+    await expect.poll(() => panel.getByText('Billing is not guaranteed').count()).toBe(1)
+    await expect
+      .poll(() => panel.getByText('Login not confirmed', { exact: true }).count(), {
+        timeout: 15000,
+      })
+      .toBe(1)
+    expect(
+      await page.getByRole('dialog', { name: 'Log in to a provider', exact: true }).count(),
+    ).toBe(0)
     expect(errors).toEqual([])
   } finally {
     await browser.close()

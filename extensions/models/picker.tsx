@@ -1,4 +1,4 @@
-import { BrainIcon, CheckIcon, KeyRoundIcon, LogInIcon } from 'lucide-react'
+import { BrainIcon, CheckIcon, KeyRoundIcon, LogInIcon, TerminalIcon } from 'lucide-react'
 import { Fragment, useMemo, useState } from 'react'
 import {
   Command,
@@ -108,6 +108,11 @@ export function ModelPicker() {
   function choose(model: ModelInfo) {
     if (loading) return
     if (!model.available) {
+      if (model.provider === 'claude-code') {
+        setOpen(false)
+        actions.openPanel('claude-code')
+        return
+      }
       openLogin(actions, model.provider)
       return
     }
@@ -135,7 +140,8 @@ export function ModelPicker() {
       >
         <DialogTitle className="sr-only">Pick a model</DialogTitle>
         <DialogDescription className="sr-only">
-          Search models by provider, id, or name. Models you are not logged in for open the login.
+          Search models by provider, id, or name. Unavailable Claude Code models open external
+          setup; other models you are not logged in for open the login.
         </DialogDescription>
         <Command
           className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10.5px] [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:uppercase"
@@ -219,6 +225,11 @@ function ProviderHeading({ id, provider }: { id: string; provider: ProviderInfo 
         <span className="ml-auto tracking-normal normal-case text-success/80">
           ✓ {label}
           {provider?.isUsingSubscription ? ' · subscription' : ''}
+        </span>
+      ) : id === 'claude-code' ? (
+        <span className="ml-auto flex items-center gap-1 tracking-normal normal-case text-warning/80">
+          <TerminalIcon className="size-3" />
+          external setup · ↵ opens setup
         </span>
       ) : (
         <span className="ml-auto flex items-center gap-1 tracking-normal normal-case text-warning/80">
