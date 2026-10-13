@@ -97,6 +97,7 @@ export function overviewBehavior(
           ...(active ? { inputId: input.entry } : {}),
           ...(answerId !== undefined ? { answerId } : {}),
           ...(state?.summary ? { summary: state.summary } : {}),
+          ...(state?.feature ? { feature: state.feature } : {}),
           ...(state?.status ? { summaryStatus: state.status } : {}),
           ...(state?.activity ? { activity: state.activity } : {}),
           ...(state?.assessmentStatus ? { assessmentStatus: state.assessmentStatus } : {}),

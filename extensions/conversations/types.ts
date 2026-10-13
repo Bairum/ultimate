@@ -26,6 +26,7 @@ export type OverviewRow = {
   inputId?: number
   answerId?: number
   summary?: string
+  feature?: string
   summaryStatus?: SummaryStatus
   activity?: string
   assessment?: Assessment

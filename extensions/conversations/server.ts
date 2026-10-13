@@ -114,6 +114,7 @@ export const actions = {
       delete state.lastAnswer
       delete state.pending
       delete state.summary
+      delete state.feature
       delete state.summaryOwed
       delete state.assessment
       delete state.activity

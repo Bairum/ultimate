@@ -78,6 +78,9 @@ Actions, each on a top-level conversation; bad args, unknown conversations, suba
 
 ## Automatic summaries and reply assessments
 
+Title/summary requests also classify a 1–3 word product feature label for top-level conversations.
+The label is kept unless the work clearly moves to another feature, exposed in the overview, and cleared by Clear context.
+
 All three triggers request work through the typed, transaction-scoped `requestSummary(tx, host, id, request)`
 helper in `summary.ts`: `intent`, `spawn`, and `reply`. The existing version-1 task inputs/checkpoints are preserved;
 initial intent adds an optional input field, so live reply and spawn tasks remain resumable.

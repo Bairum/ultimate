@@ -22,6 +22,7 @@ import { Metadata } from '../server/metadata.ts'
 import { Overview } from '../extensions/conversations/overview.ts'
 import {
   generateSummary,
+  summaryInput,
   Summaries,
   summaryBehavior,
   requestSummary,
@@ -830,6 +831,77 @@ it.each(['none', 'legacy'])(
   },
 )
 
+it.each([
+  ['  Conversation\n sidebar\t rendering extra words  ', 'Conversation sidebar rendering'],
+  ['ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 extra words', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ123456'],
+  ['Conversation-specific Rendering UI', 'Conversation-specific Rendering'],
+  ['', undefined],
+  [' \n\t ', undefined],
+  [null, undefined],
+  [42, undefined],
+  [undefined, undefined],
+])('normalizes feature labels without rejecting summaries: %j', async (feature, expected) => {
+  const result = await generateSummary(
+    {} as Models,
+    'Request',
+    new AbortController().signal,
+    true,
+    {
+      model: luna,
+      response: {
+        provider: luna.provider,
+        model: luna.id,
+        stopReason: 'stop',
+        text: JSON.stringify({ title: 'Title', summary: 'Summary', feature }),
+      },
+    },
+    'intent',
+  )
+  expect(result).toEqual({
+    assessment: 'neutral',
+    activity: '',
+    title: 'Title',
+    summary: 'Summary',
+    ...(expected ? { feature: expected } : {}),
+  })
+})
+
+it('includes the previous feature next to the previous summary in model input', () => {
+  expect(summaryInput([], 'Previous work.', 'Bash rendering')).toContain(
+    'Previous summary: Previous work.\n\nPrevious feature: Bash rendering',
+  )
+  expect(summaryInput([])).not.toContain('Previous feature:')
+})
+
+it('stores and exposes a feature, keeps it when omitted, and clears it on reset', async () => {
+  const fixture = await launch()
+  fixture.generated.mockResolvedValueOnce({
+    assessment: 'done',
+    activity: 'Added labels.',
+    title: 'Feature labels',
+    summary: 'Added labels.',
+    feature: 'Conversation sidebar',
+  })
+  await fixture.exchange()
+  expect((await fixture.read())?.feature).toBe('Conversation sidebar')
+  const row = async () =>
+    (await fixture.server.harness.snapshot(Overview, fixture.server.root.id, context))
+      ?.conversations[fixture.server.root.id]
+  await until(async () => (await row())?.feature === 'Conversation sidebar')
+  for (let count = 2; count <= 4; count++) await fixture.exchange()
+  expect(fixture.generated.mock.calls.at(-1)![1]).toContain(
+    'Previous feature: Conversation sidebar',
+  )
+  expect((await fixture.read())?.feature).toBe('Conversation sidebar')
+  expect((await fixture.read())?.summary).toBe('Added concise summaries to the sidebar.')
+  expect(
+    (await fixture.server.harness.snapshot(Metadata, fixture.server.root.id, context))?.title,
+  ).toBe('Improve the conversation sidebar')
+  expect((await fixture.action('reset')).status).toBe(200)
+  expect((await fixture.read())?.feature).toBeUndefined()
+  await until(async () => (await row())?.feature === undefined)
+})
+
 it('validates assessment-only JSON and rejects unapproved or malformed outcome states', async () => {
   let output: unknown = {
     assessment: 'needs_input',
@@ -855,6 +927,19 @@ it('validates assessment-only JSON and rejects unapproved or malformed outcome s
     }),
   ).toEqual(output)
   expect(getModel).toHaveBeenCalledWith('openai', 'gpt-6-luna')
+  expect(stream.mock.calls.at(-1)![1].systemPrompt).not.toContain('"feature"')
+  output = {
+    assessment: 'done',
+    activity: 'Done.',
+    title: 'Title',
+    summary: 'Summary',
+    feature: 'Bash rendering',
+  }
+  expect(
+    await generateSummary(models, 'Reply', new AbortController().signal, true, { model: luna }),
+  ).toEqual(output)
+  expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('Also include "feature"')
+  expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('Keep the previous feature exactly')
   output = { title: 'Delegate the sidebar', summary: 'Planning has moved to implementation.' }
   expect(
     await generateSummary(
@@ -871,6 +956,7 @@ it('validates assessment-only JSON and rejects unapproved or malformed outcome s
     activity: '',
   })
   expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('work now starting')
+  expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('Also include "feature"')
   expect(stream.mock.calls.at(-1)![1].systemPrompt).not.toContain('Assess the latest final reply')
   await generateSummary(
     models,
@@ -881,6 +967,7 @@ it('validates assessment-only JSON and rejects unapproved or malformed outcome s
     'intent',
   )
   expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('initial intent')
+  expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('Also include "feature"')
   for (const value of ['blocked', 'unfinished', ['done'], null]) {
     output = { assessment: value, activity: 'Some work was discussed.' }
     await expect(
