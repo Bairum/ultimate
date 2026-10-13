@@ -46,6 +46,7 @@ type Task = {
   deps: string[]
   status: string
   child?: number
+  verdict?: string
   notes: { at: string; text: string }[]
 }
 type Epic = {
@@ -275,6 +276,14 @@ function TaskRow({ task, tasks }: { task: Task; tasks: Map<string, Task> }) {
           {task.child !== undefined && <ChildLink child={child} id={task.child} />}
         </div>
         {child && parent !== undefined && <IsolateRow child={child} parent={parent} />}
+        {task.verdict && (
+          <div className="rounded-md border border-border/70 bg-card/50 px-3 py-2 text-[12.5px]">
+            <div className="pb-1 font-mono text-[10px] tracking-wider text-muted-foreground/80 uppercase">
+              Verdict
+            </div>
+            <MessageResponse>{task.verdict}</MessageResponse>
+          </div>
+        )}
         {open ? (
           <div className="space-y-2 pt-1">
             <div className="text-[12.5px] text-foreground/90">

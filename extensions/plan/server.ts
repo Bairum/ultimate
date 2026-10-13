@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
 import { defineDoc, defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 
@@ -9,6 +10,7 @@ export type Task = {
   deps: string[]
   status: 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'done' | 'blocked' | 'canceled'
   child?: number
+  verdict?: string
   notes: { at: string; text: string }[]
 }
 export type Epic = {
@@ -29,11 +31,11 @@ export const Plan = defineDoc<{ next: number; epics: Record<string, Epic> }>({
 })
 export const docs = [Plan]
 // Commit the receipt with the edit, closing the crash window before api.memo stores the result.
-const Receipt = defineDoc<{ text?: string }>({
+const Receipt = defineDoc<{ results: Record<string, string> }>({
   kind: 'ultimate.plan.receipt',
   version: 1,
   scope: 'task',
-  initial: () => ({}),
+  initial: () => ({ results: {} }),
 })
 const reply = (text: string) => ({ output: [{ type: 'text' as const, text }] })
 const required = (value: string | undefined, field: string) => {
@@ -64,7 +66,7 @@ export default defineExtension({
     defineTool({
       name: 'plan',
       description:
-        'Maintain the durable epic/task ledger. create {title,body}; add {epic,title,role,description,deps?}; update {key,status?,title?,description?,body?,child?,verdict?}; note {key,text} adds a task note; show {key?} reads an epic, task, or the whole ledger. Epic bodies use Request, Selected approach, Intent, Scope (in/out), binary Acceptance criteria, Implementation, Verification, Risks. Task descriptions use Outcome, Scope, Non-goals, Files, Acceptance criteria with a verification command, Constraints. Epic statuses: planning, in_progress, done, blocked. Task statuses: backlog, todo, in_progress, in_review, done, blocked, canceled. child links a conversation number; deps are task keys. Read full plans with show; the prompt contains only a compact ledger.',
+        'Maintain the durable epic/task ledger. create {title,body}; add {epic,title,role,description,deps?}; update {key,status?,title?,description?,body?,child?,verdict?}; note {key,text} adds a task note; show {key?} reads an epic, task, or the whole ledger. Epic bodies use Request, Selected approach, Intent, Scope (in/out), binary Acceptance criteria, Implementation, Verification, Risks. Task descriptions use Outcome, Scope, Non-goals, Files, Acceptance criteria with a verification command, Constraints. Epic statuses: planning, in_progress, done, blocked. Task statuses: backlog, todo, in_progress, in_review, done, blocked, canceled. child links a conversation number; deps are task keys. body is epic-only; verdict records evidence on either an epic or a task. Children read the root coordinator’s ledger with show; only that coordinator can edit it. Read full plans with show; the prompt contains only a compact ledger.',
       replay: 'safe',
       parameters: Type.Object({
         action: Type.Union(['create', 'add', 'update', 'note', 'show'].map((v) => Type.Literal(v))),
@@ -85,10 +87,21 @@ export default defineExtension({
       execute: async (args, api, context) => {
         const cached = await api.memo<ReturnType<typeof reply>>('result', context)
         if (cached) return cached
+        const receiptId = await api.memo('receipt-id', randomUUID(), context)
         const text = await api.commit(async (tx) => {
+          let coordinator = api.conversationId
+          let owner = (await tx.conversation(coordinator))?.owner
+          while (owner) {
+            coordinator = owner.conversationId
+            owner = (await tx.conversation(coordinator))?.owner
+          }
+          if (args.action !== 'show' && coordinator !== api.conversationId)
+            throw new Error(
+              `Only conversation ${coordinator} edits this plan; report to it instead`,
+            )
           const receipt = await tx.doc(Receipt, api.taskId)
-          if (receipt.text !== undefined) return receipt.text
-          const plan = await tx.doc(Plan, api.conversationId)
+          if (receipt.results[receiptId] !== undefined) return receipt.results[receiptId]
+          const plan = await tx.doc(Plan, coordinator)
           const lookup = (key: string) => {
             const epicKey = key.split('.')[0]
             const epic = Object.hasOwn(plan.epics, epicKey) ? plan.epics[epicKey] : undefined
@@ -141,24 +154,23 @@ export default defineExtension({
                 : ['planning', 'in_progress', 'done', 'blocked']
               if (args.status !== undefined && !statuses.includes(args.status))
                 throw new Error(`Invalid status for ${item.key}: ${args.status}`)
-              if (task && (args.body !== undefined || args.verdict !== undefined))
-                throw new Error('body and verdict require an epic key')
+              if (task && args.body !== undefined) throw new Error('body requires an epic key')
               if (!task && (args.description !== undefined || args.child !== undefined))
                 throw new Error('description and child require a task key')
               if (args.status !== undefined) item.status = args.status as typeof item.status
               if (args.title !== undefined) item.title = args.title
+              if (args.verdict !== undefined) item.verdict = args.verdict
               if (task) {
                 if (args.description !== undefined) item.description = args.description
                 if (args.child !== undefined) item.child = args.child
               } else {
                 if (args.body !== undefined) item.body = args.body
-                if (args.verdict !== undefined) item.verdict = args.verdict
               }
             }
             result = item
           }
-          receipt.text = JSON.stringify(result)
-          return receipt.text
+          receipt.results[receiptId] = JSON.stringify(result)
+          return receipt.results[receiptId]
         }, context)
         return api.memo('result', reply(text), context)
       },
