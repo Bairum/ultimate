@@ -1,11 +1,12 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { defineExtension, defineTool, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
-import { fauxServer, post, temp, until } from './helpers.ts'
+import { attach, fauxServer, post, temp, until } from './helpers.ts'
+import type { ConversationSummary } from '../shared/protocol.ts'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 
@@ -78,6 +79,8 @@ it('tells each top-level conversation about the others, and the surface on scree
   await server.harness.waitForIdle(context)
   const child = server.api.conversations().find((item) => item.label === 'scout')!
   expect(child.inputAt).toEqual(expect.any(Number))
+  expect(child.parentConversationId).toBe(root)
+  expect(child.branchOf).toBeUndefined()
   expect(await render('conversations', root)).toBeUndefined()
   expect(await render('conversations', child.id as ConversationId)).toBeUndefined()
   expect(await render('surfaces', child.id as ConversationId)).toBeUndefined()
@@ -116,19 +119,46 @@ it('tells each top-level conversation about the others, and the surface on scree
     ...recent.slice(1),
   ])
 
-  // A fork is not top-level: it gets neither section and is not listed.
+  // An ownerless fork is top-level, but its inherited history is tracked separately.
   const view = await server.root.viewState(context)
   const entry = view.value.entries.find((item) => item.kind === 'pi.user')!
   view.dispose()
   const fork = await server.root.fork(entry.id, { ownership: { kind: 'ownerless' } }, context)
   await until(() => summary(fork.id) !== undefined)
   expect(summary(fork.id)!.inputAt).toEqual(expect.any(Number))
-  expect(await render('conversations', fork.id)).toBeUndefined()
-  expect(await render('surfaces', fork.id)).toBeUndefined()
-  expect(listed(await render('conversations', root))).not.toContain(fork.id)
+  expect(summary(fork.id)).toMatchObject({ branchOf: { conversationId: root, at: entry.id } })
+  expect(summary(fork.id)).not.toHaveProperty('parentConversationId')
+  const stream = await attach(server)
+  try {
+    const wire = stream.events.find((event) => event.name === 'conversations')!
+    const conversations = wire.data as ConversationSummary[]
+    expect(conversations.find((item) => item.id === fork.id)).toMatchObject({
+      branchOf: { conversationId: root, at: entry.id },
+    })
+    expect(conversations.find((item) => item.id === fork.id)).not.toHaveProperty(
+      'parentConversationId',
+    )
+    expect(conversations.find((item) => item.id === child.id)?.parentConversationId).toBe(root)
+  } finally {
+    await stream.close()
+  }
+  expect(await render('conversations', fork.id)).toContain(`You are conversation #${fork.id}.`)
+  expect(listed(await render('conversations', root))).toContain(fork.id)
+  await until(async () => {
+    try {
+      const manifest = JSON.parse(
+        await readFile(join(server.host.home, 'conversations.json'), 'utf8'),
+      )
+      return manifest.some((item: { id: number }) => item.id === fork.id)
+    } catch {
+      return false
+    }
+  })
+  const manifest = JSON.parse(await readFile(join(server.host.home, 'conversations.json'), 'utf8'))
+  expect(manifest.some((item: { id: number }) => item.id === child.id)).toBe(false)
 
   // Every top-level conversation gets the surface line.
-  for (const id of [root, other, empty])
+  for (const id of [root, other, empty, fork.id])
     expect(await render('surfaces', id)).toBe('The user is looking at the Agent surface (agent).')
 }, 60000)
 
@@ -156,14 +186,25 @@ it('renames and clears top-level conversations', async () => {
   await message(root.id, 'Root work', 1000)
   const entry = (await root.context(context)).entries.find((item) => item.kind === 'pi.user')!
   const fork = await root.fork(entry.id, { ownership: { kind: 'ownerless' } }, context)
-  const forked = `Conversation ${fork.id} is a subagent or a fork, not a top-level conversation`
+  expect(await action('rename', { id: fork.id, title: 'Branch work' })).toEqual({
+    status: 200,
+    data: { result: { ok: true } },
+  })
+  expect(await action('reset', { id: fork.id })).toEqual({
+    status: 200,
+    data: { result: { ok: true } },
+  })
+  await post(server, '/api/conversations/1/submit', { text: 'delegate to scout' })
+  await server.harness.waitForIdle(context)
+  const child = server.api.conversations().find((item) => item.label === 'scout')!
+  const owned = `Conversation ${child.id} is owned, not a top-level conversation`
   for (const [name, args, error] of [
     ['rename', null, 'Expected a conversation id'],
     ['rename', { id: 'one', title: 'x' }, 'Expected a conversation id'],
     ['rename', { id }, 'Expected a title'],
     ['rename', { id: 999999, title: 'x' }, 'Unknown conversation 999999'],
-    ['rename', { id: fork.id, title: 'x' }, forked],
-    ['reset', { id: fork.id }, forked],
+    ['rename', { id: child.id, title: 'x' }, owned],
+    ['reset', { id: child.id }, owned],
   ] as const)
     expect(await action(name, args)).toEqual({ status: 500, data: { error } })
 

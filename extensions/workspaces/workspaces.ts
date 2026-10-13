@@ -303,7 +303,7 @@ export function workspaces(host: Host) {
       .conversation(ROOT_CONVERSATION_ID, context))!.agent(context)
     const result = await host.harness().commit(async (tx) => {
       const row = await tx.conversation(id)
-      if (!row || row.owner || row.parent)
+      if (!row || row.owner)
         throw new Error('Only a top-level main conversation submits its own workspace')
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       const { source, target } = index.items[String(id)]

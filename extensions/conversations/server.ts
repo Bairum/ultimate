@@ -16,14 +16,13 @@ export const docs = [Summaries, Overview]
 const record = (host: Pick<ExtensionHost, 'harness'>, id: ConversationId, caller: Context) =>
   host.harness().commit((tx) => tx.conversation(id), caller)
 
-/** The id of a top-level conversation: neither owned (a subagent) nor forked. */
+/** The id of a top-level conversation: not owned by another conversation. */
 async function topLevelId(host: ExtensionHost, args: JsonValue) {
   const id = args && typeof args === 'object' && !Array.isArray(args) ? args.id : undefined
   if (typeof id !== 'number' || !Number.isInteger(id)) throw new Error('Expected a conversation id')
   const found = await record(host, id as ConversationId, context)
   if (!found) throw new Error(`Unknown conversation ${id}`)
-  if (found.owner || found.parent)
-    throw new Error(`Conversation ${id} is a subagent or a fork, not a top-level conversation`)
+  if (found.owner) throw new Error(`Conversation ${id} is owned, not a top-level conversation`)
   return id as ConversationId
 }
 
@@ -136,11 +135,11 @@ export default (host: ExtensionHost) => {
     ...summaryBehavior(host),
     sections: [
       section('conversations', async (input, caller) => {
-        // Summaries can lag behind a new conversation, so its record decides; subagents and forks get nothing.
+        // Summaries can lag behind a new conversation, so its record decides; owned conversations get nothing.
         if (!topLevel.has(input.conversationId)) {
           const own = await record(host, input.conversationId, caller)
           if (!own) return undefined
-          topLevel.set(input.conversationId, !own.owner && !own.parent)
+          topLevel.set(input.conversationId, !own.owner)
         }
         if (!topLevel.get(input.conversationId)) return undefined
         const archived = (await host.uiState(caller))['ext.conversations.archived']

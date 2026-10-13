@@ -213,10 +213,7 @@ export default (host: ExtensionHost) => {
       const models: [ConversationId, AgentState][] = []
       for (const change of publication.changes) {
         if (change.type === 'conversation')
-          parents.set(
-            change.value.id,
-            change.value.owner?.conversationId ?? change.value.parent?.conversationId,
-          )
+          parents.set(change.value.id, change.value.owner?.conversationId)
         else if (change.type === 'entry') entries.push(change.value)
         else if (change.type === 'document' && change.conversationId !== undefined && change.value)
           if (change.record.kind === LiveDoc.definition.kind)
@@ -253,7 +250,7 @@ export default (host: ExtensionHost) => {
       do {
         const page = await tx.scanConversations({}, 256, cursor)
         for (const record of page.items) {
-          parents.set(record.id, record.owner?.conversationId ?? record.parent?.conversationId)
+          parents.set(record.id, record.owner?.conversationId)
           const [entry] = (await tx.scanEntries({ conversationId: record.id }, 1)).items
           if (entry?.conversationId === record.id) found.push([record.id, entry.id])
         }

@@ -11,7 +11,7 @@ new panel springs out of the hub, and the view frames both.
 
 Each top-level conversation is a ray from a slot on the first ring; the subagents it owns pack outward along that ray,
 in creation order. Slots fill top, bottom, right, left, then in between, and a conversation keeps its slot while the
-page is open, so a new conversation or subagent never moves another branch. Moves glide; history forks, archived
+page is open, so a new conversation or subagent never moves another branch. Moves glide; ownerless history forks get their own ray, while archived
 conversations and empty drafts stay off the map.
 
 A panel's outline is its state: Working (purple, pulsing), Waiting on subagent (blue), Queued (dashed), Needs decision
@@ -139,8 +139,8 @@ are dropped, and rebuilt when unarchived. At most 150 rows are kept; the least r
 
 ## Conclusions
 
-A tree is a top-level conversation and every conversation it owns (subagents, at any depth; history forks are not in
-it). The server follows commits and, about 300 ms after something touches a tree (an answer, a tool result, a run
+A tree is a top-level conversation and every conversation it owns (subagents, at any depth; ownerless history forks start their own
+tree). The server follows commits and, about 300 ms after something touches a tree (an answer, a tool result, a run
 starting or ending, queued input, an assessment or overview row, a landed or removed checkout), evaluates it.
 When the facet opens or reloads, it evaluates every non-archived tree, so decisions show for trees that settled before
 it ran, without new work, and drops the `trees` entries of trees that are not on the map. Archiving a tree drops its

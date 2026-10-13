@@ -135,11 +135,8 @@ export async function createApi(
         }
         refreshed.push({
           id: record.id,
-          ...(record.owner || record.parent
-            ? {
-                parentConversationId: record.owner?.conversationId ?? record.parent?.conversationId,
-              }
-            : {}),
+          ...(record.owner ? { parentConversationId: record.owner.conversationId } : {}),
+          ...(!record.owner && record.parent ? { branchOf: record.parent } : {}),
           ...(record.owner ? { ownerTaskId: record.owner.taskId } : {}),
           ...(metadata?.label ? { label: metadata.label } : {}),
           ...(metadata?.title

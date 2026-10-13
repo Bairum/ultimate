@@ -642,7 +642,7 @@ it('clears summary and cadence on reset, drops stale completion and isolates pro
   expect(fixture.generated).toHaveBeenCalledTimes(6)
 }, 60000)
 
-it('assesses owned children without renaming them, excludes ownerless forks, and does not backfill', async () => {
+it('assesses owned children without renaming them, summarizes ownerless forks, and does not backfill', async () => {
   const fixture = await launch()
   const root = fixture.server.root
   await fixture.server.harness.commit(
@@ -709,14 +709,21 @@ it('assesses owned children without renaming them, excludes ownerless forks, and
     title: 'Scout the task boundaries',
     label: 'scout',
   })
-  expect((await fixture.server.harness.snapshot(Summaries, fork.id, context))?.exchanges ?? 0).toBe(
-    0,
+  await until(
+    async () =>
+      (await fixture.server.harness.snapshot(Summaries, fork.id, context))?.assessmentStatus ===
+      'ready',
   )
-  expect(fixture.generated).toHaveBeenCalledTimes(1)
-  expect(await fixture.titleChanges(child.id)).toEqual([])
-  expect(await fixture.titleChanges(fork.id)).toEqual([])
-  await fixture.exchange()
+  expect((await fixture.server.harness.snapshot(Summaries, fork.id, context))?.exchanges).toBe(1)
   expect(fixture.generated).toHaveBeenCalledTimes(2)
+  expect(await fixture.titleChanges(child.id)).toEqual([])
+  expect(await fixture.titleChanges(fork.id)).toEqual([
+    expect.objectContaining({
+      data: expect.objectContaining({ title: 'Improve the conversation sidebar' }),
+    }),
+  ])
+  await fixture.exchange()
+  expect(fixture.generated).toHaveBeenCalledTimes(3)
   expect(fixture.generated.mock.calls.some((call) => call[5] === 'intent')).toBe(false)
 }, 60000)
 
