@@ -18,6 +18,7 @@ export const DEFAULT_EXTENSIONS = [
   'browser',
   'onboarding',
   'splash',
+  'lineage',
 ] as const
 
 export function extensionSettingsFiles(projectRoot: string, userHome = homedir()) {

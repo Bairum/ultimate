@@ -21,6 +21,18 @@ export default async function fauxExtension(host: ExtensionHost) {
     const demo: FauxResponseFactory = (transcript) => {
       faux.appendResponses([demo])
       const last = transcript.messages.findLast((message) => message.role !== 'system')
+      const system = transcript.messages[0]
+      if (
+        system?.role === 'system' &&
+        typeof system.content === 'string' &&
+        system.content.startsWith('Write the brief')
+      ) {
+        return fauxAssistantMessage([
+          fauxText(
+            '## Idea\n\nUltimate is one tree of conversations: a root and its branches (#1/11).\n\n## For this branch\n\n- Keep it minimal; reuse the existing card language.\n- Open: how notes reach an idle conversation.',
+          ),
+        ])
+      }
       if (last?.role === 'user' && last.content === 'delegate to scout') {
         return fauxAssistantMessage(
           [
@@ -64,6 +76,17 @@ export default async function fauxExtension(host: ExtensionHost) {
         last.content === 'restart yourself'
       ) {
         return fauxAssistantMessage([fauxToolCall('restart', {})], { stopReason: 'toolUse' })
+      }
+      if (last?.role === 'user' && last.content === 'leave a note') {
+        return fauxAssistantMessage(
+          [
+            fauxToolCall('note', {
+              to: 'root',
+              text: 'Notes now reach an idle conversation without waking it; see `extensions/lineage/`.',
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        )
       }
       if (last?.role === 'user' && last.content === 'submit workspace') {
         return fauxAssistantMessage([fauxToolCall('workspace', { action: 'submit' })], {
