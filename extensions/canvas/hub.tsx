@@ -129,7 +129,7 @@ export const Hub = memo(function Hub({ data }: NodeProps<HubNode>) {
             images={images}
             disabled={pending || reading}
             remove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
-            className="nodrag nowheel max-h-14 shrink-0 flex-nowrap overflow-auto px-1 py-2 [&_img]:max-h-10"
+            className="nodrag nowheel max-h-14 shrink-0 flex-nowrap overflow-auto px-1 py-2 [&_img]:max-h-10!"
           />
           <textarea
             aria-label="Start a conversation"

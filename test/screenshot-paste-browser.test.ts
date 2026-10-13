@@ -23,6 +23,33 @@ async function paste(page: Page) {
       )
   }, png)
 }
+async function pasteScreenshot(page: Page, selector: string, count = 1) {
+  await page.evaluate(
+    ({ target, copies }) => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 320
+      canvas.height = 640
+      const drawing = canvas.getContext('2d')!
+      drawing.fillStyle = '#615393'
+      drawing.fillRect(0, 0, canvas.width, canvas.height)
+      drawing.fillStyle = 'white'
+      drawing.font = '24px sans-serif'
+      drawing.fillText('Screenshot', 30, 90)
+      const bytes = Uint8Array.from(atob(canvas.toDataURL().split(',')[1]), (c) => c.charCodeAt(0))
+      const clipboard = new DataTransfer()
+      for (let i = 0; i < copies; i++)
+        clipboard.items.add(new File([bytes], 'screenshot.png', { type: 'image/png' }))
+      document.querySelector(target)!.dispatchEvent(
+        new ClipboardEvent('paste', {
+          clipboardData: clipboard,
+          bubbles: true,
+          cancelable: true,
+        }),
+      )
+    },
+    { target: selector, copies: count },
+  )
+}
 async function show(page: Page, id: number) {
   await page.evaluate(
     `import('/src/sdk/client.ts').then(({ uiState }) => uiState.set('shell.conversation', ${id}))`,
@@ -59,6 +86,13 @@ it('pastes, removes, preserves failures, sends real images and reloads clickable
     await untilInput(page)
     const input = page.locator('textarea')
     await input.waitFor()
+    await pasteScreenshot(page, '#composer-input')
+    const preview = page.getByAltText('Pasted image 1')
+    await expect
+      .poll(() => preview.evaluate((image) => image.getBoundingClientRect().height))
+      .toBe(96)
+    expect(await preview.evaluate((image) => getComputedStyle(image).maxHeight)).toBe('96px')
+    await page.getByRole('button', { name: 'Remove image 1' }).click()
     // Non-image paste remains a native textarea operation.
     expect(
       await page.evaluate(() => {
@@ -338,6 +372,45 @@ it('shares Hub clipboard validation and preserves attachments through reads, cre
     for (let i = 4; i > 0; i--)
       await page.getByRole('button', { name: `Remove image ${i}` }).click()
     expect(await send.isDisabled()).toBe(true)
+    await pasteScreenshot(page, '#canvas-hub-input', 4)
+    await expect.poll(() => page.getByAltText('Pasted image 4').count()).toBe(1)
+    await expect
+      .poll(() =>
+        page
+          .getByAltText('Pasted image 4')
+          .evaluate((image) => image.getBoundingClientRect().height),
+      )
+      .toBe(40)
+    const geometry = await page.locator('[data-hub]').evaluate((hub) => {
+      const bounds = hub.getBoundingClientRect()
+      const images = Array.from(hub.querySelectorAll('img'))
+      const row = images[0].parentElement!.parentElement!.parentElement!.getBoundingClientRect()
+      const editor = hub.querySelector('textarea')!.getBoundingClientRect()
+      const button = hub
+        .querySelector('[aria-label="Start the conversation"]')!
+        .getBoundingClientRect()
+      return {
+        height: bounds.height,
+        imageHeights: images.map((image) => image.getBoundingClientRect().height),
+        maxHeights: images.map((image) => getComputedStyle(image).maxHeight),
+        rowHeight: row.height,
+        editorHeight: editor.height,
+        separate: row.bottom <= editor.top && editor.bottom <= button.top,
+        contained: button.bottom <= bounds.bottom,
+      }
+    })
+    expect(geometry).toMatchObject({
+      height: 168,
+      imageHeights: [40, 40, 40, 40],
+      maxHeights: ['40px', '40px', '40px', '40px'],
+      separate: true,
+      contained: true,
+    })
+    expect(geometry.rowHeight).toBeLessThanOrEqual(56)
+    expect(geometry.editorHeight).toBeGreaterThan(14)
+    await input.fill('Usable with four screenshots')
+    for (let i = 4; i > 0; i--)
+      await page.getByRole('button', { name: `Remove image ${i}` }).click()
     await clipboard(['image/png'], 2 * 1024 * 1024)
     await page.getByAltText('Pasted image 1').waitFor()
     await input.fill('Keep this draft')
