@@ -45,9 +45,9 @@ the map without stopping the run, even from the composer while the agent works. 
 a run; Escape still stops runs on the Agent surface. The Map button or zooming out also goes back. The viewport is
 kept in this browser (`localStorage`).
 
-Keys, all in ⌘K under Canvas and only on this surface, never while typing: `=` or `+`, and `-` (or mod+wheel) zoom, `0` fits
-everything, `f` fits the selected tree, arrows select the nearest panel that way, Enter opens, Escape goes back, `h`
-flies to the hub, `n` starts a conversation there. The commands also rename, archive or unarchive the selected
+Keys, all in ⌘K under Canvas and only on this surface, not while typing except Escape from the composer: `=` or `+`,
+and `-` (or mod+wheel) zoom, `0` fits everything, `f` fits the selected tree, arrows select the nearest panel that way,
+Enter opens, Escape goes back, `h` flies to the hub, `n` starts a conversation there. The commands also rename, archive or unarchive the selected
 conversation, show or hide archived conversations (the toolbar's archive toggle), and open its workspace details.
 
 A panel's `…` menu offers what the sidebar row and the agent view did: open, stop the run, workspace details, and for a

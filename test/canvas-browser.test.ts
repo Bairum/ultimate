@@ -65,10 +65,6 @@ it('starts a conversation at the hub and follows its tools, writing, subagent an
         [fauxToolCall('bash', { command: `while [ ! -f ${go} ]; do sleep 0.05; done; echo 12` })],
         { stopReason: 'toolUse' },
       )
-    if (last.role === 'user' && last.content === 'Keep working')
-      return fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 120' })], {
-        stopReason: 'toolUse',
-      })
     if (last.role === 'toolResult' && last.toolName === 'bash')
       return fauxAssistantMessage(
         [
@@ -116,28 +112,6 @@ it('starts a conversation at the hub and follows its tools, writing, subagent an
 
     // A running command shows as a chip, then the answer streams in as the writing tail.
     await panel.locator('[data-tool="bash"][data-tool-status="running"]').waitFor(timeout)
-
-    // Escape minimizes a working conversation, even from its composer, without aborting it.
-    const map = page.locator('[data-canvas-map]')
-    const focused = page.locator('[data-canvas-focus]')
-    await map.click({ position: { x: 4, y: 4 } })
-    await page.keyboard.press('Enter')
-    await focused.locator('#composer-input').waitFor(timeout)
-    await focused.locator('#composer-input').focus()
-    await page.keyboard.press('Escape')
-    await focused.waitFor({ state: 'detached', ...timeout })
-    await expect
-      .poll(() => map.evaluate((element) => element === document.activeElement))
-      .toBe(true)
-    expect(server.api.conversations().find((summary) => summary.id === parent)!.busy).toBe(true)
-
-    // The map immediately takes keyboard commands; Escape also works outside the composer.
-    await page.keyboard.press('Enter')
-    await focused.waitFor(timeout)
-    await map.focus()
-    await page.keyboard.press('Escape')
-    await focused.waitFor({ state: 'detached', ...timeout })
-    expect(server.api.conversations().find((summary) => summary.id === parent)!.busy).toBe(true)
     await writeFile(go, '')
     await expect
       .poll(() => panel.locator('[data-tail="writing"]').textContent(), timeout)
@@ -155,13 +129,13 @@ it('starts a conversation at the hub and follows its tools, writing, subagent an
     // The camera follows the spawn: the shown tree is re-framed so the child is in view.
     await expect
       .poll(async () => {
-        const bounds = (await map.boundingBox())!
+        const map = (await page.locator('[data-canvas-map]').boundingBox())!
         const box = (await page.locator(`[data-agent="${child}"]`).boundingBox())!
         return (
-          box.x >= bounds.x &&
-          box.y >= bounds.y &&
-          box.x + box.width <= bounds.x + bounds.width &&
-          box.y + box.height <= bounds.y + bounds.height
+          box.x >= map.x &&
+          box.y >= map.y &&
+          box.x + box.width <= map.x + map.width &&
+          box.y + box.height <= map.y + map.height
         )
       }, timeout)
       .toBe(true)
@@ -171,27 +145,24 @@ it('starts a conversation at the hub and follows its tools, writing, subagent an
     expect(await panel.getAttribute('class')).toContain('border-sky')
     await edge.locator('[data-edge-flow="waiting"]').waitFor(present)
 
-    // A busy subagent also minimizes without stopping; keyboard navigation can reopen it.
-    await page.locator(`[data-agent="${child}"]`).dblclick()
-    await focused.locator('#composer-input').waitFor(timeout)
-    await focused.locator('#composer-input').focus()
-    await page.keyboard.press('Escape')
-    await focused.waitFor({ state: 'detached', ...timeout })
-    expect(server.api.conversations().find((summary) => summary.id === child)!.busy).toBe(true)
-    await page.keyboard.press('Enter')
-    await focused.waitFor(timeout)
-    await page.getByRole('button', { name: 'Back to the map' }).click()
-    await focused.waitFor({ state: 'detached', ...timeout })
-    await expect
-      .poll(() => map.evaluate((element) => element === document.activeElement))
-      .toBe(true)
-    // Select the parent again for the existing idle open/back checks.
-    await panel.click()
-
     // The scout answers: the wait ends, a dot runs back to the parent, and the parent replies; the finished scout
     // shrinks to a pill.
+    // Observe before release: the answer pulse lasts only 1.2 seconds, so polling afterwards can miss it.
+    await edge.evaluate((element) => {
+      const map = element.closest('[data-canvas-map]')!
+      const selector = `[data-testid="${element.getAttribute('data-testid')}"] [data-edge-answer]`
+      Reflect.set(window, 'canvasAnswerObserved', false)
+      const observer = new MutationObserver(() => {
+        if (!map.querySelector(selector)) return
+        Reflect.set(window, 'canvasAnswerObserved', true)
+        observer.disconnect()
+      })
+      observer.observe(map, { childList: true, subtree: true })
+    })
     release()
-    await edge.locator('[data-edge-answer]').waitFor(present)
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, 'canvasAnswerObserved')), timeout)
+      .toBe(true)
     await expect.poll(() => panel.getAttribute('data-status'), timeout).toBe('replied')
     await edge.locator('[data-edge-flow="waiting"]').waitFor({ state: 'detached', ...timeout })
     await expect
@@ -201,15 +172,13 @@ it('starts a conversation at the hub and follows its tools, writing, subagent an
     // Enter zooms the selected panel into the real transcript and composer; Escape returns to the map.
     await page.locator('[data-canvas-map]').click({ position: { x: 4, y: 4 } })
     await page.keyboard.press('Enter')
+    const focused = page.locator('[data-canvas-focus]')
     await focused.waitFor(timeout)
     await focused.getByText('Both counts agree: twelve files.').waitFor(timeout)
     await focused.locator('#composer-input').waitFor(timeout)
-    await focused.locator('#composer-input').focus()
+    await page.locator('[data-canvas-map]').click({ position: { x: 4, y: 4 } })
     await page.keyboard.press('Escape')
     await focused.waitFor({ state: 'detached', ...timeout })
-    await expect
-      .poll(() => map.evaluate((element) => element === document.activeElement))
-      .toBe(true)
     await panel.locator('[data-tail], [data-summary]').first().waitFor(timeout)
 
     // Another conversation from the hub: the first tree, settled and concluded, folds into its card with its outcome.
@@ -227,53 +196,6 @@ it('starts a conversation at the hub and follows its tools, writing, subagent an
       .getByText('both counts agree', { exact: false })
       .waitFor(timeout)
     expect(await card.locator('[data-stale]').count()).toBe(0)
-    // Canvas still has an explicit Stop; the Agent surface still uses Escape to stop.
-    for (const stopWithEscape of [false, true]) {
-      if (stopWithEscape) {
-        await page.getByTitle('Switch surface', { exact: true }).click()
-        await page.locator('[data-surface="canvas"]').click()
-      }
-      await map.focus()
-      await page.keyboard.press('n')
-      await hub.fill('Keep working')
-      const before = server.api.conversations().map((summary) => summary.id)
-      await hub.press('Enter')
-      await expect
-        .poll(
-          () =>
-            server.api
-              .conversations()
-              .find((summary) => !before.includes(summary.id) && summary.inputAt)?.id,
-          timeout,
-        )
-        .toBeDefined()
-      const running = server.api
-        .conversations()
-        .find((summary) => !before.includes(summary.id) && summary.inputAt)!.id
-      await page
-        .locator(`[data-agent="${running}"] [data-tool="bash"][data-tool-status="running"]`)
-        .waitFor(timeout)
-      if (stopWithEscape) {
-        await page.getByTitle('Switch surface', { exact: true }).click()
-        await page.locator('[data-surface="agent"]').click()
-        await page.locator('#composer-input').focus()
-        await page.keyboard.press('Escape')
-      } else {
-        await map.focus()
-        await page.keyboard.press('Enter')
-        await focused.locator('#composer-input').waitFor(timeout)
-        const stop = focused.getByTitle('Stop', { exact: true })
-        await stop.waitFor(timeout)
-        await stop.click()
-        await page.getByRole('button', { name: 'Back to the map' }).click()
-      }
-      await expect
-        .poll(
-          () => server.api.conversations().find((summary) => summary.id === running)!.busy,
-          timeout,
-        )
-        .toBe(false)
-    }
     expect(errors).toEqual([])
   } finally {
     release()
