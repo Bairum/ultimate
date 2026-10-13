@@ -337,7 +337,7 @@ export function workspaces(host: Host) {
       }
       return { text: `Discarded isolate; kept branch ${workspace.branch}.` }
     },
-    /** Discard every clean, idle, ready checkout whose tip its target branch already contains. */
+    /** Discard every clean, idle, ready checkout with its own commits that its target branch already contains. */
     async removeLanded(context: Context) {
       const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
       const removed: number[] = []
@@ -346,8 +346,10 @@ export function workspaces(host: Host) {
         if (workspace.state !== 'ready') continue
         if (index!.queue.some((item) => item.conversationId === id)) continue
         const tip = await git(workspace.path, 'rev-parse', 'HEAD').catch(() => '')
+        // A checkout without commits of its own is not landed; its conversation may still start work.
         if (
           !tip ||
+          tip === workspace.base ||
           !(await git(
             workspace.source,
             'merge-base',
