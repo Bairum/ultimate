@@ -18,6 +18,7 @@ import {
   useWorkspaceConversations as useConversations,
 } from './data.tsx'
 import type { WorkspaceConversation as ConversationSummary } from './data.tsx'
+import { LanderLogEntry, WorkspaceCall } from './log.tsx'
 import type { WorkspaceInfo } from './types.ts'
 
 function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) {
@@ -295,6 +296,8 @@ function WorkspacesPanel() {
 }
 
 export default defineWebExtension({
+  tools: { workspace: WorkspaceCall },
+  entries: { 'ultimate.lander': LanderLogEntry },
   panels: [
     {
       id: 'workspaces',

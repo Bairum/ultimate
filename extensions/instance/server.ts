@@ -29,6 +29,7 @@ export default function instanceExtension(
     | 'harness'
     | 'projectSettings'
     | 'extensions'
+    | 'metadata'
   >,
 ) {
   const service = workspaces(host)

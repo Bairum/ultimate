@@ -158,7 +158,8 @@ export type Inputs = {
 }
 
 /**
- * The agents on the map: top-level conversations that have a message or work, without archived ones unless asked for
+ * The agents on the map: top-level conversations that have a message or work, and lander conversations (their log
+ * has no messages), without archived ones unless asked for
  * (or shown), and below them the conversations they own (a subagent has an owner task; a history fork does not, and
  * stays off the map). Ordered by id, so a newcomer always comes last among its siblings. Active agents and those
  * waiting for a decision keep full panels; finished subagents shrink to pills, and a tree with nothing active and
@@ -184,7 +185,10 @@ export function agentsOf(inputs: Inputs): Agent[] {
   }
   const result: Agent[] = []
   for (const top of conversations.toSorted((a, b) => a.id - b.id)) {
-    if (top.parentConversationId !== undefined || (top.inputAt === undefined && !busy(top)))
+    if (
+      top.parentConversationId !== undefined ||
+      (top.inputAt === undefined && top.label !== 'lander' && !busy(top))
+    )
       continue
     const tree: Agent[] = []
     const known = trees[top.id]
