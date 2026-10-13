@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile, access, symlink, realpath } from 'node:fs/promises'
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { join } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
@@ -806,6 +806,8 @@ async function withRemote() {
   await git(paths.projectRoot, 'push', '-q', 'origin', 'main')
   return { paths, bare }
 }
+/** Git without a PATH wrapper that holds commands. */
+const realGit = (cwd: string, ...args: string[]) => execFileSync('/usr/bin/git', args, { cwd })
 async function holdGit(directory: string, command: string) {
   const bin = join(directory, 'bin')
   const started = join(directory, `${command}-started`)
@@ -853,4 +855,32 @@ it('pushes the checked commit even when the target advances before the push', as
   await push.release()
   expect((await submitted(f, submitter))[0]).toContain('Pushed to origin/main.')
   expect(await git(bare, 'rev-parse', 'main')).toBe(integrated)
+})
+it('reports a local landing whose push retry conflicts as landed locally', async () => {
+  const { paths, bare } = await withRemote()
+  const f = await lander({ push: 'origin' }, paths)
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  await writeFile(join(workspace.path, 'base.txt'), 'workspace')
+  const tip = await commit(workspace.path)
+  const push = await holdGit(f.directory, 'push')
+  await f.service.submit(id, context)
+  await push.started()
+  // The remote moves with a conflicting change while the lander pushes; real git avoids the hold.
+  const other = join(f.directory, 'other')
+  realGit(f.directory, 'clone', '-q', bare, other)
+  await writeFile(join(other, 'base.txt'), 'remote')
+  realGit(other, '-c', 'user.email=t@e.com', '-c', 'user.name=T', 'commit', '-qam', 'remote')
+  realGit(other, 'push', '-q', 'origin', 'main')
+  await push.release()
+  const [report] = await submitted(f, id)
+  const landed = await git(f.projectRoot, 'rev-parse', 'main')
+  expect(report).toContain(`landed locally as ${landed.slice(0, 7)} on main.`)
+  expect(report).toContain('Push failed: origin/main conflicts with local main in:')
+  expect(report).not.toContain('was not landed')
+  expect(
+    await git(f.projectRoot, 'merge-base', '--is-ancestor', tip, landed).then(() => true),
+  ).toBe(true)
+  expect((await f.service.get(id, context))!.landed).toBe(landed)
 })

@@ -51,10 +51,10 @@ const remote = (cwd: string, signal: AbortSignal, ...args: string[]) =>
 type Prepared = {
   base: string
   integrated: string
-  commits: string[]
-  paths: string[]
   flaky: string[]
 }
+/** What a submission's first fast-forward landed locally. */
+type Landed = { sha: string; commits: string[]; paths: string[]; flaky: string[] }
 type State =
   | { phase: 'next' }
   | { phase: 'land'; id: string; attempt: number; pushRetried?: boolean }
@@ -154,6 +154,24 @@ export function createLander(
               },
             }
           }, context)
+        const summary = (landed: Landed, sha: string, how = '') =>
+          [
+            landed.commits.length
+              ? `landed${how} as ${sha.slice(0, 7)} on ${entry.target}.`
+              : `had nothing new to land on ${entry.target}.`,
+            ...(landed.commits.length ? [`Commits:\n${landed.commits.join('\n')}`] : []),
+            ...(landed.paths.length ? [`Changed paths:\n${landed.paths.join('\n')}`] : []),
+            ...landed.flaky.map((command) => `Flaky: ${command}`),
+          ].join('\n')
+        /** Once the submission landed locally, a later failure only means its push failed. */
+        const fail = async (reason: string) => {
+          const landed = await runtime.memo<Landed>(`landed:${id}`, context)
+          return finish(
+            landed
+              ? `${summary(landed, landed.sha, ' locally')}\nPush failed: ${reason}`
+              : `was not landed: ${reason}`,
+          )
+        }
         const retry = (pushRetried = task.state.checkpoint.pushRetried) =>
           runtime.commit(
             () => ({
@@ -202,8 +220,8 @@ export function createLander(
                   } catch {
                     const conflicts = await git(path, 'diff', '--name-only', '--diff-filter=U')
                     await git(path, 'merge', '--abort').catch(() => undefined)
-                    return finish(
-                      `was not landed: ${settings.push}/${target} conflicts with local ${target} in:\n${conflicts}`,
+                    return fail(
+                      `${settings.push}/${target} conflicts with local ${target} in:\n${conflicts}`,
                     )
                   }
                 }
@@ -222,8 +240,8 @@ export function createLander(
             } catch {
               const conflicts = await git(path, 'diff', '--name-only', '--diff-filter=U')
               await git(path, 'merge', '--abort').catch(() => undefined)
-              return finish(
-                `was not landed: it conflicts with ${target} in:\n${conflicts}\nMerge ${target} into your workspace, resolve, verify and submit again.`,
+              return fail(
+                `it conflicts with ${target} in:\n${conflicts}\nMerge ${target} into your workspace, resolve, verify and submit again.`,
               )
             }
             // Setup prepares the merged revision, for example installs its lockfile.
@@ -235,8 +253,8 @@ export function createLander(
               if ((await check(path, command, checkContext)) === undefined) continue
               const output = await check(path, command, checkContext)
               if (output !== undefined)
-                return finish(
-                  `was not landed: check failed twice: ${command}\n${output}\nFix it, verify and submit again.`,
+                return fail(
+                  `check failed twice: ${command}\n${output}\nFix it, verify and submit again.`,
                 )
               flaky.push(command)
             }
@@ -246,8 +264,6 @@ export function createLander(
               {
                 base,
                 integrated,
-                commits: lines(await git(path, 'log', '--oneline', `${base}..${integrated}`)),
-                paths: lines(await git(path, 'diff', '--name-only', base, integrated)),
                 flaky,
               },
               context,
@@ -276,19 +292,29 @@ export function createLander(
             return false
           })
           if (refused)
-            return finish(
-              `was integrated as ${integrated.slice(0, 7)} but the checkout of ${target} refused the fast-forward:\n${refused}`,
+            return fail(
+              `the checkout of ${target} refused the fast-forward to ${integrated.slice(0, 7)}:\n${refused}`,
             )
           if (moved) {
             if (attempt < attempts) return retry()
-            return finish(`was not landed: ${target} kept moving during ${attempts} attempts.`)
+            return fail(`${target} kept moving during ${attempts} attempts.`)
           }
-          // The first fast-forward decides what landed; a push retry integrates again from there.
-          const { commits, paths } = await runtime.memo(
+          // The first fast-forward decides what the submission landed; a push retry integrates again from there.
+          const landed = await runtime.memo<Landed>(
             `landed:${id}`,
-            { commits: prepared.commits, paths: prepared.paths },
+            {
+              sha: integrated,
+              commits: lines(await git(source, 'log', '--oneline', `${base}..${integrated}`)),
+              paths: lines(await git(source, 'diff', '--name-only', base, integrated)),
+              flaky,
+            },
             context,
           )
+          await runtime.commit(async (tx) => {
+            ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[
+              String(entry.conversationId)
+            ].landed = integrated
+          }, context)
           let pushed = 'Not pushed.'
           if (settings.push) {
             await step(`pushing to ${settings.push}`)
@@ -306,28 +332,21 @@ export function createLander(
             } catch (error) {
               if (signal.aborted) throw error
               if (!task.state.checkpoint.pushRetried) return retry(true)
-              pushed = `Push to ${settings.push} was rejected:\n${failure(error)}`
+              return fail(`${settings.push} rejected the push:\n${failure(error)}`)
             }
           }
           const needsRestart =
             (await realpath(source)) === (await realpath(host.ultimateRoot)) &&
-            paths.some((path) => /^(server|shared)\//.test(path))
+            landed.paths.some((path) => /^(server|shared)\//.test(path))
           return finish(
-            [
-              commits.length
-                ? `landed as ${integrated.slice(0, 7)} on ${target}.`
-                : `had nothing new to land on ${target}.`,
-              ...(commits.length ? [`Commits:\n${commits.join('\n')}`] : []),
-              ...(paths.length ? [`Changed paths:\n${paths.join('\n')}`] : []),
-              ...flaky.map((command) => `Flaky: ${command}`),
-              pushed,
-              ...(needsRestart ? ['Needs restart.'] : []),
-            ].join('\n'),
+            [summary(landed, integrated), pushed, ...(needsRestart ? ['Needs restart.'] : [])].join(
+              '\n',
+            ),
             integrated,
           )
         } catch (error) {
           if (signal.aborted) throw error
-          return finish(`was not landed: ${failure(error)}`)
+          return fail(failure(error))
         }
       },
       report: async (task, runtime, context) => {
