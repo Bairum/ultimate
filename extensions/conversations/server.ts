@@ -6,7 +6,8 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Summaries, summaryBehavior } from './summary.ts'
-import { parseSummaryModel, summaryModelSetting } from './summary-model.ts'
+import { summaryModelSetting } from './summary-model.ts'
+import { parseSummaryModel } from './summary-model-ref.ts'
 import { updateSettings } from '../onboarding/settings.ts'
 import { Overview, overviewBehavior } from './overview.ts'
 
@@ -34,6 +35,13 @@ async function setTitle(host: ExtensionHost, id: ConversationId, title: string |
   }, context)
 }
 
+const projectFile = (host: ExtensionHost) => join(host.projectRoot, '.ultimate/settings.json')
+
+async function effectiveSummaryModel(host: ExtensionHost) {
+  const setting = await summaryModelSetting(host)
+  return setting.source === 'project' ? { ...setting, path: projectFile(host) } : setting
+}
+
 // Render last: Durable appends a section that appears, and re-sends the whole prompt when that breaks the order.
 export const order = 100
 
@@ -54,20 +62,30 @@ export const actions = {
     }, context)
     return { ok: true }
   },
-  /** The effective `summaryModel` setting: `{ value, source: 'default' | 'user' | 'project', default }`. */
+  /**
+   * The effective `summaryModel` setting: `{ value, source: 'default' | 'user' | 'project', default, path? }`, with the
+   * project file's `path` when the project's settings decide it.
+   */
   async summaryModel(_args: JsonValue, { host }: ActionContext) {
-    return summaryModelSetting(host)
+    return effectiveSummaryModel(host)
   },
-  /** `{value}`: sets `summaryModel` in the user's settings; `null` removes it, back to the default. */
+  /**
+   * `{value}`: sets `summaryModel` in the user's settings; `null` removes it, back to the default. The project's
+   * tracked settings file is never written: while it sets the model, this refuses.
+   */
   async setSummaryModel(args: JsonValue, { host }: ActionContext) {
     const value = args && typeof args === 'object' && !Array.isArray(args) ? args.value : undefined
     if (value !== null && (typeof value !== 'string' || !parseSummaryModel(value)))
       throw new Error('Expected value "provider/id[:thinking]" or null')
+    if ((await summaryModelSetting(host)).source === 'project')
+      throw new Error(
+        `The summary model is set by project settings in ${projectFile(host)}; edit that file to change it`,
+      )
     await updateSettings(join(host.userHome, '.ultimate/settings.json'), (settings) => {
       if (value === null) delete settings.summaryModel
       else settings.summaryModel = value
     })
-    return summaryModelSetting(host)
+    return effectiveSummaryModel(host)
   },
   /** `{id}`: starts a new context, keeping the conversation's title. */
   async reset(args: JsonValue, { host }: ActionContext) {

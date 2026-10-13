@@ -92,6 +92,7 @@ async function fixture(
     for (const file of [
       'conversations/summary.ts',
       'conversations/summary-model.ts',
+      'conversations/summary-model-ref.ts',
       'onboarding/settings.ts',
     ])
       await cp(resolvePath('extensions', file), join(ultimateRoot, 'extensions', file))
