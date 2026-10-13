@@ -40,7 +40,7 @@ export type CanvasAgent = {
   /** The latest change (ms). */
   updatedAt: number
 }
-/** Why an idle tree waits for a decision: Luna thinks one of its conversations needs input, or a checkout holds commits never landed. */
+/** Why an idle tree waits for a decision: the summary model thinks one of its conversations needs input, or a checkout holds commits never landed. */
 export type CanvasReason = {
   kind: 'needs_input' | 'unlanded'
   conversationId: number
@@ -52,7 +52,7 @@ export type CanvasConclusion = {
   headline: string
   commits: number
   pushed: boolean
-  /** Names of the features or fixes that landed, in Luna's words. */
+  /** Names of the features or fixes that landed, in the summary model's words. */
   landed: string[]
   subagents: number
   files: number

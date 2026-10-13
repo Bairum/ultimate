@@ -515,7 +515,7 @@ function Mid({ agent, feed, renaming }: { agent: Agent; feed?: CanvasAgent; rena
       : undefined
   const writing = active ? feed?.writing : undefined
   const waiting = agent.status === 'waiting' ? feed?.waitingOn : undefined
-  // Idle: Luna's summary (or what the subagent did), or the end of the last answer when a decision needs it.
+  // Idle: the summary model's summary (or what the subagent did), or the end of the last answer when a decision needs it.
   const summary =
     agent.status === 'decision'
       ? undefined
@@ -730,9 +730,9 @@ function Far({ agent, feed }: { agent: Agent; feed?: CanvasAgent }) {
 }
 
 /**
- * A settled conversation folded with everything it owns. Once concluded: the headline, Luna's summary of the whole
+ * A settled conversation folded with everything it owns. Once concluded: the headline, the summary model's summary of the whole
  * tree, the last screenshot, and what it produced as chips; dimmed while the tree has worked past it. Before its first
- * conclusion (or without Luna), its title, state and summary.
+ * conclusion (or without a summary model), its title, state and summary.
  */
 export function ConclusionCard({
   agent,

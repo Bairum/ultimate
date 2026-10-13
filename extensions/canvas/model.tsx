@@ -68,7 +68,7 @@ export const STATUS: Record<
   },
   decision: {
     label: 'Needs decision',
-    tip: 'Waits for you: Luna thinks it needs input, or an isolated checkout holds work not landed',
+    tip: 'Waits for you: the summary model thinks it needs input, or an isolated checkout holds work not landed',
     border: 'border-warning',
     text: 'text-warning',
     fill: 'bg-warning',
@@ -76,7 +76,7 @@ export const STATUS: Record<
   },
   done: {
     label: 'Done',
-    tip: "Done (Luna's opinion, not verified)",
+    tip: "Done (summary model's opinion, not verified)",
     border: 'border-success',
     text: 'text-success',
     fill: 'bg-success',
@@ -108,7 +108,7 @@ export const STATUS: Record<
 /** What a decision reason means, for its tooltip. */
 export const REASON_TIPS: Record<CanvasReason['kind'], string> = {
   needs_input:
-    "May need input (Luna's opinion, not verified); a subagent's question may be for its coordinator",
+    "May need input (summary model's opinion, not verified); a subagent's question may be for its coordinator",
   unlanded: 'Its isolated checkout holds commits that were never landed',
 }
 

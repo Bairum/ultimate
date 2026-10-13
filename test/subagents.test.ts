@@ -77,6 +77,7 @@ async function fixture(
     metadata: Metadata,
     resource: (_key, create) => create(),
     extensions: () => [],
+    notice: () => {},
   })
   prepared.registry.install(
     reportGate

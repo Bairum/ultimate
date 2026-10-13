@@ -30,7 +30,7 @@ function matches(model: ModelInfo, terms: readonly string[]) {
   return terms.every((term) => haystack.includes(term))
 }
 
-function ModelRow({
+export function ModelRow({
   model,
   current,
   onSelect,

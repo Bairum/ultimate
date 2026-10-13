@@ -3,6 +3,7 @@ import type { Op } from '@earendil-works/chord/delta'
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
+  CheckIcon,
   ChevronRightIcon,
   ChevronDownIcon,
   GitBranchIcon,
@@ -13,9 +14,17 @@ import {
   PencilIcon,
   SquarePenIcon,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
   DropdownMenu,
@@ -37,12 +46,14 @@ import {
   getState,
   useDialog,
   useExtensionUiState,
+  useModels,
   useNow,
   useStore,
   useTasks,
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, UltimateActions } from '@/sdk'
+import { ModelRow } from '../models/picker.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import {
   getWorkspaces,
@@ -60,6 +71,7 @@ import type {
 
 const newKeys = 'mod+alt+n'
 const resetDialog = 'conversations.reset'
+const summaryModelDialog = 'conversations.summary-model'
 let creationType = 'isolated'
 let creating = false
 const overviewKind = 'ultimate.conversation-overview'
@@ -244,9 +256,9 @@ function Mark({
       ? 'Working'
       : 'Subagents working'
     : assessed === 'done'
-      ? "Done (Luna's opinion, not verified)"
+      ? "Done (summary model's opinion, not verified)"
       : assessed === 'needs_input'
-        ? "May need input (Luna's opinion, not verified)"
+        ? "May need input (summary model's opinion, not verified)"
         : 'New answer'
   return (
     <span className="flex size-3 shrink-0 items-center justify-center">
@@ -819,6 +831,146 @@ function ResetDialog() {
   )
 }
 
+type SummaryModelSetting = {
+  value: unknown
+  source: 'default' | 'user' | 'project'
+  default: string
+}
+
+/**
+ * Picks the model for titles, summaries, assessments and conclusions, saved as `summaryModel` in the user's settings.
+ * It shows the effective value and where it comes from; a project's setting overrides the user's.
+ */
+function SummaryModelDialog() {
+  const [open, setOpen] = useDialog(summaryModelDialog)
+  const models = useModels()
+  const [setting, setSetting] = useState<SummaryModelSetting>()
+  const [query, setQuery] = useState('')
+  const [error, setError] = useState<string>()
+  useEffect(() => {
+    if (!open) return
+    setError(undefined)
+    setQuery('')
+    api
+      .action<SummaryModelSetting>('conversations', 'summaryModel')
+      .then(setSetting, (failure: unknown) => setError(errorMessage(failure)))
+  }, [open])
+  const current = typeof setting?.value === 'string' ? setting.value : undefined
+  const [ref] = current?.split(':') ?? []
+  const groups = useMemo(() => {
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
+    const found = (models?.models ?? []).filter(
+      (model) =>
+        model.available &&
+        terms.every((term) =>
+          `${model.provider}/${model.id} ${model.name}`.toLowerCase().includes(term),
+        ),
+    )
+    return [...Map.groupBy(found.slice(0, 150), (model) => model.provider)]
+  }, [models, query])
+  const choose = async (value: string | null) => {
+    setError(undefined)
+    try {
+      const next = await api.action<SummaryModelSetting>('conversations', 'setSummaryModel', {
+        value,
+      })
+      setSetting(next)
+      if (next.source !== 'project') setOpen(false)
+    } catch (failure) {
+      setError(errorMessage(failure))
+    }
+  }
+  return (
+    <Dialog onOpenChange={setOpen} open={open}>
+      <DialogContent
+        className="top-[16%] translate-y-0 gap-0 overflow-hidden p-0 font-mono sm:max-w-2xl"
+        showCloseButton={false}
+      >
+        <DialogTitle className="sr-only">Summary model</DialogTitle>
+        <DialogDescription className="sr-only">
+          The model that writes titles, summaries, reply assessments and Canvas conclusions.
+        </DialogDescription>
+        <div className="flex items-baseline gap-2 border-b border-border/70 px-3 py-2 text-[12px]">
+          <span className="text-muted-foreground">Summary model</span>
+          <span className="min-w-0 truncate text-foreground" data-testid="summary-model-current">
+            {setting ? String(setting.value) : '…'}
+          </span>
+          {setting && (
+            <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+              {setting.source === 'default'
+                ? 'default'
+                : setting.source === 'user'
+                  ? '~/.ultimate/settings.json'
+                  : "this project's .ultimate/settings.json"}
+            </span>
+          )}
+        </div>
+        <Command
+          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10.5px] [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:uppercase"
+          key={setting?.source}
+          defaultValue={setting?.source === 'default' ? 'default' : ref}
+          shouldFilter={false}
+        >
+          <CommandInput
+            className="text-[13px]"
+            onValueChange={setQuery}
+            placeholder="Search logged-in models…"
+            value={query}
+          />
+          <CommandList className="max-h-[50vh]">
+            <CommandEmpty className="py-6 text-center text-[12px] text-muted-foreground">
+              No logged-in model matches.
+            </CommandEmpty>
+            {!query && setting && (
+              <CommandGroup heading="Default">
+                <CommandItem
+                  className="gap-2 py-1 font-mono text-[12px]"
+                  onSelect={() => void choose(null)}
+                  value="default"
+                >
+                  <CheckIcon
+                    className={cn(
+                      'size-3.5',
+                      setting.source === 'default' ? 'text-brand' : 'opacity-0',
+                    )}
+                  />
+                  Use the default
+                  <span className="truncate text-muted-foreground">{setting.default}</span>
+                </CommandItem>
+              </CommandGroup>
+            )}
+            {groups.map(([provider, items]) => (
+              <Fragment key={provider}>
+                <CommandGroup heading={provider}>
+                  {items.map((model) => (
+                    <ModelRow
+                      current={
+                        setting?.source !== 'default' && ref === `${model.provider}/${model.id}`
+                      }
+                      key={`${model.provider}/${model.id}`}
+                      model={model}
+                      onSelect={() => void choose(`${model.provider}/${model.id}`)}
+                    />
+                  ))}
+                </CommandGroup>
+              </Fragment>
+            ))}
+          </CommandList>
+          <div className="border-t border-border/70 px-3 py-1.5 text-[11px] text-muted-foreground">
+            {error ? (
+              <span className="text-error">{error}</span>
+            ) : setting?.source === 'project' ? (
+              "This project's settings override your choice"
+            ) : (
+              'Titles, summaries, assessments and conclusions · saved in ~/.ultimate/settings.json'
+            )}
+          </div>
+        </Command>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 const assessmentLabel = { needs_input: 'may need input', done: 'Done', neutral: 'neutral' }
 
 /** What a summary task concluded, as one quiet line; each entry traces to its task by `byTaskId`. */
@@ -830,7 +982,7 @@ function summaryText(entry: EntryRecord) {
       return `Title changed to “${(entry.data as TitleChange).title}”`
     case 'conversations.assessed': {
       const data = entry.data as Assessed
-      return `Assessed: ${assessmentLabel[data.value]} (Luna's opinion) · ${data.activity}`
+      return `Assessed: ${assessmentLabel[data.value]} (summary model's opinion) · ${data.activity}`
     }
     default: {
       const data = entry.data as SummaryDiscard
@@ -866,7 +1018,7 @@ export default defineWebExtension({
     'conversations.assessed': SummaryAction,
     'conversations.summary-discarded': SummaryAction,
   },
-  slots: { sidebar: Conversations, overlay: [ResetDialog, Seen] },
+  slots: { sidebar: Conversations, overlay: [ResetDialog, SummaryModelDialog, Seen] },
   commands: [
     {
       id: 'conversations.new',
@@ -880,6 +1032,12 @@ export default defineWebExtension({
       title: 'New isolated conversation',
       group: 'Conversations',
       run: (actions) => createConversation(actions, 'isolated'),
+    },
+    {
+      id: 'conversations.summary-model',
+      title: 'Summary model…',
+      group: 'Conversations',
+      run: (actions) => actions.open(summaryModelDialog),
     },
     {
       id: 'conversations.reset',

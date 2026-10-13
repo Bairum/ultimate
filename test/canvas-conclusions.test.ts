@@ -147,7 +147,14 @@ async function launch({ repository = false, available = true } = {}) {
       defineExtension({
         ...registry.snapshot().extension('canvas')!,
         ...conclusionBehavior(
-          { harness: () => server.harness, metadata: Metadata, userHome: home },
+          {
+            harness: () => server.harness,
+            metadata: Metadata,
+            userHome: home,
+            projectSettings: async () => ({}),
+            notice: () => {},
+            modelRuntime: prepared.host.modelRuntime,
+          },
           generated,
         ),
       }),
@@ -422,6 +429,9 @@ it('waits while Luna says the conversation needs input; a subagent question its 
         {
           harness: () => server.harness,
           metadata: Metadata,
+          userHome: server.host.userHome,
+          projectSettings: async () => ({}),
+          notice: () => {},
           modelRuntime: server.host.modelRuntime,
         },
         assessed,
@@ -488,6 +498,9 @@ it('shows what settled trees wait for once the canvas opens, without new work, a
         {
           harness: () => before.harness,
           metadata: Metadata,
+          userHome: before.host.userHome,
+          projectSettings: async () => ({}),
+          notice: () => {},
           modelRuntime: before.host.modelRuntime,
         },
         async (_models, input) => ({
@@ -523,7 +536,14 @@ it('shows what settled trees wait for once the canvas opens, without new work, a
     defineExtension({
       ...canvas.snapshot().extension('canvas')!,
       ...conclusionBehavior(
-        { harness: () => server.harness, metadata: Metadata, userHome: home },
+        {
+          harness: () => server.harness,
+          metadata: Metadata,
+          userHome: home,
+          projectSettings: async () => ({}),
+          notice: () => {},
+          modelRuntime: prepared.host.modelRuntime,
+        },
         generated,
       ),
     }),
@@ -608,7 +628,14 @@ it('concludes a tree with many screenshots a page at a time, keeping only the ne
     defineExtension({
       ...registry.snapshot().extension('canvas')!,
       ...conclusionBehavior(
-        { harness: () => paged.harness, metadata: Metadata, userHome: fixture.home },
+        {
+          harness: () => paged.harness,
+          metadata: Metadata,
+          userHome: fixture.home,
+          projectSettings: async () => ({}),
+          notice: () => {},
+          modelRuntime: fixture.server.host.modelRuntime,
+        },
         fixture.generated,
       ),
     }),
@@ -726,8 +753,9 @@ it('survives a crash after Luna answered: the stored response is used, not reque
   // The response arrives and is stored, then the process goes away before the conclusion is.
   fixture.generated.mockImplementationOnce((_models, input, signal, receipt) =>
     generateConclusion(fixture.provider.models, input, signal, {
+      model: receipt.model,
       save: async (response) => {
-        await receipt!.save(response)
+        await receipt.save!(response)
         crashed()
         return new Promise((_done, reject) =>
           signal.addEventListener('abort', () => reject(new Error('Closed')), { once: true }),
@@ -751,7 +779,9 @@ it('survives a crash after Luna answered: the stored response is used, not reque
 it('accepts only a complete conclusion from Luna', async () => {
   const signal = new AbortController().signal
   const ask = (answer: unknown) =>
-    generateConclusion(luna(answer as ConclusionText).models, 'Untrusted text', signal)
+    generateConclusion(luna(answer as ConclusionText).models, 'Untrusted text', signal, {
+      model: { provider: 'openai', id: 'gpt-6-luna', thinking: 'medium' },
+    })
   expect(
     await ask({ headline: `  ${'Long headline '.repeat(10)}`, summary: 'Did it.', landed: [] }),
   ).toEqual({

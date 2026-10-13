@@ -42,7 +42,14 @@ it('starts a conversation at the hub and follows its tools, writing, subagent an
     defineExtension({
       ...registry.snapshot().extension('canvas')!,
       ...conclusionBehavior(
-        { harness: () => server.harness, metadata: Metadata, userHome },
+        {
+          harness: () => server.harness,
+          metadata: Metadata,
+          userHome,
+          projectSettings: async () => ({}),
+          notice: () => {},
+          modelRuntime: server.host.modelRuntime,
+        },
         async () => ({
           headline: 'Counted twelve files twice',
           summary: 'The user asked for a double count. A scout recounted; both counts agree.',

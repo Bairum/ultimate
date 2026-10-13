@@ -1,22 +1,12 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, readdir, writeFile, rename, rm } from 'node:fs/promises'
-import { randomUUID } from 'node:crypto'
-import { basename, dirname, join } from 'node:path'
+import { readFile, readdir } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { loadSkillsFromDir, parseFrontmatter } from '@earendil-works/pi-coding-agent'
 import { defineExtension } from '@earendil-works/pi-durable'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
+import { save, updateSettings } from './settings.ts'
 
-async function settings(path: string): Promise<JsonObject> {
-  const text = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== 'ENOENT') throw error
-    return '{}'
-  })
-  const value = JSON.parse(text)
-  if (!value || typeof value !== 'object' || Array.isArray(value))
-    throw new Error('Settings must be a JSON object')
-  return value
-}
 function lists(value: JsonObject) {
   const extensions = value.extensions ?? {}
   if (typeof extensions !== 'object' || Array.isArray(extensions))
@@ -40,34 +30,6 @@ function toggle(extensions: JsonObject, name: string, enabled: boolean) {
   if (extensions[opposite] !== undefined)
     extensions[opposite] = (extensions[opposite] as string[]).filter((entry) => entry !== name)
 }
-async function save(path: string, value: JsonObject) {
-  await mkdir(dirname(path), { recursive: true })
-  const temporary = `${path}.${randomUUID()}.tmp`
-  try {
-    await writeFile(temporary, JSON.stringify(value, null, 2) + '\n', { flag: 'wx' })
-    await rename(temporary, path)
-  } finally {
-    await rm(temporary, { force: true })
-  }
-}
-
-const writes = new Map<string, Promise<void>>()
-async function updateSettings(path: string, modify: (value: JsonObject) => void) {
-  const operation = (writes.get(path) ?? Promise.resolve())
-    .catch(() => {})
-    .then(async () => {
-      const value = await settings(path)
-      modify(value)
-      await save(path, value)
-    })
-  writes.set(path, operation)
-  try {
-    await operation
-  } finally {
-    if (writes.get(path) === operation) writes.delete(path)
-  }
-}
-
 /** Names of the project's own agents and skills, read but never loaded, so an undecided project can show them. */
 async function adds(projectRoot: string) {
   const directory = join(projectRoot, '.ultimate/agents')

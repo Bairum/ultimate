@@ -9,7 +9,13 @@ export type Assessment = { inputId: EntryId; answerId: EntryId; value: Assessmen
 /** `stale`: newer work or a reset superseded the result; `error`: the request failed. */
 export type SummaryStatus = 'pending' | 'ready' | 'stale' | 'error'
 export type Assessed = Assessment & { activity: string; model?: string; at: number }
-export type SummaryDiscard = { reason: 'stale' | 'error'; cause: string; at: number }
+export type SummaryDiscard = {
+  reason: 'stale' | 'error'
+  cause: string
+  /** The summary model that answered or was asked, when one was chosen. */
+  model?: string
+  at: number
+}
 export type OverviewRow = {
   /** `answered`: the latest input got a reply; whether its goal is met is the assessment's opinion. */
   runState: 'working' | 'queued' | 'idle' | 'answered' | 'error'

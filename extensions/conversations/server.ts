@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineExtension, section } from '@earendil-works/pi-durable'
@@ -5,6 +6,8 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Summaries, summaryBehavior } from './summary.ts'
+import { parseSummaryModel, summaryModelSetting } from './summary-model.ts'
+import { updateSettings } from '../onboarding/settings.ts'
 import { Overview, overviewBehavior } from './overview.ts'
 
 export const docs = [Summaries, Overview]
@@ -50,6 +53,21 @@ export const actions = {
       else delete metadata.title
     }, context)
     return { ok: true }
+  },
+  /** The effective `summaryModel` setting: `{ value, source: 'default' | 'user' | 'project', default }`. */
+  async summaryModel(_args: JsonValue, { host }: ActionContext) {
+    return summaryModelSetting(host)
+  },
+  /** `{value}`: sets `summaryModel` in the user's settings; `null` removes it, back to the default. */
+  async setSummaryModel(args: JsonValue, { host }: ActionContext) {
+    const value = args && typeof args === 'object' && !Array.isArray(args) ? args.value : undefined
+    if (value !== null && (typeof value !== 'string' || !parseSummaryModel(value)))
+      throw new Error('Expected value "provider/id[:thinking]" or null')
+    await updateSettings(join(host.userHome, '.ultimate/settings.json'), (settings) => {
+      if (value === null) delete settings.summaryModel
+      else settings.summaryModel = value
+    })
+    return summaryModelSetting(host)
   },
   /** `{id}`: starts a new context, keeping the conversation's title. */
   async reset(args: JsonValue, { host }: ActionContext) {

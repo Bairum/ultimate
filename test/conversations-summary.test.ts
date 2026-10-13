@@ -32,6 +32,7 @@ import {
 } from '../extensions/conversations/summary.ts'
 import { fauxServer, post, prepareFauxServer, temp, until } from './helpers.ts'
 
+const luna = { provider: 'openai', id: 'gpt-6-luna', thinking: 'medium' } as const
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 afterEach(async () => {
   for (const server of servers.splice(0)) await server.close()
@@ -83,6 +84,9 @@ async function launch(subagents = false, initialIntent = false) {
           {
             harness: () => server.harness,
             metadata: Metadata,
+            userHome: server.host.userHome,
+            projectSettings: async () => ({}),
+            notice: () => {},
             modelRuntime: {
               getAvailableSnapshot: () =>
                 server.host.modelRuntime
@@ -120,10 +124,14 @@ async function launch(subagents = false, initialIntent = false) {
             {
               harness: () => server.harness,
               metadata: Metadata,
+              userHome: server.host.userHome,
+              projectSettings: async () => ({}),
+              notice: () => {},
               modelRuntime: server.host.modelRuntime,
             },
             server.root.id,
             { reason: 'spawn', answer, agent: 'scout', task: 'Continue the plan.' },
+            luna,
           ),
         context,
       ),
@@ -278,9 +286,7 @@ it.each([false, true])(
       async () => ((await fixture.read())?.exchanges ?? 0) >= 1 && !(await fixture.read())?.pending,
     )
     expect(fixture.generated.mock.calls.filter((call) => call[5] === 'spawn')).toHaveLength(1)
-    expect(
-      fixture.generated.mock.calls.some((call) => call[5] === 'reply' && call[3] === true),
-    ).toBe(true)
+    expect(fixture.generated.mock.calls.some((call) => call[5] === 'reply' && call[3])).toBe(true)
     const child = Object.values(
       (await server.harness.snapshot(Subagents, server.root.id, context))!.agents,
     )[0].conversationId
@@ -392,7 +398,7 @@ it.each([2, 3])(
     expect((await fixture.read())?.status).toBe('stale')
     const discarded = (await fixture.entries()).filter((entry) => SummaryDiscarded.is(entry))
     expect(discarded.map((entry) => entry.data)).toEqual([
-      { reason: 'stale', cause: 'superseded', at: expect.any(Number) },
+      { reason: 'stale', cause: 'superseded', model: 'openai/gpt-6-luna', at: expect.any(Number) },
     ])
     const spawnTask = await fixture.server.harness.getTask(discarded[0].byTaskId!, context)
     expect(spawnTask?.kind).toBe('conversations.summary')
@@ -620,6 +626,7 @@ it('clears summary and cadence on reset, drops stale completion and isolates pro
   expect((await fixture.entries()).filter((entry) => SummaryDiscarded.is(entry))[0]?.data).toEqual({
     reason: 'error',
     cause: 'Provider offline',
+    model: 'openai/gpt-6-luna',
     at: expect.any(Number),
   })
   expect((await fixture.read())?.summary).toBeUndefined()
@@ -792,6 +799,9 @@ it.each(['none', 'legacy'])(
           {
             harness: () => server.harness,
             metadata: Metadata,
+            userHome: server.host.userHome,
+            projectSettings: async () => ({}),
+            notice: () => {},
             modelRuntime: { getAvailableSnapshot: () => models },
           },
           fixture.generated,
@@ -835,7 +845,9 @@ it('validates assessment-only JSON and rejects unapproved or malformed outcome s
     streamSimple: stream,
   } as unknown as Models
   expect(
-    await generateSummary(models, 'Untrusted reply text', new AbortController().signal, false),
+    await generateSummary(models, 'Untrusted reply text', new AbortController().signal, false, {
+      model: luna,
+    }),
   ).toEqual(output)
   expect(getModel).toHaveBeenCalledWith('openai', 'gpt-6-luna')
   output = { title: 'Delegate the sidebar', summary: 'Planning has moved to implementation.' }
@@ -845,7 +857,7 @@ it('validates assessment-only JSON and rejects unapproved or malformed outcome s
       'Delegation',
       new AbortController().signal,
       true,
-      undefined,
+      { model: luna },
       'spawn',
     ),
   ).toEqual({
@@ -860,14 +872,14 @@ it('validates assessment-only JSON and rejects unapproved or malformed outcome s
     'Initial input',
     new AbortController().signal,
     true,
-    undefined,
+    { model: luna },
     'intent',
   )
   expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('initial intent')
   for (const value of ['blocked', 'unfinished', ['done'], null]) {
     output = { assessment: value, activity: 'Some work was discussed.' }
     await expect(
-      generateSummary(models, 'Reply', new AbortController().signal, false),
+      generateSummary(models, 'Reply', new AbortController().signal, false, { model: luna }),
     ).rejects.toThrow('Invalid assessment')
   }
 })
@@ -1111,6 +1123,9 @@ it('derives the same overview rows live and from a fresh open, with no summary m
           {
             harness: () => fixture.server.harness,
             metadata: Metadata,
+            userHome: fixture.server.host.userHome,
+            projectSettings: async () => ({}),
+            notice: () => {},
             modelRuntime: { getAvailableSnapshot: () => [] },
           },
           fixture.generated,
@@ -1233,6 +1248,7 @@ it('records an accepted assessment as an entry traced to its summary and generat
     {
       ...state.assessment,
       activity: 'Added concise summaries to the sidebar.',
+      model: 'openai/gpt-6-luna',
       at: expect.any(Number),
     },
   ])

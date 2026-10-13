@@ -46,6 +46,9 @@ it(
           {
             harness: () => server.harness,
             metadata: Metadata,
+            userHome: server.host.userHome,
+            projectSettings: async () => ({}),
+            notice: () => {},
             modelRuntime: {
               getAvailableSnapshot: () =>
                 server.host.modelRuntime
@@ -163,7 +166,7 @@ it(
   60000 + Number(process.env.CONVERSATION_INTENT_PREVIEW_MS ?? 0),
 )
 
-it('expands real agent roles and outcomes, separates Replied from Luna Done, and uses one index stream', async (test) => {
+it('expands real agent roles and outcomes, separates Replied from summary-model Done, and uses one index stream', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const userHome = await temp('ultimate-agent-tree-browser-')
@@ -218,6 +221,9 @@ it('expands real agent roles and outcomes, separates Replied from Luna Done, and
         {
           harness: () => server.harness,
           metadata: Metadata,
+          userHome: server.host.userHome,
+          projectSettings: async () => ({}),
+          notice: () => {},
           modelRuntime: {
             getAvailableSnapshot: () =>
               server.host.modelRuntime
@@ -308,13 +314,13 @@ it('expands real agent roles and outcomes, separates Replied from Luna Done, and
     expect(await childRow(scout).textContent()).toContain('coordinator to choose')
     expect(
       await childRow(scout)
-        .getByRole('img', { name: /May need input \(Luna's opinion, not verified\)/ })
+        .getByRole('img', { name: /May need input \(summary model's opinion, not verified\)/ })
         .count(),
     ).toBe(1)
     expect(await childRow(worker).textContent()).toContain('Replied')
     expect(
       await childRow(worker)
-        .getByRole('img', { name: /Done \(Luna's opinion, not verified\)/ })
+        .getByRole('img', { name: /Done \(summary model's opinion, not verified\)/ })
         .count(),
     ).toBe(1)
     expect(await childRow(reviewer).getByRole('img').count()).toBe(0)
@@ -346,13 +352,13 @@ it('expands real agent roles and outcomes, separates Replied from Luna Done, and
       .toBe(1)
     expect(
       await childRow(worker)
-        .getByRole('img', { name: /Done \(Luna/ })
+        .getByRole('img', { name: /Done \(summary model/ })
         .count(),
     ).toBe(0)
     expect(
       await page
         .locator('[data-conversation="1"]')
-        .getByRole('img', { name: /Done \(Luna/ })
+        .getByRole('img', { name: /Done \(summary model/ })
         .count(),
     ).toBe(0)
     expect(await childRow(worker).locator('.animate-pulse-dot').count()).toBe(1)
@@ -379,7 +385,7 @@ it('expands real agent roles and outcomes, separates Replied from Luna Done, and
     await expect.poll(() => rootRow.locator('.animate-pulse-dot').count(), timeout).toBe(0)
     expect(await childRow(worker).locator('.animate-pulse-dot').count()).toBe(0)
     await expect
-      .poll(() => rootRow.getByRole('img', { name: /Done \(Luna/ }).count(), timeout)
+      .poll(() => rootRow.getByRole('img', { name: /Done \(summary model/ }).count(), timeout)
       .toBe(1)
     server.host.faux!.setResponses([
       fauxAssistantMessage('', {

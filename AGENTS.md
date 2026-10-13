@@ -43,7 +43,9 @@ The default set is `agent`, `conversations`, `workspaces`, `coding-tools`, `prom
 building blocks, including `secrets`, `parallel` (web tools; requires `secrets`), `canvas` (the Canvas surface: every agent on a live map around a hub), and `tailscale` (remote access, user-level enablement only). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
 restart. User/project extension folders are on by default; `disable` can turn off those or defaults too. Unknown names
-produce a notice.
+produce a notice. `summaryModel` (`"provider/id[:thinking]"`, default `openai/gpt-6-luna:medium`; project over user)
+picks the model for automatic titles, summaries, reply assessments and Canvas conclusions; set it in either file or with
+the "Summary model…" command, and it applies to the next request.
 User config is independent of `ULTIMATE_HOME`. This repository's `.ultimate/settings.json` enables the suggested full
 setup. Enable `self` for its guidance and `restart` tool, `surfaces` for surface awareness, and `documents` for the
 Documents tab.

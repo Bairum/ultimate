@@ -1,6 +1,7 @@
 The project's conversations in the Agent surface's sidebar: list, create, switch, rename, clear, and archive them.
-Several run at once, each a separate agent, and each knows about the others. GPT-6 Luna automatically gives top-level
-conversations concise titles and sidebar summaries, and assesses each final reply without changing the main agent.
+Several run at once, each a separate agent, and each knows about the others. A summary model (GPT-6 Luna by default)
+automatically gives top-level conversations concise titles and sidebar summaries, and assesses each final reply without
+changing the main agent.
 
 ## Sidebar
 
@@ -16,7 +17,7 @@ Working, not the potentially lagging title/timestamp list. While working, old as
 A solid purple dot means an unread reply, not ongoing work; only the pulsing dot means working.
 
 Idle, currently assessed replies may show a circular question (needs input) or green circular check (Done). These are
-**Luna assessments, not verified completion**; the tooltips say so. For a child, a question means it may need its
+**summary model assessments, not verified completion**; the tooltips say so. For a child, a question means it may need its
 coordinator, not necessarily a human. Unknown, neutral, stale or failed assessments never show a success mark.
 There is no third red blocked/unfinished assessment.
 
@@ -49,8 +50,9 @@ Escape cancels, and after either key focus returns to the row), Clear context…
 itself works, as the server refuses), and Archive. Archived rows sit in a collapsed "Archived · N" group at the bottom,
 where Unarchive brings them back; archiving the shown row shows the next one.
 
-Commands, under Conversations: `conversations.new` ("New conversation", `mod+alt+n`) and `conversations.reset`
-("Clear the context" of the shown top-level conversation, when it is idle and has entries). The UI state keeps archived
+Commands, under Conversations: `conversations.new` ("New conversation", `mod+alt+n`), `conversations.reset`
+("Clear the context" of the shown top-level conversation, when it is idle and has entries), and
+`conversations.summary-model` ("Summary model…", see [Summary model](#summary-model)). The UI state keeps archived
 ids in `ext.conversations.archived` and, in `ext.conversations.seen`, the latest answer time seen per top-level
 conversation; a conversation not recorded there counts as seen.
 
@@ -83,8 +85,8 @@ initial intent adds an optional input field, so live reply and spawn tasks remai
 `GenerationTask.beforeRequest` requests an initial title and intent summary before the main model request.
 It inspects stored entries since the current head marker: exactly one user input and no assistant reply,
 only in top-level conversations. A durable `intentRequested` flag prevents tools, request retries and recovery
-from requesting it again. Established conversations are not backfilled on later inputs, including when Luna
-becomes available later. Clear context removes the flag so a new context can request its own intent.
+from requesting it again. Established conversations are not backfilled on later inputs, including when the summary
+model becomes available later. Clear context removes the flag so a new context can request its own intent.
 Intent describes the requested goal, not completed work; it can publish while the main agent is busy.
 It does not assess a reply, increment exchanges, or consume the 1/4/7 cadence. New input (including queued input),
 a reset, or a superseding spawn/reply request makes a held result stale; compaction does not.
@@ -94,16 +96,15 @@ and a full-date tooltip. This custom system entry has no model contribution; it 
 
 The `GenerationTask.onYield` hook schedules a background observer. It waits for generation to settle and
 only counts an exchange when an input submission completed with that answer (not an intermediate yield).
-Luna uses `openai/gpt-6-luna` through the current OpenAI provider (including Sign in with ChatGPT), not the
-superseded `openai-codex` provider. It assesses each completed reply, including subagent replies, in a background
-task with medium reasoning.
+The [summary model](#summary-model) assesses each completed reply, including subagent replies, in a background task.
 Top-level conversations also get a title and summary on exchanges 1, 4, 7, and so on, in the same request.
 A summary delayed by newer work is included with the next current reply. Tools and partial replies do not trigger reply assessments.
 Successful subagent creation additionally schedules a parent title/summary refresh in the creation transaction,
 before either foreground waiting or background return. It describes the plan and delegation now starting, using
 recent visible text plus the agent/task, without publishing a final-reply assessment or activity, counting an
 exchange, or consuming the 1/4/7 reply cadence. The durable action receipt deduplicates replay; failed starts,
-messages and waits do not schedule it. If conversations or Luna is unavailable, child creation proceeds without it.
+messages and waits do not schedule it. If conversations or the summary model is unavailable, child creation proceeds
+without it.
 Spawn refreshes share the summary task, response receipt and usage accounting. They may publish while the parent
 is busy, but reset, newer input or a superseding summary request invalidates them; manual titles stay protected.
 The request reads the original request (kept even when compaction removed it from context), recent
@@ -111,19 +112,40 @@ user/assistant text and the previous summary, not tools, images or thinking.
 It times out after 60 seconds. Assessment, activity, title and summary are checked and shortened for display.
 Assessments describe the reply, not verified completion. New work or a reset can make a result stale; only a reset ends an exchange.
 Subagents get assessments and activity only; history forks are excluded.
-Luna can name an untitled conversation or update its own last generated title.
+The summary model can name an untitled conversation or update its own last generated title.
 API titles, renames and creator-given labels are kept. A blank rename restores automatic naming.
 Each accepted automatic title change appends a `conversations.title-changed` entry with `{ title, at }`
 (`at` is Unix milliseconds), atomically with the metadata update and task settlement. The transcript displays
 “Title changed to …” with the local time and a full-date tooltip. This is an automatic system action, not an
 agent-triggered tool or model message. Unchanged titles, protected manual titles, stale results, failures and
-unavailable Luna produce no action. Entries survive reload/restart without duplication; old changes are not
+an unavailable summary model produce no action. Entries survive reload/restart without duplication; old changes are not
 backfilled and manual renames are not logged.
 Clear context keeps the title, clears summary and assessment, and restarts the cadence.
 The task saves the provider response before parsing it and adds reported usage even for stale or invalid results.
 Replaying a saved response does not count it again. Crashing before it is saved can repeat the request.
 State survives reloads and restarts. Failed requests preserve the last summary and retry on the next reply.
-When Luna is unavailable in the model runtime, summaries and assessments are skipped quietly, without a task.
+When the summary model is unavailable in the model runtime, summaries and assessments are skipped quietly, without a
+task.
+
+## Summary model
+
+`summaryModel` in `~/.ultimate/settings.json` or the project's `.ultimate/settings.json` (project wins, and only once
+the project is chosen) names the model for titles, summaries, reply assessments and Canvas conclusions as
+`provider/id[:thinking]`, an exact provider and model id with an optional Pi thinking level, clamped to what the model
+supports (medium when omitted). Unset, it is `DEFAULT_SUMMARY_MODEL`: GPT-6 Luna with medium thinking through the
+current OpenAI provider (including Sign in with ChatGPT). `summary-model.ts` reads it when a request is considered and again when a
+task starts asking, so changes apply to the next request without a restart. Each task stores the resolved
+`{ provider, id, thinking }` in its `model` memo before asking: a resumed task asks the same model even after the
+setting changed. A malformed value shows one notice and turns summaries off; a well-formed model that is unknown or
+not logged in skips quietly. Usage counts under the response's `provider/model`.
+
+The "Summary model…" command opens a picker of logged-in models (rows from the models extension's picker) that shows
+the effective value and its source (default, `~/.ultimate/settings.json`, or the project's settings). Picking a model,
+or Use the default, writes the user file through two actions; a project setting still wins, and the footer says so:
+
+- `summaryModel` → `{ value, source: 'default' | 'user' | 'project', default }`.
+- `setSummaryModel {value}`: a `provider/id[:thinking]` string, or `null` to remove it; returns the new effective
+  setting. Writes reuse onboarding's atomic settings writer (`extensions/onboarding/settings.ts`).
 
 ## Token-free browser fixture
 
@@ -160,9 +182,11 @@ input submission (done/unanswered) · pi.live · pi.inbox · pi.reset ───�
 - **Summary task outcomes** are entries appended in the commit that settles the task, so each carries `byTaskId`
   (the summary task, whose input names the generation it observed). None contributes to the model context:
   - `conversations.assessed` `{ inputId, answerId, value, activity, model?, at }`: an accepted reply assessment.
-  - `conversations.summary-discarded` `{ reason: 'stale' | 'error', cause, at }`: a received result superseded by newer
-    work or a reset (`stale`), or a failed or aborted request (`error`). A task superseded before it asked Luna
-    leaves no entry.
+  - `conversations.summary-discarded` `{ reason: 'stale' | 'error', cause, model?, at }`: a received result superseded
+    by newer work or a reset (`stale`), or a failed or aborted request (`error`). A task superseded before it asked the
+    summary model leaves no entry.
+  - `model` is the `provider/model` the response names, else the summary model the task chose; absent only when no
+    model was chosen.
   - `conversations.title-changed` and `conversations.intent-summarized`, as above.
     The transcript shows each as one quiet line with its local time.
 - **Summaries** (`ultimate.conversation-summaries`) keeps the current summary, activity, assessment and their statuses
@@ -174,7 +198,7 @@ input submission (done/unanswered) · pi.live · pi.inbox · pi.reset ───�
 `ultimate.conversation-overview` keeps sidebar rows in the root conversation document.
 Each row's `runState` is `working`, `queued`, `answered`, `error` or `idle`, with the input and answer ids of the
 exchange, the summary, activity, and an assessment only while it belongs to that exact input and answer.
-Answered means a reply arrived; Done is Luna's opinion, not proof of completion.
+Answered means a reply arrived; Done is the summary model's opinion, not proof of completion.
 One root-document stream serves all rows. Titles, timestamps, child links and agent labels come from the core
 conversation list.
 A commit only selects which rows to derive again: any committed submission, `pi.user`, `pi.reset` or `pi.compaction`

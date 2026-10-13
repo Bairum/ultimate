@@ -90,6 +90,9 @@ async function launch({
   const behavior = summaryBehavior({
     harness: () => harness,
     metadata: Metadata,
+    userHome: '/nonexistent',
+    projectSettings: async () => ({}),
+    notice: () => {},
     modelRuntime: {
       getAvailableSnapshot: () => models.getModels().filter((model) => model.provider === 'openai'),
     },

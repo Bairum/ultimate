@@ -88,10 +88,13 @@ async function fixture(
     })
     // Subagents can import the scheduler while the conversations facet stays uninstalled.
     await mkdir(join(ultimateRoot, 'extensions/conversations'))
-    await cp(
-      resolvePath('extensions/conversations/summary.ts'),
-      join(ultimateRoot, 'extensions/conversations/summary.ts'),
-    )
+    await mkdir(join(ultimateRoot, 'extensions/onboarding'))
+    for (const file of [
+      'conversations/summary.ts',
+      'conversations/summary-model.ts',
+      'onboarding/settings.ts',
+    ])
+      await cp(resolvePath('extensions', file), join(ultimateRoot, 'extensions', file))
     await cp(resolvePath('extensions/workspaces'), join(ultimateRoot, 'extensions/workspaces'), {
       recursive: true,
     })

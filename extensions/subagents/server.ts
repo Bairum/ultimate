@@ -37,6 +37,7 @@ import { createChild } from './children.ts'
 import { workspaces } from '../workspaces/workspaces.ts'
 import { git } from '../workspaces/git.ts'
 import { requestSummary } from '../conversations/summary.ts'
+import { summaryModel } from '../conversations/summary-model.ts'
 import { provenance } from './provenance.ts'
 
 export const Subagents = defineDoc<{
@@ -412,6 +413,7 @@ export default function subagents(
     | 'projectSettings'
     | 'resource'
     | 'extensions'
+    | 'notice'
   >,
 ) {
   const service = workspaces(host)
@@ -657,26 +659,29 @@ Available definitions:
                 view.dispose()
               }
             }
+            const summaries =
+              definition &&
+              host
+                .extensions()
+                .some(
+                  (extension) =>
+                    extension.enabled &&
+                    extension.server?.docs.includes('ultimate.conversation-summaries'),
+                )
+            const model = summaries ? await summaryModel(host) : undefined
             const action = await api.commit(async (tx) => {
               const state = await tx.doc(Subagents, api.conversationId)
               if (state.actions[api.callId]) return { ...state.actions[api.callId] }
               let conversationId = args.id as ConversationId
               if (definition) {
-                if (
-                  host
-                    .extensions()
-                    .some(
-                      (extension) =>
-                        extension.enabled &&
-                        extension.server?.docs.includes('ultimate.conversation-summaries'),
-                    )
-                )
-                  await requestSummary(tx, host, api.conversationId, {
-                    reason: 'spawn',
-                    answer: assistant!,
-                    agent: definition.name,
-                    task: text,
-                  })
+                if (summaries)
+                  await requestSummary(
+                    tx,
+                    host,
+                    api.conversationId,
+                    { reason: 'spawn', answer: assistant!, agent: definition.name, task: text },
+                    model,
+                  )
                 const owner = await tx.createTask(Anchor, null, {
                   ownership: { kind: 'conversation' },
                   background: true,

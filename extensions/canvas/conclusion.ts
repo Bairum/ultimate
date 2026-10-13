@@ -21,13 +21,14 @@ import type {
 import type { ExtensionHost } from '../../server/extensions.ts'
 import {
   accountResponse,
-  askLuna,
+  askSummaryModel,
   currentAnswer,
-  lunaAvailable,
   Summaries,
   transcriptText,
 } from '../conversations/summary.ts'
-import type { LunaReceipt, ResponseReceipt } from '../conversations/summary.ts'
+import type { ResponseReceipt, SummaryReceipt } from '../conversations/summary.ts'
+import { summaryModel } from '../conversations/summary-model.ts'
+import type { SummaryModel, SummaryModelHost } from '../conversations/summary-model.ts'
 import { git } from '../workspaces/git.ts'
 import type { LandResult, Workspace } from '../workspaces/types.ts'
 import { Workspaces } from '../workspaces/workspaces.ts'
@@ -150,13 +151,13 @@ export type Artifacts = {
 }
 
 /**
- * Collect a tree's artifacts and Luna's input: each conversation's visible text, then the artifact list. Entries are
+ * Collect a tree's artifacts and the summary model's input: each conversation's visible text, then the artifact list. Entries are
  * read a page at a time, newest first, and never held: a result's text waits only until its call is read, and of the
  * screenshots only the newest one's place is kept.
  */
 async function collect(
   host: Pick<ExtensionHost, 'harness' | 'metadata' | 'userHome'>,
-  /** The conversation's model context, whose visible text Luna reads. */
+  /** The conversation's model context, whose visible text the summary model reads. */
   transcript: (id: ConversationId, caller: Context) => Promise<{ messages: readonly Message[] }>,
   top: ConversationId,
   caller: Context,
@@ -311,9 +312,9 @@ export async function generateConclusion(
   models: Models,
   input: string,
   signal: AbortSignal,
-  receipt?: LunaReceipt,
+  receipt: SummaryReceipt,
 ): Promise<ConclusionText> {
-  const response = await askLuna(models, PROMPT, input, signal, receipt)
+  const response = await askSummaryModel(models, PROMPT, input, signal, receipt)
   if (response.stopReason !== 'stop') throw new Error('Conclusion request did not finish')
   const parsed: unknown = JSON.parse(response.text)
   if (
@@ -377,9 +378,9 @@ const brief = (conclusion: Conclusion): CanvasConclusion => ({
   at: conclusion.at,
 })
 
-type Host = Pick<ExtensionHost, 'harness' | 'metadata' | 'userHome'>
+type Host = Pick<ExtensionHost, 'harness' | 'metadata'> & SummaryModelHost
 
-/** The durable task that concludes a settled tree: it waits out the quiet, collects, asks Luna, and stores. */
+/** The durable task that concludes a settled tree: it waits out the quiet, collects, asks the summary model, and stores. */
 export function conclusionBehavior(host: Host, generate = generateConclusion) {
   const ConclusionTask = defineTask<
     { until: number },
@@ -418,11 +419,19 @@ export function conclusionBehavior(host: Host, generate = generateConclusion) {
           try {
             result = await runtime.memo<ConclusionText>('reply', caller)
             if (!result) {
+              // Settings decide when the request starts; a resumed task asks the model it chose then.
+              let model = await runtime.memo<SummaryModel>('model', caller)
+              if (!model) {
+                const chosen = await summaryModel(host)
+                if (!chosen) throw new Error('No summary model is available')
+                model = await runtime.memo('model', chosen, caller)
+              }
               result = await generate(
                 runtime.models,
                 input,
                 AbortSignal.any([runtime.signal, AbortSignal.timeout(60_000)]),
                 {
+                  model,
                   response,
                   save: async (received) => {
                     response = await runtime.memo('response', received, caller)
@@ -504,6 +513,7 @@ export function watchConclusions(
     | 'harness'
     | 'metadata'
     | 'userHome'
+    | 'projectSettings'
     | 'modelRuntime'
     | 'onOpen'
     | 'onClose'
@@ -557,7 +567,7 @@ export function watchConclusions(
     const summaries = await Promise.all(
       members.map((id) => harness.snapshot(Summaries, id, context)),
     )
-    // Until Luna's assessment of the latest answer arrives, whether it needs input is unknown.
+    // Until the assessment of the latest answer arrives, whether it needs input is unknown.
     const settled = !active && !summaries.some((state) => state?.assessmentStatus === 'pending')
     const reasons: CanvasReason[] = []
     if (settled) {
@@ -577,6 +587,7 @@ export function watchConclusions(
     }
     // Read first, so a tree with nothing to change writes nothing.
     const saved = await harness.snapshot(Conclusions, top, context)
+    const model = await summaryModel(host)
     await harness.commit(async (tx) => {
       if (settled)
         for (const [index, id] of members.entries()) {
@@ -634,7 +645,7 @@ export function watchConclusions(
         reasons.length ||
         !owed ||
         newest <= (saved?.conclusion?.through ?? 0) ||
-        !lunaAvailable(host.modelRuntime)
+        !model
       )
         return
       ;(await tx.doc(Conclusions, top)).pending = await tx.createTask(
