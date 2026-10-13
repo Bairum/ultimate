@@ -34,6 +34,7 @@ import type {
   Assessment,
   AssessmentValue,
   IntentSummary,
+  SpawnSummary,
   SummaryDiscard,
   SummaryStatus,
   TitleChange,
@@ -42,6 +43,9 @@ import type {
 export const TitleChanged = defineEntry<TitleChange>('conversations.title-changed')
 
 export const IntentSummarized = defineEntry<IntentSummary>('conversations.intent-summarized')
+
+/** An accepted spawn refresh; `byTaskId` is the summary task, whose input names the delegation. */
+export const SpawnSummarized = defineEntry<SpawnSummary>('conversations.summarized')
 
 /** An accepted reply assessment; `byTaskId` is the summary task, whose input names the generation. */
 export const AssessmentAccepted = defineEntry<Assessed>('conversations.assessed')
@@ -546,14 +550,26 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
         const checkpoint = task.state.checkpoint
         let result: Awaited<ReturnType<typeof generate>> | undefined
         let failure: string | undefined
+        result = await runtime.memo('reply', context)
+        if (!result && !model) {
+          const chosen = await summaryModel(host)
+          if (!chosen) {
+            // Nothing was asked: settle quietly, as when no model is available at request time.
+            await runtime.commit(async (tx) => {
+              const state = await tx.doc(Summaries, runtime.conversationId)
+              if (state.pending === task.id && state.revision === task.input.revision) {
+                delete state.pending
+                if (state.assessmentStatus === 'pending') delete state.assessmentStatus
+                if (state.status === 'pending') delete state.status
+              }
+              return terminal
+            }, context)
+            return
+          }
+          model = await runtime.memo('model', chosen, context)
+        }
         try {
-          result = await runtime.memo('reply', context)
-          if (!result) {
-            if (!model) {
-              const chosen = await summaryModel(host)
-              if (!chosen) throw new Error('No summary model is available')
-              model = await runtime.memo('model', chosen, context)
-            }
+          if (!result && model) {
             result = await generate(
               runtime.models,
               checkpoint.input,
@@ -634,7 +650,11 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
             state.summary = result.summary
             if (task.input.intent)
               await tx.appendEntry(IntentSummarized, runtime.conversationId, {
-                data: { summary: result.summary, at: now },
+                data: { summary: result.summary, ...modelOf(response, model), at: now },
+              })
+            if (task.input.spawn)
+              await tx.appendEntry(SpawnSummarized, runtime.conversationId, {
+                data: { summary: result.summary, ...modelOf(response, model), at: now },
               })
             if (!task.input.spawn && !task.input.intent) delete state.summaryOwed
             const metadata = await tx.doc(host.metadata, runtime.conversationId)
@@ -642,7 +662,7 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
               if (metadata.title !== result.title) {
                 metadata.title = result.title
                 await tx.appendEntry(TitleChanged, runtime.conversationId, {
-                  data: { title: result.title, at: now },
+                  data: { title: result.title, ...modelOf(response, model), at: now },
                 })
               }
               state.generatedTitle = result.title

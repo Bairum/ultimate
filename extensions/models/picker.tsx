@@ -33,15 +33,18 @@ function matches(model: ModelInfo, terms: readonly string[]) {
 export function ModelRow({
   model,
   current,
+  disabled,
   onSelect,
 }: {
   model: ModelInfo
   current: boolean
+  disabled?: boolean
   onSelect: () => void
 }) {
   return (
     <CommandItem
       className={cn('gap-2 py-1 font-mono text-[12px]', !model.available && 'opacity-60')}
+      disabled={disabled}
       onSelect={onSelect}
       value={`${model.provider}/${model.id}`}
     >

@@ -4,6 +4,7 @@ import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { readSettings } from '../onboarding/settings.ts'
+import { parseSummaryModel } from './summary-model-ref.ts'
 
 /** Titles, summaries, reply assessments and Canvas conclusions use this model unless settings name another. */
 export const DEFAULT_SUMMARY_MODEL = 'openai/gpt-6-luna:medium'
@@ -13,23 +14,6 @@ export type SummaryModel = { provider: string; id: string; thinking: ModelThinki
 
 export type SummaryModelHost = Pick<ExtensionHost, 'userHome' | 'projectSettings' | 'notice'> & {
   modelRuntime: Pick<ExtensionHost['modelRuntime'], 'getAvailableSnapshot'>
-}
-
-const levels: readonly string[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
-
-/** `provider/id[:thinking]`, without fuzzy matching; undefined when malformed. */
-export function parseSummaryModel(value: string) {
-  const colon = value.lastIndexOf(':')
-  const thinking =
-    colon !== -1 && levels.includes(value.slice(colon + 1)) ? value.slice(colon + 1) : undefined
-  const ref = thinking ? value.slice(0, colon) : value
-  const slash = ref.indexOf('/')
-  if (slash <= 0 || slash === ref.length - 1 || /\s/.test(ref)) return undefined
-  return {
-    provider: ref.slice(0, slash),
-    id: ref.slice(slash + 1),
-    thinking: thinking as ModelThinkingLevel | undefined,
-  }
 }
 
 /** The configured value and where it comes from: the project's settings override the user's. */

@@ -467,6 +467,7 @@ it('summarizes the first, fourth and seventh completed exchanges, not tools, str
   expect(changes).toHaveLength(1)
   expect(changes[0].data).toEqual({
     title: 'Improve the conversation sidebar',
+    model: 'openai/gpt-6-luna',
     at: expect.any(Number),
   })
   expect(changes[0].model).toBeUndefined()
@@ -502,8 +503,12 @@ it('logs each accepted title change once, but not a manual rename to the generat
   for (let count = 2; count <= 4; count++) await fixture.exchange()
   const changes = await fixture.titleChanges()
   expect(changes.map((entry) => entry.data)).toEqual([
-    { title: 'Refine the sidebar', at: expect.any(Number) },
-    { title: 'Improve the conversation sidebar', at: expect.any(Number) },
+    { title: 'Refine the sidebar', model: 'openai/gpt-6-luna', at: expect.any(Number) },
+    {
+      title: 'Improve the conversation sidebar',
+      model: 'openai/gpt-6-luna',
+      at: expect.any(Number),
+    },
   ])
   for (const entry of changes) {
     expect(entry.data.at).toBeGreaterThanOrEqual(started)
@@ -939,6 +944,7 @@ it('publishes initial intent while the main model request is blocked, once acros
     const entries = await intents()
     expect(entries[0].data).toEqual({
       summary: 'Added concise summaries to the sidebar.',
+      model: 'openai/gpt-6-luna',
       at: expect.any(Number),
     })
     expect(entries[0].model).toBeUndefined()
@@ -1265,3 +1271,85 @@ it('records an accepted assessment as an entry traced to its summary and generat
   const view = await fixture.server.root.context(context)
   expect(JSON.stringify(view.messages)).not.toContain('Added concise summaries')
 }, 60000)
+
+it.each(['answers', 'fails'] as const)(
+  'follows an older follow-up delivered after a newer steer when it %s, live and after reopen',
+  async (outcome) => {
+    const fixture = await launch()
+    const { server } = fixture
+    let release!: () => void
+    let holding = false
+    server.host.registry.install(
+      defineExtension({
+        name: 'order-hold',
+        tools: [
+          defineTool({
+            name: 'order_hold',
+            description: 'Hold work until released',
+            parameters: Type.Object({}),
+            execute: async (_args, _api, toolContext) => {
+              holding = true
+              await awaitWithContext(new Promise<void>((done) => (release = done)), toolContext)
+              return { output: [{ type: 'text', text: 'Released' }] }
+            },
+          }),
+        ],
+      }),
+    )
+    server.host.faux!.setResponses([
+      fauxAssistantMessage([fauxToolCall('order_hold', {})], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('Steered answer.'),
+      outcome === 'answers'
+        ? fauxAssistantMessage('Follow-up answer.')
+        : fauxAssistantMessage('', {
+            stopReason: 'error',
+            errorMessage: 'invalid_request_error: deterministic fixture failure',
+          }),
+    ])
+    const first = await server.root.submit({ type: 'input', content: 'Start' }, context)
+    await until(() => holding)
+    const followUp = await server.root.submit({ type: 'input', content: 'Follow up' }, context)
+    const steer = await server.root.submit(
+      { type: 'input', content: 'Steer', whenBusy: 'steer' },
+      context,
+    )
+    release()
+    await first.wait(context)
+    const later = await followUp.wait(context)
+    const steered = await steer.wait(context)
+    await server.harness.waitForIdle(context)
+    // The newer steer joined the first run; the older follow-up was placed after it.
+    expect(steer.id).toBeGreaterThan(followUp.id)
+    expect(steered.status).toBe('done')
+    expect(later.entry).toBeGreaterThan(steered.entry!)
+    expect(later.status).toBe(outcome === 'answers' ? 'done' : 'unanswered')
+    const row = async () =>
+      (await fixture.server.harness.snapshot(Overview, fixture.server.root.id, context))
+        ?.conversations[fixture.server.root.id]
+    const want =
+      outcome === 'answers'
+        ? {
+            runState: 'answered',
+            inputId: later.entry,
+            answerId: later.answer,
+            assessment: { inputId: later.entry, answerId: later.answer, value: 'done' },
+          }
+        : { runState: 'error', inputId: later.entry }
+    const expected = async () => {
+      await until(async () => (await row())?.runState === want.runState)
+      expect(await row()).toMatchObject(want)
+    }
+    await until(async () =>
+      Object.values((await fixture.server.harness.inspect(context)).tasks).every(
+        (task) => task.record.kind !== 'conversations.summary',
+      ),
+    )
+    await expected()
+    await fixture.server.harness.commit(async (tx) => {
+      ;(await tx.doc(Overview, ROOT_CONVERSATION_ID)).conversations = {}
+    }, context)
+    await fixture.reopen()
+    await expected()
+  },
+  60000,
+)

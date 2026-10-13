@@ -54,6 +54,7 @@ import {
 } from '@/sdk'
 import type { EntryRecord, UltimateActions } from '@/sdk'
 import { ModelRow } from '../models/picker.tsx'
+import { parseSummaryModel } from './summary-model-ref.ts'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import {
   getWorkspaces,
@@ -63,6 +64,7 @@ import type {
   Assessed,
   Assessment,
   IntentSummary,
+  SpawnSummary,
   OverviewRow,
   OverviewState,
   SummaryDiscard,
@@ -835,11 +837,14 @@ type SummaryModelSetting = {
   value: unknown
   source: 'default' | 'user' | 'project'
   default: string
+  /** The project's settings file, when it decides the model. */
+  path?: string
 }
 
 /**
  * Picks the model for titles, summaries, assessments and conclusions, saved as `summaryModel` in the user's settings.
- * It shows the effective value and where it comes from; a project's setting overrides the user's.
+ * It shows the effective value and where it comes from. A project's setting overrides the user's and is never written
+ * here: while it applies, picking is disabled.
  */
 function SummaryModelDialog() {
   const [open, setOpen] = useDialog(summaryModelDialog)
@@ -856,7 +861,9 @@ function SummaryModelDialog() {
       .then(setSetting, (failure: unknown) => setError(errorMessage(failure)))
   }, [open])
   const current = typeof setting?.value === 'string' ? setting.value : undefined
-  const [ref] = current?.split(':') ?? []
+  const parsed = current === undefined ? undefined : parseSummaryModel(current)
+  const ref = parsed && `${parsed.provider}/${parsed.id}`
+  const locked = setting?.source === 'project'
   const groups = useMemo(() => {
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
     const found = (models?.models ?? []).filter(
@@ -875,7 +882,7 @@ function SummaryModelDialog() {
         value,
       })
       setSetting(next)
-      if (next.source !== 'project') setOpen(false)
+      setOpen(false)
     } catch (failure) {
       setError(errorMessage(failure))
     }
@@ -901,7 +908,7 @@ function SummaryModelDialog() {
                 ? 'default'
                 : setting.source === 'user'
                   ? '~/.ultimate/settings.json'
-                  : "this project's .ultimate/settings.json"}
+                  : 'set by project settings'}
             </span>
           )}
         </div>
@@ -925,6 +932,7 @@ function SummaryModelDialog() {
               <CommandGroup heading="Default">
                 <CommandItem
                   className="gap-2 py-1 font-mono text-[12px]"
+                  disabled={locked}
                   onSelect={() => void choose(null)}
                   value="default"
                 >
@@ -947,6 +955,7 @@ function SummaryModelDialog() {
                       current={
                         setting?.source !== 'default' && ref === `${model.provider}/${model.id}`
                       }
+                      disabled={locked}
                       key={`${model.provider}/${model.id}`}
                       model={model}
                       onSelect={() => void choose(`${model.provider}/${model.id}`)}
@@ -959,8 +968,8 @@ function SummaryModelDialog() {
           <div className="border-t border-border/70 px-3 py-1.5 text-[11px] text-muted-foreground">
             {error ? (
               <span className="text-error">{error}</span>
-            ) : setting?.source === 'project' ? (
-              "This project's settings override your choice"
+            ) : locked ? (
+              `Set by project settings: edit ${setting.path} to change it`
             ) : (
               'Titles, summaries, assessments and conclusions · saved in ~/.ultimate/settings.json'
             )}
@@ -980,6 +989,8 @@ function summaryText(entry: EntryRecord) {
       return `Intent: ${(entry.data as IntentSummary).summary}`
     case 'conversations.title-changed':
       return `Title changed to “${(entry.data as TitleChange).title}”`
+    case 'conversations.summarized':
+      return `Summary: ${(entry.data as SpawnSummary).summary}`
     case 'conversations.assessed': {
       const data = entry.data as Assessed
       return `Assessed: ${assessmentLabel[data.value]} (summary model's opinion) · ${data.activity}`
@@ -1015,6 +1026,7 @@ export default defineWebExtension({
   entries: {
     'conversations.title-changed': SummaryAction,
     'conversations.intent-summarized': SummaryAction,
+    'conversations.summarized': SummaryAction,
     'conversations.assessed': SummaryAction,
     'conversations.summary-discarded': SummaryAction,
   },

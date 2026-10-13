@@ -1,8 +1,12 @@
 import type { EntryId } from '@earendil-works/pi-durable'
 
-export type IntentSummary = { summary: string; at: number }
+/** `model`: the summary model that answered, as in `Assessed`. */
+export type IntentSummary = { summary: string; model?: string; at: number }
 
-export type TitleChange = { title: string; at: number }
+export type TitleChange = { title: string; model?: string; at: number }
+
+/** An accepted spawn refresh, recorded even when the title stays. */
+export type SpawnSummary = { summary: string; model?: string; at: number }
 
 export type AssessmentValue = 'needs_input' | 'done' | 'neutral'
 export type Assessment = { inputId: EntryId; answerId: EntryId; value: AssessmentValue }

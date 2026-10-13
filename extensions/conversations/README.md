@@ -90,8 +90,8 @@ model becomes available later. Clear context removes the flag so a new context c
 Intent describes the requested goal, not completed work; it can publish while the main agent is busy.
 It does not assess a reply, increment exchanges, or consume the 1/4/7 cadence. New input (including queued input),
 a reset, or a superseding spawn/reply request makes a held result stale; compaction does not.
-Accepted intent appends `conversations.intent-summarized` with `{ summary, at }` (Unix milliseconds), atomically
-with summary/title acceptance and task settlement. The transcript shows a quiet “Intent: …” row with local time
+Accepted intent appends `conversations.intent-summarized` with `{ summary, model?, at }` (Unix milliseconds),
+atomically with summary/title acceptance and task settlement. The transcript shows a quiet “Intent: …” row with local time
 and a full-date tooltip. This custom system entry has no model contribution; it survives replay without duplication.
 
 The `GenerationTask.onYield` hook schedules a background observer. It waits for generation to settle and
@@ -107,6 +107,7 @@ messages and waits do not schedule it. If conversations or the summary model is 
 without it.
 Spawn refreshes share the summary task, response receipt and usage accounting. They may publish while the parent
 is busy, but reset, newer input or a superseding summary request invalidates them; manual titles stay protected.
+An accepted spawn refresh appends `conversations.summarized` `{ summary, model?, at }`, also when the title stays.
 The request reads the original request (kept even when compaction removed it from context), recent
 user/assistant text and the previous summary, not tools, images or thinking.
 It times out after 60 seconds. Assessment, activity, title and summary are checked and shortened for display.
@@ -114,7 +115,7 @@ Assessments describe the reply, not verified completion. New work or a reset can
 Subagents get assessments and activity only; history forks are excluded.
 The summary model can name an untitled conversation or update its own last generated title.
 API titles, renames and creator-given labels are kept. A blank rename restores automatic naming.
-Each accepted automatic title change appends a `conversations.title-changed` entry with `{ title, at }`
+Each accepted automatic title change appends a `conversations.title-changed` entry with `{ title, model?, at }`
 (`at` is Unix milliseconds), atomically with the metadata update and task settlement. The transcript displays
 “Title changed to …” with the local time and a full-date tooltip. This is an automatic system action, not an
 agent-triggered tool or model message. Unchanged titles, protected manual titles, stale results, failures and
@@ -125,7 +126,7 @@ The task saves the provider response before parsing it and adds reported usage e
 Replaying a saved response does not count it again. Crashing before it is saved can repeat the request.
 State survives reloads and restarts. Failed requests preserve the last summary and retry on the next reply.
 When the summary model is unavailable in the model runtime, summaries and assessments are skipped quietly, without a
-task.
+task. A task that finds no available model before it chose one settles quietly too: no discard entry, no error status.
 
 ## Summary model
 
@@ -141,11 +142,18 @@ not logged in skips quietly. Usage counts under the response's `provider/model`.
 
 The "Summary model…" command opens a picker of logged-in models (rows from the models extension's picker) that shows
 the effective value and its source (default, `~/.ultimate/settings.json`, or the project's settings). Picking a model,
-or Use the default, writes the user file through two actions; a project setting still wins, and the footer says so:
+or Use the default, writes only the user file, never the project's tracked `.ultimate/settings.json`. While project
+settings decide the model, the dialog says "set by project settings", disables picking and Use the default, and its
+footer names the project file to edit. Two actions back it:
 
-- `summaryModel` → `{ value, source: 'default' | 'user' | 'project', default }`.
+- `summaryModel` → `{ value, source: 'default' | 'user' | 'project', default, path? }`; `path` is the project file
+  when it decides the value.
 - `setSummaryModel {value}`: a `provider/id[:thinking]` string, or `null` to remove it; returns the new effective
-  setting. Writes reuse onboarding's atomic settings writer (`extensions/onboarding/settings.ts`).
+  setting. It refuses while a project setting applies. Writes reuse onboarding's atomic settings writer
+  (`extensions/onboarding/settings.ts`).
+
+`summary-model-ref.ts` parses the value without node imports, so the web facet shares it: only a recognized final
+thinking level is stripped, so model ids may contain colons (`x-ai/grok-4.3:batch:high`).
 
 ## Token-free browser fixture
 
@@ -174,10 +182,11 @@ GenerationTask hooks ─▶ conversations.summary task ─▶ entries + Summarie
 input submission (done/unanswered) · pi.live · pi.inbox · pi.reset ────────────┘
 ```
 
-- **Exchange**: the newest input submission placed in the transcript, read newest first with the host's
-  `scanSubmissions`. `done` carries its `answer`: the row is `answered`, with or without a summary model. `unanswered`
-  is `error`, except when the user aborted it or a reset or stale write ended it. A later `pi.reset` entry ends the
-  exchange; compaction does not.
+- **Exchange**: the input submission placed last in the transcript (greatest entry id), read newest first with the
+  host's `scanSubmissions`. A newer steer can be placed before an older queued follow-up, so the scan keeps reading a
+  bounded window of older submissions past the first placed one. `done` carries its `answer`: the row is `answered`,
+  with or without a summary model. `unanswered` is `error`, except when the user aborted it or a reset or stale write
+  ended it. A later `pi.reset` entry ends the exchange; compaction does not.
 - **Run state**: `pi.live.run` is `working`; a user item in `pi.inbox` is `queued`.
 - **Summary task outcomes** are entries appended in the commit that settles the task, so each carries `byTaskId`
   (the summary task, whose input names the generation it observed). None contributes to the model context:
@@ -187,7 +196,8 @@ input submission (done/unanswered) · pi.live · pi.inbox · pi.reset ───�
     summary model leaves no entry.
   - `model` is the `provider/model` the response names, else the summary model the task chose; absent only when no
     model was chosen.
-  - `conversations.title-changed` and `conversations.intent-summarized`, as above.
+  - `conversations.title-changed`, `conversations.intent-summarized` and `conversations.summarized`, as above, with
+    `model` likewise.
     The transcript shows each as one quiet line with its local time.
 - **Summaries** (`ultimate.conversation-summaries`) keeps the current summary, activity, assessment and their statuses
   (`pending`, `ready`, `stale`, `error`) plus the cadence. Stale shows nothing in the sidebar; error shows

@@ -17,24 +17,34 @@ export const Overview = defineDoc<OverviewState>({
 /** Settlement reasons that end an input without a failure: the user stopped it or a reset cut it. */
 const quiet = new Set(['aborted', 'reset', 'stale'])
 
-/** The newest input placed in the transcript; writes and withdrawn inputs are skipped. */
+/**
+ * The input placed last in the transcript (greatest entry id); writes and withdrawn inputs are skipped. A steer placed
+ * at a tool boundary can precede an older queued follow-up, so submission order is not transcript order.
+ */
 async function latestInput(
   host: Pick<ExtensionHost, 'scanSubmissions'>,
   id: ConversationId,
 ): Promise<SubmissionRecord | undefined> {
+  // An older input is placed after a newer one only if it still waited in the inbox when the newer one was
+  // submitted, so it is among the next few older submissions: 32 more covers any realistic queue.
+  let latest: SubmissionRecord | undefined
+  let remaining = 32
   let cursor: Cursor | undefined
   do {
     const page = await host.scanSubmissions(
       { conversationId: id, order: 'descending' },
-      8,
+      16,
       cursor,
       context,
     )
-    const input = page.items.find((item) => item.type === 'input' && item.entry !== undefined)
-    if (input) return input
+    for (const item of page.items) {
+      if (latest) remaining--
+      if (item.type === 'input' && item.entry !== undefined && item.entry > (latest?.entry ?? -1))
+        latest = item
+    }
     cursor = page.next
-  } while (cursor !== undefined)
-  return undefined
+  } while (cursor !== undefined && remaining > 0)
+  return latest
 }
 
 /**
