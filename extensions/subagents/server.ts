@@ -28,6 +28,7 @@ import type {
   EntryRecord,
   TaskId,
   ToolExecutionApi,
+  SubmissionRecord,
 } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -91,15 +92,35 @@ const answerText = (message: AssistantMessage | undefined) =>
   `Returned model: ${message?.provider && message?.model ? `${message.provider}/${message.model}` : 'unknown'}\n${textOf(message)}`
 function createReporter() {
   return defineTask<
-    { conversationId: ConversationId; text: string; steer: boolean; sourceEntry?: EntryId },
+    {
+      conversationId: ConversationId
+      text: string
+      steer: boolean
+      sourceEntry?: EntryId
+      answer?: EntryId
+    },
     | { phase: 'deliver'; retryRequest?: string }
+    | { phase: 'retry'; retryRequest: string; until: number }
     | { phase: 'report'; report?: string; answer?: EntryId },
     null
   >({
     name: 'ultimate.subagent-reporter',
     version: 1,
-    initial: () => ({ phase: 'deliver' }),
+    initial: (input) =>
+      input.answer === undefined
+        ? { phase: 'deliver' }
+        : { phase: 'report', report: input.text, answer: input.answer },
     phases: {
+      retry: async (task, runtime, context) => {
+        await runtime.sleep(task.state.checkpoint.until, context)
+        await runtime.commit(
+          () => ({
+            status: 'running',
+            checkpoint: { phase: 'deliver', retryRequest: task.state.checkpoint.retryRequest },
+          }),
+          context,
+        )
+      },
       deliver: async (task, runtime, context) => {
         try {
           const child = (await runtime.conversation(task.input.conversationId, context))!
@@ -141,13 +162,45 @@ function createReporter() {
             }
             if (
               settled.status === 'unanswered' &&
-              settled.reason === 'model_error' &&
+              (settled.reason === 'model_error' || settled.reason === 'no_model') &&
               retryRequest === undefined
             ) {
+              const failedEntry = settled.entry
+              if (failedEntry === undefined) throw new Error('Provider failure has no input entry')
+              let failureId: EntryId | TaskId | undefined
+              if (settled.reason === 'no_model') {
+                // IDs share one allocation order. Generation follows its placed inputs; choose
+                // their first no-model failure, not a newer run that may already have started.
+                let cursor: Cursor | undefined
+                do {
+                  const page = await tx.scanTasks(
+                    {
+                      conversationId: child.id,
+                      kind: GenerationTask.definition.name,
+                      order: 'ascending',
+                    },
+                    500,
+                    cursor,
+                  )
+                  const generation = page.items.find(
+                    (candidate) =>
+                      candidate.id > failedEntry &&
+                      candidate.state.status === 'terminal' &&
+                      candidate.state.outcome.status === 'failed' &&
+                      (candidate.state.outcome.error.detail as { reason?: string } | undefined)
+                        ?.reason === 'no_model',
+                  )
+                  if (generation) {
+                    failureId = generation.id
+                    break
+                  }
+                  cursor = page.next
+                } while (cursor)
+              }
               let cursor: Cursor | undefined
-              do {
+              while (settled.reason === 'model_error') {
                 const page = await tx.scanEntries(
-                  { conversationId: child.id, minEntryId: settled.entry },
+                  { conversationId: child.id, minEntryId: settled.entry, order: 'ascending' },
                   500,
                   cursor,
                 )
@@ -158,15 +211,25 @@ function createReporter() {
                     entry.model[0].stopReason === 'error',
                 )
                 if (failure) {
-                  action.retryRequest = `subagent-retry:${child.id}:${failure.id}`
-                  return {
-                    status: 'running',
-                    checkpoint: { phase: 'deliver', retryRequest: action.retryRequest },
-                  }
+                  failureId = failure.id
+                  break
                 }
                 cursor = page.next
-              } while (cursor)
-              throw new Error('Provider failure has no assistant entry')
+                if (cursor === undefined) break
+              }
+              if (failureId === undefined) throw new Error('Provider failure has no run identity')
+              action.retryRequest =
+                settled.reason === 'no_model'
+                  ? `subagent-retry:${child.id}:no-model:${failureId}`
+                  : `subagent-retry:${child.id}:${failureId}`
+              return {
+                status: 'running',
+                checkpoint: {
+                  phase: 'retry',
+                  retryRequest: action.retryRequest,
+                  until: Date.now() + 20_000,
+                },
+              }
             }
             if (settled.status === 'unanswered' && settled.reason !== 'aborted') {
               const report = `[subagent ${child.id} failed: ${settled.reason}]`
@@ -454,10 +517,91 @@ export default function subagents(
     | 'resource'
     | 'extensions'
     | 'notice'
+    | 'onOpen'
+    | 'onClose'
+    | 'scanSubmissions'
   >,
 ) {
   const service = workspaces(host)
   const Reporter = createReporter()
+  let unsubscribe: (() => void) | undefined
+  let recovery = Promise.resolve()
+  const recover = async (submission: SubmissionRecord) => {
+    if (
+      submission.type !== 'input' ||
+      submission.status !== 'done' ||
+      submission.requestId?.startsWith('subagent:') ||
+      submission.requestId?.startsWith('subagent-retry:')
+    )
+      return
+    await host.harness().commit(async (tx) => {
+      const child = await tx.conversation(submission.conversationId)
+      const parent = child?.owner?.conversationId
+      if (parent === undefined) return
+      const state = await tx.doc(Subagents, parent)
+      const agent = state.agents[String(submission.conversationId)]
+      if (!agent || agent.reported.includes(submission.answer)) return
+      const action = Object.values(state.actions).findLast(
+        (candidate) => candidate.conversationId === submission.conversationId,
+      )
+      if (action?.status !== 'unanswered' && action?.status !== 'failed') return
+      const failed = await tx.submissionByRequest(
+        submission.conversationId,
+        action.retryRequest ?? `subagent:${action.reporter}`,
+      )
+      if (
+        failed?.status !== 'unanswered' ||
+        failed.reason === 'aborted' ||
+        failed.entry === undefined ||
+        submission.entry <= failed.entry
+      )
+        return
+      const answer = (await tx.entry(AssistantEntry, submission.answer))?.model?.[0] as
+        | AssistantMessage
+        | undefined
+      const reporter = await tx.createTask(
+        Reporter,
+        {
+          conversationId: submission.conversationId,
+          text: `[subagent ${submission.conversationId} (${agent.agent}) answered] ${answerText(answer)}`,
+          steer: false,
+          answer: submission.answer,
+        },
+        { conversationId: parent, ownership: { kind: 'conversation' }, background: true },
+      )
+      agent.reported.push(submission.answer)
+      state.actions[`subagent-answer:${submission.answer}`] = {
+        conversationId: submission.conversationId,
+        reporter,
+        answer: submission.answer,
+        status: 'done',
+      }
+    }, BACKGROUND_CONTEXT)
+  }
+  host.onClose(async () => {
+    unsubscribe?.()
+    unsubscribe = undefined
+    await recovery
+  })
+  host.onOpen(async () => {
+    unsubscribe?.()
+    unsubscribe = host.harness().subscribeCommits((publication) => {
+      for (const change of publication.changes) {
+        if (change.type !== 'submission') continue
+        recovery = recovery
+          .then(() => recover(change.value))
+          .catch((error: unknown) => {
+            host.notice(`Subagent answer recovery failed: ${String(error)}`)
+          })
+      }
+    })
+    let cursor: Cursor | undefined
+    do {
+      const page = await host.scanSubmissions({ status: 'done' }, 500, cursor, BACKGROUND_CONTEXT)
+      for (const submission of page.items) await recover(submission)
+      cursor = page.next
+    } while (cursor)
+  })
   return defineExtension({
     name: 'subagents',
     tasks: [Anchor, Reporter],

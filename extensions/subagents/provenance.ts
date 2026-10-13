@@ -66,7 +66,11 @@ export async function provenance(
           cursor,
         )
         for (const task of page.items) {
-          const input = task.input as { conversationId: ConversationId; sourceEntry?: EntryId }
+          const input = task.input as {
+            conversationId: ConversationId
+            sourceEntry?: EntryId
+            answer?: EntryId
+          }
           const delivery = await tx.submissionByRequest(input.conversationId, `subagent:${task.id}`)
           const instructionId = identity(delivery)
           if (instructionId) {
@@ -77,7 +81,8 @@ export async function provenance(
             }
           }
           const answer =
-            delivery?.type === 'input' && delivery.status === 'done' ? delivery.answer : undefined
+            input.answer ??
+            (delivery?.type === 'input' && delivery.status === 'done' ? delivery.answer : undefined)
           for (const [request, entry] of [
             ...(answer ? [[`subagent-answer:${answer}`, answer] as const] : []),
             [`subagent-report:${task.id}`, delivery?.entry] as const,

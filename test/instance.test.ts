@@ -68,6 +68,7 @@ async function fixture() {
       if (!resources.has(key)) resources.set(key, create())
       return resources.get(key) as T
     },
+    onOpen: () => {},
     onClose: (cleanup: () => Promise<void>) => {
       cleanups.push(cleanup)
     },

@@ -6,6 +6,7 @@ import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import {
   AssistantEntry,
+  configure,
   defineExtension,
   defineTool,
   InboxDoc,
@@ -70,7 +71,9 @@ async function fixture(
   prepared.registry.install(CodingTools)
   if (extension) prepared.registry.install(extension)
   let opened: OpenHost | undefined
-  const backend = subagents({
+  const onOpen: (() => Promise<void>)[] = []
+  const onClose: (() => Promise<void>)[] = []
+  let backend = subagents({
     projectSettings: () => projectSettings(prepared.projectRoot, prepared.userHome),
     ...prepared,
     harness: () => opened!.harness,
@@ -78,7 +81,41 @@ async function fixture(
     resource: (_key, create) => create(),
     extensions: () => [],
     notice: () => {},
+    onOpen: (callback) => {
+      onOpen.push(callback)
+    },
+    onClose: (callback) => {
+      onClose.push(callback)
+    },
   })
+  backend = {
+    ...backend,
+    tasks: backend.tasks!.map((task) => {
+      if (task.definition.name !== 'ultimate.subagent-reporter') return task
+      const reporter = task as unknown as Task<JsonValue, { phase: string }, JsonValue, object>
+      return {
+        definition: {
+          ...reporter.definition,
+          phases: {
+            ...reporter.definition.phases,
+            retry: (
+              ...[retryTask, runtime, taskContext]: Parameters<
+                typeof reporter.definition.phases.retry
+              >
+            ) =>
+              reporter.definition.phases.retry(
+                retryTask,
+                {
+                  ...runtime,
+                  sleep: (_until, sleepContext) => runtime.sleep(Date.now() + 5, sleepContext),
+                },
+                taskContext,
+              ),
+          },
+        },
+      }
+    }),
+  }
   prepared.registry.install(
     reportGate
       ? {
@@ -175,19 +212,25 @@ async function fixture(
     ])
   }
   prepared.faux!.setResponses([route])
-  opened = await prepared.open()
-  hosts.push(opened)
+  const open = async () => {
+    opened = await prepared.open()
+    const close = opened.close.bind(opened)
+    opened.close = async () => {
+      for (const callback of onClose) await callback()
+      await close()
+    }
+    for (const callback of onOpen) await callback()
+    hosts.push(opened)
+    return opened
+  }
+  await open()
   return {
     prepared,
-    opened,
+    opened: opened!,
     ultimateRoot,
     userHome,
     errors,
-    reopen: async () => {
-      opened = await prepared.open()
-      hosts.push(opened)
-      return opened
-    },
+    reopen: open,
   }
 }
 async function call(opened: OpenHost, args: Record<string, unknown>) {
@@ -490,6 +533,147 @@ describe('provider error recovery', () => {
   const retryText =
     'Your previous run stopped with a provider error. Continue from where you left off; check what you already did and do not redo it.'
 
+  it('delays and retries an unavailable model without a failure report', async () => {
+    const held = { ...gate(), entered: false, phase: 'deliver' }
+    const f = await fixture(undefined, undefined, held)
+    await call(f.opened, {
+      action: 'start',
+      agent: 'scout',
+      task: 'temporarily unavailable',
+      background: true,
+    })
+    await until(async () => held.entered)
+    const [child] = await children(f.opened)
+    await f.opened.harness.commit(
+      (tx) =>
+        configure(tx, child.conversationId, { model: { provider: 'missing', modelId: 'missing' } }),
+      context,
+    )
+    let deadline: number | undefined
+    const repaired = gate()
+    const unsubscribe = f.opened.harness.subscribeCommits((publication) => {
+      for (const change of publication.changes) {
+        if (
+          change.type !== 'task' ||
+          change.value.kind !== 'ultimate.subagent-reporter' ||
+          change.value.state.status !== 'running'
+        )
+          continue
+        const checkpoint = change.value.state.checkpoint as { phase: string; until?: number }
+        if (checkpoint.phase !== 'retry') continue
+        deadline = checkpoint.until
+        void f.opened.harness
+          .commit(
+            (tx) =>
+              configure(tx, child.conversationId, {
+                model: { provider: 'faux', modelId: 'faux-1' },
+              }),
+            context,
+          )
+          .then(() => repaired.release())
+      }
+    })
+    held.release()
+    await repaired.promise
+    expect(deadline! - Date.now()).toBeGreaterThan(19_000)
+    await until(async () => (await reports(f.opened)).length === 1)
+    await f.opened.harness.waitForIdle(context)
+    unsubscribe()
+    const delivered = await reports(f.opened)
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0].model![0].content).toContain(retryText)
+    expect(delivered[0].model![0].content).not.toContain('failed:')
+  })
+
+  it.each([false, true])(
+    'delivers a manual answer once after the automatic retry fails with no_model (offline: %s)',
+    async (offlineAnswer) => {
+      const held = { ...gate(), entered: false, phase: 'deliver', attempt: 1 as const }
+      const f = await fixture(undefined, undefined, held, (transcript) => {
+        const last = transcript.messages.at(-1)!
+        if (last.role === 'user' && last.content === 'provider failure')
+          return fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'provider failed' })
+        return undefined
+      })
+      await call(f.opened, {
+        action: 'start',
+        agent: 'scout',
+        task: 'provider failure',
+        background: true,
+      })
+      await until(async () => held.entered)
+      const [child] = await children(f.opened)
+      await f.opened.harness.commit(
+        (tx) =>
+          configure(tx, child.conversationId, {
+            model: { provider: 'missing', modelId: 'missing' },
+          }),
+        context,
+      )
+      held.release()
+      await until(async () => (await reports(f.opened)).length === 1)
+      await f.opened.harness.waitForIdle(context)
+      expect(JSON.stringify(await reports(f.opened))).toContain('failed: no_model')
+      await f.opened.harness.commit(
+        (tx) =>
+          configure(tx, child.conversationId, { model: { provider: 'faux', modelId: 'faux-1' } }),
+        context,
+      )
+      const handle = (await f.opened.harness.conversation(child.conversationId, context))!
+      if (!offlineAnswer) {
+        await (
+          await handle.submit({ type: 'input', content: 'manual continuation' }, context)
+        ).wait(context)
+        await until(async () => (await reports(f.opened)).length === 2)
+        await f.opened.harness.waitForIdle(context)
+      }
+      // An unobserved completion exercises the startup scan instead of live delivery.
+      await f.opened.close()
+      hosts.splice(hosts.indexOf(f.opened), 1)
+      const offline = await f.prepared.open()
+      hosts.push(offline)
+      if (offlineAnswer)
+        await (
+          await (await offline.harness.conversation(child.conversationId, context))!.submit(
+            { type: 'input', content: 'manual continuation' },
+            context,
+          )
+        ).wait(context)
+      await offline.close()
+      hosts.splice(hosts.indexOf(offline), 1)
+      const resumed = await f.reopen()
+      await until(async () => (await reports(resumed)).length === 2)
+      await resumed.harness.waitForIdle(context)
+      const delivered = await reports(resumed)
+      expect(delivered).toHaveLength(2)
+      expect(delivered[1].model![0].content).toContain(
+        `[subagent ${child.conversationId} (scout) answered]`,
+      )
+      expect(delivered[1].model![0].content).toContain('manual continuation')
+      expect((await children(resumed))[0].reported).toHaveLength(1)
+      expect(
+        (await provenance(resumed.harness, resumed.root.id, [delivered[1].id]))[delivered[1].id],
+      ).toEqual({
+        sender: child.conversationId,
+        kind: 'report',
+        entry: (await children(resumed))[0].reported[0],
+      })
+      await resumed.close()
+      hosts.splice(hosts.indexOf(resumed), 1)
+      const again = await f.reopen()
+      await again.harness.waitForIdle(context)
+      expect(await reports(again)).toHaveLength(2)
+      await call(again, { action: 'message', id: handle.id, text: 'reporter continuation' })
+      await again.harness.waitForIdle(context)
+      expect((await children(again))[0].reported).toHaveLength(2)
+      expect(
+        (await reports(again)).filter((entry) =>
+          JSON.stringify(entry.model).includes('reporter continuation'),
+        ),
+      ).toHaveLength(1)
+    },
+  )
+
   for (const retryFails of [false, true])
     it(`retries a model error once and ${retryFails ? 'reports the second failure' : 'delivers the answer without a failure report'}`, async () => {
       const inputs: string[] = []
@@ -523,6 +707,45 @@ describe('provider error recovery', () => {
       expect(JSON.stringify(text).includes('failed:')).toBe(retryFails)
       expect(f.errors).toEqual([])
     })
+
+  it('keeps the durable retry deadline across restart and cancels it on stop', async () => {
+    const held = { ...gate(), entered: false, phase: 'retry' }
+    let continuations = 0
+    const f = await fixture(undefined, undefined, held, (transcript) => {
+      const last = transcript.messages.at(-1)!
+      if (last.role === 'user' && last.content === retryText) continuations++
+      if (last.role === 'user' && last.content === 'provider failure')
+        return fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'provider failed' })
+      return undefined
+    })
+    await call(f.opened, {
+      action: 'start',
+      agent: 'scout',
+      task: 'provider failure',
+      background: true,
+    })
+    await until(async () => held.entered)
+    const [child] = await children(f.opened)
+    const state = (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!
+    const action = Object.values(state.actions)[0]
+    const before = (await f.opened.harness.getTask(action.reporter, context))!.state
+    expect(before).toMatchObject({ checkpoint: { phase: 'retry', until: expect.any(Number) } })
+    await f.opened.close()
+    hosts.splice(hosts.indexOf(f.opened), 1)
+    const resumed = await f.reopen()
+    expect((await resumed.harness.getTask(action.reporter, context))!.state).toEqual(before)
+    await call(resumed, { action: 'stop', id: child.conversationId })
+    held.release()
+    await resumed.harness.waitForIdle(context)
+    expect(continuations).toBe(0)
+    expect(
+      await resumed.harness.commit(
+        (tx) => tx.submissionByRequest(child.conversationId, action.retryRequest!),
+        context,
+      ),
+    ).toBeUndefined()
+    expect(await reports(resumed)).toHaveLength(0)
+  })
 
   it('shares one continuation across restart for start and steering inputs that fail in the same run', async () => {
     const held = { ...gate(), entered: false }
