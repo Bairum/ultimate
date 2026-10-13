@@ -471,6 +471,7 @@ export function CanvasMap() {
   const back = () => {
     if (!focus) return
     setFocus(false)
+    container.current?.focus({ preventScroll: true })
     if (saved.current) void flow.setViewport(saved.current, { duration: 450 })
   }
   const open = (id: number) => {

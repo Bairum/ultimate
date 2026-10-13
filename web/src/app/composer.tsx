@@ -15,7 +15,7 @@ import {
 import { Kbd } from '@/components/ui/kbd'
 import { api } from '../sdk/client.ts'
 import { errorMessage } from '../sdk/format.ts'
-import { useConversation, useExtensions, useModels } from '../sdk/hooks.ts'
+import { useConversation, useExtensions, useModels, useUltimate } from '../sdk/hooks.ts'
 import { isMac } from '../sdk/keys.ts'
 import type { ModelsResponse } from '../../../shared/protocol.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
@@ -150,6 +150,7 @@ function createDraft(id: number | undefined) {
 
 function ConversationComposer({ dock }: { dock?: boolean }) {
   const { id, busy, agent, inbox, loading } = useConversation()
+  const { surface } = useUltimate()
   if (!drafts.has(id)) drafts.set(id, createDraft(id))
   const draft = drafts.get(id)!
   const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
@@ -319,7 +320,8 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
                 blocked ??
                 (busy ? (
                   <>
-                    <Kbd>↵</Kbd> steer · <Kbd>{alt} ↵</Kbd> follow-up · <Kbd>esc</Kbd> stop
+                    <Kbd>↵</Kbd> steer · <Kbd>{alt} ↵</Kbd> follow-up · <Kbd>esc</Kbd>{' '}
+                    {surface === 'canvas' ? 'map' : 'stop'}
                   </>
                 ) : null)}
             </span>
@@ -329,7 +331,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
                 onClick={() =>
                   void api.abort().catch((failure: Error) => setError(failure.message))
                 }
-                title="Stop (Esc)"
+                title={surface === 'canvas' ? 'Stop' : 'Stop (Esc)'}
               />
             )}
             {(!busy || !empty) && (

@@ -1,6 +1,6 @@
 import { ReactFlowProvider } from '@xyflow/react'
 import { OrbitIcon } from 'lucide-react'
-import { Header, Panels, StatusLine, defineWebExtension, getConversation, getState } from '@/sdk'
+import { Header, Panels, StatusLine, defineWebExtension, getState } from '@/sdk'
 import type { CommandContribution, UltimateContext } from '@/sdk'
 import { CanvasMap, getController, onMap } from './map.tsx'
 import type { Direction } from './map.tsx'
@@ -94,9 +94,8 @@ const commands: CommandContribution[] = [
     id: 'canvas.back',
     title: 'Back to the map',
     keys: 'escape',
-    // Like Escape in the agent view, from the composer too; while the shown run works, Escape stops it (`agent.stop`).
     whileTyping: true,
-    when: (context) => here(context) && getController()!.focused() && !getConversation().busy,
+    when: (context) => here(context) && getController()!.focused(),
     run: () => getController()?.back(),
   },
   {
