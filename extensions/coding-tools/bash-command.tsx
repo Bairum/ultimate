@@ -1,3 +1,21 @@
+/** Best-effort display of one leading Python heredoc; shell wrapper stays plain. */
+export function pythonHeredoc(command: string) {
+  const lines = command.split('\n')
+  const match =
+    /^[ \t]*python(?:3)?(?:[ \t]+-)?[ \t]+<<[ \t]*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))[ \t]*$/.exec(
+      lines[0],
+    )
+  if (!match) return undefined
+  const delimiter = match[1] ?? match[2] ?? match[3]
+  const end = lines.findIndex((line, index) => index > 0 && line === delimiter)
+  if (end < 0) return undefined
+  return {
+    opening: lines[0],
+    body: lines.slice(1, end).join('\n') + (end > 1 ? '\n' : ''),
+    ending: lines.slice(end).join('\n'),
+  }
+}
+
 export interface BashCommand {
   commands: string[]
   operators: ('&&' | ';')[]

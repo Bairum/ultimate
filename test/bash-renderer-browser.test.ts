@@ -9,6 +9,11 @@ it('renders command context separately from Bash output and preserves the origin
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const reported = String.raw`cd /home/haza/Projects/ultimate && rg -n "no_model" node_modules/@earendil-works/pi-durable/dist -l | head; rg -n -B8 "reason: \"no_model\"" node_modules/@earendil-works/pi-durable/dist/harness/compaction.js | head -30`
+  const opening = "python3 - <<'EOF'"
+  const body =
+    'from pathlib import Path\nsource = Path("web/src/components/ai/code-block.tsx")\nif source.exists():\n    print(source.read_text())\n'
+  const ending = 'EOF\nrg -n "CodeBlock" web/src | head; npx tsc --noEmit'
+  const python = `${opening}\n${body}${ending}`
   const base = await temp('ultimate-bash-renderer-')
   let server: ViteDevServer | undefined
   let browser: Browser | undefined
@@ -34,7 +39,7 @@ window.show = (command, output = '', status = 'done', dropped) => flushSync(() =
     images: [], diagnostics: status === 'error' ? [{code: 'exit_code', message: 'exit code 2'}] : [],
   } })
 ))
-window.show(${JSON.stringify(reported)}, 'On branch ultimate/47c790-26077\\nWorking tree clean')
+window.show(new URLSearchParams(location.search).has('python') ? ${JSON.stringify('cd /home/haza/Projects/ultimate && ')} + ${JSON.stringify(python)} : ${JSON.stringify(reported)}, 'On branch ultimate/47c790-26077\\nWorking tree clean')
 `,
     )
     server = await createServer({
@@ -58,6 +63,7 @@ window.show(${JSON.stringify(reported)}, 'On branch ultimate/47c790-26077\\nWork
     expect(await page.getByText('cd /home/haza', { exact: false }).first().isVisible()).toBe(true)
     await page.getByText('Original command', { exact: true }).click()
     expect(await page.locator('details pre').innerText()).toBe(reported)
+    await page.getByText('Original command', { exact: true }).click()
     expect(await page.locator('pre.overflow-auto').innerText()).toBe(
       'On branch ultimate/47c790-26077\nWorking tree clean',
     )
@@ -74,10 +80,6 @@ window.show(${JSON.stringify(reported)}, 'On branch ultimate/47c790-26077\\nWork
         true,
       )
     }
-    if (process.env.BASH_PREVIEW_MS) {
-      console.log('Bash renderer preview:', server.resolvedUrls!.local[0])
-      await new Promise((finish) => setTimeout(finish, Number(process.env.BASH_PREVIEW_MS)))
-    }
     const show = async (
       command: string,
       output = '',
@@ -89,6 +91,34 @@ window.show(${JSON.stringify(reported)}, 'On branch ultimate/47c790-26077\\nWork
         { command, output, status, dropped },
       )
     }
+    await show(`cd /home/haza/Projects/ultimate && ${python}`, 'Script finished')
+    await page.waitForFunction(() =>
+      document.querySelector('[data-language="python"] code span[style*="--shiki-dark"]'),
+    )
+    expect(await page.locator('[data-language="python"] code').innerText()).toBe(body.slice(0, -1))
+    expect(await page.getByText(opening, { exact: true }).last().isVisible()).toBe(true)
+    expect(await page.getByText(ending, { exact: true }).isVisible()).toBe(true)
+    expect(await page.getByRole('button', { name: /python3/ }).innerText()).not.toContain(
+      'cd /home/haza',
+    )
+    expect(await page.getByText('cd /home/haza', { exact: false }).first().isVisible()).toBe(true)
+    for (const width of [1200, 390]) {
+      await page.setViewportSize({ width, height: 800 })
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      )
+    }
+    if (process.env.BASH_PREVIEW_MS) {
+      console.log('Bash renderer preview:', server.resolvedUrls!.local[0] + '?python')
+      await new Promise((finish) => setTimeout(finish, Number(process.env.BASH_PREVIEW_MS)))
+    }
+    await show(python)
+    await page.getByText('Original command', { exact: true }).click()
+    expect(await page.locator('details pre').innerText()).toBe(python)
+    const incomplete = `${opening}\n${body}`
+    await show(incomplete)
+    expect(await page.locator('[data-language="python"]').count()).toBe(0)
+    expect(await page.getByText(incomplete, { exact: true }).isVisible()).toBe(true)
     await show('cd /workspace && git status')
     expect(await page.getByText('no output', { exact: true }).isVisible()).toBe(true)
     await show('printf "a && b" && pwd', 'error output', 'error', { lines: 1234 })
