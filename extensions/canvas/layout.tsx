@@ -13,7 +13,7 @@ export const CONCLUDED: Size = { width: 380, height: 264 }
 export const ANSWERED: Size = { width: 380, height: 204 }
 /** A finished subagent. */
 export const PILL: Size = { width: 236, height: 60 }
-export const HUB: Size = { width: 440, height: 168 }
+export const HUB: Size = { width: 560, height: 224 }
 const GAP = 48
 /** The first ring clears the hub with room for its edges. */
 const MIN_RING = 560

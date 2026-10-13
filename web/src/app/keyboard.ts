@@ -33,7 +33,9 @@ export function useShortcuts() {
           : [],
       )
       const typing = editable(event.target)
-      const composer = event.target instanceof HTMLElement && event.target.id === 'composer-input'
+      const composer =
+        event.target instanceof HTMLTextAreaElement &&
+        !!event.target.closest('[data-composer-target]')
       const emptyPalette =
         store.getState().ui.paletteOpen &&
         event.target instanceof HTMLInputElement &&

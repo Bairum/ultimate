@@ -13,6 +13,7 @@ import { Kbd } from '@/components/ui/kbd'
 import { cn, errorMessage, useDialog, useUltimate } from '@/sdk'
 import {
   authLabel,
+  getPickerTarget,
   dialogs,
   formatWindow,
   openLogin,
@@ -78,11 +79,12 @@ export function ModelRow({
   )
 }
 
-/** Searchable models of every provider, grouped; picking one configures the shown conversation. */
+/** Searchable models of every provider, grouped; picking one configures the target that opened it. */
 export function ModelPicker() {
   const [open, setOpen] = useDialog(dialogs.picker)
   const actions = useUltimate()
-  const { ref, models, loading } = useCurrentModel()
+  const target = getPickerTarget()
+  const { ref, models, loading } = useCurrentModel(target)
   const [query, setQuery] = useState('')
   const [error, setError] = useState<string>()
   const providers = useMemo(
@@ -120,7 +122,7 @@ export function ModelPicker() {
       return
     }
     setError(undefined)
-    selectModel(model).then(
+    selectModel(model, target).then(
       () => setOpen(false),
       (failure: unknown) => setError(errorMessage(failure)),
     )

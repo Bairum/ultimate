@@ -14,12 +14,14 @@ import {
 import { Kbd } from '@/components/ui/kbd'
 import { api } from '../sdk/client.ts'
 import { errorMessage } from '../sdk/format.ts'
-import { useConversation, useExtensions, useModels, useUltimate } from '../sdk/hooks.ts'
+import { useConversation, useExtensions, useModels, useUiState, useUltimate } from '../sdk/hooks.ts'
 import { isMac } from '../sdk/keys.ts'
 import type { ModelsResponse } from '../../../shared/protocol.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
 import { inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
+import { ComposerContext, newConversationKey } from '../sdk/composer.tsx'
+import type { NewConversationChoices } from '../sdk/composer.tsx'
 
 const alt = isMac ? '⌥' : 'Alt'
 
@@ -112,6 +114,16 @@ export function Composer({ dock }: { dock?: boolean }) {
   return <ConversationComposer dock={dock} key={id} />
 }
 
+export function NewConversationComposer({
+  inputId,
+  onStarted,
+}: {
+  inputId?: string
+  onStarted: (id: number) => void
+}) {
+  return <ConversationComposer target="new" dock inputId={inputId} onStarted={onStarted} />
+}
+
 type Draft = {
   text: string
   images: { data: string; mimeType: string }[]
@@ -121,8 +133,8 @@ type Draft = {
 }
 
 // In-flight submissions and retryable failures belong to the conversation, not its mounted editor.
-const drafts = new Map<number | undefined, ReturnType<typeof createDraft>>()
-function createDraft(id: number | undefined) {
+const drafts = new Map<number | 'new' | undefined, ReturnType<typeof createDraft>>()
+function createDraft(id: number | 'new' | undefined) {
   const key = id === undefined ? undefined : `ultimate.draft.${id}`
   let value: Draft = {
     text: key ? (localStorage.getItem(key) ?? '') : '',
@@ -147,11 +159,32 @@ function createDraft(id: number | undefined) {
   }
 }
 
-function ConversationComposer({ dock }: { dock?: boolean }) {
-  const { id, busy, agent, inbox, loading } = useConversation()
+function ConversationComposer({
+  dock,
+  target = 'conversation',
+  inputId,
+  onStarted,
+}: {
+  dock?: boolean
+  target?: 'conversation' | 'new'
+  inputId?: string
+  onStarted?: (id: number) => void
+}) {
+  const conversation = useConversation()
+  const isNew = target === 'new'
+  const { id, agent } = conversation
+  const busy = !isNew && conversation.busy
+  const loading = !isNew && conversation.loading
+  const inbox = isNew ? [] : conversation.inbox
+  const [choices] = useUiState<NewConversationChoices>(newConversationKey, {})
+  const [creation] = useUiState<string>('ext.conversations.creationType', 'isolated')
+  const extensions = useExtensions()
+  const isolated =
+    creation !== 'shared' && extensions.some((extension) => extension.name === 'workspaces')
+  const draftId = isNew ? 'new' : id
   const { surface } = useUltimate()
-  if (!drafts.has(id)) drafts.set(id, createDraft(id))
-  const draft = drafts.get(id)!
+  if (!drafts.has(draftId)) drafts.set(draftId, createDraft(draftId))
+  const draft = drafts.get(draftId)!
   const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
   const setError = (message: string | undefined) => draft.set({ error: message })
   const setImages = (change: (images: Draft['images']) => Draft['images']) =>
@@ -174,16 +207,38 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     if (value) localStorage.setItem(key, value)
     else localStorage.removeItem(key)
   }
-  const blocked = loading ? undefined : blockedBy(agent, models)
+  const blocked =
+    loading || (isNew && !choices.model)
+      ? undefined
+      : blockedBy(isNew ? { ...agent, model: choices.model } : agent, models)
   const empty = !text.trim() && images.length === 0
 
   async function send(whenBusy?: 'steer' | 'followUp') {
-    if (loading || empty || blocked || draft.get().sending || pending.current || id === undefined)
+    if (
+      loading ||
+      empty ||
+      blocked ||
+      draft.get().sending ||
+      pending.current ||
+      (!isNew && id === undefined)
+    )
       return
     const submitted = draft.get()
     draft.set({ sending: true, error: undefined })
     try {
-      await api.submit(text.trim(), busy ? (whenBusy ?? 'steer') : undefined, id, images)
+      let startedId: number | undefined
+      if (isNew) {
+        startedId = isolated
+          ? (await api.action<{ id: number }>('workspaces', 'create', {})).id
+          : (await api.createConversation()).id
+        if (choices.model || choices.thinkingLevel) await api.configure(choices, startedId)
+      }
+      await api.submit(
+        text.trim(),
+        busy ? (whenBusy ?? 'steer') : undefined,
+        startedId ?? id,
+        images,
+      )
       const stored = key ? (localStorage.getItem(key) ?? '') : ''
       if (key && stored === submitted.text && draft.get().revision === submitted.revision)
         localStorage.removeItem(key)
@@ -193,6 +248,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
           : {}),
         ...(draft.get().images === submitted.images ? { images: [] } : {}),
       })
+      if (startedId !== undefined) onStarted?.(startedId)
     } catch (failure) {
       if (key && draft.get().revision === submitted.revision)
         draft.set({ text: localStorage.getItem(key) ?? '' })
@@ -202,84 +258,114 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     }
   }
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (isNew && event.key === 'Escape') event.currentTarget.blur()
     if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
     event.preventDefault()
     void send(event.altKey ? 'followUp' : 'steer')
   }
 
   return (
-    <div className={cn(column(dock), 'pb-2')}>
-      <Inbox items={inbox} />
-      <PromptInput
-        onSubmit={(event) => {
-          event.preventDefault()
-          void send()
-        }}
+    <ComposerContext value={{ target }}>
+      <div
+        data-composer-target={target}
+        className={cn(
+          isNew ? 'nodrag nowheel flex min-h-0 flex-1 flex-col overflow-y-auto' : column(dock),
+          'pb-2',
+        )}
       >
-        <ImagePreviews
-          images={images}
-          disabled={loading || sending || reading}
-          remove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
-        />
-        <PromptInputTextarea
-          autoFocus
-          readOnly={loading || sending}
-          onPaste={(event) => void paste(event)}
-          id="composer-input"
-          onChange={(event) => update(event.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder={
-            busy ? 'Steer the run, or queue a follow-up…' : 'Ask Ultimate to change something…'
-          }
-          value={text}
-        />
-        <PromptInputFooter>
-          <PromptInputTools>
-            <Slot name="composer.toolbar" variant="inline" />
-          </PromptInputTools>
-          <div className="flex min-w-0 items-center gap-2">
-            <span
-              className={cn(
-                'truncate font-mono text-[11px]',
-                error || blocked ? 'text-error' : 'text-muted-foreground/70',
-              )}
-            >
-              {error ??
-                blocked ??
-                (busy ? (
-                  <>
-                    <Kbd>↵</Kbd> steer · <Kbd>{alt} ↵</Kbd> follow-up · <Kbd>esc</Kbd>{' '}
-                    {surface === 'canvas' ? 'map' : 'stop'}
-                  </>
-                ) : null)}
-            </span>
-            {busy && (
-              <PromptInputSubmit
-                mode="stop"
-                onClick={() =>
-                  void api.abort().catch((failure: Error) => setError(failure.message))
-                }
-                title={surface === 'canvas' ? 'Stop' : 'Stop (Esc)'}
-              />
-            )}
-            {(!busy || !empty) && (
-              <PromptInputSubmit
-                disabled={loading || empty || !!blocked || sending || reading}
-                aria-label={loading ? 'Loading conversation' : 'Send'}
-                title={loading ? 'Loading conversation' : busy ? 'Steer (Enter)' : 'Send (Enter)'}
-                className={loading ? 'bg-muted text-muted-foreground' : undefined}
+        <Inbox items={inbox} />
+        <PromptInput
+          className={isNew ? 'min-h-0 flex-1' : undefined}
+          onSubmit={(event) => {
+            event.preventDefault()
+            void send()
+          }}
+        >
+          <ImagePreviews
+            className={
+              isNew ? 'max-h-14 shrink-0 flex-nowrap overflow-auto [&_img]:max-h-10!' : undefined
+            }
+            images={images}
+            disabled={loading || sending || reading}
+            remove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
+          />
+          <PromptInputTextarea
+            className={isNew ? 'min-h-0 flex-1' : undefined}
+            autoFocus={!isNew}
+            maxHeight={isNew ? 96 : undefined}
+            readOnly={loading || sending}
+            onPaste={(event) => void paste(event)}
+            id={inputId ?? 'composer-input'}
+            aria-label={isNew ? 'Start a conversation' : undefined}
+            onChange={(event) => update(event.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder={
+              isNew
+                ? 'Start a conversation…'
+                : busy
+                  ? 'Steer the run, or queue a follow-up…'
+                  : 'Ask Ultimate to change something…'
+            }
+            value={text}
+          />
+          <PromptInputFooter>
+            <PromptInputTools>
+              <Slot name="composer.toolbar" variant="inline" />
+            </PromptInputTools>
+            <div className="flex min-w-0 items-center gap-2">
+              <span
+                className={cn(
+                  'truncate font-mono text-[11px]',
+                  error || blocked ? 'text-error' : 'text-muted-foreground/70',
+                )}
               >
-                {loading ? (
-                  <LoaderCircleIcon className="size-4 motion-safe:animate-spin" />
-                ) : undefined}
-              </PromptInputSubmit>
-            )}
-          </div>
-        </PromptInputFooter>
-      </PromptInput>
-      <div className="flex items-center gap-3 overflow-hidden pt-1.5 font-mono text-[11px] whitespace-nowrap text-muted-foreground empty:hidden">
-        <Slot name="composer.status" variant="inline" />
+                {error ??
+                  blocked ??
+                  (busy ? (
+                    <>
+                      <Kbd>↵</Kbd> steer · <Kbd>{alt} ↵</Kbd> follow-up · <Kbd>esc</Kbd>{' '}
+                      {surface === 'canvas' ? 'map' : 'stop'}
+                    </>
+                  ) : null)}
+              </span>
+              {busy && (
+                <PromptInputSubmit
+                  mode="stop"
+                  onClick={() =>
+                    void api.abort().catch((failure: Error) => setError(failure.message))
+                  }
+                  title={surface === 'canvas' ? 'Stop' : 'Stop (Esc)'}
+                />
+              )}
+              {(!busy || !empty) && (
+                <PromptInputSubmit
+                  disabled={loading || empty || !!blocked || sending || reading}
+                  aria-label={
+                    loading ? 'Loading conversation' : isNew ? 'Start the conversation' : 'Send'
+                  }
+                  title={
+                    loading
+                      ? 'Loading conversation'
+                      : isNew
+                        ? 'Start (Enter)'
+                        : busy
+                          ? 'Steer (Enter)'
+                          : 'Send (Enter)'
+                  }
+                  className={loading ? 'bg-muted text-muted-foreground' : undefined}
+                >
+                  {loading ? (
+                    <LoaderCircleIcon className="size-4 motion-safe:animate-spin" />
+                  ) : undefined}
+                </PromptInputSubmit>
+              )}
+            </div>
+          </PromptInputFooter>
+        </PromptInput>
+        <div className="flex items-center gap-3 overflow-hidden pt-1.5 font-mono text-[11px] whitespace-nowrap text-muted-foreground empty:hidden">
+          <Slot name="composer.status" variant="inline" />
+        </div>
       </div>
-    </div>
+    </ComposerContext>
   )
 }

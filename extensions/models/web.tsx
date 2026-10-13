@@ -3,24 +3,34 @@ import { useState } from 'react'
 import { Kbd } from '@/components/ui/kbd'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
-  api,
   cn,
   defineWebExtension,
   errorMessage,
   getConversation,
   getState,
   useDialog,
+  useComposer,
+  newConversationKey,
   useUltimate,
 } from '@/sdk'
 import { LoginDialog } from './login.tsx'
 import { ModelPicker } from './picker.tsx'
-import { dialogs, nextThinking, openLogin, useCurrentModel } from './state.tsx'
+import {
+  configureTarget,
+  dialogs,
+  nextThinking,
+  openLogin,
+  openPicker,
+  useCurrentModel,
+} from './state.tsx'
+import type { NewConversationChoices } from '@/sdk'
 import type { ThinkingLevel } from './state.tsx'
 
 const toolbarButton =
   'flex h-7 max-w-56 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground'
 
 function ModelButton() {
+  const { target } = useComposer()
   const { ref, loading } = useCurrentModel()
   const actions = useUltimate()
   return (
@@ -28,13 +38,15 @@ function ModelButton() {
       className={toolbarButton}
       disabled={loading}
       aria-label={loading ? 'Loading model' : undefined}
-      onClick={() => actions.open(dialogs.picker)}
+      onClick={() => openPicker(actions, target)}
       title={
         loading
           ? 'Loading model'
           : ref
             ? `${ref.modelId} · ${ref.provider} — pick a model`
-            : 'Pick a model'
+            : target === 'new'
+              ? 'Use the root conversation’s model — pick a model'
+              : 'Pick a model'
       }
       type="button"
     >
@@ -45,7 +57,7 @@ function ModelButton() {
           loading ? undefined : ref ? 'text-foreground/85' : 'text-warning',
         )}
       >
-        {loading ? 'model…' : (ref?.modelId ?? 'no model')}
+        {loading ? 'model…' : (ref?.modelId ?? (target === 'new' ? 'default model' : 'no model'))}
       </span>
       <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
     </button>
@@ -53,8 +65,9 @@ function ModelButton() {
 }
 
 function ThinkingButton() {
+  const { target } = useComposer()
   const { model, thinking, loading } = useCurrentModel()
-  const [open, setOpen] = useDialog(dialogs.thinking)
+  const [open, setOpen] = useDialog(target === 'new' ? 'models.newThinking' : dialogs.thinking)
   const [error, setError] = useState<string>()
   if (loading)
     return (
@@ -75,7 +88,7 @@ function ThinkingButton() {
   const current = thinking ?? 'off'
   const choose = (level: ThinkingLevel) => {
     setError(undefined)
-    api.configure({ thinkingLevel: level }).then(
+    configureTarget({ thinkingLevel: level }, target).then(
       () => setOpen(false),
       (failure: unknown) => setError(errorMessage(failure)),
     )
@@ -128,13 +141,24 @@ export default defineWebExtension({
       id: 'model.pick',
       title: 'Pick a model',
       run: (context) => {
-        if (!getConversation().loading) context.open(dialogs.picker)
+        if (!getConversation().loading)
+          openPicker(
+            context,
+            document.activeElement?.closest('[data-composer-target="new"]')
+              ? 'new'
+              : 'conversation',
+          )
       },
     },
     {
       id: 'model.thinking',
       title: 'Set the thinking level',
-      run: (context) => context.open(dialogs.thinking),
+      run: (context) =>
+        context.open(
+          document.activeElement?.closest('[data-composer-target="new"]')
+            ? 'models.newThinking'
+            : dialogs.thinking,
+        ),
     },
     {
       id: 'model.thinking.cycle',
@@ -142,14 +166,23 @@ export default defineWebExtension({
       keys: 'shift+tab',
       whileTyping: true,
       run: () => {
-        const { agent, loading } = getConversation()
+        const { agent, loading, id } = getConversation()
+        const target = document.activeElement?.closest('[data-composer-target="new"]')
+          ? 'new'
+          : 'conversation'
+        const choices = (getState().shared?.[newConversationKey] ?? {}) as NewConversationChoices
+        const ref =
+          target === 'new' ? (choices.model ?? (id === 1 ? agent.model : undefined)) : agent.model
+        const thinking =
+          target === 'new'
+            ? (choices.thinkingLevel ?? (id === 1 ? agent.thinkingLevel : undefined))
+            : agent.thinkingLevel
         if (loading) return undefined
         const model = getState().models?.models.find(
-          (candidate) =>
-            candidate.provider === agent.model?.provider && candidate.id === agent.model.modelId,
+          (candidate) => candidate.provider === ref?.provider && candidate.id === ref.modelId,
         )
         if (!model?.reasoning) return undefined
-        return api.configure({ thinkingLevel: nextThinking(agent.thinkingLevel, model) })
+        return configureTarget({ thinkingLevel: nextThinking(thinking, model) }, target)
       },
     },
     {

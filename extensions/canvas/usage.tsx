@@ -129,15 +129,3 @@ export function UsageDetails({
     </div>
   )
 }
-
-/** The hub's line: what everything on the map spent. */
-export function HubTotals({ ids }: { ids: readonly number[] }) {
-  const totals = useTotals(ids)
-  if (!ids.length) return null
-  return (
-    <span className="truncate font-mono text-[11px] text-muted-foreground" data-hub-totals>
-      {totals.agents} agent{totals.agents === 1 ? '' : 's'}
-      {spend(totals) && ` · ${spend(totals)}`}
-    </span>
-  )
-}

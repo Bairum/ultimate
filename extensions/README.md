@@ -202,6 +202,14 @@ Components mounted in named places of the shell, on every surface that renders t
 slots: { 'header.right': [Badge], sidebar: { component: Conversations, order: -1 } }
 ```
 
+`useComposer()` returns `{ target: 'conversation' | 'new' }` inside composer slots. The Agent and dock
+composers target the shown conversation; `<NewConversationComposer onStarted={(id) => …} />`
+(with an optional `inputId` for focus control)
+uses the same input, toolbar and status slots to start a conversation. Toolbar contributions can edit pending
+choices for `new`; conversation-specific status items should return `null` there. Pending model and thinking
+choices live in `ultimate.newConversation`; isolation uses `ext.conversations.creationType` so it agrees with
+sidebar New. Choices are applied before the first submission and remembered for the next new conversation.
+
 ### Panels
 
 Tabs of the right panel (toggle: `mod+alt+b`).
