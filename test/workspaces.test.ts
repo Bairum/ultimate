@@ -1490,3 +1490,56 @@ it('fix: a follow-up queued behind the failure run gets nothing landed unchecked
     view.dispose()
   }
 })
+it('fix: a rejected fix stays rejected when the lander crashes during its cleanup', async () => {
+  const f = await lander({})
+  await landerDefinition(f, 'fix')
+  // Resolves and commits the conflict, then leaves base.txt modified: a dirty fix, rejected.
+  f.answerLander(() =>
+    fauxAssistantMessage(
+      fauxToolCall('bash', {
+        command:
+          'echo resolved > base.txt && git add base.txt && git commit -q --no-edit && echo dirty >> base.txt',
+      }),
+      { stopReason: 'toolUse' },
+    ),
+  )
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const head = await conflicting(f, id)
+  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+  const { id: submission } = await f.service.submit(id, context)
+  await until(async () => (await index())!.queue[0]?.agent === 'fix')
+  // The cleanup's reset runs, then the process goes down before the rejection is reported.
+  const bin = join(f.directory, 'bin')
+  const started = join(f.directory, 'reset-started')
+  const gate = join(f.directory, 'reset-gate')
+  await mkdir(bin, { recursive: true })
+  await writeFile(
+    join(bin, 'git'),
+    `#!/bin/sh
+if [ "$1" = "reset" ] && [ ! -f '${started}' ]; then
+  touch '${started}'
+  while [ ! -f '${gate}' ]; do sleep 0.05; done
+  /usr/bin/git "$@"
+  exit 1
+fi
+exec /usr/bin/git "$@"
+`,
+    { mode: 0o755 },
+  )
+  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+  await until(() =>
+    access(started).then(
+      () => true,
+      () => false,
+    ),
+  )
+  const reopening = f.reopen()
+  await new Promise((done) => setTimeout(done, 300))
+  await writeFile(gate, '')
+  await reopening
+  const [report] = await submitted(f, id)
+  expect(report).toContain("The lander's fix left uncommitted changes.")
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  expect((await index())!.results[submission]).toMatchObject({ outcome: 'failed' })
+})

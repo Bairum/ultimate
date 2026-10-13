@@ -439,7 +439,7 @@ export function createLander(
             return fail(handed.reason, handed.output, handed.hint, handed.answer)
           }
           const head = await git(integration, 'rev-parse', 'HEAD')
-          const problem = (await git(integration, 'status', '--porcelain'))
+          const inspected = (await git(integration, 'status', '--porcelain'))
             ? 'left uncommitted changes'
             : (await git(integration, 'rev-parse', '-q', '--verify', 'MERGE_HEAD').then(
                   () => true,
@@ -451,7 +451,9 @@ export function createLander(
                 : !(await contains(integration, handed.head, head)) ||
                     !(await contains(integration, entry.tip, head))
                   ? 'did not build on the failed merge'
-                  : undefined
+                  : ''
+          // Decided once, before the cleanup changes what a replay would inspect: a reset keeps a fix's commits.
+          const problem = await runtime.memo(`fix-verdict:${id}:${attempt}`, inspected, context)
           if (problem) {
             await reset()
             return fail(
