@@ -572,7 +572,7 @@ function Conversations() {
       (conversation) =>
         !archived.includes(conversation.id) &&
         (conversation.inputAt !== undefined ||
-          conversation.label === 'lander' ||
+          (conversation.label === 'lander' && conversation.busy) ||
           conversation.id === shownTop?.id ||
           conversation.workspace !== undefined),
     )

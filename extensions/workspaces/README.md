@@ -29,7 +29,8 @@ source checkout (`landers`) processes that source's entries in order, without a 
 The task runs in that source's lander conversation (`landerConversations`), created by the first submit in the same
 commit as the queue entry: ownerless, titled "Lander · <target>", labelled `lander`, its cwd the lander checkout. It
 has no workspace and is no main, so `workspace submit` and `land` refuse it. The task is its conversation's
-foreground work, so the conversation list, the Agents tab and the Canvas show it working while it lands. It logs
+foreground work, so the conversation list, the Agents tab and the Canvas show it working while it lands; the
+conversation list and the Canvas show it only then (open it from a "full log" link otherwise). It logs
 every submission as `ultimate.lander` entries, which carry no model message, so no model run in that conversation
 sees them: `queued`, `started`, each step, each check with `passed`, `failed` or `flaky`, and the outcome (`landed`
 with `sha`, `commits`, `paths`, `flaky`, `pushed`, or `failed` with `reason` and the `output` tail). Each line is
