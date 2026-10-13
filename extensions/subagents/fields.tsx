@@ -248,7 +248,7 @@ function ModelRow({
   )
 }
 
-/** The main conversation's tools as a checklist; `value` null inherits them all. */
+/** The main conversation's tools as a checklist; `value` null inherits all except subagent. */
 export function ToolsField({
   value,
   tools,
@@ -258,6 +258,8 @@ export function ToolsField({
   tools: { name: string; description: string }[]
   onChange: (value: string[] | null) => void
 }) {
+  const inherited = tools.filter((tool) => tool.name !== 'subagent').map((tool) => tool.name)
+  const selected = value ?? inherited
   const known = new Set(tools.map((tool) => tool.name))
   const unknown = (value ?? []).filter((name) => !known.has(name))
   return (
@@ -268,14 +270,14 @@ export function ToolsField({
           <Switch
             checked={value === null}
             aria-label="Inherit all tools"
-            onCheckedChange={(inherit) => onChange(inherit ? null : tools.map((tool) => tool.name))}
+            onCheckedChange={(inherit) => onChange(inherit ? null : inherited)}
           />
         </label>
       }
       hint={
         value === null
-          ? `All ${tools.length} tools of the main conversation except subagent, as they are when a child starts.`
-          : `${value.length} of ${tools.length}. A child gets only these; subagent is never one of them.`
+          ? `${inherited.length} of ${tools.length} tools inherited from the main conversation; subagent requires explicit selection.`
+          : `${value.length} of ${tools.length} tools selected. Select subagent explicitly to allow child delegation.`
       }
       label="Tools"
     >
@@ -292,7 +294,7 @@ export function ToolsField({
             title={tool.description}
           >
             <input
-              checked={value === null || value.includes(tool.name)}
+              checked={selected.includes(tool.name)}
               className="size-3 shrink-0 accent-brand"
               disabled={value === null}
               onChange={(event) =>
