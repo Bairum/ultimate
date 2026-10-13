@@ -20,6 +20,8 @@ import { agentRoots } from '../subagents/agents.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
 export const order = -200
 export const docs = [Workspaces]
+/** A project trust change moves the definition roots: reopening rewatches them and reconfigures the landers. */
+export const reloadOnSettings = true
 const finish = (value: unknown) => ({
   output: [{ type: 'text' as const, text: JSON.stringify(value) }],
 })
