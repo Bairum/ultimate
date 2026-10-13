@@ -18,6 +18,14 @@ export type QueueEntry = {
   at: number
   state: 'queued' | 'landing'
   step?: string
+  /** What the lander did so far, as its conversation logs it. */
+  steps: LanderStep[]
+}
+/** One row of a submission's progress: a step, or a check with its result. */
+export type LanderStep = {
+  step: string
+  at: number
+  check?: { command: string; result: 'passed' | 'failed' | 'flaky' }
 }
 /** How a submission ended. A push that failed after landing locally is `landed` with a `reason`. */
 export type LanderOutcome = {
@@ -53,7 +61,10 @@ export type WorkspaceIndex = {
   /** The lander conversation per source checkout, where its task runs and logs. */
   landerConversations: Record<string, number>
   /** Outcomes of the latest submissions by id, with their target and lander conversation, for the submitter's cards. */
-  results: Record<string, LanderOutcome & { target: string; lander: number }>
+  results: Record<
+    string,
+    LanderOutcome & { target: string; tip: string; lander: number; steps: LanderStep[] }
+  >
 }
 export type WorkspaceInfo = Workspace & {
   ahead: number | null

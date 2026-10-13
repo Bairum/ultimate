@@ -26,23 +26,30 @@ export async function landerPath(home: string, source: string) {
     createHash('sha256').update(source).digest('hex').slice(0, 12),
   )
 }
-/** Append a log line about `entry` to the lander conversation `id`. */
+/**
+ * Append a log line about `entry`, a draft of its queue entry, to the lander conversation `id`; a step also joins the
+ * entry's `steps`, which the submitter's cards show.
+ */
 export const log = (
   tx: Tx,
   id: ConversationId,
   entry: QueueEntry,
   data: Omit<LanderEntry, 'submission' | 'conversationId' | 'tip' | 'target' | 'at'>,
-) =>
-  tx.appendEntry(LanderLog, id, {
+) => {
+  const at = Date.now()
+  if (data.step)
+    entry.steps.push({ step: data.step, at, ...(data.check ? { check: data.check } : {}) })
+  return tx.appendEntry(LanderLog, id, {
     data: {
       submission: entry.id,
       conversationId: entry.conversationId,
       tip: entry.tip,
       target: entry.target,
-      at: Date.now(),
+      at,
       ...data,
     },
   })
+}
 type Host = Pick<ExtensionHost, 'home' | 'ultimateRoot' | 'projectSettings' | 'resource'>
 type Settings = { checks: string[]; push?: string }
 /** Bounded retries when the target moves while a submission is integrated. */
@@ -171,9 +178,9 @@ export function createLander(
           runtime.commit(async (tx) => {
             const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue.find(
               (item) => item.id === id,
-            )
-            if (saved) saved.step = text
-            await log(tx, runtime.conversationId, entry, {
+            )!
+            saved.step = text
+            await log(tx, runtime.conversationId, saved, {
               step: text,
               ...(result ? { check: result } : {}),
             })
@@ -182,9 +189,16 @@ export function createLander(
         const finish = (text: string, outcome: LanderOutcome) =>
           runtime.commit(async (tx) => {
             const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+            const steps = draft.queue.find((item) => item.id === id)!.steps
             draft.queue = draft.queue.filter((item) => item.id !== id)
             if (outcome.sha) draft.items[String(entry.conversationId)].landed = outcome.sha
-            draft.results[id] = { ...outcome, target: entry.target, lander: runtime.conversationId }
+            draft.results[id] = {
+              ...outcome,
+              target: entry.target,
+              tip: entry.tip,
+              lander: runtime.conversationId,
+              steps,
+            }
             for (const old of Object.keys(draft.results).slice(0, -kept)) delete draft.results[old]
             await log(tx, runtime.conversationId, entry, outcome)
             return {
