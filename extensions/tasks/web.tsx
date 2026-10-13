@@ -1,11 +1,23 @@
 import { ListTreeIcon, MessageSquareIcon } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ToolStatusIcon } from '@/components/ai/tool'
-import { cn, defineWebExtension, useConversation, useTasks, useUltimate, useUiState } from '@/sdk'
+import {
+  cn,
+  defineWebExtension,
+  formatDuration,
+  useAction,
+  useConversation,
+  useNow,
+  useTasks,
+  useUltimate,
+  useUiState,
+} from '@/sdk'
 import type { TaskGraph, TaskGraphNode } from '@/sdk'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
 
+import { FeatureTag, useOverview } from '../conversations/feature.tsx'
 import { hiddenConversationIds } from '../conversations/visible.tsx'
 
 interface Tree {
@@ -16,6 +28,11 @@ interface Tree {
   summaries: Map<number, ConversationSummary>
   /** Tool names of the shown conversation's tool tasks. */
   tools: Map<number, string>
+  /** When each task first ran, in wall-clock milliseconds. */
+  started: Record<string, number>
+  /** Feature tags of top-level conversations. */
+  features: Map<number, string>
+  now: number
 }
 
 function build(
@@ -136,6 +153,19 @@ function TaskRow({ task, tree, depth }: { task: TaskGraphNode; tree: Tree; depth
             bg
           </span>
         )}
+        {tree.started[task.id] !== undefined && (
+          <span
+            className={cn(
+              'shrink-0 text-[10.5px] tabular-nums',
+              tree.now - tree.started[task.id] >= 10 * 60_000
+                ? 'text-warning'
+                : 'text-muted-foreground/70',
+            )}
+            title={`Running since ${new Date(tree.started[task.id]).toLocaleString()}`}
+          >
+            {formatDuration(tree.now - tree.started[task.id])}
+          </span>
+        )}
         {task.abortRequested && (
           <span className="shrink-0 text-[10.5px] text-warning">aborting</span>
         )}
@@ -176,9 +206,12 @@ function ConversationRow({ id, tree, depth }: { id: number; tree: Tree; depth: n
           >
             {summary?.title || summary?.label || 'Untitled conversation'}
           </span>
-          <span className="block text-[10.5px] text-muted-foreground/60">
-            #{id}
-            {summary?.workspace && ` · W${id}`}
+          <span className="flex min-w-0 items-center gap-1.5 text-[10.5px] text-muted-foreground/60">
+            {tree.features.get(id) && <FeatureTag feature={tree.features.get(id)!} />}
+            <span className="shrink-0">
+              #{id}
+              {summary?.workspace && ` · W${id}`}
+            </span>
           </span>
         </span>
       </button>
@@ -195,8 +228,29 @@ function TasksPanel() {
   const { live } = useConversation()
   const [archived] = useUiState<number[]>('ext.conversations.archived', [])
   const { tasks, top, ...rest } = build(graph, conversations, archived)
+  const overview = useOverview()
+  const now = useNow(1000, tasks.length > 0)
+  // A start time never changes, so only tasks without one yet are asked for.
+  const [started, setStarted] = useState<Record<string, number>>({})
+  const missing = tasks.map((task) => task.id).filter((id) => !(id in started))
+  const { data } = useAction<Record<string, number>>(
+    'tasks',
+    'started',
+    { ids: missing },
+    { enabled: missing.length > 0 },
+  )
+  useEffect(() => {
+    if (data) setStarted((previous) => ({ ...previous, ...data }))
+  }, [data])
   const tree: Tree = {
     ...rest,
+    started,
+    now,
+    features: new Map(
+      Object.entries(overview).flatMap(([id, row]) =>
+        row.feature ? [[Number(id), row.feature]] : [],
+      ),
+    ),
     tools: new Map(
       (live.tools ?? []).flatMap((slot) =>
         slot.taskId === undefined ? [] : [[slot.taskId, slot.name]],

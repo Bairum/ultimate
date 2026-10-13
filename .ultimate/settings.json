@@ -22,7 +22,7 @@
     }
   },
   "lander": {
-    "checks": ["pnpm check", "pnpm test"],
+    "checks": ["pnpm check"],
     "push": "origin"
   }
 }

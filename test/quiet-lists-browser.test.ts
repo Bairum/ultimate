@@ -39,6 +39,11 @@ it('keeps list identities quiet and excludes archived subtrees and their live ta
     const tasks = page.locator('[data-panel="tasks"]')
     await tasks.getByText('6 live · 5 running', { exact: true }).waitFor()
     expect(await tasks.getByText('6 live · 5 running', { exact: true }).count()).toBe(1)
+    // Elapsed time from each task's durable start, flagged once it runs past ten minutes.
+    await tasks.getByText(/^12m 0\ds$/).waitFor()
+    expect(await tasks.getByText(/^12m 0\ds$/).getAttribute('class')).toContain('text-warning')
+    expect(await tasks.getByText(/^1m 0\ds$/).getAttribute('class')).not.toContain('text-warning')
+    expect(await tasks.locator('[data-feature="Release planning"]').count()).toBe(1)
     expect(await tasks.getByText('aborting', { exact: true }).count()).toBe(1)
     expect(await tasks.getByText('bg', { exact: true }).count()).toBe(1)
     await page.evaluate(() => Reflect.get(window, 'fixture').archive([2]))
