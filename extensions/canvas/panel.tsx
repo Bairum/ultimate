@@ -43,6 +43,7 @@ import {
 import { Kbd } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Conversation, api, cn, formatKeys } from '@/sdk'
+import { FeatureTag } from '../conversations/feature.tsx'
 import { useAgentFeed, useConclusion } from './data.tsx'
 import type { Agent, Status } from './model.tsx'
 import { REASON_TIPS, STATUS, activityOf, isActive, nameOf } from './model.tsx'
@@ -528,6 +529,9 @@ function Mid({ agent, feed, renaming }: { agent: Agent; feed?: CanvasAgent; rena
       <Header agent={agent} renaming={renaming} />
       <div className="flex h-4.5 shrink-0 items-center gap-1.5 overflow-hidden pl-4 text-[11px]">
         <StateLabel status={agent.status} />
+        {agent.parent === undefined && agent.row?.feature && (
+          <FeatureTag feature={agent.row.feature} />
+        )}
         {waiting && (
           <span className="truncate font-mono text-muted-foreground">
             on {waiting.map((id) => `#${id}`).join(', ')}
@@ -669,6 +673,9 @@ function Far({ agent, feed }: { agent: Agent; feed?: CanvasAgent }) {
         <div className="flex shrink-0 items-center gap-3 text-[20px]">
           <Mark className="size-5" status={agent.status} />
           <StateLabel status={agent.status} />
+          {agent.parent === undefined && agent.row?.feature && (
+            <FeatureTag className="text-[18px] leading-7" feature={agent.row.feature} />
+          )}
           {conclusion?.stale && <span className="text-muted-foreground">· outdated</span>}
           <span className="ml-auto font-mono text-muted-foreground/70">#{agent.id}</span>
         </div>
@@ -712,6 +719,9 @@ function Far({ agent, feed }: { agent: Agent; feed?: CanvasAgent }) {
       <div className="flex shrink-0 items-center gap-3 text-[24px]">
         <Mark className="size-5" status={agent.status} />
         <StateLabel status={agent.status} />
+        {agent.parent === undefined && agent.row?.feature && (
+          <FeatureTag className="text-[20px] leading-8" feature={agent.row.feature} />
+        )}
         <span className="ml-auto font-mono text-[20px] text-muted-foreground/70">#{agent.id}</span>
       </div>
       <p className="mt-2 line-clamp-2 shrink-0 text-[34px] leading-tight font-medium break-words">
@@ -752,6 +762,9 @@ export function ConclusionCard({
       <Header agent={agent} renaming={renaming} />
       <div className="flex h-4.5 shrink-0 items-center gap-1.5 pl-4 text-[11px] text-muted-foreground">
         <StateLabel status={agent.status} />
+        {agent.parent === undefined && agent.row?.feature && (
+          <FeatureTag feature={agent.row.feature} />
+        )}
         {!brief && agent.folded > 0 && <span>· {plural(agent.folded, 'subagent')}</span>}
         {full && full.duration > 0 && <span>· {duration(full.duration)}</span>}
         {brief?.stale && <Outdated />}
