@@ -155,7 +155,9 @@ Native reviewers inspect Git directly, including the complete `git log base..hea
    Return one synthesis including BOTH complete original reports, actual model identities, and child IDs.
    Leaves remain read/bash-only and cannot delegate.
 4. The coordinator verifies the synthesis, evidence, and findings, routes confirmed fixes, and owns acceptance.
-   After changes, select a new immutable range and repeat the full sequence before approval.
+   Each change set gets one team review. Fixes for its findings are not re-reviewed: the coordinator checks the fix
+   diff against each finding, reruns the checks, and records the evidence. Work beyond the findings is a new change
+   set with its own review.
 
 ## Subagents
 
