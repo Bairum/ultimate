@@ -22,7 +22,7 @@ and reports the tripwire if that remaining default budget expires during executi
 The slot uses `host.resource`, so every conversation shares it and extension reloads preserve it. It is in memory:
 a process crash frees it, and Pi reports interrupted calls as usual. There is no cross-process or durable lock.
 
-This wraps the resolved bash tool, composing with other wrappers such as github-triage rather than replacing them.
+This wraps the resolved bash tool, composing with other wrappers rather than replacing them.
 Codemode's nested `tools.bash` also goes through the wrap: it resolves `api.agent().tools` and invokes the resolved
 tool's `execute`. Nested output (including the waiting line) is collected privately by codemode, not streamed to the
 outer call. Nested tool hooks do not run, but this is a tool wrapper, not a hook.

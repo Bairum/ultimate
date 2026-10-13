@@ -14,14 +14,17 @@ const json = (status: number, body: unknown) =>
 
 describe('extension actions', () => {
   it('posts args for the shown conversation and resolves with the result', async () => {
-    const { api, fetch } = setup(() => json(200, { result: { issues: [1, 2] } }))
-    expect(await api.action('github-triage', 'list issues', { repo: 'a/b' })).toEqual({
-      issues: [1, 2],
+    const { api, fetch } = setup(() => json(200, { result: { notes: [1, 2] } }))
+    expect(await api.action('notes', 'list notes', { folder: 'drafts' })).toEqual({
+      notes: [1, 2],
     })
     const [url, init] = fetch.mock.calls[0]
-    expect(url).toBe('/api/extensions/github-triage/actions/list%20issues')
+    expect(url).toBe('/api/extensions/notes/actions/list%20notes')
     expect(init?.method).toBe('POST')
-    expect(JSON.parse(init?.body as string)).toEqual({ args: { repo: 'a/b' }, conversationId: 1 })
+    expect(JSON.parse(init?.body as string)).toEqual({
+      args: { folder: 'drafts' },
+      conversationId: 1,
+    })
     await api.action('notes', 'list', null, { conversationId: 7 })
     expect(JSON.parse(fetch.mock.calls[1][1]?.body as string)).toEqual({
       args: null,

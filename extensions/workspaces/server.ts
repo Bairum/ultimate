@@ -1,3 +1,5 @@
+import { existsSync, watch } from 'node:fs'
+import type { FSWatcher } from 'node:fs'
 import type { JsonValue } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
@@ -13,6 +15,8 @@ import {
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { watchRoots } from '../../server/watch-roots.ts'
+import { agentRoots } from '../subagents/agents.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
 export const order = -200
 export const docs = [Workspaces]
@@ -63,6 +67,32 @@ export const actions = {
     return workspaces(host).stats(context)
   },
 }
+/** Call `changed` on any change to a definition folder, also one that appears later. */
+function watchDefinitions(
+  host: Pick<ExtensionHost, 'ultimateRoot' | 'projectRoot' | 'userHome'>,
+  changed: () => void,
+) {
+  const watchers: FSWatcher[] = []
+  const attach = (root: string) => {
+    try {
+      watchers.push(watch(root, changed))
+    } catch {
+      // Gone again; watchRoots reports it when it reappears.
+    }
+  }
+  const roots = agentRoots(host.ultimateRoot, host.projectRoot, host.userHome).map(
+    (root) => root.path,
+  )
+  for (const root of roots) if (existsSync(root)) attach(root)
+  const stopRoots = watchRoots(roots, (root) => {
+    attach(root)
+    changed()
+  })
+  return () => {
+    stopRoots()
+    for (const watcher of watchers) watcher.close()
+  }
+}
 export default function workspaceExtension(host: ExtensionHost) {
   const service = workspaces(host)
   const resume = () =>
@@ -70,10 +100,16 @@ export default function workspaceExtension(host: ExtensionHost) {
       host.notice(`Lander resume failed: ${String(error)}`)
     })
   let unsubscribe: (() => void) | undefined
+  let stopWatching: (() => void) | undefined
+  let pending: ReturnType<typeof setTimeout> | undefined
   // A lander task that faults leaves its queue behind. One run by older code, as on a reload of this code that changed
   // the Workspaces document, is replaced at once; a fault of this code's own task would only repeat, so it waits for
   // the next submit or open. Opening (and each reload while open) picks up any such queue. An aborted task stays
   // stopped until then too.
+  const stand = () =>
+    service.standLander(context).catch((error: unknown) => {
+      host.notice(`Lander setup failed: ${String(error)}`)
+    })
   host.onOpen(async () => {
     unsubscribe?.()
     unsubscribe = host.harness().subscribeCommits((publication) => {
@@ -92,11 +128,21 @@ export default function workspaceExtension(host: ExtensionHost) {
         else void resume()
       }
     })
+    // A definition edit reconfigures every lander conversation before anyone writes to it again.
+    stopWatching?.()
+    stopWatching = watchDefinitions(host, () => {
+      clearTimeout(pending)
+      pending = setTimeout(() => void stand(), 200)
+    })
+    await stand()
     await resume()
   })
   host.onClose(async () => {
     unsubscribe?.()
     unsubscribe = undefined
+    stopWatching?.()
+    stopWatching = undefined
+    clearTimeout(pending)
   })
   return defineExtension({
     name: 'workspaces',
@@ -149,6 +195,33 @@ export default function workspaceExtension(host: ExtensionHost) {
       }),
     ],
     sections: [
+      section('lander_state', async (input, caller) => {
+        const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, caller)
+        const source = Object.entries(index?.landerConversations ?? {}).find(
+          ([, id]) => id === input.conversationId,
+        )?.[0]
+        if (!index || source === undefined) return undefined
+        const queue = index.queue.filter((item) => item.source === source)
+        const results = Object.entries(index.results)
+          .filter(([, result]) => result.lander === input.conversationId)
+          .slice(-8)
+        return [
+          `You are the lander of ${source}. Queue (oldest first):`,
+          ...(queue.length
+            ? queue.map(
+                (item) =>
+                  `- ${item.id} W${item.conversationId} tip ${item.tip.slice(0, 7)} ${item.state}${item.step ? ` · ${item.step}` : ''}`,
+              )
+            : ['- empty']),
+          'Latest results (oldest first):',
+          ...(results.length
+            ? results.map(
+                ([id, result]) =>
+                  `- ${id} ${result.outcome}${result.sha ? ` ${result.sha.slice(0, 7)}` : ''}${result.pushed ? ` pushed to ${result.pushed}` : ''}${result.reason ? ` · ${result.reason}` : ''}${result.fixed ? ` · fixed by lander` : ''}`,
+              )
+            : ['- none yet']),
+        ].join('\n')
+      }),
       section('workspace_workflow', async (input, caller) => {
         await service.ready(input.conversationId, caller)
         const own = await service.get(input.conversationId, caller)
