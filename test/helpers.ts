@@ -1,6 +1,6 @@
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
 import type { ConversationView } from '@earendil-works/pi-durable'
@@ -28,17 +28,23 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs())
 
 // Every temp() directory is removed once the test file finishes, so runs do not fill the tmpfs.
-const temps: string[] = []
-afterAll(async () => {
-  await Promise.all(temps.splice(0).map(removeTemp))
-}, 60_000)
+const temps = new Set<string>()
+afterAll(removeTemps, 60_000)
+export async function removeTemps() {
+  // Delete disjoint roots only: source copies are registered inside their fixture homes.
+  const paths = [...temps]
+  const roots = paths.filter((path) => !paths.some((parent) => path.startsWith(parent + sep)))
+  await Promise.all(roots.map(removeTemp))
+}
 export async function removeTemp(path: string) {
+  for (const registered of temps)
+    if (registered === path || registered.startsWith(path + sep)) temps.delete(registered)
   // Best effort: a closing Vite optimizer can still be writing deps_temp, and cleanup must not fail a test.
   await rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => {})
 }
 export async function temp(prefix = 'ultimate-test-', parent = tmpdir()) {
   const path = await mkdtemp(join(parent, prefix))
-  temps.push(path)
+  temps.add(path)
   return path
 }
 export async function linkDependencies(root: string) {
