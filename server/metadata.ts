@@ -1,7 +1,13 @@
 import { defineDoc } from '@earendil-works/pi-durable'
 
-/** What the shell calls a conversation: its title, and a short label its creator gives it. */
-export const Metadata = defineDoc<{ title?: string; label?: string }>({
+/** Published shell metadata: explicit naming plus input naming and activity maintained by conversations. */
+export const Metadata = defineDoc<{
+  title?: string
+  label?: string
+  inputTitle?: string
+  inputAt?: number
+  answerAt?: number
+}>({
   kind: 'ultimate.metadata',
   version: 1,
   scope: 'conversation',

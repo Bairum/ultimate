@@ -3,6 +3,7 @@ import { defineDoc, InboxDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-wo
 import type { ConversationId, Cursor, SubmissionRecord } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { currentAnswer, resetAfter, Summaries } from './summary.ts'
+import { isInput } from './activity.ts'
 import type { OverviewRow, OverviewState } from './types.ts'
 
 export const Overview = defineDoc<OverviewState>({
@@ -134,14 +135,7 @@ export function overviewBehavior(
         if (change.type === 'submission') pending.add(change.value.conversationId)
         if (
           change.type === 'entry' &&
-          [
-            'pi.user',
-            'subagents.instruction',
-            'subagents.report',
-            'workspaces.lander-report',
-            'pi.reset',
-            'pi.compaction',
-          ].includes(change.value.kind)
+          (isInput(change.value) || ['pi.reset', 'pi.compaction'].includes(change.value.kind))
         )
           pending.add(change.value.conversationId)
         if (

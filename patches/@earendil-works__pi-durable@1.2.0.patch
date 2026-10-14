@@ -79,7 +79,7 @@ index ee7a0718b1430ca405ab3fb5a037a92fd781ef29..2d1a95d31564dcb8fb43fc44c7dab39e
  /** The kind and data of an input's entry as strict JSON, without other fields an untyped caller might pass. */
  export declare function pickInputEntry({ kind, data }: InputEntry): JsonRepresentation<InputEntry>;
 diff --git a/dist/harness/inbox.js b/dist/harness/inbox.js
-index e8e07656188833bffa17af35cd2dbc4eb65b2a24..8ad4713af7f9d93ec908ddaeeb0e0bf2ea0afdf9 100644
+index e8e07656188833bffa17af35cd2dbc4eb65b2a24..de36e7149439d9acf6c8f02ecfca62ada6f4b35a 100644
 --- a/dist/harness/inbox.js
 +++ b/dist/harness/inbox.js
 @@ -14,10 +14,15 @@ export const InboxDoc = defineDoc({
@@ -120,7 +120,7 @@ index e8e07656188833bffa17af35cd2dbc4eb65b2a24..8ad4713af7f9d93ec908ddaeeb0e0bf2
 -    if (entry === undefined)
 -        return tx.appendEntry(UserEntry, conversationId, { model: [message] });
 -    return tx.appendEntry(conversationId, { ...pickInputEntry(entry), model: [message] });
-+    return { ...(entry === undefined ? { kind: UserEntry.kind } : pickInputEntry(entry)), model: [message] };
++    return { ...(entry === undefined ? { kind: UserEntry.kind } : pickInputEntry(entry)), input: true, model: [message] };
  }
  /** The kind and data of an input's entry as strict JSON, without other fields an untyped caller might pass. */
  export function pickInputEntry({ kind, data }) {
@@ -265,10 +265,19 @@ index 138e45aeda153314aff0f03c71f7b11b8d1ae654..89a01dd620227bb5f77e2b597021bee8
          if (typeof first === "number")
              return this.#appendEntry(first, second);
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index 54c217fd343fed722d3ae5b815b82331c930bad7..0eeae94d3400bdfc2989eea93077e9e8310935c5 100644
+index 54c217fd343fed722d3ae5b815b82331c930bad7..aa75b2c659eeca4da72bae72ea543313f4a8efba 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -708,6 +708,8 @@ export type CommitPublication = {
+@@ -288,6 +288,8 @@ export type ContextEdit = {
+ });
+ /** Immutable transcript event with separate model-facing and application-facing payloads. */
+ export type EntryRecord = {
++    /** Placed by the harness from an input submission, not a write. */
++    readonly input?: true;
+     readonly id: EntryId;
+     readonly conversationId: ConversationId;
+     /** Application-defined entry discriminator. */
+@@ -708,6 +710,8 @@ export type CommitPublication = {
   * Table reads and creation results are trusted immutable values and may be shared with internal commit state.
   */
  export interface Tx {

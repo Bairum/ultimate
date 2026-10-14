@@ -561,9 +561,13 @@ it.concurrent('keeps an explicit API title even when it equals the first input',
   await until(
     async () => (await fixture.server.harness.snapshot(Summaries, id, context))?.status === 'ready',
   )
-  expect(await fixture.server.harness.snapshot(Metadata, id, context)).toEqual({ title: text })
+  expect(await fixture.server.harness.snapshot(Metadata, id, context)).toMatchObject({
+    title: text,
+  })
   await fixture.reopen()
-  expect(await fixture.server.harness.snapshot(Metadata, id, context)).toEqual({ title: text })
+  expect(await fixture.server.harness.snapshot(Metadata, id, context)).toMatchObject({
+    title: text,
+  })
   expect(await fixture.titleChanges(id)).toEqual([])
 }, 60000)
 
@@ -725,7 +729,7 @@ it.concurrent('assesses owned children without renaming them, summarizes ownerle
   expect(
     (await fixture.server.harness.snapshot(Summaries, child.id, context))?.summary,
   ).toBeUndefined()
-  expect(await fixture.server.harness.snapshot(Metadata, child.id, context)).toEqual({
+  expect(await fixture.server.harness.snapshot(Metadata, child.id, context)).toMatchObject({
     title: 'Scout the task boundaries',
     label: 'scout',
   })

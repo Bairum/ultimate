@@ -669,87 +669,55 @@ export default host => { host.resource('cleanup.process',()=>{
     )
     await stream.close()
   })
-  it('streams input and answer times, keeps them across a reset, and gives summaries to server facets', async () => {
+  it('serves published titles and activity to clients and server facets without deriving entries', async () => {
     const { server } = await fixture(false, {
       summaries: `import { defineExtension } from '@earendil-works/pi-durable'
 
 export default defineExtension({ name: 'summaries' })
 export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`,
     })
-    const created = Number((await post(server, '/api/conversations')).data.id)
+    const created = (await post(server, '/api/conversations')).data.id as ConversationId
     const summary = () => server.api.conversations().find((item) => item.id === created)
-    expect(summary()).toBeDefined()
+    const stream = await attach(server)
+    await post(server, `/api/conversations/${created}/submit`, { text: 'Not a core-derived title' })
+    await server.harness.waitForIdle(context)
     expect(summary()).not.toHaveProperty('inputAt')
     expect(summary()).not.toHaveProperty('answerAt')
-    const stream = await attach(server)
-    await post(server, `/api/conversations/${created}/submit`, { text: 'Return the word SCOUT.' })
-    await server.harness.waitForIdle(context)
-    let streamed: ConversationSummary | undefined
-    await until(() => {
-      streamed = stream.events
-        .filter((event) => event.name === 'conversations')
-        .map((event) =>
-          (event.data as ServerEvents['conversations']).find((item) => item.id === created),
-        )
-        .at(-1)
-      return streamed?.inputAt !== undefined && streamed.answerAt !== undefined
+    expect(summary()).not.toHaveProperty('title')
+    await server.harness.commit(async (tx) => {
+      Object.assign(await tx.doc(Metadata, created), {
+        inputTitle: 'Published input title',
+        inputAt: 1000,
+        answerAt: 2000,
+      })
+    }, context)
+    await until(() => summary()?.answerAt === 2000)
+    expect(summary()).toMatchObject({
+      title: 'Published input title',
+      inputAt: 1000,
+      answerAt: 2000,
     })
-    expect(streamed!.inputAt).toEqual(expect.any(Number))
-    expect(streamed!.answerAt).toBeGreaterThanOrEqual(streamed!.inputAt!)
+    await until(() =>
+      stream.events.some(
+        (event) =>
+          event.name === 'conversations' &&
+          (event.data as ConversationSummary[]).some(
+            (item) => item.id === created && item.answerAt === 2000,
+          ),
+      ),
+    )
     expect(
       (await post(server, '/api/extensions/summaries/actions/list', { args: null })).data.result,
     ).toEqual(server.api.conversations())
-    const conversation = (await server.harness.conversation(created as ConversationId, context))!
-    await conversation.commit(async (tx) => {
-      ;(await tx.doc(Metadata, created as ConversationId)).label = 'before reset'
+    await server.harness.commit(async (tx) => {
+      ;(await tx.doc(Metadata, created)).title = 'Explicit title'
     }, context)
-    await until(() => summary()?.label === 'before reset')
-    expect(summary()).toMatchObject({ inputAt: streamed!.inputAt, answerAt: streamed!.answerAt })
-    // A reset empties the active view; the times come from the history before it.
-    await conversation.reset(undefined, context)
-    await server.harness.waitForIdle(context)
-    const view = await conversation.viewState(context)
-    expect(view.value.entries.some((entry) => entry.kind === 'pi.user')).toBe(false)
-    view.dispose()
-    await conversation.commit(async (tx) => {
-      ;(await tx.doc(Metadata, created as ConversationId)).label = 'after reset'
-    }, context)
-    await until(() => summary()?.label === 'after reset')
-    expect(summary()).toMatchObject({ inputAt: streamed!.inputAt, answerAt: streamed!.answerAt })
-    await stream.close()
-  })
-  it('derives a title from the active context without storing it and keeps explicit API titles', async () => {
-    const { server } = await fixture()
-    server.host.faux!.setResponses(
-      ['One', 'Two', 'Three'].map((text) => fauxAssistantMessage(text)),
-    )
-    const created = Number((await post(server, '/api/conversations')).data.id) as ConversationId
-    const named = Number((await post(server, '/api/conversations', { title: 'Named' })).data.id)
-    const summary = (id: number) => server.api.conversations().find((item) => item.id === id)
-    await post(server, `/api/conversations/${created}/submit`, { text: '  First\n\n message ' })
-    await server.harness.waitForIdle(context)
-    await until(() => summary(created)?.inputAt !== undefined)
-    expect(summary(created)?.title).toBe(' First message ')
-    expect((await server.harness.snapshot(Metadata, created, context))?.title).toBeUndefined()
+    await until(() => summary()?.title === 'Explicit title')
     const conversation = (await server.harness.conversation(created, context))!
     await conversation.reset(undefined, context)
     await server.harness.waitForIdle(context)
-    await post(server, `/api/conversations/${created}/submit`, { text: 'Second message' })
-    await server.harness.waitForIdle(context)
-    await conversation.commit(async (tx) => {
-      ;(await tx.doc(Metadata, created)).label = 'refreshed'
-    }, context)
-    await until(() => summary(created)?.label === 'refreshed')
-    expect(summary(created)?.title).toBe('Second message')
-    expect((await server.harness.snapshot(Metadata, created, context))?.title).toBeUndefined()
-    // A title given at creation is not replaced by the first message.
-    await post(server, `/api/conversations/${named}/submit`, { text: 'Not the title' })
-    await server.harness.waitForIdle(context)
-    await until(() => summary(named)?.inputAt !== undefined)
-    expect(summary(named)?.title).toBe('Named')
-    expect(await server.harness.snapshot(Metadata, named as ConversationId, context)).toEqual({
-      title: 'Named',
-    })
+    expect(summary()).toMatchObject({ title: 'Explicit title', inputAt: 1000, answerAt: 2000 })
+    await stream.close()
   })
   it('streams extension document snapshots and deltas, with a notice for unknown kinds', async () => {
     const { server } = await fixture(true)

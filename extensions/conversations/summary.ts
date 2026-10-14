@@ -28,6 +28,7 @@ import type {
 } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { summaryModel } from './summary-model.ts'
+import { isInput } from './activity.ts'
 import type { SummaryModel, SummaryModelHost } from './summary-model.ts'
 import type {
   Assessed,
@@ -323,15 +324,7 @@ export async function exchangeUser(tx: Tx, id: ConversationId) {
     const page = await tx.scanEntries({ conversationId: id }, 64, cursor)
     for (const entry of page.items) {
       if (entry.kind === 'pi.reset') return undefined
-      if (
-        [
-          'pi.user',
-          'subagents.instruction',
-          'subagents.report',
-          'workspaces.lander-report',
-        ].includes(entry.kind)
-      )
-        return entry
+      if (isInput(entry)) return entry
     }
     cursor = page.next
   } while (cursor !== undefined)
@@ -358,17 +351,7 @@ async function currentContext(tx: Tx, id: ConversationId, answer: EntryId) {
       64,
       cursor,
     )
-    if (
-      page.items.some((entry) =>
-        [
-          'pi.user',
-          'subagents.instruction',
-          'subagents.report',
-          'workspaces.lander-report',
-        ].includes(entry.kind),
-      )
-    )
-      return false
+    if (page.items.some(isInput)) return false
     cursor = page.next
   } while (cursor !== undefined)
   return true
@@ -412,14 +395,7 @@ export async function requestSummary(
         cursor,
       )
       for (const entry of page.items) {
-        if (
-          [
-            'pi.user',
-            'subagents.instruction',
-            'subagents.report',
-            'workspaces.lander-report',
-          ].includes(entry.kind)
-        ) {
+        if (isInput(entry)) {
           users++
           intent = entry.id
         }

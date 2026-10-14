@@ -102,77 +102,20 @@ export async function createApi(
     for (const record of records) {
       const conversation = await harness.conversation(record.id, context)
       if (!conversation) continue
-      const view = await conversation.viewState(context)
-      try {
-        const agent = await conversation.agent(context)
-        const metadata = await harness.snapshot(Metadata, record.id, context)
-        const { entries } = view.value
-        const input = entries.find((entry) =>
-          [
-            'pi.user',
-            'subagents.instruction',
-            'subagents.report',
-            'workspaces.lander-report',
-          ].includes(entry.kind),
-        )?.model?.[0]
-        const title =
-          input?.role === 'user'
-            ? typeof input.content === 'string'
-              ? input.content
-              : input.content
-                  .flatMap((block) => (block.type === 'text' ? [block.text] : []))
-                  .join(' ')
-            : undefined
-        let inputAt = entries.findLast((entry) =>
-          [
-            'pi.user',
-            'subagents.instruction',
-            'subagents.report',
-            'workspaces.lander-report',
-          ].includes(entry.kind),
-        )?.model?.[0]?.timestamp
-        let answerAt = entries.findLast((entry) => entry.kind === 'pi.assistant')?.model?.[0]
-          ?.timestamp
-        // A reset or compaction marker starts the view at its head; older times are in the history before it.
-        const head = entries[0]?.head
-        if (head !== undefined && (inputAt === undefined || answerAt === undefined)) {
-          let cursor: Cursor | undefined
-          do {
-            const page = await conversation.entries({ maxEntryId: head }, 64, cursor, context)
-            for (const entry of page.items) {
-              const timestamp = entry.model?.[0]?.timestamp
-              if (
-                [
-                  'pi.user',
-                  'subagents.instruction',
-                  'subagents.report',
-                  'workspaces.lander-report',
-                ].includes(entry.kind)
-              )
-                inputAt ??= timestamp
-              if (entry.kind === 'pi.assistant') answerAt ??= timestamp
-            }
-            cursor = page.next
-          } while (cursor !== undefined && (inputAt === undefined || answerAt === undefined))
-        }
-        refreshed.push({
-          id: record.id,
-          ...(record.owner ? { parentConversationId: record.owner.conversationId } : {}),
-          ...(!record.owner && record.parent ? { branchOf: record.parent } : {}),
-          ...(record.owner ? { ownerTaskId: record.owner.taskId } : {}),
-          ...(metadata?.label ? { label: metadata.label } : {}),
-          ...(metadata?.title
-            ? { title: metadata.title }
-            : title
-              ? { title: title.replace(/\s+/g, ' ').slice(0, 160) }
-              : {}),
-          cwd: agent.cwd,
-          ...(inputAt === undefined ? {} : { inputAt }),
-          ...(answerAt === undefined ? {} : { answerAt }),
-        })
-      } finally {
-        view.dispose()
-      }
+      const agent = await conversation.agent(context)
+      const metadata = await harness.snapshot(Metadata, record.id, context)
+      const title = metadata?.title ?? metadata?.inputTitle
+      refreshed.push({
+        id: record.id,
+        ...(record.owner ? { parentConversationId: record.owner.conversationId } : {}),
+        ...(!record.owner && record.parent ? { branchOf: record.parent } : {}),
+        ...(record.owner ? { ownerTaskId: record.owner.taskId } : {}),
+        ...(metadata?.label ? { label: metadata.label } : {}),
+        ...(title ? { title } : {}),
+        cwd: agent.cwd,
+        ...(metadata?.inputAt === undefined ? {} : { inputAt: metadata.inputAt }),
+        ...(metadata?.answerAt === undefined ? {} : { answerAt: metadata.answerAt }),
+      })
     }
     // Merged into the current list with busy from the current graph, so updates made during the awaits above survive.
     const next = ids ? [...summaries] : []
@@ -219,25 +162,8 @@ export async function createApi(
   const unsubscribe = harness.subscribeCommits((publication) => {
     if (closed) return
     const ids = new Set<ConversationId>()
-    const answers = new Map<number, number>()
     for (const change of publication.changes) {
       if (change.type === 'conversation') ids.add(change.value.id)
-      if (
-        change.type === 'entry' &&
-        [
-          'pi.user',
-          'subagents.instruction',
-          'subagents.report',
-          'workspaces.lander-report',
-        ].includes(change.value.kind)
-      )
-        ids.add(change.value.conversationId)
-      if (
-        change.type === 'entry' &&
-        change.value.kind === 'pi.assistant' &&
-        change.value.model?.[0]
-      )
-        answers.set(change.value.conversationId, change.value.model[0].timestamp)
       if (
         change.type === 'document' &&
         change.conversationId &&
@@ -247,17 +173,6 @@ export async function createApi(
       )
         ids.add(change.conversationId)
     }
-    // Queued behind refreshes, so one that read history before this answer cannot overwrite it.
-    if (answers.size)
-      refreshing = refreshing.then(() => {
-        const answered = summaries.map((summary) =>
-          answers.has(summary.id) ? { ...summary, answerAt: answers.get(summary.id) } : summary,
-        )
-        if (JSON.stringify(answered) !== JSON.stringify(summaries)) {
-          summaries = answered
-          events.emit('conversations', summaries)
-        }
-      })
     if (!ids.size) return
     refreshing = refreshing
       .then(() => refreshConversations(ids))

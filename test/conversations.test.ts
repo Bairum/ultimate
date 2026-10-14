@@ -5,10 +5,11 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import { defineExtension, defineTool, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
-import { attach, fauxServer, post, temp, until } from './helpers.ts'
+import { attach, fauxServer, post, prepareFauxServer, temp, until } from './helpers.ts'
 import type { ConversationSummary } from '../shared/protocol.ts'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
+import { currentAnswer, exchangeUser } from '../extensions/conversations/summary.ts'
 
 type Server = Awaited<ReturnType<typeof fauxServer>>
 const servers: Server[] = []
@@ -124,7 +125,7 @@ it('tells each top-level conversation about the others, and the surface on scree
   const entry = view.value.entries.find((item) => item.kind === 'pi.user')!
   view.dispose()
   const fork = await server.root.fork(entry.id, { ownership: { kind: 'ownerless' } }, context)
-  await until(() => summary(fork.id) !== undefined)
+  await until(() => summary(fork.id)?.inputAt !== undefined)
   expect(summary(fork.id)!.inputAt).toEqual(expect.any(Number))
   expect(summary(fork.id)).toMatchObject({ branchOf: { conversationId: root, at: entry.id } })
   expect(summary(fork.id)).not.toHaveProperty('parentConversationId')
@@ -259,3 +260,137 @@ it('renames and clears top-level conversations', async () => {
     'pi.user',
   )
 }, 60000)
+
+it('projects arbitrary typed inputs, ignores user-role writes, and preserves activity across heads and reopen', async () => {
+  const { server, summary, create, action } = await launch()
+  const id = await create()
+  const conversation = (await server.harness.conversation(id, context))!
+  await conversation.submit(
+    {
+      type: 'write',
+      entry: {
+        kind: 'lineage.note',
+        model: [{ role: 'user', content: 'A note, not an input', timestamp: 1000 }],
+      },
+    },
+    context,
+  )
+  server.harness.resume()
+  await server.harness.waitForIdle(context)
+  await until(() => summary(id) !== undefined)
+  expect(summary(id)).not.toHaveProperty('inputAt')
+  expect(summary(id)).not.toHaveProperty('title')
+
+  await conversation.submit(
+    { type: 'input', content: '  Typed\n request  ', entry: { kind: 'test.request' } },
+    context,
+  )
+  server.harness.resume()
+  await server.harness.waitForIdle(context)
+  await until(() => summary(id)?.answerAt !== undefined)
+  expect(summary(id)?.title).toBe(' Typed request ')
+  const view = await conversation.viewState(context)
+  const input = view.value.entries.find((entry) => entry.kind === 'test.request')!
+  expect(input.input).toBe(true)
+  const answer = view.value.entries.findLast((entry) => entry.model?.[0]?.role === 'assistant')!
+  view.dispose()
+  const inputAt = input.model![0].timestamp
+  const answerAt = answer.model![0].timestamp
+  await until(() => summary(id)?.inputAt === inputAt && summary(id)?.answerAt === answerAt)
+
+  // A user-role write after the answer must not invalidate the current exchange or change recency.
+  await conversation.submit(
+    {
+      type: 'write',
+      entry: {
+        kind: 'lineage.note',
+        model: [{ role: 'user', content: 'Later note', timestamp: inputAt + 10000 }],
+      },
+    },
+    context,
+  )
+  server.harness.resume()
+  await server.harness.waitForIdle(context)
+  const activity = { inputAt, answerAt }
+  expect(summary(id)).toMatchObject(activity)
+  await server.harness.commit(async (tx) => {
+    expect((await exchangeUser(tx, id))?.id).toBe(input.id)
+    expect(await currentAnswer(tx, id, answer.id)).toBe(true)
+  }, context)
+  await server.harness.commit(
+    (tx) => tx.appendEntry(id, { kind: 'pi.compaction', head: 'self' }),
+    context,
+  )
+  await until(() => summary(id)?.title === undefined)
+  expect(summary(id)).toMatchObject(activity)
+
+  await action('rename', { id, title: 'Kept title' })
+  await until(() => summary(id)?.title === 'Kept title')
+  await action('reset', { id })
+  expect(summary(id)).toMatchObject({ title: 'Kept title', ...activity })
+  const options = {
+    ultimateRoot: server.host.ultimateRoot,
+    projectRoot: server.host.projectRoot,
+    userHome: server.host.userHome,
+    home: server.host.home,
+  }
+  await server.close()
+  servers.splice(servers.indexOf(server), 1)
+  const reopened = await fauxServer(options)
+  servers.push(reopened)
+  expect(reopened.api.conversations().find((item) => item.id === id)).toMatchObject({
+    title: 'Kept title',
+    ...activity,
+  })
+})
+
+it('keeps unmarked Pi input history and makes no metadata writes on an unchanged reopen', async () => {
+  const { server, create, message, summary } = await launch()
+  const id = await create()
+  await message(id, 'Existing parser work', 1000)
+  await server.harness.commit(
+    (tx) =>
+      tx.appendEntry(id, {
+        kind: 'pi.assistant',
+        model: [{ ...fauxAssistantMessage('Existing answer'), timestamp: 2000 }],
+      }),
+    context,
+  )
+  await until(() => summary(id)?.answerAt === 2000)
+  expect(summary(id)).toMatchObject({
+    title: 'Existing parser work',
+    inputAt: 1000,
+    answerAt: 2000,
+  })
+  const options = {
+    ultimateRoot: server.host.ultimateRoot,
+    projectRoot: server.host.projectRoot,
+    userHome: server.host.userHome,
+    home: server.host.home,
+  }
+  await server.close()
+  servers.splice(servers.indexOf(server), 1)
+  const prepared = await prepareFauxServer(options)
+  const metadataWrites: number[] = []
+  const open = prepared.host.open.bind(prepared.host)
+  let stop: (() => void) | undefined
+  prepared.host.open = async (...args) => {
+    const opened = await open(...args)
+    // Subscribe before extension onOpen callbacks reconcile the stored conversations.
+    stop = opened.harness.subscribeCommits((publication) => {
+      for (const change of publication.changes)
+        if (change.type === 'document' && change.record.kind === Metadata.definition.kind)
+          metadataWrites.push(change.conversationId!)
+    })
+    return opened
+  }
+  const reopened = { ...prepared, ...(await prepared.go()) }
+  servers.push(reopened)
+  expect(reopened.api.conversations().find((item) => item.id === id)).toMatchObject({
+    title: 'Existing parser work',
+    inputAt: 1000,
+    answerAt: 2000,
+  })
+  expect(metadataWrites).toEqual([])
+  stop?.()
+})

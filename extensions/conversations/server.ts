@@ -11,6 +11,7 @@ import { summaryModelSetting } from './summary-model.ts'
 import { parseSummaryModel } from './summary-model-ref.ts'
 import { updateSettings } from '../onboarding/settings.ts'
 import { Overview, overviewBehavior } from './overview.ts'
+import { activityBehavior } from './activity.ts'
 
 export const docs = [Summaries, Overview]
 
@@ -178,6 +179,7 @@ function reopenOnInput(host: ExtensionHost) {
 
 /** Tells each top-level conversation which other conversations work in this project. */
 export default (host: ExtensionHost) => {
+  activityBehavior(host)
   overviewBehavior(host)
   reopenOnInput(host)
   /** Whether each conversation is top-level, read once: `owner` and `parent` never change after creation. */

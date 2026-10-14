@@ -50,6 +50,17 @@ conversation; a conversation not recorded there counts as seen.
 
 ## Server facet
 
+`activity.ts` maintains `ultimate.metadata`'s `inputTitle`, `inputAt`, and `answerAt` from committed
+history; core only serves those fields, preferring an explicit `title` over the input title. Reset and
+compaction cut the active title source but preserve activity times from earlier history. On open, the
+projection reconciles every conversation, including inherited fork history, and only commits metadata
+when the derived fields change.
+
+All input detection uses `isInput` in `activity.ts`: Pi Durable marks entries placed from input
+submissions with `input: true` (a small upstream patch). Pi's own `pi.user` input kind also counts,
+keeping existing history usable. Typed inputs count without an extension kind list; user-role writes
+such as lineage notes do not.
+
 The `conversations` prompt section goes to every top-level conversation (not a subagent). It names the
 conversation's own id and lists the other top-level conversations that have a message and are not archived (the web
 keeps archived ids in the UI state `ext.conversations.archived`): at most the 10 most recently active, listed by id,
