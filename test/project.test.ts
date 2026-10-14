@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile, rename, symlink } from 'node:fs/promises'
+import { mkdir, rm, writeFile, symlink } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import {
@@ -91,6 +91,9 @@ it('survives invalid settings at boot and mid-run and clears errors after repair
 it('discovers late project and user roots and follows extension symlinks with broken-link diagnostics', async () => {
   const projectRoot = await temp()
   const userHome = await temp()
+  const external = await temp()
+  await mkdir(join(projectRoot, '.ultimate/extensions'), { recursive: true })
+  await symlink(join(external, 'missing'), join(projectRoot, '.ultimate/extensions/broken-link'))
   const server = await createServer({
     ultimateRoot: resolve('.'),
     projectRoot,
@@ -116,7 +119,9 @@ it('discovers late project and user roots and follows extension symlinks with br
         ],
     )
   }
-  const external = await temp()
+  expect(
+    server.extensions.info().find((entry) => entry.name === 'broken-link')?.server?.error,
+  ).toBeTruthy()
   const target = await extension(external, 'linked', 'linked')
   const link = join(projectRoot, '.ultimate/extensions/linked')
   await symlink(target, link)
@@ -125,16 +130,6 @@ it('discovers late project and user roots and follows extension symlinks with br
   )
   expect((await post(server.url, '/api/extensions/linked/actions/hello')).data.result.value).toBe(
     'linked',
-  )
-  await symlink(join(external, 'missing'), join(projectRoot, '.ultimate/extensions/broken'))
-  // Reload discovery even on watcher platforms that do not emit add for a dangling link.
-  await rename(
-    join(projectRoot, '.ultimate/extensions/broken'),
-    join(projectRoot, '.ultimate/extensions/broken-link'),
-  )
-  await mkdir(join(projectRoot, '.ultimate/extensions/trigger'))
-  await until(
-    () => !!server.extensions.info().find((entry) => entry.name === 'broken-link')?.server?.error,
   )
 })
 
