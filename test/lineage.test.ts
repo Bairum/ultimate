@@ -475,81 +475,88 @@ it('keeps one pending notify per target and delivers it once across a reopen', a
   expect(entries).not.toContain('lineage.finished')
 })
 
-it('notifies after the brief and run without waiting for the branch’s pending notify', async () => {
-  const { server } = await fixture()
-  const other = await second(server)
-  const brief = Promise.withResolvers<void>()
-  const run = Promise.withResolvers<void>()
-  const unrelated = Promise.withResolvers<void>()
-  const briefStarted = Promise.withResolvers<void>()
-  const runStarted = Promise.withResolvers<void>()
-  const otherStarted = Promise.withResolvers<void>()
-  const intent = `NOTIFY ${JSON.stringify({ id: other.id, wake: false })}`
-  const route: FauxResponseFactory = async (transcript) => {
-    server.host.faux!.appendResponses([route])
-    if (textOf(transcript.messages[0].content).startsWith('Write the brief')) {
-      briefStarted.resolve()
-      await brief.promise
-      return fauxAssistantMessage('BRIEF: start the branch')
+it.each([false, true])(
+  'notifies after the brief and run without waiting for the branch’s pending notify (old checkpoint: %s)',
+  async (oldCheckpoint) => {
+    const { server } = await fixture()
+    const other = await second(server)
+    const brief = Promise.withResolvers<void>()
+    const run = Promise.withResolvers<void>()
+    const unrelated = Promise.withResolvers<void>()
+    const briefStarted = Promise.withResolvers<void>()
+    const runStarted = Promise.withResolvers<void>()
+    const otherStarted = Promise.withResolvers<void>()
+    const intent = `NOTIFY ${JSON.stringify({ id: other.id, wake: false })}`
+    const route: FauxResponseFactory = async (transcript) => {
+      server.host.faux!.appendResponses([route])
+      if (textOf(transcript.messages[0].content).startsWith('Write the brief')) {
+        briefStarted.resolve()
+        await brief.promise
+        return fauxAssistantMessage('BRIEF: start the branch')
+      }
+      const last = transcript.messages.at(-1)!
+      const text = textOf(last.content)
+      if (last.role === 'toolResult') return fauxAssistantMessage('Branch run finished')
+      if (text === 'HOLD') {
+        otherStarted.resolve()
+        await unrelated.promise
+      }
+      if (text === intent) {
+        runStarted.resolve()
+        await run.promise
+      }
+      if (text.startsWith('NOTIFY '))
+        return fauxAssistantMessage([fauxToolCall('notify', JSON.parse(text.slice(7)))], {
+          stopReason: 'toolUse',
+        })
+      return fauxAssistantMessage(`echo ${text}`)
     }
-    const last = transcript.messages.at(-1)!
-    const text = textOf(last.content)
-    if (last.role === 'toolResult') return fauxAssistantMessage('Branch run finished')
-    if (text === 'HOLD') {
-      otherStarted.resolve()
-      await unrelated.promise
-    }
-    if (text === intent) {
-      runStarted.resolve()
-      await run.promise
-    }
-    if (text.startsWith('NOTIFY '))
-      return fauxAssistantMessage([fauxToolCall('notify', JSON.parse(text.slice(7)))], {
-        stopReason: 'toolUse',
+    server.host.faux!.setResponses([route])
+    try {
+      await other.submit({ type: 'input', content: 'HOLD' }, context)
+      await otherStarted.promise
+      const { data } = await post(server, '/api/extensions/lineage/actions/branch', {
+        args: { prompt: intent },
       })
-    return fauxAssistantMessage(`echo ${text}`)
-  }
-  server.host.faux!.setResponses([route])
-  try {
-    await other.submit({ type: 'input', content: 'HOLD' }, context)
-    await otherStarted.promise
-    const { data } = await post(server, '/api/extensions/lineage/actions/branch', {
-      args: { prompt: intent },
-    })
-    const target = data.result.id as ConversationId
-    await briefStarted.promise
-    const state = (await server.harness.snapshot(Branch, target, context))!.branch!
-    expect(state.status).toBe('briefing')
-    expect(state.brief).toBeDefined()
-    await ask(server, server.root.id, `NOTIFY ${JSON.stringify({ id: target, wake: false })}`)
-    expect(await pendingNotifies(server)).toHaveLength(1)
-    expect(await kinds(server, server.root.id)).not.toContain('lineage.note')
-    brief.resolve()
-    await runStarted.promise
-    expect(await pendingNotifies(server)).toHaveLength(1)
-    expect(await kinds(server, server.root.id)).not.toContain('lineage.note')
-    run.resolve()
-    await until(async () => (await pendingNotifies(server)).length === 0)
-    const notes = (await server.root.context(context)).entries.filter(
-      (entry) => entry.kind === 'lineage.note',
-    )
-    expect(notes).toHaveLength(1)
-    expect(notes[0].data).toMatchObject({ from: target, text: 'Branch run finished' })
-    const pending = await server.harness.commit(
-      async (tx) =>
-        (await tx.scanTasks({ conversationId: target, kind: 'lineage.notify' }, 50)).items.filter(
-          (task) => task.state.status !== 'terminal',
-        ),
-      context,
-    )
-    expect(pending.map((task) => task.input)).toEqual([{ target: other.id, wake: false }])
-    expect((await server.harness.snapshot(LiveDoc, other.id, context))?.run).toBeDefined()
-  } finally {
-    brief.resolve()
-    run.resolve()
-    unrelated.resolve()
-  }
-})
+      const target = data.result.id as ConversationId
+      await briefStarted.promise
+      const state = (await server.harness.snapshot(Branch, target, context))!.branch!
+      expect(state.status).toBe('briefing')
+      expect(state.brief).toBeDefined()
+      if (oldCheckpoint)
+        await server.harness.commit(async (tx) => {
+          delete (await tx.doc(Branch, target)).branch!.brief
+        }, context)
+      await ask(server, server.root.id, `NOTIFY ${JSON.stringify({ id: target, wake: false })}`)
+      expect(await pendingNotifies(server)).toHaveLength(1)
+      expect(await kinds(server, server.root.id)).not.toContain('lineage.note')
+      brief.resolve()
+      await runStarted.promise
+      expect(await pendingNotifies(server)).toHaveLength(1)
+      expect(await kinds(server, server.root.id)).not.toContain('lineage.note')
+      run.resolve()
+      await until(async () => (await pendingNotifies(server)).length === 0)
+      const notes = (await server.root.context(context)).entries.filter(
+        (entry) => entry.kind === 'lineage.note',
+      )
+      expect(notes).toHaveLength(1)
+      expect(notes[0].data).toMatchObject({ from: target, text: 'Branch run finished' })
+      const pending = await server.harness.commit(
+        async (tx) =>
+          (await tx.scanTasks({ conversationId: target, kind: 'lineage.notify' }, 50)).items.filter(
+            (task) => task.state.status !== 'terminal',
+          ),
+        context,
+      )
+      expect(pending.map((task) => task.input)).toEqual([{ target: other.id, wake: false }])
+      expect((await server.harness.snapshot(LiveDoc, other.id, context))?.run).toBeDefined()
+    } finally {
+      brief.resolve()
+      run.resolve()
+      unrelated.resolve()
+    }
+  },
+)
 
 it('branches in the shared checkout with workspaces disabled', async () => {
   const home = await temp('ultimate-lineage-no-workspaces-')

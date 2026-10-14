@@ -173,6 +173,47 @@ it('stages service rows, preserves them on failed reload and removes stale handl
   ).toBeNull()
 }, 60000)
 
+it('keeps the replacement provider available while the old cleanup is pending', async () => {
+  const { projectRoot, server } = await fixture()
+  const folder = join(projectRoot, '.ultimate/extensions/service-test')
+  await mkdir(folder, { recursive: true })
+  const file = join(folder, 'server.ts')
+  await writeFile(
+    file,
+    serviceFacet('first')
+      .replace(
+        'lookup: async',
+        "gate: async (_args, { host }) => host.resource('service-test:cleanup', () => null), lookup: async",
+      )
+      .replace(
+        'host.onOpen(async',
+        "const gate = host.resource('service-test:cleanup', () => ({ started: Promise.withResolvers(), cleanup: Promise.withResolvers() })); host.onClose(async () => { gate.started.resolve(); await gate.cleanup.promise }); host.onOpen(async",
+      ),
+  )
+  await until(() => !!server.extensions.action('service-test', 'lookup'))
+  const lookup = () =>
+    server.extensions.invoke('service-test', 'lookup', {}, new AbortController().signal)
+  expect(await lookup()).toEqual({ detail: 'first' })
+  const { started, cleanup } = (await server.extensions.invoke(
+    'service-test',
+    'gate',
+    {},
+    new AbortController().signal,
+  )) as unknown as { started: PromiseWithResolvers<void>; cleanup: PromiseWithResolvers<void> }
+  try {
+    await writeFile(file, serviceFacet('replacement'))
+    server.vite.watcher.emit('change', file)
+    await started.promise
+    expect(await lookup()).toEqual({ detail: 'replacement' })
+  } finally {
+    cleanup.resolve()
+  }
+  await until(() =>
+    server.extensions.services().some((s) => s.detail === 'replacement' && s.state === 'ready'),
+  )
+  expect(await lookup()).toEqual({ detail: 'replacement' })
+})
+
 const tools = async (server: Awaited<ReturnType<typeof fauxServer>>) =>
   (await server.root.agent(context)).tools.map((tool) => tool.name).toSorted()
 const web = async (server: Awaited<ReturnType<typeof fauxServer>>) =>

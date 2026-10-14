@@ -142,6 +142,9 @@ it('applies user-only settings through the real loader and tears down on live se
   expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(1)
   await writeFile(join(f.home, '.ultimate/settings.json'), '{}')
   await until(async () => (await status()).state === 'disabled')
+  await until(
+    async () => (await f.invocations()).filter((args) => args.includes('off')).length === 2,
+  )
   expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(2)
   await until(() => server.system.current().access.origins.length === 0)
   await until(() =>

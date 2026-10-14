@@ -46,7 +46,7 @@ const repoGit = (cwd: string, ...args: string[]) =>
     .toString()
     .trim()
 
-async function catchupFixture() {
+async function catchupFixture(disableWorkspaces = false) {
   const home = await temp('ultimate-lineage-main-')
   const projectRoot = join(home, 'project')
   await mkdir(projectRoot)
@@ -56,6 +56,13 @@ async function catchupFixture() {
   await writeFile(join(projectRoot, 'schema.ts'), 'base\n')
   repoGit(projectRoot, 'add', '.')
   repoGit(projectRoot, 'commit', '-m', 'base')
+  if (disableWorkspaces) {
+    await mkdir(join(home, '.ultimate'))
+    await writeFile(
+      join(home, '.ultimate/settings.json'),
+      JSON.stringify({ extensions: { disable: ['workspaces'] } }),
+    )
+  }
   const config = { ultimateRoot, home, userHome: home, projectRoot }
   const requests: string[][] = []
   const gate = Promise.withResolvers<void>()
@@ -157,6 +164,29 @@ it('catches up once on an idle resume, puts overlap first, and reads it before t
     (await reopened.root.context(context)).entries.filter((entry) => entry.kind === 'lineage.note'),
   ).toHaveLength(1)
   expect(f.requests.at(-1)!.filter((message) => message === text)).toHaveLength(1)
+})
+
+it('seeds and catches up a shared conversation with workspaces disabled', async () => {
+  const f = await catchupFixture(true)
+  expect(f.server.host.registry.snapshot().extension('workspaces')).toBeUndefined()
+  expect((await f.server.harness.snapshot(Seen, ROOT_CONVERSATION_ID, context))?.main).toBe(
+    repoGit(f.projectRoot, 'rev-parse', 'HEAD'),
+  )
+  await ask(f.server, ROOT_CONVERSATION_ID, 'start shared work')
+  await writeFile(join(f.projectRoot, 'landed.ts'), 'landed\n')
+  repoGit(f.projectRoot, 'add', '.')
+  repoGit(f.projectRoot, 'commit', '-m', 'Shared landing')
+  await ask(f.server, ROOT_CONVERSATION_ID, 'resume shared work')
+  const entries = (await f.server.root.context(context)).entries
+  const notes = entries.filter(
+    (entry) =>
+      entry.kind === 'lineage.note' && (entry.data as { source?: string }).source === 'main',
+  )
+  expect(notes).toHaveLength(1)
+  const text = (notes[0].data as { text: string }).text
+  expect(text).toContain('1 commits landed on main')
+  expect(text).toContain('Shared landing')
+  expect(f.requests.at(-1)!.slice(-2)).toEqual([text, 'resume shared work'])
 })
 
 it('does not catch up when a note and new commits arrive in the middle of a run', async () => {

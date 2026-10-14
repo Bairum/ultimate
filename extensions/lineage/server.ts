@@ -292,7 +292,28 @@ function lineage(host: ExtensionHost) {
     phases: {
       wait: async (task, runtime, ctx) => {
         const { target } = task.input
-        const brief = (await runtime.snapshot(Branch, target, ctx))?.branch?.brief
+        const branch = (await runtime.snapshot(Branch, target, ctx))?.branch
+        let brief = branch?.brief
+        if (branch?.status === 'briefing' && brief === undefined) {
+          let cursor: Cursor | undefined
+          do {
+            const page = await host
+              .harness()
+              .commit(
+                (tx) =>
+                  tx.scanTasks(
+                    { conversationId: target, kind: Brief.definition.name },
+                    100,
+                    cursor,
+                  ),
+                ctx,
+              )
+            brief = page.items.find((record) => record.state.status !== 'terminal')?.id as
+              | TaskId<null>
+              | undefined
+            cursor = page.next
+          } while (brief === undefined && cursor)
+        }
         if (brief !== undefined) await runtime.waitForTask(brief, ctx)
         await (await runtime.conversation(target, ctx))?.waitForIdle(ctx)
         // The context starts at the brief's reset, so an inherited answer from the source never counts as its own.

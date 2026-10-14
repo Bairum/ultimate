@@ -670,6 +670,75 @@ it.concurrent('notes the root once for a landing even when its report phase is r
   expect(await rootNotes(f)).toHaveLength(1)
 })
 
+it.concurrent('delivers a persisted version-one report without outcome as plain input once', async () => {
+  const f = await lander({})
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const task = createLander(f.host, Workspaces, (_source, operation) => operation())
+  const report = task.definition.phases.report
+  const replayed = Promise.withResolvers<void>()
+  const seeded = {
+    definition: {
+      ...task.definition,
+      initial: () => ({
+        phase: 'report' as const,
+        id: 'old-report',
+        conversationId: id,
+        text: 'Old landing report',
+      }),
+      phases: {
+        ...task.definition.phases,
+        report: async (...args: Parameters<typeof report>) => {
+          const [current, runtime, ctx] = args
+          await report(current, { ...runtime, commit: async () => undefined }, ctx)
+          await report(current, runtime, ctx)
+          replayed.resolve()
+        },
+      },
+    },
+  }
+  f.prepared.registry.install(
+    defineExtension({
+      ...workspaceExtension(f.host),
+      tasks: [
+        ...(workspaceExtension(f.host).tasks ?? []).filter(
+          (item) => item.definition.name !== task.definition.name,
+        ),
+        seeded,
+      ],
+    }),
+  )
+  await f.opened.harness.commit(
+    (tx) =>
+      tx.createTask(
+        seeded,
+        { source: f.projectRoot },
+        {
+          conversationId: ROOT_CONVERSATION_ID,
+          ownership: { kind: 'conversation' },
+          background: true,
+        },
+      ),
+    context,
+  )
+  await replayed.promise
+  const conversation = (await f.opened.harness.conversation(id, context))!
+  await until(async () =>
+    (await conversation.context(context)).entries.some((entry) =>
+      JSON.stringify(entry.model).includes('Old landing report'),
+    ),
+  )
+  await conversation.waitForIdle(context)
+  const entries = (await conversation.context(context)).entries
+  const reports = entries.filter((entry) =>
+    entry.model?.some(
+      (message) => message.role === 'user' && message.content === 'Old landing report',
+    ),
+  )
+  expect(reports).toHaveLength(1)
+  expect(reports[0].kind).not.toBe('workspaces.lander-report')
+})
+
 it.concurrent('does not note the root about its own submission', async () => {
   const f = await lander({})
   f.host.extensions = () =>

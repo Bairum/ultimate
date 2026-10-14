@@ -1,4 +1,6 @@
+import { execFile } from 'node:child_process'
 import { isAbsolute, relative, resolve } from 'node:path'
+import { promisify } from 'node:util'
 import type { Context } from '@earendil-works/chord'
 import { AgentDoc, defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryDraft, Tx } from '@earendil-works/pi-durable'
@@ -15,6 +17,12 @@ export const Seen = defineDoc<{ main?: string; at?: number }>({
   initial: () => ({}),
 })
 
+const exec = promisify(execFile)
+async function git(cwd: string, ...args: string[]) {
+  const { stdout } = await exec('git', args, { cwd, timeout: 30000, maxBuffer: 1024 * 1024 })
+  return stdout.trim()
+}
+
 type Main = { cwd: string; target: string; sha: string; workspace?: string }
 async function mainOf(
   host: ExtensionHost,
@@ -23,11 +31,11 @@ async function mainOf(
   tx?: Tx,
 ): Promise<Main | undefined> {
   const service = host.use<WorkspaceService>('workspaces')
-  if (!service) return undefined
-  const { git } = service
-  const workspace = tx
-    ? (await tx.doc(service.doc, ROOT_CONVERSATION_ID)).items[String(id)]
-    : await service.get(id, ctx)
+  const workspace = service
+    ? tx
+      ? (await tx.doc(service.doc, ROOT_CONVERSATION_ID)).items[String(id)]
+      : await service.get(id, ctx)
+    : undefined
   const cwd = workspace?.source ?? host.projectRoot
   // A shared conversation follows the branch the project checkout is on, like a workspace's target.
   const target =
@@ -89,7 +97,6 @@ export function watchSeen(host: ExtensionHost, ctx: Context) {
 
 /** Files this conversation changed: its workspace diff, or its own edit/write calls in a shared checkout. */
 async function changedFiles(host: ExtensionHost, id: ConversationId, main: Main, tx: Tx) {
-  const { git } = host.use<WorkspaceService>('workspaces')!
   if (main.workspace) {
     const base = await git(main.workspace, 'merge-base', 'HEAD', main.sha)
     return new Set(
@@ -126,7 +133,6 @@ async function catchupText(
   since: { main: string; at?: number },
   tx: Tx,
 ) {
-  const { git } = host.use<WorkspaceService>('workspaces')!
   const range = `${since.main}..${main.sha}`
   const [count, records, changed] = await Promise.all([
     git(main.cwd, 'rev-list', '--count', range).then(Number),

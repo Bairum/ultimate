@@ -211,7 +211,7 @@ type State =
       id: string
       conversationId: number
       text: string
-      outcome: WorkspaceIndex['results'][string]
+      outcome?: WorkspaceIndex['results'][string]
     }
 const textOf = (message: unknown) =>
   ((message as { content?: { type: string; text?: string }[] } | undefined)?.content ?? [])
@@ -883,7 +883,9 @@ export function createLander(
           {
             type: 'input',
             content: text,
-            entry: { kind: 'workspaces.lander-report', data: { id, outcome } },
+            ...(outcome
+              ? { entry: { kind: 'workspaces.lander-report', data: { id, outcome } } }
+              : {}),
             whenBusy: 'followUp',
             requestId: `lander:${id}`,
           },
