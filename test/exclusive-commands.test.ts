@@ -54,7 +54,7 @@ it('serializes matching commands across conversations without delaying other bas
     const first = await server.root.submit(
       {
         type: 'input',
-        content: `echo first-start >> '${log}'; sleep 1; echo first-end >> '${log}' # heavy`,
+        content: `echo first-start >> '${log}'; while [ ! -f '${log}.release' ]; do sleep 0.01; done; echo first-end >> '${log}' # heavy`,
       },
       context,
     )
@@ -77,6 +77,7 @@ it('serializes matching commands across conversations without delaying other bas
     const free = await third.submit({ type: 'input', content: `echo free >> '${log}'` }, context)
     await free.wait(context)
     expect((await readFile(log, 'utf8')).trim().split('\n')).toEqual(['first-start', 'free'])
+    await writeFile(log + '.release', '')
     await Promise.all([first.wait(context), queued.wait(context)])
     expect((await readFile(log, 'utf8')).trim().split('\n')).toEqual([
       'first-start',
@@ -155,34 +156,34 @@ it('bounds exclusive waits by explicit and default limits without starting the w
       },
       context,
     )
-    const holder = `echo start > '${log}'; sleep 5; echo end >> '${log}' # heavy`
+    const holder = `echo start > '${log}'; while [ ! -f '${log}.release' ]; do sleep 0.01; done; echo end >> '${log}' # heavy`
     const first = await server.root.submit(
       { type: 'input', content: JSON.stringify({ command: holder, timeout: 10 }) },
       context,
     )
     await until(async () => (await readFile(log, 'utf8').catch(() => '')).includes('start'))
     for (const explicit of [true, false]) {
-      vi.stubEnv('ULTIMATE_BASH_TIMEOUT', '1')
+      vi.stubEnv('ULTIMATE_BASH_TIMEOUT', '0.05')
       const started = performance.now()
       const queued = await second.submit(
         {
           type: 'input',
           content: JSON.stringify({
             command: `echo ran > '${marker}' # heavy`,
-            ...(explicit ? { timeout: 1 } : {}),
+            ...(explicit ? { timeout: 0.05 } : {}),
           }),
         },
         context,
       )
       await queued.wait(context)
-      expect(performance.now() - started).toBeLessThan(2500)
+      expect(performance.now() - started).toBeLessThan(1000)
       const view = await second.viewState(context)
       try {
         const result = view.value.entries.filter((entry) => entry.kind === 'pi.tool-result').at(-1)
           ?.model?.[0]
         expect(result?.role === 'toolResult' && result.isError).toBe(true)
         expect(JSON.stringify(result)).toContain(
-          'Timed out after 1 s waiting for exclusive command:',
+          'Timed out after 0.05 s waiting for exclusive command:',
         )
         expect(JSON.stringify(result)).toContain(holder)
       } finally {
@@ -190,6 +191,7 @@ it('bounds exclusive waits by explicit and default limits without starting the w
       }
       await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     }
+    await writeFile(log + '.release', '')
     await first.wait(context)
     expect(await readFile(log, 'utf8')).toBe('start\nend\n')
     const view = await server.root.viewState(context)
@@ -200,6 +202,7 @@ it('bounds exclusive waits by explicit and default limits without starting the w
     } finally {
       view.dispose()
     }
+    vi.stubEnv('ULTIMATE_BASH_TIMEOUT', '1')
     await (
       await second.submit(
         { type: 'input', content: JSON.stringify({ command: 'sleep 10 # heavy' }) },

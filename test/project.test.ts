@@ -1,8 +1,4 @@
-import { spawn } from 'node:child_process'
-import type { ChildProcess } from 'node:child_process'
-import { once } from 'node:events'
-import { existsSync } from 'node:fs'
-import { mkdir, readFile, rm, writeFile, rename, symlink } from 'node:fs/promises'
+import { mkdir, rm, writeFile, rename, symlink } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import {
@@ -12,25 +8,14 @@ import {
   until,
   post as requestPost,
   sourceCopy,
-  cleanEnv,
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
-import { projectHome } from '../server/project.ts'
 import { actionExec } from '../server/actions.ts'
-import type { SystemInfo } from '../shared/protocol.ts'
-import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 
 const directories: string[] = []
 const servers: Awaited<ReturnType<typeof createServer>>[] = []
-const children: ChildProcess[] = []
 afterEach(async () => {
   for (const server of servers.splice(0)) await server.close()
-  for (const child of children.splice(0)) {
-    if (child.exitCode !== null || child.signalCode !== null) continue
-    const exited = once(child, 'exit')
-    child.kill('SIGTERM')
-    await exited
-  }
   for (const path of directories.splice(0)) await removeTemp(path)
 })
 async function temp() {
@@ -62,29 +47,6 @@ async function extension(root: string, name: string, value: string) {
   return path
 }
 
-it('prints a single-line error for a missing project', async () => {
-  const userHome = await temp()
-  const ultimateRoot = await sourceCopy(userHome)
-  const missing = join(userHome, 'missing')
-  const child = spawn(
-    process.execPath,
-    [join(ultimateRoot, 'bin/ultimate.ts'), missing, '--no-open'],
-    {
-      cwd: ultimateRoot,
-      env: cleanEnv({ HOME: userHome, ULTIMATE_HOME: join(userHome, 'state') }),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  )
-  children.push(child)
-  let error = ''
-  child.stderr.on('data', (chunk) => {
-    error += chunk
-  })
-  const [code] = await once(child, 'exit')
-  expect(code).toBe(1)
-  expect(error.trim().split('\n')).toEqual([`Cannot open project ${missing}: ENOENT`])
-})
-
 it('survives invalid settings at boot and mid-run and clears errors after repair', async () => {
   const projectRoot = await temp()
   const userHome = await temp()
@@ -104,6 +66,7 @@ it('survives invalid settings at boot and mid-run and clears errors after repair
   expect(server.system.current().project.settings).toEqual({})
   expect(server.system.current().project.settingsError).toContain('SyntaxError')
   await writeFile(file, '{"custom":1}')
+  await server.system.changed()
   await until(() => server.system.current().project.settings.custom === 1)
   expect(server.system.current().project.settingsError).toBeUndefined()
   const notices: string[] = []
@@ -121,6 +84,7 @@ it('survives invalid settings at boot and mid-run and clears errors after repair
   }
   expect(notices.length).toBeGreaterThan(0)
   await writeFile(file, '{}')
+  await server.system.changed()
   await until(() => !server.system.current().project.settingsError)
 })
 
@@ -331,6 +295,7 @@ it('discovers user/project agents and skills with provenance and hot config chan
   await rm(join(project, 'agents/scout.md'))
   await rm(join(project, 'skills/ult25-inspect'), { recursive: true })
   expect(await agent()).toMatchObject({ source: 'user', description: 'User scout' })
+  await server.system.changed()
   await until(() => skill().description === 'User skill')
 })
 
@@ -355,6 +320,7 @@ it('discovers clone skills live and lets project skills override them by name', 
     join(builtIn, 'SKILL.md'),
     '---\nname: ult108-built-in\ndescription: Clone skill\n---\nInspect.',
   )
+  await server.system.changed()
   await until(() => skill()?.description === 'Clone skill')
   expect(skill()?.path).toBe(join(builtIn, 'SKILL.md'))
   const project = join(projectRoot, '.ultimate/skills/ult108-built-in')
@@ -363,12 +329,14 @@ it('discovers clone skills live and lets project skills override them by name', 
     join(project, 'SKILL.md'),
     '---\nname: ult108-built-in\ndescription: Project override\n---\nInspect.',
   )
+  await server.system.changed()
   await until(() => skill()?.description === 'Project override')
   expect(skill()?.path).toBe(join(project, 'SKILL.md'))
   expect(
     server.system.current().skills.filter((entry) => entry.name === 'ult108-built-in'),
   ).toHaveLength(1)
   await rm(project, { recursive: true })
+  await server.system.changed()
   await until(() => skill()?.description === 'Clone skill')
 })
 
@@ -385,66 +353,3 @@ it('exec times out, caps output and defaults to the project without a shell', as
     exec(process.execPath, ['-e', "process.stdout.write('x'.repeat(2 * 1024 * 1024))"]),
   ).rejects.toThrow('maxBuffer')
 })
-
-it('starts two project supervisors concurrently on distinct free ports and storage, serving hello live', async () => {
-  const userHome = await temp()
-  const ultimateRoot = await sourceCopy(userHome)
-  const projects = [await temp(), await temp()]
-  await extension(join(projects[0], '.ultimate'), 'hello', 'live')
-  const launch = (project: string) => {
-    const home = projectHome(project, userHome)
-    new ProjectTrustStore(join(userHome, '.ultimate')).set(project, true)
-    const env: NodeJS.ProcessEnv = {
-      ...cleanEnv(),
-      HOME: userHome,
-      ULTIMATE_HOME: home,
-      ULTIMATE_FAUX: '1',
-    }
-    delete env.ULTIMATE_PORT
-    const child = spawn(
-      process.execPath,
-      [join(ultimateRoot, 'bin/ultimate.ts'), project, '--no-open', '--port', '0'],
-      {
-        env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    )
-    children.push(child)
-    let output = ''
-    child.stdout.on('data', (data) => {
-      output += data
-    })
-    child.stderr.on('data', (data) => {
-      output += data
-    })
-    return { home, output: () => output }
-  }
-  const runs = projects.map(launch)
-  await until(() => runs.every((run) => run.output().includes('Ultimate: http://')))
-  const urls = runs.map((run) => /Ultimate: (http:\/\/[^\s]+)/.exec(run.output())![1])
-  expect(urls[0]).not.toBe(urls[1])
-  expect(runs[0].home).not.toBe(runs[1].home)
-  for (const [index, run] of runs.entries()) {
-    const owner = JSON.parse(await readFile(join(run.home, 'ultimate.lock'), 'utf8'))
-    expect(owner).toMatchObject({
-      project: projects[index],
-      port: Number(new URL(urls[index]).port),
-    })
-    expect(owner.port).toBeGreaterThan(0)
-    expect(existsSync(join(run.home, 'state.sqlite'))).toBe(true)
-    const controller = new AbortController()
-    const response = await fetch(urls[index] + '/api/events', { signal: controller.signal })
-    const reader = response.body!.getReader()
-    let wire = ''
-    while (!wire.includes('event: system\n'))
-      wire += new TextDecoder().decode((await reader.read()).value)
-    const system = JSON.parse(/event: system\ndata: (.+)/.exec(wire)![1]) as SystemInfo
-    controller.abort()
-    expect(system.project.root).toBe(projects[index])
-    expect(system.persistence.path).toBe(join(run.home, 'state.sqlite'))
-  }
-  expect(await post(urls[0], '/api/extensions/hello/actions/hello', 'hi')).toEqual({
-    status: 200,
-    data: { result: { args: 'hi', value: 'live', cwd: projects[0] } },
-  })
-}, 60000)

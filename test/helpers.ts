@@ -10,6 +10,15 @@ import { createServer, prepareServer } from '../server/main.ts'
 import type { ServerOptions } from '../server/main.ts'
 import type { ServerEvents, SystemInfo } from '../shared/protocol.ts'
 
+vi.mock('@earendil-works/pi-ai/providers/faux', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@earendil-works/pi-ai/providers/faux')>()
+  return {
+    ...original,
+    fauxProvider: (options: Parameters<typeof original.fauxProvider>[0]) =>
+      original.fauxProvider({ ...options, tokensPerSecond: 0 }),
+  }
+})
+
 export function cleanEnv(extra: NodeJS.ProcessEnv = {}) {
   return {
     ...Object.fromEntries(
