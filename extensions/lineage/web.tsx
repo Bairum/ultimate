@@ -169,7 +169,7 @@ function Note({ entry }: { entry: EntryRecord }) {
   const { from, text, source } = entry.data as {
     from?: number
     text: string
-    source?: 'lander' | 'finished'
+    source?: 'lander' | 'finished' | 'main'
   }
   if (source === 'lander') return <LandingNote entry={entry} />
   if (source === 'finished') return <Finished entry={entry} />
@@ -179,8 +179,12 @@ function Note({ entry }: { entry: EntryRecord }) {
       data-lineage-note="note"
     >
       <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-        <StickyNoteIcon className="size-3.5 text-brand" />
-        <span className="text-foreground">Note from</span>
+        {source === 'main' ? (
+          <GitBranchIcon className="size-3.5 text-brand" />
+        ) : (
+          <StickyNoteIcon className="size-3.5 text-brand" />
+        )}
+        <span className="text-foreground">{source === 'main' ? 'Main catch-up' : 'Note from'}</span>
         {from !== undefined && (
           <button
             className="cursor-pointer text-foreground hover:underline"

@@ -20,6 +20,17 @@ A project is one tree of conversations: a root that holds the idea, and branches
   starts the caller's next run; `wake: false` leaves a `lineage.note` with `source: 'finished'`. Both use request id
   `lineage:notify:<target>:<task>`, so a resumed task delivers once; calling `notify` again for the same id aborts the
   pending one.
+- **Catch-up on resume**: `lineage.seen` (`{ main, at }`) records the target tip each top-level conversation saw,
+  seeded at creation (in the branch transaction for branches) and on the first open for existing conversations.
+  On an idle resume, a `GenerationTask.beforeRequest` hook checks main (an isolate's workspace target), lists up to
+  30 newly landed commits, and puts overlaps first: workspace changes against the merge-base, or the conversation's
+  own edit/write calls in a shared checkout. Rows include the `Ultimate-Conversation` trailer and title when present;
+  an isolate also gets its behind count. No new commits means no note; tool rounds and mid-run notes do not trigger it.
+  Pi Durable has no extension run-start or input-placement hook. The fallback appends a `lineage.note` with
+  `source: 'main'` before the answer, injects it **before the resumed input** in that request, and uses an immutable
+  context edit to preserve that model order on later requests. The raw transcript shows the input, then the catch-up
+  card, then the answer. The note and seen tip commit atomically; a generation memo and the note's input id keep
+  retries and restarts from writing or injecting it twice.
 - **Prompt**: the `lineage` section tells each top-level conversation where it sits in the tree and how to read the
   others (codemode `ultimate.entries(id)`, `ultimate.search()`).
 - **Compaction**: top-level conversations summarize with their own model and a lineage focus (root: idea, principles,

@@ -10,6 +10,7 @@ import {
   defineExtension,
   defineTask,
   defineTool,
+  GenerationTask,
   hook,
   ROOT_CONVERSATION_ID,
   section,
@@ -26,7 +27,9 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { git } from '../workspaces/git.ts'
 import { workspaces } from '../workspaces/workspaces.ts'
+import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 
 /** Which conversation is the project's root; unset means the reserved root conversation. */
 export const Root = defineDoc<{ root?: number }>({
@@ -55,7 +58,7 @@ export const Branch = defineDoc<{ branch?: BranchState }>({
   initial: () => ({}),
 })
 
-export const docs = [Root, Branch]
+export const docs = [Root, Branch, Seen]
 
 const BRIEF_TOKENS = 8192
 /** Room the brief request keeps free of source text: its prompt and answer. */
@@ -340,6 +343,11 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
   if (!prompt) throw new Error('A branch needs a prompt')
   const from = (input.from ?? (await rootOf(host, ctx))) as ConversationId
   const { startBrief } = lineage(host)
+  const main = await git(
+    host.projectRoot,
+    'rev-parse',
+    input.isolated ? 'HEAD' : 'refs/heads/main',
+  ).catch(() => undefined)
   const id = await host.harness().commit(async (tx) => {
     if (!(await tx.conversation(from))) throw new Error(`No conversation #${from}`)
     let at = input.at as EntryId | undefined
@@ -358,6 +366,7 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
       ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     })
     if (input.isolated) await workspaces(host).create(tx, fork.id, host.projectRoot)
+    if (main) await seedSeen(tx, fork.id, main, Date.now())
     ;(await tx.doc(Branch, fork.id)).branch = { from, at, intent: prompt, status: 'briefing' }
     await tx.appendEntry(from, {
       kind: 'lineage.branched',
@@ -507,11 +516,15 @@ export const actions = {
 
 export default function lineageExtension(host: ExtensionHost) {
   const { Brief, Notify } = lineage(host)
+  watchSeen(host, context)
   return defineExtension({
     name: 'lineage',
     tasks: [Brief, Notify],
     sections: [section('lineage', (input, ctx) => lineageSection(host, input.conversationId, ctx))],
     hooks: [
+      hook(GenerationTask, {
+        beforeRequest: (request, api, ctx) => catchup(host, request.messages, api, ctx),
+      }),
       hook(CompactionTask, {
         beforeCompact: async (compaction, api, ctx) => {
           const record = await host
