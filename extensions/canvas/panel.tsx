@@ -1,8 +1,7 @@
 import { Handle, Position, useStore as useFlow } from '@xyflow/react'
 import type { Node, NodeProps } from '@xyflow/react'
 import {
-  ArchiveIcon,
-  ArchiveRestoreIcon,
+  CirclePlayIcon,
   ArrowLeftIcon,
   BotIcon,
   BracesIcon,
@@ -314,8 +313,8 @@ function Menu({ agent }: { agent: Agent }) {
               Clear context…
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => actions.archive(agent.id, !agent.archived)}>
-              {agent.archived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
-              {agent.archived ? 'Unarchive' : 'Archive'}
+              {agent.archived ? <CirclePlayIcon /> : <CircleCheckIcon />}
+              {agent.archived ? 'Resume' : 'Conclude'}
             </DropdownMenuItem>
           </>
         )}
@@ -538,7 +537,7 @@ function Mid({ agent, feed, renaming }: { agent: Agent; feed?: CanvasAgent; rena
           </span>
         )}
         <Reasons agent={agent} />
-        {agent.archived && <span className="text-muted-foreground">· archived</span>}
+        {agent.archived && <span className="text-muted-foreground">· concluded</span>}
       </div>
       {latest && (
         <div className="mt-2 shrink-0">
@@ -768,7 +767,7 @@ export function ConclusionCard({
         {!brief && agent.folded > 0 && <span>· {plural(agent.folded, 'subagent')}</span>}
         {full && full.duration > 0 && <span>· {duration(full.duration)}</span>}
         {brief?.stale && <Outdated />}
-        {agent.archived && <span>· archived</span>}
+        {agent.archived && <span>· concluded</span>}
       </div>
       {brief ? (
         <div

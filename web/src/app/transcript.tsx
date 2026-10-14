@@ -14,6 +14,7 @@ import {
   CircleAlertIcon,
   CircleStopIcon,
   CopyIcon,
+  GitBranchIcon,
   LinkIcon,
   RotateCwIcon,
 } from 'lucide-react'
@@ -35,7 +36,15 @@ import { Shimmer } from '@/components/ai/shimmer'
 import { ToolImage } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { elidePath, formatDuration, formatTime, formatTokens, shortenPath } from '../sdk/format.ts'
-import { useConversation, useExtensions, useModels, useNow, useSystem } from '../sdk/hooks.ts'
+import {
+  useCommands,
+  useUltimate,
+  useConversation,
+  useExtensions,
+  useModels,
+  useNow,
+  useSystem,
+} from '../sdk/hooks.ts'
 import { entryRenderers } from '../sdk/registry.ts'
 import { ExtensionBoundary } from './boundary.tsx'
 import { column } from './layout.ts'
@@ -438,6 +447,8 @@ function MessageActions({
   className?: string
   children?: ReactNode
 }) {
+  const actions = useUltimate()
+  const branch = useCommands().find((command) => command.id === 'lineage.branch-at')
   const { conversationId: conversation, id } = entry
   const reference = `Ultimate conversation #${conversation}, message #${id}. Read it in codemode with ultimate.entries(${conversation}, { before: ${id + 1}, limit: 1 }).`
   const date = new Date(timestamp)
@@ -456,6 +467,17 @@ function MessageActions({
         <CopyButton label="Copy message" value={text}>
           <CopyIcon />
         </CopyButton>
+      )}
+      {branch && (
+        <button
+          aria-label="Branch from here"
+          title="Branch from here"
+          className="cursor-pointer rounded p-0.5 transition-colors hover:text-foreground"
+          onClick={() => void branch.run({ ...actions, conversationId: conversation, entryId: id })}
+          type="button"
+        >
+          <GitBranchIcon className="size-3" />
+        </button>
       )}
       <CopyButton label={`Copy reference to message #${id}`} value={reference}>
         <LinkIcon />

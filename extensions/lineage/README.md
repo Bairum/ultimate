@@ -35,3 +35,6 @@ A project is one tree of conversations: a root that holds the idea, and branches
   others (codemode `ultimate.entries(id)`, `ultimate.search()`).
 - **Compaction**: top-level conversations summarize with their own model and a lineage focus (root: idea, principles,
   standing decisions, tally of landings and branches; branch: intent and progress). Subagents keep Pi's default.
+
+New in the sidebar or Canvas branches from the root; hover a stored message and choose **Branch from here** to
+branch at that entry. The contextual `lineage.branch-at` command receives `conversationId` and `entryId` through the SDK.

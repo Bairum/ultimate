@@ -21,6 +21,7 @@ import {
   useAction,
   defineWebExtension,
   errorMessage,
+  events,
   getConversation,
   getState,
   useComposer,
@@ -420,6 +421,16 @@ export default defineWebExtension({
   slots: { 'composer.status': [BriefStatus], overlay: [BranchDialog] },
   commands: [
     {
+      id: 'lineage.branch-at',
+      title: 'Branch from here',
+      group: 'Conversations',
+      when: (context) => context.entryId !== undefined,
+      run: (context) => {
+        if (context.conversationId !== undefined && context.entryId !== undefined)
+          openBranch(context, { from: context.conversationId, at: context.entryId })
+      },
+    },
+    {
       id: 'lineage.branch',
       title: 'Branch…',
       group: 'Conversations',
@@ -436,7 +447,10 @@ export default defineWebExtension({
       when: topLevel,
       run: async () => {
         const { id } = getConversation()
-        if (id !== undefined) await api.action('lineage', 'root', { id })
+        if (id !== undefined) {
+          await api.action('lineage', 'root', { id })
+          events.emit('lineage:root-changed', { root: id })
+        }
       },
     },
   ],

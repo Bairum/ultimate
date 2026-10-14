@@ -345,6 +345,13 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
   const { startBrief } = lineage(host)
   // Shared and isolated branches both start from the project checkout's branch tip.
   const main = await git(host.projectRoot, 'rev-parse', 'HEAD').catch(() => undefined)
+  // A first branch needs a stored entry to fork from, even when the root is still empty.
+  if (input.at === undefined)
+    await host.harness().commit(async (tx) => {
+      if (!(await tx.conversation(from))) throw new Error(`No conversation #${from}`)
+      if (!(await tx.scanEntries({ conversationId: from }, 1)).items.length)
+        await tx.appendEntry(from, { kind: 'pi.reset', head: 'self' })
+    }, ctx)
   const id = await host.harness().commit(async (tx) => {
     if (!(await tx.conversation(from))) throw new Error(`No conversation #${from}`)
     let at = input.at as EntryId | undefined

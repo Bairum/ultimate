@@ -39,7 +39,9 @@ export async function getNewConversationConfiguration() {
   }
 }
 
-export const ComposerContext = createContext<{ target: ComposerTarget }>({ target: 'conversation' })
+export const ComposerContext = createContext<{ target: ComposerTarget; isolated?: boolean }>({
+  target: 'conversation',
+})
 
 /** The composer owning this toolbar or status contribution. */
 export function useComposer() {

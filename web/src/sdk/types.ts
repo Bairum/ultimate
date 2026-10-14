@@ -111,6 +111,8 @@ export interface UltimateActions {
 export interface UltimateContext extends UltimateActions {
   /** The shown conversation, once known. */
   conversationId?: number
+  /** A stored message targeted by a contextual command. */
+  entryId?: number
   /** The id of the surface on screen: Agent while a chosen surface that failed falls back. */
   surface: string
 }

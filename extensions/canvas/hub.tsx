@@ -25,7 +25,7 @@ export const Hub = memo(function Hub({ data }: NodeProps<HubNode>) {
       {far ? (
         <>
           <PlusIcon className="size-12 text-brand" />
-          <span className="text-[30px] font-medium text-foreground/85">Start a conversation</span>
+          <span className="text-[30px] font-medium text-foreground/85">Branch from the root</span>
         </>
       ) : (
         <>
