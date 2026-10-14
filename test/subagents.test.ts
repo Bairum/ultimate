@@ -1,3 +1,5 @@
+// First: helpers mocks the faux provider's token pacing, which must apply before the server modules load.
+import { until, temp, removeTemp } from './helpers.ts'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { projectSettings } from '../server/project-setup.ts'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
@@ -33,7 +35,6 @@ import { UiState } from '../server/ui-state.ts'
 import { provenance } from '../extensions/subagents/provenance.ts'
 import { discoverAgents, parseDefinition } from '../extensions/subagents/agents.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
-import { until, temp, removeTemp } from './helpers.ts'
 
 const directories: string[] = []
 const hosts: OpenHost[] = []
@@ -208,8 +209,6 @@ async function fixture(
       return fauxAssistantMessage([fauxToolCall('subagent', JSON.parse(text.slice(5)))], {
         stopReason: 'toolUse',
       })
-    if (last.role === 'user' && text === 'slow')
-      return fauxAssistantMessage([fauxText('Working '.repeat(700))])
     if (last.role === 'user' && text.startsWith('[subagent'))
       return fauxAssistantMessage([fauxText('Report received')])
     return fauxAssistantMessage([
@@ -299,7 +298,9 @@ it('runs root -> forked review lead -> parallel leaves -> lead -> root with scop
             ],
             { stopReason: 'toolUse' },
           )
-        return fauxAssistantMessage(`Synthesis ${JSON.stringify(results)}`)
+        return fauxAssistantMessage(
+          `Synthesis ${completed.map((message) => JSON.stringify(message.content)).join(' ')}`,
+        )
       }
       return undefined
     },
@@ -707,6 +708,8 @@ describe('provider error recovery', () => {
         task: 'provider failure',
         background: true,
       })
+      // The Reporter is a background task: idle does not wait for its retry.
+      await until(async () => (await reports(f.opened)).length === 1)
       await f.opened.harness.waitForIdle(context)
       expect(inputs).toEqual(['provider failure', retryText])
       const delivered = await reports(f.opened)
@@ -1880,11 +1883,12 @@ describe('subagents', () => {
     expect(listed[0]).toMatchObject({ conversationId: first.conversationId, busy: false })
   })
   it('background returns immediately, survives parent abort and restart, and reports exactly once', async () => {
-    const { reopen, opened } = await fixture()
+    const f = await gatedFixture()
+    const { opened } = f
     const result = await call(opened, {
       action: 'start',
       agent: 'scout',
-      task: 'slow',
+      task: 'HOLD',
       background: true,
     })
     expect(await children(opened)).toHaveLength(1)
@@ -1903,7 +1907,8 @@ describe('subagents', () => {
     ).toBeDefined()
     await opened.close()
     hosts.splice(hosts.indexOf(opened), 1)
-    const resumed = await reopen()
+    const resumed = await f.reopen()
+    f.childGate.release()
     await until(async () => (await reports(resumed)).length === 1)
     await resumed.harness.waitForIdle(context)
     expect(await children(resumed)).toHaveLength(1)
@@ -1923,7 +1928,7 @@ describe('subagents', () => {
     await until(async () => (await reports(resumed)).length === 2)
     await resumed.root.waitForIdle(context)
     expect((await children(resumed))[0].reported).toHaveLength(2)
-  }, 20000)
+  })
   it('delivers a background answer as a steer while the parent is in a tool round', async () => {
     let releaseParent!: () => void
     let releaseChild!: () => void
@@ -2052,22 +2057,14 @@ describe('subagents', () => {
     }
   })
   it('replays an interrupted foreground wait using its existing independent child', async () => {
-    const { reopen, opened } = await fixture()
-    await opened.root.submit(
-      { type: 'input', content: 'CALL {"action":"start","agent":"scout","task":"slow"}' },
-      context,
-    )
-    await until(async () => {
-      const [child] = await children(opened)
-      return (
-        child !== undefined &&
-        (await opened.harness.snapshot(LiveDoc, child.conversationId, context))?.run !== undefined
-      )
-    })
-    const [before] = await children(opened)
-    await opened.close()
-    hosts.splice(hosts.indexOf(opened), 1)
-    const resumed = await reopen()
+    const f = await gatedFixture()
+    await startCall(f.opened, { action: 'start', agent: 'scout', task: 'HOLD' })
+    await until(async () => f.holding.size === 1)
+    const [before] = await children(f.opened)
+    await f.opened.close()
+    hosts.splice(hosts.indexOf(f.opened), 1)
+    const resumed = await f.reopen()
+    f.childGate.release()
     await resumed.root.waitForIdle(context)
     expect(await children(resumed)).toHaveLength(1)
     expect((await children(resumed))[0].conversationId).toBe(before.conversationId)
@@ -2075,20 +2072,15 @@ describe('subagents', () => {
     const results = view.value.entries.filter((entry) => entry.kind === 'pi.tool-result')
     expect(results).toHaveLength(1)
     expect(results[0].model?.[0]).toMatchObject({
-      content: [{ type: 'text', text: 'Returned model: faux/faux-1\n' + 'Working '.repeat(700) }],
+      content: [{ type: 'text', text: 'Returned model: faux/faux-1\nResult: released' }],
       details: { conversationId: before.conversationId },
       isError: false,
     })
     view.dispose()
-  }, 15000)
+  })
   it('stops a background child, suppresses its aborted report, and leaves it reusable', async () => {
-    const { opened } = await fixture()
-    await call(opened, {
-      action: 'start',
-      agent: 'scout',
-      task: 'slow',
-      background: true,
-    })
+    const { opened } = await gatedFixture()
+    await call(opened, { action: 'start', agent: 'scout', task: 'HOLD', background: true })
     expect(await children(opened)).toHaveLength(1)
     const [child] = await children(opened)
     expect((await call(opened, { action: 'stop', id: child.conversationId })).text).toBe(

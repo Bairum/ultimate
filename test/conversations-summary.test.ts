@@ -1,7 +1,9 @@
+// First: helpers mocks the faux provider's token pacing, which must apply before the server modules load.
+import { fauxServer, post, prepareFauxServer, sourceCopy, temp, until } from './helpers.ts'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { Subagents } from '../extensions/subagents/server.ts'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
 import type { Models, JsonObject } from '@earendil-works/pi-ai'
 import type { ConversationId, EntryId, TaskId, ToolRegistration } from '@earendil-works/pi-durable'
@@ -16,8 +18,9 @@ import {
   LiveDoc,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
+import { DEFAULT_EXTENSIONS } from '../server/extension-settings.ts'
 import { Metadata } from '../server/metadata.ts'
 import { Overview } from '../extensions/conversations/overview.ts'
 import {
@@ -31,30 +34,47 @@ import {
   AssessmentAccepted,
   SummaryDiscarded,
 } from '../extensions/conversations/summary.ts'
-import { fauxServer, post, prepareFauxServer, temp, until } from './helpers.ts'
 
 const luna = { provider: 'openai', id: 'gpt-6-luna', thinking: 'medium' } as const
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
-afterEach(async () => {
-  for (const server of servers.splice(0)) await server.close()
+afterAll(async () => {
+  await Promise.all(servers.splice(0).map((server) => server.close()))
 })
+// One read-only copy of the source for every server here, instead of a copy per launch.
+let ultimateRoot: string
+beforeAll(async () => {
+  ultimateRoot = await sourceCopy(await temp('ultimate-summary-source-'))
+})
+/** Waits for the test's gate, or gives up when the summary task is aborted, as when a failed test closes its server. */
+const held = (gate: Promise<void>, signal: AbortSignal) =>
+  Promise.race([
+    gate,
+    new Promise<never>((_done, fail) =>
+      signal.addEventListener('abort', () => fail(new Error('Closed')), { once: true }),
+    ),
+  ])
 async function launch(subagents = false, initialIntent = false) {
   const home = await temp('ultimate-summary-')
   const projectRoot = join(home, 'project')
-  await mkdir(projectRoot)
+  await mkdir(join(projectRoot, '.ultimate/agents'), { recursive: true })
+  // Only the extensions under test: each default one adds to every boot and reopen.
+  await writeFile(
+    join(projectRoot, '.ultimate/settings.json'),
+    JSON.stringify({
+      extensions: {
+        enable: subagents ? ['subagents'] : [],
+        disable: DEFAULT_EXTENSIONS.filter((name) => name !== 'conversations'),
+      },
+    }),
+  )
   if (subagents) {
-    await mkdir(join(projectRoot, '.ultimate/agents'), { recursive: true })
-    await writeFile(
-      join(projectRoot, '.ultimate/settings.json'),
-      JSON.stringify({ extensions: { enable: ['subagents'] } }),
-    )
     await writeFile(
       join(projectRoot, '.ultimate/agents/summary-child.md'),
       '---\nname: summary-child\ndescription: Summary test child\ntools: [summary_hold]\n---\nWait for release.\n',
     )
   }
   const options = {
-    ultimateRoot: resolve('.'),
+    ultimateRoot,
     projectRoot,
     userHome: home,
     home: join(home, 'state'),
@@ -166,7 +186,7 @@ async function launch(subagents = false, initialIntent = false) {
   }
 }
 
-it.each([false, true])(
+it.concurrent.each([false, true])(
   'refreshes during an actual subagent start, background=%s, while parent and child are busy',
   async (background) => {
     const fixture = await launch(true)
@@ -316,7 +336,7 @@ it.each([false, true])(
   60000,
 )
 
-it.each(['rename', 'reset', 'newer'] as const)(
+it.concurrent.each(['rename', 'reset', 'newer'] as const)(
   'protects a held spawn result after %s',
   async (change) => {
     const fixture = await launch()
@@ -326,8 +346,8 @@ it.each(['rename', 'reset', 'newer'] as const)(
     const gate = new Promise<void>((done) => {
       release = done
     })
-    fixture.generated.mockImplementationOnce(async () => {
-      await gate
+    fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
+      await held(gate, signal)
       return {
         assessment: 'needs_input',
         activity: 'Must not publish',
@@ -365,7 +385,7 @@ it.each(['rename', 'reset', 'newer'] as const)(
   60000,
 )
 
-it.each([2, 3])(
+it.concurrent.each([2, 3])(
   'settles a held spawn superseded by assessment-only exchange %s without changing cadence',
   async (exchange) => {
     const fixture = await launch()
@@ -375,8 +395,8 @@ it.each([2, 3])(
     const gate = new Promise<void>((done) => {
       release = done
     })
-    fixture.generated.mockImplementationOnce(async () => {
-      await gate
+    fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
+      await held(gate, signal)
       return { assessment: 'done', activity: 'Old spawn', title: 'Old spawn', summary: 'Old spawn' }
     })
     await fixture.spawn(before.lastAnswer!)
@@ -415,7 +435,7 @@ it.each([2, 3])(
   60000,
 )
 
-it('summarizes the first, fourth and seventh completed exchanges, not tools, streams or idle time; persists across reopen', async () => {
+it.concurrent('summarizes the first, fourth and seventh completed exchanges, not tools, streams or idle time; persists across reopen', async () => {
   const fixture = await launch()
   const { server } = fixture
   let generation = 0
@@ -491,7 +511,7 @@ it('summarizes the first, fourth and seventh completed exchanges, not tools, str
   expect(await fixture.titleChanges()).toEqual(changes)
 }, 60000)
 
-it('logs each accepted title change once, but not a manual rename to the generated title', async () => {
+it.concurrent('logs each accepted title change once, but not a manual rename to the generated title', async () => {
   const fixture = await launch()
   const started = Date.now()
   await fixture.exchange()
@@ -530,7 +550,7 @@ it('logs each accepted title change once, but not a manual rename to the generat
   expect(await fixture.titleChanges()).toEqual(changes)
 }, 60000)
 
-it('keeps an explicit API title even when it equals the first input', async () => {
+it.concurrent('keeps an explicit API title even when it equals the first input', async () => {
   const fixture = await launch()
   const text = 'This preexisting title equals the prompt.'
   const created = await post(fixture.server, '/api/conversations', { title: text })
@@ -547,7 +567,7 @@ it('keeps an explicit API title even when it equals the first input', async () =
   expect(await fixture.titleChanges(id)).toEqual([])
 }, 60000)
 
-it('protects preexisting and in-flight manual titles, and blank rename restores automatic naming', async () => {
+it.concurrent('protects preexisting and in-flight manual titles, and blank rename restores automatic naming', async () => {
   const fixture = await launch()
   await fixture.server.harness.commit(async (tx) => {
     ;(await tx.doc(Metadata, fixture.server.root.id)).title = 'Existing title'
@@ -562,8 +582,8 @@ it('protects preexisting and in-flight manual titles, and blank rename restores 
     release = done
   })
   for (let count = 2; count <= 3; count++) await fixture.exchange()
-  fixture.generated.mockImplementationOnce(async () => {
-    await gate
+  fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
+    await held(gate, signal)
     return {
       assessment: 'done' as const,
       activity: 'Implemented the requested sidebar changes.',
@@ -597,14 +617,14 @@ it('protects preexisting and in-flight manual titles, and blank rename restores 
   expect(await fixture.titleChanges()).toHaveLength(1)
 }, 60000)
 
-it('clears summary and cadence on reset, drops stale completion and isolates provider errors', async () => {
+it.concurrent('clears summary and cadence on reset, drops stale completion and isolates provider errors', async () => {
   const fixture = await launch()
   let release!: () => void
   const gate = new Promise<void>((done) => {
     release = done
   })
-  fixture.generated.mockImplementationOnce(async () => {
-    await gate
+  fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
+    await held(gate, signal)
     return {
       assessment: 'done' as const,
       activity: 'Implemented the requested sidebar changes.',
@@ -642,7 +662,7 @@ it('clears summary and cadence on reset, drops stale completion and isolates pro
   expect(fixture.generated).toHaveBeenCalledTimes(6)
 }, 60000)
 
-it('assesses owned children without renaming them, summarizes ownerless forks, and does not backfill', async () => {
+it.concurrent('assesses owned children without renaming them, summarizes ownerless forks, and does not backfill', async () => {
   const fixture = await launch()
   const root = fixture.server.root
   await fixture.server.harness.commit(
@@ -727,14 +747,14 @@ it('assesses owned children without renaming them, summarizes ownerless forks, a
   expect(fixture.generated.mock.calls.some((call) => call[5] === 'intent')).toBe(false)
 }, 60000)
 
-it('rejects an older response after a newer scheduled summary has completed', async () => {
+it.concurrent('rejects an older response after a newer scheduled summary has completed', async () => {
   const fixture = await launch()
   let release!: () => void
   const gate = new Promise<void>((done) => {
     release = done
   })
-  fixture.generated.mockImplementationOnce(async () => {
-    await gate
+  fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
+    await held(gate, signal)
     return {
       assessment: 'done' as const,
       activity: 'Implemented the requested sidebar changes.',
@@ -761,7 +781,7 @@ it('rejects an older response after a newer scheduled summary has completed', as
   expect(await fixture.titleChanges()).toHaveLength(1)
 }, 60000)
 
-it.each(['reply', 'spawn'] as const)(
+it.concurrent.each(['reply', 'spawn'] as const)(
   'resumes pending %s generation after shutdown without a stuck checkpoint',
   async (mode) => {
     const fixture = await launch()
@@ -792,7 +812,7 @@ it.each(['reply', 'spawn'] as const)(
   60000,
 )
 
-it.each(['none', 'legacy'])(
+it.concurrent.each(['none', 'legacy'])(
   'skips summaries and assessments when current OpenAI Luna is unavailable (%s)',
   async (available) => {
     const fixture = await launch()
@@ -838,7 +858,7 @@ it.each(['none', 'legacy'])(
   },
 )
 
-it.each([
+it.concurrent.each([
   ['  Conversation\n sidebar\t rendering extra words  ', 'Conversation sidebar rendering'],
   ['ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 extra words', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ123456'],
   ['Conversation-specific Rendering UI', 'Conversation-specific Rendering'],
@@ -873,14 +893,14 @@ it.each([
   })
 })
 
-it('includes the previous feature next to the previous summary in model input', () => {
+it.concurrent('includes the previous feature next to the previous summary in model input', () => {
   expect(summaryInput([], 'Previous work.', 'Bash rendering')).toContain(
     'Previous summary: Previous work.\n\nPrevious feature: Bash rendering',
   )
   expect(summaryInput([])).not.toContain('Previous feature:')
 })
 
-it('stores and exposes a feature, keeps it when omitted, and clears it on reset', async () => {
+it.concurrent('stores and exposes a feature, keeps it when omitted, and clears it on reset', async () => {
   const fixture = await launch()
   fixture.generated.mockResolvedValueOnce({
     assessment: 'done',
@@ -909,7 +929,7 @@ it('stores and exposes a feature, keeps it when omitted, and clears it on reset'
   await until(async () => (await row())?.feature === undefined)
 })
 
-it('validates assessment-only JSON and rejects unapproved or malformed outcome states', async () => {
+it.concurrent('validates assessment-only JSON and rejects unapproved or malformed outcome states', async () => {
   let output: unknown = {
     assessment: 'needs_input',
     activity: 'Asked the coordinator to choose a deployment target.',
@@ -983,7 +1003,7 @@ it('validates assessment-only JSON and rejects unapproved or malformed outcome s
   }
 })
 
-it('publishes initial intent while the main model request is blocked, once across retries and reopen', async () => {
+it.concurrent('publishes initial intent while the main model request is blocked, once across retries and reopen', async () => {
   const fixture = await launch(false, true)
   const { server } = fixture
   let release!: () => void
@@ -1004,8 +1024,8 @@ it('publishes initial intent while the main model request is blocked, once acros
       hooks: [
         ...server.host.registry.snapshot().extension('conversations')!.hooks!,
         hook(GenerationTask, {
-          beforeRequest: async () => {
-            await gate
+          beforeRequest: async (_request, _api, caller) => {
+            await awaitWithContext(gate, caller)
             return undefined
           },
         }),
@@ -1065,7 +1085,7 @@ it('publishes initial intent while the main model request is blocked, once acros
   expect((await fixture.read())?.exchanges).toBe(1)
 }, 60000)
 
-it.each(['newer', 'reset', 'spawn'] as const)(
+it.concurrent.each(['newer', 'reset', 'spawn'] as const)(
   'rejects a held initial intent after %s',
   async (change) => {
     const fixture = await launch(false, true)
@@ -1073,8 +1093,8 @@ it.each(['newer', 'reset', 'spawn'] as const)(
     const gate = new Promise<void>((done) => {
       release = done
     })
-    fixture.generated.mockImplementationOnce(async () => {
-      await gate
+    fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
+      await held(gate, signal)
       return { assessment: 'neutral', activity: '', title: 'Stale intent', summary: 'Stale intent' }
     })
     // Hold the main request too, so the intent starts before any reply can supersede it.
@@ -1088,8 +1108,8 @@ it.each(['newer', 'reset', 'spawn'] as const)(
         hooks: [
           ...fixture.server.host.registry.snapshot().extension('conversations')!.hooks!,
           hook(GenerationTask, {
-            beforeRequest: async () => {
-              await main
+            beforeRequest: async (_request, _api, caller) => {
+              await awaitWithContext(main, caller)
               return undefined
             },
           }),
@@ -1140,7 +1160,7 @@ it.each(['newer', 'reset', 'spawn'] as const)(
   60000,
 )
 
-it('keeps an exchange answered across a mid-run compaction and reopen; only a reset ends it', async () => {
+it.concurrent('keeps an exchange answered across a mid-run compaction and reopen; only a reset ends it', async () => {
   const fixture = await launch()
   const { server } = fixture
   let release!: () => void
@@ -1212,7 +1232,7 @@ it('keeps an exchange answered across a mid-run compaction and reopen; only a re
   expect((await row())?.inputId).toBeUndefined()
 }, 60000)
 
-it('derives the same overview rows live and from a fresh open, with no summary model available', async () => {
+it.concurrent('derives the same overview rows live and from a fresh open, with no summary model available', async () => {
   const fixture = await launch()
   const install = () => {
     const registry = fixture.server.host.registry
@@ -1339,7 +1359,7 @@ it('derives the same overview rows live and from a fresh open, with no summary m
   expect(await rows()).toEqual(built)
 }, 60000)
 
-it('records an accepted assessment as an entry traced to its summary and generation tasks', async () => {
+it.concurrent('records an accepted assessment as an entry traced to its summary and generation tasks', async () => {
   const fixture = await launch()
   await fixture.exchange()
   const state = (await fixture.read())!
@@ -1366,7 +1386,7 @@ it('records an accepted assessment as an entry traced to its summary and generat
   expect(JSON.stringify(view.messages)).not.toContain('Added concise summaries')
 }, 60000)
 
-it.each(['answers', 'fails'] as const)(
+it.concurrent.each(['answers', 'fails'] as const)(
   'follows an older follow-up delivered after a newer steer when it %s, live and after reopen',
   async (outcome) => {
     const fixture = await launch()
