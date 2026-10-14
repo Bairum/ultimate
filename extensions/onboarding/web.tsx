@@ -29,9 +29,10 @@ function Onboarding() {
   const [finished, setFinished] = useState(false)
   const [, deferred] = useReducer((count: number) => count + 1, 0)
   const project = system?.project
-  // Until status answers, neither shows; without an answer there is no first run.
-  const settled = status.data !== undefined || status.error !== undefined
-  const firstRun = status.data?.firstRun === true && !finished
+  // Until status answers, neither shows; without an answer there is no first run. A page driven by automation, such
+  // as the agent's browser tool, gets neither unasked: the Extensions panel still opens the project card.
+  const settled = !navigator.webdriver && (status.data !== undefined || status.error !== undefined)
+  const firstRun = settled && status.data?.firstRun === true && !finished
   const undecided = project?.config === true && project.decision === null
   const asking =
     settled && !firstRun && undecided && sessionStorage.getItem(later(project.root)) === null

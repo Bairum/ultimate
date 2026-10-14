@@ -28,6 +28,9 @@ The two-page first run, the project question, and the Extensions panel that turn
   Turning off `agent` or `onboarding` asks first, because the panel goes with them. Failures show on the row; the
   list follows system info, so a change shows once it is live.
 
+An automated browser (`navigator.webdriver`, as in the agent's `browser` and `screenshot` tools) gets neither the first
+run nor the project card unasked; the Extensions panel still opens the card.
+
 The pages are dialogs: Escape or the close button dismisses them, focus moves into them and back to the composer.
 The first-run splash fades into page 1, already open beneath it.
 
