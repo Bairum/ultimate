@@ -205,7 +205,13 @@ type State =
   | { phase: 'next' }
   | ({ phase: 'land'; id: string; attempt: number; failure?: Failure } & Carry)
   | ({ phase: 'agent'; id: string; attempt: number; failure: Failure } & Carry)
-  | { phase: 'report'; id: string; conversationId: number; text: string }
+  | {
+      phase: 'report'
+      id: string
+      conversationId: number
+      text: string
+      outcome: WorkspaceIndex['results'][string]
+    }
 const textOf = (message: unknown) =>
   ((message as { content?: { type: string; text?: string }[] } | undefined)?.content ?? [])
     .flatMap((part) => (part.type === 'text' && part.text ? [part.text] : []))
@@ -315,6 +321,7 @@ export function createLander(
                 phase: 'report',
                 id,
                 conversationId: entry.conversationId,
+                outcome: draft.results[id],
                 text: `[lander] Submission ${id} (#${entry.conversationId}, ${entry.tip.slice(0, 7)}) ${text}\nLog: lander conversation #${runtime.conversationId}.`,
               },
             }
@@ -835,7 +842,7 @@ export function createLander(
         }, context)
       },
       report: async (task, runtime, context) => {
-        const { id, conversationId, text } = task.state.checkpoint
+        const { id, conversationId, text, outcome } = task.state.checkpoint
         if (
           host
             .extensions()
@@ -877,7 +884,13 @@ export function createLander(
         await (
           await runtime.conversation(conversationId as ConversationId, context)
         )?.submit(
-          { type: 'input', content: text, whenBusy: 'followUp', requestId: `lander:${id}` },
+          {
+            type: 'input',
+            content: text,
+            entry: { kind: 'workspaces.lander-report', data: { id, outcome } },
+            whenBusy: 'followUp',
+            requestId: `lander:${id}`,
+          },
           context,
         )
         await runtime.commit(() => ({ status: 'running', checkpoint: { phase: 'next' } }), context)

@@ -26,7 +26,7 @@ import workspaceExtension, {
 } from '../extensions/workspaces/server.ts'
 import { Workspaces, workspaces } from '../extensions/workspaces/workspaces.ts'
 import { git, setup } from '../extensions/workspaces/git.ts'
-import type { LanderEntry } from '../extensions/workspaces/types.ts'
+import type { LanderEntry, WorkspaceIndex } from '../extensions/workspaces/types.ts'
 import { exclusiveSlot } from '../extensions/exclusive-commands/slot.ts'
 import { createLander } from '../extensions/workspaces/lander.ts'
 import { leaveNote, Root } from '../extensions/lineage/server.ts'
@@ -540,10 +540,18 @@ async function submitted(f: Awaited<ReturnType<typeof fixture>>, id: Conversatio
   await conversation.waitForIdle(context)
   const view = await conversation.viewState(context)
   try {
-    return view.value.entries
-      .filter((entry) => entry.kind === 'pi.user')
-      .map((entry) => JSON.stringify(entry.model))
-      .filter((text) => text.includes('[lander]'))
+    const reports = view.value.entries.filter((entry) => entry.kind === 'workspaces.lander-report')
+    for (const report of reports) {
+      const { id: submission, outcome } = report.data as {
+        id: string
+        outcome: WorkspaceIndex['results'][string]
+      }
+      const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+      expect(outcome).toEqual(index.results[submission])
+      expect(outcome.lander).toBeGreaterThan(0)
+      expect(outcome.steps.length).toBeGreaterThan(0)
+    }
+    return reports.map((entry) => JSON.stringify(entry.model))
   } finally {
     view.dispose()
   }
@@ -620,7 +628,7 @@ it.concurrent('notes the root once for a landing even when its report phase is r
     ;(await tx.doc(Metadata, id)).title = 'Write the feature'
   }, context)
   const { id: submission } = await f.service.submit(id, context)
-  await submitted(f, id)
+  expect(await submitted(f, id)).toHaveLength(1)
   expect(replays).toBe(1)
   // A crash after admitting the note but before memoizing it reuses the same write request.
   await leaveNote(f.host, 'root', 'duplicate delivery', {

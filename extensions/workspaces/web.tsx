@@ -398,7 +398,7 @@ export default defineWebExtension({
   entries: {
     'ultimate.lander': LanderLogEntry,
     'ultimate.lander-ask': LanderAskEntry,
-    'pi.user': LanderReport,
+    'workspaces.lander-report': LanderReport,
   },
   panels: [
     {

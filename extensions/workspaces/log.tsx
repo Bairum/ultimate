@@ -27,7 +27,14 @@ import {
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import { useWorkspaceIndex } from './data.tsx'
 import { inProgress, runningStep, superseded } from './steps.tsx'
-import type { LanderAsk, LanderEntry, LanderOutcome, LanderStep, SubmitResult } from './types.ts'
+import type {
+  LanderAsk,
+  LanderEntry,
+  LanderOutcome,
+  LanderStep,
+  SubmitResult,
+  WorkspaceIndex,
+} from './types.ts'
 
 const short = (sha: string) => sha.slice(0, 7)
 const time = (at: number) => formatTime(at, true)
@@ -134,37 +141,10 @@ const tone = {
   failed: ['border-l-error/70', 'text-error', XIcon],
 } as const
 
-/**
- * The lander's report in the submitter's transcript, as a card: landed (success), landed locally but the push failed
- * (warning), or not landed (error), from the stored outcome; the message text once that outcome was pruned.
- */
-export function LanderReport({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
-  const results = useWorkspaceIndex().results
-  const message = entry.model?.[0]
-  const text =
-    message?.role !== 'user'
-      ? ''
-      : typeof message.content === 'string'
-        ? message.content
-        : message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n')
-  const report =
-    /^\[lander\] Submission (\S+) \([W#]\d+, \w+\) ([\s\S]*?)\nLog: lander conversation #(\d+)\.$/.exec(
-      text,
-    )
-  if (!report) return core
-  const [, id, body, lander] = report
-  const outcome = results[id]
-  const kind = !outcome
-    ? /^(had nothing new to land|landed as)/.test(body) && !body.includes('\nPush failed')
-      ? 'landed'
-      : body.startsWith('landed locally')
-        ? 'pushFailed'
-        : 'failed'
-    : outcome.outcome === 'failed'
-      ? 'failed'
-      : outcome.reason
-        ? 'pushFailed'
-        : 'landed'
+/** The lander's stored report in the submitter's transcript. */
+export function LanderReport({ entry }: { entry: EntryRecord }) {
+  const { outcome } = entry.data as { id: string; outcome: WorkspaceIndex['results'][string] }
+  const kind = outcome.outcome === 'failed' ? 'failed' : outcome.reason ? 'pushFailed' : 'landed'
   const [border, color, Icon] = tone[kind]
   return (
     <section
@@ -177,21 +157,15 @@ export function LanderReport({ entry, core }: { entry: EntryRecord; core: ReactN
       <header className="flex items-start gap-2">
         <Icon className={cn('mt-0.5 size-3.5 shrink-0', color)} />
         <span className="min-w-0 flex-1 break-words text-foreground">
-          {outcome ? headline(outcome, outcome.target) : body.split('\n')[0]}
+          {headline(outcome, outcome.target)}
         </span>
       </header>
       <div className="space-y-1.5 pl-5.5">
-        {outcome ? (
-          <OutcomeBody outcome={outcome} />
-        ) : (
-          <p className="whitespace-pre-wrap text-muted-foreground">
-            {body.split('\n').slice(1).join('\n')}
-          </p>
-        )}
+        <OutcomeBody outcome={outcome} />
         <Steps
-          ended={outcome?.outcome === 'failed' ? 'failed' : 'landed'}
-          lander={Number(lander)}
-          steps={outcome?.steps ?? []}
+          ended={outcome.outcome === 'failed' ? 'failed' : 'landed'}
+          lander={outcome.lander}
+          steps={outcome.steps}
         />
       </div>
     </section>
