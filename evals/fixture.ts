@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -13,6 +13,8 @@ import type {
 import { ModelRuntime, ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { AssistantEntry, ToolResultEntry, UserEntry } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
+import { inject } from 'vitest'
+import type { TurnUsage } from './reporter.ts'
 import { createServer } from '../server/main.ts'
 import { context } from '../server/harness.ts'
 import { attach, until } from '../test/helpers.ts'
@@ -63,7 +65,7 @@ export async function start(
     thinking?: string
   } = {},
 ) {
-  const model = options.model ?? process.env.ULTIMATE_EVAL_MODEL ?? 'openai-codex/gpt-6-luna'
+  const model = options.model ?? process.env.ULTIMATE_EVAL_MODEL ?? 'openai/gpt-6-luna'
   const thinkingLevel = options.thinking ?? process.env.ULTIMATE_EVAL_THINKING ?? 'high'
   const runtime = await ModelRuntime.create()
   const available = await runtime.getAvailable()
@@ -236,12 +238,6 @@ export async function start(
             }
             const turn = (await messages()).slice(before)
             const replies = turn.filter((m): m is AssistantMessage => m.role === 'assistant')
-            const failed = replies.find(
-              (m) => m.stopReason === 'error' || m.stopReason === 'aborted',
-            )
-            if (failed)
-              throw new Error(`Model turn failed: ${failed.errorMessage ?? failed.stopReason}`)
-            if (!replies.length) throw new Error('Model turn produced no assistant reply')
             const results = turn.filter((m): m is ToolResultMessage => m.role === 'toolResult')
             const usage = zeroUsage()
             for (const reply of replies) {
@@ -256,6 +252,20 @@ export async function start(
               for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const)
                 usage.cost[key] += reply.usage.cost[key]
             }
+            const wallMs = performance.now() - started
+            const measured: TurnUsage = {
+              model,
+              tokens: usage.totalTokens,
+              cost: usage.cost.total,
+              wallMs,
+            }
+            await appendFile(inject('evalUsageFile'), JSON.stringify(measured) + '\n')
+            const failed = replies.find(
+              (m) => m.stopReason === 'error' || m.stopReason === 'aborted',
+            )
+            if (failed)
+              throw new Error(`Model turn failed: ${failed.errorMessage ?? failed.stopReason}`)
+            if (!replies.length) throw new Error('Model turn produced no assistant reply')
             return {
               text: replies
                 .flatMap((m) => m.content.filter((c) => c.type === 'text').map((c) => c.text))
@@ -268,7 +278,7 @@ export async function start(
                   return { ...call, result: result.content, isError: result.isError }
                 }),
               usage,
-              wallMs: performance.now() - started,
+              wallMs,
             }
           },
         }
