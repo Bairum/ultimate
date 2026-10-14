@@ -33,11 +33,17 @@ export type Landed = {
   paths: string[]
   flaky: string[]
 }
+/** A check's result; a passed or flaky one carries its last output line as `summary`. */
+export type LanderCheck = {
+  command: string
+  result: 'passed' | 'failed' | 'flaky'
+  summary?: string
+}
 /** One row of a submission's progress: a step, or a check with its result. */
 export type LanderStep = {
   step: string
   at: number
-  check?: { command: string; result: 'passed' | 'failed' | 'flaky' }
+  check?: LanderCheck
 }
 /** How a submission ended. A push that failed after landing locally is `landed` with a `reason`. */
 export type LanderOutcome = {
@@ -67,7 +73,7 @@ export type LanderEntry = {
   target: string
   at: number
   step?: string
-  check?: { command: string; result: 'passed' | 'failed' | 'flaky' }
+  check?: LanderCheck
 } & Partial<LanderOutcome>
 /** The lander task handing a failure to its model (entry kind `ultimate.lander-ask`); the model reads the prompt. */
 export type LanderAsk = Pick<

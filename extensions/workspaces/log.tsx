@@ -282,6 +282,9 @@ function StepLine({
       >
         {row.check.command}
         {row.check.result !== 'passed' && ` · ${row.check.result}`}
+        {row.check.summary && (
+          <span className="text-muted-foreground/60"> · {row.check.summary}</span>
+        )}
       </Line>
     )
   return (
@@ -309,6 +312,11 @@ const superseded = (row: LanderStep, later: readonly LanderStep[]) => {
   const command = runningStep.exec(row.step)?.[1]
   return command !== undefined && later.some((next) => next.check?.command === command)
 }
+
+/** A group's checks run together: a running check whose later rows all belong to its group still runs. */
+const pending = (row: LanderStep, later: readonly LanderStep[]) =>
+  runningStep.test(row.step) &&
+  later.every((next) => next.check !== undefined || runningStep.test(next.step))
 
 /**
  * A submission's steps behind an "N steps" toggle, ending in a quiet link to the lander conversation's full log.
@@ -353,7 +361,7 @@ function Steps({
       <CollapsibleContent className="pt-1">
         {rows.map((row, index) => (
           <StepLine
-            active={running && index === rows.length - 1}
+            active={running && (index === rows.length - 1 || pending(row, rows.slice(index + 1)))}
             done={index < rows.length - 1 || ended === 'landed'}
             failed={ended === 'failed' && index === rows.length - 1}
             key={index}
@@ -393,7 +401,13 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
   const next = after[0]?.data as LanderEntry | undefined
   const failed = next?.outcome === 'failed'
   const done = next !== undefined && !failed
-  const landing = !next && busy
+  const landing =
+    busy &&
+    (!next ||
+      pending(
+        data as LanderStep,
+        after.map((other) => other.data as LanderStep),
+      ))
   if (data.outcome) {
     const outcome = data as LanderEntry & LanderOutcome
     const landed = data.outcome === 'landed'

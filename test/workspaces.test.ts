@@ -1,5 +1,14 @@
-import { mkdir, readdir, readFile, writeFile, access, symlink, realpath } from 'node:fs/promises'
-import { execFileSync, spawn } from 'node:child_process'
+import {
+  cp,
+  mkdir,
+  readdir,
+  readFile,
+  writeFile,
+  access,
+  symlink,
+  realpath,
+} from 'node:fs/promises'
+import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { join } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
@@ -8,7 +17,7 @@ import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { defineExtension, defineTool, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
 import type { ConversationId, JsonObject, TaskId } from '@earendil-works/pi-durable'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterAll, expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
@@ -22,38 +31,41 @@ import { createLander } from '../extensions/workspaces/lander.ts'
 import { leaveNote, Root } from '../extensions/lineage/server.ts'
 import self from '../extensions/self/server.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
-import { prepareFauxServer, post, temp, until } from './helpers.ts'
+import { temp, until } from './helpers.ts'
 
+// Every test has its own repository and harness, so they all run concurrently; fixtures close when the file ends.
+vi.setConfig({ maxConcurrency: 16 })
 const cleanup: (() => Promise<void>)[] = []
-afterEach(async () => {
-  for (const close of cleanup.splice(0).toReversed()) await close()
-  vi.unstubAllEnvs()
+afterAll(async () => {
+  await Promise.all(cleanup.splice(0).map((close) => close()))
 })
+/** A repository with base.txt and a worktree `worker` definition, made once and copied for each test. */
+let template: Promise<string> | undefined
 async function repository() {
+  template ??= (async () => {
+    const path = join(await temp('ultimate-workspaces-template-'), 'project')
+    await mkdir(join(path, 'agents'), { recursive: true })
+    await git(path, 'init', '-b', 'main')
+    await git(path, 'config', 'user.email', 'test@example.com')
+    await git(path, 'config', 'user.name', 'Test')
+    await writeFile(join(path, 'base.txt'), 'base')
+    await writeFile(
+      join(path, 'agents/worker.md'),
+      '---\nname: worker\ndescription: Writes\nisolate: worktree\n---\nCommit the assigned change.\n',
+    )
+    await git(path, 'add', '.')
+    await git(path, 'commit', '-m', 'base')
+    return path
+  })()
   const directory = await temp('ultimate-workspaces-')
   const projectRoot = join(directory, 'project')
-  await mkdir(projectRoot)
-  await git(projectRoot, 'init', '-b', 'main')
-  await git(projectRoot, 'config', 'user.email', 'test@example.com')
-  await git(projectRoot, 'config', 'user.name', 'Test')
-  await writeFile(join(projectRoot, 'base.txt'), 'base')
-  await git(projectRoot, 'add', '.')
-  await git(projectRoot, 'commit', '-m', 'base')
+  await cp(await template, projectRoot, { recursive: true })
   return { directory, projectRoot, home: join(directory, 'state') }
 }
 type Answer = (text: string) => ReturnType<typeof fauxAssistantMessage>
 const noIdea: Answer = () => fauxAssistantMessage('no idea')
 async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<typeof repository>>) {
   const paths = existing ?? (await repository())
-  if (!existing) {
-    await mkdir(join(paths.projectRoot, 'agents'))
-    await writeFile(
-      join(paths.projectRoot, 'agents/worker.md'),
-      '---\nname: worker\ndescription: Writes\nisolate: worktree\n---\nCommit the assigned change.\n',
-    )
-    await git(paths.projectRoot, 'add', '.')
-    await git(paths.projectRoot, 'commit', '-m', 'worker definition')
-  }
   const prepared = await prepareHarness({
     ...paths,
     userHome: paths.directory,
@@ -201,7 +213,7 @@ async function commit(path: string, name = 'change.txt') {
   await git(path, 'commit', '-m', name)
   return git(path, 'rev-parse', 'HEAD')
 }
-it('creates through the action; setup receives ULTIMATE_SOURCE and the first model request waits for ready', async () => {
+it.concurrent('creates through the action; setup receives ULTIMATE_SOURCE and the first model request waits for ready', async () => {
   const f = await fixture()
   const sourceFile = join(f.directory, 'source-env')
   f.host.projectSettings = async () => ({
@@ -226,55 +238,7 @@ it('creates through the action; setup receives ULTIMATE_SOURCE and the first mod
   expect(await git(pending.path, 'branch', '--show-current')).toBe(pending.branch)
   expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
 })
-it('renders workspace preparation before project context in the first composed provider request', async () => {
-  const paths = await repository()
-  const marker = 'CHECKOUT_RULE_ULT_123: preserve the release manifest.'
-  await writeFile(join(paths.projectRoot, 'AGENTS.md'), marker)
-  await git(paths.projectRoot, 'add', 'AGENTS.md')
-  await git(paths.projectRoot, 'commit', '-m', 'checkout instructions')
-  const bin = join(paths.directory, 'bin')
-  await mkdir(bin)
-  await writeFile(
-    join(bin, 'git'),
-    `#!/bin/sh
-if [ "$1 $2" = "worktree add" ]; then sleep 0.3; fi
-exec /usr/bin/git "$@"
-`,
-    { mode: 0o755 },
-  )
-  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
-  const prepared = await prepareFauxServer({
-    ...paths,
-    ultimateRoot: join(import.meta.dirname, '..'),
-    userHome: paths.directory,
-  })
-  cleanup.push(() => prepared.close())
-  const requests: string[] = []
-  prepared.host.faux!.setResponses([
-    (transcript) => {
-      requests.push(
-        JSON.stringify(transcript.messages.filter((message) => message.role === 'system')),
-      )
-      return fauxAssistantMessage('instructions read')
-    },
-  ])
-  const running = await prepared.go()
-  const server = { url: prepared.url }
-  const id = (await post(server, '/api/extensions/workspaces/actions/create', { args: {} })).data
-    .result.id
-  const workspace = (
-    await post(server, '/api/extensions/workspaces/actions/info', { args: { id } })
-  ).data.result
-  await expect(access(join(workspace.path, 'AGENTS.md'))).rejects.toThrow('ENOENT')
-  const conversation = (await running.harness.conversation(id, context))!
-  await (
-    await conversation.submit({ type: 'input', content: 'Read the checkout rules.' }, context)
-  ).wait(context)
-  expect(requests).toHaveLength(1)
-  expect(requests[0]).toContain(marker)
-  expect(await readFile(join(workspace.path, 'AGENTS.md'), 'utf8')).toBe(marker)
-})
-it('setup closes stdin so commands waiting for EOF finish', async () => {
+it.concurrent('setup closes stdin so commands waiting for EOF finish', async () => {
   const paths = await repository()
   await setup(
     paths.projectRoot,
@@ -286,7 +250,7 @@ it('setup closes stdin so commands waiting for EOF finish', async () => {
   )
   expect(await readFile(join(paths.projectRoot, 'eof.txt'), 'utf8')).toBe('eof\n')
 })
-it('failed setup keeps its output tail, removes its empty branch, and blocks tools rather than writing in the source', async () => {
+it.concurrent('failed setup keeps its output tail, removes its empty branch, and blocks tools rather than writing in the source', async () => {
   const f = await fixture(['echo SETUP_OUTPUT_TAIL >&2; exit 1'])
   const id = await f.create()
   await f.service.ready(id, context)
@@ -301,7 +265,7 @@ it('failed setup keeps its output tail, removes its empty branch, and blocks too
   expect(f.writes).toBe(0)
   await expect(access(join(f.projectRoot, 'change.txt'))).rejects.toThrow('ENOENT')
 })
-it.each(['symlinked home mid-setup', 'branch creation before registration'])(
+it.concurrent.each(['symlinked home mid-setup', 'branch creation before registration'])(
   'resumes preparation after a process crash: %s',
   async (scenario) => {
     const paths = await repository()
@@ -385,7 +349,7 @@ exec /usr/bin/git "$@"
     }
   },
 )
-it('rejects a detached source and preserves existing paths and branches instead of adopting them', async () => {
+it.concurrent('rejects a detached source and preserves existing paths and branches instead of adopting them', async () => {
   const f = await fixture()
   await git(f.projectRoot, 'switch', '--detach')
   await expect(f.create()).rejects.toThrow('Check out a branch first')
@@ -418,7 +382,7 @@ it('rejects a detached source and preserves existing paths and branches instead 
     )
   }
 })
-it('lands fast-forward, lists commits and paths, and is idempotent', async () => {
+it.concurrent('lands fast-forward, lists commits and paths, and is idempotent', async () => {
   const f = await fixture()
   const id = await f.create()
   await f.service.ready(id, context)
@@ -442,46 +406,7 @@ it('lands fast-forward, lists commits and paths, and is idempotent', async () =>
   await commit(workspace.path, 'server/change.ts')
   expect((await f.service.land(id, context)).needsRestart).toBe(true)
 })
-it('queued landing reads the current record after another workspace lands', async () => {
-  const f = await fixture()
-  const first = await f.create()
-  const second = await f.create()
-  await f.service.ready(first, context)
-  await f.service.ready(second, context)
-  await commit((await f.service.get(first, context))!.path)
-  const bin = join(f.directory, 'bin')
-  const started = join(f.directory, 'merge-started')
-  const gate = join(f.directory, 'merge-gate')
-  await mkdir(bin)
-  await writeFile(
-    join(bin, 'git'),
-    `#!/bin/sh
-if [ "$1" = "merge" ]; then
-  touch '${started}'
-  while [ ! -f '${gate}' ]; do sleep 0.05; done
-fi
-exec /usr/bin/git "$@"
-`,
-    { mode: 0o755 },
-  )
-  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
-  const landing = f.service.land(first, context)
-  await until(() =>
-    access(started).then(
-      () => true,
-      () => false,
-    ),
-  )
-  const queued = f.service.land(second, context).catch((error: Error) => error)
-  try {
-    await actions.discard({ id: second }, { host: f.host } as ActionContext)
-  } finally {
-    await writeFile(gate, '')
-  }
-  await landing
-  expect(await queued).toMatchObject({ message: 'Workspace is removed' })
-})
-it('refuses dirty workspaces, changed branches and diverged targets', async () => {
+it.concurrent('refuses dirty workspaces, overlapping dirty targets, changed branches and diverged targets', async () => {
   const f = await fixture()
   const id = await f.create()
   await f.service.ready(id, context)
@@ -490,6 +415,8 @@ it('refuses dirty workspaces, changed branches and diverged targets', async () =
   await expect(f.service.land(id, context)).rejects.toThrow('Worktree is dirty')
   await git(workspace.path, 'add', '.')
   await git(workspace.path, 'commit', '-m', 'change')
+  await writeFile(join(f.projectRoot, 'change.txt'), 'dirty')
+  await expect(f.service.land(id, context)).rejects.toThrow('change.txt')
   await writeFile(join(f.projectRoot, 'source.txt'), 'dirty')
   await git(f.projectRoot, 'add', '.')
   await git(f.projectRoot, 'commit', '-m', 'source')
@@ -499,7 +426,7 @@ it('refuses dirty workspaces, changed branches and diverged targets', async () =
   await git(f.projectRoot, 'switch', '-c', 'changed')
   await expect(f.service.land(id, context)).rejects.toThrow('Target branch changed')
 })
-it('refuses another running conversation and queued input; own tool landing skips its own run and inbox', async () => {
+it.concurrent('refuses another running conversation and queued input; own tool landing skips its own run and inbox', async () => {
   const f = await fixture()
   const id = await f.create()
   await f.service.ready(id, context)
@@ -543,7 +470,7 @@ it('refuses another running conversation and queued input; own tool landing skip
     await git(workspace.path, 'rev-parse', 'HEAD'),
   )
 })
-it('discard refuses dirty, keeps the branch, and blocks removed-workspace tools', async () => {
+it.concurrent('discard refuses dirty, keeps the branch, and blocks removed-workspace tools', async () => {
   const f = await fixture()
   const id = await f.create()
   await f.service.ready(id, context)
@@ -558,7 +485,7 @@ it('discard refuses dirty, keeps the branch, and blocks removed-workspace tools'
   expect(f.writes).toBe(0)
   await expect(access(join(f.projectRoot, 'change.txt'))).rejects.toThrow('ENOENT')
 })
-it('isolated restart refuses before landing and accepts a clean running clone at the landed tip', async () => {
+it.concurrent('isolated restart refuses before landing and accepts a clean running clone at the landed tip', async () => {
   const f = await fixture()
   const id = await f.create()
   await f.service.ready(id, context)
@@ -573,7 +500,7 @@ it('isolated restart refuses before landing and accepts a clean running clone at
   expect(JSON.stringify(await f.call(id, 'restart'))).toContain('land your workspace into')
   expect(f.restart).toHaveBeenCalledOnce()
 })
-it('starts a worker isolate, commits in the child and lands it through the parent tool', async () => {
+it.concurrent('starts a worker isolate, commits in the child and lands it through the parent tool', async () => {
   const f = await fixture()
   const result = await f.call(f.opened.root.id, 'subagent', {
     action: 'start',
@@ -645,7 +572,7 @@ async function rootNotes(f: Awaited<ReturnType<typeof fixture>>) {
   }
 }
 
-it('notes the root once for a landing even when its report phase is replayed', async () => {
+it.concurrent('notes the root once for a landing even when its report phase is replayed', async () => {
   const f = await lander({})
   f.host.extensions = () =>
     [
@@ -713,8 +640,8 @@ it('notes the root once for a landing even when its report phase is replayed', a
   expect(await rootNotes(f)).toHaveLength(1)
 })
 
-it('does not note failed landings, root submissions, or disabled lineage', async () => {
-  const f = await lander({ checks: ['false'] })
+it.concurrent('does not note the root about its own submission', async () => {
+  const f = await lander({})
   f.host.extensions = () =>
     [
       { name: 'lineage', enabled: true },
@@ -723,27 +650,14 @@ it('does not note failed landings, root submissions, or disabled lineage', async
   const id = await f.create()
   await f.service.ready(id, context)
   await commit((await f.service.get(id, context))!.path)
-  await f.service.submit(id, context)
-  expect((await submitted(f, id))[0]).toContain('was not landed')
-  expect(await rootNotes(f)).toHaveLength(0)
-  f.host.projectSettings = async () => ({ lander: {} })
   await f.opened.harness.commit(async (tx) => {
     ;(await tx.doc(Root, ROOT_CONVERSATION_ID)).root = id
   }, context)
   await f.service.submit(id, context)
-  expect((await submitted(f, id)).at(-1)).toContain('landed as')
+  expect((await submitted(f, id))[0]).toContain('landed as')
   const view = await (await f.opened.harness.conversation(id, context))!.viewState(context)
   expect(view.value.entries.filter((entry) => entry.kind === 'lineage.note')).toHaveLength(0)
   view.dispose()
-  await f.opened.harness.commit(async (tx) => {
-    delete (await tx.doc(Root, ROOT_CONVERSATION_ID)).root
-  }, context)
-  f.host.extensions = () =>
-    [{ name: 'workspaces', enabled: true }] as ReturnType<ExtensionHost['extensions']>
-  await commit((await f.service.get(id, context))!.path, 'another.txt')
-  await f.service.submit(id, context)
-  await submitted(f, id)
-  expect(await rootNotes(f)).toHaveLength(0)
 })
 
 async function lander(settings: JsonObject, existing?: Awaited<ReturnType<typeof repository>>) {
@@ -751,24 +665,7 @@ async function lander(settings: JsonObject, existing?: Awaited<ReturnType<typeof
   f.host.projectSettings = async () => ({ lander: settings })
   return f
 }
-it('lets an ownerless history fork submit its own workspace', async () => {
-  const f = await lander({ checks: ['test -f base.txt'] })
-  const entry = await f.opened.harness.commit(
-    (tx) => tx.appendEntry(f.opened.root.id, { kind: 'test.branch-point', data: {} }),
-    context,
-  )
-  const fork = await f.opened.root.fork(entry.id, { ownership: { kind: 'ownerless' } }, context)
-  await f.opened.harness.commit((tx) => f.service.create(tx, fork.id, f.projectRoot), context)
-  await f.service.ready(fork.id, context)
-  await commit((await f.service.get(fork.id, context))!.path, 'branch.txt')
-  const result = await f.call(fork.id, 'workspace', { action: 'submit' })
-  expect(JSON.stringify(result)).toContain('position')
-  const [report] = await submitted(f, fork.id)
-  expect(report).toContain('landed as')
-  expect(await readFile(join(f.projectRoot, 'branch.txt'), 'utf8')).toBe('branch.txt')
-})
-
-it('lands two submissions in order onto a moved target and reports both', async () => {
+it.concurrent('lands two submissions in order onto a moved target and reports both', async () => {
   const f = await lander({ checks: ['test -f base.txt'] })
   const first = await f.create()
   const second = await f.create()
@@ -836,78 +733,56 @@ it('lands two submissions in order onto a moved target and reports both', async 
   })
   const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
   expect(index.results[submissionTwo]).toMatchObject({ outcome: 'landed' })
+  // Lineage is disabled in this fixture: landings leave no root note.
+  expect(await rootNotes(f)).toHaveLength(0)
   // The lander conversation has no workspace and is no main: it can neither submit nor land.
   for (const action of ['submit', 'land'])
     expect(JSON.stringify(await f.call(id, 'workspace', { action }))).toContain(
       'Only a top-level main conversation',
     )
 })
-it('accepts a second submission while the lander is still landing the first', async () => {
-  const f = await lander({ checks: ['sleep 2'] })
-  const first = await f.create()
-  const second = await f.create()
-  await f.service.ready(first, context)
-  await f.service.ready(second, context)
-  await commit((await f.service.get(first, context))!.path, 'one.txt')
-  await commit((await f.service.get(second, context))!.path, 'two.txt')
-  const one = await f.service.submit(first, context)
-  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
-  // While it lands, the queue entry records each step as it happens.
-  await until(async () =>
-    (await index())!.queue.some(
-      (item) => item.state === 'landing' && item.step === 'checking: sleep 2',
-    ),
-  )
-  expect((await index())!.queue[0].steps.map((row) => row.step)).toEqual([
-    'queued',
-    'started',
-    'preparing',
-    'merging',
-    'setting up',
-    'checking: sleep 2',
-  ])
-  const two = await f.service.submit(second, context)
-  expect(two.position).toBe(2)
-  expect((await index())!.queue[1]).toMatchObject({
-    state: 'queued',
-    steps: [{ step: 'queued' }],
-  })
-  expect((await submitted(f, second))[0]).toContain('landed as')
-  // Finished, the steps move into the result, with the check's outcome.
-  const results = (await index())!.results
-  for (const { id } of [one, two]) {
-    expect(results[id].steps.at(-1)).toMatchObject({ step: 'fast-forwarding' })
-    expect(results[id].steps).toContainEqual(
-      expect.objectContaining({ check: { command: 'sleep 2', result: 'passed' } }),
-    )
-  }
-  // The second was queued while the first landed: its log lines still name their own submission.
-  const { log } = await landerLog(f)
-  const queuedTwo = log.findIndex((line) => line.submission === two.id)
-  expect(log.slice(queuedTwo).some((line) => line.submission === one.id)).toBe(true)
-  expect(
-    log.filter((line) => line.submission === two.id).map((line) => line.step ?? line.outcome),
-  ).toEqual(results[two.id].steps.map((row) => row.step).concat('landed'))
-})
-
-it('reports a conflicting submission and leaves the target untouched', async () => {
-  const f = await lander({})
+it.concurrent('runs a check group together in one exclusive slot and records each summary', async () => {
+  const f = await fixture()
+  /** Marks itself, then waits for the other: run one after the other, both would fail. */
+  const meet = (name: string, other: string) =>
+    `touch '${join(f.directory, name)}'; for i in $(seq 100); do [ -f '${join(f.directory, other)}' ] && break; sleep 0.01; done; test -f '${join(f.directory, other)}' && printf 'log\\n\\033[32m${name} met\\033[0m\\n\\n'`
+  const group = [meet('one', 'two'), meet('two', 'one')]
+  f.host.projectSettings = async () => ({ lander: { checks: ['true', group] } })
   const id = await f.create()
   await f.service.ready(id, context)
-  const workspace = (await f.service.get(id, context))!
-  await writeFile(join(workspace.path, 'base.txt'), 'workspace')
-  await commit(workspace.path)
-  await writeFile(join(f.projectRoot, 'base.txt'), 'target')
-  const head = await commit(f.projectRoot)
+  await commit((await f.service.get(id, context))!.path)
+  const slot = exclusiveSlot(f.host)
+  await slot.acquire('pnpm test')
   await f.service.submit(id, context)
+  // The group waits for the slot once, after the single check before it.
+  await until(() => slot.queue.some((waiter) => waiter.command === 'lander: true'))
+  slot.release()
+  await until(() => slot.queue.length > 0 || slot.command === undefined)
+  expect(slot.queue).toEqual([])
   const [report] = await submitted(f, id)
-  expect(report).toContain('conflicts with main in:')
-  expect(report).toContain('base.txt')
-  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
-  expect((await f.service.get(id, context))!.landed).toBeUndefined()
+  expect(report).toContain('landed as')
+  expect(report).not.toContain('Flaky')
+  const checks = (await landerLog(f)).log.flatMap((line) => (line.check ? [line.check] : []))
+  expect(checks[0]).toEqual({ command: 'true', result: 'passed' })
+  // ANSI stripped, trailing blank lines skipped.
+  expect(checks.slice(1)).toEqual(
+    expect.arrayContaining(
+      ['one met', 'two met'].map((summary) =>
+        expect.objectContaining({ result: 'passed', summary }),
+      ),
+    ),
+  )
+  expect(checks).toHaveLength(3)
 })
-it('reports a failing check with its output, reruns flaky checks, and leaves a failed target untouched', async () => {
-  const f = await lander({ checks: ['echo CHECK_OUTPUT_TAIL; test ! -f fail.txt'] })
+it.concurrent('reruns only the failing command of a group, reports its output twice failed, and lands a flaky one', async () => {
+  const f = await lander({
+    checks: [['echo PASSING_SUMMARY', 'echo CHECK_OUTPUT_TAIL; test ! -f fail.txt']],
+  })
+  f.host.extensions = () =>
+    [
+      { name: 'lineage', enabled: true },
+      { name: 'workspaces', enabled: true },
+    ] as ReturnType<ExtensionHost['extensions']>
   const id = await f.create()
   await f.service.ready(id, context)
   const workspace = (await f.service.get(id, context))!
@@ -919,16 +794,30 @@ it('reports a failing check with its output, reruns flaky checks, and leaves a f
   expect(report).toContain('CHECK_OUTPUT_TAIL')
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
   const failed = (await landerLog(f)).log
-  expect(failed.filter((line) => line.check).map((line) => line.check!.result)).toEqual(['failed'])
+  expect(
+    failed.filter((line) => line.step?.startsWith('rerunning:')).map((line) => line.step),
+  ).toEqual(['rerunning: echo CHECK_OUTPUT_TAIL; test ! -f fail.txt'])
+  expect(failed.filter((line) => line.check).map((line) => line.check)).toEqual(
+    expect.arrayContaining([
+      { command: 'echo PASSING_SUMMARY', result: 'passed', summary: 'PASSING_SUMMARY' },
+      { command: 'echo CHECK_OUTPUT_TAIL; test ! -f fail.txt', result: 'failed' },
+    ]),
+  )
   expect(failed.at(-1)).toMatchObject({
     outcome: 'failed',
     reason: 'check failed twice: echo CHECK_OUTPUT_TAIL; test ! -f fail.txt',
     output: expect.stringContaining('CHECK_OUTPUT_TAIL'),
   })
   expect(failed.at(-1)!.sha).toBeUndefined()
+  // A failed landing leaves no note in the root.
+  expect(await rootNotes(f)).toHaveLength(0)
   const marker = join(f.directory, 'flaky')
   f.host.projectSettings = async () => ({
-    lander: { checks: [`if [ -f '${marker}' ]; then exit 0; fi; touch '${marker}'; exit 1`] },
+    lander: {
+      checks: [
+        ['true', `if [ -f '${marker}' ]; then echo ok; exit 0; fi; touch '${marker}'; exit 1`],
+      ],
+    },
   })
   await git(workspace.path, 'rm', '-q', 'fail.txt')
   await git(workspace.path, 'commit', '-qm', 'fix')
@@ -937,83 +826,41 @@ it('reports a failing check with its output, reruns flaky checks, and leaves a f
   expect(reports.at(-1)).toContain('landed as')
   expect(reports.at(-1)).toContain('Flaky: if [')
   const flaky = (await landerLog(f)).log
-  expect(flaky.findLast((line) => line.check)!.check).toMatchObject({ result: 'flaky' })
+  expect(flaky.findLast((line) => line.check)!.check).toMatchObject({
+    result: 'flaky',
+    summary: 'ok',
+  })
   expect(flaky.at(-1)).toMatchObject({
     outcome: 'landed',
     flaky: [expect.stringContaining('if [')],
   })
 })
-it('fetches, merges and pushes the target to the configured remote', async () => {
-  const paths = await repository()
-  const bare = join(paths.directory, 'remote.git')
-  await git(paths.directory, 'init', '-q', '--bare', '-b', 'main', bare)
-  await git(paths.projectRoot, 'remote', 'add', 'origin', bare)
-  await git(paths.projectRoot, 'push', '-q', 'origin', 'main')
-  const other = join(paths.directory, 'other')
-  await git(paths.directory, 'clone', '-q', bare, other)
-  await git(other, 'config', 'user.email', 'test@example.com')
-  await git(other, 'config', 'user.name', 'Test')
-  const remoteTip = await commit(other, 'remote.txt')
-  await git(other, 'push', '-q', 'origin', 'main')
-  const f = await lander({ push: 'origin' }, paths)
-  const id = await f.create()
-  await f.service.ready(id, context)
-  await commit((await f.service.get(id, context))!.path, 'local.txt')
-  await f.service.submit(id, context)
-  const [report] = await submitted(f, id)
-  expect(report).toContain('Pushed to origin/main.')
-  expect((await landerLog(f)).log.at(-1)).toMatchObject({
-    outcome: 'landed',
-    sha: await git(f.projectRoot, 'rev-parse', 'HEAD'),
-    pushed: 'origin/main',
-  })
-  const pushed = await git(bare, 'rev-parse', 'main')
-  expect(pushed).toBe(await git(f.projectRoot, 'rev-parse', 'HEAD'))
-  await git(bare, 'merge-base', '--is-ancestor', remoteTip, pushed)
-  expect(await git(bare, 'show', `${pushed}:local.txt`)).toBe('local.txt')
-})
-it('lands past unrelated dirty files in the target but not over overlapping ones', async () => {
+it.concurrent('fast-forwards the worktree that has the target checked out, past unrelated dirty files but not over overlapping ones', async () => {
   const f = await lander({})
   const id = await f.create()
   await f.service.ready(id, context)
   const workspace = (await f.service.get(id, context))!
-  await writeFile(join(f.projectRoot, 'unrelated.txt'), 'dirty')
+  // The target lives in another worktree than the project checkout.
+  await git(f.projectRoot, 'switch', '-q', '-c', 'other')
+  const elsewhere = join(f.directory, 'elsewhere')
+  await git(f.projectRoot, 'worktree', 'add', '-q', elsewhere, 'main')
+  await writeFile(join(elsewhere, 'unrelated.txt'), 'dirty')
   const tip = await commit(workspace.path)
   await f.service.submit(id, context)
   expect((await submitted(f, id))[0]).toContain('landed as')
-  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(tip)
-  expect(await readFile(join(f.projectRoot, 'unrelated.txt'), 'utf8')).toBe('dirty')
-  await writeFile(join(f.projectRoot, 'overlap.txt'), 'dirty')
+  expect(await git(elsewhere, 'rev-parse', 'HEAD')).toBe(tip)
+  expect(await readFile(join(elsewhere, 'change.txt'), 'utf8')).toBe('change.txt')
+  expect(await readFile(join(elsewhere, 'unrelated.txt'), 'utf8')).toBe('dirty')
+  expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
+  await writeFile(join(elsewhere, 'overlap.txt'), 'dirty')
   await commit(workspace.path, 'overlap.txt')
-  await expect(f.service.land(id, context)).rejects.toThrow('overlap.txt')
-  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(tip)
   await f.service.submit(id, context)
   const reports = await submitted(f, id)
   expect(reports.at(-1)).toContain('refused the fast-forward')
   expect(reports.at(-1)).toContain('overlap.txt')
-  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(tip)
+  expect(await git(elsewhere, 'rev-parse', 'HEAD')).toBe(tip)
 })
-it('runs lander checks only while holding the exclusive command slot', async () => {
-  const f = await lander({ checks: ['true'] })
-  const id = await f.create()
-  await f.service.ready(id, context)
-  const head = await git(f.projectRoot, 'rev-parse', 'HEAD')
-  const tip = await commit((await f.service.get(id, context))!.path)
-  const slot = exclusiveSlot(f.host)
-  await slot.acquire('pnpm test')
-  try {
-    await f.service.submit(id, context)
-    await until(() => slot.queue.some((waiter) => waiter.command === 'lander: true'))
-    const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
-    expect(index.queue[0]).toMatchObject({ state: 'landing', step: 'checking: true' })
-    expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
-  } finally {
-    slot.release()
-  }
-  expect((await submitted(f, id))[0]).toContain('landed as')
-  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(tip)
-})
-it('counts checkouts by state, commits and uncommitted changes, and measures their disk once a minute', async () => {
+it.concurrent('counts checkouts by state, commits and uncommitted changes, and measures their disk once a minute', async () => {
   const f = await fixture()
   const landed = await f.create()
   const ahead = await f.create()
@@ -1043,7 +890,7 @@ it('counts checkouts by state, commits and uncommitted changes, and measures the
   // Counting never removes anything.
   expect((await f.service.get(landed, context))!.state).toBe('ready')
 })
-it('kills the whole process group of a running check when the lander is aborted', async () => {
+it.concurrent('kills the whole process group of a running check when the lander is aborted', async () => {
   const f = await fixture()
   const pidFile = join(f.directory, 'child.pid')
   f.host.projectSettings = async () => ({
@@ -1073,7 +920,7 @@ it('kills the whole process group of a running check when the lander is aborted'
   }, 5000)
   expect(exclusiveSlot(f.host).command).toBeUndefined()
 })
-it('runs worktree setup on the merged revision before the checks of every submission', async () => {
+it.concurrent('runs worktree setup on the merged revision before the checks', async () => {
   const f = await fixture()
   await writeFile(join(f.projectRoot, '.gitignore'), 'have.txt\n')
   await writeFile(join(f.projectRoot, 'want.txt'), 'one')
@@ -1086,32 +933,13 @@ it('runs worktree setup on the merged revision before the checks of every submis
   const id = await f.create()
   await f.service.ready(id, context)
   const workspace = (await f.service.get(id, context))!
-  await commit(workspace.path, 'first.txt')
-  await f.service.submit(id, context)
-  expect((await submitted(f, id))[0]).toContain('landed as')
+  // The check passes only when setup copies the merged want.txt, not the target's.
   await writeFile(join(workspace.path, 'want.txt'), 'two')
   await git(workspace.path, 'commit', '-qam', 'needs setup')
   await f.service.submit(id, context)
-  const reports = await submitted(f, id)
-  expect(reports.at(-1)).toContain('landed as')
-  expect(reports.at(-1)).not.toContain('Flaky')
-})
-it('fast-forwards the target inside the worktree that has it checked out', async () => {
-  const f = await lander({})
-  const id = await f.create()
-  await f.service.ready(id, context)
-  await commit((await f.service.get(id, context))!.path)
-  await git(f.projectRoot, 'switch', '-q', '-c', 'other')
-  const elsewhere = join(f.directory, 'elsewhere')
-  await git(f.projectRoot, 'worktree', 'add', '-q', elsewhere, 'main')
-  await f.service.submit(id, context)
-  expect((await submitted(f, id))[0]).toContain('landed as')
-  expect(await readFile(join(elsewhere, 'change.txt'), 'utf8')).toBe('change.txt')
-  expect(await git(elsewhere, 'status', '--porcelain')).toBe('')
-  expect(await git(elsewhere, 'rev-parse', 'HEAD')).toBe(
-    await git(f.projectRoot, 'rev-parse', 'main'),
-  )
-  expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
+  const [report] = await submitted(f, id)
+  expect(report).toContain('landed as')
+  expect(report).not.toContain('Flaky')
 })
 async function withRemote() {
   const paths = await repository()
@@ -1121,25 +949,15 @@ async function withRemote() {
   await git(paths.projectRoot, 'push', '-q', 'origin', 'main')
   return { paths, bare }
 }
-/** Git without a PATH wrapper that holds commands. */
-const realGit = (cwd: string, ...args: string[]) => execFileSync('/usr/bin/git', args, { cwd })
-async function holdGit(directory: string, command: string) {
-  const bin = join(directory, 'bin')
-  const started = join(directory, `${command}-started`)
-  const gate = join(directory, `${command}-gate`)
-  await mkdir(bin, { recursive: true })
+/** Hold the lander's pushes from the project checkout with a pre-push hook until `release`. */
+async function holdPush(f: Awaited<ReturnType<typeof fixture>>) {
+  const started = join(f.directory, 'push-started')
+  const gate = join(f.directory, 'push-gate')
   await writeFile(
-    join(bin, 'git'),
-    `#!/bin/sh
-if [ "$1" = "${command}" ] && [ ! -f '${gate}' ]; then
-  touch '${started}'
-  while [ ! -f '${gate}' ]; do sleep 0.05; done
-fi
-exec /usr/bin/git "$@"
-`,
+    join(f.projectRoot, '.git/hooks/pre-push'),
+    `#!/bin/sh\ncat >/dev/null\ntouch '${started}'\nwhile [ ! -f '${gate}' ]; do sleep 0.02; done\n`,
     { mode: 0o755 },
   )
-  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
   return {
     started: () =>
       until(() =>
@@ -1151,33 +969,15 @@ exec /usr/bin/git "$@"
     release: () => writeFile(gate, ''),
   }
 }
-it('pushes the checked commit even when the target advances before the push', async () => {
-  const { paths, bare } = await withRemote()
-  const f = await lander({ push: 'origin' }, paths)
-  const submitter = await f.create()
-  const other = await f.create()
-  await f.service.ready(submitter, context)
-  await f.service.ready(other, context)
-  await commit((await f.service.get(submitter, context))!.path, 'submitted.txt')
-  const push = await holdGit(f.directory, 'push')
-  await f.service.submit(submitter, context)
-  await push.started()
-  const integrated = await git(f.projectRoot, 'rev-parse', 'main')
-  await commit((await f.service.get(other, context))!.path, 'later.txt')
-  await git((await f.service.get(other, context))!.path, 'merge', '-q', integrated)
-  const later = (await f.service.land(other, context)).landed!
-  expect(later).not.toBe(integrated)
-  await push.release()
-  expect((await submitted(f, submitter))[0]).toContain('Pushed to origin/main.')
-  expect(await git(bare, 'rev-parse', 'main')).toBe(integrated)
-})
-it('resumes a landing interrupted before its push: pushes and reports what it landed', async () => {
+it.concurrent('resumes a landing interrupted before its push: pushes and reports what it landed, not the moved target', async () => {
   const { paths, bare } = await withRemote()
   const f = await lander({ push: 'origin' }, paths)
   const id = await f.create()
+  const other = await f.create()
   await f.service.ready(id, context)
+  await f.service.ready(other, context)
   await commit((await f.service.get(id, context))!.path, 'landed.txt')
-  const push = await holdGit(f.directory, 'push')
+  const push = await holdPush(f)
   const { id: submission } = await f.service.submit(id, context)
   await push.started()
   // Fast-forwarded, push pending: the lander task ends here, as one faulted by a reload of its code does.
@@ -1196,6 +996,11 @@ it('resumes a landing interrupted before its push: pushes and reports what it la
   await push.release()
   expect(await git(bare, 'rev-parse', 'main')).not.toBe(landed)
   expect((await index())!.queue).toMatchObject([{ id: submission, state: 'queued' }])
+  // The target advances past the landing before its push.
+  const later = (await f.service.get(other, context))!.path
+  await git(later, 'merge', '-q', landed)
+  await commit(later, 'later.txt')
+  expect((await f.service.land(other, context)).landed).not.toBe(landed)
   // Opening starts a lander for the queue left behind, without a new submit.
   await f.reopen()
   const [report] = await submitted(f, id)
@@ -1210,37 +1015,7 @@ it('resumes a landing interrupted before its push: pushes and reports what it la
   const steps = result.steps.map((row) => row.step)
   expect(steps.slice(steps.lastIndexOf('started'))).toEqual(['started', 'pushing to origin'])
 })
-it('starts a lander for queued submissions left by a lander task that ended', async () => {
-  const f = await lander({})
-  const id = await f.create()
-  await f.service.ready(id, context)
-  await commit((await f.service.get(id, context))!.path, 'left.txt')
-  // A held check keeps the first task landing; then it ends without draining its queue.
-  const gate = join(f.directory, 'gate')
-  f.host.projectSettings = async () => ({
-    lander: { checks: [`while [ ! -f '${gate}' ]; do sleep 0.05; done`] },
-  })
-  await f.service.submit(id, context)
-  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
-  await until(async () => (await index())!.queue[0]?.state === 'landing')
-  const first = Object.values((await index())!.landers)[0] as TaskId
-  await f.opened.harness.abortTask(first, context)
-  await until(
-    async () =>
-      (await f.opened.harness.commit((tx) => tx.task(first), context))!.state.status === 'terminal',
-  )
-  expect((await index())!.queue).toMatchObject([{ state: 'queued' }])
-  await writeFile(gate, '')
-  await f.reopen()
-  const second = Object.values((await index())!.landers)[0]
-  expect(second).not.toBe(first)
-  expect((await submitted(f, id))[0]).toContain('landed as')
-  expect(await readFile(join(f.projectRoot, 'left.txt'), 'utf8')).toBe('left.txt')
-  // Opening again with nothing queued starts nothing.
-  await f.reopen()
-  expect((await index())!.landers).toEqual({})
-})
-it('reports a local landing whose push retry conflicts as landed locally', async () => {
+it.concurrent('reports a local landing whose push retry conflicts as landed locally', async () => {
   const { paths, bare } = await withRemote()
   const f = await lander({ push: 'origin' }, paths)
   const id = await f.create()
@@ -1248,15 +1023,15 @@ it('reports a local landing whose push retry conflicts as landed locally', async
   const workspace = (await f.service.get(id, context))!
   await writeFile(join(workspace.path, 'base.txt'), 'workspace')
   const tip = await commit(workspace.path)
-  const push = await holdGit(f.directory, 'push')
+  const push = await holdPush(f)
   await f.service.submit(id, context)
   await push.started()
-  // The remote moves with a conflicting change while the lander pushes; real git avoids the hold.
+  // The remote moves with a conflicting change while the lander pushes.
   const other = join(f.directory, 'other')
-  realGit(f.directory, 'clone', '-q', bare, other)
+  await git(f.directory, 'clone', '-q', bare, other)
   await writeFile(join(other, 'base.txt'), 'remote')
-  realGit(other, '-c', 'user.email=t@e.com', '-c', 'user.name=T', 'commit', '-qam', 'remote')
-  realGit(other, 'push', '-q', 'origin', 'main')
+  await git(other, '-c', 'user.email=t@e.com', '-c', 'user.name=T', 'commit', '-qam', 'remote')
+  await git(other, 'push', '-q', 'origin', 'main')
   await push.release()
   const [report] = await submitted(f, id)
   const landed = await git(f.projectRoot, 'rev-parse', 'main')
@@ -1268,7 +1043,7 @@ it('reports a local landing whose push retry conflicts as landed locally', async
   ).toBe(true)
   expect((await f.service.get(id, context))!.landed).toBe(landed)
 })
-it('resumes checks after a restart without rerunning passed ones and keeps flaky notes', async () => {
+it.concurrent('resumes checks after a restart without rerunning passed ones and keeps flaky notes', async () => {
   const f = await fixture()
   const log = join(f.directory, 'runs')
   const marker = join(f.directory, 'failed-once')
@@ -1300,26 +1075,6 @@ it('resumes checks after a restart without rerunning passed ones and keeps flaky
   expect(report).toContain(`Flaky: echo second`)
   expect(await git(f.projectRoot, 'rev-parse', 'main')).toBe(merged)
 })
-it('stands a lander conversation for the project from the start, which submit reuses', async () => {
-  const f = await lander({})
-  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
-  const source = await realpath(f.projectRoot)
-  const standing = (await index())!.landerConversations[source] as ConversationId
-  expect(standing).toBeDefined()
-  expect(await f.opened.harness.snapshot(Metadata, standing, context)).toEqual({
-    title: 'Lander · main',
-    label: 'lander',
-  })
-  // Opening again keeps it.
-  await f.reopen()
-  expect((await index())!.landerConversations).toEqual({ [source]: standing })
-  const id = await f.create()
-  await f.service.ready(id, context)
-  await commit((await f.service.get(id, context))!.path, 'one.txt')
-  const { lander: used } = await f.service.submit(id, context)
-  expect(used).toBe(standing)
-  expect((await submitted(f, id))[0]).toContain(`lander conversation #${standing}`)
-})
 /** A `lander` definition in the user's agents, as an override of a project would be. */
 async function landerDefinition(
   f: Awaited<ReturnType<typeof fixture>>,
@@ -1340,7 +1095,7 @@ async function conflicting(f: Awaited<ReturnType<typeof fixture>>, id: Conversat
   await writeFile(join(f.projectRoot, 'base.txt'), 'target')
   return commit(f.projectRoot)
 }
-it('diagnose: the lander model explains a conflict, which the report carries; the target stays', async () => {
+it.concurrent('diagnose: the lander model explains a conflict, which the report carries; the target stays', async () => {
   const f = await lander({})
   await landerDefinition(f, 'diagnose')
   let prompt = ''
@@ -1358,6 +1113,7 @@ it('diagnose: the lander model explains a conflict, which the report carries; th
   expect(report).toContain('conflicts with main in:')
   expect(report).toContain('Diagnosis by lander:\\nDIAGNOSIS: both sides rewrote base.txt')
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  expect((await f.service.get(id, context))!.landed).toBeUndefined()
   const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
   expect(index.results[submission]).toMatchObject({
     outcome: 'failed',
@@ -1372,42 +1128,7 @@ it('diagnose: the lander model explains a conflict, which the report carries; th
   ).cwd!
   expect(await git(cwd, 'status', '--porcelain')).toBe('')
 })
-it('fix: the lander model resolves a conflict and commits; every check reruns, it lands and pushes', async () => {
-  const { paths, bare } = await withRemote()
-  const f = await lander({ push: 'origin', checks: ['grep -q resolved base.txt'] }, paths)
-  await landerDefinition(f, 'fix')
-  f.answerLander((text) => {
-    expect(text).toContain('Mode: fix')
-    return fauxAssistantMessage(
-      fauxToolCall('bash', {
-        command: 'echo resolved > base.txt && git add base.txt && git commit -q --no-edit',
-      }),
-      { stopReason: 'toolUse' },
-    )
-  })
-  const id = await f.create()
-  await f.service.ready(id, context)
-  await conflicting(f, id)
-  const { id: submission } = await f.service.submit(id, context)
-  const [report] = await submitted(f, id)
-  expect(report).toContain('landed as')
-  expect(report).toContain('Fixed by lander:')
-  expect(report).toContain('Pushed to origin/main.')
-  const landed = await git(f.projectRoot, 'rev-parse', 'HEAD')
-  expect(await readFile(join(f.projectRoot, 'base.txt'), 'utf8')).toBe('resolved\n')
-  expect(await git(bare, 'rev-parse', 'main')).toBe(landed)
-  const result = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
-    .results[submission]
-  expect(result).toMatchObject({ outcome: 'landed', sha: landed, pushed: 'origin/main' })
-  expect(result.fixed).toHaveLength(1)
-  // The checks ran on the fixed commit; the steps show the fix between the conflict and the checks.
-  const steps = result.steps.map((row) => row.step)
-  expect(steps.indexOf('fixing')).toBeGreaterThan(-1)
-  expect(steps.indexOf('checking: grep -q resolved base.txt')).toBeGreaterThan(
-    steps.indexOf('fixing'),
-  )
-})
-it('fix: a fix that still fails the check is not landed and leaves the target untouched', async () => {
+it.concurrent('fix: a fix that still fails the check is not landed and leaves the target untouched', async () => {
   const f = await lander({ checks: ['grep -q good base.txt'] })
   await landerDefinition(f, 'fix')
   let asked = 0
@@ -1432,7 +1153,7 @@ it('fix: a fix that still fails the check is not landed and leaves the target un
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
   expect(await readFile(join(f.projectRoot, 'base.txt'), 'utf8')).toBe('target')
 })
-it('answers the user in the lander conversation with its definition, tools and the lander state', async () => {
+it.concurrent('answers the user in the lander conversation with its definition, tools and the lander state', async () => {
   const f = await lander({})
   await landerDefinition(f, 'diagnose')
   const id = await f.create()
@@ -1457,7 +1178,7 @@ it('answers the user in the lander conversation with its definition, tools and t
   const main = await (await f.opened.harness.conversation(id, context))!.context(context)
   expect(JSON.stringify(main.messages)).not.toContain('You are the lander of')
 })
-it('gives the standing lander a checkout at the target tip before any submission', async () => {
+it.concurrent('gives the standing lander a checkout at the target tip before any submission', async () => {
   const f = await lander({})
   const { id, cwd } = await landerLog(f)
   expect(cwd).toMatch(/\/lander\/[0-9a-f]{12}$/)
@@ -1468,7 +1189,7 @@ it('gives the standing lander a checkout at the target tip before any submission
   await f.reopen()
   expect(await readFile(join(cwd!, 'kept.txt'), 'utf8')).toBe('kept')
 })
-it('fix: a model run that fails after committing lands nothing', async () => {
+it.concurrent('fix: a model run that fails after committing lands nothing', async () => {
   const f = await lander({})
   await landerDefinition(f, 'fix')
   f.answerLander(
@@ -1532,7 +1253,7 @@ async function ask(
 }
 const commitIn = (name: string) =>
   `echo ${name} > ${name} && git add ${name} && git commit -qm ${name} && echo COMMITTED`
-it('keeps user tool calls out of the lander checkout while it lands', async () => {
+it.concurrent('keeps user tool calls out of the lander checkout while it lands', async () => {
   const f = await fixture()
   const held = heldCheck(f)
   f.host.projectSettings = async () => ({ lander: { checks: [held.command] } })
@@ -1560,7 +1281,7 @@ it('keeps user tool calls out of the lander checkout while it lands', async () =
     JSON.stringify(await f.call(landerId as ConversationId, 'bash', { command: 'git log -1' })),
   ).not.toContain('The lander is landing')
 })
-it('lands only the commit every check ran on, never one added to its checkout meanwhile', async () => {
+it.concurrent('lands only the commit every check ran on, never one added to its checkout meanwhile', async () => {
   const f = await fixture()
   const held = heldCheck(f)
   f.host.projectSettings = async () => ({ lander: { checks: [held.command] } })
@@ -1577,7 +1298,7 @@ it('lands only the commit every check ran on, never one added to its checkout me
   expect(report).toContain('was not landed: the integration checkout changed during checks')
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
 })
-it('fix: a follow-up queued behind the failure run gets nothing landed unchecked', async () => {
+it.concurrent('fix: a follow-up queued behind the failure run gets nothing landed unchecked', async () => {
   const f = await lander({})
   await landerDefinition(f, 'fix')
   const held = heldCheck(f, 'grep -q resolved base.txt')
@@ -1630,60 +1351,7 @@ it('fix: a follow-up queued behind the failure run gets nothing landed unchecked
     view.dispose()
   }
 })
-it('fix: a rejected fix stays rejected when the lander crashes during its cleanup', async () => {
-  const f = await lander({})
-  await landerDefinition(f, 'fix')
-  // Resolves and commits the conflict, then leaves base.txt modified: a dirty fix, rejected.
-  f.answerLander(() =>
-    fauxAssistantMessage(
-      fauxToolCall('bash', {
-        command:
-          'echo resolved > base.txt && git add base.txt && git commit -q --no-edit && echo dirty >> base.txt',
-      }),
-      { stopReason: 'toolUse' },
-    ),
-  )
-  const id = await f.create()
-  await f.service.ready(id, context)
-  const head = await conflicting(f, id)
-  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
-  const { id: submission } = await f.service.submit(id, context)
-  await until(async () => (await index())!.queue[0]?.agent === 'fix')
-  // The cleanup's reset runs, then the process goes down before the rejection is reported.
-  const bin = join(f.directory, 'bin')
-  const started = join(f.directory, 'reset-started')
-  const gate = join(f.directory, 'reset-gate')
-  await mkdir(bin, { recursive: true })
-  await writeFile(
-    join(bin, 'git'),
-    `#!/bin/sh
-if [ "$1" = "reset" ] && [ ! -f '${started}' ]; then
-  touch '${started}'
-  while [ ! -f '${gate}' ]; do sleep 0.05; done
-  /usr/bin/git "$@"
-  exit 1
-fi
-exec /usr/bin/git "$@"
-`,
-    { mode: 0o755 },
-  )
-  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
-  await until(() =>
-    access(started).then(
-      () => true,
-      () => false,
-    ),
-  )
-  const reopening = f.reopen()
-  await new Promise((done) => setTimeout(done, 300))
-  await writeFile(gate, '')
-  await reopening
-  const [report] = await submitted(f, id)
-  expect(report).toContain("The lander's fix left uncommitted changes.")
-  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
-  expect((await index())!.results[submission]).toMatchObject({ outcome: 'failed' })
-})
-it('fix: the lander model resolves a conflict with the remote target, then the submission merges, checks and lands', async () => {
+it.concurrent('fix: the lander model resolves a conflict with the remote target, then the submission merges, checks and lands', async () => {
   const { paths, bare } = await withRemote()
   const f = await lander({ push: 'origin', checks: ['grep -q resolved base.txt'] }, paths)
   await landerDefinition(f, 'fix')

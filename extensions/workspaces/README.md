@@ -56,8 +56,11 @@ submitter is that root. Failed submissions leave no root note; notes never wake 
 1. Resets its own detached checkout, `<home>/lander/<hash of source>`, to the target branch tip. `isolates.worktree.setup`
    runs once when the checkout is created. With `lander.push`, it fetches the remote branch and merges it when it is ahead.
 2. Merges the submitted tip. A conflict aborts the merge and reports the conflicting paths.
-3. Runs `lander.checks` in order, each holding the `exclusive-commands` slot so they never overlap an agent's heavy
-   command. A failing check reruns once: passing then is reported as flaky, failing again reports the output tail.
+3. Runs `lander.checks` in order. An entry is a command or an array of commands, a group that runs concurrently;
+   each entry holds the `exclusive-commands` slot once, so it never overlaps an agent's heavy command. A failing check
+   reruns once: passing then is reported as flaky, failing again reports the output tail once every command of its
+   group settled. Each command keeps its own memo, steps and flaky note. A passed or flaky check records its last
+   output line (ANSI stripped, at most 200 characters) as `summary`, shown muted after the command on its step row.
 4. Fast-forwards the target branch in the source checkout (`merge --ff-only` when it is checked out). If the target
    moved meanwhile it starts again, at most three attempts.
 5. With `lander.push`, pushes the target branch (never forced); a rejection integrates again once, then is reported.
@@ -65,7 +68,8 @@ submitter is that root. Failed submissions leave no root note; notes never wake 
    whether it pushed, "Needs restart." for `server/` or `shared/` changes to the running clone, and the lander
    conversation id for the full log (changed paths and output tails live there).
 
-Settings (`.ultimate/settings.json`): `"lander": { "checks": ["pnpm check", "pnpm test:all"], "push": "origin" }`; both are optional.
+Settings (`.ultimate/settings.json`): `"lander": { "checks": ["pnpm check", ["pnpm test", "pnpm test:e2e"]], "push": "origin" }`;
+both are optional.
 
 ### The lander's model
 
