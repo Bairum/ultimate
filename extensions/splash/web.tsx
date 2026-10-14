@@ -309,8 +309,9 @@ function shield(overlay: HTMLElement) {
 /** The ULTIMATE wordmark over the whole window until the page is ready, then the app. */
 function Splash() {
   const { ready, timedOut } = useReady()
-  // Mounted once the page is ready, as on a very warm start or a hot reload: nothing to show.
-  const [gone, setGone] = useState(ready)
+  // Mounted once the page is ready, as on a very warm start or a hot reload, or driven by automation such as the
+  // agent's browser tool: nothing to show.
+  const [gone, setGone] = useState(ready || navigator.webdriver)
   const [still] = useState(() => matchMedia('(prefers-reduced-motion: reduce)').matches)
   const overlay = useRef<HTMLDivElement>(null)
   const show = useRef<Show>(undefined)

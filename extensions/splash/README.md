@@ -19,6 +19,8 @@ app comes up once the page is ready.
   loading (`useReady().pending`) and those that failed (`useReady().failed`), until they load or it is dismissed.
 - **Once per page load**: mounted when the page is already ready (a very warm start, a hot reload), it shows nothing,
   and hot reloads after ready never bring it back.
+- **Automated browsers** (`navigator.webdriver`, as in the agent's `browser` and `screenshot` tools): no show, so the
+  first frame is the app.
 
 ## Input
 
