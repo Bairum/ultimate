@@ -7,6 +7,8 @@ import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import { afterEach, beforeAll, expect, it } from 'vitest'
 import { Branch } from '../extensions/lineage/server.ts'
 import { Plan } from '../extensions/plan/server.ts'
+import { Summaries, summaryBehavior } from '../extensions/conversations/summary.ts'
+import { defineExtension } from '@earendil-works/pi-durable'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import type { HistoryResponse } from '../shared/protocol.ts'
@@ -89,13 +91,40 @@ it('branches with a brief, marks the source, and keeps inherited history reachab
       tasks: {},
     }
   }, context)
+  // Ordinary forks (including subagent history forks) still inherit the ledger.
+  const forkAt = await server.harness.commit(
+    async (tx) => (await tx.appendEntry(server.root.id, { kind: 'test.after-plan', data: {} })).id,
+    context,
+  )
+  const ordinary = await server.root.fork(forkAt, { ownership: { kind: 'ownerless' } }, context)
+  expect(Object.keys((await server.harness.snapshot(Plan, ordinary.id, context))!.epics)).toEqual([
+    'E1',
+  ])
   const { messages: seen } = await server.root.context(context)
   const answer = (await server.root.entries({}, 1, undefined, context)).items[0].id
+  const publications: import('@earendil-works/pi-durable').CommitPublication[] = []
+  const stop = server.harness.subscribeCommits((publication) => publications.push(publication))
   const { status, data } = await post(server, '/api/extensions/lineage/actions/branch', {
     args: { prompt: 'Add notes between conversations' },
   })
   expect(status).toBe(200)
   const id = data.result.id as ConversationId
+  stop()
+  const creation = publications.find((publication) =>
+    publication.changes.some((change) => change.type === 'conversation' && change.value.id === id),
+  )!
+  const initialized = (kind: string) =>
+    creation.changes.find(
+      (change) =>
+        change.type === 'document' && change.conversationId === id && change.record.kind === kind,
+    )
+  expect(initialized(Metadata.definition.kind)).toMatchObject({
+    value: { title: 'Add notes between conversations' },
+  })
+  expect(initialized(Summaries.definition.kind)).toMatchObject({
+    value: { generatedTitle: 'Add notes between conversations' },
+  })
+  expect(initialized(Plan.definition.kind)).toMatchObject({ value: { next: 1, epics: {} } })
   const branch = (await server.harness.conversation(id, context))!
   await until(
     async () => (await server.harness.snapshot(Branch, id, context))?.branch?.status === 'ready',
@@ -171,6 +200,53 @@ it('branches with a brief, marks the source, and keeps inherited history reachab
   ).toEqual({ root: id })
   expect(await section(server, id)).toMatch(
     new RegExp(`^You are the root of this project \\(#${id}\\)`),
+  )
+})
+
+it('lets a summary replace the provisional branch title', async () => {
+  const { server, failures } = await fixture()
+  await (
+    await server.root.submit({ type: 'input', content: 'Inherited idea.' }, context)
+  ).wait(context)
+  failures.brief = true
+  const { id } = (
+    await post(server, '/api/extensions/lineage/actions/branch', { args: { prompt: 'New intent' } })
+  ).data.result as { id: ConversationId }
+  await until(
+    async () => (await server.harness.snapshot(Branch, id, context))?.branch?.status === 'failed',
+  )
+  expect((await server.harness.snapshot(Summaries, id, context))?.generatedTitle).toBe('New intent')
+  expect(server.api.conversations().find((item) => item.id === id)?.title).toBe('New intent')
+  const existing = server.host.registry.snapshot().extension('conversations')!
+  server.host.registry.install(
+    defineExtension({
+      ...existing,
+      ...summaryBehavior(
+        {
+          harness: () => server.harness,
+          metadata: Metadata,
+          userHome: server.host.userHome,
+          projectSettings: async () => ({}),
+          notice: () => {},
+          modelRuntime: server.host.modelRuntime,
+        },
+        async () => ({
+          assessment: 'done',
+          activity: 'Finished the new work.',
+          title: 'Summarized branch',
+          summary: 'Finished the new work.',
+        }),
+      ),
+    }),
+  )
+  failures.brief = false
+  await post(server, '/api/extensions/lineage/actions/retry', { args: { id } })
+  await until(
+    async () =>
+      (await server.harness.snapshot(Metadata, id, context))?.title === 'Summarized branch',
+  )
+  expect((await server.harness.snapshot(Summaries, id, context))?.generatedTitle).toBe(
+    'Summarized branch',
   )
 })
 

@@ -10,6 +10,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import type { BranchedEvent } from '../lineage/server.ts'
 
 export type Task = {
   key: string
@@ -135,6 +136,14 @@ async function backfill(host: Pick<ExtensionHost, 'harness' | 'metadata'>) {
 }
 
 export default (host: ExtensionHost) => {
+  host.events.on('lineage:branched', (data) => {
+    const { tx, id, waitUntil } = data as BranchedEvent
+    waitUntil(
+      (async () => {
+        Object.assign(await tx.doc(Plan, id), Plan.definition.initial())
+      })(),
+    )
+  })
   host.onOpen(() => backfill(host))
   return defineExtension({
     name: 'plan',

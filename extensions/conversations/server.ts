@@ -5,6 +5,7 @@ import { defineExtension, ROOT_CONVERSATION_ID, section } from '@earendil-works/
 import type { CommitPublication, ConversationId } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import type { BranchedEvent } from '../lineage/server.ts'
 import { UiState } from '../../server/ui-state.ts'
 import { Summaries, summaryBehavior } from './summary.ts'
 import { summaryModelSetting } from './summary-model.ts'
@@ -179,6 +180,16 @@ function reopenOnInput(host: ExtensionHost) {
 
 /** Tells each top-level conversation which other conversations work in this project. */
 export default (host: ExtensionHost) => {
+  host.events.on('lineage:branched', (data) => {
+    const { tx, id, intent, waitUntil } = data as BranchedEvent
+    waitUntil(
+      (async () => {
+        const title = intent.replace(/\s+/g, ' ').slice(0, 80)
+        ;(await tx.doc(Summaries, id)).generatedTitle = title
+        ;(await tx.doc(host.metadata, id)).title = title
+      })(),
+    )
+  })
   activityBehavior(host)
   overviewBehavior(host)
   reopenOnInput(host)

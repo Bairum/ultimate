@@ -30,8 +30,6 @@ import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
-import { Summaries } from '../conversations/summary.ts'
-import { Plan } from '../plan/server.ts'
 
 /** Which conversation is the project's root; unset means the reserved root conversation. */
 export const Root = defineDoc<{ root?: number }>({
@@ -65,6 +63,14 @@ export const Branch = defineDoc<{ branch?: BranchState }>({
 })
 
 export const docs = [Root, Branch, Seen]
+
+/** Subscribers enlist their own document writes in the branch's creation transaction. */
+export type BranchedEvent = {
+  tx: Tx
+  id: ConversationId
+  intent: string
+  waitUntil: (write: Promise<void>) => void
+}
 
 const BRIEF_TOKENS = 8192
 /** Room the brief request keeps free of source text: its prompt and answer. */
@@ -412,12 +418,16 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
       status: 'briefing',
     }
     // Until the summary names it, a branch is called by its intent, not by the first message it inherited.
-    // Recorded as the generated title, so the summary may still replace it.
     const title = prompt.replace(/\s+/g, ' ').slice(0, 80)
     ;(await tx.doc(host.metadata, fork.id)).title = title
-    ;(await tx.doc(Summaries, fork.id)).generatedTitle = title
-    // A branch starts from scratch, not with the plan of the conversation it forked from.
-    Object.assign(await tx.doc(Plan, fork.id), Plan.definition.initial())
+    const writes: Promise<void>[] = []
+    host.events.emit('lineage:branched', {
+      tx,
+      id: fork.id,
+      intent: prompt,
+      waitUntil: (write) => writes.push(write),
+    } satisfies BranchedEvent)
+    await Promise.all(writes)
     await tx.appendEntry(from, {
       kind: 'lineage.branched',
       data: { branch: fork.id, at, intent: prompt },
