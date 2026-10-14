@@ -3,8 +3,10 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import { defineExtension } from '@earendil-works/pi-durable'
 import type { ConversationId, JsonObject } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
-import plan, { Plan } from '../extensions/plan/server.ts'
+import type { ExtensionHost } from '../server/extensions.ts'
+import planExtension, { Plan, TaskIndex } from '../extensions/plan/server.ts'
 import { context, prepareHarness } from '../server/harness.ts'
+import { Metadata } from '../server/metadata.ts'
 import { temp, removeTemp } from './helpers.ts'
 
 it('shares the root ledger read-only with descendants, saves verdicts, and replays nested calls separately', async () => {
@@ -15,6 +17,10 @@ it('shares the root ledger read-only with descendants, saves verdicts, and repla
     home: join(directory, 'home'),
     faux: true,
   })
+  const plan = planExtension({
+    metadata: Metadata,
+    onOpen: () => {},
+  } as unknown as ExtensionHost)
   const tool = plan.tools![0]
   const replayResults: unknown[][] = []
   let childId: ConversationId
@@ -59,16 +65,22 @@ it('shares the root ledger read-only with descendants, saves verdicts, and repla
             if (api.conversationId === childId && grandchildId === undefined) {
               grandchildId = await api.commit(
                 async (tx) =>
-                  (await tx.createConversation({ ownership: { kind: 'task', taskId: api.taskId } }))
-                    .id,
+                  (
+                    await tx.createConversation({
+                      ownership: { kind: 'task', taskId: api.taskId },
+                    })
+                  ).id,
                 ctx,
               )
             }
             if ((args as { action: string }).action === 'create') {
               childId = await api.commit(
                 async (tx) =>
-                  (await tx.createConversation({ ownership: { kind: 'task', taskId: api.taskId } }))
-                    .id,
+                  (
+                    await tx.createConversation({
+                      ownership: { kind: 'task', taskId: api.taskId },
+                    })
+                  ).id,
                 ctx,
               )
             }
@@ -94,7 +106,9 @@ it('shares the root ledger read-only with descendants, saves verdicts, and repla
   const call = async (args: JsonObject, conversationId = opened.root.id) => {
     const conversation = (await opened.harness.conversation(conversationId, context))!
     prepared.faux!.setResponses([
-      fauxAssistantMessage([fauxToolCall('plan', args)], { stopReason: 'toolUse' }),
+      fauxAssistantMessage([fauxToolCall('plan', args)], {
+        stopReason: 'toolUse',
+      }),
       fauxAssistantMessage('Complete'),
     ])
     await (
@@ -112,7 +126,11 @@ it('shares the root ledger read-only with descendants, saves verdicts, and repla
     }
   }
   try {
-    await call({ action: 'create', title: 'Ship ledger', body: '## Request\nDurable plans' })
+    await call({
+      action: 'create',
+      title: 'Ship ledger',
+      body: '## Request\nDurable plans',
+    })
     await call({
       action: 'add',
       epic: 'E1',
@@ -171,7 +189,13 @@ it('shares the root ledger read-only with descendants, saves verdicts, and repla
     }
     const mutations: JsonObject[] = [
       { action: 'create', title: 'Forbidden', body: 'No' },
-      { action: 'add', epic: 'E1', title: 'Forbidden', role: 'worker', description: 'No' },
+      {
+        action: 'add',
+        epic: 'E1',
+        title: 'Forbidden',
+        role: 'worker',
+        description: 'No',
+      },
       { action: 'update', key: 'E1.1', status: 'done' },
       { action: 'note', key: 'E1.1', text: 'No' },
     ]
@@ -201,7 +225,12 @@ it('shares the root ledger read-only with descendants, saves verdicts, and repla
     expect((await call({ action: 'update', key: 'E1', status: 'todo' })).isError).toBe(true)
     expect((await call({ action: 'show', key: 'E99' })).isError).toBe(true)
     expect(await opened.harness.snapshot(Plan, opened.root.id, context)).toEqual(saved)
-    await call({ action: 'update', key: 'E1', status: 'done', verdict: 'Approved' })
+    await call({
+      action: 'update',
+      key: 'E1',
+      status: 'done',
+      verdict: 'Approved',
+    })
     await call({ action: 'show' })
     await call({
       action: 'add',
@@ -217,6 +246,118 @@ it('shares the root ledger read-only with descendants, saves verdicts, and repla
     expect(Object.keys(nested!.epics.E1.tasks)).toEqual(['E1.1', 'E1.2', 'E1.3', 'E1.4'])
     expect(nested!.epics.E1.tasks['E1.3'].title).toBe('Nested')
     expect(nested!.epics.E1.tasks['E1.4'].title).toBe('Nested')
+  } finally {
+    await opened.close()
+    await removeTemp(directory)
+  }
+})
+
+it('indexes linked children with their task, renames them after it, and backfills existing plans', async () => {
+  const directory = await temp('ultimate-plan-index-')
+  const prepared = await prepareHarness({
+    ultimateRoot: directory,
+    userHome: directory,
+    home: join(directory, 'home'),
+    faux: true,
+  })
+  let opened!: Awaited<ReturnType<typeof prepared.open>>
+  const openers: (() => Promise<void>)[] = []
+  prepared.registry.install(
+    planExtension({
+      metadata: Metadata,
+      harness: () => opened.harness,
+      onOpen: (callback: () => Promise<void>) => openers.push(callback),
+    } as unknown as ExtensionHost),
+  )
+  const open = async () => {
+    opened = await prepared.open()
+    for (const callback of openers) await callback()
+  }
+  await open()
+  const call = async (args: JsonObject) => {
+    const conversation = (await opened.harness.conversation(opened.root.id, context))!
+    prepared.faux!.setResponses([
+      fauxAssistantMessage([fauxToolCall('plan', args)], {
+        stopReason: 'toolUse',
+      }),
+      fauxAssistantMessage('Complete'),
+    ])
+    await (
+      await conversation.submit({ type: 'input', content: 'Update plan' }, context)
+    ).wait(context)
+    await opened.harness.waitForIdle(context)
+  }
+  const index = async () =>
+    (await opened.harness.snapshot(TaskIndex, opened.root.id, context))?.children
+  const title = async (id: ConversationId) =>
+    (await opened.harness.snapshot(Metadata, id, context))?.title
+  try {
+    const [first, second] = await opened.harness.commit(
+      async (tx) => [
+        (await tx.createConversation({ ownership: { kind: 'ownerless' } })).id,
+        (await tx.createConversation({ ownership: { kind: 'ownerless' } })).id,
+      ],
+      context,
+    )
+    await call({ action: 'create', title: 'Index', body: 'Body' })
+    await call({
+      action: 'add',
+      epic: 'E1',
+      title: 'Build it',
+      role: 'worker',
+      description: 'D',
+    })
+    await call({ action: 'update', key: 'E1.1', child: first })
+    expect(await index()).toEqual({
+      [first]: {
+        coordinator: 1,
+        epic: 'E1',
+        key: 'E1.1',
+        title: 'Build it',
+        status: 'backlog',
+      },
+    })
+    expect(await title(first)).toBe('Build it')
+
+    await call({
+      action: 'update',
+      key: 'E1.1',
+      status: 'in_progress',
+      title: 'Build it well',
+    })
+    expect((await index())![first]).toMatchObject({
+      status: 'in_progress',
+      title: 'Build it well',
+    })
+    expect(await title(first)).toBe('Build it well')
+
+    // A title the user gives the child stays until the task's title changes.
+    await opened.harness.commit(async (tx) => {
+      ;(await tx.doc(Metadata, first)).title = 'Renamed by hand'
+    }, context)
+    await call({ action: 'note', key: 'E1.1', text: 'Progress' })
+    expect(await title(first)).toBe('Renamed by hand')
+
+    await call({ action: 'update', key: 'E1.1', child: second })
+    expect(Object.keys((await index())!)).toEqual([String(second)])
+    expect(await title(second)).toBe('Build it well')
+
+    // A plan written before the index existed appears once the harness opens.
+    await opened.harness.commit(async (tx) => {
+      ;(await tx.doc(TaskIndex, opened.root.id)).children = {}
+      ;(await tx.doc(Plan, opened.root.id)).epics.E1.tasks['E1.1'].status = 'done'
+    }, context)
+    await opened.close()
+    await open()
+    expect(await index()).toEqual({
+      [second]: {
+        coordinator: 1,
+        epic: 'E1',
+        key: 'E1.1',
+        title: 'Build it well',
+        status: 'done',
+      },
+    })
   } finally {
     await opened.close()
     await removeTemp(directory)

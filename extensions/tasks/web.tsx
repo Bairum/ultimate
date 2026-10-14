@@ -19,6 +19,7 @@ import { useWorkspaceConversations as useConversations } from '../workspaces/dat
 
 import { FeatureTag, useOverview } from '../conversations/feature.tsx'
 import { hiddenConversationIds } from '../conversations/visible.tsx'
+import { TaskChip, useTaskOf } from '../plan/chip.tsx'
 
 interface Tree {
   /** Live tasks by owner task id. */
@@ -183,6 +184,7 @@ function TaskRow({ task, tree, depth }: { task: TaskGraphNode; tree: Tree; depth
 function ConversationRow({ id, tree, depth }: { id: number; tree: Tree; depth: number }) {
   const { conversationId, switchConversation } = useUltimate()
   const summary = tree.summaries.get(id)
+  const link = useTaskOf(id)
   const shown = conversationId === id
   return (
     <>
@@ -200,11 +202,14 @@ function ConversationRow({ id, tree, depth }: { id: number; tree: Tree; depth: n
           className={cn('size-3 shrink-0', shown ? 'text-brand' : 'text-muted-foreground')}
         />
         <span className="min-w-0 flex-1">
-          <span
-            className="block truncate font-sans text-[12px] text-foreground/90"
-            title={summary?.title}
-          >
-            {summary?.title || summary?.label || 'Untitled conversation'}
+          <span className="flex min-w-0 items-center gap-1.5">
+            {link && <TaskChip task={link} />}
+            <span
+              className="truncate font-sans text-[12px] text-foreground/90"
+              title={summary?.title}
+            >
+              {summary?.title || summary?.label || 'Untitled conversation'}
+            </span>
           </span>
           <span className="flex min-w-0 items-center gap-1.5 text-[10.5px] text-muted-foreground/60">
             {tree.features.get(id) && <FeatureTag feature={tree.features.get(id)!} />}

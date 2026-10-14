@@ -4,6 +4,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { events, useAction, useConversation, useUltimate } from '@/sdk'
+import { TaskChip, useTaskOf } from '../plan/chip.tsx'
 import { useWorkspaceConversations } from '../workspaces/data.tsx'
 import type { AgentOrigin } from './message-types.ts'
 
@@ -99,6 +100,7 @@ export function AgentInput({ entry, core }: { entry: EntryRecord; core: ReactNod
   const { id } = useConversation()
   const { switchConversation } = useUltimate()
   const conversations = useWorkspaceConversations()
+  const task = useTaskOf(origin?.sender)
   if (!origin) return core
   const sender = conversations.find((conversation) => conversation.id === origin.sender)
   const message = entry.model?.[0]
@@ -118,6 +120,7 @@ export function AgentInput({ entry, core }: { entry: EntryRecord; core: ReactNod
         <span className="text-foreground">
           {sender?.label ?? 'agent'} #{origin.sender}
         </span>
+        {task && <TaskChip task={task} />}
         <span>{origin.kind === 'instruction' ? 'instruction' : 'report'}</span>
         <button
           disabled={!sender}

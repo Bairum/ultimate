@@ -25,6 +25,7 @@ There is no third red blocked/unfinished assessment.
 A conversation with genuinely owned children has an expandable Sub-agents group. Rows show the recorded agent role/name,
 actual Working/Queued/Idle/Replied/Run failed state, and a brief what-it-did description from its latest assessed reply.
 Replied means a run answered, not that its goal is fulfilled. During new work, an old activity is labeled Last reply.
+A child linked to a plan task leads with the plan's `TaskChip` and shows the task title instead of its activity.
 A row switches to its child, highlights selection and keeps the top-level summary visible. History forks are not
 invented delegation edges. Expansion is persisted in `ext.conversations.expanded`; buttons support keyboard access.
 

@@ -43,6 +43,7 @@ import { Kbd } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Conversation, api, cn, formatKeys } from '@/sdk'
 import { FeatureTag } from '../conversations/feature.tsx'
+import { TaskChip, useTaskOf } from '../plan/chip.tsx'
 import { useAgentFeed, useConclusion } from './data.tsx'
 import type { Agent, Status } from './model.tsx'
 import { REASON_TIPS, STATUS, activityOf, isActive, nameOf } from './model.tsx'
@@ -221,6 +222,7 @@ function Title({
 }) {
   const { actions } = useCanvas()
   const { summary } = agent
+  const task = useTaskOf(agent.id)
   const cancelled = useRef(false)
   const input = useRef<HTMLInputElement>(null)
   // Without scrolling: the map's container would scroll under its viewport.
@@ -260,6 +262,7 @@ function Title({
     )
   return (
     <span className={cn('flex min-w-0 items-baseline gap-1.5', className)}>
+      {task && <TaskChip className="nodrag self-center" task={task} />}
       {summary.label && (
         <span className="shrink-0 font-mono text-[0.85em] text-brand">{summary.label}</span>
       )}
@@ -824,10 +827,12 @@ export function ConclusionCard({
 
 /** A finished subagent: its colour, label, and what it did, in one line. */
 function Pill({ agent, feed }: { agent: Agent; feed?: CanvasAgent }) {
+  const task = useTaskOf(agent.id)
   return (
     <>
       <div className="flex h-5 items-center gap-1.5 text-[11.5px]">
         <Mark status={agent.status} />
+        {task && <TaskChip className="nodrag" task={task} />}
         {/* The role gives way before the id does. */}
         <span className="min-w-0 truncate font-mono text-foreground/85">
           {agent.summary.label ?? 'agent'}
