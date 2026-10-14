@@ -6,6 +6,7 @@ import type { CommitPublication, ConversationId } from '@earendil-works/pi-durab
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { BranchedEvent } from '../lineage/server.ts'
+import type { LandingSubject } from '../workspaces/types.ts'
 import { UiState } from '../../server/ui-state.ts'
 import { Summaries, summaryBehavior } from './summary.ts'
 import { summaryModelSetting } from './summary-model.ts'
@@ -178,8 +179,32 @@ function reopenOnInput(host: ExtensionHost) {
   })
 }
 
+export type ConversationsService = {
+  /** What conversation `id` is about now: its title, summary and feature, for a record that outlives a retitle. */
+  subject: (id: ConversationId, caller: Context) => Promise<LandingSubject>
+}
+
+export async function subject(
+  host: Pick<ExtensionHost, 'harness' | 'metadata'>,
+  id: ConversationId,
+  caller: Context,
+): Promise<LandingSubject> {
+  const [metadata, state] = await Promise.all([
+    host.harness().snapshot(host.metadata, id, caller),
+    host.harness().snapshot(Summaries, id, caller),
+  ])
+  return {
+    ...(metadata?.title ? { title: metadata.title } : {}),
+    ...(state?.summary ? { summary: state.summary } : {}),
+    ...(state?.feature ? { feature: state.feature } : {}),
+  }
+}
+
 /** Tells each top-level conversation which other conversations work in this project. */
 export default (host: ExtensionHost) => {
+  host.provide('conversations', {
+    subject: (id, caller) => subject(host, id, caller),
+  } satisfies ConversationsService)
   host.events.on('lineage:branched', (data) => {
     const { tx, id, intent, waitUntil } = data as BranchedEvent
     waitUntil(

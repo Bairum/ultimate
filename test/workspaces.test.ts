@@ -29,6 +29,9 @@ import { git, setup } from '../extensions/workspaces/git.ts'
 import type { LanderEntry, WorkspaceIndex } from '../extensions/workspaces/types.ts'
 import { createLander } from '../extensions/workspaces/lander.ts'
 import { leaveNote, rootOf, Root } from '../extensions/lineage/server.ts'
+import { subject } from '../extensions/conversations/server.ts'
+import type { ConversationsService } from '../extensions/conversations/server.ts'
+import { Summaries } from '../extensions/conversations/summary.ts'
 import self from '../extensions/self/server.ts'
 import promptExtension, { order as promptOrder } from '../extensions/prompt/server.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
@@ -639,11 +642,38 @@ it.concurrent('notes the root once for a landing even when its report phase is r
   const id = await f.create()
   await f.service.ready(id, context)
   const sha = await commit((await f.service.get(id, context))!.path, 'landed.txt')
+  f.host.provide('conversations', {
+    subject: (conversation, ctx) => subject(f.host, conversation, ctx),
+  } satisfies ConversationsService)
   await f.opened.harness.commit(async (tx) => {
     ;(await tx.doc(Metadata, id)).title = 'Write the feature'
+    Object.assign(await tx.doc(Summaries, id), {
+      summary: 'Adds the landed file.',
+      feature: 'Landing',
+    })
   }, context)
   const { id: submission } = await f.service.submit(id, context)
+  // A retitle after submitting does not rename what lands.
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Metadata, id)).title = 'Renamed later'
+  }, context)
   expect(await submitted(f, id)).toHaveLength(1)
+  const featureOf = {
+    title: 'Write the feature',
+    summary: 'Adds the landed file.',
+    feature: 'Landing',
+  }
+  expect(
+    (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!.results[
+      submission
+    ],
+  ).toMatchObject({ conversationId: id, subject: featureOf })
+  expect(
+    (await landerLog(f)).log.filter((line) => line.step === 'started' || line.outcome),
+  ).toEqual([
+    expect.objectContaining({ subject: featureOf }),
+    expect.objectContaining({ subject: featureOf }),
+  ])
   expect(replays).toBe(1)
   // A crash after admitting the note but before memoizing it reuses the same write request.
   await leaveNote(f.host, 'root', 'duplicate delivery', {
@@ -659,11 +689,13 @@ it.concurrent('notes the root once for a landing even when its report phase is r
     sha,
     target: 'main',
     title: 'Write the feature',
+    summary: 'Adds the landed file.',
+    feature: 'Landing',
     commits: [{ sha: sha.slice(0, 7), subject: 'landed.txt' }],
     paths: ['landed.txt'],
   })
   expect((notes[0].data as { text: string }).text).toContain(
-    `Landed ${sha.slice(0, 7)} on main from #${id} Write the feature:`,
+    `Landed ${sha.slice(0, 7)} on main from #${id} Write the feature (Landing):\nAdds the landed file.`,
   )
   await f.reopen()
   expect(await rootNotes(f)).toHaveLength(1)

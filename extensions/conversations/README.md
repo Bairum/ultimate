@@ -161,6 +161,9 @@ footer names the project file to edit. Two actions back it:
 `summary-model-ref.ts` parses the value without node imports, so the web facet shares it: only a recognized final
 thinking level is stripped, so model ids may contain colons (`x-ai/grok-4.3:batch:high`).
 
+It provides the `conversations` service: `subject(id)` returns a conversation's current title, summary and feature,
+which workspaces snapshots for each submission.
+
 ## How status and summaries flow
 
 Every displayed status traces back to committed Pi Durable records. Hooks and tasks write records; documents are

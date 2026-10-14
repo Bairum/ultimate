@@ -6,60 +6,38 @@ import {
   CircleDotIcon,
   GitMergeIcon,
   LoaderCircleIcon,
-  SquareArrowOutUpRightIcon,
   TriangleAlertIcon,
   XIcon,
 } from 'lucide-react'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Tool, ToolContent, ToolHeader, ToolOutput, ToolSection } from '@/components/ai/tool'
-import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   formatDuration,
   formatTime,
   useConversation,
-  useConversations,
   useNow,
   useToolDuration,
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import { useWorkspaceIndex } from './data.tsx'
+import { LandingCard, Open, Subject } from './landing.tsx'
+import type { LandingTone } from './landing.tsx'
 import { inProgress, runningStep, superseded } from './steps.tsx'
 import type {
   LanderAsk,
   LanderEntry,
   LanderOutcome,
   LanderStep,
+  LandingSubject,
   SubmitResult,
   WorkspaceIndex,
 } from './types.ts'
 
 const short = (sha: string) => sha.slice(0, 7)
 const time = (at: number) => formatTime(at, true)
-
-/** "open #id", with a dot while that conversation works. */
-function Open({ id, className, label }: { id: number; className?: string; label?: string }) {
-  const { switchConversation } = useUltimate()
-  const busy = useConversations().find((conversation) => conversation.id === id)?.busy
-  return (
-    <Button
-      className={cn(
-        'h-5 shrink-0 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground',
-        className,
-      )}
-      onClick={() => switchConversation(id)}
-      size="xs"
-      title={`Show conversation #${id}`}
-      variant="ghost"
-    >
-      {busy && <span className="size-1.5 shrink-0 animate-pulse-dot rounded-full bg-brand" />}
-      <SquareArrowOutUpRightIcon className="size-3" />
-      open {label ? `${label} ` : ''}#{id}
-    </Button>
-  )
-}
 
 /** "Landed 115f168 on main · pushed to origin/main", or "Not landed: <reason>". */
 function headline(outcome: LanderOutcome, target?: string) {
@@ -135,40 +113,30 @@ function OutcomeBody({ outcome }: { outcome: LanderOutcome }) {
   )
 }
 
-const tone = {
-  landed: ['border-l-success/70', 'text-success', CheckIcon],
-  pushFailed: ['border-l-warning/70', 'text-warning', TriangleAlertIcon],
-  failed: ['border-l-error/70', 'text-error', XIcon],
-} as const
+const toneOf = (outcome: LanderOutcome): LandingTone =>
+  outcome.outcome === 'failed' ? 'failed' : outcome.reason ? 'pushFailed' : 'landed'
 
 /** The lander's stored report in the submitter's transcript. */
 export function LanderReport({ entry }: { entry: EntryRecord }) {
   const { outcome } = entry.data as { id: string; outcome: WorkspaceIndex['results'][string] }
-  const kind = outcome.outcome === 'failed' ? 'failed' : outcome.reason ? 'pushFailed' : 'landed'
-  const [border, color, Icon] = tone[kind]
+  // Reports from before the record named its conversation are in their submitter's transcript.
+  const own = useConversation().id ?? 0
   return (
-    <section
-      className={cn(
-        'min-w-0 space-y-1.5 rounded-md border border-l-2 border-border bg-muted/20 px-3 py-2.5 font-mono text-[12px]',
-        border,
-      )}
-      data-lander-report={kind}
-    >
-      <header className="flex items-start gap-2">
-        <Icon className={cn('mt-0.5 size-3.5 shrink-0', color)} />
-        <span className="min-w-0 flex-1 break-words text-foreground">
-          {headline(outcome, outcome.target)}
-        </span>
-      </header>
-      <div className="space-y-1.5 pl-5.5">
+    <div data-lander-report={toneOf(outcome)}>
+      <LandingCard
+        from={outcome.conversationId ?? own}
+        headline={headline(outcome, outcome.target)}
+        subject={outcome.subject}
+        tone={toneOf(outcome)}
+      >
         <OutcomeBody outcome={outcome} />
         <Steps
           ended={outcome.outcome === 'failed' ? 'failed' : 'landed'}
           lander={outcome.lander}
           steps={outcome.steps}
         />
-      </div>
-    </section>
+      </LandingCard>
+    </div>
   )
 }
 
@@ -372,25 +340,19 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
     )
   if (data.outcome) {
     const outcome = data as LanderEntry & LanderOutcome
-    const landed = data.outcome === 'landed'
     return (
-      <div
-        className={cn(
-          'space-y-1.5 rounded-md border bg-card/50 px-3 py-2 font-mono text-[12px]',
-          landed && !data.reason ? 'border-success/40' : 'border-error/40',
-        )}
-        data-lander-outcome={data.outcome}
-      >
-        <div className="flex items-center gap-2">
-          {landed && !data.reason ? (
-            <CheckIcon className="size-3.5 shrink-0 text-success" />
-          ) : (
-            <XIcon className="size-3.5 shrink-0 text-error" />
-          )}
-          <span className="min-w-0 flex-1 break-words">{headline(outcome, data.target)}</span>
-          <time className="shrink-0 text-[11px] text-muted-foreground/60">{time(data.at)}</time>
-        </div>
-        <OutcomeBody outcome={outcome} />
+      <div data-lander-outcome={data.outcome}>
+        <LandingCard
+          at={
+            <time className="shrink-0 text-[11px] text-muted-foreground/60">{time(data.at)}</time>
+          }
+          from={data.conversationId}
+          headline={headline(outcome, data.target)}
+          subject={data.subject}
+          tone={toneOf(outcome)}
+        >
+          <OutcomeBody outcome={outcome} />
+        </LandingCard>
       </div>
     )
   }
@@ -406,9 +368,9 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
       <div className="space-y-0.5 border-t border-border/60 pt-3">
         <div className="flex items-center gap-2 font-mono text-[12px]">
           <GitMergeIcon className="size-3.5 shrink-0 text-brand" />
-          <span className="min-w-0 flex-1 truncate">
+          <Subject from={data.conversationId} subject={data.subject} />
+          <span className="min-w-0 flex-1 truncate text-muted-foreground">
             {short(data.tip)} → {data.target}
-            <span className="text-muted-foreground"> · {data.submission}</span>
           </span>
           <Open id={data.conversationId} />
         </div>
@@ -435,6 +397,8 @@ export function LanderAskEntry({ entry }: { entry: EntryRecord }) {
 }
 
 type Submission = {
+  conversationId?: number
+  subject?: LandingSubject
   tip: string
   target: string
   steps: readonly LanderStep[]
@@ -531,7 +495,10 @@ export function WorkspaceCall({ call }: { call: ToolCallView }) {
         }
       />
       {submitted && state && (
-        <div className="border-t border-border/80 px-2.5 py-1.5">
+        <div className="space-y-1 border-t border-border/80 px-2.5 py-1.5">
+          {state.subject && state.conversationId !== undefined && (
+            <Subject from={state.conversationId} subject={state.subject} />
+          )}
           <Steps
             lander={submitted.lander}
             onOpenChange={setOpen}

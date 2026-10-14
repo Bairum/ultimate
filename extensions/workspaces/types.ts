@@ -8,6 +8,8 @@ export type Workspace = {
   error?: string
   landed?: string
 }
+/** What a submission lands, from its conversation's summary as it was when it was submitted. */
+export type LandingSubject = { title?: string; summary?: string; feature?: string }
 /** One `workspace submit`, waiting for or being processed by its source's lander. */
 export type QueueEntry = {
   id: string
@@ -17,6 +19,7 @@ export type QueueEntry = {
   tip: string
   at: number
   state: 'queued' | 'landing'
+  subject?: LandingSubject
   step?: string
   /** What the lander did so far, as its conversation logs it. */
   steps: LanderStep[]
@@ -74,6 +77,8 @@ export type LanderEntry = {
   at: number
   step?: string
   check?: LanderCheck
+  /** On the submission's first line and its outcome. */
+  subject?: LandingSubject
 } & Partial<LanderOutcome>
 /** The lander task handing a failure to its model (entry kind `ultimate.lander-ask`); the model reads the prompt. */
 export type LanderAsk = Pick<
@@ -93,7 +98,14 @@ export type WorkspaceIndex = {
   /** Outcomes of the latest submissions by id, with their target and lander conversation, for the submitter's cards. */
   results: Record<
     string,
-    LanderOutcome & { target: string; tip: string; lander: number; steps: LanderStep[] }
+    LanderOutcome & {
+      target: string
+      tip: string
+      lander: number
+      steps: LanderStep[]
+      conversationId?: number
+      subject?: LandingSubject
+    }
   >
 }
 export type WorkspaceInfo = Workspace & {

@@ -85,6 +85,9 @@ export const log = (
       tip: entry.tip,
       target: entry.target,
       at,
+      ...(entry.subject && (data.step === 'queued' || data.step === 'started' || data.outcome)
+        ? { subject: entry.subject }
+        : {}),
       ...data,
     },
   })
@@ -340,6 +343,8 @@ export function createLander(
               tip: entry.tip,
               lander: runtime.conversationId,
               steps,
+              conversationId: entry.conversationId,
+              ...(entry.subject ? { subject: entry.subject } : {}),
             }
             for (const old of Object.keys(draft.results).slice(0, -kept)) delete draft.results[old]
             await log(tx, runtime.conversationId, entry, outcome)
@@ -868,7 +873,8 @@ export function createLander(
             const metadata = await host
               .harness()
               .snapshot(host.metadata, conversationId as ConversationId, context)
-            const title = metadata?.title ?? ''
+            const subject = result.subject ?? {}
+            const title = subject.title ?? metadata?.title ?? ''
             const commits = (result.commits ?? []).slice(0, 10).map((commit) => {
               const space = commit.indexOf(' ')
               return { sha: commit.slice(0, space), subject: commit.slice(space + 1) }
@@ -878,7 +884,8 @@ export function createLander(
             await lineage.leaveNote(
               'root',
               [
-                `Landed ${result.sha!.slice(0, 7)} on ${result.target} from #${conversationId} ${title}:`,
+                `Landed ${result.sha!.slice(0, 7)} on ${result.target} from #${conversationId} ${title}${subject.feature ? ` (${subject.feature})` : ''}:`,
+                ...(subject.summary ? [subject.summary] : []),
                 ...commits.map((commit) => commit.subject),
                 ...(more ? [`and ${more} more`] : []),
                 `Changed: ${paths.join(', ')}`,
@@ -887,7 +894,18 @@ export function createLander(
                 source: 'lander',
                 from: conversationId,
                 requestId: `lander-root:${id}`,
-                data: { sha: result.sha!, target: result.target, commits, paths, title, more },
+                data: {
+                  sha: result.sha!,
+                  target: result.target,
+                  commits,
+                  paths,
+                  title,
+                  more,
+                  lander: result.lander,
+                  ...(subject.summary ? { summary: subject.summary } : {}),
+                  ...(subject.feature ? { feature: subject.feature } : {}),
+                  ...(result.pushed ? { pushed: result.pushed } : {}),
+                },
               },
             )
           }

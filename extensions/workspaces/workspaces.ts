@@ -14,6 +14,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type { ConversationId, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import type { ConversationsService } from '../conversations/server.ts'
 import { git, setup } from './git.ts'
 import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
 import type {
@@ -394,6 +395,7 @@ export function workspaces(host: Host) {
     const tip = await git(workspace.path, 'rev-parse', 'HEAD')
     const path = await landerPath(host.home, workspace.source)
     const { change } = await landerAgent(host, context)
+    const subject = await host.use<ConversationsService>('conversations')?.subject(id, context)
     const result = await host.harness().commit(async (tx) => {
       const row = await tx.conversation(id)
       if (!row || row.owner)
@@ -414,6 +416,7 @@ export function workspaces(host: Host) {
         tip,
         at: Date.now(),
         state: 'queued' as const,
+        ...(subject ? { subject } : {}),
         steps: [],
       }
       await configure(tx, lander, change)

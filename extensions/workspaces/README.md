@@ -53,6 +53,13 @@ conversation; it keeps the full log, grouped by submission, and shows in the Age
 With lineage enabled, the report phase also leaves a replay-safe landing note in the project's root, unless the
 submitter is that root. Failed submissions leave no root note; notes never wake the root.
 
+What lands is named once, at submit: the queue entry keeps the submitter's `subject` (title, summary and feature)
+from the `conversations` service's `subject(id)`, so a later retitle does not rename it. The result, the lander log's
+first lines and outcome, and the root note carry that snapshot. `landing.tsx` renders it the same everywhere: the
+`LandingCard` (feature tag, title, summary, then the outcome) is the lander log's outcome, the submitter's report and
+the root's landing note; its one-line `Subject` heads each submission in the lander log and the submit card, and the
+lander's sidebar row shows the feature it lands or landed last.
+
 1. Resets its own detached checkout, `<home>/lander/<hash of source>`, to the target branch tip. `isolates.worktree.setup`
    runs once when the checkout is created. With `lander.push`, it fetches the remote branch and merges it when it is ahead.
 2. Merges the submitted tip. A conflict aborts the merge and reports the conflicting paths.

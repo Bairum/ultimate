@@ -220,7 +220,7 @@ export function Row({
                   root
                 </span>
               )}
-              {feature && <FeatureTag feature={feature} />}
+              {feature && !lander && <FeatureTag feature={feature} />}
               {lander ? (
                 <LanderState id={conversation.id} index={index} now={now} working={!!working} />
               ) : (

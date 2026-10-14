@@ -1,5 +1,6 @@
 import { cn } from '@/sdk'
 import { useWorkspaceIndex } from '../workspaces/data.tsx'
+import { FeatureTag } from './feature.tsx'
 
 /** `now`, `5m`, `3h`, `2d`, then a short date. */
 export function ago(at: number, now: number) {
@@ -18,8 +19,8 @@ export function ago(at: number, now: number) {
 }
 
 /**
- * The lander's line: "fixing" or "diagnosing" while its model works on a failure, a pulsing "landing" while it lands,
- * "working" while it answers someone, else "idle" with its latest landing.
+ * The lander's line: the feature it lands or landed last, then "fixing" or "diagnosing" while its model works on a
+ * failure, a pulsing "landing" while it lands, "working" while it answers someone, else "idle" with its latest landing.
  */
 export function LanderState({
   id,
@@ -44,23 +45,33 @@ export function LanderState({
           : working
             ? 'working'
             : undefined
+  const last = Object.values(index.results).findLast((result) => result.lander === id && result.sha)
+  const feature = (current ?? last)?.subject?.feature
+  const tag = feature && <FeatureTag feature={feature} />
   if (label)
     return (
-      <span className={cn('flex items-center gap-1', label !== 'diagnosing' && 'text-brand')}>
+      <>
+        {tag}
         <span
-          className={cn(
-            'size-1.5 animate-pulse-dot rounded-full',
-            label === 'diagnosing' ? 'bg-muted-foreground' : 'bg-brand',
-          )}
-        />
-        {label}
-      </span>
+          className={cn('flex shrink-0 items-center gap-1', label !== 'diagnosing' && 'text-brand')}
+        >
+          <span
+            className={cn(
+              'size-1.5 animate-pulse-dot rounded-full',
+              label === 'diagnosing' ? 'bg-muted-foreground' : 'bg-brand',
+            )}
+          />
+          {label}
+        </span>
+      </>
     )
-  const last = Object.values(index.results).findLast((result) => result.lander === id && result.sha)
   const at = last?.steps.at(-1)?.at
   return (
-    <span className="truncate" title={at ? new Date(at).toLocaleString() : undefined}>
-      idle{last?.sha && ` · last ${last.sha.slice(0, 7)}${at ? ` ${ago(at, now)}` : ''}`}
-    </span>
+    <>
+      {tag}
+      <span className="truncate" title={at ? new Date(at).toLocaleString() : undefined}>
+        idle{last?.sha && ` · last ${last.sha.slice(0, 7)}${at ? ` ${ago(at, now)}` : ''}`}
+      </span>
+    </>
   )
 }
