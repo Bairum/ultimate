@@ -579,7 +579,7 @@ export function watchConclusions(
           reasons.push({
             kind: 'unlanded',
             conversationId: id,
-            detail: `W${id}: ${count} commit${count === 1 ? '' : 's'} not landed`,
+            detail: `#${id}: ${count} commit${count === 1 ? '' : 's'} not landed`,
           })
       }
     }

@@ -215,7 +215,7 @@ export default function workspaceExtension(host: ExtensionHost) {
           ...(queue.length
             ? queue.map(
                 (item) =>
-                  `- ${item.id} W${item.conversationId} tip ${item.tip.slice(0, 7)} ${item.state}${item.step ? ` · ${item.step}` : ''}`,
+                  `- ${item.id} #${item.conversationId} tip ${item.tip.slice(0, 7)} ${item.state}${item.step ? ` · ${item.step}` : ''}`,
               )
             : ['- empty']),
           'Latest results (oldest first):',

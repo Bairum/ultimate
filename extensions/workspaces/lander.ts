@@ -306,7 +306,7 @@ export function createLander(
                 phase: 'report',
                 id,
                 conversationId: entry.conversationId,
-                text: `[lander] Submission ${id} (W${entry.conversationId}, ${entry.tip.slice(0, 7)}) ${text}\nLog: lander conversation #${runtime.conversationId}.`,
+                text: `[lander] Submission ${id} (#${entry.conversationId}, ${entry.tip.slice(0, 7)}) ${text}\nLog: lander conversation #${runtime.conversationId}.`,
               },
             }
           }, context)
@@ -390,7 +390,7 @@ export function createLander(
           const head = await git(integration, 'rev-parse', 'HEAD')
           const state = failing.conflict
             ? `Merging ${failing.conflict} into ${target} at ${head} stopped with conflicts; the merge is in progress.`
-            : `HEAD ${head} is the merge of ${entry.tip} (W${entry.conversationId}) into ${target}, set up as the checks run it.`
+            : `HEAD ${head} is the merge of ${entry.tip} (#${entry.conversationId}) into ${target}, set up as the checks run it.`
           const prompt = [
             `[lander] Submission ${id} failed: ${reason}`,
             output,
@@ -617,8 +617,8 @@ export function createLander(
               if (
                 await merge(
                   entry.tip,
-                  `Merge ${entry.tip.slice(0, 7)} from W${entry.conversationId} into ${target}`,
-                  `${entry.tip} (W${entry.conversationId})`,
+                  `Merge ${entry.tip.slice(0, 7)} from #${entry.conversationId} into ${target}`,
+                  `${entry.tip} (#${entry.conversationId})`,
                   `it conflicts with ${target} in`,
                   `Merge ${target} into your workspace, resolve, verify and submit again.`,
                 )

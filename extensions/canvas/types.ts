@@ -44,7 +44,7 @@ export type CanvasAgent = {
 export type CanvasReason = {
   kind: 'needs_input' | 'unlanded'
   conversationId: number
-  /** `needs input`, or `W12: 3 commits not landed`. */
+  /** `needs input`, or `#12: 3 commits not landed`. */
   detail: string
 }
 /** The small fields of a tree's latest conclusion the map needs; the full one comes from the `conclusion` action. */

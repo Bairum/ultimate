@@ -395,7 +395,7 @@ it('waits for a decision while a checkout holds commits not landed, then conclud
   await post(server, `/api/conversations/${top}/submit`, { text: 'Fix the bug' })
   await until(async () => (await fixture.tree(top))?.decision !== undefined, 30000)
   expect((await fixture.tree(top))?.decision?.reasons).toEqual([
-    { kind: 'unlanded', conversationId: top, detail: `W${top}: 1 commit not landed` },
+    { kind: 'unlanded', conversationId: top, detail: `#${top}: 1 commit not landed` },
   ])
   await quietly()
   expect(fixture.generated).not.toHaveBeenCalled()

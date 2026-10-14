@@ -790,7 +790,7 @@ it('lands two submissions in order onto a moved target and reports both', async 
   expect(reportTwo).toContain('two.txt')
   expect(await git(f.projectRoot, 'log', '--first-parent', '--format=%s', '-3')).toMatch(
     new RegExp(
-      `^Merge .* from W${second} into main\nMerge .* from W${first} into main\nmoved.txt$`,
+      `^Merge .* from #${second} into main\nMerge .* from #${first} into main\nmoved.txt$`,
     ),
   )
   expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
@@ -806,6 +806,8 @@ it('lands two submissions in order onto a moved target and reports both', async 
   expect(kinds.every((kind) => kind === 'ultimate.lander')).toBe(true)
   expect(reportOne).toContain(`lander conversation #${id}`)
   const [submissionOne, submissionTwo] = [...new Set(log.map((line) => line.submission))]
+  expect(reportOne).toContain(`Submission ${submissionOne} (#${first}, `)
+  expect(reportTwo).toContain(`Submission ${submissionTwo} (#${second}, `)
   const firstLog = log.filter((line) => line.submission === submissionOne)
   expect(firstLog.map((line) => line.step ?? line.outcome)).toEqual([
     'queued',
@@ -822,7 +824,7 @@ it('lands two submissions in order onto a moved target and reports both', async 
   const landedOne = firstLog.at(-1)!
   expect(landedOne).toMatchObject({ conversationId: first, outcome: 'landed' })
   expect(landedOne.commits).toEqual([
-    expect.stringContaining(`from W${first} into main`),
+    expect.stringContaining(`from #${first} into main`),
     expect.stringContaining('one.txt'),
   ])
   expect(landedOne.paths).toContain('one.txt')
@@ -1537,10 +1539,17 @@ it('keeps user tool calls out of the lander checkout while it lands', async () =
   const id = await f.create()
   await f.service.ready(id, context)
   await commit((await f.service.get(id, context))!.path, 'submitted.txt')
-  const { lander: landerId } = await f.service.submit(id, context)
+  const { id: submission, lander: landerId } = await f.service.submit(id, context)
   await held.started()
+  const section = workspaceExtension(f.host).sections!.find((item) => item.key === 'lander_state')!
+  const state = await section.render(
+    { conversationId: landerId } as Parameters<typeof section.render>[0],
+    context,
+  )
+  expect(state).toContain(`- ${submission} #${id} tip `)
+  expect(state).toContain(' landing · checking:')
   const result = await ask(f, landerId as ConversationId, 'bash', { command: commitIn('user.txt') })
-  expect(result).toContain(`The lander is landing W${id}; ask again when it is idle`)
+  expect(result).toContain(`The lander is landing #${id}; ask again when it is idle`)
   expect(result).not.toContain('COMMITTED')
   await held.release()
   expect((await submitted(f, id))[0]).toContain('landed as')
@@ -1616,7 +1625,7 @@ it('fix: a follow-up queued behind the failure run gets nothing landed unchecked
   try {
     expect(
       JSON.stringify(view.value.entries.filter((entry) => entry.kind === 'pi.tool-result')),
-    ).toContain(`The lander is landing W${id}`)
+    ).toContain(`The lander is landing #${id}`)
   } finally {
     view.dispose()
   }
