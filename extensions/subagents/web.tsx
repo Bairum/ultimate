@@ -19,6 +19,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { cn, defineWebExtension, useConversation, useToolDuration, useUltimate } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
+import { TaskChip, useTaskOf } from '../plan/chip.tsx'
 import { stateLabel, useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
 import type { Workspace as Isolate, LandResult } from '../workspaces/types.ts'
 import { DefinitionDialog, Definitions } from './definitions.tsx'
@@ -78,6 +79,7 @@ function SubagentCall({ call }: { call: ToolCallView }) {
   const childId =
     details?.conversationId ?? (typeof call.args.id === 'number' ? call.args.id : undefined)
   const child = conversations.find((conversation) => conversation.id === childId)
+  const task = useTaskOf(childId)
   const agent = text(call.args.agent) || child?.label
   const background = call.args.background === true || details?.background === true
   const instruction = action === 'start' ? text(call.args.task) : text(call.args.text)
@@ -104,6 +106,7 @@ function SubagentCall({ call }: { call: ToolCallView }) {
           className="min-w-0 flex-1"
           meta={
             <>
+              {task && <TaskChip task={task} />}
               {childId !== undefined && <IsolateBadge childId={childId} />}
               {background && <Tag>bg</Tag>}
               {yielded && <Tag>wait yielded</Tag>}

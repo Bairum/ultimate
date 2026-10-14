@@ -28,6 +28,7 @@ headline, the summary model's summary of the whole tree, the tree's last screens
 summary. New work dims the card and marks it "outdated" until the next conclusion replaces it. Hovering a card or pill
 opens it to a full panel; the shown conversation always keeps its full panel and its tree.
 
+A subagent linked to a plan task shows the plan's `TaskChip` before its title (and in a finished pill); clicking it opens the task.
 Zoomed out (below 60 %), panels are far cards: big title (a card's headline), state colour, one line. Closer, a panel
 shows its latest calls as chips (running ones shimmer; when they do not fit, the oldest fade out at the left), the
 streaming thinking (dim) or answer, its latest edits, and when idle the summary model's summary, or, when it has none or a decision

@@ -57,6 +57,7 @@ import type { EntryRecord, UltimateActions } from '@/sdk'
 import { hiddenConversationIds } from './visible.tsx'
 import { ModelRow } from '../models/picker.tsx'
 import { FeatureTag, useOverview } from './feature.tsx'
+import { TaskChip, useTaskOf } from '../plan/chip.tsx'
 import { parseSummaryModel } from './summary-model-ref.ts'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import {
@@ -517,6 +518,7 @@ function ChildRow({
   shown: boolean
 }) {
   const actions = useUltimate()
+  const task = useTaskOf(conversation.id)
   const working = conversation.busy || row?.runState === 'working'
   const state = working
     ? 'Working'
@@ -545,6 +547,7 @@ function ChildRow({
           unseen={false}
           working={working ? 'self' : undefined}
         />
+        {task && <TaskChip task={task} />}
         <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-foreground/80">
           {conversation.label ?? 'Agent'} · #{conversation.id}
         </span>
@@ -556,9 +559,11 @@ function ChildRow({
         <span className="shrink-0 text-[10px] text-muted-foreground">{state}</span>
       </span>
       <span className="line-clamp-2 pl-[18px] text-[11px] leading-relaxed break-words text-muted-foreground">
-        {row?.activity
-          ? `${working ? 'Last reply: ' : ''}${row.activity}`
-          : (conversation.title ?? 'No reply yet')}
+        {task
+          ? task.title
+          : row?.activity
+            ? `${working ? 'Last reply: ' : ''}${row.activity}`
+            : (conversation.title ?? 'No reply yet')}
       </span>
       {row?.assessmentStatus === 'error' && !working && (
         <span className="pl-[18px] text-[10px] text-muted-foreground/70">
