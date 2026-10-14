@@ -203,7 +203,7 @@ export function workspaces(host: Host) {
           )?.requestId?.startsWith(`lander-agent:${entry.id}:`)
         )
           return undefined
-    return `The lander is landing W${entry.conversationId}; ask again when it is idle`
+    return `The lander is landing #${entry.conversationId}; ask again when it is idle`
   }
   const get = async (id: ConversationId, context: Context) =>
     (await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context))?.items[String(id)]

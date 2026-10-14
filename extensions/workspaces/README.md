@@ -73,8 +73,8 @@ The lander conversation is configured from the effective agent definition named 
 `agents/lander.md`, overridable in `~/.ultimate/agents/` or the project's `.ultimate/agents/`, editable in the Agents
 tab): its model (else the main conversation's), thinking, tools (minus `workspace`) and instructions. Opening applies
 it to every lander conversation, and so does any change to a definition folder, so the next message or failure uses
-the definition as it is now. Its composer works like any conversation's: ask it what landed or why W12 failed. A
-`lander_state` prompt section, only in lander conversations, lists that source's queue (id, W#, tip, state, step) and
+the definition as it is now. Its composer works like any conversation's: ask it what landed or why #12 failed. A
+`lander_state` prompt section, only in lander conversations, lists that source's queue (submission id, #N, tip, state, step) and
 its latest results (outcome, sha, push, reason).
 
 `onFailure: diagnose | fix` (default `diagnose`) decides what happens on a merge conflict or a check that failed
