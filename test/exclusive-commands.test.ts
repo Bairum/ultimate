@@ -3,8 +3,60 @@ import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { expect, it, vi } from 'vitest'
+import { createBashTool } from '@earendil-works/pi-durable/tools'
+import type { ToolExecutionApi } from '@earendil-works/pi-durable'
+import codingTools, * as codingToolsModule from '../extensions/coding-tools/server.ts'
+import exclusiveCommands, {
+  order as exclusiveOrder,
+} from '../extensions/exclusive-commands/server.ts'
+import { Slot } from '../extensions/exclusive-commands/slot.ts'
+import type { ExtensionHost } from '../server/extensions.ts'
 import { context } from '../server/harness.ts'
 import { fauxServer, temp, removeTemp, until } from './helpers.ts'
+
+it('composes timeout outside exclusivity and preserves the original default budget', async () => {
+  vi.stubEnv('ULTIMATE_BASH_TIMEOUT', '3')
+  const slot = new Slot()
+  const host = {
+    resource: () => slot,
+    projectSettings: async () => ({ exclusiveCommands: ['heavy'] }),
+  } as unknown as ExtensionHost
+  const exclusive = exclusiveCommands(host).wraps![0]
+  const defaults = codingTools.wraps![0]
+  if (!('tool' in exclusive) || !('tool' in defaults)) throw new Error('Expected tool wrappers')
+  const execute = vi.fn<ReturnType<typeof createBashTool>['execute']>(async () => {
+    throw new Error('Command timed out after 2 seconds')
+  })
+  const base = { ...createBashTool(), execute }
+  const tool = defaults.wrap(exclusive.wrap(base)) as ReturnType<typeof createBashTool>
+  const api = { output: vi.fn<ToolExecutionApi['output']>() } as unknown as ToolExecutionApi
+  const now = vi.spyOn(performance, 'now')
+  try {
+    expect(codingToolsModule).not.toHaveProperty('order')
+    expect(0).toBeGreaterThan(exclusiveOrder)
+    for (const explicit of [false, true]) {
+      now.mockReturnValueOnce(0).mockReturnValueOnce(1500)
+      await expect(
+        tool.execute({ command: 'heavy', ...(explicit ? { timeout: 3 } : {}) }, api, context),
+      ).rejects.toThrow(
+        explicit
+          ? 'Command timed out after 2 seconds'
+          : 'Tripwire: bash ran past the 3 s default limit',
+      )
+      expect(execute.mock.lastCall?.[0]).toEqual({ command: 'heavy', timeout: 2 })
+      expect(slot.command).toBeUndefined()
+    }
+    now.mockReturnValue(0)
+    await expect(exclusive.wrap(base).execute({ command: 'heavy' }, api, context)).rejects.toThrow(
+      'Command timed out after 2 seconds',
+    )
+    expect(execute.mock.lastCall?.[0]).toEqual({ command: 'heavy', timeout: undefined })
+    expect(slot.command).toBeUndefined()
+  } finally {
+    now.mockRestore()
+    vi.unstubAllEnvs()
+  }
+})
 
 it('serializes matching commands across conversations without delaying other bash calls', async () => {
   const directory = await temp('ultimate-exclusive-')

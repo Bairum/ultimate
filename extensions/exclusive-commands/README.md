@@ -13,11 +13,14 @@ output and ignored. Only matching commands acquire the shared FIFO slot; other c
 streams one line naming the command holding the slot. Aborting a waiter removes it without releasing another call's
 slot; the holder releases in `finally`, including on error or cancellation.
 
-A matching call's `timeout` covers waiting plus execution. Without one, it uses coding-tools' default bash tripwire
-(3600 seconds, overridden by `ULTIMATE_BASH_TIMEOUT`). A deadline while waiting fails with an error naming the
-current holder and the limit; the waiting command never starts. After acquisition, bash receives the remaining
-seconds rounded up, with a minimum of one second. The exclusive wrapper runs outside coding-tools in folder order
-and reports the tripwire if that remaining default budget expires during execution.
+A matching call's effective `args.timeout` covers waiting plus execution. The default-timeout wrapper
+(default server order 0) runs outside this wrapper (`order = -10`) and supplies the default budget (3600 seconds, overridden
+by `ULTIMATE_BASH_TIMEOUT`). This extension reads only args and its own settings: it neither injects a timeout nor
+formats tripwire errors. If no wrapper or caller supplies a timeout, waiting and execution have no time limit.
+A deadline while waiting fails with an error naming the current holder and the limit; the waiting command never
+starts. After acquisition, bash receives the remaining seconds rounded up, with a minimum of one second.
+Execution timeout errors pass through to the outer wrapper, which reports the tripwire for default budgets
+and leaves explicit timeout errors unchanged.
 
 The slot uses `host.resource`, so every conversation shares it and extension reloads preserve it. It is in memory:
 a process crash frees it, and Pi reports interrupted calls as usual. There is no cross-process or durable lock.

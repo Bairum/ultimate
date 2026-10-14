@@ -7,14 +7,14 @@ import {
   createWriteTool,
 } from '@earendil-works/pi-durable/tools'
 
-export function defaultBashTimeout() {
+function defaultBashTimeout() {
   const seconds = Number(process.env.ULTIMATE_BASH_TIMEOUT ?? 3600)
   if (!Number.isFinite(seconds) || seconds <= 0)
     throw new Error('ULTIMATE_BASH_TIMEOUT must be a positive finite number of seconds')
   return seconds
 }
 
-export const bashTripwireMessage = (seconds: number) =>
+const bashTripwireMessage = (seconds: number) =>
   `Tripwire: bash ran past the ${seconds} s default limit and was stopped. Pass timeout for longer commands.`
 
 export function prepareBash(
@@ -49,7 +49,7 @@ export default defineExtension({
         } catch (error) {
           if (
             error instanceof Error &&
-            error.message === `Command timed out after ${timeout} seconds`
+            /^Command timed out after [\d.e+-]+ seconds$/.test(error.message)
           )
             throw new Error(bashTripwireMessage(timeout), { cause: error })
           throw error
