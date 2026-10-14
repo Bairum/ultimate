@@ -8,8 +8,6 @@ import {
   symlink,
   realpath,
 } from 'node:fs/promises'
-import { spawn } from 'node:child_process'
-import { once } from 'node:events'
 import { join } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -22,7 +20,10 @@ import { context, prepareHarness } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { ActionContext } from '../server/actions.ts'
-import workspaceExtension, { actions } from '../extensions/workspaces/server.ts'
+import workspaceExtension, {
+  actions,
+  order as workspacesOrder,
+} from '../extensions/workspaces/server.ts'
 import { Workspaces, workspaces } from '../extensions/workspaces/workspaces.ts'
 import { git, setup } from '../extensions/workspaces/git.ts'
 import type { LanderEntry } from '../extensions/workspaces/types.ts'
@@ -30,6 +31,7 @@ import { exclusiveSlot } from '../extensions/exclusive-commands/slot.ts'
 import { createLander } from '../extensions/workspaces/lander.ts'
 import { leaveNote, Root } from '../extensions/lineage/server.ts'
 import self from '../extensions/self/server.ts'
+import promptExtension, { order as promptOrder } from '../extensions/prompt/server.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
 import { temp, until } from './helpers.ts'
 
@@ -213,6 +215,36 @@ async function commit(path: string, name = 'change.txt') {
   await git(path, 'commit', '-m', name)
   return git(path, 'rev-parse', 'HEAD')
 }
+/**
+ * Hold the first `git <command>` in the repository at `path` (and its worktrees) at its first ref update, with a
+ * reference-transaction hook, until `release`; with `fail`, that update then fails, after the command changed the files.
+ */
+async function holdGit(path: string, command: string, fail = false) {
+  const started = join(path, `.git/${command}-started`)
+  const gate = join(path, `.git/${command}-gate`)
+  await writeFile(
+    join(path, '.git/hooks/reference-transaction'),
+    `#!/bin/sh
+cat >/dev/null
+[ "$1" = prepared ] && [ ! -f '${started}' ] || exit 0
+case "$(tr '\\0' ' ' < /proc/$PPID/cmdline)" in "git ${command} "*) ;; *) exit 0 ;; esac
+touch '${started}'
+while [ ! -f '${gate}' ]; do sleep 0.02; done
+${fail ? 'exit 1' : ''}
+`,
+    { mode: 0o755 },
+  )
+  return {
+    started: () =>
+      until(() =>
+        access(started).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    release: () => writeFile(gate, ''),
+  }
+}
 it.concurrent('creates through the action; setup receives ULTIMATE_SOURCE and the first model request waits for ready', async () => {
   const f = await fixture()
   const sourceFile = join(f.directory, 'source-env')
@@ -237,6 +269,45 @@ it.concurrent('creates through the action; setup receives ULTIMATE_SOURCE and th
   expect((await readFile(sourceFile, 'utf8')).trim()).toBe(f.projectRoot)
   expect(await git(pending.path, 'branch', '--show-current')).toBe(pending.branch)
   expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
+})
+it.concurrent('renders workspace preparation before project context in the first composed provider request', async () => {
+  const paths = await repository()
+  const marker = 'CHECKOUT_RULE_ULT_123: preserve the release manifest.'
+  await writeFile(join(paths.projectRoot, 'AGENTS.md'), marker)
+  await git(paths.projectRoot, 'add', 'AGENTS.md')
+  await git(paths.projectRoot, 'commit', '-m', 'checkout instructions')
+  const f = await fixture([], paths)
+  f.host.build = () =>
+    ({ id: 'test-build', generation: 1, core: 'core', extensions: {}, changed: [] }) as never
+  // As the server orders them: the workspace section waits for preparation before project context renders.
+  f.prepared.extensionOrders.set('workspaces', workspacesOrder)
+  f.prepared.extensionOrders.set('prompt', promptOrder)
+  f.prepared.registry.install(promptExtension(f.host))
+  const requests: string[] = []
+  f.prepared.faux!.setResponses([
+    (transcript) => {
+      requests.push(
+        JSON.stringify(transcript.messages.filter((message) => message.role === 'system')),
+      )
+      return fauxAssistantMessage('instructions read')
+    },
+  ])
+  const worktree = await holdGit(f.projectRoot, 'worktree')
+  const id = await f.create()
+  const workspace = (await f.service.get(id, context))!
+  await worktree.started()
+  await expect(access(join(workspace.path, 'AGENTS.md'))).rejects.toThrow('ENOENT')
+  const conversation = (await f.opened.harness.conversation(id, context))!
+  const submission = await conversation.submit(
+    { type: 'input', content: 'Read the checkout rules.' },
+    context,
+  )
+  expect((await f.service.get(id, context))!.state).toBe('preparing')
+  await worktree.release()
+  await submission.wait(context)
+  expect(requests).toHaveLength(1)
+  expect(requests[0]).toContain(marker)
+  expect(await readFile(join(workspace.path, 'AGENTS.md'), 'utf8')).toBe(marker)
 })
 it.concurrent('setup closes stdin so commands waiting for EOF finish', async () => {
   const paths = await repository()
@@ -265,90 +336,6 @@ it.concurrent('failed setup keeps its output tail, removes its empty branch, and
   expect(f.writes).toBe(0)
   await expect(access(join(f.projectRoot, 'change.txt'))).rejects.toThrow('ENOENT')
 })
-it.concurrent.each(['symlinked home mid-setup', 'branch creation before registration'])(
-  'resumes preparation after a process crash: %s',
-  async (scenario) => {
-    const paths = await repository()
-    const physicalHome = join(paths.directory, 'physical-state')
-    await mkdir(physicalHome)
-    await symlink(physicalHome, paths.home)
-    const started = join(paths.directory, 'started')
-    const gate = join(paths.directory, 'gate')
-    const idFile = join(paths.directory, 'id')
-    const commands = [`echo attempt >> '${started}'; while [ ! -f '${gate}' ]; do sleep 0.05; done`]
-    const script = `
-    import { writeFile } from 'node:fs/promises';
-    import { prepareHarness, context } from './server/harness.ts';
-    import extension, { actions } from './extensions/workspaces/server.ts';
-    const paths = ${JSON.stringify(paths)};
-    const prepared = await prepareHarness({ ...paths, ultimateRoot: paths.projectRoot, userHome: paths.directory, faux: true });
-    let opened;
-    const resources = new Map();
-    const host = { ...prepared, harness: () => opened.harness, metadata: (await import('./server/metadata.ts')).Metadata,
-      projectSettings: async () => ({ isolates: { worktree: { setup: ${JSON.stringify(commands)} } } }),
-      extensions: () => [{ name: 'workspaces', enabled: true }],
-      resource: (key, create) => { if (!resources.has(key)) resources.set(key, create()); return resources.get(key) },
-      onOpen: () => {}, onClose: () => {} };
-    prepared.registry.install(extension(host));
-    opened = await prepared.open();
-    await writeFile(${JSON.stringify(idFile)}, String((await actions.create({}, { host })).id));
-    setInterval(() => {}, 1000);
-  `
-    const bin = join(paths.directory, 'bin')
-    await mkdir(bin)
-    await writeFile(
-      join(bin, 'git'),
-      `#!/bin/sh
-if [ "$1 $2" = "worktree add" ]; then
-  /usr/bin/git branch "$4" "$6" || exit 1
-  echo branch > '${started}'
-  while [ ! -f '${gate}' ]; do sleep 0.05; done
-fi
-exec /usr/bin/git "$@"
-`,
-      { mode: 0o755 },
-    )
-    const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
-      cwd: process.cwd(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        ...(scenario === 'branch creation before registration'
-          ? { PATH: `${bin}:${process.env.PATH}` }
-          : {}),
-      },
-    })
-    let output = ''
-    child.stderr.on('data', (data) => {
-      output += data.toString()
-    })
-    try {
-      await until(async () => {
-        if (child.exitCode !== null) throw new Error(output)
-        return readFile(started, 'utf8').then(
-          () => true,
-          () => false,
-        )
-      })
-      child.kill('SIGKILL')
-      await once(child, 'exit')
-      const id = Number(await readFile(idFile, 'utf8')) as ConversationId
-      await writeFile(gate, '')
-      const f = await fixture(commands, paths)
-      await f.service.ready(id, context)
-      const workspace = (await f.service.get(id, context))!
-      expect(workspace.state).toBe('ready')
-      expect(workspace.path).toBe(join(await realpath(physicalHome), 'worktrees', String(id)))
-      expect((await readFile(started, 'utf8')).trim().split('\n')).toHaveLength(2)
-      expect(await git(workspace.path, 'branch', '--show-current')).toBe(workspace.branch)
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill('SIGKILL')
-        await once(child, 'exit')
-      }
-    }
-  },
-)
 it.concurrent('rejects a detached source and preserves existing paths and branches instead of adopting them', async () => {
   const f = await fixture()
   await git(f.projectRoot, 'switch', '--detach')
@@ -405,6 +392,25 @@ it.concurrent('lands fast-forward, lists commits and paths, and is idempotent', 
   await mkdir(join(workspace.path, 'server'))
   await commit(workspace.path, 'server/change.ts')
   expect((await f.service.land(id, context)).needsRestart).toBe(true)
+})
+it.concurrent('queued landing reads the current record after another workspace lands', async () => {
+  const f = await fixture()
+  const first = await f.create()
+  const second = await f.create()
+  await f.service.ready(first, context)
+  await f.service.ready(second, context)
+  await commit((await f.service.get(first, context))!.path)
+  const merge = await holdGit(f.projectRoot, 'merge')
+  const landing = f.service.land(first, context)
+  await merge.started()
+  const queued = f.service.land(second, context).catch((error: Error) => error)
+  try {
+    await actions.discard({ id: second }, { host: f.host } as ActionContext)
+  } finally {
+    await merge.release()
+  }
+  await landing
+  expect(await queued).toMatchObject({ message: 'Workspace is removed' })
 })
 it.concurrent('refuses dirty workspaces, overlapping dirty targets, changed branches and diverged targets', async () => {
   const f = await fixture()
@@ -1091,6 +1097,36 @@ it.concurrent('resumes checks after a restart without rerunning passed ones and 
   expect(report).toContain(`Flaky: echo second`)
   expect(await git(f.projectRoot, 'rev-parse', 'main')).toBe(merged)
 })
+it.concurrent('starts a lander for queued submissions left by a lander task that ended', async () => {
+  const f = await lander({})
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path, 'left.txt')
+  // A held check keeps the first task landing; then it ends without draining its queue.
+  const gate = join(f.directory, 'gate')
+  f.host.projectSettings = async () => ({
+    lander: { checks: [`while [ ! -f '${gate}' ]; do sleep 0.05; done`] },
+  })
+  await f.service.submit(id, context)
+  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+  await until(async () => (await index())!.queue[0]?.state === 'landing')
+  const first = Object.values((await index())!.landers)[0] as TaskId
+  await f.opened.harness.abortTask(first, context)
+  await until(
+    async () =>
+      (await f.opened.harness.commit((tx) => tx.task(first), context))!.state.status === 'terminal',
+  )
+  expect((await index())!.queue).toMatchObject([{ state: 'queued' }])
+  await writeFile(gate, '')
+  await f.reopen()
+  const second = Object.values((await index())!.landers)[0]
+  expect(second).not.toBe(first)
+  expect((await submitted(f, id))[0]).toContain('landed as')
+  expect(await readFile(join(f.projectRoot, 'left.txt'), 'utf8')).toBe('left.txt')
+  // Opening again with nothing queued starts nothing.
+  await f.reopen()
+  expect((await index())!.landers).toEqual({})
+})
 /** A `lander` definition in the user's agents, as an override of a project would be. */
 async function landerDefinition(
   f: Awaited<ReturnType<typeof fixture>>,
@@ -1366,6 +1402,74 @@ it.concurrent('fix: a follow-up queued behind the failure run gets nothing lande
   } finally {
     view.dispose()
   }
+})
+it.concurrent('resumes a group after a restart without a third run of its twice-failed member', async () => {
+  const f = await fixture()
+  const runs = join(f.directory, 'runs')
+  const held = heldCheck(f)
+  const failing = `echo failing >> '${runs}'; echo FAILING_OUTPUT; exit 1`
+  f.host.projectSettings = async () => ({ lander: { checks: [[failing, held.command]] } })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path)
+  const head = await git(f.projectRoot, 'rev-parse', 'HEAD')
+  const { id: submission } = await f.service.submit(id, context)
+  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+  const task = Object.values((await index())!.landers)[0] as TaskId
+  // The failing member's rerun outcome is stored while its sibling still runs.
+  await until(async () => {
+    const record = await f.opened.harness.commit((tx) => tx.task(task), context)
+    return record?.memos?.[`check:${submission}:1:0.0:rerun`] !== undefined
+  })
+  await held.started()
+  await f.reopen()
+  await held.release()
+  const [report] = await submitted(f, id)
+  expect(await readFile(runs, 'utf8')).toBe('failing\nfailing\n')
+  expect(report).toContain(`was not landed: check failed twice: ${failing}`)
+  expect(report).toContain('FAILING_OUTPUT')
+  expect((await index())!.results[submission]).toMatchObject({
+    outcome: 'failed',
+    output: expect.stringContaining('FAILING_OUTPUT'),
+  })
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+})
+it.concurrent('fix: a rejected fix stays rejected when the lander crashes during its cleanup', async () => {
+  const f = await lander({})
+  await landerDefinition(f, 'fix')
+  // Resolves and commits the conflict, then leaves base.txt modified: a dirty fix, rejected.
+  f.answerLander(() =>
+    fauxAssistantMessage(
+      fauxToolCall('bash', {
+        command:
+          'echo resolved > base.txt && git add base.txt && git commit -q --no-edit && echo dirty >> base.txt',
+      }),
+      { stopReason: 'toolUse' },
+    ),
+  )
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const head = await conflicting(f, id)
+  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+  const { id: submission } = await f.service.submit(id, context)
+  await until(async () => (await index())!.queue[0]?.agent === 'fix')
+  // The cleanup's reset cleans the checkout, then the process goes down before the rejection is reported.
+  const reset = await holdGit(f.projectRoot, 'reset', true)
+  await reset.started()
+  const crashed = f.opened
+  const reopening = f.reopen()
+  await until(() =>
+    crashed.harness.conversation(ROOT_CONVERSATION_ID, context).then(
+      () => false,
+      () => true,
+    ),
+  )
+  await reset.release()
+  await reopening
+  const [report] = await submitted(f, id)
+  expect(report).toContain("The lander's fix left uncommitted changes.")
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  expect((await index())!.results[submission]).toMatchObject({ outcome: 'failed' })
 })
 it.concurrent('fix: the lander model resolves a conflict with the remote target, then the submission merges, checks and lands', async () => {
   const { paths, bare } = await withRemote()

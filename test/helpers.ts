@@ -4,7 +4,7 @@ import { join, resolve, sep } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
 import type { ConversationView } from '@earendil-works/pi-durable'
-import { afterAll, beforeEach, afterEach, vi } from 'vitest'
+import { afterAll, vi } from 'vitest'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { createServer, prepareServer } from '../server/main.ts'
 import type { ServerOptions } from '../server/main.ts'
@@ -27,11 +27,10 @@ export function cleanEnv(extra: NodeJS.ProcessEnv = {}) {
     ...extra,
   }
 }
-beforeEach(() => {
-  for (const key of Object.keys(process.env))
-    if (key.startsWith('ULTIMATE_')) vi.stubEnv(key, undefined)
-})
-afterEach(() => vi.unstubAllEnvs())
+// Tests run without the supervisor's ULTIMATE_* variables: removed once, not stubbed per test, so concurrent tests never
+// see them come back. Stubs a test leaves behind end with its file; stubbing restores to unset.
+for (const key of Object.keys(process.env)) if (key.startsWith('ULTIMATE_')) delete process.env[key]
+afterAll(() => vi.unstubAllEnvs())
 
 // Every temp() directory is removed once the test file finishes, so runs do not fill the tmpfs.
 const temps = new Set<string>()

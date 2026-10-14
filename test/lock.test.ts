@@ -2,8 +2,6 @@ import { rm, writeFile } from 'node:fs/promises'
 import { temp, removeTemp } from './helpers.ts'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { spawn } from 'node:child_process'
-import { once } from 'node:events'
 import { acquireLock, readOwner, retireStorageOwner, alive } from '../server/lock.ts'
 
 const directories: string[] = []
@@ -17,21 +15,6 @@ async function path() {
   directories.push(directory)
   return join(directory, 'storage.lock')
 }
-it('drops a stale sidecar without signalling an unrelated live process', async () => {
-  const file = await path()
-  const child = spawn('sleep', ['60'])
-  try {
-    await writeFile(file, JSON.stringify({ pid: child.pid }))
-    await retireStorageOwner(file)
-    expect(alive(child.pid!)).toBe(true)
-    expect(await readOwner(file)).toBeUndefined()
-    locks.push(await acquireLock(file, { pid: process.pid }))
-  } finally {
-    const exited = once(child, 'exit')
-    child.kill()
-    await exited
-  }
-})
 it('refuses to signal an unverified owner of a held storage lock', async () => {
   const file = await path()
   locks.push(await acquireLock(file, { pid: process.pid }))

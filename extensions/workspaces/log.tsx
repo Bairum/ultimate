@@ -26,6 +26,7 @@ import {
 } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import { useWorkspaceIndex } from './data.tsx'
+import { inProgress, runningStep, superseded } from './steps.tsx'
 import type { LanderAsk, LanderEntry, LanderOutcome, LanderStep, SubmitResult } from './types.ts'
 
 const short = (sha: string) => sha.slice(0, 7)
@@ -306,18 +307,6 @@ function StepLine({
   )
 }
 
-/** A running check's line gives way to its result, which follows it. */
-const runningStep = /^(?:checking|rerunning): (.*)$/s
-const superseded = (row: LanderStep, later: readonly LanderStep[]) => {
-  const command = runningStep.exec(row.step)?.[1]
-  return command !== undefined && later.some((next) => next.check?.command === command)
-}
-
-/** A group's checks run together: a running check whose later rows all belong to its group still runs. */
-const pending = (row: LanderStep, later: readonly LanderStep[]) =>
-  runningStep.test(row.step) &&
-  later.every((next) => next.check !== undefined || runningStep.test(next.step))
-
 /**
  * A submission's steps behind an "N steps" toggle, ending in a quiet link to the lander conversation's full log.
  * `open` and `onOpenChange` control it; without them it starts collapsed.
@@ -361,11 +350,7 @@ function Steps({
       <CollapsibleContent className="pt-1">
         {rows.map((row, index) => (
           <StepLine
-            active={
-              running &&
-              !row.check &&
-              (index === rows.length - 1 || pending(row, rows.slice(index + 1)))
-            }
+            active={running && inProgress(row, rows.slice(index + 1))}
             done={index < rows.length - 1 || ended === 'landed'}
             failed={ended === 'failed' && index === rows.length - 1}
             key={index}
@@ -407,12 +392,10 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
   const done = next !== undefined && !failed
   const landing =
     busy &&
-    !data.check &&
-    (!next ||
-      pending(
-        data as LanderStep,
-        after.map((other) => other.data as LanderStep),
-      ))
+    inProgress(
+      data as LanderStep,
+      after.map((other) => other.data as LanderStep),
+    )
   if (data.outcome) {
     const outcome = data as LanderEntry & LanderOutcome
     const landed = data.outcome === 'landed'
