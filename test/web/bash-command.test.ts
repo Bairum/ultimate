@@ -30,6 +30,14 @@ it('ignores operators and program names inside quotes, substitutions, and heredo
   expect(formatBashCommand(heredoc).summary).toBe('cat')
 })
 
+it("lists each step's pipeline programs for the header arrows", () => {
+  expect(
+    formatBashCommand(
+      'git -C x status 2>&1 | head -3 && timeout 5 pnpm test || echo no; for f in a; do :; done | sort',
+    ).steps.map((step) => step.programs),
+  ).toEqual([['git status', 'head'], ['pnpm test'], ['echo'], ['for', 'sort']])
+})
+
 it('names programs through wrappers, env assignments, git -C and package runners', () => {
   for (const [command, summary] of [
     ['timeout 120 pnpm test test/a.test.ts 2>&1 | tail -20', 'pnpm test | tail'],
@@ -97,7 +105,7 @@ it('lifts only a literal leading cd into the directory', () => {
 it('keeps unparsable input as one raw step', () => {
   for (const command of ["echo 'unfinished", 'for f in *.ts; do echo $f', 'pwd &&']) {
     expect(formatBashCommand(command)).toEqual({
-      steps: [{ text: command, heredocs: [] }],
+      steps: [{ text: command, programs: [], heredocs: [] }],
       summary: command.split('\n')[0],
     })
   }

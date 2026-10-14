@@ -14,6 +14,8 @@ export interface BashStep {
   operator?: '&&' | '||' | ';'
   /** The step's source, without heredoc bodies. */
   text: string
+  /** The programs of its pipeline, in order: `['rg', 'head']`. */
+  programs: string[]
   heredocs: Heredoc[]
 }
 
@@ -111,7 +113,7 @@ function literalDirectory(word: Word | undefined) {
 /** Display only: the command's steps and programs from a real Bash parse; unparsable input stays one raw step. */
 export function formatBashCommand(command: string): BashCommand {
   const raw: BashCommand = {
-    steps: [{ text: command, heredocs: [] }],
+    steps: [{ text: command, programs: [], heredocs: [] }],
     summary: command.split('\n')[0],
   }
   const script = parse(command)
@@ -128,6 +130,7 @@ export function formatBashCommand(command: string): BashCommand {
     steps.push({
       ...(operator ? { operator } : {}),
       text: command.slice(node.pos, end),
+      programs: stages(node).map(stageLabel).filter(Boolean),
       heredocs: heredocs(command, node),
     })
     const name = stageLabel(node)

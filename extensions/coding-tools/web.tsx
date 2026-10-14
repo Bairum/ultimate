@@ -1,5 +1,5 @@
 // Pi upstream: @earendil-works/pi-durable@1.2.0 src/tools/bash.ts and src/tools/edit.ts — internal bash exit_code diagnostic message drives exitOf and untyped details.patch/details.diff drive Edit. Drop when Pi exports structured bash outcomes and structured diff rows for rendering.
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnsiOutput } from '@/components/ai/ansi-output'
 import { CodeBlock, languageFromPath } from '@/components/ai/code-block'
 import {
@@ -21,7 +21,7 @@ import {
   useToolDuration,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
-import { formatBashCommand } from './bash-command.tsx'
+import { type BashStep, formatBashCommand } from './bash-command.tsx'
 import { countChanges, Diff, editRows, parseDisplayDiff, parsePatch } from './diff.tsx'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
@@ -200,81 +200,143 @@ function exitOf(call: ToolCallView): { label: string; ok: boolean } | undefined 
   return { label: 'failed', ok: false }
 }
 
+const separators: Record<string, string> = { '&&': '&&', '||': '||', ';': '·' }
+
+/** The file a heredoc writes, by name: `cat > src/a.ts <<EOF` writes `a.ts`. */
+const written = (step: BashStep) =>
+  step.heredocs
+    .find((heredoc) => heredoc.file && !heredoc.file.startsWith('heredoc.'))
+    ?.file?.split('/')
+    .at(-1)
+
+/** The header line: each step's programs joined by pipe arrows, steps by their operators, repeats folded. */
+function BashSummary({ steps }: { steps: BashStep[] }) {
+  const runs: { step: BashStep; count: number }[] = []
+  for (const step of steps) {
+    const previous = runs.at(-1)
+    if (
+      previous &&
+      previous.step.programs.join() === step.programs.join() &&
+      step.operator !== '||'
+    )
+      previous.count++
+    else runs.push({ step, count: 1 })
+  }
+  return (
+    <>
+      {runs.map(({ step, count }, index) => (
+        <span key={index}>
+          {index > 0 && (
+            <span className="px-1.5 text-muted-foreground/50">
+              {separators[step.operator ?? ';']}
+            </span>
+          )}
+          {step.programs.map((name, position) => {
+            const [program, ...rest] = name.split(' ')
+            return (
+              <span key={position}>
+                {position > 0 && <span className="px-1 text-brand/70">→</span>}
+                <span className="text-foreground/90">{program}</span>
+                {rest.length > 0 && (
+                  <span className="text-muted-foreground"> {rest.join(' ')}</span>
+                )}
+              </span>
+            )
+          })}
+          {written(step) && <span className="text-muted-foreground"> &gt; {written(step)}</span>}
+          {count > 1 && <span className="pl-1 text-muted-foreground/60">×{count}</span>}
+        </span>
+      ))}
+    </>
+  )
+}
+
 function Bash({ call }: { call: ToolCallView }) {
   const command = text(call.args.command)
   const display = useMemo(() => formatBashCommand(command), [command])
   const directory = usePath(display.directory ?? '')
-  const multiline = command.includes('\n')
-  const formatted =
-    !!display.directory ||
-    display.steps.length > 1 ||
-    display.steps.some((step) => step.heredocs.length > 0)
-  const plain = !formatted && !multiline
+  const parsed = display.steps.some((step) => step.programs.length > 0)
+  const plain =
+    parsed &&
+    display.steps.length === 1 &&
+    display.steps[0].programs.length === 1 &&
+    !display.directory &&
+    !command.includes('\n')
   const duration = useToolDuration(call)
   const exit = exitOf(call)
   const output = call.output
   const running = call.status === 'running'
+  const [toggled, setToggled] = useState<boolean>()
+  const open = toggled ?? (running || call.status === 'error')
   const scroller = useRef<HTMLPreElement>(null)
   useEffect(() => {
     const element = scroller.current
     if (running && element) element.scrollTop = element.scrollHeight
   }, [output, running])
   return (
-    <Tool defaultOpen>
+    <Tool onOpenChange={setToggled} open={open}>
       <ToolHeader
         meta={
           <>
-            {exit && <span className={exit.ok ? 'text-success' : 'text-error'}>{exit.label}</span>}
+            {display.directory && (
+              <span className="max-w-48 truncate" title={display.directory}>
+                {directory}
+              </span>
+            )}
+            {exit && !exit.ok && <span className="text-error">{exit.label}</span>}
             {duration && <span>{duration}</span>}
           </>
         }
         name="$"
         state={call.status}
         title={
-          <span className="text-foreground/90" title={plain ? undefined : display.summary}>
-            {plain ? command : display.summary}
+          <span title={command.split('\n')[0]}>
+            {plain || !parsed ? (
+              <span className="text-foreground/90">{command.split('\n')[0]}</span>
+            ) : (
+              <BashSummary steps={display.steps} />
+            )}
           </span>
         }
       />
       <ToolContent>
-        {(formatted || multiline) && (
-          <ToolSection className="space-y-1">
+        {!plain && (
+          <ToolSection className="space-y-1.5">
             {display.directory && (
-              <div className="truncate text-muted-foreground/70" title={display.directory}>
-                cd {directory} <span className="text-muted-foreground/50">&&</span>
+              <div className="flex gap-2 text-muted-foreground/70">
+                <span className="w-4 shrink-0 text-muted-foreground/50">$</span>
+                <span className="min-w-0 truncate" title={display.directory}>
+                  cd {directory}
+                </span>
               </div>
             )}
-            <div className="space-y-1 text-foreground/85">
-              {display.steps.map((step, index) => (
-                <div className="flex gap-2" key={index}>
-                  <span className="w-4 shrink-0 text-muted-foreground/50">
-                    {step.operator ?? '$'}
-                  </span>
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <pre className="whitespace-pre-wrap break-words">{step.text}</pre>
-                    {step.heredocs.map((heredoc, position) => (
-                      <div key={position}>
-                        <CodeBlock
-                          className="rounded-none border-none"
-                          code={heredoc.body}
-                          language={languageFromPath(heredoc.file ?? '')}
-                        />
-                        <pre className="text-muted-foreground/60">{heredoc.closing}</pre>
-                      </div>
-                    ))}
-                  </div>
+            {display.steps.map((step, index) => (
+              <div className="flex gap-2" key={index}>
+                <span className="w-4 shrink-0 pt-px text-muted-foreground/50">
+                  {step.operator ?? (display.directory ? '&&' : '$')}
+                </span>
+                <div className="min-w-0 flex-1 space-y-1">
+                  <CodeBlock
+                    className="rounded-none border-none bg-transparent [&_pre]:p-0 [&_pre]:whitespace-pre-wrap [&_.whitespace-pre]:whitespace-pre-wrap"
+                    code={step.text}
+                    language="bash"
+                  />
+                  {step.heredocs.map((heredoc, position) => (
+                    <div className="border-l-2 border-border/80" key={position}>
+                      <CodeBlock
+                        className="rounded-none border-none"
+                        code={heredoc.body}
+                        language={languageFromPath(heredoc.file ?? '')}
+                      />
+                      <pre className="px-3 text-muted-foreground/60">{heredoc.closing}</pre>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-            {formatted && (
-              <details className="text-muted-foreground/70">
-                <summary className="cursor-pointer">Original command</summary>
-                <pre className="mt-1 whitespace-pre-wrap break-words">{command}</pre>
-              </details>
-            )}
+              </div>
+            ))}
           </ToolSection>
         )}
-        {(multiline || output || running) && (
+        {(output || running) && (
           <pre
             className="max-h-80 overflow-auto bg-terminal px-3 py-2 leading-[1.55] whitespace-pre-wrap text-foreground/85"
             ref={scroller}
@@ -290,7 +352,7 @@ function Bash({ call }: { call: ToolCallView }) {
             )}
           </pre>
         )}
-        {!output && !running && !multiline && (
+        {!output && !running && (
           <ToolSection className={cn('text-muted-foreground/70')}>no output</ToolSection>
         )}
         <ToolDiagnostics diagnostics={call.diagnostics.filter((d) => d.code !== 'tool_error')} />
