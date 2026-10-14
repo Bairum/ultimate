@@ -141,7 +141,9 @@ conventions. Everything that is not core plumbing is an extension folder with a 
 pnpm dev                          # the server alone, without the supervisor
 ULTIMATE_FAUX=1 pnpm start        # a scripted demo model, no tokens
 pnpm check                        # format, lint, types
-pnpm test                         # integration tests with the faux model
+pnpm test                         # integration tests with the faux model, without browser tests
+pnpm test:browser                 # browser tests (*-browser.test.ts)
+pnpm test:all                     # both
 ```
 
 ## License

@@ -25,5 +25,5 @@ fixture.archive([]) // restore
 Regression command:
 
 ```sh
-pnpm test test/quiet-lists-browser.test.ts
+pnpm vitest run test/quiet-lists-browser.test.ts
 ```

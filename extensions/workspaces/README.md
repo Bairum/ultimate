@@ -65,7 +65,7 @@ submitter is that root. Failed submissions leave no root note; notes never wake 
    whether it pushed, "Needs restart." for `server/` or `shared/` changes to the running clone, and the lander
    conversation id for the full log (changed paths and output tails live there).
 
-Settings (`.ultimate/settings.json`): `"lander": { "checks": ["pnpm check"], "push": "origin" }`; both are optional.
+Settings (`.ultimate/settings.json`): `"lander": { "checks": ["pnpm check", "pnpm test:all"], "push": "origin" }`; both are optional.
 
 ### The lander's model
 

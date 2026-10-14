@@ -107,7 +107,7 @@ The host owns `ultimate.ui` on the root conversation, persisted in SQLite and co
 - `ULTIMATE_GENERATION` defaults to `1` and labels the process in system info.
 - `ULTIMATE_FAUX=1` uses a looping demo provider without tokens; its tools edit only a scratch file in the home.
 - Pi's models, settings, auth, skills, and context loaders are shared with `~/.pi/agent`; the `models` extension logs in to providers.
-- `pnpm check` checks format/lint/types; `pnpm test` runs faux integration tests with temporary homes.
+- `pnpm check` checks format/lint/types; `pnpm test` runs the faux integration tests with temporary homes, except browser tests; `pnpm test:browser` runs the `*-browser.test.ts` files and `pnpm test:all` runs both.
 - `tsconfig.swap.json` is the server-only type-check gate for swaps.
 - `tsconfig.json` (server, tests, tooling) references `tsconfig.web.json` (browser: `web/src`, `extensions/**/*.tsx`).
   `pnpm check` type-checks both; with plain `tsc`, run `tsc -b`.
@@ -125,7 +125,7 @@ A top-level conversation created with New isolated conversation works in its own
 `workspace status` shows its tip and the original checkout's tip.
 Read worker reports and diffs; rerun checks only for missing or thin evidence, reported failures, changes crossing
 workers, `server/` or `shared/` changes, or surprises in the diff, then land and call `workspace submit`.
-The lander is the final gate: it runs every configured check (here `pnpm check` and `pnpm test`) on the merged result
+The lander is the final gate: it runs every configured check (here `pnpm check` and `pnpm test:all`) on the merged result
 and reports back, landed or not, with findings.
 It fixes small failures when the project configures it to; on success it fast-forwards the branch and pushes to
 `lander.push` (here `origin`), so keep working while it runs.
@@ -163,7 +163,7 @@ This standing permission does not authorize releases, publishing, deployments, o
   properties), relative imports end in `.ts`.
 - Core server/web contracts live in `shared/protocol.ts`; extension-local types live with their extension.
 - Pin `@earendil-works/*` packages to exact versions; Pi Durable is experimental.
-- Checks: `pnpm check` (format, lint, types) and `pnpm test` must pass before a commit.
+- Checks: `pnpm check` (format, lint, types) and the tests covering your change must pass before a commit; the lander runs `pnpm test:all`.
 - Every user-visible result is designed, not dumped: status and outcomes (a subagent report, a landing, a failure) get a
   renderer that matches the existing cards (see `extensions/subagents/messages.tsx`, `extensions/workspaces/log.tsx`),
   never plain Markdown in a message. Look at the running app and recent screenshots first, write the expected look into
