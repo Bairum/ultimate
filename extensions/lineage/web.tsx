@@ -22,6 +22,7 @@ import {
   getState,
   NewConversationComposer,
   useComposer,
+  useCommands,
   useDialog,
   useDoc,
   useUltimate,
@@ -300,6 +301,29 @@ function BranchBrief() {
   )
 }
 
+function BranchAction({ entry }: { entry: EntryRecord }) {
+  const actions = useUltimate()
+  const branch = useCommands().find((command) => command.id === 'lineage.branch-at')
+  if (!branch) return null
+  return (
+    <button
+      aria-label="Branch from here"
+      title="Branch from here"
+      className="cursor-pointer rounded p-0.5 transition-colors hover:text-foreground"
+      onClick={() =>
+        void branch.run({
+          ...actions,
+          conversationId: entry.conversationId,
+          entryId: entry.id,
+        })
+      }
+      type="button"
+    >
+      <GitBranchIcon className="size-3" />
+    </button>
+  )
+}
+
 function BranchDialog() {
   const [open, setOpen] = useDialog(branchDialog)
   const actions = useUltimate()
@@ -347,6 +371,7 @@ export default defineWebExtension({
     'pi.reset': Brief,
   },
   slots: { 'composer.status': [BriefStatus], overlay: [BranchDialog] },
+  messageActions: [BranchAction],
   commands: [
     {
       id: 'lineage.branch-at',

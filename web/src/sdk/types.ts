@@ -67,7 +67,8 @@ export interface ToolCallView {
   result?: ToolResultMessage
 }
 
-export type ToolRenderer = ComponentType<{ call: ToolCallView }>
+/** `core` is the rendering so far, starting with the generic tool card. */
+export type ToolRenderer = ComponentType<{ call: ToolCallView; core: ReactNode }>
 /** `core` is the core's rendering of the entry: return it for entries you leave alone, or wrap it. */
 export type EntryRenderer = ComponentType<{ entry: EntryRecord; core: ReactNode }>
 
@@ -145,6 +146,8 @@ export interface WebExtension {
   /** Entry renderers by entry kind; they also replace the core renderer of a `pi.*` kind. */
   entries?: Readonly<Record<string, EntryRenderer>>
   inbox?: InboxRenderer
+  /** Contributions to the hover action row on stored messages, in discovery order. */
+  messageActions?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Document renderers; a later facet wins a kind. */
   documents?: readonly DocumentContribution[]
   commands?: readonly CommandContribution[]

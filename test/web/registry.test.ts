@@ -10,7 +10,8 @@ import {
   resolveSurface,
   slotItems,
   surfaceItems,
-  toolRenderer,
+  toolRenderers,
+  messageActionItems,
 } from '../../web/src/sdk/registry.ts'
 import type { ExtensionLoader, SurfaceItem } from '../../web/src/sdk/registry.ts'
 import type { WebExtension } from '../../web/src/sdk/types.ts'
@@ -248,8 +249,11 @@ describe('web extension registry', () => {
         }),
     })
     const records = registry.getSnapshot()
-    expect(toolRenderer(records, 'bash')?.extension).toBe('b')
-    expect(toolRenderer(records, 'read')).toBeUndefined()
+    expect(toolRenderers(records, 'bash')).toEqual([
+      { extension: 'a', version: 1, component: First },
+      { extension: 'b', version: 1, component: Second },
+    ])
+    expect(toolRenderers(records, 'read')).toEqual([])
     // Entry renderers compose instead of replacing each other: all of them, in folder order.
     expect(entryRenderers(records, 'pi.user').map((renderer) => renderer.extension)).toEqual([
       'a',
@@ -265,6 +269,26 @@ describe('web extension registry', () => {
     expect(documents.get('ultimate.plan')?.component).toBe(Second)
     expect(documents.get('a.notes')?.extension).toBe('a')
     expect(documents.has('codemode.store')).toBe(false)
+  })
+
+  it('lists message actions in discovery and contribution order, validating their shape', async () => {
+    const First = component('first')
+    const Second = component('second')
+    const registry = createRegistry()
+    await registry.setLoaders({
+      [path('builtin-z')]: async () => module({ messageActions: [First, Second] }),
+      [path('project-a')]: async () => module({ messageActions: [Second] }),
+    })
+    expect(messageActionItems(registry.getSnapshot())).toEqual([
+      { key: 'builtin-z:0', extension: 'builtin-z', version: 1, component: First },
+      { key: 'builtin-z:1', extension: 'builtin-z', version: 1, component: Second },
+      { key: 'project-a:0', extension: 'project-a', version: 1, component: Second },
+    ])
+    registry.replace('project-a', { default: { messageActions: [42] } })
+    expect(registry.getSnapshot()[1]?.error).toBe(
+      'messageActions must be an array of message action components',
+    )
+    expect(messageActionItems(registry.getSnapshot())).toHaveLength(3)
   })
 
   it('lists surfaces with Agent first, then by order and title, a later facet winning an id', async () => {

@@ -8,28 +8,24 @@ import {
   ToolOutput,
 } from '@/components/ai/tool'
 import { useExtensions, useToolDuration } from '../sdk/hooks.ts'
-import { toolRenderer } from '../sdk/registry.ts'
+import type { ReactNode } from 'react'
+import { toolRenderers } from '../sdk/registry.ts'
 import type { ToolCallView } from '../sdk/types.ts'
 import { ExtensionBoundary } from './boundary.tsx'
 
-/** A tool call through its extension renderer, or the generic one. */
+/** Tool renderers compose in discovery order, starting with the generic card. */
 export function ToolCallBlock({ call }: { call: ToolCallView }) {
-  const renderer = toolRenderer(useExtensions(), call.name)
-  const Renderer = renderer?.component
+  const content = toolRenderers(useExtensions(), call.name).reduce<ReactNode>(
+    (inner, { extension, version, component: Renderer }) => (
+      <ExtensionBoundary extension={extension} fallback={inner} key={extension} version={version}>
+        <Renderer call={call} core={inner} />
+      </ExtensionBoundary>
+    ),
+    <GenericToolCall call={call} />,
+  )
   return (
     <div className="empty:hidden" data-tool-call-id={call.id}>
-      {renderer && Renderer ? (
-        <ExtensionBoundary
-          extension={renderer.extension}
-          key={renderer.extension}
-          fallback={<GenericToolCall call={call} />}
-          version={renderer.version}
-        >
-          <Renderer call={call} />
-        </ExtensionBoundary>
-      ) : (
-        <GenericToolCall call={call} />
-      )}
+      {content}
     </div>
   )
 }

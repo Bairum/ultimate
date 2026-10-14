@@ -181,7 +181,7 @@ No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, entries, documents, commands })`; every key is optional. Extensions load
+`defineWebExtension({ slots, panels, surfaces, tools, entries, messageActions, documents, commands })`; every key is optional. Extensions load
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
 
 ### Slots
@@ -211,7 +211,7 @@ choices live in `ultimate.newConversation`; isolation uses `ext.conversations.cr
 sidebar New. Choices are passed to lineage `branch` and remembered for the next branch. Images disable send until the branch starts.
 An optional `isolated` prop forces that creation mode without changing the saved preference; `useComposer().isolated`
 lets the isolation control show the forced mode. Contextual commands can receive an `entryId` alongside `conversationId`
-through `useCommands()`; stored-message actions use this for `lineage.branch-at`.
+through `useCommands()`; a message-action component can pass its entry's id to a command.
 
 ### Panels
 
@@ -264,6 +264,32 @@ tools: {
 `ToolImage`) from `@/components/ai/tool` shows images as thumbnails that open full size; the generic card already does.
 To put a button beside the header (such as "open"), wrap `ToolHeader` in a flex row inside `Tool`: a button inside the
 header would toggle it.
+
+Tool renderers also receive `core`, starting with the generic tool card. Like entry renderers, they compose in
+discovery order (built-in → user → project): each receives the previous rendering, and its error boundary falls back
+to that rendering. Return `core` to leave it unchanged, wrap it to decorate it, or replace it with your own card.
+
+### Message actions
+
+`messageActions` contributes components to the hover action row on stored user and assistant messages, between the
+copy-message and copy-reference buttons. Each receives `{ entry }`, follows discovery order (then array order), and
+runs in its own error boundary. Return `null` for messages you do not act on. Keep buttons compact and give them an
+accessible label and a tooltip, as `lineage` does for its branch action.
+
+```tsx
+messageActions: [
+  ({ entry }) => (
+    <button
+      aria-label="Pin message"
+      title="Pin message"
+      onClick={() => pin(entry.id)}
+      type="button"
+    >
+      <PinIcon className="size-3" />
+    </button>
+  ),
+]
+```
 
 ### Entry renderers
 

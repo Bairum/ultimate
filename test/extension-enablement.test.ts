@@ -5,7 +5,7 @@ import { afterEach, expect, it } from 'vitest'
 import { fauxServer, sourceCopy, temp, until, attach } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { compareExtensions, discoverExtensions } from '../server/discovery.ts'
-import { createRegistry, toolRenderer } from '../web/src/sdk/registry.ts'
+import { createRegistry, toolRenderers } from '../web/src/sdk/registry.ts'
 
 const homes: string[] = []
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
@@ -87,7 +87,7 @@ it('orders facets by source so a project bash tool and renderer win regardless o
     ),
   )
   expect(registry.getSnapshot().every((record) => !record.error)).toBe(true)
-  expect(toolRenderer(registry.getSnapshot(), 'bash')?.extension).toBe('aaa-bash')
+  expect(toolRenderers(registry.getSnapshot(), 'bash').at(-1)?.extension).toBe('aaa-bash')
   // An explicit server order still takes precedence over source layering.
   expect(
     [

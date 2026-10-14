@@ -116,6 +116,7 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   tools: [objectOf(isComponent), 'an object of tool name → component'],
   entries: [objectOf(isComponent), 'an object of entry kind → component'],
   inbox: [isComponent, 'an inbox renderer component'],
+  messageActions: [arrayOf(isComponent), 'an array of message action components'],
   documents: [
     arrayOf(
       fields({
@@ -408,14 +409,25 @@ export function entryRenderers(
   })
 }
 
-/** The renderer for a tool; the last extension in discovery order wins. */
-export function toolRenderer(
+/** Every tool renderer in discovery order: each receives the previous rendering as `core`. */
+export function toolRenderers(
   records: readonly ExtensionRecord[],
   name: string,
-): { extension: string; version: number; component: ToolRenderer } | undefined {
-  for (const record of records.toReversed()) {
+): { extension: string; version: number; component: ToolRenderer }[] {
+  return records.flatMap((record) => {
     const component = record.extension?.tools?.[name]
-    if (component) return { extension: record.name, version: record.version, component }
-  }
-  return undefined
+    return component ? [{ extension: record.name, version: record.version, component }] : []
+  })
+}
+
+/** Hover actions on stored messages, preserving discovery order and each facet's array order. */
+export function messageActionItems(records: readonly ExtensionRecord[]) {
+  return records.flatMap(({ name, extension, version }) =>
+    (extension?.messageActions ?? []).map((component, index) => ({
+      key: `${name}:${index}`,
+      extension: name,
+      version,
+      component,
+    })),
+  )
 }
