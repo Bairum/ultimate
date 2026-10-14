@@ -673,18 +673,25 @@ export function createLander(
                   first = await runtime.memo(key, result, context)
                 }
                 if (first === 'passed') return {}
-                if (!(await runtime.memo<'passed'>(`${key}:rerun`, context))) {
+                // The rerun's outcome is durable either way: a resume while the group's other commands still run
+                // neither grants a third run nor loses the failure.
+                let rerun = await runtime.memo<{ failure?: string }>(`${key}:rerun`, context)
+                if (!rerun) {
                   await step(`rerunning: ${command}`)
                   const ran = await run(command)
-                  if (ran.failure !== undefined) return { failure: ran.failure }
-                  await step(`checked: ${command}`, {
-                    command,
-                    result: 'flaky',
-                    ...(ran.summary ? { summary: ran.summary } : {}),
-                  })
-                  await runtime.memo(`${key}:rerun`, 'passed', context)
+                  if (ran.failure === undefined)
+                    await step(`checked: ${command}`, {
+                      command,
+                      result: 'flaky',
+                      ...(ran.summary ? { summary: ran.summary } : {}),
+                    })
+                  rerun = await runtime.memo<{ failure?: string }>(
+                    `${key}:rerun`,
+                    ran.failure === undefined ? {} : { failure: ran.failure },
+                    context,
+                  )
                 }
-                return { flaky: true }
+                return rerun.failure === undefined ? { flaky: true } : { failure: rerun.failure }
               }
               // Every command settles before a failure hands over, so none still runs in the checkout.
               const settled = await Promise.allSettled(commands.map(settle))

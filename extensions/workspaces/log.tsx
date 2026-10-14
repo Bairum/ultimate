@@ -361,7 +361,11 @@ function Steps({
       <CollapsibleContent className="pt-1">
         {rows.map((row, index) => (
           <StepLine
-            active={running && (index === rows.length - 1 || pending(row, rows.slice(index + 1)))}
+            active={
+              running &&
+              !row.check &&
+              (index === rows.length - 1 || pending(row, rows.slice(index + 1)))
+            }
             done={index < rows.length - 1 || ended === 'landed'}
             failed={ended === 'failed' && index === rows.length - 1}
             key={index}
@@ -403,6 +407,7 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
   const done = next !== undefined && !failed
   const landing =
     busy &&
+    !data.check &&
     (!next ||
       pending(
         data as LanderStep,
