@@ -1,89 +1,168 @@
-/** Best-effort display of one leading Python heredoc; shell wrapper stays plain. */
-export function pythonHeredoc(command: string) {
-  const lines = command.split('\n')
-  const match =
-    /^[ \t]*python(?:3)?(?:[ \t]+-)?[ \t]+<<[ \t]*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))[ \t]*$/.exec(
-      lines[0],
-    )
-  if (!match) return undefined
-  const delimiter = match[1] ?? match[2] ?? match[3]
-  const end = lines.findIndex((line, index) => index > 0 && line === delimiter)
-  if (end < 0) return undefined
-  return {
-    opening: lines[0],
-    body: lines.slice(1, end).join('\n') + (end > 1 ? '\n' : ''),
-    ending: lines.slice(end).join('\n'),
-  }
+import { parse } from 'unbash'
+import type { AndOr, Command, PipelineNode, Statement, Word } from 'unbash'
+
+export interface Heredoc {
+  body: string
+  /** The closing delimiter line as written. */
+  closing: string
+  /** A file name whose extension picks the highlighting: the redirect target or the interpreter. */
+  file?: string
+}
+
+export interface BashStep {
+  /** How this step joins the previous one; the first step has none. */
+  operator?: '&&' | '||' | ';'
+  /** The step's source, without heredoc bodies. */
+  text: string
+  heredocs: Heredoc[]
 }
 
 export interface BashCommand {
-  commands: string[]
-  operators: ('&&' | ';')[]
+  /** A literal directory from a leading `cd <dir> &&`. */
   directory?: string
+  steps: BashStep[]
+  /** The programs that run, joined by the command's own operators: `git add && git commit; rg | head`. */
+  summary: string
 }
 
-/** Display only: recognize ordinary lists, not general shell grammar. */
-export function formatBashCommand(command: string): BashCommand {
-  // Extract a literal cd independently: an unsupported tail must not hide the work.
-  const cd =
-    /^[ \t]*cd[ \t]+(?:([^ \t\r\n'"\\|&;(){}<>$`#*?[\]]+)|'([^'\r\n]+)'|"([^"\\$`\r\n]+)")[ \t]*&&[ \t]*/.exec(
-      command,
-    )
-  const path = cd && (cd[1] ?? cd[2] ?? cd[3])
-  const directory = path && !/^[-~]/.test(path) ? path : undefined
-  const tail = directory ? command.slice(cd![0].length) : command
-  const context = directory ? { directory } : {}
-  const intact: BashCommand = { ...context, commands: [tail], operators: [] }
-  if (!tail || /[\r\n]/.test(tail)) return intact
-  const commands: string[] = []
-  const operators: BashCommand['operators'] = []
-  let quote = ''
-  let start = 0
-  for (let i = 0; i < tail.length; i++) {
-    const char = tail[i]
-    if (char === '\\' && quote !== "'") {
-      if (++i === tail.length || /\s/.test(tail[i])) return intact
-      continue
-    }
-    if (quote) {
-      if (char === quote) quote = ''
-      else if (quote === '"' && /[$`]/.test(char)) return intact
-      continue
-    }
-    if (char === "'" || char === '"') {
-      quote = char
-      continue
-    }
-    if (char === '&' && tail[i + 1] === '&') {
-      commands.push(tail.slice(start, i).replace(/^[ \t]+|[ \t]+$/g, ''))
-      operators.push('&&')
-      start = ++i + 1
-    } else if (char === ';') {
-      commands.push(tail.slice(start, i).replace(/^[ \t]+|[ \t]+$/g, ''))
-      operators.push(';')
-      start = i + 1
-    } else if (char === '&') {
-      // Descriptor duplication belongs to a redirect, not a command separator.
-      if (!(/[<>]/.test(tail[i - 1] ?? '') && /[\d-]/.test(tail[i + 1] ?? ''))) return intact
-    } else if (
-      /[(){}$`#]/.test(char) ||
-      (char === '<' && tail[i + 1] === '<') ||
-      (char === '|' && tail[i + 1] === '|')
-    )
-      return intact
-  }
-  if (quote) return intact
-  commands.push(tail.slice(start).replace(/^[ \t]+|[ \t]+$/g, ''))
-  if (
-    commands.some(
-      (part) =>
-        !part ||
-        /(?:^|\|\s*)(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|select|function|!|time|coproc|\[\[)(?:\s|$)/.test(
-          part,
-        ),
-    )
+const interpreters: Record<string, string> = {
+  python: 'heredoc.py',
+  python3: 'heredoc.py',
+  node: 'heredoc.js',
+  bun: 'heredoc.ts',
+  deno: 'heredoc.ts',
+  tsx: 'heredoc.ts',
+  sqlite3: 'heredoc.sql',
+  psql: 'heredoc.sql',
+  bash: 'heredoc.sh',
+  sh: 'heredoc.sh',
+  ruby: 'heredoc.rb',
+}
+const wrappers = new Set(['timeout', 'sudo', 'env', 'nice', 'nohup', 'command', 'exec', 'stdbuf'])
+const subcommands = new Set(['git', 'pnpm', 'npm', 'yarn', 'bun', 'gh', 'docker', 'cargo', 'go'])
+const runners = new Set(['exec', 'dlx', 'run', 'x'])
+const compounds: Record<string, string> = { Subshell: '( )', BraceGroup: '{ }' }
+
+/** The program a command runs, looking through wrappers such as `timeout 60` and `env A=1`, with its arguments. */
+function program(command: Command): string[] {
+  const words = [command.name, ...command.args].map((word) =>
+    word?.type === 'Word' ? word.value : (word?.text ?? ''),
   )
-    return intact
-  if (commands.length < 2) return intact
-  return { ...context, commands, operators }
+  let index = 0
+  while (wrappers.has(words[index] ?? '')) {
+    index++
+    while (/^(-|\d|\w+=)/.test(words[index] ?? '')) index++
+  }
+  return words.slice(index)
+}
+
+function label(command: Command) {
+  const [name = '', ...args] = program(command)
+  if (!subcommands.has(name)) return name
+  const rest = args.filter((arg, index) => !arg.startsWith('-') && args[index - 1] !== '-C')
+  const sub = rest[0]
+  if (!sub) return name
+  return runners.has(sub) && rest[1] ? `${name} ${sub} ${rest[1]}` : `${name} ${sub}`
+}
+
+function stages(node: PipelineNode): PipelineNode[] {
+  return node.type === 'Pipeline' ? [...node.commands] : [node]
+}
+
+function stageLabel(node: PipelineNode): string {
+  if (node.type === 'Command') return label(node)
+  if (node.type === 'Redirected') return stageLabel(node.command)
+  if (node.type === 'Time' || node.type === 'Negation')
+    return node.command ? stageLabel(node.command) : ''
+  if (node.type === 'Pipeline') return node.commands.map(stageLabel).filter(Boolean).join(' | ')
+  if (node.type === 'Function') return `${node.name.value}()`
+  return compounds[node.type] ?? node.type.toLowerCase()
+}
+
+function heredocs(source: string, node: PipelineNode): Heredoc[] {
+  return stages(node).flatMap((stage) => {
+    const command = stage.type === 'Command' ? stage : undefined
+    const redirects = command?.redirects ?? (stage.type === 'Redirected' ? stage.redirects : [])
+    let target: string | undefined
+    for (const redirect of redirects)
+      if (redirect.type === 'Redirect' && redirect.operator.startsWith('>'))
+        target ??= redirect.target?.value
+    const file = target ?? (command && interpreters[program(command)[0] ?? ''])
+    return redirects.flatMap((redirect) =>
+      redirect.type === 'HereDoc' && redirect.closing
+        ? [
+            {
+              body: redirect.body.text,
+              closing: source.slice(redirect.closing.pos, redirect.closing.end),
+              ...(file ? { file } : {}),
+            },
+          ]
+        : [],
+    )
+  })
+}
+
+/** A plain path that `cd` would enter as written: no expansion, glob, home, or option. */
+function literalDirectory(word: Word | undefined) {
+  if (!word || /[$`*?[\]]/.test(word.text) || /^[-~]/.test(word.value)) return undefined
+  return word.value
+}
+
+/** Display only: the command's steps and programs from a real Bash parse; unparsable input stays one raw step. */
+export function formatBashCommand(command: string): BashCommand {
+  const raw: BashCommand = {
+    steps: [{ text: command, heredocs: [] }],
+    summary: command.split('\n')[0],
+  }
+  const script = parse(command)
+  if (script.errors?.length || script.source !== undefined) return raw
+  const steps: BashStep[] = []
+  const summary: string[] = []
+  const push = (
+    statement: Statement,
+    node: PipelineNode,
+    operator: BashStep['operator'],
+    last: boolean,
+  ) => {
+    const end = last ? statement.end : node.end
+    steps.push({
+      ...(operator ? { operator } : {}),
+      text: command.slice(node.pos, end),
+      heredocs: heredocs(command, node),
+    })
+    const name = stageLabel(node)
+    if (name)
+      summary.push(`${summary.length ? (operator === ';' ? '; ' : ` ${operator} `) : ''}${name}`)
+    if (last && statement.background) summary.push(' &')
+  }
+  for (const statement of script.commands) {
+    const list: AndOr | undefined =
+      statement.command.type === 'AndOr' ? statement.command : undefined
+    const nodes = list ? list.commands : [statement.command as PipelineNode]
+    nodes.forEach((node, index) =>
+      push(
+        statement,
+        node,
+        index ? list!.operators[index - 1] : steps.length ? ';' : undefined,
+        index === nodes.length - 1,
+      ),
+    )
+  }
+  if (!steps.length) return raw
+  const first = script.commands[0].command
+  const cd = first.type === 'AndOr' ? first.commands[0] : undefined
+  const directory =
+    cd?.type === 'Command' &&
+    cd.name?.value === 'cd' &&
+    cd.args.length === 1 &&
+    !cd.redirects.length
+      ? literalDirectory(cd.args[0] as Word)
+      : undefined
+  if (directory) {
+    steps.shift()
+    delete steps[0].operator
+    summary.shift()
+    summary[0] = summary[0].replace(/^ && /, '')
+  }
+  return { ...(directory ? { directory } : {}), steps, summary: summary.join('') }
 }

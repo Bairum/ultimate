@@ -1,5 +1,5 @@
 // Pi upstream: @earendil-works/pi-durable@1.2.0 src/tools/bash.ts and src/tools/edit.ts — internal bash exit_code diagnostic message drives exitOf and untyped details.patch/details.diff drive Edit. Drop when Pi exports structured bash outcomes and structured diff rows for rendering.
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { AnsiOutput } from '@/components/ai/ansi-output'
 import { CodeBlock, languageFromPath } from '@/components/ai/code-block'
 import {
@@ -21,7 +21,7 @@ import {
   useToolDuration,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
-import { formatBashCommand, pythonHeredoc } from './bash-command.tsx'
+import { formatBashCommand } from './bash-command.tsx'
 import { countChanges, Diff, editRows, parseDisplayDiff, parsePatch } from './diff.tsx'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
@@ -202,10 +202,14 @@ function exitOf(call: ToolCallView): { label: string; ok: boolean } | undefined 
 
 function Bash({ call }: { call: ToolCallView }) {
   const command = text(call.args.command)
-  const display = formatBashCommand(command)
+  const display = useMemo(() => formatBashCommand(command), [command])
   const directory = usePath(display.directory ?? '')
-  const heredoc = pythonHeredoc(display.commands[0])
-  const formatted = !!display.directory || display.commands.length > 1 || !!heredoc
+  const multiline = command.includes('\n')
+  const formatted =
+    !!display.directory ||
+    display.steps.length > 1 ||
+    display.steps.some((step) => step.heredocs.length > 0)
+  const plain = !formatted && !multiline
   const duration = useToolDuration(call)
   const exit = exitOf(call)
   const output = call.output
@@ -215,7 +219,6 @@ function Bash({ call }: { call: ToolCallView }) {
     const element = scroller.current
     if (running && element) element.scrollTop = element.scrollHeight
   }, [output, running])
-  const multiline = command.includes('\n')
   return (
     <Tool defaultOpen>
       <ToolHeader
@@ -228,11 +231,8 @@ function Bash({ call }: { call: ToolCallView }) {
         name="$"
         state={call.status}
         title={
-          <span className="text-foreground/90">
-            {display.commands[0].split('\n')[0]}
-            {display.commands.length > 1 && (
-              <span className="text-muted-foreground/60"> · +{display.commands.length - 1}</span>
-            )}
+          <span className="text-foreground/90" title={plain ? undefined : display.summary}>
+            {plain ? command : display.summary}
           </span>
         }
       />
@@ -245,24 +245,24 @@ function Bash({ call }: { call: ToolCallView }) {
               </div>
             )}
             <div className="space-y-1 text-foreground/85">
-              {display.commands.map((part, index) => (
+              {display.steps.map((step, index) => (
                 <div className="flex gap-2" key={index}>
                   <span className="w-4 shrink-0 text-muted-foreground/50">
-                    {index === 0 ? '$' : display.operators[index - 1]}
+                    {step.operator ?? '$'}
                   </span>
-                  {index === 0 && heredoc ? (
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <pre className="whitespace-pre-wrap break-words">{heredoc.opening}</pre>
-                      <CodeBlock
-                        className="rounded-none border-none"
-                        code={heredoc.body}
-                        language="python"
-                      />
-                      <pre className="whitespace-pre-wrap break-words">{heredoc.ending}</pre>
-                    </div>
-                  ) : (
-                    <pre className="min-w-0 whitespace-pre-wrap break-words">{part}</pre>
-                  )}
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <pre className="whitespace-pre-wrap break-words">{step.text}</pre>
+                    {step.heredocs.map((heredoc, position) => (
+                      <div key={position}>
+                        <CodeBlock
+                          className="rounded-none border-none"
+                          code={heredoc.body}
+                          language={languageFromPath(heredoc.file ?? '')}
+                        />
+                        <pre className="text-muted-foreground/60">{heredoc.closing}</pre>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>

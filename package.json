@@ -39,6 +39,7 @@
     "react-dom": "19.3.0",
     "streamdown": "2.7.0",
     "tailwindcss": "4.3.3",
+    "unbash": "5.1.0",
     "undici": "8.10.2",
     "use-stick-to-bottom": "1.1.6",
     "vite-plus": "0.3.1"

@@ -1,6 +1,6 @@
 Commits made through `bash` carry an `Ultimate-Conversation: <id>` trailer via process-local Git config hooks; commits outside the tool and repository hook files are untouched.
 
-Pi's coding tools and how the transcript shows them: `read` as a numbered, highlighted excerpt; `write` with its size and content; `edit` as a unified diff with old and new line numbers; `bash` as a terminal with streamed output, exit status, and duration.
+Pi's coding tools and how the transcript shows them: `read` as a numbered, highlighted excerpt; `write` with its size and content; `edit` as a unified diff with old and new line numbers; `bash` as a terminal with streamed output, exit status, and duration. `bash-command.tsx` parses the command with [unbash](https://github.com/webpro-nl/unbash) (display only): the header names the programs that run (`cd && git add && git commit; rg | head`), each list step gets its own row, a literal leading `cd` becomes the directory, and every heredoc body is highlighted by its target file or interpreter. Unparsable commands stay raw.
 
 Bash calls without `timeout` have a 600-second tripwire ceiling. `ULTIMATE_BASH_TIMEOUT` overrides that default
 in seconds and is read at each call; it must be positive and finite. A tripwire timeout stops the process and reports

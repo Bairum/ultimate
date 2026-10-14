@@ -1,174 +1,104 @@
 import { expect, it } from 'vitest'
-import { formatBashCommand, pythonHeredoc } from '../../extensions/coding-tools/bash-command.tsx'
+import { formatBashCommand } from '../../extensions/coding-tools/bash-command.tsx'
 
-it('recognizes a complete leading Python heredoc while retaining its shell wrapper', () => {
-  const body = 'from pathlib import Path\nif True:\n    print(Path("web"))\n'
-  for (const opening of ["python3 - <<'EOF'", 'python <<EOF', 'python3 - <<"EOF"']) {
-    const ending = 'EOF\nrg -n "Path" web | head; npx tsc --noEmit'
-    const command = `${opening}\n${body}${ending}`
-    expect(pythonHeredoc(command)).toEqual({ opening, body, ending })
-    const display = formatBashCommand(`cd /workspace && ${command}`)
-    expect(display.directory).toBe('/workspace')
-    expect(pythonHeredoc(display.commands[0])).toEqual({ opening, body, ending })
-  }
-})
+const steps = (command: string) =>
+  formatBashCommand(command).steps.map(({ operator, text }) =>
+    operator ? [operator, text] : [text],
+  )
 
-it('leaves incomplete and unsupported Python heredocs plain', () => {
-  for (const command of [
-    "python3 - <<'EOF'\nprint(1)",
-    "python3 - <<'EOF'\nprint(1)\n EOF",
-    "python3 - <<'EOF' <<'OTHER'\nprint(1)\nEOF\nOTHER",
-    "python3 -u - <<'EOF'\nprint(1)\nEOF",
-    "cat <<'EOF'\nprint(1)\nEOF",
+it('splits lists at the operators bash runs, keeping pipes and redirects within a step', () => {
+  const command = 'pnpm check 2>&1 | tail -20 && git add -A || echo failed; git status &'
+  expect(steps(command)).toEqual([
+    ['pnpm check 2>&1 | tail -20'],
+    ['&&', 'git add -A'],
+    ['||', 'echo failed'],
+    [';', 'git status &'],
   ])
-    expect(pythonHeredoc(command)).toBeUndefined()
+  expect(formatBashCommand(command).summary).toBe(
+    'pnpm check | tail && git add || echo; git status &',
+  )
 })
 
-it('formats the reported rg pipelines and semicolon list', () => {
-  const first = 'rg -n "no_model" node_modules/@earendil-works/pi-durable/dist -l | head'
-  const second = String.raw`rg -n -B8 "reason: \"no_model\"" node_modules/@earendil-works/pi-durable/dist/harness/compaction.js | head -30`
-  expect(formatBashCommand(`cd /home/haza/Projects/ultimate && ${first}; ${second}`)).toEqual({
-    directory: '/home/haza/Projects/ultimate',
-    commands: [first, second],
-    operators: [';'],
+it('ignores operators and program names inside quotes, substitutions, and heredocs', () => {
+  const command = `git commit -m "fix: run pnpm test && git push later" && echo "$(date; id)"`
+  expect(steps(command)).toEqual([
+    ['git commit -m "fix: run pnpm test && git push later"'],
+    ['&&', 'echo "$(date; id)"'],
+  ])
+  expect(formatBashCommand(command).summary).toBe('git commit && echo')
+  const heredoc = "cat > notes.md <<'EOF'\npnpm test && git push\nEOF"
+  expect(formatBashCommand(heredoc).summary).toBe('cat')
+})
+
+it('names programs through wrappers, env assignments, git -C and package runners', () => {
+  for (const [command, summary] of [
+    ['timeout 120 pnpm test test/a.test.ts 2>&1 | tail -20', 'pnpm test | tail'],
+    ['ULTIMATE_FAUX=1 env PORT=4800 pnpm start --no-open', 'pnpm start'],
+    ['git -C /home/haza/Projects/ultimate push origin main', 'git push'],
+    ['pnpm exec vp check', 'pnpm exec vp'],
+    ['sudo -n rm -rf /tmp/x', 'rm'],
+    ['for f in *.ts; do wc -l "$f"; done | sort -n', 'for | sort'],
+    ['pnpm check || { tail -40 log; exit 1; }', 'pnpm check || { }'],
+  ])
+    expect(formatBashCommand(command).summary).toBe(summary)
+})
+
+it('extracts every heredoc body with a file name that picks its highlighting', () => {
+  const command = [
+    "cd /work && cat > src/a.ts <<'EOF'",
+    'export const a = 1',
+    'EOF',
+    'python3 - <<PY',
+    'print(1)',
+    'PY',
+    'node --input-type=module <<"JS" | head',
+    'console.log(1)',
+    'JS',
+    'git commit -F - <<MSG',
+    'feat: x',
+    'MSG',
+  ].join('\n')
+  const display = formatBashCommand(command)
+  expect(display.directory).toBe('/work')
+  expect(display.summary).toBe('cat; python3; node | head; git commit')
+  expect(display.steps.map((step) => step.heredocs)).toEqual([
+    [{ body: 'export const a = 1\n', closing: 'EOF', file: 'src/a.ts' }],
+    [{ body: 'print(1)\n', closing: 'PY', file: 'heredoc.py' }],
+    [{ body: 'console.log(1)\n', closing: 'JS', file: 'heredoc.js' }],
+    [{ body: 'feat: x\n', closing: 'MSG' }],
+  ])
+  expect(display.steps.map((step) => step.text)).toEqual([
+    "cat > src/a.ts <<'EOF'",
+    'python3 - <<PY',
+    'node --input-type=module <<"JS" | head',
+    'git commit -F - <<MSG',
+  ])
+})
+
+it('lifts only a literal leading cd into the directory', () => {
+  expect(formatBashCommand("cd '/path with spaces' && git status")).toMatchObject({
+    directory: '/path with spaces',
+    steps: [{ text: 'git status' }],
+    summary: 'git status',
   })
-})
-
-it('extracts a literal leading directory and ordered commands', () => {
-  expect(formatBashCommand('cd /long/worktree/path && git status && git diff')).toEqual({
-    directory: '/long/worktree/path',
-    commands: ['git status', 'git diff'],
-    operators: ['&&'],
-  })
-  for (const prefix of ["cd '/path with spaces'", 'cd "/path with spaces"']) {
-    expect(formatBashCommand(`${prefix} && git status`)).toEqual({
-      directory: '/path with spaces',
-      commands: ['git status'],
-      operators: [],
-    })
-  }
-})
-
-it('retains pipelines and redirections within rows and preserves each list operator', () => {
-  expect(
-    formatBashCommand('rg foo 2>/dev/null | head; rg bar 2>&1 | head && cat < input >> output'),
-  ).toEqual({
-    commands: ['rg foo 2>/dev/null | head', 'rg bar 2>&1 | head', 'cat < input >> output'],
-    operators: [';', '&&'],
-  })
-  expect(formatBashCommand('cd /workspace && rg foo 2>&1 | head')).toEqual({
-    directory: '/workspace',
-    commands: ['rg foo 2>&1 | head'],
-    operators: [],
-  })
-})
-
-it('keeps quoted and escaped operators within their commands', () => {
-  expect(formatBashCommand(`echo 'a && b; c' && echo "c && d; e"; echo a\\&\\&b\\;c\\|d`)).toEqual({
-    commands: ["echo 'a && b; c'", 'echo "c && d; e"', 'echo a\\&\\&b\\;c\\|d'],
-    operators: ['&&', ';'],
-  })
-  expect(formatBashCommand(`echo '$(literal) # text' && pwd`)).toEqual({
-    commands: ["echo '$(literal) # text'", 'pwd'],
-    operators: ['&&'],
-  })
-})
-
-it('trims only shell blanks at row boundaries, preserving literal NBSP', () => {
-  for (const operator of [';', '&&'] as const) {
-    expect(formatBashCommand(`rg needle\u00a0${operator} pwd`)).toEqual({
-      commands: ['rg needle\u00a0', 'pwd'],
-      operators: [operator],
-    })
-    expect(formatBashCommand(`pwd${operator} rg needle\u00a0`)).toEqual({
-      commands: ['pwd', 'rg needle\u00a0'],
-      operators: [operator],
-    })
-    expect(formatBashCommand(`pwd${operator} \u00a0rg needle`)).toEqual({
-      commands: ['pwd', '\u00a0rg needle'],
-      operators: [operator],
-    })
-    expect(formatBashCommand(` \trg needle \t${operator} \tpwd \t`)).toEqual({
-      commands: ['rg needle', 'pwd'],
-      operators: [operator],
-    })
-  }
-})
-
-it('does not consume literal NBSP when recognizing a leading cd', () => {
-  expect(formatBashCommand('\u00a0cd /workspace && pwd')).toEqual({
-    commands: ['\u00a0cd /workspace', 'pwd'],
-    operators: ['&&'],
-  })
-  expect(formatBashCommand(' \tcd /workspace\u00a0 && pwd')).toEqual({
-    directory: '/workspace\u00a0',
-    commands: ['pwd'],
-    operators: [],
-  })
-})
-
-it('preserves escaped whitespace instead of trimming it at chain boundaries', () => {
-  for (const whitespace of [' ', '\t']) {
-    for (const command of [
-      `echo foo\\${whitespace} && pwd`,
-      `pwd && echo foo\\${whitespace}`,
-      `echo foo\\${whitespace}; pwd`,
-      `pwd; echo foo\\${whitespace}`,
-      `cd a\\${whitespace}b && pwd`,
-    ])
-      expect(formatBashCommand(command)).toEqual({ commands: [command], operators: [] })
-    const tail = `echo foo\\${whitespace} && pwd`
-    expect(formatBashCommand(`cd /workspace && ${tail}`)).toEqual({
-      directory: '/workspace',
-      commands: [tail],
-      operators: [],
-    })
-  }
-})
-
-it('leaves complex tails intact independently of literal leading cd extraction', () => {
-  for (const tail of [
-    'echo $(pwd); pwd',
-    'echo "$HOME" && pwd',
-    'echo `pwd`; pwd',
-    'cat <<EOF\ntext\nEOF',
-    'pwd # comment; echo done',
-    'pwd\ngit diff',
-    '(pwd); ls',
-    '{ pwd; }; ls',
-    'if true && pwd; then ls; fi',
-    'for i in a b; do pwd; done',
-    '! false && pwd',
-    'time pwd && ls',
-    '[[ -f a && -f b ]]; pwd',
-    'echo x | while read x; do echo "$x"; done',
-    'pwd || ls; echo done',
-    'pwd & ls',
-    'pwd &&',
-    "echo 'unfinished",
-    'echo trailing\\',
-  ]) {
-    expect(formatBashCommand(tail)).toEqual({ commands: [tail], operators: [] })
-    expect(formatBashCommand(`cd /path && ${tail}`)).toEqual({
-      directory: '/path',
-      commands: [tail],
-      operators: [],
-    })
-  }
-})
-
-it('does not hide nonliteral cd arguments or options', () => {
-  for (const prefix of [
-    'cd -',
-    'cd ~',
-    'cd -- /path',
-    'cd /path/*',
-    'cd /path/?',
-    'cd "$HOME"',
+  for (const command of [
+    'cd - && pwd',
+    'cd ~/x && pwd',
+    'cd "$HOME" && pwd',
+    'cd /path/* && pwd',
     'cd /path; pwd',
+    'cd -- /path && pwd',
   ]) {
-    const command = `${prefix} && echo $(pwd)`
-    expect(formatBashCommand(command)).toEqual({ commands: [command], operators: [] })
+    expect(formatBashCommand(command).directory).toBeUndefined()
+    expect(formatBashCommand(command).steps[0].text.startsWith('cd')).toBe(true)
   }
-  expect(formatBashCommand('git status')).toEqual({ commands: ['git status'], operators: [] })
+})
+
+it('keeps unparsable input as one raw step', () => {
+  for (const command of ["echo 'unfinished", 'for f in *.ts; do echo $f', 'pwd &&']) {
+    expect(formatBashCommand(command)).toEqual({
+      steps: [{ text: command, heredocs: [] }],
+      summary: command.split('\n')[0],
+    })
+  }
 })
