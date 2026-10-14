@@ -147,7 +147,7 @@ export function LanderReport({ entry, core }: { entry: EntryRecord; core: ReactN
         ? message.content
         : message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n')
   const report =
-    /^\[lander\] Submission (\S+) \(W\d+, \w+\) ([\s\S]*?)\nLog: lander conversation #(\d+)\.$/.exec(
+    /^\[lander\] Submission (\S+) \([W#]\d+, \w+\) ([\s\S]*?)\nLog: lander conversation #(\d+)\.$/.exec(
       text,
     )
   if (!report) return core
@@ -431,7 +431,7 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
         <div className="flex items-center gap-2 font-mono text-[12px]">
           <GitMergeIcon className="size-3.5 shrink-0 text-brand" />
           <span className="min-w-0 flex-1 truncate">
-            W{data.conversationId} · {short(data.tip)} → {data.target}
+            {short(data.tip)} → {data.target}
             <span className="text-muted-foreground"> · {data.submission}</span>
           </span>
           <Open id={data.conversationId} />

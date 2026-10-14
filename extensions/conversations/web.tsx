@@ -278,7 +278,13 @@ function Row({
   const refocus = useRef(false)
   /** What a menu item does once the menu has closed, so focus lands where it should. */
   const afterMenu = useRef<() => void>(undefined)
-  const name = conversation.title ?? (draft ? 'New conversation' : `#${conversation.id}`)
+  const name =
+    conversation.title ??
+    (draft
+      ? 'New conversation'
+      : conversation.workspace
+        ? 'Untitled conversation'
+        : `#${conversation.id}`)
   const latest = Math.max(conversation.inputAt ?? 0, conversation.answerAt ?? 0)
   const lander = conversation.label === 'lander'
   const hasMetadata = root || feature || conversation.workspace || latest > 0 || lander
@@ -382,7 +388,7 @@ function Row({
               ) : (
                 conversation.workspace && (
                   <span className="shrink-0" title="Isolated checkout">
-                    W{conversation.id}
+                    #{conversation.id}
                   </span>
                 )
               )}
@@ -549,9 +555,10 @@ function ChildRow({
           {conversation.label ?? 'Agent'} · #{conversation.id}
         </span>
         {conversation.workspace && (
-          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-            W{conversation.id}
-          </span>
+          <GitBranchIcon
+            aria-label="Isolated checkout"
+            className="size-3 shrink-0 text-muted-foreground"
+          />
         )}
         <span className="shrink-0 text-[10px] text-muted-foreground">{state}</span>
       </span>

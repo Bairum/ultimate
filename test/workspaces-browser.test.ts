@@ -8,6 +8,7 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import { context } from '../server/harness.ts'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 import { git } from '../extensions/workspaces/git.ts'
+import { LanderLog } from '../extensions/workspaces/lander.ts'
 import { fauxServer, post, skipWithoutChromium, temp, until, untilInput } from './helpers.ts'
 
 const timeout = { timeout: 15000 }
@@ -18,7 +19,11 @@ it('manages every isolated draft safely without removing checkout history', asyn
   if (!executablePath) return
   const directory = await temp('ultimate-workspace-browser-')
   const projectRoot = join(directory, 'project')
-  await mkdir(projectRoot)
+  await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
+  await writeFile(
+    join(projectRoot, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { enable: ['canvas', 'tasks'] } }),
+  )
   await git(projectRoot, 'init', '-b', 'main')
   await git(projectRoot, 'config', 'user.email', 'test@example.com')
   await git(projectRoot, 'config', 'user.name', 'Test')
@@ -31,6 +36,7 @@ it('manages every isolated draft safely without removing checkout history', asyn
     userHome: directory,
     home: join(directory, 'state'),
   })
+  server.vite.config.server.fs.allow.push(resolve('node_modules'))
   const browser = await chromium.launch({ executablePath, headless: true })
   let release!: () => void
   const gate = new Promise<void>((done) => {
@@ -57,7 +63,9 @@ it('manages every isolated draft safely without removing checkout history', asyn
     const active = await info(receivedId)
     await expect
       .poll(() => row(page, receivedId).textContent(), timeout)
-      .toContain(`W${receivedId}`)
+      .toContain(`#${receivedId}`)
+    expect((await row(page, receivedId).textContent())?.match(/#\d+/g)).toEqual([`#${receivedId}`])
+    expect(await row(page, receivedId).textContent()).not.toContain(`W${receivedId}`)
     expect(await row(page, receivedId).textContent()).not.toContain(active.branch)
     const fixtures: Record<string, number> = {}
     for (const state of ['pending', 'error', 'discarded']) {
@@ -87,7 +95,7 @@ it('manages every isolated draft safely without removing checkout history', asyn
     const panel = page.locator('aside').last()
     const card = page.locator(`[data-workspace="${receivedId}"]`)
     await expect.poll(() => panel.textContent(), timeout).toContain(active.path)
-    await page.getByRole('button', { name: `Copy path of W${receivedId}`, exact: true }).click()
+    await page.getByRole('button', { name: `Copy path of #${receivedId}`, exact: true }).click()
     await expect
       .poll(() => page.evaluate(() => navigator.clipboard.readText()), timeout)
       .toBe(active.path)
@@ -126,6 +134,41 @@ it('manages every isolated draft safely without removing checkout history', asyn
       .poll(() => card.getByRole('button', { name: 'Land', exact: true }).isDisabled(), timeout)
       .toBe(true)
     expect(await panel.textContent()).toContain('Conversation is running')
+    const snapshot = async (name: string) => {
+      if (process.env.CONVERSATION_IDS_SCREENSHOTS) {
+        await page
+          .getByLabel('Loading Ultimate', { exact: true })
+          .waitFor({ state: 'detached', ...timeout })
+        await page.screenshot({
+          path: join(process.env.CONVERSATION_IDS_SCREENSHOTS, `${name}.png`),
+          fullPage: true,
+        })
+      }
+    }
+    await page.getByRole('button', { name: 'Tasks', exact: true }).click()
+    const taskRow = page
+      .locator('aside')
+      .last()
+      .getByRole('button', { name: /Untitled conversation/ })
+    await expect.poll(() => taskRow.count(), timeout).toBe(1)
+    expect((await taskRow.textContent())?.match(/#\d+/g)).toEqual([`#${receivedId}`])
+    expect(await taskRow.textContent()).not.toContain(`W${receivedId}`)
+    await snapshot('sidebar-task-graph')
+    await post(server, '/api/ui', { set: { 'shell.surface': 'canvas' } })
+    const canvasAgent = page.locator(`[data-agent="${receivedId}"]`)
+    await canvasAgent.waitFor(timeout)
+    expect((await canvasAgent.textContent())?.match(/#\d+/g)).toEqual([`#${receivedId}`])
+    expect(await canvasAgent.textContent()).not.toContain(`W${receivedId}`)
+    await snapshot('canvas')
+    await canvasAgent.getByRole('button', { name: `#${receivedId}`, exact: true }).click()
+    await expect.poll(() => card.count(), timeout).toBe(1)
+    const workspaceHeader = card.getByRole('button', {
+      name: `Workspace #${receivedId}`,
+      exact: true,
+    })
+    expect((await workspaceHeader.textContent())?.match(/#\d+/g)).toEqual([`#${receivedId}`])
+    await post(server, '/api/ui', { set: { 'shell.surface': 'agent' } })
+    await snapshot('workspace')
     release()
     await server.harness.waitForTask(task, context)
     await expect
@@ -146,15 +189,17 @@ it('manages every isolated draft safely without removing checkout history', asyn
     await card.getByRole('button', { name: 'Land', exact: true }).click()
     await expect.poll(() => panel.textContent(), timeout).toContain('Landed 1 commit.')
     await expect.poll(() => panel.textContent(), timeout).toContain(firstTip.slice(0, 7))
+    await snapshot('workspace-landed')
     await writeFile(join(active.path, 'later.txt'), 'later')
     await git(active.path, 'add', '.')
     await git(active.path, 'commit', '-m', 'later workspace change')
-    await page.getByRole('button', { name: `Refresh W${receivedId}`, exact: true }).click()
+    await page.getByRole('button', { name: `Refresh #${receivedId}`, exact: true }).click()
     await expect.poll(() => card.textContent(), timeout).toContain('Ahead1 commit')
     expect(await panel.textContent()).toContain('Ready')
     expect(await panel.textContent()).toContain('Last landed')
     // Archive and reset do not invoke removal or alter the saved branch tip.
     const laterTip = await git(active.path, 'rev-parse', 'HEAD')
+    await page.getByRole('button', { name: /^Earlier/ }).click()
     await row(page, receivedId).hover()
     await row(page, receivedId)
       .getByRole('button', { name: 'Conversation actions', exact: true })
@@ -168,6 +213,53 @@ it('manages every isolated draft safely without removing checkout history', asyn
     await post(server, '/api/extensions/workspaces/actions/discard', { args: { id: receivedId } })
     await until(async () => (await info(receivedId))?.state === 'removed')
     expect(await git(projectRoot, 'rev-parse', active.branch)).toBe(laterTip)
+    await page.goto(`${server.url}/?conversation=1`)
+    await untilInput(page)
+    await server.harness.commit(
+      (tx) =>
+        tx.appendEntry(LanderLog, ROOT_CONVERSATION_ID, {
+          data: {
+            submission: 'Sfixture',
+            conversationId: receivedId,
+            tip: laterTip,
+            target: 'main',
+            at: Date.now(),
+            step: 'started',
+          },
+        }),
+      context,
+    )
+    const landingHeader = page
+      .locator('.font-mono')
+      .filter({ has: page.getByRole('button', { name: `open #${receivedId}`, exact: true }) })
+      .last()
+    await expect.poll(() => landingHeader.count(), timeout).toBe(1)
+    expect((await landingHeader.textContent())?.match(/#\d+/g)).toEqual([`#${receivedId}`])
+    expect(await landingHeader.textContent()).not.toContain(`W${receivedId}`)
+    await landingHeader.scrollIntoViewIfNeeded()
+    await snapshot('landing-started')
+    for (const prefix of ['#', 'W'])
+      await (
+        await server.root.submit(
+          {
+            type: 'input',
+            content: `[lander] Submission S${prefix === '#' ? 'new' : 'historic'} (${prefix}${receivedId}, ${laterTip.slice(0, 7)}) landed as ${laterTip.slice(0, 7)} on main.\nLog: lander conversation #${fixtures.pending}.`,
+          },
+          context,
+        )
+      ).wait(context)
+    const reports = page.locator('[data-lander-report="landed"]')
+    await expect.poll(() => reports.count(), timeout).toBe(2)
+    for (const report of await reports.all()) {
+      expect(await report.textContent()).not.toContain('[lander] Submission')
+      await report.getByRole('button', { name: 'Steps', exact: true }).click()
+      expect(
+        await report
+          .getByRole('button', { name: `full log in #${fixtures.pending}`, exact: true })
+          .count(),
+      ).toBe(1)
+    }
+    await snapshot('landing-cards')
     expect(errors).toEqual([])
   } finally {
     release()

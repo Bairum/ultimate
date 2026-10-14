@@ -208,10 +208,7 @@ function ConversationRow({ id, tree, depth }: { id: number; tree: Tree; depth: n
           </span>
           <span className="flex min-w-0 items-center gap-1.5 text-[10.5px] text-muted-foreground/60">
             {tree.features.get(id) && <FeatureTag feature={tree.features.get(id)!} />}
-            <span className="shrink-0">
-              #{id}
-              {summary?.workspace && ` · W${id}`}
-            </span>
+            <span className="shrink-0">#{id}</span>
           </span>
         </span>
       </button>

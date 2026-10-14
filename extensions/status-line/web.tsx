@@ -48,7 +48,7 @@ function Cwd() {
   const { target } = useComposer()
   if (!system || target === 'new') return null
   const cwd = agent.cwd ?? system.execution.defaultCwd
-  const shown = workspace ? `W${id}` : shortenPath(cwd, { home: system.machine.home })
+  const shown = workspace ? `#${id}` : shortenPath(cwd, { home: system.machine.home })
   const { branch, dirty, sha } = system.code
   const inRepo = !workspace && cwd === system.code.ultimateRoot
   return (

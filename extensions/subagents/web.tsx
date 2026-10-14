@@ -59,7 +59,6 @@ function IsolateBadge({ childId }: { childId: number }) {
       title={`${isolate.branch}\n${isolate.path}`}
     >
       <GitBranchIcon className="size-3 shrink-0" />
-      <span className="shrink-0">W{childId}</span>
       <StateTag isolate={isolate} />
     </span>
   )

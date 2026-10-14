@@ -123,10 +123,10 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
     >
       <CollapsibleTrigger
         className="group flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-left text-xs"
-        aria-label={`Workspace W${conversation.id}`}
+        aria-label={`Workspace #${conversation.id}`}
       >
         <ChevronRightIcon className="size-3 shrink-0 transition-transform group-data-[state=open]:rotate-90" />
-        <span className="shrink-0 font-mono">W{conversation.id}</span>
+        <span className="shrink-0 font-mono">#{conversation.id}</span>
         <span className="min-w-0 flex-1 truncate text-muted-foreground">
           {conversation.title ?? 'Isolated draft'}
         </span>
@@ -145,7 +145,7 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
             Open conversation
           </Button>
           <Button
-            aria-label={`Refresh W${conversation.id}`}
+            aria-label={`Refresh #${conversation.id}`}
             className="ml-auto cursor-pointer"
             disabled={info.loading}
             onClick={() => void info.refetch()}
@@ -165,7 +165,7 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
                 </span>
                 {(label === 'Path' || label === 'Branch') && (
                   <button
-                    aria-label={`Copy ${label.toLowerCase()} of W${conversation.id}`}
+                    aria-label={`Copy ${label.toLowerCase()} of #${conversation.id}`}
                     className="shrink-0 cursor-pointer text-muted-foreground hover:text-foreground"
                     onClick={() => void navigator.clipboard.writeText(value)}
                     type="button"
@@ -274,7 +274,7 @@ function LanderQueue() {
       <ol className="space-y-1">
         {queue.map((item) => (
           <li className="flex items-center gap-2" key={item.id}>
-            <span className="shrink-0 font-mono">W{item.conversationId}</span>
+            <span className="shrink-0 font-mono">#{item.conversationId}</span>
             <span className="shrink-0 font-mono text-muted-foreground">{item.tip.slice(0, 7)}</span>
             <span className="min-w-0 flex-1 truncate text-muted-foreground">
               {item.state === 'landing' ? (item.step ?? 'landing') : `queued for ${item.target}`}

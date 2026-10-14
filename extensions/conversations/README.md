@@ -8,9 +8,10 @@ changing the main agent.
 The sidebar pins the lander above the root (from lineage `info`), marked with a branch icon and `root`.
 Branches nest under their source (`branchOf.conversationId`), with a hairline guide and one indent per depth;
 siblings sort by latest input. Older conversations that are neither the root nor branches live in the collapsed
-"Earlier · N" group, above "Concluded · N". Isolated rows carry a short `W<conversationId>` badge;
+"Earlier · N" group, above "Concluded · N". Isolated rows carry a short `#<conversationId>` badge;
 Workspace details in their menu opens the Workspaces panel. The shown row is highlighted, also while one of its
-subagents is shown. Each row has its title (or `#id`) and the time of its latest message (`now`, `5m`, `3h`, `2d`,
+subagents is shown. Each row has its title (or `#id` for shared rows, `Untitled conversation` for isolated rows)
+and the time of its latest message (`now`, `5m`, `3h`, `2d`,
 then a date). Its leading mark pulses while it or any of its subagents works, and is solid when an answer arrived
 since you last looked at it. Actual foreground tasks and live run boundaries determine Working, not the potentially
 lagging title/timestamp list. While working, old assessment marks are suppressed.
