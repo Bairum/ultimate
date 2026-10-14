@@ -98,9 +98,11 @@ async function fixture(
       'onboarding/settings.ts',
     ])
       await cp(resolvePath('extensions', file), join(ultimateRoot, 'extensions', file))
-    await cp(resolvePath('extensions/workspaces'), join(ultimateRoot, 'extensions/workspaces'), {
-      recursive: true,
-    })
+    // Workspaces imports lineage, which notes landings in the root.
+    for (const name of ['workspaces', 'lineage'])
+      await cp(resolvePath('extensions', name), join(ultimateRoot, 'extensions', name), {
+        recursive: true,
+      })
     await cp(resolvePath('agents'), join(ultimateRoot, 'agents'), { recursive: true })
   }
   if (sources) {
