@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { setImmediate as yieldToIO } from 'node:timers/promises'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
+import type { TaskId } from '@earendil-works/pi-durable'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -188,7 +189,9 @@ it('pause keeps a running profile run alive, skips overlap, and abort cancels a 
   expect((await f.records())[0].runs[0].status).toBe('running')
   f.release()
   await until(async () => (await f.records())[0].runs[0].status === 'done')
+  await f.opened.harness.waitForTask(Number(run.id) as TaskId, context)
   const manual = (await f.action('run', { id: a.id })) as { id: string }
+  expect(manual.id).not.toMatch(/^skipped:/)
   await until(async () => !!(await f.records())[0].runs.at(-1)?.conversationId)
   await f.action('abort', { id: a.id, runId: manual.id })
   await until(async () => (await f.records())[0].runs.at(-1)?.status === 'aborted')
