@@ -53,8 +53,8 @@ describe('web extension registry', () => {
 
     const settled = registry.setLoaders(loaders)
     expect(registry.getSnapshot().map((record) => [record.name, record.loading])).toEqual([
-      ['alpha', true],
       ['beta', true],
+      ['alpha', true],
       ['broken', true],
     ])
     await vi.waitFor(() => {
@@ -72,11 +72,11 @@ describe('web extension registry', () => {
     await settled
     const records = registry.getSnapshot()
     expect(records.map((record) => [record.name, !!record.extension, record.error])).toEqual([
-      ['alpha', true, undefined],
       ['beta', true, undefined],
+      ['alpha', true, undefined],
       ['broken', false, 'Unexpected token (3:14)'],
     ])
-    // `order` first, then folder name.
+    // `order` first, then discovery order.
     expect(slotItems(records, 'statusline.left').map((item) => item.extension)).toEqual([
       'beta',
       'alpha',

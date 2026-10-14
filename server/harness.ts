@@ -1,6 +1,8 @@
 import { mkdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { projectHome } from './project.ts'
+import type { Source } from './project.ts'
+import { compareExtensions } from './discovery.ts'
 import { acquireLock } from './lock.ts'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
@@ -84,6 +86,7 @@ export async function prepareHarness(options: HostOptions) {
   configureHttpDispatcher(settings.getHttpIdleTimeoutMs())
   const registry = createRegistry()
   const extensionOrders = new Map<string, number>()
+  const extensionSources = new Map<string, Source>()
   const envs = new Map<string, NodeExecutionEnv>()
   const env = ({ cwd = projectRoot }: EnvTarget) => {
     let found = envs.get(cwd)
@@ -146,6 +149,7 @@ export async function prepareHarness(options: HostOptions) {
     settings,
     registry,
     extensionOrders,
+    extensionSources,
     faux: fauxHandle,
     async open(resume = true) {
       const owner = await acquireLock(
@@ -166,10 +170,19 @@ export async function prepareHarness(options: HostOptions) {
               registry
                 .snapshot()
                 .installed()
-                .toSorted(
-                  (a, b) =>
-                    (extensionOrders.get(a.name) ?? 0) - (extensionOrders.get(b.name) ?? 0) ||
-                    (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+                .toSorted((a, b) =>
+                  compareExtensions(
+                    {
+                      name: a.name,
+                      source: extensionSources.get(a.name) ?? 'builtin',
+                      order: extensionOrders.get(a.name),
+                    },
+                    {
+                      name: b.name,
+                      source: extensionSources.get(b.name) ?? 'builtin',
+                      order: extensionOrders.get(b.name),
+                    },
+                  ),
                 ),
             ),
             env,

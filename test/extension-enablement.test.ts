@@ -4,7 +4,8 @@ import { join, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { fauxServer, sourceCopy, temp, until, attach } from './helpers.ts'
 import { context } from '../server/harness.ts'
-import { discoverExtensions } from '../server/discovery.ts'
+import { compareExtensions, discoverExtensions } from '../server/discovery.ts'
+import { createRegistry, toolRenderer } from '../web/src/sdk/registry.ts'
 
 const homes: string[] = []
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
@@ -30,6 +31,74 @@ async function fixture(settings?: string) {
   servers.push(server)
   return { home, projectRoot, server }
 }
+it('orders facets by source so a project bash tool and renderer win regardless of folder name', async () => {
+  const home = await temp()
+  homes.push(home)
+  const projectRoot = join(home, 'project')
+  for (const [name, root] of [
+    ['zzz-bash', home],
+    ['aaa-bash', projectRoot],
+  ]) {
+    const folder = join(root, '.ultimate/extensions', name)
+    await mkdir(folder, { recursive: true })
+    await writeFile(join(folder, 'web.tsx'), 'export default { tools: { bash: () => null } }')
+    await writeFile(
+      join(folder, 'server.ts'),
+      `
+      import { Type } from '@earendil-works/pi-ai'
+      import { defineExtension, defineTool } from '@earendil-works/pi-durable'
+      export default defineExtension({ name: '${name}', tools: [defineTool({
+        name: 'bash', description: '${name}', parameters: Type.Object({}),
+        execute: async () => ({})
+      })] })
+    `,
+    )
+  }
+  const server = await fauxServer({
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    userHome: home,
+    home: join(home, 'state'),
+  })
+  servers.push(server)
+  expect(
+    server.extensions
+      .info()
+      .filter((e) => ['coding-tools', 'zzz-bash', 'aaa-bash'].includes(e.name))
+      .map((e) => e.name),
+  ).toEqual(['coding-tools', 'zzz-bash', 'aaa-bash'])
+  expect(
+    (await server.root.agent(context)).tools.find((tool) => tool.name === 'bash')?.description,
+  ).toBe('aaa-bash')
+  const paths = (await web(server)).filter((path) =>
+    ['coding-tools', 'zzz-bash', 'aaa-bash'].some((name) => path.includes(`/${name}/`)),
+  )
+  const registry = createRegistry()
+  await registry.setLoaders(
+    Object.fromEntries(
+      paths.map((path) => [
+        path,
+        () =>
+          // The built-in UI needs browser globals; only its registry position matters here.
+          path.includes('/coding-tools/')
+            ? Promise.resolve({ default: { tools: { bash: () => null } } })
+            : server.vite.ssrLoadModule(path),
+      ]),
+    ),
+  )
+  expect(registry.getSnapshot().every((record) => !record.error)).toBe(true)
+  expect(toolRenderer(registry.getSnapshot(), 'bash')?.extension).toBe('aaa-bash')
+  // An explicit server order still takes precedence over source layering.
+  expect(
+    [
+      { name: 'coding-tools', source: 'builtin' as const },
+      { name: 'aaa-bash', source: 'project' as const, order: -100 },
+    ]
+      .toSorted(compareExtensions)
+      .map((e) => e.name),
+  ).toEqual(['aaa-bash', 'coding-tools'])
+})
+
 const serviceFacet = (detail: string, fail = false) => `
 import { defineExtension } from '@earendil-works/pi-durable'
 export const actions = { stale: async (_args, { host }) => {

@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { discoverExtensions } from './discovery.ts'
+import { compareExtensions, discoverExtensions } from './discovery.ts'
 import { projectSetup, projectSettings, projectDiagnostics } from './project-setup.ts'
 import { createEventBus, ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import type { EventBus } from '@earendil-works/pi-coding-agent'
@@ -228,7 +228,7 @@ export async function loadExtensions(
     system: runtime.system,
     conversations: runtime.conversations,
     projects: () => projects(host.userHome, host.home),
-    extensions: () => [...records.values()],
+    extensions: () => info(),
     projectSetup: () => projectSetup(host.projectRoot, host.userHome),
     projectSettings: () => projectSettings(host.projectRoot, host.userHome, notice),
     projectExtensions: async () => {
@@ -278,6 +278,13 @@ export async function loadExtensions(
     metadata: Metadata,
   }
   const installed = host.extensionOrders
+  const info = () =>
+    [...records.values()].toSorted((a, b) =>
+      compareExtensions(
+        { ...a, order: installed.get(a.name) },
+        { ...b, order: installed.get(b.name) },
+      ),
+    )
   let chain = Promise.resolve()
   let closed = false
   const settingsFiles = [
@@ -300,7 +307,7 @@ export async function loadExtensions(
       ...available
         .filter((entry) => !active.some((current) => current.name === entry.name))
         .map((entry) => ({ ...entry, enabled: false })),
-    ].toSorted((a, b) => a.name.localeCompare(b.name))
+    ].toSorted(compareExtensions)
     return Object.assign(winners, { settings: active.settings })
   }
   async function reload(
@@ -325,6 +332,7 @@ export async function loadExtensions(
     }
     for (const { name, path, source, enabled, files, error: discoveryError } of winners) {
       const previous = records.get(name)
+      host.extensionSources.set(name, source)
       const layer = settings.layers.get(name) ?? (source === 'builtin' ? 'default' : 'folder')
       if (selected && !selected.has(name) && previous) {
         if (previous) previous.layer = layer
@@ -407,6 +415,7 @@ export async function loadExtensions(
         facetHosts.delete(name)
         if (installed.delete(name)) host.registry.uninstall({ name })
         records.delete(name)
+        host.extensionSources.delete(name)
         actions.delete(name)
         settingsReloads.delete(name)
         host.builds.remove(name)
@@ -525,7 +534,7 @@ export async function loadExtensions(
     }
   })
   return {
-    info: Object.assign(() => [...records.values()], {
+    info: Object.assign(info, {
       diagnostics: () => [
         ...new Set([
           ...diagnostics,

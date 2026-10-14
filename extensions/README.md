@@ -21,7 +21,7 @@ existing extension and change it:
 | A prompt section from durable UI state            | `surfaces`                                          |
 | Toasts or other global overlays                   | `notices`                                           |
 
-An optional `inbox` renderer wraps each queued composer input with `{ item, core, cancel }`. Return `core` for inputs you do not own; when replacing it, include `cancel` to retain core cancellation. Like entry renderers, the last facet in folder order wins and runs behind an extension boundary with core fallback. Keep provenance and domain-specific UI in the extension.
+An optional `inbox` renderer wraps each queued composer input with `{ item, core, cancel }`. Return `core` for inputs you do not own; when replacing it, include `cancel` to retain core cancellation. Like entry renderers, the last facet in discovery order wins and runs behind an extension boundary with core fallback. Keep provenance and domain-specific UI in the extension.
 
 ## Where extensions live
 
@@ -182,7 +182,7 @@ No restart, no reload.
 ## Contributions
 
 `defineWebExtension({ slots, panels, surfaces, tools, entries, documents, commands })`; every key is optional. Extensions load
-in parallel, installing independently; contributions sort by folder name. Give a slot item `{ component, order }` to move it (default order 0, lower first).
+in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
 
 ### Slots
 
@@ -275,7 +275,7 @@ entries: { 'notes.pinned': ({ entry }) => <div className="text-muted-foreground"
 ```
 
 A renderer also gets `core`, the rendering of the same entry so far: return it for the entries you leave alone, wrap
-it, or return `null` to hide the entry. Several extensions can render one kind: they compose in folder order, each
+it, or return `null` to hide the entry. Several extensions can render one kind: they compose in discovery order, each
 receiving the rendering of the one before it as `core`, down to the core's own. Each runs in its own error boundary,
 which falls back to its `core` when it throws. `self` renders `pi.system` entries that change the build section as a
 reload marker and returns `core` for the rest; `subagents` and `workspaces` both render `pi.user`, each only the inputs
@@ -309,7 +309,7 @@ export default defineWebExtension({
 })
 ```
 
-A later facet in folder-name order wins a kind. A renderer that throws shows an error card with the JSON tree below it;
+A later facet in discovery order wins a kind. A renderer that throws shows an error card with the JSON tree below it;
 the other documents keep working. To render another extension's component yourself, wrap it in `ExtensionBoundary`
 from `@/sdk`, as the Documents tab does, and look renderers up with `useDocumentRenderers()`. Opening the tab streams
 every exported kind, which creates a missing document with its initial value, as `useDoc` does.
@@ -340,7 +340,7 @@ key to an open dialog, which closes or moves focus with it. To let a command ope
 popover, use a dialog id: the command calls `context.open(id)` and the component reads `useDialog(id)` as its open state
 (see `models`).
 
-Command ids are global and resolve like surface ids: a later facet in folder-name order wins an id, in the place of the
+Command ids are global and resolve like surface ids: a later facet in discovery order wins an id, in the place of the
 command it replaces. The shell itself has only the palette (`ultimate.palette`), the panel and sidebar toggles
 (`ultimate.panel`, `ultimate.sidebar`), and a `ultimate.surface.<id>` switch per surface; the conversation commands
 (stop, compact, focus the composer, show the main conversation) come from `agent`, the theme toggle from `theme`. To
@@ -743,4 +743,4 @@ Keep UI state that should survive a reload in `useExtensionUiState`; keep throwa
 - Do not import another extension's files; share through documents, commands, or the SDK.
 - Server facets: see `prompt/` for prompt sections and `coding-tools/server.ts` for tools; the root `AGENTS.md` explains
   reloads and durability. Server facets may `export const order = -100`: lower values come first, with the default 0
-  keeping folder-name order; changing it reorders the prompt and tools once.
+  keeping discovery order (built-in → user → project, then folder name); changing it reorders the server prompt and tools once.

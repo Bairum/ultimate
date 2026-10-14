@@ -5,6 +5,19 @@ import type { Source } from './project.ts'
 import { useProjectSetup } from './project-setup.ts'
 import { DEFAULT_EXTENSIONS, extensionSettings } from './extension-settings.ts'
 
+const sourceOrder = { builtin: 0, user: 1, project: 2 }
+
+export function compareExtensions(
+  a: { name: string; source: Source; order?: number },
+  b: { name: string; source: Source; order?: number },
+) {
+  return (
+    (a.order ?? 0) - (b.order ?? 0) ||
+    sourceOrder[a.source] - sourceOrder[b.source] ||
+    a.name.localeCompare(b.name)
+  )
+}
+
 export async function discoverExtensions(
   ultimateRoot: string,
   projectRoot: string,
@@ -57,6 +70,6 @@ export async function discoverExtensions(
         overrides.get(entry.name) ??
         (entry.source !== 'builtin' || DEFAULT_EXTENSIONS.some((name) => name === entry.name)),
     }))
-    .toSorted((a, b) => a.name.localeCompare(b.name))
+    .toSorted(compareExtensions)
   return Object.assign(entries, { settings })
 }

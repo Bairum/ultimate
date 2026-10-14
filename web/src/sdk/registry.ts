@@ -226,19 +226,17 @@ export function createRegistry() {
         listeners.delete(listener)
       }
     },
-    /** Load every facet in `loaders`, drop facets that are gone, and settle when all loads have. */
+    /** Load facets in discovery order (built-in → user → project, then name), dropping missing facets. */
     async setLoaders(loaders: Readonly<Record<string, ExtensionLoader>>) {
       if (!started) deadline = setTimeout(() => refreshReady(true), 8000)
       started = true
       const current = ++generation
       settled = false
       tokens.clear()
-      const entries = Object.entries(loaders)
-        .flatMap(([path, loader]) => {
-          const name = extensionName(path)
-          return name ? [{ name, loader }] : []
-        })
-        .toSorted((a, b) => a.name.localeCompare(b.name))
+      const entries = Object.entries(loaders).flatMap(([path, loader]) => {
+        const name = extensionName(path)
+        return name ? [{ name, loader }] : []
+      })
       pending = new Set(entries.map(({ name }) => name))
       const previous = new Map(records.map((record) => [record.name, record]))
       records = entries.map(({ name }) => previous.get(name) ?? { name, loading: true, version: 0 })
@@ -289,7 +287,7 @@ function normalize(value: Contribution | readonly Contribution[] | undefined) {
   )
 }
 
-/** Components for a slot, by `order`, then folder name, then position. */
+/** Components for a slot, by `order`, then discovery order, then position. */
 export function slotItems(records: readonly ExtensionRecord[], slot: SlotName): SlotItem[] {
   return records
     .flatMap(({ name, extension, version }) =>
@@ -381,7 +379,7 @@ export function commandItems(
   return [...byId.values()]
 }
 
-/** Document renderers by kind; the last extension in folder order wins a kind. */
+/** Document renderers by kind; the last extension in discovery order wins a kind. */
 export function documentItems(records: readonly ExtensionRecord[]): Map<string, DocumentItem> {
   const byKind = new Map<string, DocumentItem>()
   for (const { name, extension, version } of records)
@@ -399,7 +397,7 @@ export function inboxRenderer(
   return undefined
 }
 
-/** Every renderer of an entry kind, in folder order: each one wraps the rendering of the one before it. */
+/** Every renderer of an entry kind, in discovery order: each one wraps the rendering of the one before it. */
 export function entryRenderers(
   records: readonly ExtensionRecord[],
   kind: string,
@@ -410,7 +408,7 @@ export function entryRenderers(
   })
 }
 
-/** The renderer for a tool; the last extension in folder order wins. */
+/** The renderer for a tool; the last extension in discovery order wins. */
 export function toolRenderer(
   records: readonly ExtensionRecord[],
   name: string,
