@@ -27,7 +27,6 @@ import workspaceExtension, {
 import { Workspaces, workspaces } from '../extensions/workspaces/workspaces.ts'
 import { git, setup } from '../extensions/workspaces/git.ts'
 import type { LanderEntry, WorkspaceIndex } from '../extensions/workspaces/types.ts'
-import { exclusiveSlot } from '../extensions/exclusive-commands/slot.ts'
 import { createLander } from '../extensions/workspaces/lander.ts'
 import { leaveNote, rootOf, Root } from '../extensions/lineage/server.ts'
 import self from '../extensions/self/server.ts'
@@ -869,7 +868,7 @@ it.concurrent('lands two submissions in order onto a moved target and reports bo
       'Only a top-level main conversation',
     )
 })
-it.concurrent('runs a check group together in one exclusive slot and records each summary', async () => {
+it.concurrent('runs a check group concurrently and records each summary', async () => {
   const f = await fixture()
   /** Marks itself, then waits for the other: run one after the other, both would fail. */
   const meet = (name: string, other: string) =>
@@ -879,14 +878,7 @@ it.concurrent('runs a check group together in one exclusive slot and records eac
   const id = await f.create()
   await f.service.ready(id, context)
   await commit((await f.service.get(id, context))!.path)
-  const slot = exclusiveSlot(f.host)
-  await slot.acquire('pnpm test')
   await f.service.submit(id, context)
-  // The group waits for the slot once, after the single check before it.
-  await until(() => slot.queue.some((waiter) => waiter.command === 'lander: true'))
-  slot.release()
-  await until(() => slot.queue.length > 0 || slot.command === undefined)
-  expect(slot.queue).toEqual([])
   const [report] = await submitted(f, id)
   expect(report).toContain('landed as')
   expect(report).not.toContain('Flaky')
@@ -1046,7 +1038,6 @@ it.concurrent('kills the whole process group of a running check when the lander 
       return true
     }
   }, 5000)
-  expect(exclusiveSlot(f.host).command).toBeUndefined()
 })
 it.concurrent('runs worktree setup on the merged revision before the checks', async () => {
   const f = await fixture()

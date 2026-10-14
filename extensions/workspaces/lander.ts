@@ -21,7 +21,6 @@ import type {
   Tx,
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { exclusiveSlot } from '../exclusive-commands/slot.ts'
 import type { LineageService } from '../lineage/server.ts'
 import { definitionAgent, discoverAgents } from '../subagents/agents.ts'
 import { git, setup } from './git.ts'
@@ -277,7 +276,6 @@ export function createLander(
   serial: <T>(source: string, operation: () => Promise<T>) => Promise<T>,
   limits: CheckLimits = checkLimits,
 ) {
-  const slot = exclusiveSlot(host)
   async function checkout(source: string, tip: string) {
     const path = await landerCheckout(host.home, source, tip)
     // Every attempt starts from a clean checkout at the target tip; ignored files such as installs stay.
@@ -683,14 +681,7 @@ export function createLander(
             const flaky: string[] = []
             for (const [position, group] of settings.checks.entries()) {
               const commands = typeof group === 'string' ? [group] : group
-              // The group takes the exclusive slot once, when its first command needs it: its commands run together,
-              // never next to an agent's heavy command.
-              let held: Promise<void> | undefined
-              const run = async (command: string) => {
-                held ??= slot.acquire(`lander: ${commands.join(', ')}`, checkContext.abortSignal)
-                await held
-                return runLanderCheck(path, command, checkContext, limits)
-              }
+              const run = (command: string) => runLanderCheck(path, command, checkContext, limits)
               /** One command: its first run, then one rerun when that failed; its output tail if it failed twice. */
               const settle = async (command: string, member: number) => {
                 // Outcomes are durable (memos are first-writer-wins, so the rerun has its own key): a resume
@@ -732,10 +723,6 @@ export function createLander(
               }
               // Every command settles before a failure hands over, so none still runs in the checkout.
               const settled = await Promise.allSettled(commands.map(settle))
-              await held?.then(
-                () => slot.release(),
-                () => undefined,
-              )
               const results = settled.map((outcome) => {
                 if (outcome.status === 'rejected') throw outcome.reason
                 return outcome.value
