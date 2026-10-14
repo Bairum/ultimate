@@ -578,7 +578,7 @@ export default function lineageExtension(host: ExtensionHost) {
     sections: [section('lineage', (input, ctx) => lineageSection(host, input.conversationId, ctx))],
     hooks: [
       hook(GenerationTask, {
-        beforeRequest: (request, api, ctx) => catchup(host, request.messages, api, ctx),
+        beforeInput: (input, api, ctx) => catchup(host, input, api, ctx),
       }),
       hook(CompactionTask, {
         beforeCompact: async (compaction, api, ctx) => {

@@ -1,3 +1,129 @@
+diff --git a/dist/harness/generation.js b/dist/harness/generation.js
+index 136bed43fe2c45f1739109e34af5590d5036a3f7..05e108e60f8afb4970869ea87c2f8fee4bc406cf 100644
+--- a/dist/harness/generation.js
++++ b/dist/harness/generation.js
+@@ -425,7 +425,7 @@ async function answer(runtime, message, context) {
+     const conversationId = runtime.conversationId;
+     await runtime.commit(async (tx) => {
+         // Queue modes are read on the Session line, when the boundary is decided.
+-        const boundary = await prepareBoundary(tx, conversationId, runtime.settings);
++        const boundary = await prepareBoundary(tx, conversationId, runtime.settings, "final", runtime.now());
+         const live = await tx.doc(LiveDoc, conversationId);
+         const entry = await appendAssistant(tx, conversationId, message);
+         const result = { status: "terminal", outcome: { status: "completed", result: { entryId: entry.id } } };
+@@ -507,7 +507,7 @@ async function finishToolRound(runtime, assistant, tools, context) {
+     // The last handoff in call order wins.
+     const handoff = [...controls.values()].findLast((control) => control?.handoff !== undefined)?.handoff;
+     await runtime.commit(async (tx) => {
+-        const boundary = await prepareBoundary(tx, conversationId, runtime.settings);
++        const boundary = await prepareBoundary(tx, conversationId, runtime.settings, terminate || handoff !== undefined ? "final" : "postTools", runtime.now());
+         if (added.length > 0)
+             await addTools(tx, conversationId, added);
+         const live = await tx.doc(LiveDoc, conversationId);
+diff --git a/dist/harness/harness.js b/dist/harness/harness.js
+index d228c4c4aafde8bb5de06c8c0c132c085a53ba8e..238c5f994d7660c61b2d216f22156f9d6471066a 100644
+--- a/dist/harness/harness.js
++++ b/dist/harness/harness.js
+@@ -2,7 +2,7 @@ import { withAbortSignal, withoutAbortSignal } from "@earendil-works/chord/conte
+ import { ResetEntry } from "../entries.js";
+ import { contained, SessionImpl } from "../session/session.js";
+ import { ROOT_CONVERSATION_ID } from "../types.js";
+-import { AgentDoc, configure, createAgent, resolveAgent, resolveSettings } from "./agent.js";
++import { AgentDoc, agentHooks, configure, createAgent, resolveAgent, resolveSettings } from "./agent.js";
+ import { createCompaction } from "./compaction.js";
+ import { readContext } from "./context.js";
+ import { InboxDoc, withdrawQueuedInputs } from "./inbox.js";
+@@ -127,6 +127,15 @@ class HarnessImpl extends SessionImpl {
+             create: (target, createOptions, context) => this.#create(target, createOptions, context),
+         };
+     }
++    async beforeInput(tx, conversationId, input, context) {
++        const agent = resolveAgent(await tx.doc(AgentDoc, conversationId), this.#options.registry.snapshot(), resolveSettings(this.#options.settings), this.#report);
++        const entries = [];
++        for (const handlers of agentHooks(agent, "pi.generation")) {
++            const result = await handlers.beforeInput?.(input, { conversationId, tx }, context);
++            entries.push(...(result?.entries ?? []));
++        }
++        return entries;
++    }
+     /** Resolve a conversation's committed `pi.agent` against `snapshot`, or the current one, and the current settings. */
+     async resolveAgent(id, snapshot, context) {
+         const registry = snapshot ?? this.#options.registry.snapshot();
+diff --git a/dist/harness/inbox.d.ts b/dist/harness/inbox.d.ts
+index ee7a0718b1430ca405ab3fb5a037a92fd781ef29..2d1a95d31564dcb8fb43fc44c7dab39eab49d191 100644
+--- a/dist/harness/inbox.d.ts
++++ b/dist/harness/inbox.d.ts
+@@ -23,6 +23,7 @@ export declare const InboxDoc: import("../types.ts").ConversationDocToken<InboxS
+ export type QueueModes = Pick<Settings, "steeringMode" | "followUpMode">;
+ /** What a boundary reads before the commit's first table write, and the newest head it has seen so far. */
+ export type Boundary = {
++    readonly entries: readonly EntryDraft[];
+     readonly conversationId: ConversationId;
+     readonly inbox: Draft<InboxState>;
+     readonly steeringMode: QueueMode;
+@@ -39,7 +40,7 @@ export type BoundaryResult = {
+  * Read what a boundary needs. Table reads must precede the commit's first table write, so callers prepare the
+  * boundary at the start of their commit.
+  */
+-export declare function prepareBoundary(tx: Tx, conversationId: ConversationId, modes: QueueModes): Promise<Boundary>;
++export declare function prepareBoundary(tx: Tx, conversationId: ConversationId, modes: QueueModes, at: "postTools" | "final", now: number, incoming?: EntryDraft): Promise<Boundary>;
+ /**
+  * Place the queued items a boundary selects (spec §6): every write, the first or all steers, and at `final` the first
+  * or all follow-ups. A selected reset turns a `postTools` boundary into `final`. Writes are placed first and user
+@@ -49,6 +50,7 @@ export declare function prepareBoundary(tx: Tx, conversationId: ConversationId,
+  */
+ export declare function applyBoundary(tx: Tx, boundary: Boundary, at: "postTools" | "final", now: number): Promise<BoundaryResult>;
+ /** Append the entry an input is placed as: `entry`'s kind and data, or `pi.user`, with the user message of `content`. */
++export declare function inputDraft(content: UserInput, entry: InputEntry | undefined, now: number): EntryDraft;
+ export declare function appendInput(tx: Tx, conversationId: ConversationId, content: UserInput, entry: InputEntry | undefined, now: number): Promise<EntryRecord>;
+ /** The kind and data of an input's entry as strict JSON, without other fields an untyped caller might pass. */
+ export declare function pickInputEntry({ kind, data }: InputEntry): JsonRepresentation<InputEntry>;
+diff --git a/dist/harness/inbox.js b/dist/harness/inbox.js
+index e8e07656188833bffa17af35cd2dbc4eb65b2a24..8ad4713af7f9d93ec908ddaeeb0e0bf2ea0afdf9 100644
+--- a/dist/harness/inbox.js
++++ b/dist/harness/inbox.js
+@@ -14,10 +14,15 @@ export const InboxDoc = defineDoc({
+  * Read what a boundary needs. Table reads must precede the commit's first table write, so callers prepare the
+  * boundary at the start of their commit.
+  */
+-export async function prepareBoundary(tx, conversationId, modes) {
++export async function prepareBoundary(tx, conversationId, modes, at, now, incoming) {
+     const head = (await tx.latestHeadMarker(conversationId))?.head;
+     const inbox = await tx.doc(InboxDoc, conversationId);
++    const first = inbox.items.find(item => item.mode === "steer" || item.mode === "followUp");
++    const input = first === undefined ? incoming : inputDraft(first.content, first.entry, now);
++    const entries = input !== undefined && (at === "final" || hasQueuedReset(inbox.items))
++        ? await tx.beforeInput(conversationId, input) : [];
+     return {
++        entries,
+         conversationId,
+         inbox,
+         steeringMode: modes.steeringMode,
+@@ -59,6 +64,9 @@ export async function applyBoundary(tx, boundary, at, now) {
+     }
+     const placed = [];
+     for (const index of users) {
++        if (placed.length === 0)
++            for (const draft of boundary.entries)
++                await tx.appendEntry(conversationId, draft);
+         const item = items[index];
+         const entry = await appendInput(tx, conversationId, item.content, item.entry, now);
+         tx.placeSubmission(item.id, entry.id);
+@@ -71,10 +79,11 @@ export async function applyBoundary(tx, boundary, at, now) {
+ }
+ /** Append the entry an input is placed as: `entry`'s kind and data, or `pi.user`, with the user message of `content`. */
+ export function appendInput(tx, conversationId, content, entry, now) {
++    return tx.appendEntry(conversationId, inputDraft(content, entry, now));
++}
++export function inputDraft(content, entry, now) {
+     const message = { role: "user", content, timestamp: now };
+-    if (entry === undefined)
+-        return tx.appendEntry(UserEntry, conversationId, { model: [message] });
+-    return tx.appendEntry(conversationId, { ...pickInputEntry(entry), model: [message] });
++    return { ...(entry === undefined ? { kind: UserEntry.kind } : pickInputEntry(entry)), model: [message] };
+ }
+ /** The kind and data of an input's entry as strict JSON, without other fields an untyped caller might pass. */
+ export function pickInputEntry({ kind, data }) {
 diff --git a/dist/harness/output.js b/dist/harness/output.js
 index 55f7754fadb83e326386bec10bddc28e1e576f43..3f0f6ccf7193ef9c7a72fa11d3b823c0f47884d9 100644
 --- a/dist/harness/output.js
@@ -19,3 +145,135 @@ index 55f7754fadb83e326386bec10bddc28e1e576f43..3f0f6ccf7193ef9c7a72fa11d3b823c0
  }
  /**
   * Bound `text` to whole lines within the limits: the first lines for `head`, the last lines for `tail`. The result is an
+diff --git a/dist/harness/submissions.js b/dist/harness/submissions.js
+index ee076b5ea977ae39bca78a22e43827c26ba386a5..fd545203037c828570b3b5350eaabdbc977254c3 100644
+--- a/dist/harness/submissions.js
++++ b/dist/harness/submissions.js
+@@ -1,7 +1,7 @@
+ import { copyJson } from "@earendil-works/chord";
+ import { ConversationBusy } from "../errors.js";
+ import { startRun } from "./generation.js";
+-import { appendInput, applyBoundary, hasQueuedReset, InboxDoc, isDisplayOnly, isStale, pickInputEntry, prepareBoundary, removeInboxItem, } from "./inbox.js";
++import { appendInput, inputDraft, applyBoundary, hasQueuedReset, InboxDoc, isDisplayOnly, isStale, pickInputEntry, prepareBoundary, removeInboxItem, } from "./inbox.js";
+ import { LiveDoc } from "./live.js";
+ import { closedError, Waiters } from "./util.js";
+ /** Admission, waits, and withdrawal of the durable submissions of one Harness. */
+@@ -148,7 +148,7 @@ export async function admitSubmission(tx, conversationId, draft, now, queueModes
+     if (busy && draft.type === "input" && draft.whenBusy === "reject")
+         throw new ConversationBusy(conversationId);
+     // A boundary reads the table, so it is prepared before the first table write; a busy one needs none.
+-    const boundary = busy ? undefined : await prepareBoundary(tx, conversationId, queueModes);
++    const boundary = busy ? undefined : await prepareBoundary(tx, conversationId, queueModes, "final", now, draft.type === "input" ? inputDraft(draft.content, draft.entry, now) : undefined);
+     if (boundary === undefined || boundary.inbox.items.length > 0) {
+         const { id } = await tx.createSubmission({
+             conversationId,
+@@ -185,6 +185,8 @@ export async function admitSubmission(tx, conversationId, draft, now, queueModes
+         const write = { conversationId, ...requestId, type: "write", status: "done", entry: entry.id };
+         return (await tx.createSubmission(write)).id;
+     }
++    for (const before of boundary.entries)
++        await tx.appendEntry(conversationId, before);
+     const entry = await appendInput(tx, conversationId, draft.content, draft.entry, now);
+     const input = { conversationId, ...requestId, type: "input", status: "placed", entry: entry.id };
+     const { id } = await tx.createSubmission(input);
+diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
+index ea3adc9e21bcc4b101da614ce9913e3858777f0d..0aeeb60440bf11979bd7867e22ff0a2bdd2ee59e 100644
+--- a/dist/harness/types.d.ts
++++ b/dist/harness/types.d.ts
+@@ -686,6 +686,8 @@ export interface HookApi extends DocumentReader {
+ export type HookResult<T> = T | undefined | Promise<T | undefined>;
+ /** Hooks of the built-in generation task. */
+ export interface GenerationHooks {
++    /** Before a new run’s first input is placed. Use only tx for storage access; effects commit with the input. */
++    beforeInput(input: EntryDraft, api: { readonly conversationId: ConversationId; readonly tx: Tx }, context: Context): HookResult<{ readonly entries?: readonly EntryDraft[] }>;
+     /** Before every request attempt, including recovery; the result is used for that request only. */
+     beforeRequest(request: {
+         readonly messages: readonly Message[];
+diff --git a/dist/session/session.d.ts b/dist/session/session.d.ts
+index 1d5ded26a39ce8c8b73fd13247e9816bc15deb90..835ea525640a3ceb24c1de1b15fec79c0994dc3d 100644
+--- a/dist/session/session.d.ts
++++ b/dist/session/session.d.ts
+@@ -1,5 +1,5 @@
+ import { type Context, type JsonValue } from "@earendil-works/chord";
+-import type { CommitPublication, ConversationDocFamilyToken, ConversationDocToken, ConversationId, ConversationRecord, DocumentRecord, DocumentState, DocumentWatch, EntryId, JsonObject, RewindableConversationDocFamilyToken, RewindableConversationDocToken, Session, SessionDocFamilyToken, SessionDocToken, SessionEnd, Storage, TaskDocFamilyToken, TaskDocToken, TaskId, Tx } from "../types.ts";
++import type { CommitPublication, ConversationDocFamilyToken, ConversationDocToken, EntryDraft, ConversationId, ConversationRecord, DocumentRecord, DocumentState, DocumentWatch, EntryId, JsonObject, RewindableConversationDocFamilyToken, RewindableConversationDocToken, Session, SessionDocFamilyToken, SessionDocToken, SessionEnd, Storage, TaskDocFamilyToken, TaskDocToken, TaskId, Tx } from "../types.ts";
+ import { Transaction, type TransactionScope } from "./transaction.ts";
+ /**
+  * Open a Session kernel over one storage backend. `now` is the wall clock for task times; default `Date.now`. The first
+@@ -91,6 +91,7 @@ export declare class SessionImpl implements Session {
+     close(context: Context): Promise<void>;
+     /** Internal: the Session's failure, and errors of listeners, which never fail what ran them. A plain Session drops them. */
+     report(_error: unknown): void;
++    protected beforeInput(tx: Transaction, id: ConversationId, input: EntryDraft, context: Context): Promise<readonly EntryDraft[]>;
+     /**
+      * Runs inside every transaction that creates or forks a conversation, after the conversation record is staged. A
+      * plain Session stages nothing; a Harness stages its built-in documents.
+diff --git a/dist/session/session.js b/dist/session/session.js
+index 7b7c02895a2a1a222b9afcd29c99a417e38a8e66..f0befbe749056193138fa054e8dc9a5f14ecad7c 100644
+--- a/dist/session/session.js
++++ b/dist/session/session.js
+@@ -121,6 +121,7 @@ export class SessionImpl {
+                 if (this.#documents.get(id)?.record.id === recordId)
+                     this.#dropDocument(id);
+             },
++            beforeInput: (tx, id, input, context) => this.beforeInput(tx, id, input, context),
+             conversationCreated: (tx, record) => this.conversationCreated(tx, record),
+         };
+     }
+@@ -347,6 +348,9 @@ export class SessionImpl {
+     }
+     /** Internal: the Session's failure, and errors of listeners, which never fail what ran them. A plain Session drops them. */
+     report(_error) { }
++    async beforeInput(_tx, _id, _input, _context) {
++        return [];
++    }
+     /**
+      * Runs inside every transaction that creates or forks a conversation, after the conversation record is staged. A
+      * plain Session stages nothing; a Harness stages its built-in documents.
+diff --git a/dist/session/transaction.d.ts b/dist/session/transaction.d.ts
+index e32932460ce5ef231dc9ee09249266f0e57396e2..3754a773735efd8fa117ce9b93bce9d5153e11f8 100644
+--- a/dist/session/transaction.d.ts
++++ b/dist/session/transaction.d.ts
+@@ -28,6 +28,7 @@ export interface TransactionHost {
+     install(document: LoadedDocument): void;
+     /** Remove a retired incarnation if it is still the cached occupant of its address. */
+     evict(addressId: string, recordId: DocumentId): void;
++    beforeInput(tx: Transaction, conversationId: ConversationId, input: EntryDraft, context: Context): Promise<readonly EntryDraft[]>;
+     /** Stage writes that belong to every newly created or forked conversation, in its creating transaction. */
+     conversationCreated(tx: Transaction, record: ConversationRecord): Promise<void>;
+ }
+@@ -68,6 +69,7 @@ export declare class Transaction implements Tx {
+     forkConversation(parentConversationId: ConversationId, at: EntryId, options: {
+         readonly ownership: ConversationOwnership;
+     }): Promise<ConversationRecord>;
++    beforeInput(conversationId: ConversationId, input: EntryDraft): Promise<readonly EntryDraft[]>;
+     appendEntry(conversationId: ConversationId, value: EntryDraft): Promise<EntryRecord>;
+     appendEntry<D extends JsonValue>(token: Entry<D>, conversationId: ConversationId, value: TypedEntryDraft<NoInfer<D>>): Promise<TypedEntry<D>>;
+     createTask<I, S extends {
+diff --git a/dist/session/transaction.js b/dist/session/transaction.js
+index 138e45aeda153314aff0f03c71f7b11b8d1ae654..89a01dd620227bb5f77e2b597021bee8026b3516 100644
+--- a/dist/session/transaction.js
++++ b/dist/session/transaction.js
+@@ -147,6 +147,9 @@ export class Transaction {
+         this.#assertOpen();
+         return record;
+     }
++    beforeInput(conversationId, input) {
++        return this.#read("beforeInput", () => this.#host.beforeInput(this, conversationId, input, this.#context));
++    }
+     appendEntry(first, second, third) {
+         if (typeof first === "number")
+             return this.#appendEntry(first, second);
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index 54c217fd343fed722d3ae5b815b82331c930bad7..0eeae94d3400bdfc2989eea93077e9e8310935c5 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -708,6 +708,8 @@ export type CommitPublication = {
+  * Table reads and creation results are trusted immutable values and may be shared with internal commit state.
+  */
+ export interface Tx {
++    /** Prepare entries before a new run’s first input; called before table writes, in the placement transaction. */
++    beforeInput(conversationId: ConversationId, input: EntryDraft): Promise<readonly EntryDraft[]>;
+     conversation(id: ConversationId): Promise<ConversationRecord | undefined>;
+     entry(id: EntryId): Promise<EntryRecord | undefined>;
+     /** Undefined when the entry is absent or has another kind. */

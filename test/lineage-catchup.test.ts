@@ -124,6 +124,14 @@ it('catches up once on an idle resume, puts overlap first, and reads it before t
   expect(text.indexOf('Fix schema')).toBeLessThan(text.indexOf('Add something unrelated'))
   expect(f.requests.at(-1)!.slice(-2)).toEqual([text, 'continue work'])
   const view = await f.server.root.context(context)
+  const resumed = view.entries.find((entry) =>
+    entry.model?.some(
+      (message) => message.role === 'user' && textOf(message.content) === 'continue work',
+    ),
+  )!
+  expect(notes[0].id).toBeLessThan(resumed.id)
+  expect(notes[0].edits).toBeUndefined()
+  expect(notes[0].model?.[0]?.content).toBe(text)
   expect(
     view.messages
       .filter((message) => message.role === 'user')

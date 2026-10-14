@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   '@earendil-works/pi-claude-code@0.1.0': 5fc3dc9f9de5c251d4bbc215c0fb9fa1fd3da9b6af598410598676bfea0b80d7
-  '@earendil-works/pi-durable@1.2.0': fe430e2fbdb22aa3547344364b63806c6d37d5b3f2dc4cd273e0439c5bfea848
+  '@earendil-works/pi-durable@1.2.0': bd6d95c632939bc7e039228ca01a3f85ce0e41c055b1c205e7efe07c754a2564
 
 importers:
 
@@ -29,7 +29,7 @@ importers:
         version: 1.2.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)
       '@earendil-works/pi-durable':
         specifier: 1.2.0
-        version: 1.2.0(patch_hash=fe430e2fbdb22aa3547344364b63806c6d37d5b3f2dc4cd273e0439c5bfea848)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)
+        version: 1.2.0(patch_hash=bd6d95c632939bc7e039228ca01a3f85ce0e41c055b1c205e7efe07c754a2564)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)
       '@fontsource-variable/inter':
         specifier: 5.3.0
         version: 5.3.0
@@ -3905,7 +3905,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-durable@1.2.0(patch_hash=fe430e2fbdb22aa3547344364b63806c6d37d5b3f2dc4cd273e0439c5bfea848)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)':
+  '@earendil-works/pi-durable@1.2.0(patch_hash=bd6d95c632939bc7e039228ca01a3f85ce0e41c055b1c205e7efe07c754a2564)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)':
     dependencies:
       '@earendil-works/chord': 1.2.0
       '@earendil-works/pi-ai': 1.2.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)
