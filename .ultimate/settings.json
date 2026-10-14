@@ -21,7 +21,7 @@
     }
   },
   "lander": {
-    "checks": ["pnpm check"],
+    "checks": ["pnpm check", ["pnpm test", "pnpm test:e2e", "pnpm eval"]],
     "push": "origin"
   }
 }

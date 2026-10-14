@@ -76,7 +76,9 @@ test('seeded tool failure supplies the context for a fix', async () => {
   try {
     const c = await ultimate.conversation({
       history: [
-        user('Run app.mjs. The greeting should be exactly Hello seeded history. Do not commit.'),
+        user(
+          'Run app.mjs. It should print exactly "Hello seeded history" (no punctuation). Do not commit.',
+        ),
         assistant('', [
           {
             type: 'toolCall',

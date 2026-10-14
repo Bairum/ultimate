@@ -665,6 +665,22 @@ async function lander(settings: JsonObject, existing?: Awaited<ReturnType<typeof
   f.host.projectSettings = async () => ({ lander: settings })
   return f
 }
+it.concurrent('lets an ownerless history fork submit its own workspace', async () => {
+  const f = await lander({ checks: ['test -f base.txt'] })
+  const entry = await f.opened.harness.commit(
+    (tx) => tx.appendEntry(f.opened.root.id, { kind: 'test.branch-point', data: {} }),
+    context,
+  )
+  const fork = await f.opened.root.fork(entry.id, { ownership: { kind: 'ownerless' } }, context)
+  await f.opened.harness.commit((tx) => f.service.create(tx, fork.id, f.projectRoot), context)
+  await f.service.ready(fork.id, context)
+  await commit((await f.service.get(fork.id, context))!.path, 'branch.txt')
+  const result = await f.call(fork.id, 'workspace', { action: 'submit' })
+  expect(JSON.stringify(result)).toContain('position')
+  const [report] = await submitted(f, fork.id)
+  expect(report).toContain('landed as')
+  expect(await readFile(join(f.projectRoot, 'branch.txt'), 'utf8')).toBe('branch.txt')
+})
 it.concurrent('lands two submissions in order onto a moved target and reports both', async () => {
   const f = await lander({ checks: ['test -f base.txt'] })
   const first = await f.create()
