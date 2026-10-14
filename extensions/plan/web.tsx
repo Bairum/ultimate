@@ -39,6 +39,7 @@ import { stateLabel, useWorkspaceAction, useWorkspaces } from '../workspaces/dat
 import type { WorkspaceInfo } from '../workspaces/types.ts'
 import { StatusIcon, TaskChip, statusOf, useOpenTask, useTaskOf } from './chip.tsx'
 import type { TaskLink } from './chip.tsx'
+import { finished, number, pillOf } from './progress.tsx'
 
 /** The `ultimate.plan` document, as `server.ts` defines it. */
 type Task = {
@@ -398,7 +399,7 @@ function EpicCard({
   own?: string
 }) {
   const list = Object.values(epic.tasks)
-  const done = list.filter((task) => task.status === 'done').length
+  const done = finished(epic.tasks)
   const approved = epic.verdict?.trimStart().startsWith('APPROVED')
   const section = useScrollTo<HTMLElement>(focus?.key === epic.key ? focus : undefined)
   return (
@@ -514,8 +515,6 @@ export function PlanBody({
     </>
   )
 }
-
-const number = (key: string) => Number(key.slice(1).split('.')[0]) || 0
 
 /** A conversation's live `ultimate.plan`, on a stream of its own: a worker's view of its coordinator's plan. */
 function usePlanOf(conversation: number | undefined) {
@@ -679,14 +678,11 @@ function CoordinatorPlan({
     setFocus({ key: request.key })
     settle()
   }, [request, plan, setExpanded, settle])
-  const epics = Object.values(plan?.epics ?? {}).toSorted((a, b) => number(b.key) - number(a.key))
-  if (epics.length === 0) return null
-  const open = epics.filter((epic) => epic.status !== 'done')
-  const shown = open[0] ?? epics[0]
-  const list = Object.values(shown.tasks)
+  const shown = pillOf(plan?.epics ?? {})
+  if (!shown && !expanded) return null
   return (
     <>
-      {expanded && (
+      {expanded && plan && (
         <Panel
           close={() => {
             setExpanded(false)
@@ -697,21 +693,23 @@ function CoordinatorPlan({
           plan={plan}
         />
       )}
-      <button
-        aria-expanded={expanded}
-        className={pill}
-        data-plan-pill
-        onClick={() => setExpanded(!expanded)}
-        title={`${shown.key} · ${shown.title}`}
-        type="button"
-      >
-        <ClipboardListIcon className="size-3.5 shrink-0" />
-        <span className="text-foreground/80">{shown.key}</span>
-        <span>
-          · {list.filter((task) => task.status === 'done').length}/{list.length} done
-        </span>
-        {open.length > 1 && <span className="text-muted-foreground/70">+{open.length - 1}</span>}
-      </button>
+      {shown && (
+        <button
+          aria-expanded={expanded}
+          className={pill}
+          data-plan-pill
+          onClick={() => setExpanded(!expanded)}
+          title={`${shown.epic.key} · ${shown.epic.title}`}
+          type="button"
+        >
+          <ClipboardListIcon className="size-3.5 shrink-0" />
+          <span className="text-foreground/80">{shown.epic.key}</span>
+          <span>
+            · {shown.finished}/{shown.total} done
+          </span>
+          {shown.more > 0 && <span className="text-muted-foreground/70">+{shown.more}</span>}
+        </button>
+      )}
     </>
   )
 }
