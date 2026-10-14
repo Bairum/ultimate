@@ -20,7 +20,6 @@ import {
   useExtensions,
   useModels,
   useUiState,
-  useUltimate,
 } from '../sdk/hooks.ts'
 import { isMac } from '../sdk/keys.ts'
 import type { ModelsResponse } from '../../../shared/protocol.ts'
@@ -214,7 +213,6 @@ function ConversationComposer({
       ? 'new'
       : `branch-${point.from}${point.at === undefined ? '' : `-${point.at}`}`
     : id
-  const { surface } = useUltimate()
   const [archived, setArchived] = useUiState<number[]>('ext.conversations.archived', [])
   const summaries = useConversations()
   if (!drafts.has(draftId)) drafts.set(draftId, createDraft(draftId))
@@ -375,8 +373,7 @@ function ConversationComposer({
                   blocked ??
                   (busy ? (
                     <>
-                      <Kbd>↵</Kbd> steer · <Kbd>{alt} ↵</Kbd> follow-up · <Kbd>esc</Kbd>{' '}
-                      {surface === 'canvas' ? 'map' : 'stop'}
+                      <Kbd>↵</Kbd> steer · <Kbd>{alt} ↵</Kbd> follow-up · <Kbd>esc</Kbd> stop
                     </>
                   ) : null)}
               </span>
@@ -386,7 +383,7 @@ function ConversationComposer({
                   onClick={() =>
                     void api.abort().catch((failure: Error) => setError(failure.message))
                   }
-                  title={surface === 'canvas' ? 'Stop' : 'Stop (Esc)'}
+                  title="Stop (Esc)"
                 />
               )}
               {(!busy || !empty) && (

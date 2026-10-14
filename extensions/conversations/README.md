@@ -31,8 +31,7 @@ invented delegation edges. Expansion is persisted in `ext.conversations.expanded
 
 New conversation (the button, `mod+alt+n`, or the palette) opens a pending branch composer on the Agent surface.
 It creates nothing until sent; sending calls lineage `branch` from the root's latest entry with the prompt and
-chosen model/thinking level and any pasted images. The same composer serves the Canvas hub and lineage's "Branch
-from here". The dropdown's Isolated and Shared choices only select the type, remembered in
+chosen model/thinking level and any pasted images. The same composer serves lineage's "Branch from here". The dropdown's Isolated and Shared choices only select the type, remembered in
 `ext.conversations.creationType` across tabs, reloads and restarts. New isolated conversation explicitly branches
 in its own checkout without changing that preference. Errors preserve the prompt for retry.
 Conclude and clear context never remove checkouts or commits. The menu retains Manage workspaces.
@@ -127,7 +126,7 @@ task. A task that finds no available model before it chose one settles quietly t
 ## Summary model
 
 `summaryModel` in `~/.ultimate/settings.json` or the project's `.ultimate/settings.json` (project wins, and only once
-the project is chosen) names the model for titles, summaries, reply assessments and Canvas conclusions as
+the project is chosen) names the model for titles, summaries and reply assessments as
 `provider/id[:thinking]`, an exact provider and model id with an optional Pi thinking level, clamped to what the model
 supports (medium when omitted). Unset, it is `DEFAULT_SUMMARY_MODEL`: GPT-6 Luna with medium thinking through the
 current OpenAI provider (including Sign in with ChatGPT). `summary-model.ts` reads it when a request is considered and again when a
@@ -158,7 +157,7 @@ projections that can be rebuilt from those records at any time; no process-local
 
 ```text
 GenerationTask hooks ─▶ conversations.summary task ─▶ entries + Summaries doc ─┐
- (beforeRequest, onYield)   (byTaskId on its entries)                          ├─▶ Overview doc ─▶ sidebar, canvas
+ (beforeRequest, onYield)   (byTaskId on its entries)                          ├─▶ Overview doc ─▶ sidebar
 input submission (done/unanswered) · pi.live · pi.inbox · pi.reset ────────────┘
 ```
 

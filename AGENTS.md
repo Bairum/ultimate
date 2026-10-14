@@ -60,11 +60,11 @@ Skills load from clone `skills/`, then Pi's defaults, then `~/.ultimate/skills/`
 `<project>/.ultimate/skills/`, with later names winning.
 The default set is `agent`, `conversations`, `workspaces`, `coding-tools`, `prompt`, `models`, `status-line`, `notices`, `theme`,
 `faux` (inert unless `ULTIMATE_FAUX=1`), `codemode`, `browser`, `onboarding`, `splash`, and `lineage` (the conversation tree: root, branches, notes). Other built-ins are opt-in
-building blocks, including `secrets`, `parallel` (web tools; requires `secrets`), `canvas` (the Canvas surface: every agent on a live map around a hub), and `tailscale` (remote access, user-level enablement only). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
+building blocks, including `secrets`, `parallel` (web tools; requires `secrets`), and `tailscale` (remote access, user-level enablement only). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
 restart. User/project extension folders are on by default; `disable` can turn off those or defaults too. Unknown names
 produce a notice. `summaryModel` (`"provider/id[:thinking]"`, default `openai/gpt-6-luna:medium`; project over user)
-picks the model for automatic titles, summaries, reply assessments and Canvas conclusions; set it in either file or with
+picks the model for automatic titles, summaries and reply assessments; set it in either file or with
 the "Summary model…" command, and it applies to the next request.
 User config is independent of `ULTIMATE_HOME`. This repository's `.ultimate/settings.json` enables the suggested full
 setup. Enable `self` for its guidance and `restart` tool, `surfaces` for surface awareness, and `documents` for the
@@ -131,7 +131,7 @@ It fixes small failures when the project configures it to; on success it fast-fo
 `lander.push` (here `origin`), so keep working while it runs.
 Its progress shows live on the submit tool card, with expandable steps, and its report as an outcome card, both in
 the submitting conversation; the source's "Lander · <target>" conversation, pinned at the top of the sidebar, keeps
-the full log and shows as working on the Canvas and in the Agents tab while it lands. It runs the `lander` agent
+the full log and shows as working in the Agents tab while it lands. It runs the `lander` agent
 definition: here `.ultimate/agents/lander.md` with `onFailure: fix`, so a conflict or a twice-failing check is
 resolved and committed by its model, every check runs again, and only then does it land and push. Talk to it in its
 conversation about the queue and recent landings.
@@ -196,7 +196,6 @@ Definitions live in `agents/`, `~/.ultimate/agents/`, and the project root's `.u
 - `extensions/coding-tools/web.tsx` — internal bash exit_code diagnostic message drives exitOf and untyped details.patch/details.diff drive Edit. Drop when Pi exports structured bash outcomes and structured diff rows for rendering.
 - `extensions/self/web.tsx` — internal remove-all pi.system entry immediately precedes a reordered re-add, hidden here. Drop when Pi exposes prompt reorder metadata instead of requiring entry-sequence inference.
 - `extensions/subagents/server.ts` — internal ToolTaskInput.assistant locates the calling assistant for history forks. Drop when ToolExecutionApi exposes the calling assistant entry ID.
-- `extensions/canvas/feed.ts` — internal untyped details.patch counts an edit's added and removed lines. Drop when Pi exports structured diff rows for rendering.
 
 On a Pi upgrade, run `rg "Pi upstream:"` and recheck each marked item against the new version; test/pi-upstream.test.ts checks that every tracked marker matches the installed package version and its path appears in this list, and every backticked path in this list is tracked and contains a marker.
 Delete copies and patches that Pi now exports or fixes, then update the remaining markers and this list after verification.

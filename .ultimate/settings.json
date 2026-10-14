@@ -2,7 +2,6 @@
   "extensions": {
     "enable": [
       "automations",
-      "canvas",
       "claude-code",
       "documents",
       "info",

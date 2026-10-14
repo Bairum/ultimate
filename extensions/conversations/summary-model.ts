@@ -6,7 +6,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { readSettings } from '../onboarding/settings.ts'
 import { parseSummaryModel } from './summary-model-ref.ts'
 
-/** Titles, summaries, reply assessments and Canvas conclusions use this model unless settings name another. */
+/** Titles, summaries and reply assessments use this model unless settings name another. */
 export const DEFAULT_SUMMARY_MODEL = 'openai/gpt-6-luna:medium'
 
 /** A resolved summary model, kept in a task's memo so a resumed task asks the same one. */

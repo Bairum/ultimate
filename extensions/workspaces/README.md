@@ -33,7 +33,7 @@ The task runs in that source's lander conversation (`landerConversations`): owne
 labelled `lander`, its cwd the lander checkout. The project's checkout has one from the moment the extension opens
 (idempotently, the same record submit uses); another source gets its own on its first submit. It has no workspace and
 is no main, so `workspace submit` and `land` refuse it. The task is its conversation's foreground work, so the Agents
-tab and the Canvas show it working while it lands; the Canvas shows it only then. The sidebar pins every lander
+tab shows it working while it lands. The sidebar pins every lander
 conversation above the others, never archived, with "idle · last <sha> <time>", a pulsing "landing", or "fixing" /
 "diagnosing" while its model works on a failure. It logs
 every submission as `ultimate.lander` entries, which carry no model message, so no model run in that conversation
@@ -49,7 +49,7 @@ The submitter follows the lander in its own transcript, from that document. The 
 `Not landed`); below it an "N steps" toggle, open while queued or landing and closed once finished, lists the step
 rows and ends in a quiet "full log in #<lander>" link. The lander's report message renders as an outcome card with
 a success, warning (landed, push failed) or error accent and the same collapsed steps. Nobody has to open the lander
-conversation; it keeps the full log, grouped by submission, and shows on the Canvas and in the Agents tab.
+conversation; it keeps the full log, grouped by submission, and shows in the Agents tab.
 With lineage enabled, the report phase also leaves a replay-safe landing note in the project's root, unless the
 submitter is that root. Failed submissions leave no root note; notes never wake the root.
 

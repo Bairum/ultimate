@@ -1005,7 +1005,7 @@ function SummaryModelDialog() {
       >
         <DialogTitle className="sr-only">Summary model</DialogTitle>
         <DialogDescription className="sr-only">
-          The model that writes titles, summaries, reply assessments and Canvas conclusions.
+          The model that writes titles, summaries and reply assessments.
         </DialogDescription>
         <div className="flex items-baseline gap-2 border-b border-border/70 px-3 py-2 text-[12px]">
           <span className="text-muted-foreground">Summary model</span>

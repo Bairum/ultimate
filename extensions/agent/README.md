@@ -7,6 +7,6 @@ it doubles as the smallest example of a surface. To change it for yourself or on
 fails to load, the host still shows a bare header, conversation, and status line, so you can always ask for a fix.
 
 It also brings the conversation's commands: stop the run (`agent.stop`, Escape, also from the composer but not other
-inputs) on every surface except Canvas, where Escape returns to the map and the explicit Stop button stops the run.
+inputs) on every surface.
 Compact the context (`agent.compact`), focus the composer (`agent.composer`), and show the main conversation
 (`agent.main`) are available on every surface.

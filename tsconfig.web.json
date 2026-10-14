@@ -21,7 +21,6 @@
     "extensions/**/*.tsx",
     ".ultimate/extensions/**/*.tsx",
     "shared/protocol.ts",
-    "extensions/canvas/types.ts",
     "extensions/conversations/types.ts",
     "extensions/conversations/summary-model-ref.ts",
     "extensions/status-line/context.ts",

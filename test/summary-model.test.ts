@@ -274,7 +274,7 @@ it('writes only the user summary model, and refuses while project settings decid
   await mkdir(join(userHome, '.ultimate'))
   await writeFile(
     path,
-    JSON.stringify({ extensions: { enable: ['canvas'] }, summaryModel: 'acme/mini' }),
+    JSON.stringify({ extensions: { enable: ['documents'] }, summaryModel: 'acme/mini' }),
   )
   const project: JsonObject = { summaryModel: 'acme/large' }
   const ctx = {
@@ -292,7 +292,7 @@ it('writes only the user summary model, and refuses while project settings decid
       `The summary model is set by project settings in ${projectFile}; edit that file to change it`,
     )
   expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({
-    extensions: { enable: ['canvas'] },
+    extensions: { enable: ['documents'] },
     summaryModel: 'acme/mini',
   })
   delete project.summaryModel
@@ -306,12 +306,14 @@ it('writes only the user summary model, and refuses while project settings decid
     source: 'user',
   })
   expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({
-    extensions: { enable: ['canvas'] },
+    extensions: { enable: ['documents'] },
     summaryModel: 'acme/mini:low',
   })
   await expect(actions.setSummaryModel({ value: 'mini' }, ctx)).rejects.toThrow('provider/id')
   expect(await actions.setSummaryModel({ value: null }, ctx)).toMatchObject({ source: 'default' })
-  expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ extensions: { enable: ['canvas'] } })
+  expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({
+    extensions: { enable: ['documents'] },
+  })
 })
 
 it.each([

@@ -102,9 +102,6 @@ it('respects typing, dialogs, sequences, timeout, composition and listener teard
   composer.id = 'composer-input'
   expect(send('Tab', composer, { shiftKey: true })).toBe(true)
   expect(runCommand).toHaveBeenLastCalledWith('thinking')
-  composer.id = 'canvas-hub-input'
-  expect(send('Tab', composer, { shiftKey: true })).toBe(true)
-  expect(runCommand).toHaveBeenLastCalledWith('thinking')
   dialog.mockReturnValue({})
   expect(send('Tab', composer, { shiftKey: true })).toBe(false)
   dialog.mockReturnValue(null)
