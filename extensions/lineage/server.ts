@@ -52,6 +52,7 @@ export type BranchState = {
   /** Images pasted with the prompt; they go with it as the branch's first input, then are dropped. */
   images?: BranchImage[]
   status: 'briefing' | 'ready' | 'failed'
+  brief?: TaskId<null>
   error?: string
 }
 /** A branch's origin and the state of its brief; absent on the root and on conversations made otherwise. */
@@ -265,12 +266,15 @@ function lineage(host: ExtensionHost) {
         return { status: 'terminal', outcome: { status: 'aborted' } }
       }, ctx),
   })
-  const startBrief = (tx: Tx, id: ConversationId) =>
-    tx.createTask(
+  const startBrief = async (tx: Tx, id: ConversationId) => {
+    const brief = await tx.createTask(
       Brief,
       { id },
       { conversationId: id, ownership: { kind: 'conversation' }, background: true },
     )
+    ;(await tx.doc(Branch, id)).branch!.brief = brief
+    return brief
+  }
   const Notify = defineTask<
     { target: ConversationId; wake: boolean },
     { phase: 'wait' } | { phase: 'deliver'; title?: string; text: string },
@@ -282,10 +286,8 @@ function lineage(host: ExtensionHost) {
     phases: {
       wait: async (task, runtime, ctx) => {
         const { target } = task.input
-        // A branch writing its brief has only background work, which waitForIdle does not count: wait for the brief
-        // and for the run it starts, so "finished" means its own work ended.
-        while ((await runtime.snapshot(Branch, target, ctx))?.branch?.status === 'briefing')
-          await runtime.sleep(runtime.now() + 2000, ctx)
+        const brief = (await runtime.snapshot(Branch, target, ctx))?.branch?.brief
+        if (brief !== undefined) await runtime.waitForTask(brief, ctx)
         await (await runtime.conversation(target, ctx))?.waitForIdle(ctx)
         // The context starts at the brief's reset, so an inherited answer from the source never counts as its own.
         const answer = (await runtime.context(target, ctx)).messages.findLast(
