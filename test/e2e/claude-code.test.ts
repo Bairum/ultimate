@@ -6,10 +6,10 @@ import {
   getSupportedThinkingLevels,
   isModelType,
 } from '@earendil-works/pi-ai/models'
-import { fauxServer, temp, until, attach, post, sourceCopy } from './helpers.ts'
-import { createServer } from '../server/main.ts'
+import { fauxServer, temp, until, attach, post, sourceCopy } from '../helpers.ts'
+import { createServer } from '../../server/main.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
-import { context } from '../server/harness.ts'
+import { context } from '../../server/harness.ts'
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 
 it('loads pinned TypeScript upstream through Vite, tracks external auth, and cleans up reload/disable', async () => {

@@ -3,7 +3,8 @@ import { awaitWithContext } from '@earendil-works/chord/context'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { setTimeout as realDelay } from 'node:timers/promises'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import { context, prepareHarness } from '../server/harness.ts'
@@ -12,11 +13,23 @@ import { Metadata } from '../server/metadata.ts'
 import automations, { actions, Automations } from '../extensions/automations/server.ts'
 import type { Automation } from '../extensions/automations/server.ts'
 import type { ActionContext } from '../server/actions.ts'
-import { temp, until } from './helpers.ts'
+import { temp } from './helpers.ts'
+
+beforeEach(() => vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] }))
+
+async function until(test: () => boolean | Promise<boolean>, timeout = 7000) {
+  for (let elapsed = 0; elapsed <= timeout; elapsed += 50) {
+    if (await test()) return
+    await vi.advanceTimersByTimeAsync(50)
+    await realDelay(2)
+  }
+  throw new Error('Timed out')
+}
 
 const hosts: OpenHost[] = []
 afterEach(async () => {
   for (const host of hosts.splice(0)) await host.close()
+  vi.useRealTimers()
 })
 async function fixture() {
   const root = await temp('ultimate-automations-')
@@ -113,7 +126,7 @@ async function fixture() {
     },
   }
 }
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+const delay = (ms: number) => vi.advanceTimersByTimeAsync(ms)
 
 it('fires every 2s into distinct answered conversations and supports pause, resume, run and delete', async () => {
   const f = await fixture()
@@ -148,7 +161,10 @@ it('fires every 2s into distinct answered conversations and supports pause, resu
   await until(async () => (await f.records())[0].runs.at(-1)?.status === 'done')
   expect((await f.records())[0].runs).toHaveLength(runs.length + 1)
   await f.action('resume', { id: a.id })
-  await until(async () => (await f.records())[0].runs.length === runs.length + 2, 3500)
+  await until(async () => {
+    const current = (await f.records())[0].runs
+    return current.length === runs.length + 2 && current.at(-1)?.status === 'done'
+  }, 3500)
   await f.action('delete', { id: a.id })
   expect(await f.records()).toEqual([])
   expect(await f.opened.harness.conversation(runs[0].conversationId!, context)).toBeDefined()

@@ -1,168 +1,32 @@
 import { request } from 'node:http'
-import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve as resolvePath } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
 import type { ConversationId, ConversationView } from '@earendil-works/pi-durable'
-import { defineExtension, InboxDoc, LiveDoc } from '@earendil-works/pi-durable'
+import { InboxDoc, LiveDoc } from '@earendil-works/pi-durable'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   fauxServer as createServer,
   prepareFauxServer as prepareServer,
   until,
   post,
   attach,
-  temp,
-  removeTemp,
-  linkDependencies,
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { UiState } from '../server/ui-state.ts'
 import { Metadata } from '../server/metadata.ts'
 import type { ConversationSummary, ServerEvents } from '../shared/protocol.ts'
 import { Logins } from '../extensions/models/server.ts'
-
-const servers: Awaited<ReturnType<typeof createServer>>[] = []
-const directories: string[] = []
-afterEach(async () => {
-  vi.restoreAllMocks()
-  for (const server of servers.splice(0)) {
-    await server.vite.watcher.close()
-    await server.close()
-  }
-  for (const directory of directories.splice(0)) await removeTemp(directory)
-})
-async function fixture(
-  extra = false,
-  agents = false,
-  sources?: Record<string, string>,
-  empty = false,
-) {
-  const directory = await temp()
-  directories.push(directory)
-  const ultimateRoot = join(directory, 'repo')
-  await mkdir(join(ultimateRoot, 'extensions', 'prompt'), { recursive: true })
-  await cp(resolvePath('extensions/coding-tools'), join(ultimateRoot, 'extensions/coding-tools'), {
-    recursive: true,
-  })
-  await cp(resolvePath('extensions/faux'), join(ultimateRoot, 'extensions/faux'), {
-    recursive: true,
-  })
-  await mkdir(join(ultimateRoot, 'web'), { recursive: true })
-  await linkDependencies(ultimateRoot)
-  await writeFile(
-    join(ultimateRoot, 'vite.config.ts'),
-    "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', cacheDir: '.vite-cache', optimizeDeps: { noDiscovery: true } })",
-  )
-  await writeFile(
-    join(ultimateRoot, 'web', 'index.html'),
-    '<html><body>Ultimate server is running</body></html>',
-  )
-  await writeFile(
-    join(ultimateRoot, 'extensions', 'prompt', 'server.ts'),
-    await readFile(resolvePath('extensions/prompt/server.ts'), 'utf8'),
-  )
-  await cp(resolvePath('server'), join(ultimateRoot, 'server'), { recursive: true })
-  await cp(resolvePath('shared'), join(ultimateRoot, 'shared'), { recursive: true })
-  if (extra) {
-    await mkdir(join(ultimateRoot, 'extensions', 'counter'), { recursive: true })
-    await writeFile(
-      join(ultimateRoot, 'extensions', 'counter', 'value.ts'),
-      "export const value = 'one'",
-    )
-    await writeFile(join(ultimateRoot, 'extensions', 'counter', 'server.ts'), counterSource)
-    await mkdir(join(ultimateRoot, 'extensions', 'web-only'), { recursive: true })
-    await writeFile(
-      join(ultimateRoot, 'extensions', 'web-only', 'web.tsx'),
-      'export default () => null',
-    )
-    await writeFile(
-      join(ultimateRoot, 'extensions', 'web-only', 'README.md'),
-      'A browser-only extension.\n\nMore detail.',
-    )
-  }
-  if (agents) {
-    await cp(resolvePath('extensions/subagents'), join(ultimateRoot, 'extensions/subagents'), {
-      recursive: true,
-    })
-    // Subagents can import the scheduler while the conversations facet stays uninstalled.
-    await mkdir(join(ultimateRoot, 'extensions/conversations'))
-    await mkdir(join(ultimateRoot, 'extensions/onboarding'))
-    await mkdir(join(ultimateRoot, 'extensions/exclusive-commands'))
-    for (const file of [
-      'exclusive-commands/slot.ts',
-      'conversations/summary.ts',
-      'conversations/summary-model.ts',
-      'conversations/summary-model-ref.ts',
-      'onboarding/settings.ts',
-    ])
-      await cp(resolvePath('extensions', file), join(ultimateRoot, 'extensions', file))
-    // Workspaces imports lineage, which notes landings in the root.
-    for (const name of ['workspaces', 'lineage'])
-      await cp(resolvePath('extensions', name), join(ultimateRoot, 'extensions', name), {
-        recursive: true,
-      })
-    await cp(resolvePath('agents'), join(ultimateRoot, 'agents'), { recursive: true })
-  }
-  if (sources) {
-    await rm(join(ultimateRoot, 'extensions/coding-tools'), { recursive: true })
-    for (const [name, source] of Object.entries(sources)) {
-      await mkdir(join(ultimateRoot, 'extensions', name), { recursive: true })
-      await writeFile(join(ultimateRoot, 'extensions', name, 'server.ts'), source)
-    }
-  }
-  if (empty) {
-    await rm(join(ultimateRoot, 'extensions'), { recursive: true })
-    await mkdir(join(ultimateRoot, 'extensions'))
-  }
-  await mkdir(join(ultimateRoot, '.ultimate'), { recursive: true })
-  await writeFile(
-    join(ultimateRoot, '.ultimate/settings.json'),
-    JSON.stringify({
-      extensions: {
-        enable: [
-          'counter',
-          'web-only',
-          'subagents',
-          'added',
-          '0-new',
-          ...Object.keys(sources ?? {}),
-        ],
-      },
-    }),
-  )
-  const options = {
-    ultimateRoot,
-    // Explicit, so an inherited ULTIMATE_PROJECT (tests run from inside Ultimate) cannot add its project's extensions.
-    projectRoot: ultimateRoot,
-    userHome: directory,
-    home: join(directory, 'home'),
-    faux: true,
-    port: 0,
-  }
-  const server = await createServer(options)
-  servers.push(server)
-  return { server, options }
-}
-const counterSource = `import { Type } from '@earendil-works/pi-ai'
-import { defineDoc, defineExtension, defineTool, section } from '@earendil-works/pi-durable'
-import { value } from './value.ts'
-export const Counter = defineDoc({ kind: 'test.counter', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', initial: () => ({ count: 0 }) })
-export const docs = [Counter]
-export default defineExtension({ name: 'counter', sections: [section('counter', () => value)], tools: [defineTool({ name: 'increment', description: 'Increment', parameters: Type.Object({}), execute: async (_args, api, context) => { await api.commit(async tx => { (await tx.doc(Counter, api.conversationId)).count++ }, context); return {} } })] })`
-
-const orderedSource = (name: string, order = 0) => `
-import { Type } from '@earendil-works/pi-ai'
-import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
-export const order = ${order}
-export default defineExtension({ name: '${name}', sections: [section('${name === '0-new' ? 'new' : name}', () => '${name}')], tools: [defineTool({ name: '${name === '0-new' ? 'new' : name}', description: '${name}', parameters: Type.Object({}), execute: async () => ({}) })] })`
+import { fixture, orderedSource, servers } from './server-fixture.ts'
 
 describe('server', () => {
   it('admits registered identities for API, SSE, actions, assets and HMR, then revokes on disposal and unload', async () => {
     const origin = 'https://rog.example.ts.net:5799'
-    const { server, options } = await fixture(false, false, {
+    const { server, options } = await fixture(false, {
       access: `import { defineExtension } from '@earendil-works/pi-durable'
+
 let remove
 export default host => {
   remove = host.access.allow({ origin: '${origin}', verify: async ({ headers }) => headers['tailscale-user-login'] === 'owner' ? { login: 'owner' } : undefined })
@@ -275,8 +139,9 @@ export const actions = { ping: async () => 'pong', revoke: async () => { remove(
     expect(await wire(wsPath, 'owner', upgrade)).toBe(403)
   })
   it('revokes a deferred verifier in flight for HTTP and upgrades', async () => {
-    const { server } = await fixture(false, false, {
+    const { server } = await fixture(false, {
       deferred: `import { defineExtension } from '@earendil-works/pi-durable'
+
 let host, remove, resolve
 export default h => { host=h; return defineExtension({ name: 'deferred' }) }
 export const actions = {
@@ -324,6 +189,7 @@ finish: async () => { remove(); resolve({login:'owner'}); return true }
 
   it('cleans up facet lifecycles on reload but retains reload-stable resource lifecycles until shutdown', async () => {
     const source = `import { defineExtension } from '@earendil-works/pi-durable'
+
 import { writeFile } from 'node:fs/promises'
 export let state
 export default host => {
@@ -337,7 +203,7 @@ export default host => {
   return defineExtension({ name: 'lifecycle' })
 }
 export const actions = { state: async () => state }`
-    const { server, options } = await fixture(false, false, { lifecycle: source })
+    const { server, options } = await fixture(false, { lifecycle: source })
     const path = join(options.ultimateRoot, 'extensions/lifecycle/server.ts')
     const initial = server.extensions.info().find((entry) => entry.name === 'lifecycle')!
       .server!.loadedAt
@@ -360,8 +226,9 @@ export const actions = { state: async () => state }`
   })
 
   it('runs late facet openers immediately and continues after throwing cleanups', async () => {
-    const { server } = await fixture(false, false, {
+    const { server } = await fixture(false, {
       cleanup: `import { defineExtension } from '@earendil-works/pi-durable'
+
 import { writeFile } from 'node:fs/promises'
 let host, opened=false
 export default h => { host=h; h.onClose(async()=>{throw new Error('cleanup test failure')}); h.onClose(async()=>{await writeFile(h.userHome+'/cleanup-ok','yes')}); return defineExtension({name:'cleanup'}) }
@@ -385,8 +252,9 @@ export const actions={ late: async()=>{host.onOpen(async()=>{opened=true}); retu
   })
 
   it('settles failing process resource cleanups and still closes the server', async () => {
-    const { server } = await fixture(false, false, {
+    const { server } = await fixture(false, {
       resourcecleanup: `import { defineExtension } from '@earendil-works/pi-durable'
+
 import { writeFile } from 'node:fs/promises'
 export default host => { host.resource('cleanup.process',()=>{
   host.onClose(()=>{throw new Error('sync process failure')})
@@ -402,7 +270,7 @@ export default host => { host.resource('cleanup.process',()=>{
   })
 
   it('serves and completes a faux submit with an empty extensions directory', async () => {
-    const { server } = await fixture(false, false, undefined, true)
+    const { server } = await fixture(false, undefined, true)
     expect((await fetch(server.url)).status).toBe(200)
     expect(server.extensions.info()).toEqual([])
     server.host.faux!.setResponses([fauxAssistantMessage('Core-only response')])
@@ -424,7 +292,7 @@ export default host => { host.resource('cleanup.process',()=>{
     })
   })
   it('scans committed submissions newest first, filtered and paged', async () => {
-    const { server } = await fixture(false, false, undefined, true)
+    const { server } = await fixture(false, undefined, true)
     server.host.faux!.setResponses([fauxAssistantMessage('One'), fauxAssistantMessage('Two')])
     const ids = []
     for (const content of ['one', 'two']) {
@@ -501,7 +369,7 @@ export default host => { host.resource('cleanup.process',()=>{
     )
   })
   it('orders live-added sections and tools deterministically across reopen', async () => {
-    const { server, options } = await fixture(false, false, {
+    const { server, options } = await fixture(false, {
       a: orderedSource('a'),
       prompt: orderedSource('prompt', -100),
     })
@@ -604,42 +472,6 @@ export default host => { host.resource('cleanup.process',()=>{
     expect(await server.host.uiState(context)).toEqual(JSON.parse('{"__proto__":{"safe":true}}'))
   })
 
-  it('runs the faux subagent demo and streams its labelled tree and child transcript', async () => {
-    const { server } = await fixture(false, true)
-    const stream = await attach(server)
-    await post(server, '/api/conversations/1/submit', { text: 'delegate to scout' })
-    await server.root.waitForIdle(context)
-    let child: ServerEvents['conversations'][number] | undefined
-    await until(() => {
-      for (const event of stream.events) {
-        if (event.name === 'conversations')
-          child =
-            (event.data as ServerEvents['conversations']).find((item) => item.label === 'scout') ??
-            child
-      }
-      return child?.title === 'Return the word SCOUT.' && !child.busy && !!child.answerAt
-    })
-    const childStream = await attach(server, `?conversation=${child!.id}`)
-    const view = childStream.events.find((event) => event.name === 'view')!.data as ConversationView
-    expect(
-      view.entries.some(
-        (entry) =>
-          entry.model?.[0]?.role === 'assistant' &&
-          entry.model[0].content.some((part) => part.type === 'text' && part.text === 'SCOUT'),
-      ),
-    ).toBe(true)
-    expect(
-      (
-        await post(server, `/api/conversations/${child!.id}/submit`, {
-          text: 'Return the word SCOUT.',
-          whenBusy: 'steer',
-        })
-      ).status,
-    ).toBe(202)
-    expect((await post(server, `/api/conversations/${child!.id}/abort`)).status).toBe(200)
-    await childStream.close()
-    await stream.close()
-  })
   it('prepares the core and listener without opening SQLite until go', async () => {
     const { options } = await fixture()
     const prepared = await prepareServer({ ...options, home: join(options.home, 'candidate') })
@@ -838,8 +670,9 @@ export default host => { host.resource('cleanup.process',()=>{
     await stream.close()
   })
   it('streams input and answer times, keeps them across a reset, and gives summaries to server facets', async () => {
-    const { server } = await fixture(false, false, {
+    const { server } = await fixture(false, {
       summaries: `import { defineExtension } from '@earendil-works/pi-durable'
+
 export default defineExtension({ name: 'summaries' })
 export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`,
     })
@@ -918,185 +751,6 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
       title: 'Named',
     })
   })
-  it('tracks extension and web builds and stores positional prompt changes', async () => {
-    const { server, options } = await fixture(true)
-    const first = server.host.build()
-    const prepared = await prepareServer({ ...options, home: join(options.home, 'second') })
-    expect(prepared.host.build().id).toBe(first.id)
-    await prepared.close()
-    const stream = await attach(server)
-    await post(server, '/api/conversations/1/submit', { text: 'before' })
-    await server.harness.waitForIdle(context)
-    await writeFile(
-      join(options.ultimateRoot, 'extensions/counter/value.ts'),
-      "export const value = 'new'",
-    )
-    await until(() => server.host.build().id !== first.id)
-    const second = server.host.build()
-    expect(second.extensions.counter).not.toBe(first.extensions.counter)
-    expect(second.changed).toEqual(['extensions/counter'])
-    await until(() =>
-      stream.events.some(
-        (event) =>
-          event.name === 'system' && (event.data as ServerEvents['system']).build.id === second.id,
-      ),
-    )
-    await post(server, '/api/conversations/1/submit', { text: 'after' })
-    await server.harness.waitForIdle(context)
-    const view = await server.root.viewState(context)
-    const systems = view.value.entries.filter((entry) => entry.kind === 'pi.system')
-    expect(systems.length).toBeGreaterThan(1)
-    expect(JSON.stringify(systems.at(-1))).toContain(`Ultimate build ${second.id}`)
-    view.dispose()
-    await writeFile(
-      join(options.ultimateRoot, 'extensions/web-only/web.tsx'),
-      'export default () => "changed"',
-    )
-    await until(() => server.host.build().id !== second.id)
-    expect(server.host.build().changed).toEqual(['extensions/web-only'])
-    await stream.close()
-  })
-  it('rejects foreign Hosts on API and Vite and accepts localhost Origin', async () => {
-    const { server } = await fixture()
-    for (const path of ['/api/events', '/']) {
-      const status = await new Promise<number | undefined>((resolve, reject) => {
-        const req = request(
-          server.url + path,
-          { headers: { Host: `evil.example:${server.port}` } },
-          (response) => {
-            response.resume()
-            resolve(response.statusCode)
-          },
-        )
-        req.on('error', reject)
-        req.end()
-      })
-      expect(status).toBe(403)
-    }
-    expect(
-      (
-        await fetch(server.url + '/api/conversations/1/configure', {
-          method: 'POST',
-          headers: {
-            Origin: `http://localhost:${server.port}`,
-            'Content-Type': 'application/json',
-          },
-          body: '{}',
-        })
-      ).status,
-    ).toBe(200)
-  })
-  it('hot reloads a transitive local import and retains the old extension on a syntax error', async () => {
-    const { server } = await fixture(true)
-    const entry = () => server.extensions.info().find((extension) => extension.name === 'counter')!
-    const loaded = entry().server!.loadedAt
-    const promptLoaded = server.extensions.info().find((extension) => extension.name === 'prompt')!
-      .server!.loadedAt
-    await writeFile(
-      join(server.host.ultimateRoot, 'extensions/counter/value.ts'),
-      "export const value = 'two'",
-    )
-    await until(() => entry().server!.loadedAt !== loaded)
-    const installed = server.host.registry.snapshot().extension('counter')!
-    const section = installed.sections![0]
-    expect(await section.render({} as Parameters<typeof section.render>[0], context)).toBe('two')
-    expect(
-      server.extensions.info().find((extension) => extension.name === 'prompt')!.server!.loadedAt,
-    ).toBe(promptLoaded)
-    const successful = entry().server!.loadedAt
-    await until(async () => {
-      await writeFile(
-        join(server.host.ultimateRoot, 'extensions/counter/value.ts'),
-        'this is not valid TS !!!',
-      )
-      return !!entry().server!.error
-    })
-    expect(entry().server!.loadedAt).toBe(successful)
-    expect(server.host.registry.snapshot().extension('counter')).toBe(installed)
-  })
-  it('reloads only the owning extension when files or directories are added or removed', async () => {
-    const { server } = await fixture(false, false, {
-      a: orderedSource('a'),
-      b: orderedSource('b'),
-    })
-    const loadedAt = (name: string) =>
-      server.extensions.info().find((extension) => extension.name === name)!.server!.loadedAt
-    const bLoaded = loadedAt('b')
-    const folder = join(server.host.ultimateRoot, 'extensions/a')
-    const file = join(folder, 'new.ts')
-    const nested = join(folder, 'nested')
-    for (const change of [
-      () => writeFile(file, 'export const value = 1'),
-      () => rm(file),
-      () => mkdir(nested),
-      () => rm(nested, { recursive: true }),
-    ]) {
-      const aLoaded = loadedAt('a')
-      await change()
-      await until(() => loadedAt('a') !== aLoaded)
-      expect(loadedAt('b')).toBe(bLoaded)
-    }
-  })
-  it('keeps hot reloading extensions after a Vite config change restarts Vite', async () => {
-    const { server } = await fixture(true)
-    const entry = () => server.extensions.info().find((extension) => extension.name === 'counter')!
-    const config = join(server.host.ultimateRoot, 'vite.config.ts')
-    const watcher = server.vite.watcher
-    await writeFile(config, `${await readFile(config, 'utf8')}\n`)
-    await until(() => server.vite.watcher !== watcher)
-    // Replacing the watcher does not wait for its initial extension-directory scan.
-    await until(() => {
-      const watched = server.vite.watcher.getWatched()
-      return watched[join(server.host.ultimateRoot, 'extensions/counter')]?.includes('value.ts')
-    })
-    const loaded = entry().server!.loadedAt
-    await writeFile(
-      join(server.host.ultimateRoot, 'extensions/counter/value.ts'),
-      "export const value = 'after restart'",
-    )
-    await until(() => entry().server!.loadedAt !== loaded)
-    const section = server.host.registry.snapshot().extension('counter')!.sections![0]
-    expect(await section.render({} as Parameters<typeof section.render>[0], context)).toBe(
-      'after restart',
-    )
-  })
-  it('does not uninstall an extension installed outside the folder loader', async () => {
-    const { server } = await fixture(true)
-    const external = defineExtension({ name: 'web-only' })
-    server.host.registry.install(external)
-    await writeFile(
-      join(server.host.ultimateRoot, 'extensions/web-only/README.md'),
-      'Changed browser facet',
-    )
-    await until(
-      () =>
-        server.extensions.info().find((extension) => extension.name === 'web-only')?.readme ===
-        'Changed browser facet',
-    )
-    expect(server.host.registry.snapshot().extension('web-only')).toBe(external)
-    await rm(join(server.host.ultimateRoot, 'extensions/web-only'), {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-    })
-    await until(() => !server.extensions.info().some((extension) => extension.name === 'web-only'))
-    expect(server.host.registry.snapshot().extension('web-only')).toBe(external)
-    const folder = join(server.host.ultimateRoot, 'extensions', 'added')
-    await mkdir(folder)
-    await writeFile(
-      join(folder, 'server.ts'),
-      "import { defineExtension } from '@earendil-works/pi-durable'; export default defineExtension({ name: 'added' })",
-    )
-    await until(
-      () =>
-        !!server.extensions.info().find((extension) => extension.name === 'added')?.server
-          ?.loadedAt,
-    )
-    expect(server.host.registry.snapshot().extension('added')).toBeDefined()
-    await rm(folder, { recursive: true })
-    await until(() => !server.extensions.info().some((extension) => extension.name === 'added'))
-    expect(server.host.registry.snapshot().extension('added')).toBeUndefined()
-  })
   it('streams extension document snapshots and deltas, with a notice for unknown kinds', async () => {
     const { server } = await fixture(true)
     const stream = await attach(server, '?docs=test.counter,missing')
@@ -1122,7 +776,7 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     await stream.close()
   })
   it('runs logins in the models extension: prompt, answer, cancel, no credential leak, dead flows cancelled', async () => {
-    const { server, options } = await fixture(false, false, {
+    const { server, options } = await fixture(false, {
       models: await readFile(resolvePath('extensions/models/server.ts'), 'utf8'),
     })
     vi.spyOn(server.host.modelRuntime, 'getProvider').mockReturnValue({
