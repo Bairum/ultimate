@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { request } from 'node:http'
 import { connect } from 'node:net'
-import { temp, sourceCopy, cleanEnv, until, post } from './helpers.ts'
+import { temp, sourceCopy, cleanEnv, until, post } from '../helpers.ts'
 import { children, homes, copies, launch, fixture, attach } from './supervisor-helpers.ts'
 it('starts past stale lock sidecars without killing an unrelated live pid', async () => {
   const home = await temp('ultimate-stale-supervisor-')

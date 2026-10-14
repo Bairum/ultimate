@@ -2,7 +2,14 @@ import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { readFile, writeFile } from 'node:fs/promises'
-import { temp, removeTemp, sourceCopy, cleanEnv, until, attach as attachStream } from './helpers.ts'
+import {
+  temp,
+  removeTemp,
+  sourceCopy,
+  cleanEnv,
+  until,
+  attach as attachStream,
+} from '../helpers.ts'
 import { join } from 'node:path'
 import type { ConversationView } from '@earendil-works/pi-durable'
 import { afterEach } from 'vitest'

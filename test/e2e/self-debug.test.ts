@@ -3,7 +3,7 @@ import { once } from 'node:events'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
-import { sourceCopy, cleanEnv, until, temp, removeTemp } from './helpers.ts'
+import { sourceCopy, cleanEnv, until, temp, removeTemp } from '../helpers.ts'
 
 it('terminates an isolated instance after its owner is SIGKILLed', async () => {
   const home = await temp('ultimate-owner-test-')

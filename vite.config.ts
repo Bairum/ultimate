@@ -17,5 +17,11 @@ export default defineConfig({
     options: { denyWarnings: true, typeAware: true, typeCheck: true },
   },
   fmt: { semi: false, singleQuote: true },
-  test: { root: '.', include: ['test/**/*.test.ts'], testTimeout: 30000, maxWorkers: 8 },
+  test: {
+    root: '.',
+    include: ['test/**/*.test.ts'],
+    exclude: ['test/e2e/**'],
+    testTimeout: 30000,
+    maxWorkers: 8,
+  },
 })

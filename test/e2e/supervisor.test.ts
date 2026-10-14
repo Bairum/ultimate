@@ -3,7 +3,7 @@ import { once } from 'node:events'
 import { readFile, writeFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { cleanEnv, until, post } from './helpers.ts'
+import { cleanEnv, until, post } from '../helpers.ts'
 import { children, fixture, attach, activationFailure, transcript } from './supervisor-helpers.ts'
 describe('supervisor restart', () => {
   it('replays a memoed restart in generation 2 and reconnects SSE to the finished transcript', async () => {
