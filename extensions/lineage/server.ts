@@ -26,10 +26,12 @@ import type {
   Tx,
 } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
+import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { git } from '../workspaces/git.ts'
 import { workspaces } from '../workspaces/workspaces.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
+import { Summaries } from '../conversations/summary.ts'
 
 /** Which conversation is the project's root; unset means the reserved root conversation. */
 export const Root = defineDoc<{ root?: number }>({
@@ -41,10 +43,13 @@ export const Root = defineDoc<{ root?: number }>({
   initial: () => ({}),
 })
 
+export type BranchImage = { data: string; mimeType: string }
 export type BranchState = {
   from: number
   at: number
   intent: string
+  /** Images pasted with the prompt; they go with it as the branch's first input, then are dropped. */
+  images?: BranchImage[]
   status: 'briefing' | 'ready' | 'failed'
   error?: string
 }
@@ -215,13 +220,25 @@ function lineage(host: ExtensionHost) {
             },
             ctx,
           )
-          await runtime.commit(async (tx) => {
-            ;(await tx.doc(Branch, id)).branch!.status = 'ready'
-          }, ctx)
+          const images = state.images ?? []
           await conversation.submit(
-            { type: 'input', content: state.intent, requestId: 'lineage:branch' },
+            {
+              type: 'input',
+              content: images.length
+                ? [
+                    { type: 'text' as const, text: state.intent },
+                    ...images.map((image) => ({ type: 'image' as const, ...image })),
+                  ]
+                : state.intent,
+              requestId: 'lineage:branch',
+            },
             ctx,
           )
+          await runtime.commit(async (tx) => {
+            const branch = (await tx.doc(Branch, id)).branch!
+            branch.status = 'ready'
+            delete branch.images
+          }, ctx)
           await runtime.commit(
             () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
             ctx,
@@ -264,7 +281,12 @@ function lineage(host: ExtensionHost) {
     phases: {
       wait: async (task, runtime, ctx) => {
         const { target } = task.input
+        // A branch writing its brief has only background work, which waitForIdle does not count: wait for the brief
+        // and for the run it starts, so "finished" means its own work ended.
+        while ((await runtime.snapshot(Branch, target, ctx))?.branch?.status === 'briefing')
+          await runtime.sleep(runtime.now() + 2000, ctx)
         await (await runtime.conversation(target, ctx))?.waitForIdle(ctx)
+        // The context starts at the brief's reset, so an inherited answer from the source never counts as its own.
         const answer = (await runtime.context(target, ctx)).messages.findLast(
           (message) => message.role === 'assistant' && contentText(message.content).trim(),
         )
@@ -332,6 +354,7 @@ export type BranchInput = {
   from?: number
   at?: number
   prompt: string
+  images?: BranchImage[]
   isolated?: boolean
   model?: ModelRef
   thinkingLevel?: ModelThinkingLevel
@@ -371,7 +394,18 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
     })
     if (input.isolated) await workspaces(host).create(tx, fork.id, host.projectRoot)
     if (main) await seedSeen(tx, fork.id, main, Date.now())
-    ;(await tx.doc(Branch, fork.id)).branch = { from, at, intent: prompt, status: 'briefing' }
+    ;(await tx.doc(Branch, fork.id)).branch = {
+      from,
+      at,
+      intent: prompt,
+      ...(input.images?.length ? { images: input.images } : {}),
+      status: 'briefing',
+    }
+    // Until the summary names it, a branch is called by its intent, not by the first message it inherited.
+    // Recorded as the generated title, so the summary may still replace it.
+    const title = prompt.replace(/\s+/g, ' ').slice(0, 80)
+    ;(await tx.doc(host.metadata, fork.id)).title = title
+    ;(await tx.doc(Summaries, fork.id)).generatedTitle = title
     await tx.appendEntry(from, {
       kind: 'lineage.branched',
       data: { branch: fork.id, at, intent: prompt },
@@ -501,6 +535,18 @@ export const actions = {
       (typeof input.model?.provider !== 'string' || typeof input.model.modelId !== 'string')
     )
       throw new Error('model must be { provider, modelId }')
+    if (input.images !== undefined) {
+      if (!Array.isArray(input.images) || input.images.length > maxImages)
+        throw new Error(`images must be an array of at most ${maxImages}`)
+      for (const image of input.images)
+        if (
+          !imageMimeTypes.includes(image?.mimeType) ||
+          typeof image.data !== 'string' ||
+          !image.data ||
+          Buffer.byteLength(image.data, 'base64') > maxImageBytes
+        )
+          throw new Error('Expected supported image MIME type and base64 data of at most 2 MiB')
+    }
     return startBranch(host, input as BranchInput, context)
   },
   async retry(args: JsonValue, { host }: ActionContext) {

@@ -9,6 +9,7 @@ import { afterEach, expect, it } from 'vitest'
 import { Branch, leaveNote } from '../extensions/lineage/server.ts'
 import { Seen } from '../extensions/lineage/catchup.ts'
 import { context } from '../server/harness.ts'
+import { Metadata } from '../server/metadata.ts'
 import type { HistoryResponse } from '../shared/protocol.ts'
 import { fauxServer, post, temp, until } from './helpers.ts'
 
@@ -49,7 +50,14 @@ async function fixture() {
     }
     if (textOf(system.content).startsWith('You condense'))
       return fauxAssistantMessage(`LINEAGE SUMMARY of ${textOf(first.content).slice(0, 40)}`)
+    const final = transcript.messages.at(-1)!
+    if (final.role === 'toolResult') return fauxAssistantMessage(`Tool: ${textOf(final.content)}`)
     const last = transcript.messages.findLast((message) => message.role === 'user')
+    if (textOf(last?.content).startsWith('NOTIFY '))
+      return fauxAssistantMessage(
+        [fauxToolCall('notify', JSON.parse(textOf(last?.content).slice(7)))],
+        { stopReason: 'toolUse' },
+      )
     return fauxAssistantMessage(`echo ${textOf(last?.content)}`)
   }
   server.host.faux!.setResponses([route])
@@ -193,6 +201,31 @@ it('marks a failed brief and starts it again on retry', async () => {
   await until(async () => (await state())?.status === 'ready')
   await branch.waitForIdle(context)
   expect((await branch.context(context)).entries[0].kind).toBe('pi.reset')
+})
+
+it('names a branch by its intent and notifies only once its own work ends', async () => {
+  const { server } = await fixture()
+  await (await server.root.submit({ type: 'input', content: 'An idea.' }, context)).wait(context)
+  const { id } = (
+    await post(server, '/api/extensions/lineage/actions/branch', {
+      args: { prompt: 'Fix the lost answers' },
+    })
+  ).data.result as { id: ConversationId }
+  // While the brief is written, the title is the intent, not the root's first message.
+  expect((await server.harness.snapshot(Metadata, id, context))?.title).toBe('Fix the lost answers')
+  await server.root.submit({ type: 'input', content: `NOTIFY ${JSON.stringify({ id })}` }, context)
+  await until(
+    async () => (await server.harness.snapshot(Branch, id, context))?.branch?.status === 'ready',
+  )
+  await (await server.harness.conversation(id, context))!.waitForIdle(context)
+  await until(async () =>
+    (await server.root.context(context)).entries.some((entry) => entry.kind === 'lineage.finished'),
+  )
+  const finished = (await server.root.context(context)).entries.find(
+    (entry) => entry.kind === 'lineage.finished',
+  )!
+  // The branch's own answer, never one it inherited from the root.
+  expect((finished.data as { text: string }).text).toBe('echo Fix the lost answers')
 })
 
 it('compacts a top-level conversation with its lineage focus', async () => {

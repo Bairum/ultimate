@@ -9,7 +9,9 @@
     "dev": "node server/main.ts",
     "start": "node bin/ultimate.ts",
     "check": "vp check",
-    "test": "MIMALLOC_ALLOW_THP=0 MIMALLOC_PURGE_DELAY=0 vp test",
+    "test": "MIMALLOC_ALLOW_THP=0 MIMALLOC_PURGE_DELAY=0 vp test --exclude 'test/**/*-browser.test.ts'",
+    "test:browser": "MIMALLOC_ALLOW_THP=0 MIMALLOC_PURGE_DELAY=0 vp test browser.test.ts",
+    "test:all": "MIMALLOC_ALLOW_THP=0 MIMALLOC_PURGE_DELAY=0 vp test",
     "eval": "vitest run --config evals/vitest.config.ts",
     "fmt": "vp fmt",
     "lint": "vp lint"

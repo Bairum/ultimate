@@ -136,8 +136,9 @@ it('branches New from the root, branches at a message, nests the tree and conclu
     const response = page.waitForResponse((candidate) =>
       candidate.url().endsWith('/lineage/actions/branch'),
     )
-    await dialog.getByPlaceholder('What should the branch do?').fill('Polish the tree guides')
-    await dialog.getByRole('button', { name: 'Branch', exact: true }).click()
+    const prompt = dialog.getByPlaceholder('What should the branch do?')
+    await prompt.fill('Polish the tree guides')
+    await prompt.press('Enter')
     const nested = (await (await response).json()).result.id as number
     await expect
       .poll(

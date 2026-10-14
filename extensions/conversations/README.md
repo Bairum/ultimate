@@ -29,8 +29,8 @@ invented delegation edges. Expansion is persisted in `ext.conversations.expanded
 
 New conversation (the button, `mod+alt+n`, or the palette) opens a pending branch composer on the Agent surface.
 It creates nothing until sent; sending calls lineage `branch` from the root's latest entry with the prompt and
-chosen model/thinking level. The same composer serves the Canvas hub. Images disable send with a short hint;
-add them after the branch starts. The dropdown's Isolated and Shared choices only select the type, remembered in
+chosen model/thinking level and any pasted images. The same composer serves the Canvas hub and lineage's "Branch
+from here". The dropdown's Isolated and Shared choices only select the type, remembered in
 `ext.conversations.creationType` across tabs, reloads and restarts. New isolated conversation explicitly branches
 in its own checkout without changing that preference. Errors preserve the prompt for retry.
 Conclude and clear context never remove checkouts or commits. The menu retains Manage workspaces.

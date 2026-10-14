@@ -1,6 +1,8 @@
 A project is one tree of conversations: a root that holds the idea, and branches forked from any conversation at any entry, each starting from a brief aimed at its intent.
 
-- **Branch** (⌘K "Branch…", or action `branch` `{ from?, at?, prompt, isolated?, model?, thinkingLevel? }` → `{ id }`)
+- **Branch** (⌘K "Branch…", "Branch from here" on a message, or action `branch`
+  `{ from?, at?, prompt, images?, isolated?, model?, thinkingLevel? }` → `{ id }`). Every branch starts in the same
+  composer as New (model, Isolated, pasted images); images go with the prompt into the branch's first input. It
   forks the source at `at` (default: its latest entry) as an ownerless conversation in the project root, optionally
   isolated in its own worktree. The background task `lineage.brief` asks the branch's model to write a brief of the
   source context aimed at the prompt, places it as a `pi.reset` with `data.lineage = { from, at }`, then submits the
