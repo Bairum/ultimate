@@ -88,8 +88,25 @@ const textOf = (message: AssistantMessage | undefined) =>
   (message?.content ?? []).flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
 // A report is keyed by its answer, independently of the tool call that may return it.
 const answerRequest = (answer: EntryId) => `subagent-answer:${answer}`
+/** An aborted or failed turn keeps its partial message, often only an empty thinking block: not an answer. */
+const answered = (message: AssistantMessage | undefined) =>
+  message !== undefined &&
+  message.stopReason !== 'aborted' &&
+  message.stopReason !== 'error' &&
+  textOf(message).trim() !== ''
+const unanswered = (message: AssistantMessage | undefined) =>
+  `ended its turn without an answer${message?.stopReason === 'aborted' || message?.stopReason === 'error' ? ` (${message.stopReason})` : ''}`
 const answerText = (message: AssistantMessage | undefined) =>
   `Returned model: ${message?.provider && message?.model ? `${message.provider}/${message.model}` : 'unknown'}\n${textOf(message)}`
+const reportText = (id: ConversationId, agent: string, message: AssistantMessage | undefined) =>
+  answered(message)
+    ? `[subagent ${id} (${agent}) answered] ${answerText(message)}`
+    : `[subagent ${id} failed: ${unanswered(message)}]`
+/** What a foreground start, message or wait returns for a child's answer entry. */
+const replyText = (id: ConversationId, message: AssistantMessage | undefined) =>
+  answered(message)
+    ? answerText(message)
+    : `Subagent ${id} ${unanswered(message)}. Message it to continue.`
 function createReporter() {
   return defineTask<
     {
@@ -154,10 +171,13 @@ function createReporter() {
               const answer = (await tx.entry(AssistantEntry, settled.answer))?.model?.[0] as
                 | AssistantMessage
                 | undefined
-              const report = `[subagent ${child.id} (${agent.agent}) answered] ${answerText(answer)}`
               return {
                 status: 'running',
-                checkpoint: { phase: 'report', report, answer: settled.answer },
+                checkpoint: {
+                  phase: 'report',
+                  report: reportText(child.id, agent.agent, answer),
+                  answer: settled.answer,
+                },
               }
             }
             if (
@@ -232,9 +252,12 @@ function createReporter() {
               }
             }
             if (settled.status === 'unanswered' && settled.reason !== 'aborted') {
-              const report = `[subagent ${child.id} failed: ${settled.reason}]`
-              return { status: 'running', checkpoint: { phase: 'report', report } }
+              const failure = `[subagent ${child.id} failed: ${settled.reason}]`
+              return { status: 'running', checkpoint: { phase: 'report', report: failure } }
             }
+            // A parent stop aborts this task before the input, so this abort came from the child's
+            // own conversation: whatever answers its next input there still belongs to the parent.
+            if (settled.status === 'unanswered') action.status = 'interrupted'
             return { status: 'running', checkpoint: { phase: 'report' } }
           }, context)
         } catch (error) {
@@ -547,16 +570,18 @@ export default function subagents(
       const action = Object.values(state.actions).findLast(
         (candidate) => candidate.conversationId === submission.conversationId,
       )
-      if (action?.status !== 'unanswered' && action?.status !== 'failed') return
+      const interrupted = action?.status === 'interrupted'
+      if (action?.status !== 'unanswered' && action?.status !== 'failed' && !interrupted) return
       const failed = await tx.submissionByRequest(
         submission.conversationId,
         action.retryRequest ?? `subagent:${action.reporter}`,
       )
+      // IDs share one allocation order; an input withdrawn before placement has no entry.
       if (
         failed?.status !== 'unanswered' ||
-        failed.reason === 'aborted' ||
-        failed.entry === undefined ||
-        submission.entry <= failed.entry
+        (failed.reason === 'aborted') !== interrupted ||
+        (failed.entry === undefined && !interrupted) ||
+        submission.entry <= (failed.entry ?? failed.id)
       )
         return
       const answer = (await tx.entry(AssistantEntry, submission.answer))?.model?.[0] as
@@ -566,7 +591,7 @@ export default function subagents(
         Reporter,
         {
           conversationId: submission.conversationId,
-          text: `[subagent ${submission.conversationId} (${agent.agent}) answered] ${answerText(answer)}`,
+          text: reportText(submission.conversationId, agent.agent, answer),
           steer: false,
           answer: submission.answer,
         },
@@ -956,7 +981,10 @@ Available definitions:
                 : await api.commit((tx) => tx.entry(AssistantEntry, settled.answer!), context)
             return finish(
               (answer
-                ? answerText(answer.model?.[0] as AssistantMessage | undefined)
+                ? replyText(
+                    action.conversationId,
+                    answer.model?.[0] as AssistantMessage | undefined,
+                  )
                 : `Subagent ${action.conversationId}: ${settled.status}`) + isolateInfo,
               details(
                 action.conversationId,
@@ -1047,7 +1075,7 @@ Available definitions:
             return latest
           }, context)
           return finish(
-            answerText(answer?.model?.[0] as AssistantMessage | undefined),
+            replyText(id, answer?.model?.[0] as AssistantMessage | undefined),
             details(
               id,
               index.agents[String(id)].background,

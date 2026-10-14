@@ -2,7 +2,12 @@ import { awaitWithContext } from '@earendil-works/chord/context'
 import { projectSettings } from '../server/project-setup.ts'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import {
+  fauxAssistantMessage,
+  fauxText,
+  fauxThinking,
+  fauxToolCall,
+} from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import {
   AssistantEntry,
@@ -1065,6 +1070,56 @@ it('attributes real queued instructions and reports by submission identity and d
   await (await f.opened.harness.submission(report.id, context))!.abort(context)
   expect(await provenance(f.opened.harness, f.opened.root.id, [report.id], true)).toEqual({})
   f.parentGate.release()
+})
+
+describe('turns without an answer', () => {
+  it('reports an empty final turn as a failure, not an answer, and wait says so too', async () => {
+    const f = await fixture(undefined, undefined, undefined, (transcript) => {
+      const last = transcript.messages.findLast((message) => message.role !== 'system')!
+      return last.role === 'user' && last.content === 'EMPTY'
+        ? fauxAssistantMessage([fauxThinking('')])
+        : undefined
+    })
+    await call(f.opened, { action: 'start', agent: 'scout', task: 'EMPTY', background: true })
+    const [child] = await children(f.opened)
+    await until(async () => (await reports(f.opened)).length === 1)
+    expect((await reports(f.opened))[0].model?.[0]).toMatchObject({
+      content: `[subagent ${child.conversationId} failed: ended its turn without an answer]`,
+    })
+    expect((await call(f.opened, { action: 'wait', id: child.conversationId })).text).toBe(
+      `Subagent ${child.conversationId} ended its turn without an answer. Message it to continue.`,
+    )
+    const foreground = await call(f.opened, { action: 'start', agent: 'scout', task: 'EMPTY' })
+    const other = (await children(f.opened)).at(-1)!.conversationId
+    expect(foreground.text).toBe(
+      `Subagent ${other} ended its turn without an answer. Message it to continue.`,
+    )
+  })
+  it('delivers the answer that follows a child-side stop exactly once, across reopen', async () => {
+    const f = await gatedFixture()
+    await call(f.opened, { action: 'start', agent: 'scout', task: 'HOLD', background: true })
+    const [child] = await children(f.opened)
+    await until(async () => f.holding.has(child.conversationId))
+    // The human stops the child in its own conversation, then tells it to continue.
+    const handle = (await f.opened.harness.conversation(child.conversationId, context))!
+    await handle.abort(context)
+    await f.opened.harness.waitForIdle(context)
+    expect(await reports(f.opened)).toHaveLength(0)
+    expect((await call(f.opened, { action: 'wait', id: child.conversationId })).text).toMatch(
+      /ended its turn without an answer/,
+    )
+    await (await handle.submit({ type: 'input', content: 'continue' }, context)).wait(context)
+    await until(async () => (await reports(f.opened)).length === 1)
+    expect((await reports(f.opened))[0].model?.[0]).toMatchObject({
+      content: `[subagent ${child.conversationId} (scout) answered] Returned model: faux/faux-1\nChild: continue`,
+    })
+    await f.opened.harness.waitForIdle(context)
+    await f.opened.close()
+    hosts.splice(hosts.indexOf(f.opened), 1)
+    const resumed = await f.reopen()
+    await resumed.harness.waitForIdle(context)
+    expect(await reports(resumed)).toHaveLength(1)
+  })
 })
 
 function stopCaptureGate(f: Awaited<ReturnType<typeof gatedFixture>>) {
