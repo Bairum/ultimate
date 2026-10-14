@@ -343,11 +343,8 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
   if (!prompt) throw new Error('A branch needs a prompt')
   const from = (input.from ?? (await rootOf(host, ctx))) as ConversationId
   const { startBrief } = lineage(host)
-  const main = await git(
-    host.projectRoot,
-    'rev-parse',
-    input.isolated ? 'HEAD' : 'refs/heads/main',
-  ).catch(() => undefined)
+  // Shared and isolated branches both start from the project checkout's branch tip.
+  const main = await git(host.projectRoot, 'rev-parse', 'HEAD').catch(() => undefined)
   const id = await host.harness().commit(async (tx) => {
     if (!(await tx.conversation(from))) throw new Error(`No conversation #${from}`)
     let at = input.at as EntryId | undefined

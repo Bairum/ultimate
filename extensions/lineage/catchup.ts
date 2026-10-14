@@ -25,7 +25,11 @@ async function mainOf(
 ): Promise<Main | undefined> {
   const workspace = await workspaces(host).get(id, ctx)
   const cwd = workspace?.source ?? host.projectRoot
-  const target = workspace?.target ?? 'main'
+  // A shared conversation follows the branch the project checkout is on, like a workspace's target.
+  const target =
+    workspace?.target ??
+    (await git(cwd, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => ''))
+  if (!target) return undefined
   // Projects without a main branch have nothing to catch up on.
   const sha = await git(cwd, 'rev-parse', '--verify', `refs/heads/${target}`).catch(() => undefined)
   return sha ? { cwd, target, sha, ...(workspace ? { workspace: workspace.path } : {}) } : undefined
