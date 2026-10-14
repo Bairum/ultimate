@@ -163,11 +163,13 @@ function StateLabel({ status, className }: { status: Status; className?: string 
   )
 }
 
-/** A reason in a few words; another conversation's question names it. */
+/** Self reasons share the panel's ID; other conversations keep their reference. */
 const reasonLabel = (reason: CanvasReason, id: number) =>
-  reason.kind === 'needs_input' && reason.conversationId !== id
-    ? `#${reason.conversationId} ${reason.detail}`
-    : reason.detail
+  reason.kind === 'unlanded' && reason.conversationId === id
+    ? reason.detail.slice(`#${id}: `.length)
+    : reason.kind === 'needs_input' && reason.conversationId !== id
+      ? `#${reason.conversationId} ${reason.detail}`
+      : reason.detail
 
 /** Why it waits for a decision, in the warm colour of needs-input. */
 function Reasons({ agent, className }: { agent: Agent; className?: string }) {

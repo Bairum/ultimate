@@ -9,6 +9,7 @@ import { context } from '../server/harness.ts'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 import { git } from '../extensions/workspaces/git.ts'
 import { LanderLog } from '../extensions/workspaces/lander.ts'
+import { Canvas } from '../extensions/canvas/documents.ts'
 import { fauxServer, post, skipWithoutChromium, temp, until, untilInput } from './helpers.ts'
 
 const timeout = { timeout: 15000 }
@@ -41,6 +42,10 @@ it('manages every isolated draft safely without removing checkout history', asyn
   let release!: () => void
   const gate = new Promise<void>((done) => {
     release = done
+  })
+  let releaseShared!: () => void
+  const sharedGate = new Promise<void>((done) => {
+    releaseShared = done
   })
   try {
     await post(server, '/api/conversations')
@@ -105,13 +110,13 @@ it('manages every isolated draft safely without removing checkout history', asyn
     await expect.poll(() => stats.textContent(), timeout).toContain('1 removed')
     expect(await stats.textContent()).toContain('1 ready · 1 setting up · 1 failed')
     expect(await page.locator('[data-workspace]').count()).toBe(1)
-    const holding = defineTask<null, { phase: 'wait' }, null>({
+    const holding = defineTask<'shared' | null, { phase: 'wait' }, null>({
       name: 'workspace-ui-hold',
       version: 1,
       initial: () => ({ phase: 'wait' }),
       phases: {
-        wait: async (_task, runtime, caller) => {
-          await gate
+        wait: async (task, runtime, caller) => {
+          await (task.input === 'shared' ? sharedGate : gate)
           await runtime.commit(
             () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
             caller,
@@ -122,6 +127,19 @@ it('manages every isolated draft safely without removing checkout history', asyn
         runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), caller),
     })
     server.host.registry.install(defineExtension({ name: 'workspace-ui-hold', tasks: [holding] }))
+    const conversation = (await server.harness.conversation(receivedId as ConversationId, context))!
+    await (
+      await conversation.submit({ type: 'input', content: 'Inspect the checkout.' }, context)
+    ).wait(context)
+    const sharedId = (await post(server, '/api/conversations')).data.id
+    const sharedTask = await server.harness.commit(
+      (tx) =>
+        tx.createTask(holding, 'shared', {
+          conversationId: sharedId as ConversationId,
+          ownership: { kind: 'conversation' },
+        }),
+      context,
+    )
     const task = await server.harness.commit(
       (tx) =>
         tx.createTask(holding, null, {
@@ -139,6 +157,8 @@ it('manages every isolated draft safely without removing checkout history', asyn
         await page
           .getByLabel('Loading Ultimate', { exact: true })
           .waitFor({ state: 'detached', ...timeout })
+        // Let the Canvas camera finish its transition before capturing the frame.
+        await page.waitForTimeout(600)
         await page.screenshot({
           path: join(process.env.CONVERSATION_IDS_SCREENSHOTS, `${name}.png`),
           fullPage: true,
@@ -149,16 +169,30 @@ it('manages every isolated draft safely without removing checkout history', asyn
     const taskRow = page
       .locator('aside')
       .last()
-      .getByRole('button', { name: /Untitled conversation/ })
-    await expect.poll(() => taskRow.count(), timeout).toBe(1)
-    expect((await taskRow.textContent())?.match(/#\d+/g)).toEqual([`#${receivedId}`])
-    expect(await taskRow.textContent()).not.toContain(`W${receivedId}`)
+      .getByRole('button')
+      .filter({ hasText: new RegExp(`#(${receivedId}|${sharedId})\\b`) })
+    const isolatedRow = taskRow.filter({ hasText: `#${receivedId}` })
+    const sharedRow = taskRow.filter({ hasText: `#${sharedId}` })
+    await expect.poll(() => taskRow.count(), timeout).toBe(2)
+    expect((await isolatedRow.textContent())?.match(/#\d+/g)).toEqual([`#${receivedId}`])
+    expect(await isolatedRow.textContent()).not.toContain(`W${receivedId}`)
+    expect(await isolatedRow.getByLabel('Isolated checkout').count()).toBe(1)
+    expect(await sharedRow.getByLabel('Isolated checkout').count()).toBe(0)
+    expect((await sharedRow.textContent())?.match(/#\d+/g)).toEqual([`#${sharedId}`])
     await snapshot('sidebar-task-graph')
+    releaseShared()
+    await server.harness.waitForTask(sharedTask, context)
     await post(server, '/api/ui', { set: { 'shell.surface': 'canvas' } })
     const canvasAgent = page.locator(`[data-agent="${receivedId}"]`)
     await canvasAgent.waitFor(timeout)
-    expect((await canvasAgent.textContent())?.match(/#\d+/g)).toEqual([`#${receivedId}`])
-    expect(await canvasAgent.textContent()).not.toContain(`W${receivedId}`)
+    await canvasAgent.click()
+    await page.keyboard.press('Enter')
+    await canvasAgent.getByRole('button', { name: `#${receivedId}`, exact: true }).waitFor(timeout)
+    const canvasMetadata = canvasAgent
+      .getByRole('button', { name: `#${receivedId}`, exact: true })
+      .locator('..')
+    expect((await canvasMetadata.textContent())?.match(/#\d+/g)).toEqual([`#${receivedId}`])
+    expect(await canvasMetadata.textContent()).not.toContain(`W${receivedId}`)
     await snapshot('canvas')
     await canvasAgent.getByRole('button', { name: `#${receivedId}`, exact: true }).click()
     await expect.poll(() => card.count(), timeout).toBe(1)
@@ -171,6 +205,51 @@ it('manages every isolated draft safely without removing checkout history', asyn
     await snapshot('workspace')
     release()
     await server.harness.waitForTask(task, context)
+    // Settled trees retain generated #N reasons, but their own label shares the panel ID.
+    const ownReason = `#${receivedId}: 1 commit not landed`
+    const otherReason = `#${fixtures.pending}: 2 commits not landed`
+    await server.harness.commit(async (tx) => {
+      const canvas = await tx.doc(Canvas, ROOT_CONVERSATION_ID)
+      canvas.trees[String(receivedId)] = {
+        decision: {
+          reasons: [
+            { kind: 'unlanded', conversationId: receivedId, detail: ownReason },
+            { kind: 'unlanded', conversationId: fixtures.pending, detail: otherReason },
+            { kind: 'needs_input', conversationId: fixtures.error, detail: 'needs input' },
+          ],
+        },
+      }
+    }, context)
+    await post(server, '/api/ui', { set: { 'shell.surface': 'canvas' } })
+    await expect
+      .poll(() => canvasAgent.locator('[data-reason="unlanded"]').allTextContents(), timeout)
+      .toEqual(['1 commit not landed', otherReason])
+    expect(await canvasAgent.locator('[data-reason="needs_input"]').textContent()).toBe(
+      `#${fixtures.error} needs input`,
+    )
+    expect((await canvasAgent.textContent())?.match(/#\d+/g)).toEqual([
+      `#${receivedId}`,
+      `#${fixtures.pending}`,
+      `#${fixtures.error}`,
+    ])
+    const recorded = await server.harness.commit(
+      async (tx) =>
+        (await tx.doc(Canvas, ROOT_CONVERSATION_ID)).trees[String(receivedId)].decision?.reasons[0]
+          .detail,
+      context,
+    )
+    expect(recorded).toBe(ownReason)
+    await snapshot('canvas-settled-unlanded')
+    await canvasAgent.click()
+    await page.keyboard.press('Enter')
+    await expect.poll(() => canvasMetadata.textContent(), timeout).toContain('1 commit not landed')
+    expect((await canvasMetadata.textContent())?.match(/#\d+/g)).toEqual([
+      `#${fixtures.pending}`,
+      `#${fixtures.error}`,
+      `#${receivedId}`,
+    ])
+    await snapshot('canvas-settled-header')
+    await post(server, '/api/ui', { set: { 'shell.surface': 'agent' } })
     await expect
       .poll(() => card.getByRole('button', { name: 'Land', exact: true }).isDisabled(), timeout)
       .toBe(false)
@@ -262,6 +341,7 @@ it('manages every isolated draft safely without removing checkout history', asyn
     await snapshot('landing-cards')
     expect(errors).toEqual([])
   } finally {
+    releaseShared()
     release()
     await browser.close()
     await server.close()
