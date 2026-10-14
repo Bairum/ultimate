@@ -12,6 +12,7 @@ import {
   surfaceItems,
   toolRenderers,
   messageActionItems,
+  conversationStarter,
 } from '../../web/src/sdk/registry.ts'
 import type { ExtensionLoader, SurfaceItem } from '../../web/src/sdk/registry.ts'
 import type { WebExtension } from '../../web/src/sdk/types.ts'
@@ -269,6 +270,24 @@ describe('web extension registry', () => {
     expect(documents.get('ultimate.plan')?.component).toBe(Second)
     expect(documents.get('a.notes')?.extension).toBe('a')
     expect(documents.has('codemode.store')).toBe(false)
+  })
+
+  it('selects the last conversation starter and keeps it after an invalid reload', async () => {
+    const ids = [1, 2]
+    const first = async () => ({ id: ids[0] })
+    const last = async () => ({ id: ids[1] })
+    const registry = createRegistry()
+    expect(conversationStarter(registry.getSnapshot())).toBeUndefined()
+    await registry.setLoaders({
+      [path('builtin-z')]: async () => module({ start: first }),
+      [path('project-a')]: async () => module({ start: last }),
+    })
+    expect(await conversationStarter(registry.getSnapshot())!({ prompt: 'hello' })).toEqual({
+      id: 2,
+    })
+    registry.replace('project-a', { default: { start: 42 } })
+    expect(registry.getSnapshot()[1]?.error).toBe('start must be a conversation starter function')
+    expect(conversationStarter(registry.getSnapshot())).toBe(last)
   })
 
   it('lists message actions in discovery and contribution order, validating their shape', async () => {

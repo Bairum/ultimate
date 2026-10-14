@@ -116,6 +116,7 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   tools: [objectOf(isComponent), 'an object of tool name → component'],
   entries: [objectOf(isComponent), 'an object of entry kind → component'],
   inbox: [isComponent, 'an inbox renderer component'],
+  start: [isFunction, 'a conversation starter function'],
   messageActions: [arrayOf(isComponent), 'an array of message action components'],
   documents: [
     arrayOf(
@@ -430,4 +431,9 @@ export function messageActionItems(records: readonly ExtensionRecord[]) {
       component,
     })),
   )
+}
+
+/** The last new-conversation starter in discovery order. */
+export function conversationStarter(records: readonly ExtensionRecord[]) {
+  return records.toReversed().find((record) => record.extension?.start)?.extension?.start
 }

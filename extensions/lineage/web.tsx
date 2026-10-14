@@ -20,6 +20,7 @@ import {
   events,
   getConversation,
   getState,
+  getUiState,
   NewConversationComposer,
   useComposer,
   useCommands,
@@ -364,6 +365,13 @@ function topLevel() {
 }
 
 export default defineWebExtension({
+  start: async (draft) => {
+    const isolated =
+      draft.isolated ??
+      (getUiState('ext.conversations.creationType') !== 'shared' &&
+        getState().system?.extensions.some((extension) => extension.name === 'workspaces') === true)
+    return api.action<{ id: number }>('lineage', 'branch', { ...draft, isolated })
+  },
   entries: {
     'lineage.branched': Branched,
     'lineage.note': Note,

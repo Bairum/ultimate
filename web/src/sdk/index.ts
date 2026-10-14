@@ -7,6 +7,7 @@ export { events, useEvent } from './events.ts'
 export type {
   CommandContribution,
   Contribution,
+  ConversationDraft,
   DocumentContribution,
   DocumentProps,
   EntryRenderer,
@@ -38,6 +39,7 @@ export type { Api } from './api.ts'
 export {
   getConversation,
   getState,
+  getUiState,
   refreshModels,
   useAction,
   useCommands,

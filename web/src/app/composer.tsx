@@ -14,17 +14,11 @@ import {
 import { Kbd } from '@/components/ui/kbd'
 import { api } from '../sdk/client.ts'
 import { errorMessage } from '../sdk/format.ts'
-import {
-  useConversation,
-  useConversations,
-  useExtensions,
-  useModels,
-  useUiState,
-} from '../sdk/hooks.ts'
+import { useConversation, useExtensions, useModels } from '../sdk/hooks.ts'
 import { isMac } from '../sdk/keys.ts'
 import type { ModelsResponse } from '../../../shared/protocol.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
-import { inboxRenderer } from '../sdk/registry.ts'
+import { conversationStarter, inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
 import { ComposerContext, useNewConversationConfiguration } from '../sdk/composer.tsx'
 
@@ -202,19 +196,13 @@ function ConversationComposer({
   const defaults = useNewConversationConfiguration(isNew)
   const loading = isNew ? defaults.loading : conversation.loading
   const inbox = isNew ? [] : conversation.inbox
-  const [creation] = useUiState<string>('ext.conversations.creationType', 'isolated')
-  const extensions = useExtensions()
-  const isolated =
-    isolation ??
-    (creation !== 'shared' && extensions.some((extension) => extension.name === 'workspaces'))
+  const start = conversationStarter(useExtensions())
   // New and each branch point keep their own draft.
   const draftId = isNew
     ? point?.from === undefined
       ? 'new'
       : `branch-${point.from}${point.at === undefined ? '' : `-${point.at}`}`
     : id
-  const [archived, setArchived] = useUiState<number[]>('ext.conversations.archived', [])
-  const summaries = useConversations()
   if (!drafts.has(draftId)) drafts.set(draftId, createDraft(draftId))
   const draft = drafts.get(draftId)!
   const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
@@ -240,11 +228,13 @@ function ConversationComposer({
     else localStorage.removeItem(key)
   }
   const blocked =
-    loading || (isNew && !defaults.available)
-      ? undefined
-      : isNew && defaults.error
-        ? errorMessage(defaults.error)
-        : blockedBy(isNew ? defaults.configuration : agent, models)
+    isNew && !start
+      ? 'No extension provides a conversation starter.'
+      : loading || (isNew && !defaults.available)
+        ? undefined
+        : isNew && defaults.error
+          ? errorMessage(defaults.error)
+          : blockedBy(isNew ? defaults.configuration : agent, models)
   const empty = !text.trim() && images.length === 0
 
   async function send(whenBusy?: 'steer' | 'followUp') {
@@ -263,12 +253,12 @@ function ConversationComposer({
       let startedId: number | undefined
       if (isNew) {
         startedId = (
-          await api.action<{ id: number }>('lineage', 'branch', {
+          await start!({
             prompt: text.trim(),
             ...(images.length ? { images } : {}),
             ...(point?.from === undefined ? {} : { from: point.from }),
             ...(point?.at === undefined ? {} : { at: point.at }),
-            isolated,
+            ...(isolation === undefined ? {} : { isolated: isolation }),
             ...(defaults.configuration.model ? { model: defaults.configuration.model } : {}),
             ...(defaults.configuration.thinkingLevel
               ? { thinkingLevel: defaults.configuration.thinkingLevel }
@@ -277,15 +267,6 @@ function ConversationComposer({
         ).id
       } else {
         await api.submit(text.trim(), busy ? (whenBusy ?? 'steer') : undefined, id, images)
-        const ancestors = new Set<number>()
-        let current = summaries.find((summary) => summary.id === id)
-        while (current && !ancestors.has(current.id)) {
-          ancestors.add(current.id)
-          const parent = current.parentConversationId ?? current.branchOf?.conversationId
-          current = summaries.find((summary) => summary.id === parent)
-        }
-        if (archived.some((candidate) => ancestors.has(candidate)))
-          setArchived((previous) => previous.filter((candidate) => !ancestors.has(candidate)))
       }
       const stored = key ? (localStorage.getItem(key) ?? '') : ''
       if (key && stored === submitted.text && draft.get().revision === submitted.revision)

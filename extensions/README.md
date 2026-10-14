@@ -181,8 +181,12 @@ No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, entries, messageActions, documents, commands })`; every key is optional. Extensions load
+`defineWebExtension({ slots, panels, surfaces, tools, entries, messageActions, start, documents, commands })`; every key is optional. Extensions load
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
+
+A `start(draft)` contribution starts a new conversation from the composer's prompt, images, branch point and
+configuration, returning `Promise<{ id: number }>`. The last starter in discovery order wins; without one, the
+new composer is blocked. The extension owns creation policy; `getUiState(key)` reads pending local UI choices too.
 
 ### Slots
 

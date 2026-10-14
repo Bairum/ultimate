@@ -1,10 +1,11 @@
 import { join } from 'node:path'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { defineExtension, section } from '@earendil-works/pi-durable'
-import type { ConversationId } from '@earendil-works/pi-durable'
+import { defineExtension, ROOT_CONVERSATION_ID, section } from '@earendil-works/pi-durable'
+import type { CommitPublication, ConversationId } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { UiState } from '../../server/ui-state.ts'
 import { Summaries, summaryBehavior } from './summary.ts'
 import { summaryModelSetting } from './summary-model.ts'
 import { parseSummaryModel } from './summary-model-ref.ts'
@@ -125,9 +126,60 @@ export const actions = {
   },
 }
 
+/** Only placed composer inputs reopen ancestry; extension inputs and passive writes do not. */
+function placedInputs(publication: CommitPublication) {
+  return publication.changes.flatMap((change) =>
+    change.type === 'submission' &&
+    change.value.type === 'input' &&
+    change.value.status === 'placed' &&
+    publication.changes.some(
+      (entry) =>
+        entry.type === 'entry' &&
+        entry.value.id === change.value.entry &&
+        entry.value.kind === 'pi.user',
+    )
+      ? [change.value.conversationId]
+      : [],
+  )
+}
+
+function reopenOnInput(host: ExtensionHost) {
+  let stop: (() => void) | undefined
+  host.onOpen(async () => {
+    stop = host.harness().subscribeCommits((publication) => {
+      const ids = placedInputs(publication)
+      if (!ids.length) return
+      void host
+        .harness()
+        .commit(async (tx) => {
+          const ancestors = new Set<ConversationId>()
+          for (const id of ids) {
+            let current: ConversationId | undefined = id
+            while (current !== undefined && !ancestors.has(current)) {
+              ancestors.add(current)
+              const ancestor = await tx.conversation(current)
+              current = ancestor?.owner?.conversationId ?? ancestor?.parent?.conversationId
+            }
+          }
+          const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
+          const archived = ui['ext.conversations.archived']
+          if (Array.isArray(archived) && archived.some((id) => ancestors.has(id as ConversationId)))
+            ui['ext.conversations.archived'] = archived.filter(
+              (id) => !ancestors.has(id as ConversationId),
+            )
+        }, context)
+        .catch((error) => host.notice('Unable to reopen conversation: ' + String(error)))
+    })
+  })
+  host.onClose(async () => {
+    stop?.()
+  })
+}
+
 /** Tells each top-level conversation which other conversations work in this project. */
 export default (host: ExtensionHost) => {
   overviewBehavior(host)
+  reopenOnInput(host)
   /** Whether each conversation is top-level, read once: `owner` and `parent` never change after creation. */
   const topLevel = new Map<ConversationId, boolean>()
   return defineExtension({

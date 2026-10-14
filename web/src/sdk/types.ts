@@ -1,6 +1,7 @@
 import type { ComponentType, ReactNode } from 'react'
 import type { ImageContent, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai'
 import type { EntryRecord, InboxItem, JsonObject, ToolDiagnostic } from '@earendil-works/pi-durable'
+import type { ConfigureRequest } from '../../../shared/protocol.ts'
 
 /** Named places in the shell that extensions fill with components. */
 export type SlotName =
@@ -136,6 +137,17 @@ export interface CommandContribution {
   run(context: UltimateContext): void | Promise<unknown>
 }
 
+/** A composer submission for a new conversation; extensions own how it starts. */
+export interface ConversationDraft {
+  prompt: string
+  images?: { data: string; mimeType: string }[]
+  from?: number
+  at?: number
+  isolated?: boolean
+  model?: { provider: string; modelId: string }
+  thinkingLevel?: ConfigureRequest['thinkingLevel']
+}
+
 /** The browser facet of an extension: `extensions/<name>/web.tsx` default-exports one. */
 export interface WebExtension {
   slots?: Partial<Record<SlotName, Contribution | readonly Contribution[]>>
@@ -146,6 +158,8 @@ export interface WebExtension {
   /** Entry renderers by entry kind; they also replace the core renderer of a `pi.*` kind. */
   entries?: Readonly<Record<string, EntryRenderer>>
   inbox?: InboxRenderer
+  /** Starts a new conversation; the last contribution in discovery order wins. */
+  start?: (draft: ConversationDraft) => Promise<{ id: number }>
   /** Contributions to the hover action row on stored messages, in discovery order. */
   messageActions?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Document renderers; a later facet wins a kind. */
