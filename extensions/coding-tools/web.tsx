@@ -17,7 +17,7 @@ import {
   formatBytes,
   shortenPath,
   useConversation,
-  useSystem,
+  useStore,
   useToolDuration,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
@@ -28,12 +28,10 @@ const text = (value: unknown) => (typeof value === 'string' ? value : '')
 
 /** A path relative to the conversation's cwd, else with `~`. */
 function usePath(path: string) {
-  const system = useSystem()
-  const { agent } = useConversation()
-  return shortenPath(path, {
-    cwd: agent.cwd ?? system?.execution.defaultCwd,
-    home: system?.machine.home,
-  })
+  const cwd = useConversation((conversation) => conversation.agent.cwd)
+  const defaultCwd = useStore((state) => state.system?.execution.defaultCwd)
+  const home = useStore((state) => state.system?.machine.home)
+  return shortenPath(path, { cwd: cwd ?? defaultCwd, home })
 }
 
 function lineCount(value: string) {

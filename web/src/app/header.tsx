@@ -14,7 +14,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import type { ConversationSummary } from '../../../shared/protocol.ts'
 import { actions, shellKeys } from '../sdk/actions.ts'
 import { ROOT } from '../sdk/api.ts'
-import { useConversation, useConversations, useExtensions, useUiState } from '../sdk/hooks.ts'
+import {
+  useConversation,
+  useConversations,
+  useExtensions,
+  useStore,
+  useUiState,
+} from '../sdk/hooks.ts'
 import { HOME, panelItems, slotItems, surfaceItems } from '../sdk/registry.ts'
 import { Slot } from './boundary.tsx'
 import { Shortcut } from './palette.tsx'
@@ -76,7 +82,9 @@ const nameOf = (conversation: ConversationSummary) =>
 
 /** Where the shown conversation sits: its ancestors, a busy dot, and its title. */
 function Trail() {
-  const { id, busy } = useConversation()
+  const { busy } = useConversation()
+  // The requested conversation while its snapshot loads, so a switch keeps naming where it goes.
+  const id = useStore((state) => state.view?.conversation.id ?? state.requested)
   const conversations = useConversations()
   const summary = conversations.find((conversation) => conversation.id === id)
   const trail = ancestors(id, conversations)

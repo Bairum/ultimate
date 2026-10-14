@@ -274,7 +274,7 @@ function Restarted({ from, to }: { from: number; to: number }) {
  */
 // Pi upstream: @earendil-works/pi-durable@1.2.0 src/harness/prompt.ts — internal remove-all pi.system entry immediately precedes a reordered re-add, hidden here. Drop when Pi exposes prompt reorder metadata instead of requiring entry-sequence inference.
 function SystemEntry({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
-  const { entries } = useConversation()
+  const entries = useConversation((conversation) => conversation.entries)
   const system = useSystem()
   const message = systemOf(entry)
   if (!message?.sections) return core

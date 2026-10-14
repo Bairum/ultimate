@@ -133,6 +133,8 @@
   --radius-xl: calc(var(--radius) + 4px);
   --animate-shimmer: shimmer 1.6s linear infinite;
   --animate-pulse-dot: pulse-dot 1.2s ease-in-out infinite;
+  /* Shows a loading state only when the wait is long enough to notice. */
+  --animate-appear: appear 0.2s ease-out 0.3s both;
 
   @keyframes shimmer {
     from {
@@ -140,6 +142,11 @@
     }
     to {
       background-position: 0% center;
+    }
+  }
+  @keyframes appear {
+    from {
+      opacity: 0;
     }
   }
   @keyframes pulse-dot {

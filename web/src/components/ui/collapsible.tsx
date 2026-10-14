@@ -1,19 +1,97 @@
-import { Collapsible as CollapsiblePrimitive } from 'radix-ui'
+import { createContext, useContext, useId, useMemo, useRef, useState } from 'react'
+import type { ComponentProps } from 'react'
 
-function Collapsible({ ...props }: React.ComponentProps<typeof CollapsiblePrimitive.Root>) {
-  return <CollapsiblePrimitive.Root data-slot="collapsible" {...props} />
+// Radix's Collapsible measures every content on mount (a forced style read and layout each) to animate its height,
+// which made opening a long transcript lock up. Nothing here animates the height, so content just mounts when open.
+const CollapsibleContext = createContext<{
+  open: boolean
+  disabled?: boolean
+  contentId: string
+  toggle: () => void
+} | null>(null)
+
+const state = (open: boolean) => (open ? 'open' : 'closed')
+
+function useCollapsible(part: string) {
+  const context = useContext(CollapsibleContext)
+  if (!context) throw new Error(`${part} must be inside a Collapsible`)
+  return context
 }
 
-function CollapsibleTrigger({
+function Collapsible({
+  open: openProp,
+  defaultOpen = false,
+  onOpenChange,
+  disabled,
   ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleTrigger>) {
-  return <CollapsiblePrimitive.CollapsibleTrigger data-slot="collapsible-trigger" {...props} />
+}: ComponentProps<'div'> & {
+  open?: boolean
+  defaultOpen?: boolean
+  onOpenChange?: (open: boolean) => void
+  disabled?: boolean
+}) {
+  const [uncontrolled, setUncontrolled] = useState(defaultOpen)
+  const open = openProp ?? uncontrolled
+  const contentId = useId()
+  const latest = useRef({ open, controlled: openProp !== undefined, onOpenChange })
+  latest.current = { open, controlled: openProp !== undefined, onOpenChange }
+  const context = useMemo(
+    () => ({
+      open,
+      disabled,
+      contentId,
+      toggle: () => {
+        const next = !latest.current.open
+        if (!latest.current.controlled) setUncontrolled(next)
+        latest.current.onOpenChange?.(next)
+      },
+    }),
+    [open, disabled, contentId],
+  )
+  return (
+    <CollapsibleContext.Provider value={context}>
+      <div
+        data-disabled={disabled ? '' : undefined}
+        data-slot="collapsible"
+        data-state={state(open)}
+        {...props}
+      />
+    </CollapsibleContext.Provider>
+  )
 }
 
-function CollapsibleContent({
-  ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleContent>) {
-  return <CollapsiblePrimitive.CollapsibleContent data-slot="collapsible-content" {...props} />
+function CollapsibleTrigger({ onClick, ...props }: ComponentProps<'button'>) {
+  const { open, disabled, contentId, toggle } = useCollapsible('CollapsibleTrigger')
+  return (
+    <button
+      aria-controls={open ? contentId : undefined}
+      aria-expanded={open}
+      data-disabled={disabled ? '' : undefined}
+      data-slot="collapsible-trigger"
+      data-state={state(open)}
+      disabled={disabled}
+      type="button"
+      {...props}
+      onClick={(event) => {
+        onClick?.(event)
+        if (!event.defaultPrevented) toggle()
+      }}
+    />
+  )
+}
+
+function CollapsibleContent(props: ComponentProps<'div'>) {
+  const { open, disabled, contentId } = useCollapsible('CollapsibleContent')
+  if (!open) return null
+  return (
+    <div
+      data-disabled={disabled ? '' : undefined}
+      data-slot="collapsible-content"
+      data-state="open"
+      id={contentId}
+      {...props}
+    />
+  )
 }
 
 export { Collapsible, CollapsibleTrigger, CollapsibleContent }

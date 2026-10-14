@@ -26,8 +26,8 @@ export function indexTools(entries: readonly EntryRecord[]) {
   return { results, calls }
 }
 
-export function slotsOf(live: LiveState): Map<string, ToolSlot> {
-  return new Map((live.tools ?? []).map((slot) => [slot.callId, slot]))
+export function slotsOf(tools: LiveState['tools']): Map<string, ToolSlot> {
+  return new Map((tools ?? []).map((slot) => [slot.callId, slot]))
 }
 
 // Pi upstream: @earendil-works/pi-durable@1.2.0 src/harness/tool.ts — internal trailing <harness> text block duplicates diagnostics and is stripped for display. Drop when Pi exports a diagnostic-free tool-result content accessor.

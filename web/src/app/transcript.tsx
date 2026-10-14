@@ -17,8 +17,18 @@ import {
   LinkIcon,
   RotateCwIcon,
 } from 'lucide-react'
-import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  Fragment,
+  memo,
+  startTransition,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type { ReactNode } from 'react'
+import { flushSync } from 'react-dom'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
 import { useEvent } from '../sdk/events.ts'
 import { api } from '../sdk/client.ts'
@@ -49,13 +59,15 @@ export function Transcript({ dock }: { dock?: boolean }) {
   return (
     <Conversation className="min-h-0">
       <ConversationContent className={cn(column(dock), 'gap-3 pt-6 pb-10')}>
-        <EntryNavigation conversationId={id} />
         <TranscriptEntries key={id} />
       </ConversationContent>
       <ConversationScrollButton />
     </Conversation>
   )
 }
+
+/** Rows a conversation shows at once when it opens; the rest follow without blocking. */
+const firstRows = 30
 
 function TranscriptEntries() {
   const { id, entries: active, live, busy, loading } = useConversation()
@@ -218,13 +230,36 @@ function TranscriptEntries() {
     }
   }
   const { results, calls } = useMemo(() => indexTools(entries), [entries])
-  const slots = useMemo(() => slotsOf(live), [live])
+  // Keyed on the tools, not `live`: a streamed token must not re-render every row.
+  const slots = useMemo(() => slotsOf(live.tools), [live.tools])
   const partial = partialOf(live)
   const visible = entries.filter(
     (entry) => !(entry.kind === 'pi.tool-result' && calls.has(toolCallId(entry) ?? '')),
   )
+  // Opening a long conversation renders its end first, then the rest as an interruptible transition.
+  const [whole, setWhole] = useState(false)
+  useEffect(() => {
+    if (!loading) startTransition(() => setWhole(true))
+  }, [loading])
+  const shown = whole ? visible : visible.slice(-firstRows)
+  // Reveal a stored row without the auto-follow animation overriding the jump; an older row needs every row first.
+  useEvent('ultimate:reveal-entry', (value) => {
+    const target = value as { conversationId?: number; entryId?: number } | undefined
+    if (target?.conversationId !== id || !Number.isSafeInteger(target?.entryId)) return
+    if (!whole) flushSync(() => setWhole(true))
+    const element = contentRef.current?.querySelector(`[data-entry-id="${target?.entryId}"]`)
+    if (element) {
+      stopScroll()
+      element.scrollIntoView({ block: 'start' })
+    }
+  })
   return (
     <>
+      {loading && (
+        <div className="mt-[30vh] animate-appear text-center font-mono text-[12px]">
+          <Shimmer>Loading conversation…</Shimmer>
+        </div>
+      )}
       {!loading && entries.length > 0 && !exhausted && (
         <div className="flex flex-col items-center gap-1">
           <Button
@@ -248,7 +283,7 @@ function TranscriptEntries() {
         </div>
       )}
       {!loading && visible.length === 0 && !partial && <EmptyState />}
-      {visible.map((entry) => (
+      {shown.map((entry) => (
         <div
           className="empty:hidden"
           data-conversation-id={id}
@@ -267,21 +302,6 @@ function TranscriptEntries() {
       )}
     </>
   )
-}
-
-/** Reveal a stored row without the transcript's auto-follow animation overriding the jump. */
-function EntryNavigation({ conversationId }: { conversationId?: number }) {
-  const { contentRef, stopScroll } = useStickToBottomContext()
-  useEvent('ultimate:reveal-entry', (value) => {
-    const target = value as { conversationId?: number; entryId?: number } | undefined
-    if (target?.conversationId !== conversationId || !Number.isSafeInteger(target?.entryId)) return
-    const element = contentRef.current?.querySelector(`[data-entry-id="${target?.entryId}"]`)
-    if (element) {
-      stopScroll()
-      element.scrollIntoView({ block: 'start' })
-    }
-  })
-  return null
 }
 
 /** What this Ultimate is and runs on, before the first message. */
@@ -357,17 +377,14 @@ function textOf(content: string | readonly (TextContent | ImageContent)[]) {
     : content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n')
 }
 
-const EntryView = memo(function EntryView({
-  entry,
-  results,
-  slots,
-  busy,
-}: {
+interface RowProps {
   entry: EntryRecord
   results: Map<string, ToolResult>
   slots: Map<string, ToolSlot>
   busy: boolean
-}) {
+}
+
+const EntryView = memo(function EntryView({ entry, results, slots, busy }: RowProps) {
   // Renderers compose in discovery order: each receives the one before it as `core`, and falls back to it.
   return entryRenderers(useExtensions(), entry.kind).reduce<ReactNode>(
     (inner, { extension, version, component: Renderer }) => (
@@ -377,7 +394,28 @@ const EntryView = memo(function EntryView({
     ),
     coreEntry(entry, results, slots, busy),
   )
-})
+}, sameRow)
+
+/** The tool calls a row shows: an assistant's calls, or the call of a result shown on its own. */
+function rowCalls(entry: EntryRecord): string[] {
+  const message = entry.model?.[0]
+  if (message?.role === 'toolResult') return [message.toolCallId]
+  if (message?.role !== 'assistant') return []
+  return message.content.flatMap((block) => (block.type === 'toolCall' ? [block.id] : []))
+}
+
+/** A row changes only with its entry and its own calls, so a new entry or run re-renders just the rows it touches. */
+function sameRow(a: RowProps, b: RowProps) {
+  if (a.entry !== b.entry) return false
+  return rowCalls(b.entry).every((id) => {
+    const result = b.results.get(id)?.message
+    return (
+      a.results.get(id)?.message === result &&
+      a.slots.get(id) === b.slots.get(id) &&
+      (result !== undefined || a.busy === b.busy)
+    )
+  })
+}
 
 function coreEntry(
   entry: EntryRecord,

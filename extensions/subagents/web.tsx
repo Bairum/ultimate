@@ -69,7 +69,7 @@ function IsolateBadge({ childId }: { childId: number }) {
 function SubagentCall({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
   const { switchConversation } = useUltimate()
-  const { id } = useConversation()
+  const id = useConversation((conversation) => conversation.id)
   const conversations = useConversations()
   const action = text(call.args.action) || 'start'
   const details = call.details as

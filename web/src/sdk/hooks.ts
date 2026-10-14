@@ -94,9 +94,14 @@ function derive(view: ConversationView | undefined): ConversationState {
   return state
 }
 
-/** The shown conversation's replica. */
-export function useConversation(): ConversationState {
-  return derive(useStore((state) => state.view))
+/**
+ * The shown conversation's replica, or the part `select` picks: then it re-renders only when that part changes, which
+ * matters for anything rendered per transcript row while a run streams.
+ */
+export function useConversation(): ConversationState
+export function useConversation<T>(select: (conversation: ConversationState) => T): T
+export function useConversation<T>(select?: (conversation: ConversationState) => T) {
+  return useStore((state) => (select ? select(derive(state.view)) : derive(state.view)))
 }
 /** The shown conversation now, outside React: for commands and callbacks. Components use `useConversation()`. */
 export const getConversation = (): ConversationState => derive(store.getState().view)

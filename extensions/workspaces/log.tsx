@@ -120,7 +120,7 @@ const toneOf = (outcome: LanderOutcome): LandingTone =>
 export function LanderReport({ entry }: { entry: EntryRecord }) {
   const { outcome } = entry.data as { id: string; outcome: WorkspaceIndex['results'][string] }
   // Reports from before the record named its conversation are in their submitter's transcript.
-  const own = useConversation().id ?? 0
+  const own = useConversation((conversation) => conversation.id) ?? 0
   return (
     <div data-lander-report={toneOf(outcome)}>
       <LandingCard
@@ -315,7 +315,8 @@ function Steps({
 /** One `ultimate.lander` entry: a submission header, a step, a check result, or the outcome card. */
 export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
   const data = entry.data as LanderEntry
-  const { entries, busy } = useConversation()
+  const entries = useConversation((conversation) => conversation.entries)
+  const busy = useConversation((conversation) => conversation.busy)
   const own = (other: EntryRecord) =>
     other.kind === 'ultimate.lander' && (other.data as LanderEntry).submission === data.submission
   const after = entries.filter((other) => other.id > entry.id && own(other))

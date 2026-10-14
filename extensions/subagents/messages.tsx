@@ -53,7 +53,7 @@ export function AgentMessages() {
 export function AgentInput({ entry }: { entry: EntryRecord }) {
   const [expanded, setExpanded] = useState(false)
   const origin = entry.data as AgentOrigin
-  const { id } = useConversation()
+  const id = useConversation((conversation) => conversation.id)
   const { switchConversation } = useUltimate()
   const conversations = useWorkspaceConversations()
   const task = useTaskOf(origin?.sender)
