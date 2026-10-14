@@ -323,7 +323,11 @@ it('runs root -> forked review lead -> parallel leaves -> lead -> root with scop
   expect(leadAgent.tools.map((tool) => tool.name)).toEqual(['read', 'bash', 'subagent'])
   expect(leadAgent.extensions.some((extension) => extension.name === 'subagents')).toBe(true)
   const leadIndex = (await f.opened.harness.snapshot(Subagents, leadId, context))!
-  expect(Object.values(leadIndex.agents).map((child) => child.agent)).toEqual(['astra', 'sol'])
+  expect(
+    Object.values(leadIndex.agents)
+      .map((child) => child.agent)
+      .toSorted(),
+  ).toEqual(['astra', 'sol'])
   expect(Object.keys(leadIndex.actions)).toHaveLength(2)
   for (const child of Object.values(leadIndex.agents)) {
     const leaf = (await f.opened.harness.conversation(child.conversationId, context))!
