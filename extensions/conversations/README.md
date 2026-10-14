@@ -151,22 +151,6 @@ footer names the project file to edit. Two actions back it:
 `summary-model-ref.ts` parses the value without node imports, so the web facet shares it: only a recognized final
 thinking level is stripped, so model ids may contain colons (`x-ai/grok-4.3:batch:high`).
 
-## Token-free browser fixture
-
-The initial-intent fixture uses the existing faux server, an injected summary generator and a blocked
-main-generation hook; it does not add a production test API or use provider tokens. Run:
-
-```sh
-pnpm exec vitest run test/conversations-browser.test.ts -t 'renders initial intent'
-```
-
-To inspect the busy state interactively, run the same command with
-`CONVERSATION_INTENT_PREVIEW_MS=120000`. It prints `Initial intent preview: http://127.0.0.1:<port>` after
-intent/title rows arrive and the browser reload verifies them. Open that URL during the pause: the final answer
-is still blocked. `CONVERSATION_INTENT_SCREENSHOT=/tmp/conversation-intent.png` also saves a desktop screenshot.
-The fixture then releases generation, verifies the narrow layout and browser errors, and closes its temporary server.
-Chromium is discovered through the existing browser-test helper; without Chromium this browser test skips.
-
 ## How status and summaries flow
 
 Every displayed status traces back to committed Pi Durable records. Hooks and tasks write records; documents are

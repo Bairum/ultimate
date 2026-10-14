@@ -24,30 +24,13 @@ The `provenance {entries: number[]}` action verifies requested entries against f
 
 Source and foreground Open offer a header Return button back to the receiving conversation and its message when known. Transcript entry anchors and the core `ultimate:reveal-entry {conversationId, entryId}` web event cancel auto-follow before revealing a row, so a long answer cannot pull the view back to its end. This one-hop navigation is local to the browser session; ordinary conversation switching remains unchanged. Missing sender summaries keep the ID visible and disable Source with an explanatory tooltip.
 
-### Token-free screenshot fixture
+### Token-free preview
 
-From this checkout, run:
-
-```sh
-AGENT_MESSAGES_PREVIEW_MS=120000 AGENT_MESSAGES_SCREENSHOT=/tmp/agent-report.png \
-  pnpm exec vp test test/subagents-messages-browser.test.ts
-```
-
-Wait for `Agent message preview: http://127.0.0.1:<port>` and open that URL while the test pauses. It uses an isolated temporary home and faux responses, not provider tokens. Scroll up to the first report card if the new browser opens at the transcript's end. The receiving transcript includes a long report with bold, lists, a checked task and a TypeScript block, plus human text resembling a report prefix. Click Source to jump to the child's answer (the parent's Markdown instruction is above it), then Return to restore the receiving report. Use Expand full message / Compact view to compare density. The test also saves the screenshot at the supplied path and closes its server after the pause. Omit both environment variables for the normal automated regression.
-
-For a smaller standalone preview, start a faux instance, accept its project setup, send `delegate to scout`, and use the foreground card's Open button to inspect the attributed child instruction. The rich report fixture above is independent of any user/project agent profile overrides.
+Start a faux instance, accept its project setup, send `delegate to scout`, and use the foreground card's Open button to inspect the attributed child instruction.
 
 ## Queued agent inputs
 
 Above the composer, actual pending instructions and reports use quiet bordered rows: sender, instruction/report, steer/follow-up, a truncated preview with full text in its tooltip, Source, and the existing cancellation button. Human lookalikes remain ordinary queue rows. The `provenance {submissions: number[]}` action intersects requested IDs with the receiving conversation's live inbox, then joins the same durable reporter submissions as transcript attribution. Delivered or cancelled submissions cannot be attributed as pending. Source uses the same one-hop Return navigation, returning to the receiving conversation without a transcript entry target.
-
-For a paused, token-free renderer fixture (including a human lookalike and unavailable source), run:
-
-```sh
-AGENT_INBOX_PREVIEW_MS=120000 pnpm exec vp test test/subagents-renderer-browser.test.ts
-```
-
-Open the printed `Agent inbox preview` URL, including `?inbox=1`, before the pause ends. This standalone fixture supplies deterministic browser data rather than provider runs. Resize to 360px to inspect wrapping and scroll the queue to see the unavailable-source row. `AGENT_INBOX_SCREENSHOT=/tmp/agent-inbox.png` optionally saves the test browser's narrow screenshot. The automated test drives source/return and cancellation; the durable subagent tests separately verify real queued submission identities and cancellation.
 
 ## Definitions are shared profiles
 

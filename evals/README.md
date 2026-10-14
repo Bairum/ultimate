@@ -18,4 +18,4 @@ Use `ultimate.file`, `ultimate.exec`, and `ultimate.action` to inspect outcomes.
 Always `await ultimate.stop()` in `finally`; every test gets temporary project, config, and state.
 Each measured turn prints wall time and model usage, excluding seeded history usage.
 Prefer evals for tool choice and completing user requests, not exact wording.
-Keep faux tests for crashes, races, storage, durability, browser, and process semantics.
+Keep faux tests for crashes, races, storage, durability, and process semantics.
