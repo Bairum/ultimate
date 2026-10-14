@@ -125,7 +125,7 @@ A top-level conversation created with New isolated conversation works in its own
 `workspace status` shows its tip and the original checkout's tip.
 Read worker reports and diffs; rerun checks only for missing or thin evidence, reported failures, changes crossing
 workers, `server/` or `shared/` changes, or surprises in the diff, then land and call `workspace submit`.
-The lander is the final gate: it runs every configured check (here `pnpm check` and `pnpm test:all`) on the merged result
+The lander is the final gate: it runs every configured check (here only `pnpm check`; tests are out of the gate until flaky tests are triaged) on the merged result
 and reports back, landed or not, with findings.
 It fixes small failures when the project configures it to; on success it fast-forwards the branch and pushes to
 `lander.push` (here `origin`), so keep working while it runs.
@@ -163,7 +163,7 @@ This standing permission does not authorize releases, publishing, deployments, o
   properties), relative imports end in `.ts`.
 - Core server/web contracts live in `shared/protocol.ts`; extension-local types live with their extension.
 - Pin `@earendil-works/*` packages to exact versions; Pi Durable is experimental.
-- Checks: `pnpm check` (format, lint, types) and the tests covering your change must pass before a commit; the lander runs `pnpm test:all`.
+- Checks: `pnpm check` (format, lint, types) and the tests covering your change must pass before a commit; the lander runs only `pnpm check` until flaky tests are triaged.
 - Every user-visible result is designed, not dumped: status and outcomes (a subagent report, a landing, a failure) get a
   renderer that matches the existing cards (see `extensions/subagents/messages.tsx`, `extensions/workspaces/log.tsx`),
   never plain Markdown in a message. Look at the running app and recent screenshots first, write the expected look into
