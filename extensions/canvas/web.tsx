@@ -107,7 +107,7 @@ const commands: CommandContribution[] = [
   },
   {
     id: 'canvas.new',
-    title: 'Start a conversation at the hub',
+    title: 'Branch from the root at the hub',
     keys: 'n',
     when: (context) => here(context) && onMap(),
     run: () => getController()?.hub(true),
@@ -120,25 +120,25 @@ const commands: CommandContribution[] = [
   },
   {
     id: 'canvas.archive',
-    title: 'Archive the selected conversation',
+    title: 'Conclude the selected conversation',
     when: (context) => here(context) && topSelected() && !selected()!.archived,
     run: () => getController()?.archive(),
   },
   {
     id: 'canvas.unarchive',
-    title: 'Unarchive the selected conversation',
+    title: 'Resume the selected conversation',
     when: (context) => here(context) && topSelected() && selected()!.archived,
     run: () => getController()?.archive(),
   },
   {
     id: 'canvas.archived',
-    title: 'Show archived conversations',
+    title: 'Show concluded conversations',
     when: (context) => here(context) && conversationsOn() && !getController()!.archivedShown(),
     run: () => getController()?.toggleArchived(),
   },
   {
     id: 'canvas.archived-hide',
-    title: 'Hide archived conversations',
+    title: 'Hide concluded conversations',
     when: (context) => here(context) && getController()!.archivedShown(),
     run: () => getController()?.toggleArchived(),
   },

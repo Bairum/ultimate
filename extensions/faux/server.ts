@@ -88,6 +88,23 @@ export default async function fauxExtension(host: ExtensionHost) {
           { stopReason: 'toolUse' },
         )
       }
+      const notify =
+        last?.role === 'user' && typeof last.content === 'string'
+          ? /^notify (\d+)( quietly)?$/.exec(last.content)
+          : null
+      if (notify) {
+        return fauxAssistantMessage(
+          [fauxToolCall('notify', { id: Number(notify[1]), wake: !notify[2] })],
+          { stopReason: 'toolUse' },
+        )
+      }
+      if (
+        last?.role === 'user' &&
+        typeof last.content === 'string' &&
+        /^#\d+ finished/.test(last.content)
+      ) {
+        return fauxAssistantMessage([fauxText('Noted: it finished.')])
+      }
       if (last?.role === 'user' && last.content === 'submit workspace') {
         return fauxAssistantMessage([fauxToolCall('workspace', { action: 'submit' })], {
           stopReason: 'toolUse',

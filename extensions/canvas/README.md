@@ -11,7 +11,7 @@ new panel springs out of the hub, and the view frames both.
 
 Each top-level conversation is a ray from a slot on the first ring; the subagents it owns pack outward along that ray,
 in creation order. Slots fill top, bottom, right, left, then in between, and a conversation keeps its slot while the
-page is open, so a new conversation or subagent never moves another branch. Moves glide; ownerless history forks get their own ray, while archived
+page is open, so a new conversation or subagent never moves another branch. Moves glide; ownerless history forks get their own ray, while concluded
 conversations and empty drafts stay off the map.
 
 A panel's outline is its state: Working (purple, pulsing), Waiting on subagent (blue), Queued (dashed), Needs decision
@@ -47,11 +47,11 @@ kept in this browser (`localStorage`).
 
 Keys, all in ⌘K under Canvas and only on this surface, not while typing except Escape from the composer: `=` or `+`,
 and `-` (or mod+wheel) zoom, `0` fits everything, `f` fits the selected tree, arrows select the nearest panel that way,
-Enter opens, Escape goes back, `h` flies to the hub, `n` starts a conversation there. The commands also rename, archive or unarchive the selected
-conversation, show or hide archived conversations (the toolbar's archive toggle), and open its workspace details.
+Enter opens, Escape goes back, `h` flies to the hub, `n` starts a conversation there. The commands also rename, conclude or resume the selected
+conversation, show or hide concluded conversations (the toolbar's concluded toggle), and open its workspace details.
 
 A panel's `…` menu offers what the sidebar row and the agent view did: open, stop the run, workspace details, and for a
-top-level conversation rename, clear context (the `conversations.reset` command and its dialog), archive or unarchive
+top-level conversation rename, clear context (the `conversations.reset` command and its dialog), conclude or resume
 (the sidebar's `ext.conversations.archived`, so both views agree). An isolated conversation shows its `W<id>` badge,
 which opens the Workspaces panel.
 

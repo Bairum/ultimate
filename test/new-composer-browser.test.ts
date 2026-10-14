@@ -4,7 +4,15 @@ import { join, resolve } from 'node:path'
 import { chromium } from 'playwright-core'
 import { expect, it, vi } from 'vitest'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { attach, fauxServer, post, skipWithoutChromium, temp, untilInput } from './helpers.ts'
+import {
+  until,
+  attach,
+  fauxServer,
+  post,
+  skipWithoutChromium,
+  temp,
+  untilInput,
+} from './helpers.ts'
 
 it('remembers hub model and thinking choices and applies them before submitting to an isolated conversation', async (test) => {
   const executablePath = await skipWithoutChromium(test)
@@ -75,10 +83,12 @@ it('remembers hub model and thinking choices and applies them before submitting 
         hub.getByRole('button', { name: 'Start the conversation', exact: true }).isDisabled(),
       )
       .toBe(false)
-    const submitted = page.waitForRequest((request) => request.url().endsWith('/submit'))
+    const submitted = page.waitForResponse((response) =>
+      response.url().endsWith('/lineage/actions/branch'),
+    )
     await input.press('Enter')
     const request = await submitted
-    const id = Number(/conversations\/(\d+)\/submit/.exec(request.url())![1])
+    const id = (await request.json()).result.id
     const stream = await attach(server, `?conversation=${id}`)
     const view = stream.view()
     await stream.close()
@@ -89,7 +99,14 @@ it('remembers hub model and thinking choices and applies them before submitting 
     const workspace = await post(server, '/api/extensions/workspaces/actions/info', {
       args: { id },
     })
-    expect(workspace.data.result).toMatchObject({ state: 'ready' })
+    await until(
+      async () =>
+        (await post(server, '/api/extensions/workspaces/actions/info', { args: { id } })).data
+          .result.state === 'ready',
+    )
+    expect(
+      server.api.conversations().find((summary) => summary.id === id)?.branchOf?.conversationId,
+    ).toBe(1)
     expect(workspace.data.result.path).not.toBe(projectRoot)
     expect(errors).toEqual([])
   } finally {
@@ -150,10 +167,12 @@ it('uses root defaults while another conversation is shown and keeps a thinking-
       thinkingLevel: 'medium',
     })
     for (const message of ['Thinking only', 'Remember thinking']) {
-      const submitted = page.waitForRequest((request) => request.url().endsWith('/submit'))
+      const submitted = page.waitForResponse((response) =>
+        response.url().endsWith('/lineage/actions/branch'),
+      )
       await input.fill(message)
       await input.press('Enter')
-      const id = Number(/conversations\/(\d+)\/submit/.exec((await submitted).url())![1])
+      const id = (await (await submitted).json()).result.id
       const stream = await attach(server, `?conversation=${id}`)
       expect(stream.view().docs['pi.agent']).toMatchObject({
         model: { provider: 'faux', modelId: 'faux-1' },
@@ -166,9 +185,10 @@ it('uses root defaults while another conversation is shown and keeps a thinking-
         thinkingLevel: 'medium',
       })
       await page.reload()
-      await hub.waitFor()
+      await page.locator('[data-canvas-map]').waitFor()
       await untilInput(page)
       await page.keyboard.press('Escape')
+      await page.locator('[data-canvas-map]').focus()
       await page.keyboard.press('h')
       await input.waitFor()
       await expect.poll(() => thinking.innerText()).toBe('medium')

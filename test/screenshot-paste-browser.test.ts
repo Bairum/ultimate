@@ -310,7 +310,7 @@ it('reconciles delayed submissions across navigation and preserves keyboard focu
   }
 }, 30000)
 
-it('shares Hub clipboard validation and preserves attachments through reads, creation and submission failures', async (test) => {
+it('shares Hub clipboard validation and blocks images until a branch has started', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const userHome = await temp('ultimate-hub-paste-')
@@ -439,77 +439,18 @@ it('shares Hub clipboard validation and preserves attachments through reads, cre
     await page.getByAltText('Pasted image 1').waitFor()
     await page.evaluate('FileReader.prototype.readAsDataURL = window.originalRead')
     await page.getByRole('button', { name: 'Remove image 1' }).click()
-    let creations = 0
-    let failCreation = true
-    await page.route('**/api/extensions/workspaces/actions/create', async (route) => {
-      creations++
-      if (failCreation)
-        return route.fulfill({
-          status: 400,
-          contentType: 'application/json',
-          body: '{"error":"Cannot isolate"}',
-        })
-      const id = (await post(server, '/api/conversations', {})).data.id
-      await route.fulfill({
-        contentType: 'application/json',
-        body: JSON.stringify({ result: { id } }),
-      })
-    })
-    for (const isolated of [true, false]) {
-      if (!isolated) await page.getByRole('switch', { name: 'Isolated' }).click()
-      for (const text of ['Review screenshot', '']) {
-        await input.fill(text)
-        await paste(page)
-        await page.getByAltText('Pasted image 1').waitFor()
-        if (isolated && failCreation) {
-          await input.press('Enter')
-          await page.getByText('Cannot isolate', { exact: true }).waitFor()
-          failCreation = false
-        }
-        expect(await input.inputValue()).toBe(text)
-        expect(await page.getByAltText('Pasted image 1').count()).toBe(1)
-        let release!: () => void
-        const gate = new Promise<void>((done) => {
-          release = done
-        })
-        let requested!: () => void
-        const request = new Promise<void>((done) => {
-          requested = done
-        })
-        await page.route('**/api/conversations/*/submit', async (route) => {
-          requested()
-          await gate
-          await route.fulfill({
-            status: 400,
-            contentType: 'application/json',
-            body: '{"error":"Retry image"}',
-          })
-        })
-        await input.press('Enter')
-        await request
-        expect(await send.isDisabled()).toBe(true)
-        expect(await page.getByRole('button', { name: 'Remove image 1' }).isDisabled()).toBe(true)
-        const count = submissions.length
-        await input.evaluate((element) =>
-          element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
-        )
-        await paste(page)
-        expect(submissions).toHaveLength(count)
-        release()
-        await page.getByText('Retry image', { exact: true }).waitFor()
-        expect(await input.inputValue()).toBe(text)
-        expect(await page.getByAltText('Pasted image 1').count()).toBe(1)
-        await page.unroute('**/api/conversations/*/submit')
-        await input.press('Enter')
-        await expect.poll(() => page.getByAltText('Pasted image 1').count()).toBe(0)
-        expect(await input.inputValue()).toBe('')
-        expect(submissions.at(-1)).toMatchObject({
-          text,
-          images: [{ data: png, mimeType: 'image/png' }],
-        })
-      }
+    for (const text of ['Review screenshot', '']) {
+      await input.fill(text)
+      await paste(page)
+      await page.getByAltText('Pasted image 1').waitFor()
+      expect(await send.isDisabled()).toBe(true)
+      await page.getByText('Images can be added after the branch starts', { exact: true }).waitFor()
+      await input.press('Enter')
+      expect(submissions).toEqual([])
+      expect(await input.inputValue()).toBe(text)
+      expect(await page.getByAltText('Pasted image 1').count()).toBe(1)
+      await page.getByRole('button', { name: 'Remove image 1' }).click()
     }
-    expect(creations).toBe(5)
     expect(errors).toEqual([])
   } finally {
     await browser.close()

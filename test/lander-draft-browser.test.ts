@@ -48,8 +48,27 @@ it('never offers the standing lander as a new shared conversation', async (test)
     await page.getByRole('button', { name: 'Conversation creation options', exact: true }).click()
     await page.getByRole('menuitemradio', { name: 'Shared (not isolated)', exact: true }).click()
     await page.getByLabel('New conversation', { exact: true }).click()
-    // The pristine root is the draft it reuses, not the lander.
-    await expect.poll(shown, { timeout: 15000 }).toBe(1)
+    const input = page.getByPlaceholder('Branch from the root: what do you want to do?')
+    await input.waitFor()
+    // Opening New leaves the lander alone; sending creates a fresh branch from the root.
+    await expect.poll(shown, { timeout: 15000 }).toBe(lander)
+    const response = page.waitForResponse((candidate) =>
+      candidate.url().endsWith('/lineage/actions/branch'),
+    )
+    await input.fill('Start a new line of work')
+    await input.press('Enter')
+    const result = await response
+    expect(result.status()).toBe(200)
+    const id = (await result.json()).result.id as number
+    expect(id).not.toBe(lander)
+    expect(id).not.toBe(Number(ROOT_CONVERSATION_ID))
+    await expect.poll(shown, { timeout: 15000 }).toBe(id)
+    expect(
+      server.api.conversations().find((summary) => summary.id === id)?.branchOf?.conversationId,
+    ).toBe(Number(ROOT_CONVERSATION_ID))
+    expect(
+      server.api.conversations().find((summary) => summary.id === lander)?.inputAt,
+    ).toBeUndefined()
   } finally {
     await browser.close()
     await server.close()

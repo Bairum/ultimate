@@ -28,10 +28,10 @@ import type { WorkspaceDisk, WorkspaceInfo, WorkspaceStats } from './types.ts'
 import { Row, Rows } from '../info/rows.tsx'
 
 function IsolationToggle() {
-  const { target } = useComposer()
+  const { target, isolated: isolation } = useComposer()
   const [creation, setCreation] = useUiState<string>('ext.conversations.creationType', 'isolated')
   if (target !== 'new') return null
-  const isolated = creation !== 'shared'
+  const isolated = isolation ?? creation !== 'shared'
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -49,6 +49,7 @@ function IsolationToggle() {
           <Switch
             aria-label="Isolated"
             checked={isolated}
+            disabled={isolation !== undefined}
             className="ml-0.5"
             onCheckedChange={(on) => setCreation(on ? 'isolated' : 'shared')}
           />

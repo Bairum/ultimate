@@ -14,18 +14,20 @@ import {
 import { Kbd } from '@/components/ui/kbd'
 import { api } from '../sdk/client.ts'
 import { errorMessage } from '../sdk/format.ts'
-import { useConversation, useExtensions, useModels, useUiState, useUltimate } from '../sdk/hooks.ts'
+import {
+  useConversation,
+  useConversations,
+  useExtensions,
+  useModels,
+  useUiState,
+  useUltimate,
+} from '../sdk/hooks.ts'
 import { isMac } from '../sdk/keys.ts'
 import type { ModelsResponse } from '../../../shared/protocol.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
 import { inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
-import {
-  ComposerContext,
-  newConversationKey,
-  useNewConversationConfiguration,
-} from '../sdk/composer.tsx'
-import type { NewConversationChoices } from '../sdk/composer.tsx'
+import { ComposerContext, useNewConversationConfiguration } from '../sdk/composer.tsx'
 
 const alt = isMac ? '⌥' : 'Alt'
 
@@ -121,11 +123,21 @@ export function Composer({ dock }: { dock?: boolean }) {
 export function NewConversationComposer({
   inputId,
   onStarted,
+  isolated,
 }: {
+  isolated?: boolean
   inputId?: string
   onStarted: (id: number) => void
 }) {
-  return <ConversationComposer target="new" dock inputId={inputId} onStarted={onStarted} />
+  return (
+    <ConversationComposer
+      target="new"
+      dock
+      isolated={isolated}
+      inputId={inputId}
+      onStarted={onStarted}
+    />
+  )
 }
 
 type Draft = {
@@ -168,7 +180,9 @@ function ConversationComposer({
   target = 'conversation',
   inputId,
   onStarted,
+  isolated: isolation,
 }: {
+  isolated?: boolean
   dock?: boolean
   target?: 'conversation' | 'new'
   inputId?: string
@@ -181,13 +195,15 @@ function ConversationComposer({
   const defaults = useNewConversationConfiguration(isNew)
   const loading = isNew ? defaults.loading : conversation.loading
   const inbox = isNew ? [] : conversation.inbox
-  const [choices] = useUiState<NewConversationChoices>(newConversationKey, {})
   const [creation] = useUiState<string>('ext.conversations.creationType', 'isolated')
   const extensions = useExtensions()
   const isolated =
-    creation !== 'shared' && extensions.some((extension) => extension.name === 'workspaces')
+    isolation ??
+    (creation !== 'shared' && extensions.some((extension) => extension.name === 'workspaces'))
   const draftId = isNew ? 'new' : id
   const { surface } = useUltimate()
+  const [archived, setArchived] = useUiState<number[]>('ext.conversations.archived', [])
+  const summaries = useConversations()
   if (!drafts.has(draftId)) drafts.set(draftId, createDraft(draftId))
   const draft = drafts.get(draftId)!
   const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
@@ -218,6 +234,8 @@ function ConversationComposer({
       : isNew && defaults.error
         ? errorMessage(defaults.error)
         : blockedBy(isNew ? defaults.configuration : agent, models)
+  const imageHint =
+    isNew && images.length > 0 ? 'Images can be added after the branch starts' : undefined
   const empty = !text.trim() && images.length === 0
 
   async function send(whenBusy?: 'steer' | 'followUp') {
@@ -225,6 +243,7 @@ function ConversationComposer({
       loading ||
       empty ||
       blocked ||
+      imageHint ||
       draft.get().sending ||
       pending.current ||
       (!isNew && id === undefined)
@@ -235,17 +254,28 @@ function ConversationComposer({
     try {
       let startedId: number | undefined
       if (isNew) {
-        startedId = isolated
-          ? (await api.action<{ id: number }>('workspaces', 'create', {})).id
-          : (await api.createConversation()).id
-        if (choices.model || choices.thinkingLevel) await api.configure(choices, startedId)
+        startedId = (
+          await api.action<{ id: number }>('lineage', 'branch', {
+            prompt: text.trim(),
+            isolated,
+            ...(defaults.configuration.model ? { model: defaults.configuration.model } : {}),
+            ...(defaults.configuration.thinkingLevel
+              ? { thinkingLevel: defaults.configuration.thinkingLevel }
+              : {}),
+          })
+        ).id
+      } else {
+        await api.submit(text.trim(), busy ? (whenBusy ?? 'steer') : undefined, id, images)
+        const ancestors = new Set<number>()
+        let current = summaries.find((summary) => summary.id === id)
+        while (current && !ancestors.has(current.id)) {
+          ancestors.add(current.id)
+          const parent = current.parentConversationId ?? current.branchOf?.conversationId
+          current = summaries.find((summary) => summary.id === parent)
+        }
+        if (archived.some((candidate) => ancestors.has(candidate)))
+          setArchived((previous) => previous.filter((candidate) => !ancestors.has(candidate)))
       }
-      await api.submit(
-        text.trim(),
-        busy ? (whenBusy ?? 'steer') : undefined,
-        startedId ?? id,
-        images,
-      )
       const stored = key ? (localStorage.getItem(key) ?? '') : ''
       if (key && stored === submitted.text && draft.get().revision === submitted.revision)
         localStorage.removeItem(key)
@@ -272,7 +302,7 @@ function ConversationComposer({
   }
 
   return (
-    <ComposerContext value={{ target }}>
+    <ComposerContext value={{ target, isolated: isolation }}>
       <div
         data-composer-target={target}
         className={cn(
@@ -308,7 +338,7 @@ function ConversationComposer({
             onKeyDown={onKeyDown}
             placeholder={
               isNew
-                ? 'Start a conversation…'
+                ? 'Branch from the root: what do you want to do?'
                 : busy
                   ? 'Steer the run, or queue a follow-up…'
                   : 'Ask Ultimate to change something…'
@@ -328,6 +358,7 @@ function ConversationComposer({
               >
                 {error ??
                   blocked ??
+                  imageHint ??
                   (busy ? (
                     <>
                       <Kbd>↵</Kbd> steer · <Kbd>{alt} ↵</Kbd> follow-up · <Kbd>esc</Kbd>{' '}
@@ -346,7 +377,7 @@ function ConversationComposer({
               )}
               {(!busy || !empty) && (
                 <PromptInputSubmit
-                  disabled={loading || empty || !!blocked || sending || reading}
+                  disabled={loading || empty || !!blocked || !!imageHint || sending || reading}
                   aria-label={
                     loading ? 'Loading conversation' : isNew ? 'Start the conversation' : 'Send'
                   }

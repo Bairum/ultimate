@@ -11,7 +11,7 @@ import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { chromium } from 'playwright-core'
 import { expect, it } from 'vitest'
-import { fauxServer, skipWithoutChromium, temp, until, untilInput } from './helpers.ts'
+import { fauxServer, post, skipWithoutChromium, temp, until, untilInput } from './helpers.ts'
 import { Summaries, summaryBehavior } from '../extensions/conversations/summary.ts'
 import { Overview } from '../extensions/conversations/overview.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -138,7 +138,7 @@ it(
       const conversation = page.locator(`[data-conversation="${server.root.id}"]`)
       await conversation.hover()
       await conversation.getByRole('button', { name: 'Conversation actions' }).click()
-      await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
+      await page.getByRole('menuitem', { name: 'Conclude', exact: true }).click()
       await expect
         .poll(
           () => page.getByRole('navigation', { name: 'Conversations', exact: true }).textContent(),
@@ -149,10 +149,10 @@ it(
       await page.reload()
       await untilInput(page)
       expect(await summary.count()).toBe(0)
-      await page.getByRole('button', { name: /^Archived/ }).click()
+      await page.getByRole('button', { name: /^Concluded/ }).click()
       await conversation.hover()
       await conversation.getByRole('button', { name: 'Conversation actions' }).click()
-      await page.getByRole('menuitem', { name: 'Unarchive', exact: true }).click()
+      await page.getByRole('menuitem', { name: 'Resume', exact: true }).click()
       await expect
         .poll(() => summary.textContent(), timeout)
         .toContain('Review sidebar accessibility before implementation.')
@@ -416,7 +416,7 @@ it('expands real agent roles and outcomes, separates Replied from summary-model 
   }
 }, 120000)
 
-it('lists, creates, marks, archives, renames and clears conversations in the sidebar', async (test) => {
+it('lists, branches, marks, concludes, renames and clears conversations in the sidebar', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const userHome = await temp('ultimate-conversations-browser-')
@@ -458,16 +458,7 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
       const action = /\/api\/extensions\/conversations\/actions\/(\w+)$/.exec(request.url())?.[1]
       if (action) calls.push(action)
     })
-    const configured: unknown[] = []
-    page.on('request', (request) => {
-      if (request.url().endsWith('/configure')) configured.push(request.postDataJSON())
-    })
-    const failed: string[] = []
-    page.on('response', (response) => {
-      if (response.url().endsWith('/configure') && response.status() >= 400)
-        failed.push(`${response.status()} ${response.url()}`)
-    })
-    const sidebar = page.getByRole('navigation', { name: 'Conversations' })
+    const sidebar = page.locator('nav[aria-label="Conversations"]')
     const rows = sidebar.locator('[data-conversation]')
     const titles = () => rows.locator('.truncate').allTextContents()
     const row = (title: string) => rows.filter({ hasText: title })
@@ -541,34 +532,27 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
       .toBe('true')
     await page.keyboard.press('Escape')
 
-    // New conversation shows an empty draft, configured with the shown one's model, listed first, the composer focused.
-    const { model } = await server.root.agent(context)
+    // New opens a pending branch composer; sending starts a branch, without a blank draft.
     await page.getByRole('button', { name: 'New conversation' }).click()
-    await expect.poll(titles, timeout).toEqual(['New conversation', 'first message'])
-    await expect.poll(shown, timeout).not.toBe('1')
-    const draft = await shown()
-    await expect.poll(focused, timeout).toBe('composer-input')
-    await expect.poll(() => configured, timeout).toEqual([expect.objectContaining({ model })])
-    expect(failed).toEqual([])
-
-    // From the main conversation, the shortcut reuses that draft instead of creating another.
-    await row('first message').locator('> button').first().click()
-    await expect.poll(shown, timeout).toBe('1')
-    await ready(Number(server.root.id))
-    await page.keyboard.press('Control+Alt+n')
-    await expect.poll(shown, timeout).toBe(draft)
-    await expect.poll(focused, timeout).toBe('composer-input')
-    await ready(Number(draft))
-    expect(await titles()).toEqual(['New conversation', 'first message'])
-
-    // Sending titles the draft's row and lists it first; it shows working while it runs, also when not shown.
+    expect(await titles()).toEqual(['first message'])
+    expect(server.api.conversations()).toHaveLength(count)
+    const pending = page.getByPlaceholder('Branch from the root: what do you want to do?')
+    await pending.fill('second message')
     server.host.faux!.setResponses([
+      fauxAssistantMessage('Brief of the first message.'),
       fauxAssistantMessage([fauxToolCall('hold_run', {})], { stopReason: 'toolUse' }),
       fauxAssistantMessage('Second answer.'),
     ])
+    const created = page.waitForResponse((response) =>
+      response.url().endsWith('/lineage/actions/branch'),
+    )
+    await pending.press('Enter')
+    const draft = String((await (await created).json()).result.id)
     try {
-      await send('second message', Number(draft))
-      await expect.poll(titles, timeout).toEqual(['second message', 'first message'])
+      await expect.poll(titles, timeout).toEqual(['first message', 'second message'])
+      await expect.poll(shown, timeout).toBe(draft)
+      await expect.poll(focused, timeout).toBe('composer-input')
+      await post(server, '/api/ui', { set: { 'ext.conversations.seen': { [draft]: 0 } } })
       const second = row('second message')
       await expect.poll(() => second.getByRole('img', { name: 'Working' }).count(), timeout).toBe(1)
       await row('first message').locator('> button').first().click()
@@ -586,50 +570,51 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
     await second.locator('> button').first().click()
     await expect.poll(() => second.getByRole('img').count(), timeout).toBe(0)
 
-    // Archiving moves a row into the collapsed Archived group, which survives a reload.
-    const first = row('first message')
+    // Concluding moves a row into the collapsed Concluded group, which survives a reload.
+    const first = row('second message')
     await first.hover()
     await first.getByRole('button', { name: 'Conversation actions' }).click()
-    await page.getByRole('menuitem', { name: 'Archive' }).click()
-    await expect.poll(titles, timeout).toEqual(['second message'])
-    const archived = page.getByRole('button', { name: /^Archived/ })
-    await expect.poll(() => archived.textContent(), timeout).toBe('Archived · 1')
+    await page.getByRole('menuitem', { name: 'Conclude' }).click()
+    await expect.poll(titles, timeout).toEqual(['first message'])
+    const archived = page.getByRole('button', { name: /^Concluded/ })
+    await expect.poll(() => archived.textContent(), timeout).toBe('Concluded · 1')
     await page.reload()
-    await expect.poll(() => archived.textContent(), timeout).toBe('Archived · 1')
+    await expect.poll(() => archived.textContent(), timeout).toBe('Concluded · 1')
     await untilInput(page)
-    expect(await titles()).toEqual(['second message'])
+    expect(await titles()).toEqual(['first message'])
     await archived.click()
     await expect
       .poll(
-        () => page.getByRole('region', { name: 'Archived' }).locator('.truncate').allTextContents(),
+        () =>
+          page.getByRole('region', { name: 'Concluded' }).locator('.truncate').allTextContents(),
         timeout,
       )
-      .toEqual(['first message'])
+      .toEqual(['second message'])
 
     // Renaming a row that is not shown saves on Enter and keeps the shown conversation.
-    const hiddenRow = page.getByRole('region', { name: 'Archived' }).locator('[data-conversation]')
+    const hiddenRow = page.getByRole('region', { name: 'Concluded' }).locator('[data-conversation]')
     await hiddenRow.hover()
     await hiddenRow.getByRole('button', { name: 'Conversation actions' }).click()
     await page.getByRole('menuitem', { name: 'Rename' }).click()
     const input = page.getByRole('textbox', { name: 'Conversation title' })
-    await expect.poll(() => input.inputValue(), timeout).toBe('first message')
+    await expect.poll(() => input.inputValue(), timeout).toBe('second message')
     await input.fill('Earlier work')
     await page.keyboard.press('Enter')
     await expect
       .poll(() => hiddenRow.locator('.truncate').textContent(), timeout)
       .toBe('Earlier work')
-    expect(await shown()).toBe(draft)
+    expect(await shown()).toBe('1')
 
-    // Rename from the menu: Enter saves, and the row and the header trail show the new title.
+    // Rename from the menu: Enter saves the row title; the root keeps its role in the header.
     const renamed = rows.first()
     await renamed.hover()
     await renamed.getByRole('button', { name: 'Conversation actions' }).click()
     await page.getByRole('menuitem', { name: 'Rename' }).click()
-    await expect.poll(() => input.inputValue(), timeout).toBe('second message')
+    await expect.poll(() => input.inputValue(), timeout).toBe('first message')
     await input.fill('Sidebar work')
     await page.keyboard.press('Enter')
     await expect.poll(titles, timeout).toEqual(['Sidebar work'])
-    const trail = page.locator('header').getByText('Sidebar work', { exact: true })
+    const trail = page.locator('header').getByText('main', { exact: true })
     await expect.poll(() => trail.count(), timeout).toBe(1)
     const rowFocused = () =>
       renamed
@@ -662,7 +647,6 @@ it('lists, creates, marks, archives, renames and clears conversations in the sid
     expect(await titles()).toEqual(['Sidebar work'])
     expect(await trail.count()).toBe(1)
     expect(calls).toEqual(['rename', 'rename', 'reset'])
-    expect(failed).toEqual([])
     expect(errors).toEqual([])
   } finally {
     releaseRun()

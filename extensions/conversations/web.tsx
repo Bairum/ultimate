@@ -1,6 +1,4 @@
 import {
-  ArchiveIcon,
-  ArchiveRestoreIcon,
   CheckIcon,
   ChevronRightIcon,
   ChevronDownIcon,
@@ -44,6 +42,9 @@ import {
   formatTime,
   getConversation,
   getState,
+  useAction,
+  useEvent,
+  NewConversationComposer,
   useDialog,
   useExtensionUiState,
   useModels,
@@ -53,12 +54,12 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, UltimateActions } from '@/sdk'
+import { hiddenConversationIds } from './visible.tsx'
 import { ModelRow } from '../models/picker.tsx'
 import { FeatureTag, useOverview } from './feature.tsx'
 import { parseSummaryModel } from './summary-model-ref.ts'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import {
-  getWorkspaces,
   useWorkspaceConversations as useConversations,
   useWorkspaceIndex,
 } from '../workspaces/data.tsx'
@@ -75,8 +76,6 @@ import type {
 const newKeys = 'mod+alt+n'
 const resetDialog = 'conversations.reset'
 const summaryModelDialog = 'conversations.summary-model'
-let creationType = 'isolated'
-let creating = false
 
 function currentAssessment(row: OverviewRow | undefined) {
   return row?.runState === 'answered' &&
@@ -115,9 +114,9 @@ function workingByTop(conversations: readonly ConversationSummary[]) {
   return working
 }
 
-/** The empty draft first, then by latest input, newest first. */
+/** Siblings by latest input, newest first. */
 const byInput = (a: ConversationSummary, b: ConversationSummary) =>
-  (b.inputAt ?? Infinity) - (a.inputAt ?? Infinity) || b.id - a.id
+  (b.inputAt ?? 0) - (a.inputAt ?? 0) || b.id - a.id
 
 /** `now`, `5m`, `3h`, `2d`, then a short date. */
 function ago(at: number, now: number) {
@@ -144,73 +143,38 @@ function focusWhenShown(actions: UltimateActions, id: number, deadline = Date.no
   })
 }
 
-/**
- * Show an empty conversation on the Agent surface, the composer focused: the shown draft, else an empty, untitled,
- * idle one nobody archived, else a new one. It takes the shown conversation's model and thinking level, not a
- * subagent's.
- */
-async function newConversation(actions: UltimateActions) {
-  const { conversations, shared, models } = getState()
-  const shown = getConversation()
-  actions.showSurface('agent')
-  const current = conversations.find((conversation) => conversation.id === shown.id)
-  const topLevel = current !== undefined && current.parentConversationId === undefined
-  // The replica, not the lagging summary: right after a first send, the shown conversation is no draft any longer.
-  // A lander is never a draft, even before its first submission.
-  if (
-    topLevel &&
-    current.label !== 'lander' &&
-    !getWorkspaces()[String(current.id)] &&
-    shown.entries.length === 0
-  ) {
-    focusWhenShown(actions, current.id)
-    return
-  }
-  const archived = shared?.['ext.conversations.archived']
-  const reusable = conversations
-    .filter(
-      (conversation) =>
-        conversation.parentConversationId === undefined &&
-        conversation.label !== 'lander' &&
-        conversation.inputAt === undefined &&
-        conversation.title === undefined &&
-        !getWorkspaces()[String(conversation.id)] &&
-        !conversation.busy &&
-        !(Array.isArray(archived) && archived.includes(conversation.id)),
-    )
-    .toSorted((a, b) => b.id - a.id)[0]
-  const id = reusable?.id ?? (await api.createConversation()).id
-  const { model, thinkingLevel } = shown.agent
-  // A level the model does not support fails the whole call; without one, the server clamps the current level.
-  const levels = models?.models.find(
-    (candidate) => candidate.provider === model?.provider && candidate.id === model.modelId,
-  )?.thinkingLevels
-  if (topLevel && model)
-    await api
-      .configure(
-        { model, ...(thinkingLevel && levels?.includes(thinkingLevel) && { thinkingLevel }) },
-        id,
-      )
-      .catch(() => undefined)
-  actions.switchConversation(id)
-  focusWhenShown(actions, id)
-}
+const newDialog = 'conversations.new'
 
-/** Both creation commands share a guard; failures propagate to the command notice handler. */
-async function createConversation(actions: UltimateActions, type = creationType) {
-  if (creating) return
-  creating = true
-  try {
-    if (type === 'shared') await newConversation(actions)
-    else {
-      const { id } = await api.action<{ id: number }>('workspaces', 'create', {})
-      actions.showSurface('agent')
-      actions.switchConversation(id)
-      focusWhenShown(actions, id)
-    }
-  } finally {
-    creating = false
-  }
+function createConversation(actions: UltimateActions, isolated?: boolean) {
+  newIsolation = isolated
+  actions.showSurface('agent')
+  actions.open(newDialog)
+}
+let newIsolation: boolean | undefined
+
+function NewDialog() {
+  const [open, setOpen] = useDialog(newDialog)
+  const actions = useUltimate()
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent className="gap-3 sm:max-w-xl">
+        <DialogTitle className="flex items-center gap-2 text-[14px] font-medium">
+          <GitBranchIcon className="size-4 text-brand" /> Branch from the root
+        </DialogTitle>
+        <DialogDescription className="text-[13px]">
+          Start a new line of work from the root's latest context.
+        </DialogDescription>
+        <NewConversationComposer
+          isolated={newIsolation}
+          onStarted={(id) => {
+            setOpen(false)
+            actions.switchConversation(id)
+            focusWhenShown(actions, id)
+          }}
+        />
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 /** The conversation the clear-context dialog asks about; set just before it opens. */
@@ -281,7 +245,7 @@ function Mark({
   )
 }
 
-/** One top-level conversation: click shows it; the menu renames, clears, archives or unarchives it. */
+/** One top-level conversation: click shows it; the menu renames, clears, concludes or resumes it. */
 function Row({
   conversation,
   shown,
@@ -293,7 +257,9 @@ function Row({
   onArchive,
   feature,
   assessment,
+  root,
 }: {
+  root?: boolean
   conversation: ConversationSummary
   shown: boolean
   draft: boolean
@@ -315,7 +281,7 @@ function Row({
   const name = conversation.title ?? (draft ? 'New conversation' : `#${conversation.id}`)
   const latest = Math.max(conversation.inputAt ?? 0, conversation.answerAt ?? 0)
   const lander = conversation.label === 'lander'
-  const hasMetadata = feature || conversation.workspace || latest > 0 || lander
+  const hasMetadata = root || feature || conversation.workspace || latest > 0 || lander
   const index = useWorkspaceIndex()
   const rename = () => {
     cancelled.current = false
@@ -404,6 +370,12 @@ function Row({
           </span>
           {hasMetadata && (
             <span className="flex w-full items-center gap-2 pr-5 pl-[18px] font-mono text-[10px] leading-4 text-muted-foreground">
+              {root && (
+                <span className="flex shrink-0 items-center gap-1">
+                  <GitBranchIcon aria-label="Root" className="size-2.5" />
+                  root
+                </span>
+              )}
               {feature && <FeatureTag feature={feature} />}
               {lander ? (
                 <LanderState id={conversation.id} index={index} now={now} working={!!working} />
@@ -476,8 +448,8 @@ function Row({
             </DropdownMenuItem>
             {!lander && (
               <DropdownMenuItem className="text-[12.5px]" onSelect={() => onArchive(!archived)}>
-                {archived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
-                {archived ? 'Unarchive' : 'Archive'}
+                <CircleCheckIcon />
+                {archived ? 'Resume' : 'Conclude'}
               </DropdownMenuItem>
             )}
           </DropdownMenuContent>
@@ -597,10 +569,7 @@ function ChildRow({
   )
 }
 
-/**
- * The project's top-level conversations that have a message, newest input first, under the shown one when it is an
- * empty draft; archived ones in a collapsed group at the bottom.
- */
+/** The project tree, with owned subagents under each row and earlier/concluded work at the bottom. */
 function Conversations() {
   const overview = useOverview()
   const tasks = useTasks()
@@ -621,7 +590,11 @@ function Conversations() {
   const [archived, setArchived] = useExtensionUiState<number[]>('archived', [])
   const [seen] = useExtensionUiState<Record<string, number>>('seen', {})
   const shownTop = topOf(shownId, conversations)
-  const summary = shownTop && !archived.includes(shownTop.id) ? overview[shownTop.id] : undefined
+  const hiddenIds = hiddenConversationIds(conversations, archived)
+  const summary = shownTop && !hiddenIds.has(shownTop.id) ? overview[shownTop.id] : undefined
+  const info = useAction<{ root: number }>('lineage', 'info')
+  useEvent('lineage:root-changed', () => void info.refetch())
+  const rootId = info.data?.root
   const [expanded, setExpanded] = useExtensionUiState<number[]>('expanded', [])
   const working = workingByTop(conversations)
   const topLevel = conversations.filter(
@@ -632,27 +605,43 @@ function Conversations() {
     .filter((conversation) => conversation.label === 'lander')
     .toSorted((a, b) => a.id - b.id)
   const listed = topLevel
-    .filter(
-      (conversation) =>
-        conversation.label !== 'lander' &&
-        !archived.includes(conversation.id) &&
-        (conversation.inputAt !== undefined ||
-          conversation.id === shownTop?.id ||
-          conversation.workspace !== undefined),
-    )
+    .filter((conversation) => conversation.label !== 'lander' && !hiddenIds.has(conversation.id))
     .toSorted(byInput)
   const hidden = topLevel
-    .filter((conversation) => conversation.label !== 'lander' && archived.includes(conversation.id))
+    .filter((conversation) => conversation.label !== 'lander' && hiddenIds.has(conversation.id))
     .toSorted(byInput)
+  const root = listed.find((conversation) => conversation.id === rootId)
+  const earlier = listed.filter(
+    (conversation) => conversation.id !== rootId && !conversation.branchOf,
+  )
+  const branchesBySource = new Map<number, ConversationSummary[]>()
+  for (const conversation of topLevel.toSorted(byInput)) {
+    if (conversation.id === rootId || !conversation.branchOf) continue
+    const source = conversation.branchOf.conversationId
+    branchesBySource.set(source, [...(branchesBySource.get(source) ?? []), conversation])
+  }
 
   const setArchive = (id: number, archive: boolean) => {
+    const resumed = new Set([id])
+    if (!archive) {
+      let current = conversations.find((conversation) => conversation.id === id)
+      while (current?.branchOf && !resumed.has(current.branchOf.conversationId)) {
+        resumed.add(current.branchOf.conversationId)
+        current = conversations.find(
+          (conversation) => conversation.id === current?.branchOf?.conversationId,
+        )
+      }
+    }
     setArchived((previous) => [
-      ...previous.filter((candidate) => candidate !== id),
+      ...previous.filter((candidate) => !resumed.has(candidate)),
       ...(archive ? [id] : []),
     ])
-    if (!archive || id !== shownTop?.id) return
+    if (!archive || !hiddenConversationIds(conversations, [id]).has(shownTop?.id ?? -1)) return
     const index = listed.findIndex((conversation) => conversation.id === id)
-    const next = listed[index + 1] ?? listed[index - 1]
+    const subtree = hiddenConversationIds(conversations, [id])
+    const next =
+      listed.slice(index + 1).find((candidate) => !subtree.has(candidate.id)) ??
+      listed.find((candidate) => !subtree.has(candidate.id))
     if (next) actions.switchConversation(next.id)
   }
   const row = (conversation: ConversationSummary) => {
@@ -661,7 +650,8 @@ function Conversations() {
     return (
       <Row
         assessment={tasks ? currentAssessment(overview[conversation.id]) : undefined}
-        archived={archived.includes(conversation.id)}
+        archived={hiddenIds.has(conversation.id)}
+        root={conversation.id === rootId}
         conversation={conversation}
         draft={conversation.inputAt === undefined}
         feature={overview[conversation.id]?.feature}
@@ -688,7 +678,7 @@ function Conversations() {
     children.push(candidate)
     childrenByParent.set(parent, children)
   }
-  const tree = (conversation: ConversationSummary, nested = false) => {
+  const tree = (conversation: ConversationSummary, nested = false, concluded = false) => {
     const children = childrenByParent.get(conversation.id) ?? []
     const open = expanded.includes(conversation.id)
     return (
@@ -720,10 +710,20 @@ function Conversations() {
               Sub-agents · {children.length}
             </CollapsibleTrigger>
             <CollapsibleContent className="ml-4 border-l border-border/60">
-              {children.map((child) => tree(child, true))}
+              {children.map((child) => tree(child, true, concluded))}
             </CollapsibleContent>
           </Collapsible>
         )}
+        {!nested &&
+          (branchesBySource.get(conversation.id) ?? []).some(
+            (branch) => hiddenIds.has(branch.id) === concluded,
+          ) && (
+            <div className="ml-4 border-l border-border/60" data-branches-of={conversation.id}>
+              {(branchesBySource.get(conversation.id) ?? [])
+                .filter((branch) => hiddenIds.has(branch.id) === concluded)
+                .map((branch) => tree(branch, false, concluded))}
+            </div>
+          )}
       </div>
     )
   }
@@ -760,7 +760,6 @@ function Conversations() {
             <DropdownMenuRadioGroup
               value={type}
               onValueChange={(value) => {
-                creationType = value
                 setType(value)
               }}
             >
@@ -787,7 +786,15 @@ function Conversations() {
             {landers.map((conversation) => tree(conversation))}
           </div>
         )}
-        {listed.map((conversation) => tree(conversation))}
+        {root && tree(root)}
+        {listed
+          .filter(
+            (conversation) =>
+              conversation.branchOf &&
+              conversation.id !== rootId &&
+              !listed.some((source) => source.id === conversation.branchOf?.conversationId),
+          )
+          .map((conversation) => tree(conversation))}
       </nav>
       {summary &&
         (summary.summary ||
@@ -817,30 +824,50 @@ function Conversations() {
             )}
           </section>
         )}
-      {hidden.length > 0 && (
-        <Collapsible className="mt-auto pt-3">
-          <CollapsibleTrigger className="group/archived flex w-full items-center gap-1 px-4 py-1 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase outline-none hover:text-foreground focus-visible:text-foreground">
-            <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/archived:rotate-90" />
-            Archived · {hidden.length}
-          </CollapsibleTrigger>
-          <CollapsibleContent
-            aria-label="Archived"
-            className="flex flex-col gap-px pt-1"
-            role="region"
-          >
-            {hidden.map((conversation) => tree(conversation))}
-          </CollapsibleContent>
-        </Collapsible>
-      )}
+      <div className="mt-auto pt-3">
+        {earlier.length > 0 && (
+          <Collapsible className="pt-1">
+            <CollapsibleTrigger className="group/earlier flex w-full cursor-pointer items-center gap-1 px-4 py-1 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase outline-none hover:text-foreground">
+              <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/earlier:rotate-90" />
+              Earlier · {earlier.length}
+            </CollapsibleTrigger>
+            <CollapsibleContent
+              aria-label="Earlier"
+              role="region"
+              className="flex flex-col gap-px pt-1"
+            >
+              {earlier.map((conversation) => tree(conversation))}
+            </CollapsibleContent>
+          </Collapsible>
+        )}
+        {hidden.length > 0 && (
+          <Collapsible className="pt-1">
+            <CollapsibleTrigger className="group/archived flex w-full cursor-pointer items-center gap-1 px-4 py-1 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase outline-none hover:text-foreground focus-visible:text-foreground">
+              <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/archived:rotate-90" />
+              Concluded · {hidden.length}
+            </CollapsibleTrigger>
+            <CollapsibleContent
+              aria-label="Concluded"
+              className="flex flex-col gap-px pt-1"
+              role="region"
+            >
+              {hidden
+                .filter(
+                  (conversation) =>
+                    conversation.id === rootId ||
+                    !hidden.some((source) => source.id === conversation.branchOf?.conversationId),
+                )
+                .map((conversation) => tree(conversation, false, true))}
+            </CollapsibleContent>
+          </Collapsible>
+        )}
+      </div>
     </div>
   )
 }
 
 /** Records the answer the user has seen: the shown top-level conversation's latest, once it is idle. */
 function Seen() {
-  // Commands stay in sync even when the sidebar is not mounted.
-  const [type] = useExtensionUiState('creationType', 'isolated')
-  creationType = type
   const id = useShownId()
   const summary = useConversations().find((conversation) => conversation.id === id)
   const [seen, setSeen] = useExtensionUiState<Record<string, number>>('seen', {})
@@ -1101,7 +1128,7 @@ export default defineWebExtension({
     'conversations.assessed': SummaryAction,
     'conversations.summary-discarded': SummaryAction,
   },
-  slots: { sidebar: Conversations, overlay: [ResetDialog, SummaryModelDialog, Seen] },
+  slots: { sidebar: Conversations, overlay: [NewDialog, ResetDialog, SummaryModelDialog, Seen] },
   commands: [
     {
       id: 'conversations.new',
@@ -1114,7 +1141,7 @@ export default defineWebExtension({
       id: 'conversations.new-isolated',
       title: 'New isolated conversation',
       group: 'Conversations',
-      run: (actions) => createConversation(actions, 'isolated'),
+      run: (actions) => createConversation(actions, true),
     },
     {
       id: 'conversations.summary-model',

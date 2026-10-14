@@ -11,10 +11,9 @@ import { git } from '../extensions/workspaces/git.ts'
 import { fauxServer, post, skipWithoutChromium, temp, until, untilInput } from './helpers.ts'
 
 const timeout = { timeout: 15000 }
-const row = (page: Page, id: number) =>
-  page.locator(`nav[aria-label="Conversations"] [data-conversation="${id}"]`)
+const row = (page: Page, id: number) => page.locator(`[data-conversation="${id}"]`)
 
-it('defaults to isolated without model input, keeps shared reuse and manages every isolated draft safely', async (test) => {
+it('manages every isolated draft safely without removing checkout history', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const directory = await temp('ultimate-workspace-browser-')
@@ -38,31 +37,20 @@ it('defaults to isolated without model input, keeps shared reuse and manages eve
     release = done
   })
   try {
-    const shared = (await post(server, '/api/conversations')).data.id
+    await post(server, '/api/conversations')
     const page = await browser.newPage({
       viewport: { width: 1280, height: 800 },
       permissions: ['clipboard-read', 'clipboard-write'],
     })
     const errors: string[] = []
-    let receivedId = 0
     page.on('pageerror', (error) => errors.push(error.message))
-    page.on('response', async (response) => {
-      if (
-        new URL(response.url()).pathname === '/api/extensions/workspaces/actions/create' &&
-        response.ok()
-      )
-        receivedId = (await response.json()).result.id
-    })
+    const receivedId = (
+      await post(server, '/api/extensions/workspaces/actions/create', { args: {} })
+    ).data.result.id
+    await post(server, '/api/ui', { set: { 'shell.conversation': receivedId } })
     await page.goto(server.url)
     await untilInput(page)
-    await page.getByLabel('New conversation', { exact: true }).click()
-    await until(() => receivedId > 0)
-    await expect
-      .poll(
-        () => row(page, receivedId).getByRole('button').first().getAttribute('aria-current'),
-        timeout,
-      )
-      .toBe('true')
+    await page.getByRole('button', { name: /^Earlier/ }).click()
     const info = async (id: number) =>
       (await post(server, '/api/extensions/workspaces/actions/info', { args: { id } })).data.result
     await until(async () => (await info(receivedId)).state === 'ready')
@@ -71,33 +59,6 @@ it('defaults to isolated without model input, keeps shared reuse and manages eve
       .poll(() => row(page, receivedId).textContent(), timeout)
       .toContain(`W${receivedId}`)
     expect(await row(page, receivedId).textContent()).not.toContain(active.branch)
-    await page.getByRole('button', { name: 'Conversation creation options', exact: true }).click()
-    await page.getByRole('menuitemradio', { name: 'Shared (not isolated)', exact: true }).click()
-    await page.getByLabel('New conversation', { exact: true }).click()
-    await expect
-      .poll(
-        () => row(page, shared).getByRole('button').first().getAttribute('aria-current'),
-        timeout,
-      )
-      .toBe('true')
-    expect(
-      server.api
-        .conversations()
-        .filter(
-          (conversation) =>
-            conversation.parentConversationId === undefined && conversation.label !== 'lander',
-        ),
-    ).toHaveLength(3)
-    for (const id of [shared, receivedId]) {
-      const conversation = await server.harness.conversation(id as ConversationId, context)
-      const view = await conversation!.viewState(context)
-      expect(
-        view.value.entries.filter(
-          (entry) => entry.kind === 'pi.user' || entry.kind === 'pi.assistant',
-        ),
-      ).toHaveLength(0)
-      view.dispose()
-    }
     const fixtures: Record<string, number> = {}
     for (const state of ['pending', 'error', 'discarded']) {
       const id = (await post(server, '/api/extensions/workspaces/actions/create', { args: {} }))
@@ -198,7 +159,7 @@ it('defaults to isolated without model input, keeps shared reuse and manages eve
     await row(page, receivedId)
       .getByRole('button', { name: 'Conversation actions', exact: true })
       .click()
-    await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Conclude', exact: true }).click()
     expect(await git(active.path, 'rev-parse', 'HEAD')).toBe(laterTip)
     await post(server, '/api/extensions/conversations/actions/reset', { args: { id: receivedId } })
     expect(await git(active.path, 'rev-parse', 'HEAD')).toBe(laterTip)

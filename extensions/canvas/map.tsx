@@ -8,7 +8,7 @@ import {
   useStore as useFlow,
 } from '@xyflow/react'
 import type { Viewport } from '@xyflow/react'
-import { ArchiveIcon, HouseIcon, MinusIcon, PlusIcon, ScanIcon } from 'lucide-react'
+import { CircleCheckIcon, HouseIcon, MinusIcon, PlusIcon, ScanIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -788,12 +788,12 @@ export function CanvasMap() {
               {conversationsOn && archivedCount > 0 && (
                 <Control
                   label={
-                    showArchived ? 'Hide archived conversations' : 'Show archived conversations'
+                    showArchived ? 'Hide concluded conversations' : 'Show concluded conversations'
                   }
                   onClick={() => setShowArchived(!showArchived)}
                   pressed={showArchived}
                 >
-                  <ArchiveIcon className="size-3.5" />
+                  <CircleCheckIcon className="size-3.5" />
                   <span className="font-mono text-[11px]">{archivedCount}</span>
                 </Control>
               )}

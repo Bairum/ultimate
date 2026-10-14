@@ -1,19 +1,19 @@
-The project's conversations in the Agent surface's sidebar: list, create, switch, rename, clear, and archive them.
+The project's conversations in the Agent surface's sidebar: branch, switch, rename, clear, and conclude them.
 Several run at once, each a separate agent, and each knows about the others. A summary model (GPT-6 Luna by default)
 automatically gives top-level conversations concise titles and sidebar summaries, and assesses each final reply without
 changing the main agent.
 
 ## Sidebar
 
-The sidebar lists the top-level conversations that have a message, newest input first, so a row moves when its
-conversation gets input (your message or a background subagent's report), not while it works. Empty conversations stay
-out, except the shown one and every isolated draft (including pending, failed and removed checkouts): an empty shown
-conversation is the draft, listed first as "New conversation". Isolated rows carry a short `W<conversationId>` badge;
-Workspace details in their menu opens the Workspaces panel. Empty isolated rows also have the management menu. The shown row
-is highlighted, also while one of its subagents is shown. Each row has its title (or `#id`) and the time of its latest
-message (`now`, `5m`, `3h`, `2d`, then a date). Its leading mark pulses while it or any of its subagents works, and is
-solid when an answer arrived since you last looked at it. Actual foreground tasks and live run boundaries determine
-Working, not the potentially lagging title/timestamp list. While working, old assessment marks are suppressed.
+The sidebar pins the lander above the root (from lineage `info`), marked with a branch icon and `root`.
+Branches nest under their source (`branchOf.conversationId`), with a hairline guide and one indent per depth;
+siblings sort by latest input. Older conversations that are neither the root nor branches live in the collapsed
+"Earlier · N" group, above "Concluded · N". Isolated rows carry a short `W<conversationId>` badge;
+Workspace details in their menu opens the Workspaces panel. The shown row is highlighted, also while one of its
+subagents is shown. Each row has its title (or `#id`) and the time of its latest message (`now`, `5m`, `3h`, `2d`,
+then a date). Its leading mark pulses while it or any of its subagents works, and is solid when an answer arrived
+since you last looked at it. Actual foreground tasks and live run boundaries determine Working, not the potentially
+lagging title/timestamp list. While working, old assessment marks are suppressed.
 A solid purple dot means an unread reply, not ongoing work; only the pulsing dot means working.
 
 Idle, currently assessed replies may show a circular question (needs input) or green circular check (Done). These are
@@ -27,28 +27,19 @@ Replied means a run answered, not that its goal is fulfilled. During new work, a
 A row switches to its child, highlights selection and keeps the top-level summary visible. History forks are not
 invented delegation edges. Expansion is persisted in `ext.conversations.expanded`; buttons support keyboard access.
 
-New conversation (the button, `mod+alt+n`, or the palette) uses the remembered creation type and focuses the composer
-on the Agent surface. The dropdown's radio choices, Isolated and Shared (not isolated), only select the type; they do
-not create a conversation. The default is Isolated, and the tooltip shows the selected type. The preference is stored
-in `ext.conversations.creationType`, shared across tabs and retained across reloads and restarts.
-
-Shared reuses the shown draft (a shown top-level conversation without entries), else the newest
-empty, untitled, idle, unarchived **shared** conversation, and creates one only when there is none. It never reuses
-an empty isolated conversation, including the shown one. From a top-level conversation
-it takes that one's model and thinking level; from a subagent it sets none, so a reused conversation keeps its own and a
-new one gets the main conversation's.
-
-Isolated creates directly through the workspaces extension's `create` action, without a confirmation dialog.
-The explicit New isolated conversation palette command always creates isolated, without changing the preference.
-Creation never submits input or runs a model. Both commands share an in-flight guard against duplicate creation.
-Request errors appear in command notices; non-Git projects never silently fall back to Shared. Checkout setup errors
-are inspected in Workspaces; start a new conversation to try again. The menu retains Manage workspaces.
-Archive and clear context never remove checkouts or commits.
+New conversation (the button, `mod+alt+n`, or the palette) opens a pending branch composer on the Agent surface.
+It creates nothing until sent; sending calls lineage `branch` from the root's latest entry with the prompt and
+chosen model/thinking level. The same composer serves the Canvas hub. Images disable send with a short hint;
+add them after the branch starts. The dropdown's Isolated and Shared choices only select the type, remembered in
+`ext.conversations.creationType` across tabs, reloads and restarts. New isolated conversation explicitly branches
+in its own checkout without changing that preference. Errors preserve the prompt for retry.
+Conclude and clear context never remove checkouts or commits. The menu retains Manage workspaces.
 
 On hover or focus, a row's `…` menu offers Rename (inline; also on double-click; Enter or leaving the field saves,
 Escape cancels, and after either key focus returns to the row), Clear context… (asks first; not while the conversation
-itself works, as the server refuses), and Archive. Archived rows sit in a collapsed "Archived · N" group at the bottom,
-where Unarchive brings them back; archiving the shown row shows the next one.
+itself works, as the server refuses), and Conclude. Concluded rows and their branches/subagents sit in a collapsed "Concluded · N" group at the bottom.
+Resume brings them back; sending to a concluded branch resumes it and any concluded ancestors automatically.
+Concluding the shown subtree shows another live conversation when one exists.
 
 Commands, under Conversations: `conversations.new` ("New conversation", `mod+alt+n`), `conversations.reset`
 ("Clear the context" of the shown top-level conversation, when it is idle and has entries), and
@@ -58,7 +49,7 @@ conversation; a conversation not recorded there counts as seen.
 
 ## Server facet
 
-The `conversations` prompt section goes to every top-level conversation (neither a subagent nor a fork). It names the
+The `conversations` prompt section goes to every top-level conversation (not a subagent). It names the
 conversation's own id and lists the other top-level conversations that have a message and are not archived (the web
 keeps archived ids in the UI state `ext.conversations.archived`): at most the 10 most recently active, listed by id,
 each as `#<id> <title or "untitled">` with its cwd when that differs. It holds no busy state or times, so it changes
@@ -66,7 +57,7 @@ only when that list, a title, or a cwd does, and prompt caches stay warm. It rem
 checkout unless a cwd says otherwise, and how to look at them with codemode's `ultimate.entries(id)` and
 `ultimate.taskGraph()`. Without other conversations there is no section.
 
-Actions, each on a top-level conversation; bad args, unknown conversations, subagents, and forks throw:
+Actions, each on a top-level conversation; bad args, unknown conversations, and subagents throw:
 
 - `rename {id, title}`: sets the `ultimate.metadata` title, with whitespace runs (newlines too) collapsed to one space,
   trimmed, and cut to at most 160 characters; a blank title removes it, so the first message names the conversation

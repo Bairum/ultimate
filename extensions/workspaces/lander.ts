@@ -22,6 +22,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { exclusiveSlot } from '../exclusive-commands/slot.ts'
+import { leaveNote, rootOf } from '../lineage/server.ts'
 import { definitionAgent, discoverAgents } from '../subagents/agents.ts'
 import { git, setup } from './git.ts'
 import type {
@@ -99,6 +100,8 @@ type Host = Pick<
   | 'harness'
   | 'projectSettings'
   | 'resource'
+  | 'extensions'
+  | 'metadata'
 >
 /**
  * The lander conversation's agent from the effective `lander` definition (model, thinking, tools, instructions) over
@@ -783,6 +786,44 @@ export function createLander(
       },
       report: async (task, runtime, context) => {
         const { id, conversationId, text } = task.state.checkpoint
+        if (
+          host
+            .extensions()
+            .some((extension) => extension.name === 'lineage' && extension.enabled) &&
+          !(await runtime.memo<boolean>(`root-note:${id}`, context))
+        ) {
+          const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+          const result = index?.results[id]
+          if (result?.outcome === 'landed' && conversationId !== (await rootOf(host, context))) {
+            const metadata = await host
+              .harness()
+              .snapshot(host.metadata, conversationId as ConversationId, context)
+            const title = metadata?.title ?? ''
+            const commits = (result.commits ?? []).slice(0, 10).map((commit) => {
+              const space = commit.indexOf(' ')
+              return { sha: commit.slice(0, space), subject: commit.slice(space + 1) }
+            })
+            const more = (result.commits?.length ?? 0) - commits.length
+            const paths = (result.paths ?? []).slice(0, 8)
+            await leaveNote(
+              host,
+              'root',
+              [
+                `Landed ${result.sha!.slice(0, 7)} on ${result.target} from #${conversationId} ${title}:`,
+                ...commits.map((commit) => commit.subject),
+                ...(more ? [`and ${more} more`] : []),
+                `Changed: ${paths.join(', ')}`,
+              ].join('\n'),
+              {
+                source: 'lander',
+                from: conversationId,
+                requestId: `lander-root:${id}`,
+                data: { sha: result.sha!, target: result.target, commits, paths, title, more },
+              },
+            )
+          }
+          await runtime.memo(`root-note:${id}`, true, context)
+        }
         await (
           await runtime.conversation(conversationId as ConversationId, context)
         )?.submit(
