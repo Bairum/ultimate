@@ -10,6 +10,7 @@ import {
   CircleSlashIcon,
 } from 'lucide-react'
 import { useCallback, useSyncExternalStore } from 'react'
+import type { SyntheticEvent } from 'react'
 import { cn, useUiState, useUltimate } from '@/sdk'
 /** One entry of the root `ultimate.plan.tasks` index, as `server.ts` defines it. */
 export type TaskLink = {
@@ -109,25 +110,34 @@ export function useOpenTask() {
   )
 }
 
-/** A task's key with its status dot; click opens the task in its coordinator's plan. */
+/**
+ * A task's key with its status dot; click opens the task in its coordinator's plan.
+ * A `span` with the button role: it sits inside row buttons, which cannot nest buttons.
+ */
 export function TaskChip({ task, className }: { task: TaskLink; className?: string }) {
   const openTask = useOpenTask()
+  const open = (event: SyntheticEvent) => {
+    event.stopPropagation()
+    event.preventDefault()
+    openTask(task)
+  }
   return (
-    <button
+    <span
       className={cn(
-        'inline-flex shrink-0 items-center gap-1 rounded bg-muted/60 px-1.5 font-mono text-[10px] leading-4 text-muted-foreground hover:bg-muted hover:text-foreground',
+        'inline-flex shrink-0 cursor-pointer items-center gap-1 rounded bg-muted/60 px-1.5 font-mono text-[10px] leading-4 text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
         className,
       )}
       data-task={task.key}
-      onClick={(event) => {
-        event.stopPropagation()
-        openTask(task)
+      onClick={open}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') open(event)
       }}
+      role="button"
+      tabIndex={0}
       title={`#${task.coordinator}/${task.key} · ${task.title} · ${task.status.replace('_', ' ')}`}
-      type="button"
     >
       <span className={cn('size-1.5 shrink-0 rounded-full', statusOf(task.status).dot)} />
       {task.key}
-    </button>
+    </span>
   )
 }

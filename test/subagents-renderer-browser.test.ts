@@ -26,7 +26,7 @@ import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import extension from '/@fs/${resolve('extensions/subagents/web.tsx')}'
 import { AgentInput, AgentMessages } from '/@fs/${resolve('extensions/subagents/messages.tsx')}'
-import plan from '/@fs/${resolve('extensions/plan/web.tsx')}'
+import { PlanBody } from '/@fs/${resolve('extensions/plan/web.tsx')}'
 import { store, registry, uiState } from '/@fs/${resolve('web/src/sdk/client.ts')}'
 import { Composer } from '/@fs/${resolve('web/src/app/composer.tsx')}'
 import { ExtensionNameContext } from '/@fs/${resolve('web/src/sdk/hooks.ts')}'
@@ -34,7 +34,7 @@ import '/@fs/${resolve('web/src/index.css')}'
 let source, workspaces
 window.EventSource = class extends EventTarget {
   readyState = 1
-  constructor(url) { super(); if (url.includes('ultimate.workspaces')) workspaces = this; else source = this }
+  constructor(url) { super(); if (url.includes('ultimate.workspaces')) workspaces = this; else if (!url.includes('ultimate.plan.tasks')) source = this }
   close() {}
 }
 store.start()
@@ -64,7 +64,7 @@ window.fixture = {
   },
   rows: () => flushSync(() => root.render(createElement('div', {},
     createElement(ExtensionNameContext.Provider, { value: 'subagents' }, createElement(extension.panels[0].component)),
-    createElement(plan.documents[0].component, { conversationId: 1, value: { next: 2, epics: {
+    createElement(PlanBody, { coordinator: 1, plan: { next: 2, epics: {
       E1: { key: 'E1', title: 'Example epic', body: '', status: 'in_progress', tasks: {
         T1: { key: 'T1', title: 'Linked task', role: 'worker', description: '', deps: [], status: 'in_progress', child: 2, notes: [] },
       } },

@@ -1,12 +1,17 @@
+import { applyImmutable } from '@earendil-works/chord/delta'
+import type { Op } from '@earendil-works/chord/delta'
 import {
+  CheckIcon,
   ChevronRightIcon,
   ClipboardListIcon,
   GitBranchIcon,
   GitMergeIcon,
+  LinkIcon,
   SquareArrowOutUpRightIcon,
+  XIcon,
 } from 'lucide-react'
-import type { ReactNode } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import type { ReactNode, SyntheticEvent } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import {
   Tool,
@@ -24,13 +29,16 @@ import {
   formatTime,
   useAction,
   useConversations,
+  useDoc,
   useToolDuration,
+  useUiState,
   useUltimate,
 } from '@/sdk'
-import type { ConversationSummary, DocumentProps, ToolCallView } from '@/sdk'
+import type { ConversationSummary, ToolCallView } from '@/sdk'
 import { stateLabel, useWorkspaceAction, useWorkspaces } from '../workspaces/data.tsx'
 import type { WorkspaceInfo } from '../workspaces/types.ts'
-import { StatusIcon, statusOf } from './chip.tsx'
+import { StatusIcon, TaskChip, statusOf, useOpenTask, useTaskOf } from './chip.tsx'
+import type { TaskLink } from './chip.tsx'
 
 /** The `ultimate.plan` document, as `server.ts` defines it. */
 type Task = {
@@ -184,7 +192,7 @@ function ChildLink({ id, child }: { id: number; child?: ConversationSummary }) {
   const { switchConversation } = useUltimate()
   return (
     <Button
-      className="ml-auto h-5 shrink-0 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
+      className="h-5 shrink-0 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
       onClick={() => switchConversation(id)}
       size="xs"
       title={child?.title ?? `Show conversation #${id}`}
@@ -199,22 +207,92 @@ function ChildLink({ id, child }: { id: number; child?: ConversationSummary }) {
   )
 }
 
+/** Scrolls the returned ref's element into view, after `reveal`, each time `focus` becomes a new request. */
+function useScrollTo<T extends HTMLElement>(focus: Focus, reveal?: () => void) {
+  const ref = useRef<T>(null)
+  const latest = useRef(reveal)
+  latest.current = reveal
+  useEffect(() => {
+    if (!focus) return
+    latest.current?.()
+    requestAnimationFrame(() => ref.current?.scrollIntoView({ block: 'nearest' }))
+  }, [focus])
+  return ref
+}
+
+/** Copies the link that opens this task in its coordinator's plan: `?conversation=N&task=E1.2`. */
+function CopyLink({
+  coordinator,
+  id,
+  className,
+}: {
+  coordinator: number
+  id: string
+  className?: string
+}) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <Button
+      aria-label={`Copy link to ${id}`}
+      className={cn(
+        'h-5 shrink-0 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground opacity-0 group-hover/row:opacity-100 hover:text-foreground focus-visible:opacity-100',
+        copied && 'opacity-100',
+        className,
+      )}
+      onClick={() => {
+        const url = new URL(location.origin)
+        url.searchParams.set('conversation', String(coordinator))
+        url.searchParams.set('task', id)
+        void navigator.clipboard.writeText(url.href).then(() => {
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1200)
+        })
+      }}
+      size="xs"
+      title={`Copy a link to ${id}`}
+      variant="ghost"
+    >
+      {copied ? <CheckIcon className="size-3" /> : <LinkIcon className="size-3" />}
+      {copied ? 'copied' : 'link'}
+    </Button>
+  )
+}
+
 /** One task: key, title, status, role, deps, the linked child and its isolate, and the last note; click for the rest. */
-function TaskRow({ task, tasks }: { task: Task; tasks: Map<string, Task> }) {
+function TaskRow({
+  task,
+  tasks,
+  coordinator,
+  focus,
+  own,
+}: {
+  task: Task
+  tasks: Map<string, Task>
+  coordinator: number
+  focus: Focus
+  own?: string
+}) {
   const [open, setOpen] = useState(false)
-  const { conversationId } = useUltimate()
+  const row = useScrollTo<HTMLDivElement>(focus?.key === task.key ? focus : undefined, () =>
+    setOpen(true),
+  )
   const conversations = useConversations()
   const child =
     task.child === undefined
       ? undefined
       : conversations.find((conversation) => conversation.id === task.child)
-  const parent = child?.parentConversationId ?? conversationId
+  const parent = child?.parentConversationId ?? coordinator
   const last = task.notes.at(-1)
   return (
     <Collapsible
-      className="border-t border-border/50 first:border-t-0"
+      className={cn(
+        'group/row border-t border-border/50 first:border-t-0',
+        own === task.key && 'bg-brand/5 shadow-[inset_2px_0_0_var(--color-brand)]',
+      )}
+      data-plan-task={task.key}
       onOpenChange={setOpen}
       open={open}
+      ref={row}
     >
       <CollapsibleTrigger className="group/task flex h-7 w-full min-w-0 items-center gap-1.5 px-3 text-left hover:bg-accent/40">
         <StatusIcon status={task.status} />
@@ -250,6 +328,11 @@ function TaskRow({ task, tasks }: { task: Task; tasks: Map<string, Task> }) {
               ))}
             </span>
           )}
+          <CopyLink
+            className={cn(task.child === undefined && 'ml-auto')}
+            coordinator={coordinator}
+            id={task.key}
+          />
           {task.child !== undefined && <ChildLink child={child} id={task.child} />}
         </div>
         {child && parent !== undefined && <IsolateRow child={child} parent={parent} />}
@@ -301,12 +384,29 @@ function TaskRow({ task, tasks }: { task: Task; tasks: Map<string, Task> }) {
 }
 
 /** One epic: status and title, its plan folded below, the verdict when there is one, then its tasks. */
-function EpicCard({ epic, tasks }: { epic: Epic; tasks: Map<string, Task> }) {
+function EpicCard({
+  epic,
+  tasks,
+  coordinator,
+  focus,
+  own,
+}: {
+  epic: Epic
+  tasks: Map<string, Task>
+  coordinator: number
+  focus: Focus
+  own?: string
+}) {
   const list = Object.values(epic.tasks)
   const done = list.filter((task) => task.status === 'done').length
   const approved = epic.verdict?.trimStart().startsWith('APPROVED')
+  const section = useScrollTo<HTMLElement>(focus?.key === epic.key ? focus : undefined)
   return (
-    <section className="border-t border-border/70 first:border-t-0">
+    <section
+      className="border-t border-border/70 first:border-t-0"
+      data-plan-epic={epic.key}
+      ref={section}
+    >
       <Collapsible className="group/epic">
         <CollapsibleTrigger className="flex w-full min-w-0 items-center gap-1.5 px-3 py-2 text-left hover:bg-accent/40">
           <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/70 transition-transform group-data-[state=open]/epic:rotate-90" />
@@ -347,7 +447,14 @@ function EpicCard({ epic, tasks }: { epic: Epic; tasks: Map<string, Task> }) {
         </span>
       </div>
       {list.map((task) => (
-        <TaskRow key={task.key} task={task} tasks={tasks} />
+        <TaskRow
+          coordinator={coordinator}
+          focus={focus}
+          key={task.key}
+          own={own}
+          task={task}
+          tasks={tasks}
+        />
       ))}
       {list.length === 0 && (
         <p className="px-3 pb-2 font-sans text-[12px] text-muted-foreground/70">No tasks yet.</p>
@@ -356,44 +463,336 @@ function EpicCard({ epic, tasks }: { epic: Epic; tasks: Map<string, Task> }) {
   )
 }
 
-/**
- * The `ultimate.plan` document in the Documents tab: open epics first, each with its plan, verdict, and tasks, live.
- */
-function PlanDocument({ value, conversationId }: DocumentProps) {
-  const plan = value as unknown as Plan
-  const { switchConversation } = useUltimate()
-  const conversations = useConversations()
-  const epics = Object.values(plan.epics ?? {})
-  const ordered = [
-    ...epics.filter((epic) => epic.status !== 'done'),
-    ...epics.filter((epic) => epic.status === 'done'),
-  ]
+/** The task or epic a deep link asked for: its row opens and scrolls into view. */
+type Focus = { key: string } | undefined
+
+/** Open epics first, newest first; done epics fold into one row at the end. */
+export function PlanBody({
+  plan,
+  coordinator,
+  focus,
+  own,
+}: {
+  plan: Plan
+  coordinator: number
+  focus: Focus
+  own?: string
+}) {
+  const epics = Object.values(plan.epics).toSorted((a, b) => number(b.key) - number(a.key))
+  const open = epics.filter((epic) => epic.status !== 'done')
+  const done = epics.filter((epic) => epic.status === 'done')
   const tasks = new Map(epics.flatMap((epic) => Object.values(epic.tasks)).map((t) => [t.key, t]))
-  const parent = conversations.find(
-    (conversation) => conversation.id === conversationId,
-  )?.parentConversationId
+  const card = (epic: Epic) => (
+    <EpicCard
+      coordinator={coordinator}
+      epic={epic}
+      focus={focus}
+      key={epic.key}
+      own={own}
+      tasks={tasks}
+    />
+  )
   if (epics.length === 0)
-    return (
-      <p className="px-3 font-sans text-[12px] leading-relaxed text-muted-foreground/70">
-        No epics yet: the agent plans work here with the <code className="font-mono">plan</code>{' '}
-        tool.
-        {parent !== undefined && (
-          <>
-            {' '}
-            This is a subagent; plans live with its{' '}
-            <button
-              className="font-mono text-brand hover:underline"
-              onClick={() => switchConversation(parent)}
-              type="button"
-            >
-              parent #{parent}
-            </button>
-            .
-          </>
+    return <p className="px-3 py-2 font-sans text-[12px] text-muted-foreground/70">No epics yet.</p>
+  return (
+    <>
+      {open.map(card)}
+      {done.length > 0 && (
+        <Collapsible
+          className="group/done border-t border-border/70 first:border-t-0"
+          defaultOpen={
+            open.length === 0 || done.some((epic) => focus && focus.key.split('.')[0] === epic.key)
+          }
+        >
+          <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-3 py-2 text-left font-mono text-[11px] text-muted-foreground hover:bg-accent/40">
+            <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/70 transition-transform group-data-[state=open]/done:rotate-90" />
+            {done.length} done epic{done.length === 1 ? '' : 's'}
+          </CollapsibleTrigger>
+          <CollapsibleContent>{done.map(card)}</CollapsibleContent>
+        </Collapsible>
+      )}
+    </>
+  )
+}
+
+const number = (key: string) => Number(key.slice(1).split('.')[0]) || 0
+
+/** A conversation's live `ultimate.plan`, on a stream of its own: a worker's view of its coordinator's plan. */
+function usePlanOf(conversation: number | undefined) {
+  const [plan, setPlan] = useState<Plan | null>()
+  useEffect(() => {
+    if (conversation === undefined) return undefined
+    const stream = new EventSource(`/api/events?conversation=${conversation}&docs=ultimate.plan`)
+    stream.addEventListener('doc', (event) => {
+      const data = JSON.parse(event.data) as { kind: string; value: Plan | null }
+      if (data.kind === 'ultimate.plan') setPlan(data.value)
+    })
+    stream.addEventListener('docOps', (event) => {
+      const data = JSON.parse(event.data) as { kind: string; ops: Op[] }
+      if (data.kind === 'ultimate.plan')
+        setPlan((previous) => previous && applyImmutable(previous, data.ops))
+    })
+    return () => {
+      stream.close()
+      setPlan(undefined)
+    }
+  }, [conversation])
+  return plan
+}
+
+const pill =
+  'pointer-events-auto flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full border border-border/70 bg-card/90 px-2.5 font-mono text-[11px] text-muted-foreground shadow-sm backdrop-blur hover:text-foreground'
+
+/** The plan card above the pill: the plan with a header naming whose it is. */
+function Panel({
+  plan,
+  coordinator,
+  focus,
+  own,
+  close,
+}: {
+  plan: Plan | null | undefined
+  coordinator: number
+  focus: Focus
+  own?: string
+  close: () => void
+}) {
+  return (
+    <div
+      className="pointer-events-auto flex max-h-[60vh] w-[420px] max-w-full flex-col overflow-hidden rounded-lg border border-border/80 bg-popover shadow-lg"
+      data-plan-panel
+    >
+      <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border/70 px-3 font-mono text-[11px] text-muted-foreground">
+        <ClipboardListIcon className="size-3.5" />
+        Plan
+        <span className="text-muted-foreground/70">· #{coordinator}</span>
+        <button
+          aria-label="Close the plan"
+          className="ml-auto text-muted-foreground/70 hover:text-foreground"
+          onClick={close}
+          type="button"
+        >
+          <XIcon className="size-3.5" />
+        </button>
+      </div>
+      <div className="min-h-0 overflow-y-auto pb-1">
+        {plan ? (
+          <PlanBody coordinator={coordinator} focus={focus} own={own} plan={plan} />
+        ) : (
+          <p className="px-3 py-2 font-sans text-[12px] text-muted-foreground/70">Loading…</p>
         )}
-      </p>
+      </div>
+    </div>
+  )
+}
+
+/** Where the pill floats: the right edge of the conversation's prompt, just above it. */
+function useAnchor(conversationId: number | undefined) {
+  const [anchor, setAnchor] = useState<{ right: number; bottom: number }>()
+  useEffect(() => {
+    let form: HTMLFormElement | null | undefined
+    let retry: ReturnType<typeof setTimeout> | undefined
+    const measure = () => {
+      if (!form?.isConnected) return
+      const rect = form.getBoundingClientRect()
+      setAnchor({ right: innerWidth - rect.right, bottom: innerHeight - rect.top + 6 })
+    }
+    // The column resizes when a side region toggles, which moves the prompt without resizing it.
+    const observer = new ResizeObserver(measure)
+    const attach = () => {
+      const container = document.querySelector('[data-composer-target="conversation"]')
+      form = container?.querySelector('form')
+      if (!container?.parentElement || !form) {
+        setAnchor(undefined)
+        retry = setTimeout(attach, 250)
+        return
+      }
+      observer.observe(container.parentElement)
+      observer.observe(form)
+      measure()
+    }
+    attach()
+    addEventListener('resize', measure)
+    return () => {
+      clearTimeout(retry)
+      observer.disconnect()
+      removeEventListener('resize', measure)
+    }
+  }, [conversationId])
+  return anchor
+}
+
+type Open = { conversation: number; key: string } | null
+
+/**
+ * The plan beside the conversation: a pill above the prompt (the open epic's progress, or a worker's task and its
+ * coordinator) that expands into the plan. `plan.open` (set by task chips and `?task=` links) opens it at a task.
+ */
+function PlanOverlay() {
+  const { surface, conversationId } = useUltimate()
+  const task = useTaskOf(conversationId)
+  const anchor = useAnchor(conversationId)
+  const [request, setRequest] = useUiState<Open>('plan.open', null)
+  useEffect(() => {
+    const url = new URL(location.href)
+    const key = url.searchParams.get('task')
+    const conversation = Number(url.searchParams.get('conversation'))
+    if (!key) return
+    url.searchParams.delete('task')
+    history.replaceState(history.state, '', url)
+    if (Number.isSafeInteger(conversation) && conversation > 0) setRequest({ conversation, key })
+  }, [setRequest])
+  if (surface !== 'agent' || conversationId === undefined || !anchor) return null
+  return (
+    <div
+      className="pointer-events-none fixed z-30 flex max-w-[calc(100vw-1.5rem)] flex-col items-end gap-1.5"
+      style={anchor}
+    >
+      {task ? (
+        <WorkerPlan conversation={conversationId} task={task} />
+      ) : (
+        <CoordinatorPlan
+          conversation={conversationId}
+          request={request?.conversation === conversationId ? request : null}
+          settle={() => setRequest(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function CoordinatorPlan({
+  conversation,
+  request,
+  settle,
+}: {
+  conversation: number
+  request: Open
+  settle: () => void
+}) {
+  const plan = useDoc<Plan>('ultimate.plan')
+  const [expanded, setExpanded] = useUiState('plan.panel', false)
+  const [focus, setFocus] = useState<Focus>()
+  useEffect(() => {
+    if (!request || plan === undefined) return
+    setExpanded(true)
+    setFocus({ key: request.key })
+    settle()
+  }, [request, plan, setExpanded, settle])
+  const epics = Object.values(plan?.epics ?? {}).toSorted((a, b) => number(b.key) - number(a.key))
+  if (epics.length === 0) return null
+  const open = epics.filter((epic) => epic.status !== 'done')
+  const shown = open[0] ?? epics[0]
+  const list = Object.values(shown.tasks)
+  return (
+    <>
+      {expanded && (
+        <Panel
+          close={() => {
+            setExpanded(false)
+            setFocus(undefined)
+          }}
+          coordinator={conversation}
+          focus={focus}
+          plan={plan}
+        />
+      )}
+      <button
+        aria-expanded={expanded}
+        className={pill}
+        data-plan-pill
+        onClick={() => setExpanded(!expanded)}
+        title={`${shown.key} · ${shown.title}`}
+        type="button"
+      >
+        <ClipboardListIcon className="size-3.5 shrink-0" />
+        <span className="text-foreground/80">{shown.key}</span>
+        <span>
+          · {list.filter((task) => task.status === 'done').length}/{list.length} done
+        </span>
+        {open.length > 1 && <span className="text-muted-foreground/70">+{open.length - 1}</span>}
+      </button>
+    </>
+  )
+}
+
+function WorkerPlan({ conversation, task }: { conversation: number; task: TaskLink }) {
+  const [expanded, setExpanded] = useUiState('plan.panel', false)
+  const plan = usePlanOf(expanded ? task.coordinator : undefined)
+  const openTask = useOpenTask()
+  const focus = useMemo(() => ({ key: task.key }), [task.key])
+  return (
+    <>
+      {expanded && (
+        <Panel
+          close={() => setExpanded(false)}
+          coordinator={task.coordinator}
+          focus={focus}
+          key={conversation}
+          own={task.key}
+          plan={plan}
+        />
+      )}
+      <div className={cn(pill, 'pr-1')} data-plan-pill>
+        <TaskChip task={task} />
+        <button
+          aria-expanded={expanded}
+          className="max-w-56 min-w-0 truncate hover:text-foreground"
+          onClick={() => setExpanded(!expanded)}
+          title={task.title}
+          type="button"
+        >
+          {task.title}
+        </button>
+        <button
+          className="shrink-0 rounded-full px-1.5 hover:bg-accent hover:text-foreground"
+          onClick={() => openTask(task)}
+          title={`Show coordinator #${task.coordinator} at ${task.key}`}
+          type="button"
+        >
+          ↑ #{task.coordinator}
+        </button>
+      </div>
+    </>
+  )
+}
+
+/** A key in a `plan` call's header: the task's chip, or the epic key, opening the plan panel there. */
+function PlanKey({ id }: { id: string }) {
+  const { conversationId } = useUltimate()
+  const plan = useDoc<Plan>('ultimate.plan')
+  const coordinator = useTaskOf(conversationId)?.coordinator ?? conversationId
+  const openTask = useOpenTask()
+  if (coordinator === undefined || !/^E\d+(\.\d+)?$/.test(id))
+    return <span className="text-foreground/80">{id}</span>
+  const epic = plan?.epics[id.split('.')[0]]
+  const task = epic?.tasks[id]
+  if (task && epic && coordinator === conversationId)
+    return (
+      <TaskChip
+        className="align-middle"
+        task={{ coordinator, epic: epic.key, key: id, title: task.title, status: task.status }}
+      />
     )
-  return ordered.map((epic) => <EpicCard epic={epic} key={epic.key} tasks={tasks} />)
+  const open = (event: SyntheticEvent) => {
+    event.stopPropagation()
+    event.preventDefault()
+    openTask({ coordinator, key: id })
+  }
+  return (
+    <span
+      className="cursor-pointer text-foreground/80 underline-offset-2 hover:underline"
+      onClick={open}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') open(event)
+      }}
+      role="button"
+      tabIndex={0}
+      title={`Open ${id} in the plan`}
+    >
+      {id}
+    </span>
+  )
 }
 
 /** One `plan` call: the action and the key it touched, with what it wrote below. */
@@ -444,7 +843,7 @@ function PlanCall({ call }: { call: ToolCallView }) {
         state={call.status}
         title={
           <>
-            {action || '…'} {key && <span className="text-foreground/80">{key}</span>} {detail}
+            {action || '…'} {key && <PlanKey id={key} />} {detail}
           </>
         }
       />
@@ -473,7 +872,5 @@ function PlanCall({ call }: { call: ToolCallView }) {
 
 export default defineWebExtension({
   tools: { plan: PlanCall },
-  documents: [
-    { kind: 'ultimate.plan', title: 'Plan', icon: ClipboardListIcon, component: PlanDocument },
-  ],
+  slots: { overlay: PlanOverlay },
 })
