@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, realpath, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
+import { promisify, stripVTControlCharacters } from 'node:util'
 import { copyJson } from '@earendil-works/chord'
 import type { Context } from '@earendil-works/chord'
 import { withAbortSignal } from '@earendil-works/chord/context'
@@ -128,7 +128,8 @@ export async function landerAgent(
     }),
   }
 }
-type Settings = { checks: string[]; push?: string }
+/** Checks run in order; an array is a group whose commands run concurrently. */
+type Settings = { checks: (string | string[])[]; push?: string }
 /** Bounded retries when the target moves while a submission is integrated. */
 const attempts = 3
 /** Seconds one check may run. */
@@ -139,8 +140,17 @@ export const landerSettings = async (host: Pick<Host, 'projectSettings'>): Promi
     | { checks?: unknown; push?: unknown }
     | undefined
   const checks = lander?.checks ?? []
-  if (!Array.isArray(checks) || !checks.every((check) => typeof check === 'string'))
-    throw new Error('lander.checks must be an array of command strings')
+  if (
+    !Array.isArray(checks) ||
+    !checks.every(
+      (check) =>
+        typeof check === 'string' ||
+        (Array.isArray(check) &&
+          check.length > 0 &&
+          check.every((command) => typeof command === 'string')),
+    )
+  )
+    throw new Error('lander.checks must be an array of commands or command groups')
   if (lander?.push !== undefined && typeof lander.push !== 'string')
     throw new Error('lander.push must be a remote name')
   return { checks, ...(lander?.push ? { push: lander.push } : {}) }
@@ -217,29 +227,28 @@ export function createLander(
     await git(path, 'clean', '-fdq')
     return path
   }
-  /** Run one check; returns its output tail on failure. Abort and timeout kill its whole process group. */
+  /**
+   * Run one check, while its group holds the exclusive slot: its output tail on failure, else its last output line as
+   * a summary. Abort and timeout kill its whole process group.
+   */
   async function check(path: string, command: string, context: Context) {
-    await slot.acquire(`lander: ${command}`, context.abortSignal)
-    try {
-      let output = ''
-      const result = await new NodeExecutionEnv({ cwd: path }).exec(
-        command,
-        {
-          timeout: checkTimeout,
-          onOutput: (text) => {
-            output = (output + text).slice(-3000)
-          },
+    let output = ''
+    const result = await new NodeExecutionEnv({ cwd: path }).exec(
+      command,
+      {
+        timeout: checkTimeout,
+        onOutput: (text) => {
+          output = (output + text).slice(-3000)
         },
-        context,
-      )
-      context.abortSignal?.throwIfAborted()
-      if (!result.ok) return `${output}\n${result.error.message}`.trim()
-      return result.value.exitCode === 0
-        ? undefined
-        : `${output}\nexit ${result.value.exitCode}`.trim()
-    } finally {
-      slot.release()
-    }
+      },
+      context,
+    )
+    context.abortSignal?.throwIfAborted()
+    if (!result.ok) return { failure: `${output}\n${result.error.message}`.trim() }
+    if (result.value.exitCode !== 0)
+      return { failure: `${output}\nexit ${result.value.exitCode}`.trim() }
+    const last = lines(stripVTControlCharacters(output)).findLast((line) => line.trim())
+    return { summary: last?.trim().slice(0, 200) }
   }
 
   const Lander = defineTask<{ source: string }, State, null>({
@@ -635,33 +644,67 @@ export function createLander(
             await step('setting up')
             await setup(source, path, await host.projectSettings(), signal)
             const flaky: string[] = []
-            for (const [position, command] of settings.checks.entries()) {
-              // Outcomes are durable (memos are first-writer-wins, so the rerun has its own key): a resume
-              // neither reruns a passed check nor grants another rerun, and keeps the flaky note.
-              const key = `check:${id}:${attempt}:${position}`
-              let first = await runtime.memo<'passed' | 'failed'>(key, context)
-              if (!first) {
-                await step(`checking: ${command}`)
-                const failed = (await check(path, command, checkContext)) !== undefined
-                // Logged before the memo: a crash in between reruns the check and logs it again, as it ran.
-                await step(`checked: ${command}`, { command, result: failed ? 'failed' : 'passed' })
-                first = await runtime.memo(key, failed ? 'failed' : 'passed', context)
+            for (const [position, group] of settings.checks.entries()) {
+              const commands = typeof group === 'string' ? [group] : group
+              // The group takes the exclusive slot once, when its first command needs it: its commands run together,
+              // never next to an agent's heavy command.
+              let held: Promise<void> | undefined
+              const run = async (command: string) => {
+                held ??= slot.acquire(`lander: ${commands.join(', ')}`, checkContext.abortSignal)
+                await held
+                return check(path, command, checkContext)
               }
-              if (first === 'passed') continue
-              if (!(await runtime.memo<'passed'>(`${key}:rerun`, context))) {
-                await step(`rerunning: ${command}`)
-                const output = await check(path, command, checkContext)
-                if (output !== undefined)
-                  return handOver(
-                    `check failed twice: ${command}`,
-                    output,
-                    'Fix it, verify and submit again.',
-                    { base, merging: entry.tip },
-                  )
-                await step(`checked: ${command}`, { command, result: 'flaky' })
-                await runtime.memo(`${key}:rerun`, 'passed', context)
+              /** One command: its first run, then one rerun when that failed; its output tail if it failed twice. */
+              const settle = async (command: string, member: number) => {
+                // Outcomes are durable (memos are first-writer-wins, so the rerun has its own key): a resume
+                // neither reruns a passed check nor grants another rerun, and keeps the flaky note.
+                const key = `check:${id}:${attempt}:${typeof group === 'string' ? position : `${position}.${member}`}`
+                let first = await runtime.memo<'passed' | 'failed'>(key, context)
+                if (!first) {
+                  await step(`checking: ${command}`)
+                  const ran = await run(command)
+                  const result = ran.failure === undefined ? 'passed' : 'failed'
+                  // Logged before the memo: a crash in between reruns the check and logs it again, as it ran.
+                  await step(`checked: ${command}`, {
+                    command,
+                    result,
+                    ...(ran.summary ? { summary: ran.summary } : {}),
+                  })
+                  first = await runtime.memo(key, result, context)
+                }
+                if (first === 'passed') return {}
+                if (!(await runtime.memo<'passed'>(`${key}:rerun`, context))) {
+                  await step(`rerunning: ${command}`)
+                  const ran = await run(command)
+                  if (ran.failure !== undefined) return { failure: ran.failure }
+                  await step(`checked: ${command}`, {
+                    command,
+                    result: 'flaky',
+                    ...(ran.summary ? { summary: ran.summary } : {}),
+                  })
+                  await runtime.memo(`${key}:rerun`, 'passed', context)
+                }
+                return { flaky: true }
               }
-              flaky.push(command)
+              // Every command settles before a failure hands over, so none still runs in the checkout.
+              const settled = await Promise.allSettled(commands.map(settle))
+              await held?.then(
+                () => slot.release(),
+                () => undefined,
+              )
+              const results = settled.map((outcome) => {
+                if (outcome.status === 'rejected') throw outcome.reason
+                return outcome.value
+              })
+              const failed = results.findIndex((result) => result.failure !== undefined)
+              if (failed !== -1)
+                return handOver(
+                  `check failed twice: ${commands[failed]}`,
+                  results[failed].failure!,
+                  'Fix it, verify and submit again.',
+                  { base, merging: entry.tip },
+                )
+              flaky.push(...commands.filter((_command, member) => results[member].flaky))
             }
             // Only the commit every check ran on lands: nothing may have moved or touched the checkout meanwhile.
             if (
