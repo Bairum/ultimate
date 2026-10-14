@@ -1,12 +1,5 @@
 import {
   ChevronRightIcon,
-  CircleAlertIcon,
-  CircleCheckIcon,
-  CircleDashedIcon,
-  CircleDotIcon,
-  CircleEllipsisIcon,
-  CircleIcon,
-  CircleSlashIcon,
   ClipboardListIcon,
   GitBranchIcon,
   GitMergeIcon,
@@ -37,6 +30,7 @@ import {
 import type { ConversationSummary, DocumentProps, ToolCallView } from '@/sdk'
 import { stateLabel, useWorkspaceAction, useWorkspaces } from '../workspaces/data.tsx'
 import type { WorkspaceInfo } from '../workspaces/types.ts'
+import { StatusIcon, statusOf } from './chip.tsx'
 
 /** The `ultimate.plan` document, as `server.ts` defines it. */
 type Task = {
@@ -62,18 +56,6 @@ type Plan = { next: number; epics: Record<string, Epic> }
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 
-const statuses: Record<string, { icon: typeof CircleIcon; tone: string }> = {
-  backlog: { icon: CircleDashedIcon, tone: 'text-muted-foreground/70' },
-  planning: { icon: CircleDashedIcon, tone: 'text-muted-foreground' },
-  todo: { icon: CircleIcon, tone: 'text-muted-foreground' },
-  in_progress: { icon: CircleDotIcon, tone: 'border-brand/40 text-brand' },
-  in_review: { icon: CircleEllipsisIcon, tone: 'border-warning/40 text-warning' },
-  done: { icon: CircleCheckIcon, tone: 'border-success/40 text-success' },
-  blocked: { icon: CircleAlertIcon, tone: 'border-error/40 text-error' },
-  canceled: { icon: CircleSlashIcon, tone: 'text-muted-foreground/60 line-through' },
-}
-const statusOf = (status: string) => statuses[status] ?? statuses.todo
-
 function Tag({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <span
@@ -89,11 +71,6 @@ function Tag({ children, className }: { children: ReactNode; className?: string 
 
 function StatusChip({ status }: { status: string }) {
   return <Tag className={statusOf(status).tone}>{status.replace('_', ' ')}</Tag>
-}
-
-function StatusIcon({ status }: { status: string }) {
-  const { icon: Icon, tone } = statusOf(status)
-  return <Icon aria-label={status} className={cn('size-3.5 shrink-0', tone)} />
 }
 
 const time = (at: string) => formatTime(at)
