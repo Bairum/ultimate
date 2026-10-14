@@ -342,14 +342,6 @@ it('indexes linked children with their task, renames them after it, and backfill
     expect(Object.keys((await index())!)).toEqual([String(second)])
     expect(await title(second)).toBe('Build it well')
 
-    // A branch forked from the coordinator starts without its plan.
-    const branch = await opened.harness.commit(async (tx) => {
-      const at = (await tx.scanEntries({ conversationId: opened.root.id }, 1)).items[0].id
-      return (await tx.forkConversation(opened.root.id, at, { ownership: { kind: 'ownerless' } }))
-        .id
-    }, context)
-    expect((await opened.harness.snapshot(Plan, branch, context))?.epics ?? {}).toEqual({})
-
     // A plan written before the index existed appears once the harness opens.
     await opened.harness.commit(async (tx) => {
       ;(await tx.doc(TaskIndex, opened.root.id)).children = {}

@@ -8,6 +8,7 @@ import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import { Branch, leaveNote } from '../extensions/lineage/server.ts'
 import { Seen } from '../extensions/lineage/catchup.ts'
+import { Plan } from '../extensions/plan/server.ts'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import type { HistoryResponse } from '../shared/protocol.ts'
@@ -72,6 +73,15 @@ it('branches with a brief, marks the source, and keeps inherited history reachab
       context,
     )
   ).wait(context)
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(Plan, server.root.id)).epics.E1 = {
+      key: 'E1',
+      title: 'Root work',
+      body: 'Body',
+      status: 'in_progress',
+      tasks: {},
+    }
+  }, context)
   const { messages: seen } = await server.root.context(context)
   const answer = (await server.root.entries({}, 1, undefined, context)).items[0].id
   const { status, data } = await post(server, '/api/extensions/lineage/actions/branch', {
@@ -84,6 +94,11 @@ it('branches with a brief, marks the source, and keeps inherited history reachab
     async () => (await server.harness.snapshot(Branch, id, context))?.branch?.status === 'ready',
   )
   await branch.waitForIdle(context)
+  // A branch starts with an empty plan; the root keeps its own.
+  expect((await server.harness.snapshot(Plan, id, context))?.epics).toEqual({})
+  expect(
+    Object.keys((await server.harness.snapshot(Plan, server.root.id, context))!.epics),
+  ).toEqual(['E1'])
 
   // The brief read the source context, tagged with entry ids.
   expect(briefs).toHaveLength(1)

@@ -32,6 +32,7 @@ import { git } from '../workspaces/git.ts'
 import { workspaces } from '../workspaces/workspaces.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 import { Summaries } from '../conversations/summary.ts'
+import { Plan } from '../plan/server.ts'
 
 /** Which conversation is the project's root; unset means the reserved root conversation. */
 export const Root = defineDoc<{ root?: number }>({
@@ -406,6 +407,8 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
     const title = prompt.replace(/\s+/g, ' ').slice(0, 80)
     ;(await tx.doc(host.metadata, fork.id)).title = title
     ;(await tx.doc(Summaries, fork.id)).generatedTitle = title
+    // A branch starts from scratch, not with the plan of the conversation it forked from.
+    Object.assign(await tx.doc(Plan, fork.id), Plan.definition.initial())
     await tx.appendEntry(from, {
       kind: 'lineage.branched',
       data: { branch: fork.id, at, intent: prompt },
