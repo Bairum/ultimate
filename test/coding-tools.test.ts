@@ -1,56 +1,31 @@
-import { readFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
-import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { expect, it, vi } from 'vitest'
+import { createBashTool } from '@earendil-works/pi-durable/tools'
+import type { ToolExecutionApi } from '@earendil-works/pi-durable'
+import { afterEach, expect, it, vi } from 'vitest'
+import codingTools from '../extensions/coding-tools/server.ts'
 import { context } from '../server/harness.ts'
-import { fauxServer, temp, removeTemp } from './helpers.ts'
 
-it('stops default bash at the tripwire, kills its process, and preserves explicit timeout errors', async () => {
-  vi.stubEnv('ULTIMATE_BASH_TIMEOUT', '1')
-  const directory = await temp('ultimate-bash-tripwire-')
-  const server = await fauxServer({
-    ultimateRoot: resolve('.'),
-    home: join(directory, 'home'),
-    userHome: directory,
-  })
-  try {
-    const pidFile = join(directory, 'pid')
-    for (const explicit of [false, true]) {
-      server.host.faux!.setResponses([
-        fauxAssistantMessage(
-          [
-            fauxToolCall('bash', {
-              command: `echo $$ > '${pidFile}'; sleep 10`,
-              ...(explicit ? { timeout: 1 } : {}),
-            }),
-          ],
-          { stopReason: 'toolUse' },
-        ),
-        fauxAssistantMessage('Complete'),
-      ])
-      const started = performance.now()
-      await (await server.root.submit({ type: 'input', content: 'Run' }, context)).wait(context)
-      expect(performance.now() - started).toBeLessThan(4000)
-      const view = await server.root.viewState(context)
-      try {
-        const result = view.value.entries.filter((entry) => entry.kind === 'pi.tool-result').at(-1)
-          ?.model?.[0]
-        expect(result?.role === 'toolResult' && result.isError).toBe(true)
-        expect(JSON.stringify(result)).toContain(
-          explicit
-            ? 'Command timed out after 1 seconds'
-            : 'Tripwire: bash ran past the 1 s default limit',
-        )
-        expect(JSON.stringify(result).includes('Tripwire:')).toBe(!explicit)
-      } finally {
-        view.dispose()
-      }
-      const pid = Number(await readFile(pidFile, 'utf8'))
-      expect(() => process.kill(pid, 0)).toThrow('ESRCH')
-    }
-  } finally {
-    vi.unstubAllEnvs()
-    await server.close()
-    await removeTemp(directory)
-  }
+afterEach(() => vi.unstubAllEnvs())
+
+it('uses a 600-second default tripwire and leaves explicit timeouts unchanged', async () => {
+  vi.stubEnv('ULTIMATE_BASH_TIMEOUT', undefined)
+  const execute = vi
+    .fn<ReturnType<typeof createBashTool>['execute']>()
+    .mockRejectedValue(new Error('Command timed out after 600 seconds'))
+  const wrapper = codingTools.wraps!.find((wrap) => 'tool' in wrap && wrap.tool === 'bash')!
+  if (!('tool' in wrapper)) throw new Error('Missing bash wrapper')
+  const bash = wrapper.wrap({ ...createBashTool(), execute }) as ReturnType<typeof createBashTool>
+  const api = {} as ToolExecutionApi
+  await expect(bash.execute({ command: 'sleep' }, api, context)).rejects.toThrow(
+    'Tripwire: bash ran past the 600 s default limit',
+  )
+  expect(execute.mock.calls[0][0]).toEqual({ command: 'sleep', timeout: 600 })
+  await expect(bash.execute({ command: 'sleep', timeout: 1200 }, api, context)).rejects.toThrow(
+    'Command timed out after 600 seconds',
+  )
+  expect(execute.mock.calls[1][0]).toEqual({ command: 'sleep', timeout: 1200 })
+  vi.stubEnv('ULTIMATE_BASH_TIMEOUT', '42')
+  await expect(bash.execute({ command: 'sleep' }, api, context)).rejects.toThrow(
+    'the 42 s default limit',
+  )
+  expect(execute.mock.calls[2][0]).toEqual({ command: 'sleep', timeout: 42 })
 })

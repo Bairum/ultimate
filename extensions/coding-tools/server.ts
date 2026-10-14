@@ -8,7 +8,7 @@ import {
 } from '@earendil-works/pi-durable/tools'
 
 function defaultBashTimeout() {
-  const seconds = Number(process.env.ULTIMATE_BASH_TIMEOUT ?? 3600)
+  const seconds = Number(process.env.ULTIMATE_BASH_TIMEOUT ?? 600)
   if (!Number.isFinite(seconds) || seconds <= 0)
     throw new Error('ULTIMATE_BASH_TIMEOUT must be a positive finite number of seconds')
   return seconds

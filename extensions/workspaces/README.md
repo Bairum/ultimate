@@ -56,7 +56,9 @@ submitter is that root. Failed submissions leave no root note; notes never wake 
 1. Resets its own detached checkout, `<home>/lander/<hash of source>`, to the target branch tip. `isolates.worktree.setup`
    runs once when the checkout is created. With `lander.push`, it fetches the remote branch and merges it when it is ahead.
 2. Merges the submitted tip. A conflict aborts the merge and reports the conflicting paths.
-3. Runs `lander.checks` in order. An entry is a command or an array of commands, a group that runs concurrently;
+3. Runs `lander.checks` in order. Each check is stopped after 5 minutes without output or 15 minutes total,
+   killing its whole process group. Watchdog failures include which limit fired and the output tail, and enter
+   the same rerun/fix flow as other check failures. An entry is a command or an array of commands, a group that runs concurrently;
    each entry holds the `exclusive-commands` slot once, so it never overlaps an agent's heavy command. A failing check
    reruns once: passing then is reported as flaky, failing again reports the output tail once every command of its
    group settled. Each command keeps its own memo, steps and flaky note. A passed or flaky check records its last

@@ -133,8 +133,59 @@ export async function landerAgent(
 type Settings = { checks: (string | string[])[]; push?: string }
 /** Bounded retries when the target moves while a submission is integrated. */
 const attempts = 3
-/** Seconds one check may run. */
-const checkTimeout = 30 * 60
+/** Seconds without output and total seconds allowed for one check. */
+type CheckLimits = { stall: number; total: number }
+const checkLimits: CheckLimits = { stall: 5 * 60, total: 15 * 60 }
+
+/** Watchdog aborts use the execution environment's process-group kill, just like task cancellation. */
+export async function runLanderCheck(
+  path: string,
+  command: string,
+  context: Context,
+  limits: CheckLimits = checkLimits,
+) {
+  let output = ''
+  let stopped: string | undefined
+  const watchdog = new AbortController()
+  const signal = AbortSignal.any([
+    watchdog.signal,
+    ...(context.abortSignal ? [context.abortSignal] : []),
+  ])
+  const stop = (reason: string) => {
+    if (signal.aborted) return
+    stopped = reason
+    watchdog.abort()
+  }
+  const stalled = () => stop(`Stalled: no output for ${limits.stall / 60} min, stopped`)
+  let stallTimer = setTimeout(stalled, limits.stall * 1000)
+  const totalTimer = setTimeout(
+    () => stop(`Timed out after ${limits.total / 60} min`),
+    limits.total * 1000,
+  )
+  try {
+    const result = await new NodeExecutionEnv({ cwd: path }).exec(
+      command,
+      {
+        onOutput: (text) => {
+          output = (output + text).slice(-3000)
+          clearTimeout(stallTimer)
+          stallTimer = setTimeout(stalled, limits.stall * 1000)
+        },
+      },
+      withAbortSignal(signal, context),
+    )
+    context.abortSignal?.throwIfAborted()
+    if (stopped) return { failure: `${stopped}\n${output}`.trim() }
+    if (!result.ok) return { failure: `${output}\n${result.error.message}`.trim() }
+    if (result.value.exitCode !== 0)
+      return { failure: `${output}\nexit ${result.value.exitCode}`.trim() }
+    const last = lines(stripVTControlCharacters(output)).findLast((line) => line.trim())
+    return { summary: last?.trim().slice(0, 200) }
+  } finally {
+    clearTimeout(stallTimer)
+    clearTimeout(totalTimer)
+  }
+}
 
 export const landerSettings = async (host: Pick<Host, 'projectSettings'>): Promise<Settings> => {
   const lander = (await host.projectSettings()).lander as
@@ -224,6 +275,7 @@ export function createLander(
   Workspaces: ConversationDocToken<WorkspaceIndex>,
   /** Serializes source checkout writes with synchronous landing. */
   serial: <T>(source: string, operation: () => Promise<T>) => Promise<T>,
+  limits: CheckLimits = checkLimits,
 ) {
   const slot = exclusiveSlot(host)
   async function checkout(source: string, tip: string) {
@@ -233,29 +285,6 @@ export function createLander(
     await git(path, 'checkout', '-q', '--detach', '--force', tip)
     await git(path, 'clean', '-fdq')
     return path
-  }
-  /**
-   * Run one check, while its group holds the exclusive slot: its output tail on failure, else its last output line as
-   * a summary. Abort and timeout kill its whole process group.
-   */
-  async function check(path: string, command: string, context: Context) {
-    let output = ''
-    const result = await new NodeExecutionEnv({ cwd: path }).exec(
-      command,
-      {
-        timeout: checkTimeout,
-        onOutput: (text) => {
-          output = (output + text).slice(-3000)
-        },
-      },
-      context,
-    )
-    context.abortSignal?.throwIfAborted()
-    if (!result.ok) return { failure: `${output}\n${result.error.message}`.trim() }
-    if (result.value.exitCode !== 0)
-      return { failure: `${output}\nexit ${result.value.exitCode}`.trim() }
-    const last = lines(stripVTControlCharacters(output)).findLast((line) => line.trim())
-    return { summary: last?.trim().slice(0, 200) }
   }
 
   const Lander = defineTask<{ source: string }, State, null>({
@@ -660,7 +689,7 @@ export function createLander(
               const run = async (command: string) => {
                 held ??= slot.acquire(`lander: ${commands.join(', ')}`, checkContext.abortSignal)
                 await held
-                return check(path, command, checkContext)
+                return runLanderCheck(path, command, checkContext, limits)
               }
               /** One command: its first run, then one rerun when that failed; its output tail if it failed twice. */
               const settle = async (command: string, member: number) => {

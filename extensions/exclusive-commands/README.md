@@ -14,7 +14,7 @@ streams one line naming the command holding the slot. Aborting a waiter removes 
 slot; the holder releases in `finally`, including on error or cancellation.
 
 A matching call's effective `args.timeout` covers waiting plus execution. The default-timeout wrapper
-(default server order 0) runs outside this wrapper (`order = -10`) and supplies the default budget (3600 seconds, overridden
+(default server order 0) runs outside this wrapper (`order = -10`) and supplies the default budget (600 seconds, overridden
 by `ULTIMATE_BASH_TIMEOUT`). This extension reads only args and its own settings: it neither injects a timeout nor
 formats tripwire errors. If no wrapper or caller supplies a timeout, waiting and execution have no time limit.
 A deadline while waiting fails with an error naming the current holder and the limit; the waiting command never
