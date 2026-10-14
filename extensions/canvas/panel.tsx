@@ -163,11 +163,13 @@ function StateLabel({ status, className }: { status: Status; className?: string 
   )
 }
 
-/** A reason in a few words; another conversation's question names it. */
+/** Self reasons share the panel's ID; other conversations keep their reference. */
 const reasonLabel = (reason: CanvasReason, id: number) =>
-  reason.kind === 'needs_input' && reason.conversationId !== id
-    ? `#${reason.conversationId} ${reason.detail}`
-    : reason.detail
+  reason.kind === 'unlanded' && reason.conversationId === id
+    ? reason.detail.slice(`#${id}: `.length)
+    : reason.kind === 'needs_input' && reason.conversationId !== id
+      ? `#${reason.conversationId} ${reason.detail}`
+      : reason.detail
 
 /** Why it waits for a decision, in the warm colour of needs-input. */
 function Reasons({ agent, className }: { agent: Agent; className?: string }) {
@@ -186,10 +188,13 @@ function Reasons({ agent, className }: { agent: Agent; className?: string }) {
   ))
 }
 
-/** `W<id>`: the agent works in its own checkout; a click opens the Workspaces panel on it. */
+/** The agent ID opens its checkout details when isolated. */
 function WorkspaceBadge({ agent }: { agent: Agent }) {
   const { actions } = useCanvas()
-  if (!agent.workspace) return null
+  if (!agent.workspace)
+    return (
+      <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70">#{agent.id}</span>
+    )
   return (
     <button
       className="nodrag shrink-0 cursor-pointer rounded-sm px-1 font-mono text-[10.5px] text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -200,7 +205,7 @@ function WorkspaceBadge({ agent }: { agent: Agent }) {
       title={`Isolated checkout (${agent.workspace.state}${agent.workspace.landed ? ', landed' : ''}): workspace details`}
       type="button"
     >
-      W{agent.id}
+      #{agent.id}
     </button>
   )
 }
@@ -259,7 +264,7 @@ function Title({
         <span className="shrink-0 font-mono text-[0.85em] text-brand">{summary.label}</span>
       )}
       <span className="truncate font-medium" title={nameOf(summary)}>
-        {nameOf(summary)}
+        {summary.title ?? (agent.id === 1 ? 'main' : 'Untitled conversation')}
       </span>
     </span>
   )
@@ -500,7 +505,6 @@ function Header({ agent, renaming }: { agent: Agent; renaming: boolean }) {
       <Mark status={agent.status} />
       <Title agent={agent} className="flex-1" renaming={renaming} />
       <WorkspaceBadge agent={agent} />
-      <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70">#{agent.id}</span>
       <Menu agent={agent} />
     </div>
   )
@@ -686,7 +690,7 @@ function Far({ agent, feed }: { agent: Agent; feed?: CanvasAgent }) {
             conclusion?.stale && 'opacity-60',
           )}
         >
-          {conclusion?.headline ?? nameOf(agent.summary)}
+          {conclusion?.headline ?? agent.summary.title ?? 'Untitled conversation'}
         </p>
         {conclusion && (
           <p className="mt-2 line-clamp-2 shrink-0 text-[20px] text-muted-foreground">
@@ -727,7 +731,7 @@ function Far({ agent, feed }: { agent: Agent; feed?: CanvasAgent }) {
         {agent.summary.label && (
           <span className="mr-2 font-mono text-brand">{agent.summary.label}</span>
         )}
-        {nameOf(agent.summary)}
+        {agent.summary.title ?? 'Untitled conversation'}
       </p>
       <p className="mt-auto shrink-0 truncate text-[22px] text-muted-foreground">
         {agent.reasons.length
@@ -864,7 +868,6 @@ function Focused({ agent, feed }: { agent: Agent; feed?: CanvasAgent }) {
         <Reasons agent={agent} className="text-[11px]" />
         <StateLabel className="text-[12px]" status={agent.status} />
         <WorkspaceBadge agent={agent} />
-        <span className="font-mono text-[11px] text-muted-foreground/70">#{agent.id}</span>
         <Menu agent={agent} />
       </div>
       {(summary || agent.row?.summaryStatus === 'pending') && (

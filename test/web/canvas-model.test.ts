@@ -7,7 +7,7 @@ import type { OverviewRow } from '../../extensions/conversations/types.ts'
 const unlanded: CanvasReason = {
   kind: 'unlanded',
   conversationId: 2,
-  detail: 'W2: 1 commit not landed',
+  detail: '#2: 1 commit not landed',
 }
 const concluded: CanvasConclusion = {
   headline: 'Reviewed and landed',

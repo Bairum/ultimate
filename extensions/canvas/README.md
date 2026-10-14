@@ -18,7 +18,7 @@ A panel's outline is its state: Working (purple, pulsing), Waiting on subagent (
 (warm), Done (green, the summary model's opinion), Replied (green; the overview row's `answered` run state), Run failed (red), Idle. A tree **needs a decision** when the
 server says so (see [Conclusions](#conclusions)): once the whole tree is idle, the summary model says one of its conversations needs
 input, or a checkout in it holds commits that were never landed. Its panels name the reasons ("needs input",
-"W12: 3 commits not landed"; a subagent's question shows as "#49 needs input" on its top-level panel). While anything in
+"#12: 3 commits not landed"; a subagent's question shows as "#49 needs input" on its top-level panel). While anything in
 the tree works, nothing shows: unlanded work is expected then.
 
 Finished work shrinks: a finished subagent with nothing to decide becomes a pill (its role gives way before its id), and
@@ -52,8 +52,7 @@ conversation, show or hide concluded conversations (the toolbar's concluded togg
 
 A panel's `…` menu offers what the sidebar row and the agent view did: open, stop the run, workspace details, and for a
 top-level conversation rename, clear context (the `conversations.reset` command and its dialog), conclude or resume
-(the sidebar's `ext.conversations.archived`, so both views agree). An isolated conversation shows its `W<id>` badge,
-which opens the Workspaces panel.
+(the sidebar's `ext.conversations.archived`, so both views agree). An isolated conversation’s `#<id>` reference opens the Workspaces panel.
 
 Everything arrives over one stream on the root conversation, whatever the number of panels:
 `ultimate.canvas`, `ultimate.conversation-overview` (with `conversations`) and `ultimate.workspaces` (with
@@ -93,7 +92,7 @@ type CanvasTree = {
   decision?: { reasons: CanvasReason[] } // what the idle tree waits for
   conclusion?: CanvasConclusion // its latest conclusion, small
 }
-type CanvasReason = { kind: 'needs_input' | 'unlanded'; conversationId; detail } // `needs input`, `W12: 3 commits not landed`
+type CanvasReason = { kind: 'needs_input' | 'unlanded'; conversationId; detail } // `needs input`, `#12: 3 commits not landed`
 type CanvasConclusion = {
   headline: string
   commits: number
