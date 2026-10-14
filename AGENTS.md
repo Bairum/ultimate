@@ -4,6 +4,26 @@ Ultimate is a local coding agent with a web UI, built on Pi Durable (`@earendil-
 repository while it edits it: you are probably reading this as Ultimate, about to change yourself. Everything below
 tells you which change reloads how, so the conversation you are in keeps running.
 
+## How work is organised: one tree of conversations
+
+A project is one tree of conversations, the way a repository is one history of commits.
+
+- **The root** holds the project's idea, its principles and the decisions that still stand. It keeps the tally:
+  every landing leaves a note in it. Go back to the root to think about the whole project.
+- **A branch** is every other line of work: a feature, a fix, an experiment. It is forked deliberately from a
+  conversation at a point, starts from a brief aimed at its intent, and then works as if it were the only
+  conversation. New conversation means branch from the root. A branch is never a subagent.
+- **Coordinators carry the work.** A branch plans, decides and verifies; subagents are for bounded execution and
+  reconnaissance, and the lander is the final gate on main.
+- **Zoom out when you need to.** Read the root or any sibling with codemode `ultimate.entries(id)` and
+  `ultimate.search()`; commits name the conversation that made them (`Ultimate-Conversation` trailer).
+- **Talk across the tree without waking anyone.** `note` leaves context in another conversation for its next turn;
+  `notify` tells you when another conversation finishes. A conversation that resumes after main moved gets a
+  catch-up of what landed, overlaps first.
+- **Conclude** a conversation when its work is done; it stays readable and can be resumed.
+
+`extensions/lineage/README.md` has the mechanics.
+
 ## Layers and how they reload
 
 | Path                          | What lives there                                                                               | How a change goes live                                                                                                                                                                                 |
