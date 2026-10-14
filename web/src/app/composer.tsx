@@ -120,14 +120,19 @@ export function Composer({ dock }: { dock?: boolean }) {
   return <ConversationComposer dock={dock} key={id} />
 }
 
+/** Where a new conversation branches from: a conversation and, optionally, one of its entries; default the root. */
+export type BranchPoint = { from?: number; at?: number }
+
 export function NewConversationComposer({
   inputId,
   onStarted,
   isolated,
+  branch,
 }: {
   isolated?: boolean
   inputId?: string
   onStarted: (id: number) => void
+  branch?: BranchPoint
 }) {
   return (
     <ConversationComposer
@@ -136,6 +141,7 @@ export function NewConversationComposer({
       isolated={isolated}
       inputId={inputId}
       onStarted={onStarted}
+      branch={branch}
     />
   )
 }
@@ -149,8 +155,8 @@ type Draft = {
 }
 
 // In-flight submissions and retryable failures belong to the conversation, not its mounted editor.
-const drafts = new Map<number | 'new' | undefined, ReturnType<typeof createDraft>>()
-function createDraft(id: number | 'new' | undefined) {
+const drafts = new Map<number | string | undefined, ReturnType<typeof createDraft>>()
+function createDraft(id: number | string | undefined) {
   const key = id === undefined ? undefined : `ultimate.draft.${id}`
   let value: Draft = {
     text: key ? (localStorage.getItem(key) ?? '') : '',
@@ -181,8 +187,10 @@ function ConversationComposer({
   inputId,
   onStarted,
   isolated: isolation,
+  branch: point,
 }: {
   isolated?: boolean
+  branch?: BranchPoint
   dock?: boolean
   target?: 'conversation' | 'new'
   inputId?: string
@@ -200,7 +208,12 @@ function ConversationComposer({
   const isolated =
     isolation ??
     (creation !== 'shared' && extensions.some((extension) => extension.name === 'workspaces'))
-  const draftId = isNew ? 'new' : id
+  // New and each branch point keep their own draft.
+  const draftId = isNew
+    ? point?.from === undefined
+      ? 'new'
+      : `branch-${point.from}${point.at === undefined ? '' : `-${point.at}`}`
+    : id
   const { surface } = useUltimate()
   const [archived, setArchived] = useUiState<number[]>('ext.conversations.archived', [])
   const summaries = useConversations()
@@ -234,8 +247,6 @@ function ConversationComposer({
       : isNew && defaults.error
         ? errorMessage(defaults.error)
         : blockedBy(isNew ? defaults.configuration : agent, models)
-  const imageHint =
-    isNew && images.length > 0 ? 'Images can be added after the branch starts' : undefined
   const empty = !text.trim() && images.length === 0
 
   async function send(whenBusy?: 'steer' | 'followUp') {
@@ -243,7 +254,6 @@ function ConversationComposer({
       loading ||
       empty ||
       blocked ||
-      imageHint ||
       draft.get().sending ||
       pending.current ||
       (!isNew && id === undefined)
@@ -257,6 +267,9 @@ function ConversationComposer({
         startedId = (
           await api.action<{ id: number }>('lineage', 'branch', {
             prompt: text.trim(),
+            ...(images.length ? { images } : {}),
+            ...(point?.from === undefined ? {} : { from: point.from }),
+            ...(point?.at === undefined ? {} : { at: point.at }),
             isolated,
             ...(defaults.configuration.model ? { model: defaults.configuration.model } : {}),
             ...(defaults.configuration.thinkingLevel
@@ -338,7 +351,9 @@ function ConversationComposer({
             onKeyDown={onKeyDown}
             placeholder={
               isNew
-                ? 'Branch from the root: what do you want to do?'
+                ? point?.from === undefined
+                  ? 'Branch from the root: what do you want to do?'
+                  : 'What should the branch do?'
                 : busy
                   ? 'Steer the run, or queue a follow-up…'
                   : 'Ask Ultimate to change something…'
@@ -358,7 +373,6 @@ function ConversationComposer({
               >
                 {error ??
                   blocked ??
-                  imageHint ??
                   (busy ? (
                     <>
                       <Kbd>↵</Kbd> steer · <Kbd>{alt} ↵</Kbd> follow-up · <Kbd>esc</Kbd>{' '}
@@ -377,7 +391,7 @@ function ConversationComposer({
               )}
               {(!busy || !empty) && (
                 <PromptInputSubmit
-                  disabled={loading || empty || !!blocked || !!imageHint || sending || reading}
+                  disabled={loading || empty || !!blocked || sending || reading}
                   aria-label={
                     loading ? 'Loading conversation' : isNew ? 'Start the conversation' : 'Send'
                   }

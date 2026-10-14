@@ -11,24 +11,19 @@ import {
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
-import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { Switch } from '@/components/ui/switch'
 import {
   api,
-  cn,
   useAction,
   defineWebExtension,
-  errorMessage,
   events,
   getConversation,
   getState,
+  NewConversationComposer,
   useComposer,
   useDialog,
   useDoc,
-  useSystem,
-  useUiState,
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, UltimateActions } from '@/sdk'
@@ -308,97 +303,30 @@ function BranchBrief() {
 function BranchDialog() {
   const [open, setOpen] = useDialog(branchDialog)
   const actions = useUltimate()
-  const system = useSystem()
-  const [creation, setCreation] = useUiState<string>('ext.conversations.creationType', 'isolated')
-  const [prompt, setPrompt] = useState('')
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState<string>()
-  const canIsolate = !!system?.extensions.some(
-    (extension) => extension.name === 'workspaces' && extension.enabled,
-  )
-  const isolated = canIsolate && creation !== 'shared'
   const from = target.from ?? actions.conversationId
-  const close = () => {
-    setOpen(false)
-    setError(undefined)
-  }
-  const branch = async () => {
-    if (!prompt.trim() || pending) return
-    setPending(true)
-    setError(undefined)
-    try {
-      const { id } = await api.action<{ id: number }>('lineage', 'branch', {
-        prompt,
-        isolated,
-        ...(from === undefined ? {} : { from }),
-        ...(target.at === undefined ? {} : { at: target.at }),
-      })
-      setPrompt('')
-      close()
-      actions.switchConversation(id)
-    } catch (failure) {
-      setError(errorMessage(failure))
-    } finally {
-      setPending(false)
-    }
-  }
   return (
-    <Dialog onOpenChange={(next) => (next ? setOpen(true) : close())} open={open}>
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-lg" showCloseButton={false}>
-        <div className="px-5 pt-5 pb-4">
-          <DialogTitle className="flex items-center gap-2 text-[14px] font-medium">
-            <GitForkIcon className="size-4 text-brand" />
-            Branch from #{from ?? '?'}
-            {target.at !== undefined && (
-              <span className="font-mono text-[12px] text-muted-foreground">at {target.at}</span>
-            )}
-          </DialogTitle>
-          <DialogDescription className="mt-2 text-[13px] leading-relaxed">
-            A new conversation starts from a brief of this one, aimed at what you write here.
-          </DialogDescription>
-          <textarea
-            autoFocus
-            className="mt-3 min-h-24 w-full resize-y rounded-md border border-input bg-transparent px-2.5 py-2 text-[13px] leading-relaxed outline-none placeholder:text-muted-foreground/60 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
-            onChange={(event) => setPrompt(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault()
-                void branch()
-              }
-            }}
-            placeholder="What should the branch do?"
-            rows={4}
-            value={prompt}
-          />
-          {error && <p className="mt-3 font-mono text-[12px] break-words text-error">{error}</p>}
-        </div>
-        <div className="flex items-center gap-2 border-t border-border/70 bg-sidebar px-5 py-3">
-          {canIsolate && (
-            <label
-              className={cn(
-                'flex h-7 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-[12px] transition-colors',
-                isolated
-                  ? 'border-brand/60 bg-brand/15 text-foreground'
-                  : 'border-transparent text-muted-foreground hover:text-foreground',
-              )}
-            >
-              <GitBranchIcon className={cn('size-3.5', isolated && 'text-brand')} />
-              Isolated
-              <Switch
-                aria-label="Isolated"
-                checked={isolated}
-                className="ml-0.5"
-                onCheckedChange={(on) => setCreation(on ? 'isolated' : 'shared')}
-              />
-            </label>
+    <Dialog onOpenChange={setOpen} open={open}>
+      <DialogContent className="gap-3 sm:max-w-xl">
+        <DialogTitle className="flex items-center gap-2 text-[14px] font-medium">
+          <GitForkIcon className="size-4 text-brand" />
+          Branch from #{from ?? '?'}
+          {target.at !== undefined && (
+            <span className="font-mono text-[12px] text-muted-foreground">at {target.at}</span>
           )}
-          <Button className="ml-auto" onClick={close} size="sm" variant="ghost">
-            Cancel
-          </Button>
-          <Button disabled={pending || !prompt.trim()} onClick={() => void branch()} size="sm">
-            {pending ? 'Branching…' : 'Branch'}
-          </Button>
-        </div>
+        </DialogTitle>
+        <DialogDescription className="text-[13px]">
+          A new conversation starts from a brief of this one, aimed at what you write here.
+        </DialogDescription>
+        <NewConversationComposer
+          branch={{
+            ...(from === undefined ? {} : { from }),
+            ...(target.at === undefined ? {} : { at: target.at }),
+          }}
+          onStarted={(id) => {
+            setOpen(false)
+            actions.switchConversation(id)
+          }}
+        />
       </DialogContent>
     </Dialog>
   )

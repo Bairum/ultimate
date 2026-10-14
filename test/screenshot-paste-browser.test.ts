@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path'
 import { chromium, type Page } from 'playwright-core'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { expect, it } from 'vitest'
-import { fauxServer, post, skipWithoutChromium, temp, untilInput } from './helpers.ts'
+import { fauxServer, post, skipWithoutChromium, temp, until, untilInput } from './helpers.ts'
 import { context } from '../server/harness.ts'
 
 const png =
@@ -310,7 +310,7 @@ it('reconciles delayed submissions across navigation and preserves keyboard focu
   }
 }, 30000)
 
-it('shares Hub clipboard validation and blocks images until a branch has started', async (test) => {
+it('shares Hub clipboard validation and starts a branch with pasted images', async (test) => {
   const executablePath = await skipWithoutChromium(test)
   if (!executablePath) return
   const userHome = await temp('ultimate-hub-paste-')
@@ -328,7 +328,9 @@ it('shares Hub clipboard validation and blocks images until a branch has started
   })
   const browser = await chromium.launch({ executablePath, headless: true })
   try {
-    await post(server, '/api/ui', { set: { 'shell.surface': 'canvas' } })
+    await post(server, '/api/ui', {
+      set: { 'shell.surface': 'canvas', 'ext.conversations.creationType': 'shared' },
+    })
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } })
     page.setDefaultTimeout(10000)
     const errors: string[] = []
@@ -429,28 +431,51 @@ it('shares Hub clipboard validation and blocks images until a branch has started
     await input.fill('Wait for image')
     await paste(page)
     expect(await send.isDisabled()).toBe(true)
-    const submissions: { text: string; images: { data: string; mimeType: string }[] }[] = []
+    const submissions: { args: { prompt: string; images?: { mimeType: string }[] } }[] = []
     page.on('request', (request) => {
-      if (request.url().endsWith('/submit')) submissions.push(request.postDataJSON())
+      if (request.url().endsWith('/lineage/actions/branch'))
+        submissions.push(request.postDataJSON())
     })
     await input.press('Enter')
     expect(submissions).toEqual([])
     await page.evaluate('window.finishRead()')
     await page.getByAltText('Pasted image 1').waitFor()
     await page.evaluate('FileReader.prototype.readAsDataURL = window.originalRead')
-    await page.getByRole('button', { name: 'Remove image 1' }).click()
-    for (const text of ['Review screenshot', '']) {
-      await input.fill(text)
-      await paste(page)
-      await page.getByAltText('Pasted image 1').waitFor()
-      expect(await send.isDisabled()).toBe(true)
-      await page.getByText('Images can be added after the branch starts', { exact: true }).waitFor()
-      await input.press('Enter')
-      expect(submissions).toEqual([])
-      expect(await input.inputValue()).toBe(text)
-      expect(await page.getByAltText('Pasted image 1').count()).toBe(1)
-      await page.getByRole('button', { name: 'Remove image 1' }).click()
-    }
+    // A branch needs words to write its brief toward; images alone do not start one.
+    await input.fill('')
+    expect(await send.isDisabled()).toBe(false)
+    await input.press('Enter')
+    await page.getByText('A branch needs a prompt').waitFor()
+    expect(await page.getByAltText('Pasted image 1').count()).toBe(1)
+    // With words, the screenshot goes with them into the branch's first message.
+    await input.fill('Review screenshot')
+    await input.press('Enter')
+    await expect.poll(() => submissions.length).toBe(2)
+    expect(submissions[1].args.prompt).toBe('Review screenshot')
+    expect(submissions[1].args.images?.map((image) => image.mimeType)).toEqual(['image/png'])
+    // The branch's first message carries the screenshot.
+    await until(async () => {
+      const branches = await server.harness.commit(
+        async (tx) =>
+          (await tx.scanConversations({}, 100)).items.filter(
+            (record) => record.parent && !record.owner,
+          ),
+        context,
+      )
+      for (const record of branches) {
+        const view = await (await server.harness.conversation(record.id, context))!.context(context)
+        if (
+          view.messages.some(
+            (message) =>
+              message.role === 'user' &&
+              Array.isArray(message.content) &&
+              message.content.some((part) => part.type === 'image'),
+          )
+        )
+          return true
+      }
+      return false
+    })
     expect(errors).toEqual([])
   } finally {
     await browser.close()
