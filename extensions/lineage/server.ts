@@ -30,6 +30,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { git } from '../workspaces/git.ts'
 import { workspaces } from '../workspaces/workspaces.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
+import { Summaries } from '../conversations/summary.ts'
 
 /** Which conversation is the project's root; unset means the reserved root conversation. */
 export const Root = defineDoc<{ root?: number }>({
@@ -264,7 +265,12 @@ function lineage(host: ExtensionHost) {
     phases: {
       wait: async (task, runtime, ctx) => {
         const { target } = task.input
+        // A branch writing its brief has only background work, which waitForIdle does not count: wait for the brief
+        // and for the run it starts, so "finished" means its own work ended.
+        while ((await runtime.snapshot(Branch, target, ctx))?.branch?.status === 'briefing')
+          await runtime.sleep(runtime.now() + 2000, ctx)
         await (await runtime.conversation(target, ctx))?.waitForIdle(ctx)
+        // The context starts at the brief's reset, so an inherited answer from the source never counts as its own.
         const answer = (await runtime.context(target, ctx)).messages.findLast(
           (message) => message.role === 'assistant' && contentText(message.content).trim(),
         )
@@ -372,6 +378,11 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
     if (input.isolated) await workspaces(host).create(tx, fork.id, host.projectRoot)
     if (main) await seedSeen(tx, fork.id, main, Date.now())
     ;(await tx.doc(Branch, fork.id)).branch = { from, at, intent: prompt, status: 'briefing' }
+    // Until the summary names it, a branch is called by its intent, not by the first message it inherited.
+    // Recorded as the generated title, so the summary may still replace it.
+    const title = prompt.replace(/\s+/g, ' ').slice(0, 80)
+    ;(await tx.doc(host.metadata, fork.id)).title = title
+    ;(await tx.doc(Summaries, fork.id)).generatedTitle = title
     await tx.appendEntry(from, {
       kind: 'lineage.branched',
       data: { branch: fork.id, at, intent: prompt },
