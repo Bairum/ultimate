@@ -134,7 +134,14 @@ export function overviewBehavior(
         if (change.type === 'submission') pending.add(change.value.conversationId)
         if (
           change.type === 'entry' &&
-          ['pi.user', 'pi.reset', 'pi.compaction'].includes(change.value.kind)
+          [
+            'pi.user',
+            'subagents.instruction',
+            'subagents.report',
+            'workspaces.lander-report',
+            'pi.reset',
+            'pi.compaction',
+          ].includes(change.value.kind)
         )
           pending.add(change.value.conversationId)
         if (

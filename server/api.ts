@@ -107,7 +107,14 @@ export async function createApi(
         const agent = await conversation.agent(context)
         const metadata = await harness.snapshot(Metadata, record.id, context)
         const { entries } = view.value
-        const input = entries.find((entry) => entry.kind === 'pi.user')?.model?.[0]
+        const input = entries.find((entry) =>
+          [
+            'pi.user',
+            'subagents.instruction',
+            'subagents.report',
+            'workspaces.lander-report',
+          ].includes(entry.kind),
+        )?.model?.[0]
         const title =
           input?.role === 'user'
             ? typeof input.content === 'string'
@@ -116,7 +123,14 @@ export async function createApi(
                   .flatMap((block) => (block.type === 'text' ? [block.text] : []))
                   .join(' ')
             : undefined
-        let inputAt = entries.findLast((entry) => entry.kind === 'pi.user')?.model?.[0]?.timestamp
+        let inputAt = entries.findLast((entry) =>
+          [
+            'pi.user',
+            'subagents.instruction',
+            'subagents.report',
+            'workspaces.lander-report',
+          ].includes(entry.kind),
+        )?.model?.[0]?.timestamp
         let answerAt = entries.findLast((entry) => entry.kind === 'pi.assistant')?.model?.[0]
           ?.timestamp
         // A reset or compaction marker starts the view at its head; older times are in the history before it.
@@ -127,7 +141,15 @@ export async function createApi(
             const page = await conversation.entries({ maxEntryId: head }, 64, cursor, context)
             for (const entry of page.items) {
               const timestamp = entry.model?.[0]?.timestamp
-              if (entry.kind === 'pi.user') inputAt ??= timestamp
+              if (
+                [
+                  'pi.user',
+                  'subagents.instruction',
+                  'subagents.report',
+                  'workspaces.lander-report',
+                ].includes(entry.kind)
+              )
+                inputAt ??= timestamp
               if (entry.kind === 'pi.assistant') answerAt ??= timestamp
             }
             cursor = page.next
@@ -200,7 +222,15 @@ export async function createApi(
     const answers = new Map<number, number>()
     for (const change of publication.changes) {
       if (change.type === 'conversation') ids.add(change.value.id)
-      if (change.type === 'entry' && change.value.kind === 'pi.user')
+      if (
+        change.type === 'entry' &&
+        [
+          'pi.user',
+          'subagents.instruction',
+          'subagents.report',
+          'workspaces.lander-report',
+        ].includes(change.value.kind)
+      )
         ids.add(change.value.conversationId)
       if (
         change.type === 'entry' &&

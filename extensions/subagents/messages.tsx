@@ -1,90 +1,47 @@
 import type { EntryRecord, InboxItem } from '@earendil-works/pi-durable'
 import { ArrowLeftIcon, BotIcon, SquareArrowOutUpRightIcon } from 'lucide-react'
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
-import { events, useAction, useConversation, useUltimate } from '@/sdk'
+import { events, useEvent, useConversation, useUltimate } from '@/sdk'
 import { TaskChip, useTaskOf } from '../plan/chip.tsx'
 import { useWorkspaceConversations } from '../workspaces/data.tsx'
 import type { AgentOrigin } from './message-types.ts'
 
-let origins: Record<string, AgentOrigin> = {}
-let pendingOrigins: { conversation?: number; items: Record<string, AgentOrigin> } = { items: {} }
-const listeners = new Set<() => void>()
-const subscribe = (listener: () => void) => {
-  listeners.add(listener)
-  return () => {
-    listeners.delete(listener)
-  }
-}
-let target: { conversation: number; entry?: number } | undefined
-let back: { conversation: number; entry?: number } | undefined
-const notify = () => {
-  for (const listener of listeners) listener()
-}
+type Destination = { conversation: number; entry?: number }
 
 export function openAgentSource(
   switchConversation: (id: number) => void,
   source: { conversation: number; entry?: number },
   receiver: { conversation: number; entry?: number },
 ) {
-  back = receiver
-  target = source
+  events.emit('subagents:source', { target: source, back: receiver })
   switchConversation(source.conversation)
-  notify()
 }
 
-/** One query per transcript revision, shared by all input renderers. */
 export function AgentMessages() {
-  const { id, entries, inbox, loading } = useConversation()
+  const { id, entries, loading } = useConversation()
   const { switchConversation } = useUltimate()
-  const [, refresh] = useState(0)
-  useEffect(() => subscribe(() => refresh((value) => value + 1)), [])
-  const ids = entries.filter((entry) => entry.kind === 'pi.user').map((entry) => entry.id)
-  const { data } = useAction<Record<string, AgentOrigin>>(
-    'subagents',
-    'provenance',
-    { entries: ids, conversation: id ?? null },
-    { enabled: !!id && ids.length > 0 },
-  )
-  const { data: pending } = useAction<Record<string, AgentOrigin>>(
-    'subagents',
-    'provenance',
-    {
-      submissions: inbox.filter((item) => item.mode !== 'write').map((item) => item.id),
-      conversation: id ?? null,
-    },
-    { enabled: !!id && inbox.length > 0 },
-  )
-  useEffect(() => {
-    pendingOrigins = { conversation: id, items: pending ?? {} }
-    notify()
-  }, [pending, id])
-  useEffect(() => {
-    if (data) {
-      origins = data
-      notify()
-    }
-  }, [data, id])
+  const [navigation, setNavigation] = useState<{ target?: Destination; back?: Destination }>({})
+  const { target, back } = navigation
+  useEvent('subagents:source', (value) => setNavigation(value as typeof navigation))
   useEffect(() => {
     if (!target || target.conversation !== id || loading) return
     if (target.entry === undefined) {
-      target = undefined
+      setNavigation((value) => ({ ...value, target: undefined }))
       return
     }
     events.emit('ultimate:reveal-entry', { conversationId: id, entryId: target.entry })
-    target = undefined
-  }, [id, entries, loading])
+    setNavigation((value) => ({ ...value, target: undefined }))
+  }, [id, entries, loading, target])
   if (!back || back.conversation === id) return null
   return (
     <button
       className="flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 font-mono text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
       onClick={() => {
-        const destination = back!
-        target = destination
-        back = undefined
+        const destination = back
+        setNavigation({ target: destination })
         switchConversation(destination.conversation)
-        notify()
       }}
     >
       <ArrowLeftIcon className="size-3" />
@@ -93,23 +50,15 @@ export function AgentMessages() {
   )
 }
 
-export function AgentInput({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
+export function AgentInput({ entry }: { entry: EntryRecord }) {
   const [expanded, setExpanded] = useState(false)
-  const map = useSyncExternalStore(subscribe, () => origins)
-  const origin = map[entry.id]
+  const origin = entry.data as AgentOrigin
   const { id } = useConversation()
   const { switchConversation } = useUltimate()
   const conversations = useWorkspaceConversations()
   const task = useTaskOf(origin?.sender)
-  if (!origin) return core
   const sender = conversations.find((conversation) => conversation.id === origin.sender)
-  const message = entry.model?.[0]
-  const content = message?.role === 'user' ? message.content : ''
-  let body =
-    typeof content === 'string'
-      ? content
-      : content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n')
-  body = agentBody(body, origin)
+  const body = origin.body
   return (
     <section
       data-agent-origin={origin.kind}
@@ -118,7 +67,7 @@ export function AgentInput({ entry, core }: { entry: EntryRecord; core: ReactNod
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <BotIcon className="size-3.5 text-brand" />
         <span className="text-foreground">
-          {sender?.label ?? 'agent'} #{origin.sender}
+          {sender?.label ?? (origin.kind === 'report' ? origin.agent : 'agent')} #{origin.sender}
         </span>
         {task && <TaskChip task={task} />}
         <span>{origin.kind === 'instruction' ? 'instruction' : 'report'}</span>
@@ -160,16 +109,6 @@ export function AgentInput({ entry, core }: { entry: EntryRecord; core: ReactNod
   )
 }
 
-// Strip transport framing only after durable attribution.
-function agentBody(body: string, origin: AgentOrigin) {
-  if (origin.kind !== 'report') return body
-  body = body.replace(new RegExp(`^\\[subagent ${origin.sender} \\([^\\n]*\\) answered\\] `), '')
-  const failure = `[subagent ${origin.sender} failed: `
-  return body.startsWith(failure) && body.endsWith(']')
-    ? `Failed: ${body.slice(failure.length, -1)}`
-    : body
-}
-
 export function AgentInbox({
   item,
   core,
@@ -179,20 +118,17 @@ export function AgentInbox({
   core: ReactNode
   cancel: ReactNode
 }) {
-  const map = useSyncExternalStore(subscribe, () => pendingOrigins)
   const { id } = useConversation()
   const { switchConversation } = useUltimate()
   const conversations = useWorkspaceConversations()
-  const origin = map.conversation === id ? map.items[item.id] : undefined
-  if (!origin || item.mode === 'write') return core
-  const sender = conversations.find((conversation) => conversation.id === origin.sender)
-  const content = item.content
-  const body = agentBody(
-    typeof content === 'string'
-      ? content
-      : content.flatMap((part) => (part.type === 'text' ? [part.text] : ['[image]'])).join(' '),
-    origin,
+  if (
+    item.mode === 'write' ||
+    !['subagents.instruction', 'subagents.report'].includes(item.entry?.kind ?? '')
   )
+    return core
+  const origin = item.entry!.data as AgentOrigin
+  const sender = conversations.find((conversation) => conversation.id === origin.sender)
+  const body = origin.body
   return (
     <section
       data-agent-inbox={origin.kind}
@@ -203,9 +139,9 @@ export function AgentInbox({
           <BotIcon className="size-3 shrink-0 text-brand" />
           <span
             className="min-w-0 truncate text-foreground"
-            title={`${sender?.label ?? 'agent'} #${origin.sender}`}
+            title={`${sender?.label ?? (origin.kind === 'report' ? origin.agent : 'agent')} #${origin.sender}`}
           >
-            {sender?.label ?? 'agent'} #{origin.sender}
+            {sender?.label ?? (origin.kind === 'report' ? origin.agent : 'agent')} #{origin.sender}
           </span>
           <span>{origin.kind}</span>
           <span className={item.mode === 'steer' ? 'text-brand' : ''}>

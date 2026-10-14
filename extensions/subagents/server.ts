@@ -39,7 +39,6 @@ import { workspaces } from '../workspaces/workspaces.ts'
 import { git } from '../workspaces/git.ts'
 import { requestSummary } from '../conversations/summary.ts'
 import { summaryModel } from '../conversations/summary-model.ts'
-import { provenance } from './provenance.ts'
 
 export const Subagents = defineDoc<{
   agents: Record<
@@ -142,14 +141,26 @@ function createReporter() {
         try {
           const child = (await runtime.conversation(task.input.conversationId, context))!
           const retryRequest = task.state.checkpoint.retryRequest
+          const content =
+            retryRequest !== undefined
+              ? 'Your previous run stopped with a provider error. Continue from where you left off; check what you already did and do not redo it.'
+              : task.input.text
           const settled = await (
             await child.submit(
               {
                 type: 'input',
-                content:
-                  retryRequest !== undefined
-                    ? 'Your previous run stopped with a provider error. Continue from where you left off; check what you already did and do not redo it.'
-                    : task.input.text,
+                content,
+                entry: {
+                  kind: 'subagents.instruction',
+                  data: {
+                    sender: runtime.conversationId,
+                    kind: 'instruction',
+                    agent: (await runtime.snapshot(Subagents, runtime.conversationId, context))!
+                      .agents[String(child.id)].agent,
+                    body: content,
+                    ...(task.input.sourceEntry ? { entry: task.input.sourceEntry } : {}),
+                  },
+                },
                 whenBusy: task.input.steer ? 'steer' : 'followUp',
                 requestId: retryRequest ?? `subagent:${task.id}`,
               },
@@ -252,7 +263,7 @@ function createReporter() {
               }
             }
             if (settled.status === 'unanswered' && settled.reason !== 'aborted') {
-              const failure = `[subagent ${child.id} failed: ${settled.reason}]`
+              const failure = settled.reason
               return { status: 'running', checkpoint: { phase: 'report', report: failure } }
             }
             // A parent stop aborts this task before the input, so this abort came from the child's
@@ -273,7 +284,7 @@ function createReporter() {
               status: 'running',
               checkpoint: {
                 phase: 'report',
-                report: `[subagent ${task.input.conversationId} failed: ${message}]`,
+                report: message,
               },
             }
           }, context)
@@ -283,10 +294,38 @@ function createReporter() {
         const { report, answer } = task.state.checkpoint
         if (report !== undefined) {
           const parent = (await runtime.conversation(runtime.conversationId, context))!
+          const agent = (await runtime.snapshot(Subagents, runtime.conversationId, context))!
+            .agents[String(task.input.conversationId)].agent
+          let message: AssistantMessage | undefined
+          if (answer !== undefined)
+            await runtime.commit(async (tx) => {
+              message = (await tx.entry(answer))?.model?.[0] as AssistantMessage | undefined
+            }, context)
+          const failed = !answered(message)
+          const body =
+            answer === undefined
+              ? `Failed: ${report}`
+              : failed
+                ? `Failed: ${unanswered(message)}`
+                : answerText(message)
           await parent.submit(
             {
               type: 'input',
-              content: report,
+              content:
+                answer === undefined
+                  ? `[subagent ${task.input.conversationId} failed: ${report}]`
+                  : report,
+              entry: {
+                kind: 'subagents.report',
+                data: {
+                  sender: task.input.conversationId,
+                  kind: 'report',
+                  agent,
+                  failed,
+                  body,
+                  ...(answer ? { entry: answer } : {}),
+                },
+              },
               whenBusy: 'steer',
               requestId:
                 answer === undefined ? `subagent-report:${task.id}` : answerRequest(answer),
@@ -390,25 +429,8 @@ async function waitInterruptibly(
   }
 }
 
-/** Browser actions for message provenance and the Agents tab. */
+/** Browser actions for the Agents tab. */
 export const actions = {
-  async provenance(args: JsonValue, { host, conversationId }: ActionContext) {
-    const { entries, submissions } = args as { entries?: number[]; submissions?: number[] }
-    const ids = submissions ?? entries
-    if (
-      !conversationId ||
-      !Array.isArray(ids) ||
-      ids.length > 10000 ||
-      ids.some((id) => !Number.isSafeInteger(id) || id < 1)
-    )
-      throw new Error('Invalid entries')
-    return provenance(
-      host.harness(),
-      conversationId as ConversationId,
-      ids as EntryId[],
-      !!submissions,
-    )
-  },
   /**
    * The definitions without their instructions and the files that failed to parse, and for the config view the main
    * conversation's model and tools (a definition may list a subset), where each scope saves, and whether the

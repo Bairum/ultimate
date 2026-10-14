@@ -32,7 +32,6 @@ import type { ActionContext } from '../server/actions.ts'
 import codemode from '../extensions/codemode/server.ts'
 import { Metadata } from '../server/metadata.ts'
 import { UiState } from '../server/ui-state.ts'
-import { provenance } from '../extensions/subagents/provenance.ts'
 import { discoverAgents, parseDefinition } from '../extensions/subagents/agents.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 
@@ -392,23 +391,19 @@ it('routes asynchronous leaf reports only to their lead, not the root', async ()
   const lead = (await f.opened.harness.conversation(leadId, context))!
   await until(async () => {
     const view = await lead.viewState(context)
-    const delivered = view.value.entries.some(
-      (entry) => entry.kind === 'pi.user' && JSON.stringify(entry.model).includes('answered]'),
-    )
+    const delivered = view.value.entries.some((entry) => entry.kind === 'subagents.report')
     view.dispose()
     return delivered
   })
   await lead.waitForIdle(context)
   const view = await lead.viewState(context)
-  const report = view.value.entries.find(
-    (entry) => entry.kind === 'pi.user' && JSON.stringify(entry.model).includes('answered]'),
-  )!
+  const report = view.value.entries.find((entry) => entry.kind === 'subagents.report')!
   view.dispose()
   expect(report).toBeDefined()
   const leafId = Object.values(
     (await f.opened.harness.snapshot(Subagents, leadId, context))!.agents,
   )[0].conversationId
-  expect((await provenance(f.opened.harness, leadId, [report.id]))[report.id]).toMatchObject({
+  expect(report.data).toMatchObject({
     sender: leafId,
     kind: 'report',
   })
@@ -479,47 +474,38 @@ it('attributes durable instructions and reports across reopen and forks, never h
   const [child] = await children(f.opened)
   const conversation = (await f.opened.harness.conversation(child.conversationId, context))!
   const childView = await conversation.viewState(context)
-  const instruction = childView.value.entries.find((entry) => entry.kind === 'pi.user')!
+  const instruction = childView.value.entries.find(
+    (entry) => entry.kind === 'subagents.instruction',
+  )!
   childView.dispose()
-  const origin = (await provenance(f.opened.harness, child.conversationId, [instruction.id]))[
-    instruction.id
-  ]
-  expect(origin).toMatchObject({ sender: f.opened.root.id, kind: 'instruction' })
-  expect(origin.entry).toBeTypeOf('number')
-  const attributed = await provenance(f.opened.harness, f.opened.root.id, [report.id])
-  expect(attributed[report.id]).toMatchObject({ sender: child.conversationId, kind: 'report' })
-  expect(attributed[report.id].entry).toBeTypeOf('number')
-  const reporter = Object.values(
-    (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!.actions,
-  )[0].reporter
-  const failure = await (
-    await f.opened.root.submit(
-      {
-        type: 'input',
-        content: `[subagent ${child.conversationId} failed: delivery error]`,
-        requestId: `subagent-report:${reporter}`,
-      },
-      context,
-    )
-  ).wait(context)
-  expect(
-    (await provenance(f.opened.harness, f.opened.root.id, [failure.entry!]))[failure.entry!],
-  ).toEqual({ sender: child.conversationId, kind: 'report', entry: instruction.id })
+  expect(instruction.data).toMatchObject({
+    sender: f.opened.root.id,
+    kind: 'instruction',
+    body: '**Inspect**\n\n- [x] checked',
+    agent: 'scout',
+  })
+  expect(report.data).toMatchObject({
+    sender: child.conversationId,
+    kind: 'report',
+    failed: false,
+    agent: 'scout',
+  })
+  expect((report.data as { entry: number }).entry).toBeTypeOf('number')
   const human = await f.opened.root.submit(
     { type: 'input', content: `[subagent ${child.conversationId} (scout) answered] **human**` },
     context,
   )
   const humanRecord = await human.wait(context)
-  expect(await provenance(f.opened.harness, f.opened.root.id, [humanRecord.entry!])).toEqual({})
+  expect((await f.opened.harness.commit((tx) => tx.entry(humanRecord.entry!), context))?.kind).toBe(
+    'pi.user',
+  )
   const fork = await f.opened.root.fork(report.id, { ownership: { kind: 'ownerless' } }, context)
-  expect(await provenance(f.opened.harness, fork.id, [report.id])).toEqual(attributed)
-  expect(await provenance(f.opened.harness, child.conversationId, [report.id])).toEqual({})
-  await f.opened.root.reset(undefined, context)
-  expect(await provenance(f.opened.harness, f.opened.root.id, [report.id])).toEqual(attributed)
   await f.opened.close()
   hosts.splice(hosts.indexOf(f.opened), 1)
   const reopened = await f.reopen()
-  expect(await provenance(reopened.harness, fork.id, [report.id])).toEqual(attributed)
+  const forkView = await (await reopened.harness.conversation(fork.id, context))!.viewState(context)
+  expect(forkView.value.entries.find((entry) => entry.id === report.id)?.data).toEqual(report.data)
+  forkView.dispose()
 })
 
 async function children(opened: OpenHost) {
@@ -529,12 +515,7 @@ async function children(opened: OpenHost) {
 }
 async function reports(opened: OpenHost) {
   const view = await opened.root.viewState(context)
-  const entries = view.value.entries.filter(
-    (entry) =>
-      entry.model?.[0]?.role === 'user' &&
-      typeof entry.model[0].content === 'string' &&
-      entry.model[0].content.startsWith('[subagent'),
-  )
+  const entries = view.value.entries.filter((entry) => entry.kind === 'subagents.report')
   view.dispose()
   return entries
 }
@@ -661,9 +642,7 @@ describe('provider error recovery', () => {
       )
       expect(delivered[1].model![0].content).toContain('manual continuation')
       expect((await children(resumed))[0].reported).toHaveLength(1)
-      expect(
-        (await provenance(resumed.harness, resumed.root.id, [delivered[1].id]))[delivered[1].id],
-      ).toEqual({
+      expect(delivered[1].data).toMatchObject({
         sender: child.conversationId,
         kind: 'report',
         entry: (await children(resumed))[0].reported[0],
@@ -1047,20 +1026,25 @@ it('attributes real queued instructions and reports by submission identity and d
   )
   const instruction = (await f.opened.harness.snapshot(InboxDoc, child.conversationId, context))!
     .items[0]
-  expect(
-    (await provenance(f.opened.harness, child.conversationId, [instruction.id], true))[
-      instruction.id
-    ],
-  ).toMatchObject({ sender: 1, kind: 'instruction' })
+  expect(instruction.entry).toMatchObject({
+    kind: 'subagents.instruction',
+    data: { sender: 1, kind: 'instruction', body: 'queued instruction' },
+  })
   const human = await childHandle.submit(
     { type: 'input', content: 'queued instruction', whenBusy: 'followUp' },
     context,
   )
-  expect(await provenance(f.opened.harness, child.conversationId, [human.id], true)).toEqual({})
+  expect(
+    (await f.opened.harness.snapshot(InboxDoc, child.conversationId, context))!.items.find(
+      (item) => item.id === human.id,
+    ),
+  ).not.toHaveProperty('entry')
   await (await f.opened.harness.submission(instruction.id, context))!.abort(context)
-  expect(await provenance(f.opened.harness, child.conversationId, [instruction.id], true)).toEqual(
-    {},
-  )
+  expect(
+    (await f.opened.harness.snapshot(InboxDoc, child.conversationId, context))!.items.some(
+      (item) => item.id === instruction.id,
+    ),
+  ).toBe(false)
   await human.abort(context)
   await f.opened.root.submit({ type: 'input', content: 'HOLD' }, context)
   await until(async () => f.holding.has(1))
@@ -1070,12 +1054,16 @@ it('attributes real queued instructions and reports by submission identity and d
       (await f.opened.harness.snapshot(InboxDoc, f.opened.root.id, context))!.items.length > 0,
   )
   const report = (await f.opened.harness.snapshot(InboxDoc, f.opened.root.id, context))!.items[0]
-  expect(
-    (await provenance(f.opened.harness, f.opened.root.id, [report.id], true))[report.id],
-  ).toMatchObject({ sender: child.conversationId, kind: 'report' })
-  expect(await provenance(f.opened.harness, child.conversationId, [report.id], true)).toEqual({})
+  expect(report.entry).toMatchObject({
+    kind: 'subagents.report',
+    data: { sender: child.conversationId, kind: 'report', failed: false },
+  })
   await (await f.opened.harness.submission(report.id, context))!.abort(context)
-  expect(await provenance(f.opened.harness, f.opened.root.id, [report.id], true)).toEqual({})
+  expect(
+    (await f.opened.harness.snapshot(InboxDoc, f.opened.root.id, context))!.items.some(
+      (item) => item.id === report.id,
+    ),
+  ).toBe(false)
   f.parentGate.release()
 })
 
@@ -1092,6 +1080,10 @@ describe('turns without an answer', () => {
     await until(async () => (await reports(f.opened)).length === 1)
     expect((await reports(f.opened))[0].model?.[0]).toMatchObject({
       content: `[subagent ${child.conversationId} failed: ended its turn without an answer]`,
+    })
+    expect((await reports(f.opened))[0].data).toMatchObject({
+      failed: true,
+      body: 'Failed: ended its turn without an answer',
     })
     expect((await call(f.opened, { action: 'wait', id: child.conversationId })).text).toBe(
       `Subagent ${child.conversationId} ended its turn without an answer. Message it to continue.`,

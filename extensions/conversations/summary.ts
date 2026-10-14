@@ -323,7 +323,15 @@ export async function exchangeUser(tx: Tx, id: ConversationId) {
     const page = await tx.scanEntries({ conversationId: id }, 64, cursor)
     for (const entry of page.items) {
       if (entry.kind === 'pi.reset') return undefined
-      if (entry.kind === 'pi.user') return entry
+      if (
+        [
+          'pi.user',
+          'subagents.instruction',
+          'subagents.report',
+          'workspaces.lander-report',
+        ].includes(entry.kind)
+      )
+        return entry
     }
     cursor = page.next
   } while (cursor !== undefined)
@@ -350,7 +358,17 @@ async function currentContext(tx: Tx, id: ConversationId, answer: EntryId) {
       64,
       cursor,
     )
-    if (page.items.some((entry) => entry.kind === 'pi.user')) return false
+    if (
+      page.items.some((entry) =>
+        [
+          'pi.user',
+          'subagents.instruction',
+          'subagents.report',
+          'workspaces.lander-report',
+        ].includes(entry.kind),
+      )
+    )
+      return false
     cursor = page.next
   } while (cursor !== undefined)
   return true
@@ -394,7 +412,14 @@ export async function requestSummary(
         cursor,
       )
       for (const entry of page.items) {
-        if (entry.kind === 'pi.user') {
+        if (
+          [
+            'pi.user',
+            'subagents.instruction',
+            'subagents.report',
+            'workspaces.lander-report',
+          ].includes(entry.kind)
+        ) {
           users++
           intent = entry.id
         }
