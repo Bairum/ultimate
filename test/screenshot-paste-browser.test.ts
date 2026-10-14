@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { chromium, type Page } from 'playwright-core'
-import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { expect, it } from 'vitest'
 import { fauxServer, post, skipWithoutChromium, temp, until, untilInput } from './helpers.ts'
 import { context } from '../server/harness.ts'
@@ -175,6 +175,54 @@ it('pastes, removes, preserves failures, sends real images and reloads clickable
     await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => done())))
     expect(await input.inputValue()).toBe('New draft')
     expect(await page.getByAltText('Pasted image 1').count()).toBe(0)
+    expect(errors).toEqual([])
+  } finally {
+    await browser.close()
+    await server.close()
+  }
+}, 30000)
+
+it('shows an image the read tool returns as a thumbnail that opens full size', async (test) => {
+  const executablePath = await skipWithoutChromium(test)
+  if (!executablePath) return
+  const userHome = await temp('ultimate-read-image-')
+  const projectRoot = join(userHome, 'project')
+  await mkdir(projectRoot)
+  await writeFile(join(projectRoot, 'shot.png'), Buffer.from(png, 'base64'))
+  await writeFile(join(projectRoot, 'notes.txt'), 'plain text\n')
+  const server = await fauxServer({
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    userHome,
+    home: join(userHome, 'state'),
+  })
+  const browser = await chromium.launch({ executablePath, headless: true })
+  try {
+    server.host.faux!.setResponses([
+      fauxAssistantMessage(
+        [
+          fauxToolCall('read', { path: join(projectRoot, 'shot.png') }),
+          fauxToolCall('read', { path: join(projectRoot, 'notes.txt') }),
+        ],
+        { stopReason: 'toolUse' },
+      ),
+      fauxAssistantMessage('Looked at it.'),
+    ])
+    await server.root.submit({ type: 'input', content: 'Read the screenshot' }, context)
+    await server.harness.waitForIdle(context)
+    const page = await browser.newPage()
+    page.setDefaultTimeout(8000)
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    await page.goto(server.url)
+    await untilInput(page)
+    const thumbnail = page.getByAltText('shot.png')
+    await thumbnail.click()
+    await page.getByRole('dialog').getByAltText('shot.png').waitFor()
+    expect(await page.getByText(/Read image file/).count()).toBe(0)
+    await page.keyboard.press('Escape')
+    await page.getByText('1 line', { exact: true }).waitFor()
+    expect(await page.locator('img').count()).toBe(1)
     expect(errors).toEqual([])
   } finally {
     await browser.close()

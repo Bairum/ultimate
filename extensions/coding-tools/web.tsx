@@ -7,6 +7,7 @@ import {
   ToolContent,
   ToolDiagnostics,
   ToolHeader,
+  ToolImage,
   ToolOutput,
   ToolSection,
 } from '@/components/ai/tool'
@@ -51,8 +52,13 @@ function Read({ call }: { call: ToolCallView }) {
     offset || limit ? `:${offset ?? 1}${limit ? `-${(offset ?? 1) + limit - 1}` : '+'}` : ''
   const failed = call.status === 'error'
   const count = call.status === 'done' ? lineCount(call.output) : 0
+  const image = call.images[0]
+  // The image itself says what Pi's bare "Read image file [type]." note does; keep only notes that add something.
+  const diagnostics = image
+    ? call.diagnostics.filter((d) => !/^Read image file \[[^\]]+\]\.$/.test(d.message))
+    : call.diagnostics
   return (
-    <Tool defaultOpen={failed}>
+    <Tool defaultOpen={failed || !!image}>
       <ToolHeader
         meta={
           <>
@@ -72,6 +78,10 @@ function Read({ call }: { call: ToolCallView }) {
       <ToolContent>
         {failed ? (
           <ToolOutput isError output={call.output} />
+        ) : image ? (
+          <ToolSection>
+            <ToolImage alt={shown} image={image} />
+          </ToolSection>
         ) : (
           call.output && (
             <CodeBlock
@@ -83,7 +93,7 @@ function Read({ call }: { call: ToolCallView }) {
             />
           )
         )}
-        <ToolDiagnostics diagnostics={call.diagnostics} />
+        <ToolDiagnostics diagnostics={diagnostics} />
       </ToolContent>
     </Tool>
   )
