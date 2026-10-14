@@ -22,7 +22,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { exclusiveSlot } from '../exclusive-commands/slot.ts'
-import { leaveNote, rootOf } from '../lineage/server.ts'
+import type { LineageService } from '../lineage/server.ts'
 import { definitionAgent, discoverAgents } from '../subagents/agents.ts'
 import { git, setup } from './git.ts'
 import type {
@@ -99,6 +99,7 @@ type Host = Pick<
   | 'modelRuntime'
   | 'harness'
   | 'projectSettings'
+  | 'use'
   | 'resource'
   | 'extensions'
   | 'metadata'
@@ -843,15 +844,11 @@ export function createLander(
       },
       report: async (task, runtime, context) => {
         const { id, conversationId, text, outcome } = task.state.checkpoint
-        if (
-          host
-            .extensions()
-            .some((extension) => extension.name === 'lineage' && extension.enabled) &&
-          !(await runtime.memo<boolean>(`root-note:${id}`, context))
-        ) {
+        const lineage = host.use<LineageService>('lineage')
+        if (lineage && !(await runtime.memo<boolean>(`root-note:${id}`, context))) {
           const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
           const result = index?.results[id]
-          if (result?.outcome === 'landed' && conversationId !== (await rootOf(host, context))) {
+          if (result?.outcome === 'landed' && conversationId !== (await lineage.rootOf(context))) {
             const metadata = await host
               .harness()
               .snapshot(host.metadata, conversationId as ConversationId, context)
@@ -862,8 +859,7 @@ export function createLander(
             })
             const more = (result.commits?.length ?? 0) - commits.length
             const paths = (result.paths ?? []).slice(0, 8)
-            await leaveNote(
-              host,
+            await lineage.leaveNote(
               'root',
               [
                 `Landed ${result.sha!.slice(0, 7)} on ${result.target} from #${conversationId} ${title}:`,

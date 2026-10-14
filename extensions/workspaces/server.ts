@@ -17,7 +17,12 @@ import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { watchRoots } from '../../server/watch-roots.ts'
 import { agentRoots } from '../subagents/agents.ts'
+import { git } from './git.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
+export type WorkspaceService = ReturnType<typeof workspaces> & {
+  git: typeof git
+  doc: typeof Workspaces
+}
 export const order = -200
 export const docs = [Workspaces]
 /** A project trust change moves the definition roots: reopening rewatches them and reconfigures the landers. */
@@ -100,6 +105,7 @@ function watchDefinitions(
 }
 export default function workspaceExtension(host: ExtensionHost) {
   const service = workspaces(host)
+  host.provide('workspaces', { ...service, git, doc: Workspaces } satisfies WorkspaceService)
   const resume = () =>
     service.resume(context).catch((error: unknown) => {
       host.notice(`Lander resume failed: ${String(error)}`)

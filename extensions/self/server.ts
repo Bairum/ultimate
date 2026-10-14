@@ -4,16 +4,15 @@ import { Type } from '@earendil-works/pi-ai'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { workspaces } from '../workspaces/workspaces.ts'
-import { git } from '../workspaces/git.ts'
+import type { WorkspaceService } from '../workspaces/server.ts'
 
 export default function self(host: ExtensionHost) {
-  const service = workspaces(host)
+  const service = () => host.use<WorkspaceService>('workspaces')
   return defineExtension({
     name: 'self',
     sections: [
       section('self', async (input, context) => {
-        const own = await service.get(input.conversationId, context)
+        const own = await service()?.get(input.conversationId, context)
         const cwd = input.env?.cwd ?? input.agent.cwd ?? host.projectRoot
         const sourceRoot =
           own && host.projectRoot === host.ultimateRoot ? own.path : host.ultimateRoot
@@ -44,13 +43,13 @@ export default function self(host: ExtensionHost) {
         parameters: Type.Object({}),
         replay: 'safe',
         async execute(_args, api, context): Promise<ToolExecutionResult> {
-          const own = await service.get(api.conversationId, context)
+          const own = await service()?.get(api.conversationId, context)
           if (
             own &&
             ((await realpath(own.source)) !== (await realpath(host.ultimateRoot)) ||
               !own.landed ||
-              (await git(host.ultimateRoot, 'status', '--porcelain')) ||
-              (await git(host.ultimateRoot, 'rev-parse', 'HEAD')) !== own.landed)
+              (await service()!.git(host.ultimateRoot, 'status', '--porcelain')) ||
+              (await service()!.git(host.ultimateRoot, 'rev-parse', 'HEAD')) !== own.landed)
           ) {
             const error = `Restart refused: land your workspace into ${own.source} first`
             return {

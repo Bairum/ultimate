@@ -474,3 +474,26 @@ it('notifies after the brief and run without waiting for the branch’s pending 
     unrelated.resolve()
   }
 })
+
+it('branches in the shared checkout with workspaces disabled', async () => {
+  const home = await temp('ultimate-lineage-no-workspaces-')
+  const source = await sourceCopy(home)
+  await writeFile(
+    join(source, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { disable: ['workspaces'] } }),
+  )
+  const server = await fauxServer({ ultimateRoot: source, home, userHome: home })
+  servers.push(server)
+  expect(server.host.registry.snapshot().extension('workspaces')).toBeUndefined()
+  const { status, data } = await post(server, '/api/extensions/lineage/actions/branch', {
+    args: { prompt: 'Shared intent', isolated: false },
+  })
+  expect(status).toBe(200)
+  const id = data.result.id as ConversationId
+  const branch = (await server.harness.conversation(id, context))!
+  expect(branch.id).toBe(id)
+  await until(
+    async () => (await server.harness.snapshot(Branch, id, context))?.branch?.status === 'ready',
+  )
+  await branch.waitForIdle(context)
+})

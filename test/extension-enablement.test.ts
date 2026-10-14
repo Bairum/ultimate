@@ -101,12 +101,13 @@ it('orders facets by source so a project bash tool and renderer win regardless o
 
 const serviceFacet = (detail: string, fail = false) => `
 import { defineExtension } from '@earendil-works/pi-durable'
-export const actions = { stale: async (_args, { host }) => {
+export const actions = { lookup: async (_args, { host }) => host.use('service-test'), stale: async (_args, { host }) => {
   const saved = host.resource('service-test:handles', () => [])
   saved[0].update({ state: 'error', detail: 'stale update' })
   saved[0].dispose()
 } }
 export default (host) => {
+  host.provide('service-test', { detail: '${detail}' })
   const status = host.service('worker', { state: 'starting', detail: '${detail}' })
   host.resource('service-test:handles', () => []).push(status)
   ${fail ? "throw new Error('failed service installation')" : ''}
@@ -122,6 +123,9 @@ it('stages service rows, preserves them on failed reload and removes stale handl
   await until(() =>
     server.extensions.services().some((s) => s.detail === 'first' && s.state === 'ready'),
   )
+  const lookup = () =>
+    server.extensions.invoke('service-test', 'lookup', {}, new AbortController().signal)
+  expect(await lookup()).toEqual({ detail: 'first' })
   await writeFile(file, serviceFacet('failed', true))
   server.vite.watcher.emit('change', file)
   await until(
@@ -134,15 +138,28 @@ it('stages service rows, preserves them on failed reload and removes stale handl
   expect(server.extensions.services().filter((s) => s.extension === 'service-test')).toEqual([
     { extension: 'service-test', name: 'worker', state: 'ready', detail: 'first' },
   ])
+  expect(await lookup()).toEqual({ detail: 'first' })
   await writeFile(file, serviceFacet('replacement'))
   server.vite.watcher.emit('change', file)
   await until(() =>
     server.extensions.services().some((s) => s.detail === 'replacement' && s.state === 'ready'),
   )
+  expect(await lookup()).toEqual({ detail: 'replacement' })
   await server.extensions.invoke('service-test', 'stale', {}, new AbortController().signal)
   expect(server.extensions.services().filter((s) => s.extension === 'service-test')).toEqual([
     { extension: 'service-test', name: 'worker', state: 'ready', detail: 'replacement' },
   ])
+  const consumer = join(projectRoot, '.ultimate/extensions/service-consumer')
+  await mkdir(consumer, { recursive: true })
+  await writeFile(
+    join(consumer, 'server.ts'),
+    `
+    import { defineExtension } from '@earendil-works/pi-durable'
+    export const actions = { lookup: async (_args, { host }) => host.use('service-test') ?? null }
+    export default defineExtension({ name: 'service-consumer' })
+  `,
+  )
+  await until(() => !!server.extensions.action('service-consumer', 'lookup'))
   await writeFile(
     join(home, '.ultimate/settings.json'),
     JSON.stringify({ extensions: { disable: ['service-test'] } }),
@@ -151,6 +168,9 @@ it('stages service rows, preserves them on failed reload and removes stale handl
     () => server.extensions.info().find((e) => e.name === 'service-test')?.enabled === false,
   )
   expect(server.extensions.services().some((s) => s.extension === 'service-test')).toBe(false)
+  expect(
+    await server.extensions.invoke('service-consumer', 'lookup', {}, new AbortController().signal),
+  ).toBeNull()
 }, 60000)
 
 const tools = async (server: Awaited<ReturnType<typeof fauxServer>>) =>

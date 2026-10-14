@@ -3,8 +3,7 @@ import type { Context } from '@earendil-works/chord'
 import { AgentDoc, defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryDraft, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { git } from '../workspaces/git.ts'
-import { Workspaces, workspaces } from '../workspaces/workspaces.ts'
+import type { WorkspaceService } from '../workspaces/server.ts'
 
 /** The target tip a conversation last saw. A branch gets its own baseline, not its source's. */
 export const Seen = defineDoc<{ main?: string; at?: number }>({
@@ -23,9 +22,12 @@ async function mainOf(
   ctx: Context,
   tx?: Tx,
 ): Promise<Main | undefined> {
+  const service = host.use<WorkspaceService>('workspaces')
+  if (!service) return undefined
+  const { git } = service
   const workspace = tx
-    ? (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)]
-    : await workspaces(host).get(id, ctx)
+    ? (await tx.doc(service.doc, ROOT_CONVERSATION_ID)).items[String(id)]
+    : await service.get(id, ctx)
   const cwd = workspace?.source ?? host.projectRoot
   // A shared conversation follows the branch the project checkout is on, like a workspace's target.
   const target =
@@ -87,6 +89,7 @@ export function watchSeen(host: ExtensionHost, ctx: Context) {
 
 /** Files this conversation changed: its workspace diff, or its own edit/write calls in a shared checkout. */
 async function changedFiles(host: ExtensionHost, id: ConversationId, main: Main, tx: Tx) {
+  const { git } = host.use<WorkspaceService>('workspaces')!
   if (main.workspace) {
     const base = await git(main.workspace, 'merge-base', 'HEAD', main.sha)
     return new Set(
@@ -123,6 +126,7 @@ async function catchupText(
   since: { main: string; at?: number },
   tx: Tx,
 ) {
+  const { git } = host.use<WorkspaceService>('workspaces')!
   const range = `${since.main}..${main.sha}`
   const [count, records, changed] = await Promise.all([
     git(main.cwd, 'rev-list', '--count', range).then(Number),

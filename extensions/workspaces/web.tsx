@@ -1,4 +1,4 @@
-import { ChevronRightIcon, CopyIcon, GitBranchIcon, RefreshCwIcon } from 'lucide-react'
+import { CheckIcon, ChevronRightIcon, CopyIcon, GitBranchIcon, RefreshCwIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -25,7 +25,63 @@ import {
 import type { WorkspaceConversation as ConversationSummary } from './data.tsx'
 import { LanderAskEntry, LanderLogEntry, LanderReport, WorkspaceCall } from './log.tsx'
 import type { WorkspaceDisk, WorkspaceInfo, WorkspaceStats } from './types.ts'
+import type { EntryRecord } from '@earendil-works/pi-durable'
 import { Row, Rows } from '../info/rows.tsx'
+
+function LandingNote({ entry }: { entry: EntryRecord }) {
+  const { switchConversation } = useUltimate()
+  const {
+    from,
+    sha,
+    target: branch,
+    title,
+    commits,
+    paths,
+    more,
+  } = entry.data as {
+    from: number
+    sha: string
+    target: string
+    title: string
+    commits: { sha: string; subject: string }[]
+    paths: string[]
+    more: number
+  }
+  return (
+    <section
+      className="min-w-0 rounded-md border border-l-2 border-border border-l-success/70 bg-muted/20"
+      data-lineage-note="lander"
+    >
+      <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px]">
+        <CheckIcon className="size-3.5 shrink-0 text-success" />
+        <span className="shrink-0">Landed {sha.slice(0, 7)} ·</span>
+        <button
+          className="min-w-0 cursor-pointer truncate text-muted-foreground hover:text-foreground hover:underline"
+          onClick={() => switchConversation(from)}
+          title={`Open #${from}`}
+          type="button"
+        >
+          #{from} {title}
+        </button>
+      </header>
+      <div className="space-y-2 px-3 py-2.5 font-mono text-[11px]">
+        <div className="text-muted-foreground">on {branch}</div>
+        <div>
+          {commits.map((commit) => (
+            <div className="flex gap-2" key={commit.sha}>
+              <span className="shrink-0 text-muted-foreground">{commit.sha.slice(0, 7)}</span>
+              <span className="min-w-0 break-words">{commit.subject}</span>
+            </div>
+          ))}
+          {more > 0 && <div className="text-muted-foreground">and {more} more</div>}
+        </div>
+        {paths.length > 0 && (
+          <div className="break-words text-muted-foreground">Changed: {paths.join(', ')}</div>
+        )}
+      </div>
+    </section>
+  )
+}
 
 function IsolationToggle() {
   const { target, isolated: isolation } = useComposer()
@@ -396,6 +452,12 @@ export default defineWebExtension({
   slots: { 'composer.toolbar': [IsolationToggle] },
   tools: { workspace: WorkspaceCall },
   entries: {
+    'lineage.note': ({ entry, core }) =>
+      (entry.data as { source?: string })?.source === 'lander' ? (
+        <LandingNote entry={entry} />
+      ) : (
+        core
+      ),
     'ultimate.lander': LanderLogEntry,
     'ultimate.lander-ask': LanderAskEntry,
     'workspaces.lander-report': LanderReport,

@@ -29,7 +29,7 @@ import { git, setup } from '../extensions/workspaces/git.ts'
 import type { LanderEntry, WorkspaceIndex } from '../extensions/workspaces/types.ts'
 import { exclusiveSlot } from '../extensions/exclusive-commands/slot.ts'
 import { createLander } from '../extensions/workspaces/lander.ts'
-import { leaveNote, Root } from '../extensions/lineage/server.ts'
+import { leaveNote, rootOf, Root } from '../extensions/lineage/server.ts'
 import self from '../extensions/self/server.ts'
 import promptExtension, { order as promptOrder } from '../extensions/prompt/server.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
@@ -76,6 +76,7 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
   })
   let opened: Awaited<ReturnType<typeof prepared.open>>
   const resources = new Map<string, unknown>()
+  const services = new Map<string, unknown>()
   const restart = vi.fn<ExtensionHost['restart']>(async () => 'RESTART_CALLED')
   // As the server: openers run each time the harness opens, cleanups each time it closes.
   const openers: (() => Promise<void>)[] = []
@@ -84,6 +85,21 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
     ...prepared,
     harness: () => opened.harness,
     metadata: Metadata,
+    provide: (name: string, value: unknown) => {
+      services.set(name, value)
+    },
+    use: (name: string) =>
+      services.get(name) ??
+      (name === 'lineage' && host.extensions().some((e) => e.name === 'lineage' && e.enabled)
+        ? {
+            rootOf: (ctx: typeof context) => rootOf(host, ctx),
+            leaveNote: (
+              to: number | 'root',
+              text: string,
+              source: Parameters<typeof leaveNote>[3],
+            ) => leaveNote(host, to, text, source),
+          }
+        : undefined),
     projectSettings: async () => ({ isolates: { worktree: { setup: commands } } }),
     extensions: () => [{ name: 'workspaces', enabled: true }],
     resource<T>(key: string, create: () => T): T {
@@ -694,6 +710,19 @@ it.concurrent('lets an ownerless history fork submit its own workspace', async (
   const [report] = await submitted(f, fork.id)
   expect(report).toContain('landed as')
   expect(await readFile(join(f.projectRoot, 'branch.txt'), 'utf8')).toBe('branch.txt')
+})
+it.concurrent('lands and reports a submission without a lineage provider', async () => {
+  const f = await lander({ checks: ['test -f base.txt'] })
+  expect(f.host.use('lineage')).toBeUndefined()
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  await commit(workspace.path, 'no-lineage.txt')
+  await f.service.submit(id, context)
+  const [report] = await submitted(f, id)
+  expect(report).toContain('landed as')
+  expect(await readFile(join(f.projectRoot, 'no-lineage.txt'), 'utf8')).toBe('no-lineage.txt')
+  expect(await rootNotes(f)).toHaveLength(0)
 })
 it.concurrent('lands two submissions in order onto a moved target and reports both', async () => {
   const f = await lander({ checks: ['test -f base.txt'] })

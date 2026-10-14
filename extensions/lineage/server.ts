@@ -28,8 +28,7 @@ import type {
 import type { ActionContext } from '../../server/actions.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { git } from '../workspaces/git.ts'
-import { workspaces } from '../workspaces/workspaces.ts'
+import type { WorkspaceService } from '../workspaces/server.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 import { Summaries } from '../conversations/summary.ts'
 import { Plan } from '../plan/server.ts'
@@ -201,7 +200,8 @@ function lineage(host: ExtensionHost) {
             )
             brief = await runtime.memo('brief', answer.text, ctx)
           }
-          if (await workspaces(host).get(id, ctx)) await workspaces(host).ready(id, ctx)
+          if (await host.use<WorkspaceService>('workspaces')?.get(id, ctx))
+            await host.use<WorkspaceService>('workspaces')?.ready(id, ctx)
           const conversation = (await host.harness().conversation(id, ctx))!
           await conversation.submit(
             {
@@ -370,7 +370,10 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
   const from = (input.from ?? (await rootOf(host, ctx))) as ConversationId
   const { startBrief } = lineage(host)
   // Shared and isolated branches both start from the project checkout's branch tip.
-  const main = await git(host.projectRoot, 'rev-parse', 'HEAD').catch(() => undefined)
+  const main = await host
+    .use<WorkspaceService>('workspaces')
+    ?.git(host.projectRoot, 'rev-parse', 'HEAD')
+    .catch(() => undefined)
   // A first branch needs a stored entry to fork from, even when the root is still empty.
   if (input.at === undefined)
     await host.harness().commit(async (tx) => {
@@ -395,7 +398,11 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
       ...(input.model ? { model: input.model } : {}),
       ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     })
-    if (input.isolated) await workspaces(host).create(tx, fork.id, host.projectRoot)
+    if (input.isolated) {
+      const workspaces = host.use<WorkspaceService>('workspaces')
+      if (!workspaces) throw new Error('Isolated branches require workspaces')
+      await workspaces.create(tx, fork.id, host.projectRoot)
+    }
     if (main) await seedSeen(tx, fork.id, main, Date.now())
     ;(await tx.doc(Branch, fork.id)).branch = {
       from,
@@ -569,7 +576,19 @@ export const actions = {
   },
 }
 
+export type LineageService = {
+  rootOf: (ctx: Context) => ReturnType<typeof rootOf>
+  leaveNote: (
+    to: number | 'root',
+    text: string,
+    source?: Parameters<typeof leaveNote>[3],
+  ) => ReturnType<typeof leaveNote>
+}
 export default function lineageExtension(host: ExtensionHost) {
+  host.provide('lineage', {
+    rootOf: (ctx) => rootOf(host, ctx),
+    leaveNote: (to, text, source) => leaveNote(host, to, text, source),
+  } satisfies LineageService)
   const { Brief, Notify } = lineage(host)
   watchSeen(host, context)
   return defineExtension({

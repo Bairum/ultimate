@@ -52,6 +52,9 @@ export type ExtensionHost = Pick<
   notice(message: string): void
   /** Ephemeral terminal status, scoped to this facet; staged until installation succeeds. */
   service(name: string, status: ServiceStatus): ServiceHandle
+  provide(name: string, value: unknown): void
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters
+  use<T>(name: string): T | undefined
   resource<T>(key: string, create: () => T): T
   /** Run `callback` each time the harness opens, at once when it is open; the server serves once it settles. */
   onOpen(callback: () => Promise<void>): void
@@ -96,6 +99,8 @@ export async function loadExtensions(
     reportCore({ type: 'services', services: snapshot }),
   )
   const facetServices = new Map<ExtensionHost, ReturnType<typeof services.scope>>()
+  const provided = new Map<ExtensionHost, Map<string, unknown>>()
+  const providers = new Map<string, { owner: ExtensionHost; value: unknown }>()
   const facetHosts = new Map<string, ExtensionHost>()
   const subscriptions = new Map<ExtensionHost, Set<() => void>>()
   const facetOpeners = new Map<ExtensionHost, Set<() => Promise<void>>>()
@@ -105,6 +110,8 @@ export async function loadExtensions(
     if (!facetHost) return
     facetServices.get(facetHost)?.dispose()
     facetServices.delete(facetHost)
+    for (const [name, service] of providers) if (service.owner === facetHost) providers.delete(name)
+    provided.delete(facetHost)
     for (const stop of subscriptions.get(facetHost) ?? []) stop()
     subscriptions.delete(facetHost)
     for (const callback of facetOpeners.get(facetHost) ?? []) openers.delete(callback)
@@ -125,6 +132,11 @@ export async function loadExtensions(
     let sharedResource = false
     const facetHost = {
       ...extensionHost,
+      provide: (serviceName, value) => {
+        provided.get(facetHost)!.set(serviceName, value)
+        if (facetHosts.get(name) === facetHost)
+          providers.set(serviceName, { owner: facetHost, value })
+      },
       service: (serviceName, status) => serviceScope.service(serviceName, status),
       notice: (message) => {
         facetNotices.get(facetHost)!.add(message)
@@ -177,6 +189,7 @@ export async function loadExtensions(
         },
       },
     } satisfies ExtensionHost
+    provided.set(facetHost, new Map())
     facetServices.set(facetHost, serviceScope)
     subscriptions.set(facetHost, stops)
     facetOpeners.set(facetHost, new Set())
@@ -196,6 +209,11 @@ export async function loadExtensions(
   const resources = new Map<string, unknown>()
   const extensionHost: ExtensionHost = {
     events,
+    provide: () => {
+      throw new Error('Providers require a facet scope')
+    },
+    // oxlint-disable-next-line typescript/no-unnecessary-type-parameters
+    use: <T>(name: string) => providers.get(name)?.value as T | undefined,
     service: () => {
       throw new Error('Services require a facet scope')
     },
@@ -370,6 +388,8 @@ export async function loadExtensions(
           host.registry.install(extension)
           await dispose(facetHosts.get(name))
           facetHosts.set(name, facetHost)
+          for (const [key, value] of provided.get(facetHost)!)
+            providers.set(key, { owner: facetHost, value })
           facetServices.get(facetHost)!.activate()
           if (open) await Promise.all([...facetOpeners.get(facetHost)!].map(runOpener))
           actions.set(name, exportedActions)

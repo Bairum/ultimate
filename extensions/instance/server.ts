@@ -8,7 +8,7 @@ import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Subagents } from '../subagents/server.ts'
-import { workspaces } from '../workspaces/workspaces.ts'
+import type { WorkspaceService } from '../workspaces/server.ts'
 
 const info = ({ id, url, home, pid }: { id: string; url: string; home: string; pid: number }) => ({
   id,
@@ -20,6 +20,7 @@ const info = ({ id, url, home, pid }: { id: string; url: string; home: string; p
 export default function instanceExtension(
   host: Pick<
     ExtensionHost,
+    | 'use'
     | 'resource'
     | 'onClose'
     | 'home'
@@ -33,7 +34,7 @@ export default function instanceExtension(
     | 'metadata'
   >,
 ) {
-  const service = workspaces(host)
+  const service = () => host.use<WorkspaceService>('workspaces')
   const instances = host.resource('instance', () => {
     host.onClose(async () => {
       await Promise.all([...instances.keys()].map(stop))
@@ -130,7 +131,7 @@ export default function instanceExtension(
                 if (!child) throw new Error(`Unknown subagent: ${args.subagent}`)
                 conversationId = child.conversationId
               }
-              const workspace = await service.get(conversationId, context)
+              const workspace = await service()?.get(conversationId, context)
               if (args.subagent !== undefined && !workspace)
                 throw new Error('Subagent must have an active worktree isolate')
               if (workspace) {

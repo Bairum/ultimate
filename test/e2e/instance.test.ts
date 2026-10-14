@@ -57,12 +57,17 @@ async function fixture() {
   })
   let opened: Awaited<ReturnType<typeof prepared.open>>
   const resources = new Map<string, unknown>()
+  const services = new Map<string, unknown>()
   const cleanups: (() => Promise<void>)[] = []
   const host = {
     ...prepared,
     projectSettings: () => projectSettings(source, root),
     harness: () => opened.harness,
     metadata: Metadata,
+    provide: (name: string, value: unknown) => {
+      services.set(name, value)
+    },
+    use: (name: string) => services.get(name),
     extensions: () => [{ name: 'workspaces', enabled: true }],
     resource<T>(key: string, create: () => T): T {
       if (!resources.has(key)) resources.set(key, create())

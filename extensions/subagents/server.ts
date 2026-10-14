@@ -35,8 +35,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import type { Source } from '../../server/project.ts'
 import { agentRoots, deleteDefinition, discoverAgents, saveDefinition } from './agents.ts'
 import { createChild } from './children.ts'
-import { workspaces } from '../workspaces/workspaces.ts'
-import { git } from '../workspaces/git.ts'
+import type { WorkspaceService } from '../workspaces/server.ts'
 import { requestSummary } from '../conversations/summary.ts'
 import { summaryModel } from '../conversations/summary-model.ts'
 
@@ -562,6 +561,7 @@ export default function subagents(
     | 'modelRuntime'
     | 'home'
     | 'projectSettings'
+    | 'use'
     | 'resource'
     | 'extensions'
     | 'notice'
@@ -570,7 +570,7 @@ export default function subagents(
     | 'scanSubmissions'
   >,
 ) {
-  const service = workspaces(host)
+  const service = () => host.use<WorkspaceService>('workspaces')
   const Reporter = createReporter()
   let unsubscribe: (() => void) | undefined
   let recovery = Promise.resolve()
@@ -829,7 +829,7 @@ Available definitions:
             const rows = await Promise.all(
               Object.values(index.agents).map(async (agent) => ({
                 ...agent,
-                workspace: await service.get(agent.conversationId, context),
+                workspace: await service()?.get(agent.conversationId, context),
                 busy:
                   (await api.snapshot(LiveDoc, agent.conversationId, context))?.run !== undefined,
               })),
@@ -845,9 +845,11 @@ Available definitions:
             if (await api.memo<boolean>('workspace-operation', context))
               throw new Error('Workspace operation interrupted; call again')
             await api.memo('workspace-operation', true, context)
+            const workspaceService = service()
+            if (!workspaceService) throw new Error('Workspace operations require workspaces')
             const operation = args.action
             return finish(
-              JSON.stringify(await service[operation](args.id as ConversationId, context)),
+              JSON.stringify(await workspaceService[operation](args.id as ConversationId, context)),
             )
           }
           if (args.action === 'start' || args.action === 'message') {
@@ -875,8 +877,12 @@ Available definitions:
               throw new Error('Definition tools must be a subset of parent tools')
             const isolated =
               definition && (args.isolate ?? definition.isolate ?? 'none') === 'worktree'
+            const workspaceService = service()
+            if (isolated && !workspaceService)
+              throw new Error('Worktree isolates require workspaces')
             const warning =
-              isolated && (await git(parent.cwd ?? host.projectRoot, 'status', '--porcelain'))
+              isolated &&
+              (await workspaceService!.git(parent.cwd ?? host.projectRoot, 'status', '--porcelain'))
                 ? '\nWarning: parent has uncommitted changes; they are not in the worktree.'
                 : ''
             const task = await api.getTask(api.taskId, context)
@@ -944,7 +950,7 @@ Available definitions:
                   reported: [],
                 }
                 if (isolated) {
-                  const workspace = await service.create(
+                  const workspace = await workspaceService!.create(
                     tx,
                     child.id,
                     parent.cwd ?? host.projectRoot,
@@ -968,7 +974,7 @@ Available definitions:
               state.actions[api.callId] = createdAction
               return createdAction
             }, context)
-            const isolate = await service.get(action.conversationId, context)
+            const isolate = await service()?.get(action.conversationId, context)
             const isolateInfo = isolate
               ? `\nIsolate: ${isolate.path}\nBranch: ${isolate.branch}${warning}`
               : ''

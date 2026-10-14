@@ -77,6 +77,7 @@ type Host = Pick<
   | 'userHome'
   | 'modelRuntime'
   | 'projectSettings'
+  | 'use'
   | 'resource'
   | 'extensions'
   | 'metadata'
