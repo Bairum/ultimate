@@ -35,7 +35,7 @@ export const Plan = defineDoc<{ next: number; epics: Record<string, Epic> }>({
   version: 1,
   scope: 'conversation',
   history: 'rewindable',
-  fork: 'initial',
+  fork: 'asOf',
   initial: () => ({ next: 1, epics: {} }),
 })
 /** The task each linked child conversation works on, across every coordinator's plan; kept with the root. */
