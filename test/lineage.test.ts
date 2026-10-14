@@ -228,7 +228,12 @@ it('lets a summary replace the provisional branch title', async () => {
           userHome: server.host.userHome,
           projectSettings: async () => ({}),
           notice: () => {},
-          modelRuntime: server.host.modelRuntime,
+          modelRuntime: {
+            getAvailableSnapshot: () =>
+              server.host.modelRuntime
+                .getModels()
+                .filter((model) => model.provider === 'openai' && model.id === 'gpt-6-luna'),
+          },
         },
         async () => ({
           assessment: 'done',

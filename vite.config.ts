@@ -19,6 +19,7 @@ export default defineConfig({
   fmt: { semi: false, singleQuote: true },
   test: {
     root: '.',
+    setupFiles: ['test/setup.ts'],
     include: ['test/**/*.test.ts'],
     exclude: ['test/e2e/**'],
     testTimeout: 30000,

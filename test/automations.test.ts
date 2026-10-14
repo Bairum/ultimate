@@ -3,8 +3,8 @@ import { awaitWithContext } from '@earendil-works/chord/context'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { setTimeout as realDelay } from 'node:timers/promises'
+import { afterEach, expect, it, vi } from 'vitest'
+import { setImmediate as yieldToIO } from 'node:timers/promises'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import { context, prepareHarness } from '../server/harness.ts'
@@ -15,13 +15,11 @@ import type { Automation } from '../extensions/automations/server.ts'
 import type { ActionContext } from '../server/actions.ts'
 import { temp } from './helpers.ts'
 
-beforeEach(() => vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] }))
-
 async function until(test: () => boolean | Promise<boolean>, timeout = 7000) {
   for (let elapsed = 0; elapsed <= timeout; elapsed += 50) {
     if (await test()) return
     await vi.advanceTimersByTimeAsync(50)
-    await realDelay(2)
+    await yieldToIO()
   }
   throw new Error('Timed out')
 }
@@ -45,6 +43,7 @@ async function fixture() {
     home: join(root, 'home'),
     faux: true,
   })
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
   let opened: OpenHost
   let enabled = true
   let release: (() => void) | undefined

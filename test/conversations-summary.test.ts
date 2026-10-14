@@ -97,6 +97,11 @@ async function launch(subagents = false, initialIntent = false) {
     summary: 'Added concise summaries to the sidebar.',
   }))
   const install = (registry = server.host.registry) => {
+    vi.spyOn(server.host.modelRuntime, 'getAvailableSnapshot').mockImplementation(() =>
+      server.host.modelRuntime
+        .getModels()
+        .filter((model) => model.provider === 'openai' && model.id === 'gpt-6-luna'),
+    )
     const existing = registry.snapshot().extension('conversations')!
     registry.install(
       defineExtension({
