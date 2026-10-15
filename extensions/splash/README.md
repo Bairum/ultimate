@@ -21,6 +21,8 @@ app comes up once the page is ready.
   loading (`useReady().pending`) and those that failed (`useReady().failed`), until they load or it is dismissed.
 - **Once per page load**: mounted when the page is already ready (a very warm start, a hot reload), it shows nothing,
   and hot reloads after ready never bring it back.
+- **Fresh starts only**: a reload of a rendered page (a core restart, a Vite full reload, F5) shows the previous
+  page's view until the app is back (`resumed` from `@/sdk`), so the splash stays away.
 - **Rehearsal**: `?splash` holds the splash on screen, automated browsers included, and a click replays it;
   `?splash=first` plays the first run's version. For polishing it on a preview instance.
 - **Automated browsers** (`navigator.webdriver`, as in the agent's `browser` and `screenshot` tools): no show, so the

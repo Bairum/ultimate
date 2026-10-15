@@ -16,6 +16,7 @@ import {
 } from '../sdk/hooks.ts'
 import { HOME, surfaceItems } from '../sdk/registry.ts'
 import type { SurfaceItem } from '../sdk/registry.ts'
+import { rendered } from '../sdk/resume.ts'
 import { ExtensionErrors, Slot } from './boundary.tsx'
 import { useShortcuts } from './keyboard.ts'
 import { CommandPalette } from './palette.tsx'
@@ -141,7 +142,12 @@ export function App() {
   const ready = useStore((state) => state.shared !== undefined && state.system !== undefined)
   const home = surfaceItems(records).find((item) => item.id === HOME)
   const shown = useStore((state) => state.ui.surface)
+  const viewed = useStore((state) => state.view !== undefined)
   useDocumentTitle(shown)
+  // The surface and its conversation are on screen: what a reload resumes, and what a resumed reload uncovers.
+  useEffect(() => {
+    if (loaded && !pending && viewed) rendered()
+  }, [loaded, pending, viewed])
 
   useEffect(() => {
     if (!ready || pending || missing === reported) return

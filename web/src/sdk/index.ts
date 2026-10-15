@@ -4,6 +4,7 @@
  */
 export { defineWebExtension } from './types.ts'
 export { events, useEvent } from './events.ts'
+export { resumed } from './resume.ts'
 export type {
   CommandContribution,
   Contribution,
