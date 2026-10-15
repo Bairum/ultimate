@@ -1,8 +1,18 @@
 diff --git a/dist/harness/generation.js b/dist/harness/generation.js
-index 136bed43fe2c45f1739109e34af5590d5036a3f7..05e108e60f8afb4970869ea87c2f8fee4bc406cf 100644
+index 136bed43fe2c45f1739109e34af5590d5036a3f7..2b43c79b6d83288f2508ef362e8a25443a36b0be 100644
 --- a/dist/harness/generation.js
 +++ b/dist/harness/generation.js
-@@ -425,7 +425,7 @@ async function answer(runtime, message, context) {
+@@ -125,7 +125,8 @@ export const GenerationTask = defineTask({
+                 sessionId: await ensureProviderSessionId(runtime, context),
+                 ...(thinkingLevel === "off" ? {} : { reasoning: thinkingLevel }),
+             };
+-            const message = await streamResponse(runtime, model, messages, options, attempt, context);
++            // The level this request asked for, recorded on the response as Pi's agent loop does.
++            const message = Object.assign(await streamResponse(runtime, model, messages, options, attempt, context), { thinkingLevel: thinkingLevel ?? "off" });
+             const request = { attempt, compacted, model: ref, cutoff, messages: view.messages };
+             await classify(runtime, request, message, context);
+         },
+@@ -425,7 +426,7 @@ async function answer(runtime, message, context) {
      const conversationId = runtime.conversationId;
      await runtime.commit(async (tx) => {
          // Queue modes are read on the Session line, when the boundary is decided.
@@ -11,7 +21,7 @@ index 136bed43fe2c45f1739109e34af5590d5036a3f7..05e108e60f8afb4970869ea87c2f8fee
          const live = await tx.doc(LiveDoc, conversationId);
          const entry = await appendAssistant(tx, conversationId, message);
          const result = { status: "terminal", outcome: { status: "completed", result: { entryId: entry.id } } };
-@@ -507,7 +507,7 @@ async function finishToolRound(runtime, assistant, tools, context) {
+@@ -507,7 +508,7 @@ async function finishToolRound(runtime, assistant, tools, context) {
      // The last handoff in call order wins.
      const handoff = [...controls.values()].findLast((control) => control?.handoff !== undefined)?.handoff;
      await runtime.commit(async (tx) => {

@@ -95,3 +95,21 @@ it('places hook entries transactionally before initial and queued run inputs, no
     await f.close()
   }
 })
+
+it('records the thinking level each request asked for on its response', async () => {
+  const home = await temp()
+  const prepared = await prepareHarness({ ultimateRoot: home, userHome: home, home, faux: true })
+  prepared.faux!.setResponses([fauxAssistantMessage('unset'), fauxAssistantMessage('high')])
+  const f = await prepared.open()
+  try {
+    await (await f.root.submit({ type: 'input', content: 'one' }, context)).wait(context)
+    await f.root.configure({ thinkingLevel: 'high' }, context)
+    await (await f.root.submit({ type: 'input', content: 'two' }, context)).wait(context)
+    const levels = (await f.root.context(context)).messages.flatMap((message) =>
+      message.role === 'assistant' ? [message.thinkingLevel] : [],
+    )
+    expect(levels).toEqual(['off', 'high'])
+  } finally {
+    await f.close()
+  }
+})
