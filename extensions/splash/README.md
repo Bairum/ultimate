@@ -7,16 +7,16 @@ app comes up once the page is ready.
   the first system snapshot is in, or the core's 8 s deadline has passed. The shell holds the app itself back until
   then, so the overlay draws over the background `web/index.html` paints and nothing of the app flashes, however late
   the splash installs.
-- **The show** (Web Animations API): each letter's outline traces in behind a bright pen, stroke by stroke, then
-  fills in the brand colour. Still loading after that, a quiet rule draws out beneath the name.
+- **The show** (Web Animations API and WebGL): lightning sweeps across the name from left to right, each letter
+  filling in the brand colour as it passes, then a dot pops onto the I as the lightning flares and settles into a
+  faint glow that stays until the overlay goes. The lightning is `electric.tsx`, adapted from React Bits'
+  ElectricLogo on `ogl`; without WebGL2 the letters fill in the same way without it. Still loading after that, a quiet rule draws out beneath the name.
   Once ready, a drawing still in progress finishes within a quarter second and the overlay fades into the app. It
   stays at least 0.7 s, so a warm start does not flash.
 - **First run** (onboarding's `status` action reports `firstRun`): the signature version plays slower and in full,
   with the rule, then the name lifts away as the overlay fades into onboarding's page beneath, which is already open.
-  Without the `onboarding` extension there is no first run. As its I fills in, faint lightning starts flowing around
-  it (`electric.tsx`, adapted from React Bits' ElectricLogo on `ogl`), in the theme's colours and gone with the overlay;
-  without WebGL2 or with reduced motion there is none.
-- **Reduced motion** (`prefers-reduced-motion`): the settled wordmark, then a quick fade.
+  Without the `onboarding` extension there is no first run.
+- **Reduced motion** (`prefers-reduced-motion`): the settled wordmark with its dot, no lightning, then a quick fade.
 - **Never stuck**: not ready after 8 s, the core reveals the app anyway, and a small notice names the extensions still
   loading (`useReady().pending`) and those that failed (`useReady().failed`), until they load or it is dismissed.
 - **Once per page load**: mounted when the page is already ready (a very warm start, a hot reload), it shows nothing,
@@ -40,6 +40,6 @@ is `aria-hidden`.
 `web.tsx` holds the outlines of ULTIMATE as the header sets it, Inter SemiBold tracked 0.28em, taken from the
 display optical size (`opsz` 32, `wght` 600) of the Inter variable font that `@fontsource-variable/inter` ships, with
 overlaps removed and kerned by HarfBuzz. Its colours are theme tokens (`brand`, `foreground`), so it follows light and
-dark. Sizes inside the SVG, such as the stroke widths, are in font units and scale with the wordmark.
+dark. The dot over the I is a circle in font units, so it scales with the wordmark.
 
 Turn it off with `{ "extensions": { "disable": ["splash"] } }` in `~/.ultimate/settings.json`.

@@ -32,63 +32,47 @@ const letters: readonly (readonly string[])[] = [
 ]
 const view = { x: 118, width: 13533, height: 1514 }
 
-/** The I alone, for the lightning to trace: its outline in a box of its own. */
+/** The dot that makes the I an i, above its stem, in font units. */
+const dot = { cx: 5634, cy: -310, r: 150 }
+
+/** The wordmark's outline, for the lightning to trace. */
 const charge = `data:image/svg+xml,${encodeURIComponent(
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="5502 0 264 1490" width="264" height="1490"><path d="${letters[3][0]}" fill="#fff"/></svg>`,
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${view.x} 0 ${view.width} ${view.height}" width="${view.width / 10}" height="${view.height / 10}"><path d="${letters.flat().join('')}" fill="#fff"/></svg>`,
 )}`
 
 /**
- * The first run's spark: lightning flowing faintly around the I, centred on it in a box three times the wordmark's
- * height so the glow has room. Theme colours: brand light in dark, brand ink in light.
+ * Lightning around the wordmark, in a box reaching past it so the glow has room. `level` drives it: how far the sweep
+ * has reached and how strong it is. Theme colours: brand light in dark, brand ink in light.
  */
-function Spark() {
+function Lightning({ level }: { level: () => Level }) {
   const theme = useStore((state) => state.ui.theme)
   return (
     <Electric
-      arcs={0.3}
-      bend={0.5}
-      className="pointer-events-none absolute top-1/2 left-[40.76%] h-[300%] w-[24%] -translate-1/2"
+      arcs={0.25}
+      bend={0.45}
+      className="pointer-events-none absolute top-1/2 left-1/2 h-[400%] w-[120%] -translate-1/2"
       color={theme === 'dark' ? '#e4d6ff' : '#7b47bf'}
-      crackle={1.2}
+      crackle={1}
       flicker={0.3}
-      glow={0.7}
+      glow={0.8}
       glowColor={theme === 'dark' ? '#bb9af4' : '#7b47bf'}
-      intensity={0.7}
-      scale={0.328}
-      speed={1.8}
+      presence={() => level().presence}
+      reveal={() => level().reveal}
+      scale={1 / 1.2}
+      speed={2}
       src={charge}
       strands={3}
       theme={theme}
-      thickness={1.2}
+      thickness={1.3}
     />
   )
 }
 
-/** One contour's outline, or its pen. */
-const outline = (d: string, key: number, kind: 'trace' | 'pen') => (
-  <path
-    className={
-      kind === 'trace'
-        ? 'fill-none stroke-brand stroke-[28px]'
-        : 'fill-none stroke-brand stroke-[56px] opacity-0 brightness-150 drop-shadow-[0_0_60px_var(--brand)]'
-    }
-    d={d}
-    data-pen={kind === 'pen' ? '' : undefined}
-    data-trace={kind === 'trace' ? '' : undefined}
-    key={`${kind}${key}`}
-    pathLength={1}
-    strokeDasharray={kind === 'trace' ? '1 2' : '0.04 2'}
-    strokeDashoffset={kind === 'trace' ? 1 : 0.04}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  />
-)
-
 /**
- * The wordmark: per letter its fill, the outline that traces it, and the pen, a short bright dash at the head of the
- * outline. `still` draws it settled.
+ * The wordmark: per letter its fill, the dot over the I, and the lightning that draws them in. `still` draws it settled,
+ * without lightning.
  */
-function Wordmark({ still, spark }: { still: boolean; spark: boolean }) {
+function Wordmark({ still, level }: { still: boolean; level: () => Level }) {
   return (
     <div className="relative">
       <svg
@@ -97,19 +81,23 @@ function Wordmark({ still, spark }: { still: boolean; spark: boolean }) {
         viewBox={`${view.x} 0 ${view.width} ${view.height}`}
       >
         {letters.map((contours, index) => (
-          <g data-letter="" key={index}>
-            <path
-              className="fill-brand"
-              d={contours.join('')}
-              data-fill=""
-              fillOpacity={still ? 1 : 0}
-            />
-            {!still && contours.map((d, contour) => outline(d, contour, 'trace'))}
-            {!still && contours.map((d, contour) => outline(d, contour, 'pen'))}
-          </g>
+          <path
+            className="fill-brand"
+            d={contours.join('')}
+            data-letter=""
+            fillOpacity={still ? 1 : 0}
+            key={index}
+          />
         ))}
+        <circle
+          className="origin-center fill-brand [transform-box:fill-box]"
+          data-dot=""
+          fillOpacity={still ? 1 : 0}
+          {...dot}
+        />
       </svg>
-      {spark && <Spark />}
+      {!still && <Lightning level={level} />}
+      <div data-sweep="" hidden />
     </div>
   )
 }
@@ -118,10 +106,13 @@ function Wordmark({ still, spark }: { still: boolean; spark: boolean }) {
 const minimum = { motion: 700, still: 400 }
 /** Once ready, the rest of the drawing takes at most this long. */
 const rush = 240
+/** The lightning sweeps across the name for this long, then settles over as long again while the dot pops in. */
+const sweep = 900
+/** Once swept, the lightning idles at this strength. */
+const idle = 0.3
 /** The first run's intro plays at this rate: the signature version. */
 const signatureRate = 0.8
 
-const draw = 'cubic-bezier(0.65, 0, 0.35, 1)'
 const out = 'cubic-bezier(0.22, 1, 0.36, 1)'
 const inOut = 'cubic-bezier(0.45, 0, 0.25, 1)'
 
@@ -129,7 +120,15 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, Math.m
 const finished = (animations: readonly Animation[]) =>
   Promise.allSettled(animations.map((animation) => animation.finished))
 
+/** The lightning's state: how far it has swept across the name (0 to 1) and how strong it is. */
+interface Level {
+  reveal: number
+  presence: number
+}
+
 interface Show {
+  /** The lightning, read every frame. */
+  level(): Level
   /** Plays the first run's signature version: a slower intro in full, the rule drawn beneath. */
   signature(): void
   /** Settles the wordmark and fades the overlay into the app; true once it has gone, false when cancelled. */
@@ -157,47 +156,38 @@ function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
   /** The reveal has begun: the show no longer changes. */
   let committed = false
 
+  /** The sweep's clock: an invisible animation, so hurrying and the signature rate move the lightning too. */
+  let clock: Animation | undefined
   if (!still) {
-    for (const [index, letter] of [...overlay.querySelectorAll('[data-letter]')].entries()) {
-      const start = 60 + index * 70
-      const pens = letter.querySelectorAll('[data-pen]')
-      for (const [contour, trace] of [...letter.querySelectorAll('[data-trace]')].entries()) {
-        // A's counter follows its outline.
-        const timing = {
-          delay: start + contour * 260,
-          duration: contour === 0 ? 760 : 480,
-          easing: draw,
-          fill: 'both',
-        } as const
-        intro.push(
-          trace.animate([{ strokeDashoffset: 1 }, { strokeDashoffset: 0 }], timing),
-          // The pen rides the head of the outline: a short dash ending where the outline does.
-          pens[contour].animate(
-            [
-              { strokeDashoffset: 0.04, opacity: 0 },
-              { opacity: 1, offset: 0.1 },
-              { opacity: 1, offset: 0.85 },
-              { strokeDashoffset: -0.96, opacity: 0 },
-            ],
-            timing,
-          ),
-          // The outline gives way to the fill.
-          trace.animate([{ opacity: 1 }, { opacity: 0 }], {
-            delay: timing.delay + timing.duration,
-            duration: 500,
-            fill: 'both',
-          }),
-        )
-      }
+    clock = find('[data-sweep]').animate([{ opacity: 0 }, { opacity: 1 }], {
+      delay: 60,
+      duration: sweep * 2,
+      fill: 'both',
+    })
+    intro.push(clock)
+    const left = view.x
+    for (const letter of overlay.querySelectorAll<SVGGraphicsElement>('[data-letter]')) {
+      // Each letter fills as the lightning crosses its middle.
+      const box = letter.getBBox()
       intro.push(
-        letter.querySelector('[data-fill]')!.animate([{ fillOpacity: 0 }, { fillOpacity: 1 }], {
-          delay: start + 580,
-          duration: 480,
+        letter.animate([{ fillOpacity: 0 }, { fillOpacity: 1 }], {
+          delay: 60 + (sweep * (box.x + box.width / 2 - left)) / view.width,
+          duration: 420,
           easing: out,
           fill: 'both',
         }),
       )
     }
+    intro.push(
+      find('[data-dot]').animate(
+        [
+          { fillOpacity: 0, transform: 'scale(0)' },
+          { fillOpacity: 1, transform: 'scale(1.35)', offset: 0.55 },
+          { fillOpacity: 1, transform: 'scale(1)' },
+        ],
+        { delay: 60 + sweep, duration: 520, easing: out, fill: 'both' },
+      ),
+    )
     // Still loading once all of it has played: the rule says so.
     void finished([...intro, ...flair]).then(() => {
       if (!committed) rule()
@@ -238,6 +228,16 @@ function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
   }
 
   return {
+    level() {
+      const progress = clock?.effect?.getComputedTiming().progress ?? 0
+      const settle = Math.max(0, progress * 2 - 1)
+      return {
+        reveal: Math.min(1, progress * 2),
+        // Flares as the dot pops, then idles.
+        presence:
+          idle + (1 - idle) * (1 - settle) + Math.sin(Math.PI * Math.min(1, settle * 2)) * 0.6,
+      }
+    },
     signature() {
       if (signature || committed || still) return
       signature = true
@@ -351,7 +351,7 @@ function Splash() {
   const [still] = useState(() => matchMedia('(prefers-reduced-motion: reduce)').matches)
   const overlay = useRef<HTMLDivElement>(null)
   const show = useRef<Show>(undefined)
-  const [signature, setSignature] = useState(false)
+  const level = () => show.current?.level() ?? { reveal: 0, presence: 0 }
 
   useLayoutEffect(() => {
     if (!overlay.current) return undefined
@@ -362,12 +362,7 @@ function Splash() {
     let active = true
     api.action<{ firstRun?: boolean }>('onboarding', 'status').then(
       (status) => {
-        if (!active || !status.firstRun) return
-        current.signature()
-        // The spark comes as the I fills in.
-        setTimeout(() => {
-          if (active) setSignature(true)
-        }, 1000)
+        if (active && status.firstRun) current.signature()
       },
       // Without onboarding there is no first run.
       () => {},
@@ -399,7 +394,7 @@ function Splash() {
       tabIndex={-1}
     >
       <div className="relative w-[min(72vw,40rem)]" data-mark="">
-        <Wordmark spark={signature && !still} still={still} />
+        <Wordmark level={level} still={still} />
         <div
           className="relative mx-auto mt-[7%] h-px w-1/4 overflow-hidden bg-foreground/10 opacity-0"
           data-rule=""

@@ -5,7 +5,8 @@
 import { Mesh, Program, Renderer, Texture, Triangle } from 'ogl'
 import { useEffect, useRef } from 'react'
 
-const RASTER = 560
+/** The traced raster's area in px, whatever the image's aspect. */
+const RASTER = 640 * 640
 const CELL = 4
 const FAR = 1e20
 const ARCS = 5
@@ -137,7 +138,7 @@ const traceShape = (image: HTMLImageElement): Shape | undefined => {
   const iw = image.naturalWidth
   const ih = image.naturalHeight
   if (!iw || !ih) return undefined
-  const fit = RASTER / Math.max(iw, ih)
+  const fit = Math.sqrt(RASTER / (iw * ih))
   const w = Math.max(2, Math.round(iw * fit))
   const h = Math.max(2, Math.round(ih * fit))
   const canvas = document.createElement('canvas')
@@ -167,7 +168,8 @@ const traceShape = (image: HTMLImageElement): Shape | undefined => {
 
   const logoWidth = right - left + 1
   const logoHeight = bottom - top + 1
-  const pad = Math.ceil(Math.max(logoWidth, logoHeight) * 0.25) + 2
+  const size = Math.sqrt(logoWidth * logoHeight)
+  const pad = Math.ceil(size * 0.25) + 2
   const width = logoWidth + pad * 2
   const height = logoHeight + pad * 2
   const outer = new Float32Array(width * height)
@@ -215,7 +217,6 @@ const traceShape = (image: HTMLImageElement): Shape | undefined => {
   const edges: number[] = []
   for (let i = 0; i < points.length; i += stride) edges.push(points[i], points[i + 1])
 
-  const size = Math.max(logoWidth, logoHeight)
   const glowPad = Math.ceil((size * 0.7) / CELL)
   const glowWidth = Math.ceil(logoWidth / CELL) + glowPad * 2
   const glowHeight = Math.ceil(logoHeight / CELL) + glowPad * 2
@@ -260,7 +261,7 @@ const spawnArc = (shape: Shape, time: number): Spark | undefined => {
   const { edges, logoWidth, logoHeight } = shape
   const count = edges.length / 2
   if (count < 2) return undefined
-  const size = Math.max(logoWidth, logoHeight)
+  const size = Math.sqrt(logoWidth * logoHeight)
   const i = Math.floor(Math.random() * count)
   const ax = edges[i * 2]
   const ay = edges[i * 2 + 1]
@@ -314,6 +315,8 @@ uniform vec2 uResolution;
 uniform float uUnit;
 uniform float uTime;
 uniform float uPresence;
+uniform float uSweep;
+uniform float uHead;
 uniform vec3 uColor;
 uniform vec3 uGlowColor;
 uniform float uIntensity;
@@ -461,7 +464,10 @@ void main() {
 
   float base = shape(p);
   float breath = 1.0 + uFlicker * 0.6 * wobble(vec2(t * 2.1, 7.0), 3u);
-  float grow = uPresence;
+  float soft = uUnit * 40.0;
+  float grow = uPresence * smoothstep(uSweep + soft, uSweep - soft, p.x);
+  float front = (p.x - uSweep) / (uUnit * 20.0);
+  float head = uHead * exp(-front * front);
 
   float edge = abs(base);
   vec2 halo = aura(p);
@@ -507,7 +513,7 @@ void main() {
 
   for (int i = 0; i < ${ARCS}; i++) addArc(p, uArcEnds[i], uArcShape[i], t, light, energy, hot);
 
-  float gain = uIntensity * breath * 1.4;
+  float gain = uIntensity * breath * 1.4 * (1.0 + head * 2.0);
   float alpha = 1.0 - exp(-energy * gain);
   vec3 color = mix(1.0 - exp(-light * gain), alpha * light / max(energy, 1e-4), ink);
   color = mix(color, vec3(alpha), clamp(hot * grow, 0.0, 1.0) * ink * 0.85);
@@ -542,14 +548,18 @@ export interface ElectricProps {
   flicker?: number
   fill?: number
   speed?: number
+  /** The strength, read every frame: 0 shows nothing, 1 is full, more flares. */
+  presence: () => number
+  /** How much of the shape the lightning has reached, left to right, read every frame; the head of the sweep flares. */
+  reveal?: () => number
   /** Light renders crisp electric ink instead of emitted light. */
   theme: 'dark' | 'light'
   className?: string
 }
 
 /**
- * Lightning flowing around the outline of `src`, on a WebGL2 canvas filling the container. It fades in over 1.4 s once
- * the shape is traced, renders nothing without WebGL2, and slows down without flicker under reduced motion.
+ * Lightning flowing around the outline of `src`, on a WebGL2 canvas filling the container, as strong as `presence` says.
+ * It renders nothing without WebGL2 and slows down without flicker under reduced motion.
  */
 export function Electric(props: ElectricProps) {
   const container = useRef<HTMLDivElement>(null)
@@ -600,6 +610,8 @@ export function Electric(props: ElectricProps) {
       uUnit: { value: 1 },
       uTime: { value: 0 },
       uPresence: { value: 0 },
+      uSweep: { value: 0 },
+      uHead: { value: 0 },
       uColor: { value: [1, 1, 1] },
       uGlowColor: { value: [1, 1, 1] },
       uIntensity: { value: 1 },
@@ -622,7 +634,6 @@ export function Electric(props: ElectricProps) {
     const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches
     const sparks: Spark[] = []
     let shape: Shape | undefined
-    let progress = 0
     let ink = settings.current.theme === 'light' ? 1 : 0
     let time = 0
     let width = 1
@@ -662,8 +673,8 @@ export function Electric(props: ElectricProps) {
       const dt = Math.min(0.05, Math.max(0, (now - last) / 1000))
       last = now
       if (shape) {
-        progress = Math.min(1, progress + dt / 1.4)
-        const presence = progress * progress * (3 - 2 * progress)
+        const presence = s.presence()
+        const reveal = s.reveal?.() ?? 1
         const scale = s.scale ?? 0.7
         const speed = s.speed ?? 2.5
         const arcs = s.arcs ?? 1
@@ -680,6 +691,7 @@ export function Electric(props: ElectricProps) {
         if (
           !reducedMotion &&
           presence > 0.8 &&
+          reveal >= 1 &&
           sparks.length < ARCS &&
           Math.random() < dt * speed * arcs * 2.2
         ) {
@@ -706,9 +718,12 @@ export function Electric(props: ElectricProps) {
         ink += ((s.theme === 'light' ? 1 : 0) - ink) * (1 - Math.exp(-dt / 0.25))
         uniforms.uMap.value = [ox, oy, fit, shape.glowOffset]
         uniforms.uSize.value = [shape.width, shape.height, shape.glowWidth, shape.glowHeight]
-        uniforms.uUnit.value = (Math.max(shape.logoWidth, shape.logoHeight) * fit) / 100
+        uniforms.uUnit.value = (Math.sqrt(shape.logoWidth * shape.logoHeight) * fit) / 100
         uniforms.uTime.value = time
         uniforms.uPresence.value = presence
+        uniforms.uSweep.value =
+          reveal >= 1 ? width * 4 : ox + (shape.pad + shape.logoWidth * reveal) * fit
+        uniforms.uHead.value = Math.sin(Math.PI * Math.min(1, reveal))
         uniforms.uColor.value = hexToRgb(s.color)
         uniforms.uGlowColor.value = hexToRgb(s.glowColor)
         uniforms.uIntensity.value = s.intensity ?? 1
