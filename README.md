@@ -148,4 +148,4 @@ pnpm eval                         # real-model agent evals, ending with their co
 
 ## License
 
-[MIT](LICENSE). The repository is private for now.
+[MIT](LICENSE).
