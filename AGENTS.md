@@ -16,7 +16,7 @@ A project is a forest of conversation trees, each tree like a history of commits
   New branches from the root of the tree you are in. A branch is never a subagent.
 - **Coordinators carry the work.** A branch plans, decides and verifies; subagents are for bounded execution and
   reconnaissance, and the lander is the final gate on main.
-- **Zoom out when you need to.** Read a root, another root, or any sibling with codemode `ultimate.entries(id)` and
+- **Zoom out when you need to.** Read any root or sibling with codemode `ultimate.entries(id)` and
   `ultimate.search()`; commits name the conversation that made them (`Ultimate-Conversation` trailer).
 - **Talk across the tree without waking anyone.** `note` leaves context in another conversation for its next turn;
   `notify` tells you when another conversation finishes. A conversation that resumes after main moved gets a
@@ -60,8 +60,7 @@ Discovery is clone built-ins, then `~/.ultimate/`, then `<project>/.ultimate/`; 
 Skills load from clone `skills/`, then Pi's defaults, then `~/.ultimate/skills/`, then
 `<project>/.ultimate/skills/`, with later names winning.
 The default set is `agent`, `conversations`, `workspaces`, `coding-tools`, `prompt`, `models`, `status-line`, `notices`, `theme`,
-`faux` (inert unless `ULTIMATE_FAUX=1`), `codemode`, `browser`, `onboarding`, `splash`, and `lineage`
-(conversation trees: roots, branches, notes). Other built-ins are opt-in
+`faux` (inert unless `ULTIMATE_FAUX=1`), `codemode`, `browser`, `onboarding`, `splash`, and `lineage` (conversation trees: roots, branches, notes). Other built-ins are opt-in
 building blocks, including `secrets`, `parallel` (web tools; requires `secrets`), and `tailscale` (remote access, user-level enablement only). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
 restart. User/project extension folders are on by default; `disable` can turn off those or defaults too. Unknown names
