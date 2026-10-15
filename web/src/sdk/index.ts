@@ -61,6 +61,7 @@ export {
   useSystem,
   useTasks,
   useToolDuration,
+  useTranscript,
   useUiState,
   useUltimate,
 } from './hooks.ts'

@@ -11,7 +11,7 @@ import {
   slotItems,
   surfaceItems,
   toolRenderers,
-  messageActionItems,
+  messageItems,
   conversationStarter,
 } from '../../web/src/sdk/registry.ts'
 import type { ExtensionLoader, SurfaceItem } from '../../web/src/sdk/registry.ts'
@@ -298,7 +298,7 @@ describe('web extension registry', () => {
       [path('builtin-z')]: async () => module({ messageActions: [First, Second] }),
       [path('project-a')]: async () => module({ messageActions: [Second] }),
     })
-    expect(messageActionItems(registry.getSnapshot())).toEqual([
+    expect(messageItems(registry.getSnapshot(), 'messageActions')).toEqual([
       { key: 'builtin-z:0', extension: 'builtin-z', version: 1, component: First },
       { key: 'builtin-z:1', extension: 'builtin-z', version: 1, component: Second },
       { key: 'project-a:0', extension: 'project-a', version: 1, component: Second },
@@ -307,7 +307,23 @@ describe('web extension registry', () => {
     expect(registry.getSnapshot()[1]?.error).toBe(
       'messageActions must be an array of message action components',
     )
-    expect(messageActionItems(registry.getSnapshot())).toHaveLength(3)
+    expect(messageItems(registry.getSnapshot(), 'messageActions')).toHaveLength(3)
+  })
+
+  it('lists message details apart from message actions, validating their shape', async () => {
+    const Detail = component('detail')
+    const registry = createRegistry()
+    await registry.setLoaders({
+      [path('builtin-z')]: async () => module({ messageDetails: [Detail] }),
+    })
+    expect(messageItems(registry.getSnapshot(), 'messageDetails')).toEqual([
+      { key: 'builtin-z:0', extension: 'builtin-z', version: 1, component: Detail },
+    ])
+    expect(messageItems(registry.getSnapshot(), 'messageActions')).toEqual([])
+    registry.replace('builtin-z', { default: { messageDetails: {} } })
+    expect(registry.getSnapshot()[0]?.error).toBe(
+      'messageDetails must be an array of message detail components',
+    )
   })
 
   it('lists surfaces with Agent first, then by order and title, a later facet winning an id', async () => {

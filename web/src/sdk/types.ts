@@ -162,6 +162,8 @@ export interface WebExtension {
   start?: (draft: ConversationDraft) => Promise<{ id: number }>
   /** Contributions to the hover action row on stored messages, in discovery order. */
   messageActions?: readonly ComponentType<{ entry: EntryRecord }>[]
+  /** Readouts on the hover action row on stored messages, before its time, in discovery order. */
+  messageDetails?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Document renderers; a later facet wins a kind. */
   documents?: readonly DocumentContribution[]
   commands?: readonly CommandContribution[]

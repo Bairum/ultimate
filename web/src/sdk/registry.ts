@@ -118,6 +118,7 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   inbox: [isComponent, 'an inbox renderer component'],
   start: [isFunction, 'a conversation starter function'],
   messageActions: [arrayOf(isComponent), 'an array of message action components'],
+  messageDetails: [arrayOf(isComponent), 'an array of message detail components'],
   documents: [
     arrayOf(
       fields({
@@ -421,10 +422,13 @@ export function toolRenderers(
   })
 }
 
-/** Hover actions on stored messages, preserving discovery order and each facet's array order. */
-export function messageActionItems(records: readonly ExtensionRecord[]) {
+/** Hover actions or details on stored messages, preserving discovery order and each facet's array order. */
+export function messageItems(
+  records: readonly ExtensionRecord[],
+  contribution: 'messageActions' | 'messageDetails',
+) {
   return records.flatMap(({ name, extension, version }) =>
-    (extension?.messageActions ?? []).map((component, index) => ({
+    (extension?.[contribution] ?? []).map((component, index) => ({
       key: `${name}:${index}`,
       extension: name,
       version,
