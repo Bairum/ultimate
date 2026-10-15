@@ -161,7 +161,7 @@ it('tells each top-level conversation about the others, and the surface on scree
   // Every top-level conversation gets the surface line.
   for (const id of [root, other, empty, fork.id])
     expect(await render('surfaces', id)).toBe('The user is looking at the Agent surface (agent).')
-}, 60000)
+})
 
 it('renames and clears top-level conversations', async () => {
   const { server, summary, create, message, action } = await launch()
@@ -259,7 +259,7 @@ it('renames and clears top-level conversations', async () => {
   expect((await conversation.context(context)).entries.map((item) => item.kind)).toContain(
     'pi.user',
   )
-}, 60000)
+})
 
 it('projects arbitrary typed inputs, ignores user-role writes, and preserves activity across heads and reopen', async () => {
   const { server, summary, create, action } = await launch()

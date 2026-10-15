@@ -171,7 +171,7 @@ it('stages service rows, preserves them on failed reload and removes stale handl
   expect(
     await server.extensions.invoke('service-consumer', 'lookup', {}, new AbortController().signal),
   ).toBeNull()
-}, 60000)
+})
 
 it('keeps the replacement provider available while the old cleanup is pending', async () => {
   const { projectRoot, server } = await fixture()

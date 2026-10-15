@@ -338,7 +338,6 @@ it.concurrent.each([false, true])(
       expect(fixture.generated.mock.calls.filter((call) => call[5] === 'spawn')).toHaveLength(1)
     }
   },
-  60000,
 )
 
 it.concurrent.each(['rename', 'reset', 'newer'] as const)(
@@ -387,7 +386,6 @@ it.concurrent.each(['rename', 'reset', 'newer'] as const)(
     )
     expect(state?.exchanges).toBe({ rename: 1, reset: 0, newer: 2 }[change])
   },
-  60000,
 )
 
 it.concurrent.each([2, 3])(
@@ -437,7 +435,6 @@ it.concurrent.each([2, 3])(
       fixture.generated.mock.calls.filter((call) => call[5] === 'reply').map((call) => call[3]),
     ).toEqual([true, false, false, true])
   },
-  60000,
 )
 
 it.concurrent('summarizes the first, fourth and seventh completed exchanges, not tools, streams or idle time; persists across reopen', async () => {
@@ -514,7 +511,7 @@ it.concurrent('summarizes the first, fourth and seventh completed exchanges, not
   }
   await fixture.server.harness.waitForIdle(context)
   expect(await fixture.titleChanges()).toEqual(changes)
-}, 60000)
+})
 
 it.concurrent('logs each accepted title change once, but not a manual rename to the generated title', async () => {
   const fixture = await launch()
@@ -553,7 +550,7 @@ it.concurrent('logs each accepted title change once, but not a manual rename to 
   expect(await fixture.titleChanges()).toEqual(changes)
   await fixture.reopen()
   expect(await fixture.titleChanges()).toEqual(changes)
-}, 60000)
+})
 
 it.concurrent('keeps an explicit API title even when it equals the first input', async () => {
   const fixture = await launch()
@@ -574,7 +571,7 @@ it.concurrent('keeps an explicit API title even when it equals the first input',
     title: text,
   })
   expect(await fixture.titleChanges(id)).toEqual([])
-}, 60000)
+})
 
 it.concurrent('protects preexisting and in-flight manual titles, and blank rename restores automatic naming', async () => {
   const fixture = await launch()
@@ -624,7 +621,7 @@ it.concurrent('protects preexisting and in-flight manual titles, and blank renam
     (await fixture.server.harness.snapshot(Metadata, fixture.server.root.id, context))?.title,
   ).toBe('Improve the conversation sidebar')
   expect(await fixture.titleChanges()).toHaveLength(1)
-}, 60000)
+})
 
 it.concurrent('clears summary and cadence on reset, drops stale completion and isolates provider errors', async () => {
   const fixture = await launch()
@@ -669,7 +666,7 @@ it.concurrent('clears summary and cadence on reset, drops stale completion and i
   for (let count = 2; count <= 4; count++) await fixture.exchange()
   await until(async () => (await fixture.read())?.status === 'ready')
   expect(fixture.generated).toHaveBeenCalledTimes(6)
-}, 60000)
+})
 
 it.concurrent('assesses owned children without renaming them, summarizes ownerless forks, and does not backfill', async () => {
   const fixture = await launch()
@@ -754,7 +751,7 @@ it.concurrent('assesses owned children without renaming them, summarizes ownerle
   await fixture.exchange()
   expect(fixture.generated).toHaveBeenCalledTimes(3)
   expect(fixture.generated.mock.calls.some((call) => call[5] === 'intent')).toBe(false)
-}, 60000)
+})
 
 it.concurrent('rejects an older response after a newer scheduled summary has completed', async () => {
   const fixture = await launch()
@@ -788,7 +785,7 @@ it.concurrent('rejects an older response after a newer scheduled summary has com
     (await fixture.server.harness.snapshot(Metadata, fixture.server.root.id, context))?.title,
   ).toBe('Improve the conversation sidebar')
   expect(await fixture.titleChanges()).toHaveLength(1)
-}, 60000)
+})
 
 it.concurrent.each(['reply', 'spawn'] as const)(
   'resumes pending %s generation after shutdown without a stuck checkpoint',
@@ -818,7 +815,6 @@ it.concurrent.each(['reply', 'spawn'] as const)(
     await fixture.reopen()
     expect(await fixture.titleChanges()).toEqual(changes)
   },
-  60000,
 )
 
 it.concurrent.each(['none', 'legacy'])(
@@ -1092,7 +1088,7 @@ it.concurrent('publishes initial intent while the main model request is blocked,
   await fixture.exchange()
   expect(fixture.generated.mock.calls.filter((call) => call[5] === 'intent')).toHaveLength(2)
   expect((await fixture.read())?.exchanges).toBe(1)
-}, 60000)
+})
 
 it.concurrent.each(['newer', 'reset', 'spawn'] as const)(
   'rejects a held initial intent after %s',
@@ -1166,7 +1162,6 @@ it.concurrent.each(['newer', 'reset', 'spawn'] as const)(
       ])
     }
   },
-  60000,
 )
 
 it.concurrent('keeps an exchange answered across a mid-run compaction and reopen; only a reset ends it', async () => {
@@ -1239,7 +1234,7 @@ it.concurrent('keeps an exchange answered across a mid-run compaction and reopen
   await until(async () => (await row())?.runState === 'idle')
   expect((await row())?.assessment).toBeUndefined()
   expect((await row())?.inputId).toBeUndefined()
-}, 60000)
+})
 
 it.concurrent('derives the same overview rows live and from a fresh open, with no summary model available', async () => {
   const fixture = await launch()
@@ -1366,7 +1361,7 @@ it.concurrent('derives the same overview rows live and from a fresh open, with n
   install()
   await until(async () => Object.values(await rows()).every((row) => row !== undefined))
   expect(await rows()).toEqual(built)
-}, 60000)
+})
 
 it.concurrent('records an accepted assessment as an entry traced to its summary and generation tasks', async () => {
   const fixture = await launch()
@@ -1393,7 +1388,7 @@ it.concurrent('records an accepted assessment as an entry traced to its summary 
   expect((await fixture.entries()).filter((entry) => SummaryDiscarded.is(entry))).toEqual([])
   const view = await fixture.server.root.context(context)
   expect(JSON.stringify(view.messages)).not.toContain('Added concise summaries')
-}, 60000)
+})
 
 it.concurrent.each(['answers', 'fails'] as const)(
   'follows an older follow-up delivered after a newer steer when it %s, live and after reopen',
@@ -1474,5 +1469,4 @@ it.concurrent.each(['answers', 'fails'] as const)(
     await fixture.reopen()
     await expected()
   },
-  60000,
 )

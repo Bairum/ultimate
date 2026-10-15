@@ -81,7 +81,7 @@ it('keeps stores local while exposing projects, conversations and live URLs thro
     ]),
   )
   expect(b.api.conversations().some((item) => item.title === 'A titled conversation')).toBe(false)
-}, 60000)
+})
 
 it('lists unknown homes and ignores dead locks; skips unchanged index writes and excludes children', async () => {
   const userHome = await temp('ultimate-project-index-')

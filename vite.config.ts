@@ -18,6 +18,11 @@ export default defineConfig({
     },
     overrides: [
       {
+        files: ['test/**'],
+        excludeFiles: ['test/e2e/**'],
+        rules: { 'ultimate/no-test-timeout': 'error' },
+      },
+      {
         files: ['**/*'],
         excludeFiles: ['test/**', 'evals/**'],
         rules: {

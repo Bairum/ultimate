@@ -13,7 +13,10 @@ interface Node {
   body?: Node | Node[]
   argument?: Node | null
   callee?: Node
+  tag?: Node
   property?: Node
+  object?: Node
+  properties?: Node[]
   arguments?: Node[]
   parent?: Node | null
 }
@@ -33,9 +36,56 @@ const extensionOf = (filename: string) => {
   return directory === 'extensions' ? extension : undefined
 }
 
+const propertyName = (node: Node | undefined) =>
+  node?.computed ? node.property?.value : (node?.property?.name ?? node?.property?.value)
+const hasOption = (node: Node, name: string) =>
+  node.type === 'ObjectExpression' &&
+  node.properties?.some(
+    (property) =>
+      (property.computed ? property.key?.value : (property.key?.name ?? property.key?.value)) ===
+      name,
+  )
+const root = (node: Node | undefined): Node | undefined => {
+  if (node?.type === 'MemberExpression') return root(node.object)
+  if (node?.type === 'CallExpression') return root(node.callee)
+  if (node?.type === 'TaggedTemplateExpression') return root(node.tag)
+  return node
+}
+
 export default {
   meta: { name: 'ultimate' },
   rules: {
+    'no-test-timeout': {
+      meta: { schema: [] },
+      create(context: Context) {
+        return {
+          CallExpression(node: Node) {
+            const callee = node.callee
+            const base = root(callee)
+            const args = node.arguments ?? []
+            const testCall =
+              base?.type === 'Identifier' && ['it', 'test', 'describe'].includes(base.name ?? '')
+            const configCall =
+              callee?.type === 'MemberExpression' &&
+              callee.object?.type === 'Identifier' &&
+              callee.object.name === 'vi' &&
+              propertyName(callee) === 'setConfig'
+            if (
+              (testCall &&
+                args
+                  .slice(1)
+                  .some((arg) => typeof arg.value === 'number' || hasOption(arg, 'timeout'))) ||
+              (configCall && args.some((arg) => hasOption(arg, 'testTimeout')))
+            )
+              context.report({
+                node,
+                message:
+                  'AGENTS.md: Keep pnpm test fast; fix or delete a flaky test rather than raising its timeout. Do not override test timeouts.',
+              })
+          },
+        }
+      },
+    },
     'replay-safe-reason': {
       meta: { schema: [] },
       create(context: Context) {

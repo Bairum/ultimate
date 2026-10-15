@@ -201,7 +201,7 @@ it('gates project resources, remembers choices, and applies onboarding settings 
     await server?.close()
     await removeTemp(home)
   }
-}, 60000)
+})
 
 it('does not inherit a parent project choice', async () => {
   const home = await temp('ultimate-trust-')
@@ -261,4 +261,4 @@ it('boots with corrupt trust, discloses project replacements, and recovers after
     await server?.close()
     await removeTemp(home)
   }
-}, 60000)
+})

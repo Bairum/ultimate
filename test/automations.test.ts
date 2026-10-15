@@ -126,7 +126,6 @@ async function fixture() {
     },
   }
 }
-const delay = (ms: number) => vi.advanceTimersByTimeAsync(ms)
 
 it('fires every 2s into distinct answered conversations and supports pause, resume, run and delete', async () => {
   const f = await fixture()
@@ -155,7 +154,7 @@ it('fires every 2s into distinct answered conversations and supports pause, resu
     expect((await child.agent(context)).tools.map((t) => t.name)).not.toContain('automation')
     expect((await f.opened.harness.snapshot(Metadata, child.id, context))?.label).toBe('automation')
   }
-  await delay(2200)
+  await vi.advanceTimersByTimeAsync(2200)
   expect((await f.records())[0].runs).toHaveLength(runs.length)
   await f.action('run', { id: a.id })
   await until(async () => (await f.records())[0].runs.at(-1)?.status === 'done')
@@ -168,7 +167,7 @@ it('fires every 2s into distinct answered conversations and supports pause, resu
   await f.action('delete', { id: a.id })
   expect(await f.records()).toEqual([])
   expect(await f.opened.harness.conversation(runs[0].conversationId!, context)).toBeDefined()
-}, 15000)
+})
 
 it('pause keeps a running profile run alive, skips overlap, and abort cancels a run', async () => {
   const f = await fixture()
@@ -196,7 +195,7 @@ it('pause keeps a running profile run alive, skips overlap, and abort cancels a 
   await f.action('abort', { id: a.id, runId: manual.id })
   await until(async () => (await f.records())[0].runs.at(-1)?.status === 'aborted')
   await expect(f.action('update', { id: a.id, agent: 'missing' })).rejects.toThrow('Unknown agent')
-}, 10000)
+})
 
 it('catches up a missed fire exactly once after reopening', async () => {
   const f = await fixture()
@@ -207,11 +206,11 @@ it('catches up a missed fire exactly once after reopening', async () => {
   })
   await until(async () => !!(await f.records())[0].nextAt)
   await f.close()
-  await delay(1500)
+  await vi.advanceTimersByTimeAsync(1500)
   await f.reopen()
   await until(async () => (await f.records())[0].runs[0]?.status === 'done')
   await f.reopen()
-  await delay(300)
+  await vi.advanceTimersByTimeAsync(300)
   const a = (await f.records())[0]
   expect(a.runs).toHaveLength(1)
   expect(a.enabled).toBe(false)
@@ -256,7 +255,7 @@ it('preserves the next interval fire on rename, even when the same schedule is s
     prompt: 'Hello',
     schedule: 'every 1d',
   })) as Automation
-  await delay(50)
+  await vi.advanceTimersByTimeAsync(50)
   const renamed = (await f.action('update', {
     id: a.id,
     name: 'After',

@@ -50,4 +50,4 @@ it('reconfigures the lander when the project setup is chosen, edited, and given 
   } finally {
     await server.close()
   }
-}, 60000)
+})
