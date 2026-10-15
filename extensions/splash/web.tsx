@@ -1,6 +1,6 @@
 import { TriangleAlertIcon, XIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { api, defineWebExtension, useReady, useStore } from '@/sdk'
+import { api, defineWebExtension, resumed, useReady, useStore } from '@/sdk'
 import { Electric } from './electric.tsx'
 
 /** The core's readiness deadline: not ready by then, the app opens anyway and the notice names what is missing. */
@@ -331,9 +331,9 @@ function Overlay() {
 /** The ULTIMATE wordmark over the whole window until the page is ready, then the app. */
 function Splash({ replay }: { replay?: () => void }) {
   const { ready, timedOut } = useReady()
-  // Mounted once the page is ready, as on a very warm start or a hot reload, or driven by automation such as the
-  // agent's browser tool: nothing to show.
-  const [gone, setGone] = useState(!replay && (ready || navigator.webdriver))
+  // Mounted once the page is ready, as on a very warm start or a hot reload, on a reload that shows the previous
+  // page's view meanwhile, or driven by automation such as the agent's browser tool: nothing to show.
+  const [gone, setGone] = useState(!replay && (ready || resumed || navigator.webdriver))
   const [still] = useState(
     () => matchMedia('(prefers-reduced-motion: reduce)').matches || !canSpark(),
   )

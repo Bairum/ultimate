@@ -21,6 +21,30 @@
   </head>
   <body>
     <div id="app"></div>
+    <script>
+      // A reload paints the page as it last looked until the app has rendered again (web/src/sdk/resume.ts).
+      {
+        const resume = JSON.parse(sessionStorage.getItem('ultimate.resume') ?? 'null')
+        if (resume && Date.now() - resume.at < 30000) {
+          const view = document.createElement('div')
+          view.id = 'resume'
+          view.inert = true
+          view.style.cssText =
+            'position:fixed;inset:0;z-index:2147483647;background:var(--background)'
+          view.innerHTML = resume.html
+          const style = document.createElement('style')
+          // Offscreen content sizes itself only once rendered: lay it all out now, so the scroll offsets land.
+          style.textContent = `${resume.css}\n#resume * { content-visibility: visible !important; }`
+          view.prepend(style)
+          document.body.append(view)
+          for (const element of view.querySelectorAll('[data-resume-scroll]')) {
+            const [top, left] = element.dataset.resumeScroll.split(',')
+            element.scrollTop = top
+            element.scrollLeft = left
+          }
+        }
+      }
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

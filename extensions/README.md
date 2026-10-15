@@ -139,6 +139,9 @@ The deadline reveals even without a system snapshot; `timedOut` distinguishes th
 Facets import in parallel and their contributions render as soon as they install, except the app itself: the shell
 shows the surface and starts its shortcuts only once ready. In particular, root overlays can render while another
 facet is still loading; they need not wait for ready.
+A reload of a rendered page (a core restart, a Vite full reload, F5) paints the previous page's view from
+`sessionStorage` before any module loads and fades it out once the app has rendered and settled
+(`web/src/sdk/resume.ts`); `resumed` from `@/sdk` is true on such a load, so a loading overlay can stay away.
 
 ## An extension's files
 
