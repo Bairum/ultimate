@@ -32,9 +32,6 @@ const letters: readonly (readonly string[])[] = [
 ]
 const view = { x: 118, width: 13533, height: 1514 }
 
-/** The dot that makes the I an i, above its stem, in font units. */
-const dot = { cx: 5634, cy: -310, r: 150 }
-
 /** The wordmark's outline, for the lightning to trace. */
 const charge = `data:image/svg+xml,${encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${view.x} 0 ${view.width} ${view.height}" width="${view.width / 10}" height="${view.height / 10}"><path d="${letters.flat().join('')}" fill="#fff"/></svg>`,
@@ -56,6 +53,7 @@ function Lightning({ level }: { level: () => Level }) {
       flicker={0.3}
       glow={0.8}
       glowColor={theme === 'dark' ? '#bb9af4' : '#7b47bf'}
+      bursts={() => level().bursts}
       presence={() => level().presence}
       reveal={() => level().reveal}
       scale={1 / 1.2}
@@ -69,8 +67,8 @@ function Lightning({ level }: { level: () => Level }) {
 }
 
 /**
- * The wordmark: per letter its fill, the dot over the I, and the lightning that draws them in. `still` draws it settled,
- * without lightning.
+ * The wordmark: drawn by lightning alone, or, `still` (reduced motion or no WebGL2), as solid letters. The SVG keeps
+ * the wordmark's size either way.
  */
 function Wordmark({ still, level }: { still: boolean; level: () => Level }) {
   return (
@@ -80,21 +78,7 @@ function Wordmark({ still, level }: { still: boolean; level: () => Level }) {
         className="block w-full overflow-visible"
         viewBox={`${view.x} 0 ${view.width} ${view.height}`}
       >
-        {letters.map((contours, index) => (
-          <path
-            className="fill-brand"
-            d={contours.join('')}
-            data-letter=""
-            fillOpacity={still ? 1 : 0}
-            key={index}
-          />
-        ))}
-        <circle
-          className="origin-center fill-brand [transform-box:fill-box]"
-          data-dot=""
-          fillOpacity={still ? 1 : 0}
-          {...dot}
-        />
+        {still && <path className="fill-brand" d={letters.flat().join('')} />}
       </svg>
       {!still && <Lightning level={level} />}
       <div data-sweep="" hidden />
@@ -102,14 +86,21 @@ function Wordmark({ still, level }: { still: boolean; level: () => Level }) {
   )
 }
 
+/** Whether the lightning can draw: WebGL2, asked once on a throwaway canvas. */
+function canSpark() {
+  const gl = document.createElement('canvas').getContext('webgl2')
+  gl?.getExtension('WEBGL_lose_context')?.loseContext()
+  return gl !== null
+}
+
 /** On screen at least this long, so a warm start does not flash. */
 const minimum = { motion: 700, still: 400 }
 /** Once ready, the rest of the drawing takes at most this long. */
 const rush = 240
-/** The lightning sweeps across the name for this long, then settles over as long again while the dot pops in. */
+/** The lightning sweeps across the name for this long, then settles over as long again. */
 const sweep = 900
 /** Once swept, the lightning idles at this strength. */
-const idle = 0.3
+const idle = 0.75
 /** The first run's intro plays at this rate: the signature version. */
 const signatureRate = 0.8
 
@@ -124,6 +115,8 @@ const finished = (animations: readonly Animation[]) =>
 interface Level {
   reveal: number
   presence: number
+  /** 1 once the sweep has reached the end: the lightning bursts from the middle. */
+  bursts: number
 }
 
 interface Show {
@@ -137,8 +130,8 @@ interface Show {
 }
 
 /**
- * Animates the splash in `overlay` with the Web Animations API. Each letter's outline traces in behind a bright pen,
- * then fills. Held longer, a rule draws out beneath until the reveal. `still` (reduced
+ * Animates the splash in `overlay` with the Web Animations API: a clock drives the lightning's sweep across the name and
+ * its settling. Held longer, a rule draws out beneath until the reveal. `still` (reduced
  * motion) shows the settled wordmark and only fades. `release` hands input back to the app as the overlay fades.
  */
 function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
@@ -165,29 +158,6 @@ function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
       fill: 'both',
     })
     intro.push(clock)
-    const left = view.x
-    for (const letter of overlay.querySelectorAll<SVGGraphicsElement>('[data-letter]')) {
-      // Each letter fills as the lightning crosses its middle.
-      const box = letter.getBBox()
-      intro.push(
-        letter.animate([{ fillOpacity: 0 }, { fillOpacity: 1 }], {
-          delay: 60 + (sweep * (box.x + box.width / 2 - left)) / view.width,
-          duration: 420,
-          easing: out,
-          fill: 'both',
-        }),
-      )
-    }
-    intro.push(
-      find('[data-dot]').animate(
-        [
-          { fillOpacity: 0, transform: 'scale(0)' },
-          { fillOpacity: 1, transform: 'scale(1.35)', offset: 0.55 },
-          { fillOpacity: 1, transform: 'scale(1)' },
-        ],
-        { delay: 60 + sweep, duration: 520, easing: out, fill: 'both' },
-      ),
-    )
     // Still loading once all of it has played: the rule says so.
     void finished([...intro, ...flair]).then(() => {
       if (!committed) rule()
@@ -233,9 +203,8 @@ function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
       const settle = Math.max(0, progress * 2 - 1)
       return {
         reveal: Math.min(1, progress * 2),
-        // Flares as the dot pops, then idles.
-        presence:
-          idle + (1 - idle) * (1 - settle) + Math.sin(Math.PI * Math.min(1, settle * 2)) * 0.6,
+        presence: idle + (1 - idle) * (1 - settle),
+        bursts: progress >= 0.5 ? 1 : 0,
       }
     },
     signature() {
@@ -342,16 +311,35 @@ function shield(overlay: HTMLElement) {
   }
 }
 
+/**
+ * `?splash` holds the splash on screen to polish it, automated browsers included, and a click replays it;
+ * `?splash=first` plays the first run's signature version.
+ */
+const rehearsal = new URLSearchParams(location.search).get('splash')
+
+/** The splash, played again on each click while rehearsing. */
+function Overlay() {
+  const [take, setTake] = useState(0)
+  return (
+    <Splash
+      key={take}
+      replay={rehearsal === null ? undefined : () => setTake((current) => current + 1)}
+    />
+  )
+}
+
 /** The ULTIMATE wordmark over the whole window until the page is ready, then the app. */
-function Splash() {
+function Splash({ replay }: { replay?: () => void }) {
   const { ready, timedOut } = useReady()
   // Mounted once the page is ready, as on a very warm start or a hot reload, or driven by automation such as the
   // agent's browser tool: nothing to show.
-  const [gone, setGone] = useState(ready || navigator.webdriver)
-  const [still] = useState(() => matchMedia('(prefers-reduced-motion: reduce)').matches)
+  const [gone, setGone] = useState(!replay && (ready || navigator.webdriver))
+  const [still] = useState(
+    () => matchMedia('(prefers-reduced-motion: reduce)').matches || !canSpark(),
+  )
   const overlay = useRef<HTMLDivElement>(null)
   const show = useRef<Show>(undefined)
-  const level = () => show.current?.level() ?? { reveal: 0, presence: 0 }
+  const level = () => show.current?.level() ?? { reveal: 0, presence: 0, bursts: 0 }
 
   useLayoutEffect(() => {
     if (!overlay.current) return undefined
@@ -362,7 +350,7 @@ function Splash() {
     let active = true
     api.action<{ firstRun?: boolean }>('onboarding', 'status').then(
       (status) => {
-        if (active && status.firstRun) current.signature()
+        if (active && (status.firstRun || rehearsal === 'first')) current.signature()
       },
       // Without onboarding there is no first run.
       () => {},
@@ -375,7 +363,7 @@ function Splash() {
   }, [still])
 
   useEffect(() => {
-    if (gone || !ready) return
+    if (gone || !ready || rehearsal !== null) return
     void show.current?.reveal().then((done) => {
       if (done) setGone(true)
     })
@@ -389,6 +377,7 @@ function Splash() {
       aria-live="polite"
       // Takes the clicks itself, even under a modal dialog's `pointer-events: none` on the body.
       className="pointer-events-auto fixed inset-0 z-[60] grid place-items-center bg-background outline-none data-revealing:pointer-events-none"
+      onClick={replay}
       ref={overlay}
       role="progressbar"
       tabIndex={-1}
@@ -442,4 +431,4 @@ function Late() {
   )
 }
 
-export default defineWebExtension({ slots: { overlay: Splash } })
+export default defineWebExtension({ slots: { overlay: Overlay } })

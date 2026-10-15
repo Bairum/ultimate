@@ -256,13 +256,31 @@ const traceShape = (image: HTMLImageElement): Shape | undefined => {
   }
 }
 
-/** A short arc leaping off the edge and landing further along it, bowing outwards. */
-const spawnArc = (shape: Shape, time: number): Spark | undefined => {
+/**
+ * A short arc leaping off the edge and landing further along it, bowing outwards; with `focus`, from an edge point within
+ * its radius, in shape units.
+ */
+const spawnArc = (
+  shape: Shape,
+  time: number,
+  focus?: { x: number; y: number; radius: number },
+): Spark | undefined => {
   const { edges, logoWidth, logoHeight } = shape
   const count = edges.length / 2
   if (count < 2) return undefined
   const size = Math.sqrt(logoWidth * logoHeight)
-  const i = Math.floor(Math.random() * count)
+  let i = Math.floor(Math.random() * count)
+  if (focus) {
+    let found = false
+    for (let attempt = 0; attempt < 40 && !found; attempt++) {
+      const j = Math.floor(Math.random() * count)
+      if (Math.hypot(edges[j * 2] - focus.x, edges[j * 2 + 1] - focus.y) < focus.radius) {
+        i = j
+        found = true
+      }
+    }
+    if (!found) return undefined
+  }
   const ax = edges[i * 2]
   const ay = edges[i * 2 + 1]
   for (let attempt = 0; attempt < 24; attempt++) {
@@ -317,6 +335,8 @@ uniform float uTime;
 uniform float uPresence;
 uniform float uSweep;
 uniform float uHead;
+uniform vec4 uPulse;
+uniform float uFlash;
 uniform vec3 uColor;
 uniform vec3 uGlowColor;
 uniform float uIntensity;
@@ -408,6 +428,18 @@ vec2 wander(vec2 p, float t, uint seed, float reachScale, out mat2 jac, out vec2
   return sway + (c + d * 0.35) * crinkleAmp;
 }
 
+vec2 ripple(vec2 p, out float surge) {
+  surge = 0.0;
+  if (uPulse.w <= 0.0) return vec2(0.0);
+  // The ring crosses the shape's half-width in about half a second, as wide as a tenth of it.
+  float reach = uMap.z * uSize.x * 0.5;
+  vec2 d = p - uPulse.xy;
+  float dist = length(d);
+  float front = (dist - uPulse.z * reach * 2.2) / (reach * 0.2);
+  surge = exp(-front * front) * uPulse.w * exp(-uPulse.z * 1.7) * smoothstep(reach * 0.05, reach * 0.3, dist);
+  return d / max(dist, 1.0) * surge * cos(front * 2.2) * uUnit * 7.5;
+}
+
 vec2 glowShape(float line, float spread, float w) {
   float x = abs(line);
   float y = abs(spread);
@@ -462,7 +494,11 @@ void main() {
   float energy = 0.0;
   float hot = 0.0;
 
-  float base = shape(p);
+  float surge;
+  vec2 pr = p - ripple(p, surge);
+  float heat = min(surge * 1.4, 2.0);
+  float heatCap = min(exp(-uPulse.z * 1.7) * uPulse.w * 1.4, 2.0);
+  float base = shape(pr);
   float breath = 1.0 + uFlicker * 0.6 * wobble(vec2(t * 2.1, 7.0), 3u);
   float soft = uUnit * 40.0;
   float grow = uPresence * smoothstep(uSweep + soft, uSweep - soft, p.x);
@@ -470,39 +506,43 @@ void main() {
   float head = uHead * exp(-front * front);
 
   float edge = abs(base);
-  vec2 halo = aura(p);
+  vec2 halo = aura(pr);
   float ink = uInk;
-  float bloom = (halo.x * 0.16 + halo.y * 0.08) * (1.0 - ink * 0.65) * uGlow;
+  float bloom = (halo.x * 0.16 + halo.y * 0.08) * (1.0 - ink * 0.65) * uGlow * (1.0 + heat * 1.2);
   float body = smoothstep(0.75, -0.75, base) * uFill * (0.06 + 1.2 * min(halo.x, 1.0));
   light += uGlowColor * bloom * grow * grow;
   energy += bloom * grow * grow;
 
-  float reachScale = mix(0.15, 1.0, grow);
-  float reach = uUnit * uBend * 16.0 + uCrackle * 3.0 + uThickness * 20.0 + 8.0;
+  float reachScale = mix(0.15, 1.0, grow) * (1.0 + heat * 0.9);
+  float reach = (uUnit * uBend * 16.0 + uCrackle * 3.0) * (1.0 + heatCap * 0.9) + uThickness * 20.0 + 8.0;
   if (edge < reach && grow > 0.0) {
     float fade = smoothstep(reach, reach * 0.55, edge);
-    vec2 q = p / uUnit;
+    vec2 q = pr / uUnit;
+    float count = min(uStrands + heat * 2.5, 6.0);
+    float limit = min(uStrands + heatCap * 2.5, 6.0);
     for (int i = 0; i < 6; i++) {
       float fi = float(i);
-      if (fi >= uStrands) break;
+      if (fi >= limit) break;
+      float present = clamp(count - fi, 0.0, 1.0);
+      if (present <= 0.0) continue;
       uint seed = uint(i) * 7u + 3u;
       mat2 jac;
       vec2 sway;
       float lead = i == 0 ? 1.0 : 0.0;
-      vec2 warped = p + wander(p, t * (1.0 + fi * 0.19), seed, reachScale * mix(0.6 + fi * 0.2, 0.7, lead), jac, sway);
+      vec2 warped = pr + wander(pr, t * (1.0 + fi * 0.19), seed, reachScale * mix(0.6 + fi * 0.2, 0.7, lead), jac, sway);
       float dw = shape(warped);
       vec2 slope = vec2(shape(warped + vec2(1.0, 0.0)), shape(warped + vec2(0.0, 1.0))) - dw;
       float d = dw / max(length(slope + jac * slope), 0.3);
-      float spread = shape(p + sway);
+      float spread = shape(pr + sway);
       float swell = 0.5 + 0.5 * wobble(q * 0.06 + vec2(t * 0.9, fi * 5.1 - t * 0.6), seed + 8u);
       float w = uThickness * mix(0.5, 1.0, lead) * (0.5 + swell);
       float vis = mix(0.3 + 0.45 * smoothstep(-0.25, 0.2, wobble(q * 0.035 + vec2(t * 0.21, fi * 3.7), seed + 5u)), 1.0, lead);
       float spark = 1.0 - uFlicker * 0.3 * (0.5 + 0.5 * wobble(vec2(t * 6.0, fi * 2.3), seed + 6u));
-      float weight = vis * spark * fade * (0.7 + 0.6 * swell);
+      float weight = max(vis, heat * 0.85) * spark * fade * present * (0.7 + 0.6 * swell);
       vec2 g = glowShape(d, spread, w) * weight;
       float soft = mix(1.0, mix(0.5, 1.0, lead), ink);
       vec3 stroke = mix(uColor, uGlowColor, ink * (1.0 - lead) * 0.65);
-      float haze = uGlow * (1.0 - ink * 0.7);
+      float haze = uGlow * (1.0 + heat) * (1.0 - ink * 0.7);
       light += stroke * g.x * soft + uGlowColor * g.y * haze;
       energy += g.x * soft + g.y * haze;
       hot += exp(-d * d / (w * w * 0.16)) * lead * weight;
@@ -511,9 +551,9 @@ void main() {
     energy *= grow;
   }
 
-  for (int i = 0; i < ${ARCS}; i++) addArc(p, uArcEnds[i], uArcShape[i], t, light, energy, hot);
+  for (int i = 0; i < ${ARCS}; i++) addArc(pr, uArcEnds[i], uArcShape[i], t, light, energy, hot);
 
-  float gain = uIntensity * breath * 1.4 * (1.0 + head * 2.0);
+  float gain = uIntensity * breath * 1.4 * (1.0 + head * 2.0) * (1.0 + heat * 0.45) * (1.0 + uFlash * 0.3);
   float alpha = 1.0 - exp(-energy * gain);
   vec3 color = mix(1.0 - exp(-light * gain), alpha * light / max(energy, 1e-4), ink);
   color = mix(color, vec3(alpha), clamp(hot * grow, 0.0, 1.0) * ink * 0.85);
@@ -552,6 +592,9 @@ export interface ElectricProps {
   presence: () => number
   /** How much of the shape the lightning has reached, left to right, read every frame; the head of the sweep flares. */
   reveal?: () => number
+  /** How many bursts have fired, read every frame: each new one sends a ripple out from the shape's centre with a
+   * spray of arcs, as React Bits' click does. */
+  bursts?: () => number
   /** Light renders crisp electric ink instead of emitted light. */
   theme: 'dark' | 'light'
   className?: string
@@ -612,6 +655,8 @@ export function Electric(props: ElectricProps) {
       uPresence: { value: 0 },
       uSweep: { value: 0 },
       uHead: { value: 0 },
+      uPulse: { value: [0, 0, 0, 0] },
+      uFlash: { value: 0 },
       uColor: { value: [1, 1, 1] },
       uGlowColor: { value: [1, 1, 1] },
       uIntensity: { value: 1 },
@@ -636,6 +681,8 @@ export function Electric(props: ElectricProps) {
     let shape: Shape | undefined
     let ink = settings.current.theme === 'light' ? 1 : 0
     let time = 0
+    let bursts = 0
+    let pulse: number | undefined
     let width = 1
     let height = 1
     let raf = 0
@@ -688,6 +735,21 @@ export function Electric(props: ElectricProps) {
 
         for (let i = sparks.length - 1; i >= 0; i--)
           if (time - sparks[i].born > sparks[i].life) sparks.splice(i, 1)
+        const fired = s.bursts?.() ?? 0
+        if (fired > bursts && !reducedMotion) {
+          pulse = now
+          sparks.length = 0
+          const centre = { x: shape.pad + shape.logoWidth / 2, y: shape.pad + shape.logoHeight / 2 }
+          for (let i = 0; i < ARCS * 3 && sparks.length < ARCS; i++) {
+            const spark = spawnArc(shape, time, { ...centre, radius: shape.logoWidth * 0.3 })
+            if (spark) sparks.push(spark)
+          }
+        }
+        bursts = fired
+        const age = pulse === undefined ? 0 : (now - pulse) / 1000
+        if (age > 2) pulse = undefined
+        uniforms.uPulse.value = [width / 2, height / 2, age, pulse === undefined ? 0 : 1]
+        uniforms.uFlash.value = pulse === undefined ? 0 : Math.exp(-age * 7)
         if (
           !reducedMotion &&
           presence > 0.8 &&
