@@ -9,7 +9,7 @@ import {
   LogOutIcon,
   SearchIcon,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -602,10 +602,13 @@ export function LoginDialog() {
   // A flow's document lives on the conversation that started it: showing another one ends the flow.
   const { conversationId } = useUltimate()
   const shown = useRef(conversationId)
+  const leave = useEffectEvent(() => {
+    if (state) close()
+  })
   useEffect(() => {
     if (shown.current === conversationId) return
     shown.current = conversationId
-    if (state) close()
+    leave()
   }, [conversationId])
   // Another tab or pi may have logged in or out since this window last had focus.
   useEffect(() => {

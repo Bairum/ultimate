@@ -327,6 +327,7 @@ function EmptyState() {
       agent.model ? (
         `${agent.model.provider}/${agent.model.modelId}${reasoning !== false && agent.thinkingLevel ? ` · ${agent.thinkingLevel}` : ''}`
       ) : (
+        // oxlint-disable-next-line react/jsx-key -- a [label, value] row, not a rendered list
         <span className="text-warning">none configured</span>
       ),
     ],

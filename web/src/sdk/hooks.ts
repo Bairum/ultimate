@@ -208,7 +208,7 @@ export function useDocumentRenderers() {
 /** Core and extension commands. */
 export function useCommands() {
   const records = useExtensions()
-  return useMemo(() => allCommands(), [records])
+  return useMemo(() => allCommands(records), [records])
 }
 
 export interface Restart {
@@ -348,12 +348,13 @@ export function useAction<T = JsonValue>(
       else store.notify({ level: 'error', message: actionMessage(failure) })
       return undefined
     }
-    // `key` stands for extension, name, and args.
-  }, [key])
+    // `key` stands for args too, which are read through `latest`.
+  }, [key, extension, name])
   const enabled = options.enabled !== false
   useEffect(() => {
     if (enabled) void call()
     // Disabled too: a `refetch` in flight must not outlive the component or its args.
+    // oxlint-disable-next-line react/exhaustive-deps -- abort the call in flight at cleanup, possibly a later refetch
     return () => latest.current.controller?.abort()
   }, [call, enabled])
   const current = state.key === key ? state : { key, loading: enabled }

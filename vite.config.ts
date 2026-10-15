@@ -98,7 +98,18 @@ export default defineConfig({
       },
       {
         files: ['web/src/**', 'extensions/**/*.tsx'],
+        plugins: ['react'],
         rules: {
+          'react/rules-of-hooks': 'error',
+          'react/exhaustive-deps': 'error',
+          'react/jsx-key': 'error',
+          'react/react-in-jsx-scope': 'off',
+          'react/hooks': 'off',
+          'react/set-state-in-effect': 'off',
+          'react/refs': 'off',
+          'react/purity': 'off',
+          'react/memo-dependencies': 'off',
+          'react/exhaustive-effect-dependencies': 'off',
           'no-restricted-imports': [
             'error',
             {

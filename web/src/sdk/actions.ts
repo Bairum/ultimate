@@ -149,8 +149,7 @@ export const coreCommands: CommandItem[] = core.map((command) => ({
 }))
 
 /** Core commands, a switch per surface (`mod+1…9` for the first nine), then extension commands; later wins an id. */
-export function allCommands(): CommandItem[] {
-  const records = registry.getSnapshot()
+export function allCommands(records = registry.getSnapshot()): CommandItem[] {
   return commandItems(records, [
     ...coreCommands,
     ...surfaceItems(records).map((surface, index) => ({

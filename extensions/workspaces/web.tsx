@@ -143,9 +143,10 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
   useEffect(() => {
     if (shown) setOpen(true)
   }, [shown])
+  const { refetch } = info
   useEffect(() => {
-    if (open) void info.refetch()
-  }, [recorded.state, recorded.landed, conversation.busy, open, info.refetch])
+    if (open) void refetch()
+  }, [recorded.state, recorded.landed, conversation.busy, open, refetch])
   const disabled =
     busy ||
     pending !== undefined ||
@@ -343,6 +344,7 @@ function Stats() {
   const records = useWorkspaces()
   const { data, error, refetch } = useAction<WorkspaceStats>('workspaces', 'stats')
   const disk = useAction<WorkspaceDisk>('workspaces', 'disk')
+  const { refetch: refetchDisk } = disk
   const states = Object.entries(records)
     .map(([id, workspace]) => `${id}:${workspace.state}:${workspace.landed ?? ''}`)
     .join()
@@ -352,11 +354,11 @@ function Stats() {
   useEffect(() => {
     const refresh = () => {
       void refetch()
-      void disk.refetch()
+      void refetchDisk()
     }
     window.addEventListener('focus', refresh)
     return () => window.removeEventListener('focus', refresh)
-  }, [refetch, disk.refetch])
+  }, [refetch, refetchDisk])
   if (error) return <p className="px-4 py-3 text-xs text-error">{error.message}</p>
   if (!data) return null
   return (
