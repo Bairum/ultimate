@@ -23,7 +23,9 @@
     "shared/protocol.ts",
     "extensions/conversations/types.ts",
     "extensions/conversations/summary-model-ref.ts",
+    "extensions/models/switches.ts",
     "extensions/status-line/context.ts",
+    "extensions/status-line/turns.ts",
     "extensions/workspaces/types.ts",
     "extensions/subagents/message-types.ts",
     "test/web"

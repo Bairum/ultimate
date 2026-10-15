@@ -194,6 +194,17 @@ export type Widen<T> = T extends boolean
       ? number
       : T
 
+/** The rows a transcript has loaded, oldest first; the transcript provides it to the entries it renders. */
+export const TranscriptContext = createContext<readonly EntryRecord[]>([])
+
+/**
+ * The entries the transcript around a contribution has loaded, oldest first: the active context and any earlier
+ * history the reader paged in. Entry renderers and message contributions relate an entry to its neighbours with it.
+ */
+export function useTranscript(): readonly EntryRecord[] {
+  return useContext(TranscriptContext)
+}
+
 /** The extension whose contribution is rendering; the shell provides it. */
 export const ExtensionNameContext = createContext<string | undefined>(undefined)
 

@@ -1,5 +1,6 @@
 import { BrainIcon, CheckIcon, ChevronDownIcon, CpuIcon } from 'lucide-react'
 import { useState } from 'react'
+import type { ReactNode } from 'react'
 import { Kbd } from '@/components/ui/kbd'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
@@ -11,8 +12,10 @@ import {
   getNewConversationConfiguration,
   useDialog,
   useComposer,
+  useTranscript,
   useUltimate,
 } from '@/sdk'
+import type { EntryRecord } from '@/sdk'
 import { LoginDialog } from './login.tsx'
 import { ModelPicker } from './picker.tsx'
 import {
@@ -24,6 +27,7 @@ import {
   useCurrentModel,
 } from './state.tsx'
 import type { ThinkingLevel } from './state.tsx'
+import { switchAt } from './switches.ts'
 
 const toolbarButton =
   'flex h-7 max-w-56 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground'
@@ -133,7 +137,37 @@ function ThinkingButton() {
   )
 }
 
+/** A response that ran on another model or thinking level than the one before it, marked above it. */
+function Switched({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
+  const change = switchAt(useTranscript(), entry)
+  if (!change) return core
+  const Icon = change.model ? CpuIcon : BrainIcon
+  return (
+    <div className="flex flex-col gap-3">
+      <div
+        className="flex items-center gap-3 font-mono text-[11px] text-muted-foreground/70 before:h-px before:flex-1 before:bg-border/70 after:h-px after:flex-1 after:bg-border/70"
+        data-models-switch
+        title="The model and thinking level from this response on"
+      >
+        <span className="flex max-w-[80%] min-w-0 items-center gap-1.5">
+          <Icon className="size-3 shrink-0" />
+          <span className="truncate">
+            {[
+              change.model && `${change.model.from} → ${change.model.to}`,
+              change.thinking && `thinking ${change.thinking.from} → ${change.thinking.to}`,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </span>
+        </span>
+      </div>
+      {core}
+    </div>
+  )
+}
+
 export default defineWebExtension({
+  entries: { 'pi.assistant': Switched },
   slots: { 'composer.toolbar': [ModelButton, ThinkingButton], overlay: [ModelPicker, LoginDialog] },
   commands: [
     {

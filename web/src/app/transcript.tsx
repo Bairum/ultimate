@@ -44,9 +44,16 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai/r
 import { Shimmer } from '@/components/ai/shimmer'
 import { ToolImage } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { elidePath, formatDuration, formatTime, formatTokens, shortenPath } from '../sdk/format.ts'
-import { useConversation, useExtensions, useModels, useNow, useSystem } from '../sdk/hooks.ts'
-import { entryRenderers, messageActionItems } from '../sdk/registry.ts'
+import { elidePath, formatDuration, formatTime, shortenPath } from '../sdk/format.ts'
+import {
+  TranscriptContext,
+  useConversation,
+  useExtensions,
+  useModels,
+  useNow,
+  useSystem,
+} from '../sdk/hooks.ts'
+import { entryRenderers, messageItems } from '../sdk/registry.ts'
 import { ExtensionBoundary } from './boundary.tsx'
 import { column } from './layout.ts'
 import { indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
@@ -254,7 +261,7 @@ function TranscriptEntries() {
     }
   })
   return (
-    <>
+    <TranscriptContext value={entries}>
       {loading && (
         <div className="mt-[30vh] animate-appear text-center font-mono text-[12px]">
           <Shimmer>Loading conversation…</Shimmer>
@@ -300,7 +307,7 @@ function TranscriptEntries() {
       {tailSpace > 0 && (
         <div aria-hidden="true" data-history-anchor-space style={{ height: tailSpace }} />
       )}
-    </>
+    </TranscriptContext>
   )
 }
 
@@ -463,21 +470,21 @@ function coreEntry(
   }
 }
 
-/** Hover actions on a stored message: its time, and copies of its text or of a reference another conversation can follow. */
+/** Hover actions on a stored message: extensions' details, its time, and copies of its text or of a reference another conversation can follow. */
 function MessageActions({
   entry,
   text,
   timestamp,
   className,
-  children,
 }: {
   entry: EntryRecord
   text: string
   timestamp: number
   className?: string
-  children?: ReactNode
 }) {
-  const contributions = messageActionItems(useExtensions())
+  const extensions = useExtensions()
+  const details = messageItems(extensions, 'messageDetails')
+  const contributions = messageItems(extensions, 'messageActions')
   const { conversationId: conversation, id } = entry
   const reference = `Ultimate conversation #${conversation}, message #${id}. Read it in codemode with ultimate.entries(${conversation}, { before: ${id + 1}, limit: 1 }).`
   const date = new Date(timestamp)
@@ -488,7 +495,11 @@ function MessageActions({
         className,
       )}
     >
-      {children}
+      {details.map(({ key, extension, version, component: Detail }) => (
+        <ExtensionBoundary extension={extension} fallback={null} key={key} version={version}>
+          <Detail entry={entry} />
+        </ExtensionBoundary>
+      ))}
       <time className="tabular-nums" dateTime={date.toISOString()} title={date.toLocaleString()}>
         {formatTime(date)}
       </time>
@@ -643,22 +654,9 @@ function AssistantView({
         <AssistantNotice message={message} />
       )}
       {entry && (text || ended) && (
-        <MessageActions entry={entry} text={text} timestamp={message.timestamp}>
-          {ended && <Usage message={message} />}
-        </MessageActions>
+        <MessageActions entry={entry} text={text} timestamp={message.timestamp} />
       )}
     </Message>
-  )
-}
-
-function Usage({ message: { model, usage } }: { message: AssistantMessage }) {
-  const tokens = usage.input + usage.cacheRead + usage.cacheWrite
-  if (tokens === 0) return null
-  return (
-    <span className="truncate">
-      {model} · ↑{formatTokens(tokens)} ↓{formatTokens(usage.output)}
-      {usage.cost.total > 0 ? ` · $${usage.cost.total.toFixed(4)}` : ''}
-    </span>
   )
 }
 

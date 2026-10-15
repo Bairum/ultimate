@@ -181,7 +181,7 @@ No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, entries, messageActions, start, documents, commands })`; every key is optional. Extensions load
+`defineWebExtension({ slots, panels, surfaces, tools, entries, messageActions, messageDetails, start, documents, commands })`; every key is optional. Extensions load
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
 
 A `start(draft)` contribution starts a new conversation from the composer's prompt, images, branch point and
@@ -295,6 +295,9 @@ messageActions: [
 ]
 ```
 
+`messageDetails` contributes readouts to the same row, before the message's time, under the same rules. `status-line`
+shows each message's context and cost there.
+
 ### Entry renderers
 
 How an entry kind looks in the transcript. Extensions that append their own entries render them here; a renderer for a
@@ -310,6 +313,10 @@ receiving the rendering of the one before it as `core`, down to the core's own. 
 which falls back to its `core` when it throws. `self` renders `pi.system` entries that change the build section as a
 reload marker and returns `core` for the rest; `subagents` and `workspaces` both render `pi.user`, each only the inputs
 it owns (agent messages, lander reports).
+
+Entry renderers and message contributions relate an entry to its neighbours with `useTranscript()`: the entries the
+transcript has loaded, oldest first, which grows as the reader pages in earlier history. `models` marks a response that
+ran on another model or thinking level than the one before it this way.
 
 ### Documents
 
