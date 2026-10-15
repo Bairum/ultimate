@@ -16,6 +16,7 @@ const response = ({
   model = 'opus',
   provider = 'anthropic',
   level = 'high',
+  requested,
   prompt = 1000,
   cost = 0.1,
   timestamp = 0,
@@ -26,6 +27,8 @@ const response = ({
   provider?: string
   /** The thinking level the provider reports; null for none. */
   level?: string | null
+  /** The thinking level the request asked for. */
+  requested?: string
   prompt?: number
   cost?: number
   timestamp?: number
@@ -37,6 +40,7 @@ const response = ({
     provider,
     model,
     ...(level ? { providerThinkingLevel: level } : {}),
+    ...(requested ? { thinkingLevel: requested } : {}),
     usage: { input: 0, cacheRead: prompt, cacheWrite: 0, output: 10, cost: { total: cost } },
     stopReason,
     timestamp,
@@ -67,6 +71,26 @@ describe('switchAt', () => {
     const entries = [response(), response({ level: null }), response({ level: 'max' })]
     expect(switchAt(entries, entries[1])).toBeUndefined()
     expect(switchAt(entries, entries[2])).toEqual({ thinking: { from: 'high', to: 'max' } })
+  })
+
+  it('prefers the requested level, for providers that report none', () => {
+    const openai = { provider: 'openai', model: 'gpt', level: null }
+    const entries = [
+      response({ ...openai, requested: 'high' }),
+      response({ ...openai, requested: 'xhigh' }),
+    ]
+    expect(switchAt(entries, entries[1])).toEqual({ thinking: { from: 'high', to: 'xhigh' } })
+  })
+
+  it('compares responses from before requested levels were recorded by what the provider reported', () => {
+    // Pi's xhigh is Anthropic's max: comparing across vocabularies would mark a switch that did not happen.
+    const entries = [
+      response({ level: 'max' }),
+      response({ level: 'max', requested: 'xhigh' }),
+      response({ level: 'high', requested: 'high' }),
+    ]
+    expect(switchAt(entries, entries[1])).toBeUndefined()
+    expect(switchAt(entries, entries[2])).toEqual({ thinking: { from: 'xhigh', to: 'high' } })
   })
 
   it('reports a model and thinking change together', () => {

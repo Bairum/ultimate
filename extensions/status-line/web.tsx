@@ -336,7 +336,8 @@ function MessageUsage({ entry }: { entry: EntryRecord }) {
           <span>Model</span>
           <span>
             {message.provider}/{message.model}
-            {message.providerThinkingLevel && ` · ${message.providerThinkingLevel}`}
+            {(message.thinkingLevel ?? message.providerThinkingLevel) &&
+              ` · ${message.thinkingLevel ?? message.providerThinkingLevel}`}
           </span>
         </div>
       }

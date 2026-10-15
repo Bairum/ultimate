@@ -12,20 +12,31 @@ const responseOf = (entry: EntryRecord): AssistantMessage | undefined => {
 }
 
 /**
- * What changed since the response before `entry`: its model, and its thinking level where the provider reports the
- * level it used (`providerThinkingLevel`). Undefined for the first loaded response and for one that changed nothing.
+ * The thinking levels of two responses, when both record one the same way: the level the request asked for, or else
+ * the one the provider reports using (responses from before levels were recorded have only the latter, and only for
+ * providers that report it).
  */
+function levels(before: AssistantMessage, after: AssistantMessage) {
+  if (before.thinkingLevel && after.thinkingLevel)
+    return { from: before.thinkingLevel, to: after.thinkingLevel }
+  if (before.providerThinkingLevel && after.providerThinkingLevel)
+    return { from: before.providerThinkingLevel, to: after.providerThinkingLevel }
+  return undefined
+}
+
+/** What changed since the response before `entry`; undefined for the first loaded response and one that changed nothing. */
 export function switchAt(entries: readonly EntryRecord[], entry: EntryRecord): Switch | undefined {
   const response = responseOf(entry)
   if (!response) return undefined
+  const leveled = !!(response.thinkingLevel || response.providerThinkingLevel)
   let previous: AssistantMessage | undefined
-  let thinking: string | undefined
+  let thinking: Switch['thinking']
   for (let index = entries.indexOf(entry) - 1; index >= 0; index--) {
     const message = responseOf(entries[index])
     if (!message) continue
     previous ??= message
-    thinking = message.providerThinkingLevel
-    if (thinking || !response.providerThinkingLevel) break
+    thinking = levels(message, response)
+    if (thinking || !leveled) break
   }
   if (!previous) return undefined
   const change: Switch = {}
@@ -36,7 +47,6 @@ export function switchAt(entries: readonly EntryRecord[], entry: EntryRecord): S
         : `${message.provider}/${message.model}`
     change.model = { from: named(previous), to: named(response) }
   }
-  if (thinking && response.providerThinkingLevel && thinking !== response.providerThinkingLevel)
-    change.thinking = { from: thinking, to: response.providerThinkingLevel }
+  if (thinking && thinking.from !== thinking.to) change.thinking = thinking
   return change.model || change.thinking ? change : undefined
 }
