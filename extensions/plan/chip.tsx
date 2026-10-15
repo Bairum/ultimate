@@ -1,5 +1,3 @@
-import { applyImmutable } from '@earendil-works/chord/delta'
-import type { Op } from '@earendil-works/chord/delta'
 import {
   CircleAlertIcon,
   CircleCheckIcon,
@@ -9,9 +7,9 @@ import {
   CircleIcon,
   CircleSlashIcon,
 } from 'lucide-react'
-import { useCallback, useSyncExternalStore } from 'react'
+import { useCallback } from 'react'
 import type { SyntheticEvent } from 'react'
-import { cn, useUiState, useUltimate } from '@/sdk'
+import { cn, useDocOf, useUiState, useUltimate } from '@/sdk'
 /** One entry of the root `ultimate.plan.tasks` index, as `server.ts` defines it. */
 export type TaskLink = {
   coordinator: number
@@ -50,45 +48,13 @@ export function StatusIcon({ status }: { status: string }) {
   return <Icon aria-label={status} className={cn('size-3.5 shrink-0', tone)} />
 }
 
-const kind = 'ultimate.plan.tasks'
-let children: Record<string, TaskLink> = {}
-const listeners = new Set<() => void>()
-let stream: EventSource | undefined
-function subscribe(listener: () => void) {
-  listeners.add(listener)
-  if (!stream) {
-    stream = new EventSource(`/api/events?conversation=1&docs=${kind}`)
-    const publish = () => {
-      for (const notify of listeners) notify()
-    }
-    stream.addEventListener('doc', (event) => {
-      const data = JSON.parse(event.data) as {
-        kind: string
-        value: { children: Record<string, TaskLink> } | null
-      }
-      if (data.kind !== kind) return
-      children = data.value?.children ?? {}
-      publish()
-    })
-    stream.addEventListener('docOps', (event) => {
-      const data = JSON.parse(event.data) as { kind: string; ops: Op[] }
-      if (data.kind !== kind) return
-      children = applyImmutable({ children }, data.ops).children
-      publish()
-    })
-  }
-  return () => {
-    listeners.delete(listener)
-    if (!listeners.size) {
-      stream?.close()
-      stream = undefined
-    }
-  }
-}
+const noTasks: Record<string, TaskLink> = {}
 
 /** Every linked child conversation id → its plan task, live from the root's `ultimate.plan.tasks`. */
 export function useTaskIndex() {
-  return useSyncExternalStore(subscribe, () => children)
+  return (
+    useDocOf<{ children: Record<string, TaskLink> }>(1, 'ultimate.plan.tasks')?.children ?? noTasks
+  )
 }
 
 /** The plan task conversation `id` works on, if a coordinator linked it. */

@@ -97,6 +97,10 @@ export default defineConfig({
         },
       },
       {
+        files: ['extensions/**/*.tsx'],
+        rules: { 'ultimate/no-raw-stream': 'error' },
+      },
+      {
         files: ['web/src/**', 'extensions/**/*.tsx'],
         plugins: ['react'],
         rules: {

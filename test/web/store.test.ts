@@ -141,6 +141,74 @@ describe('web replica store', () => {
     store.stop()
   })
 
+  it('streams documents of given conversations on one stream per conversation', async () => {
+    const { store, sources, latest } = setup()
+    latest().open()
+    const tasks = store.watchDocOf(1, 'test.tasks')
+    const tasksAgain = store.watchDocOf(1, 'test.tasks')
+    const overview = store.watchDocOf(1, 'test.overview')
+    const plan = store.watchDocOf(7, 'test.plan')
+    await tick()
+    // The shown conversation's stream stays as it is; each watched conversation gets one stream of all its kinds.
+    expect(sources.map((source) => [source.url, source.closed])).toEqual([
+      ['/api/events', false],
+      ['/api/events?conversation=1&docs=test.overview%2Ctest.tasks', false],
+      ['/api/events?conversation=7&docs=test.plan', false],
+    ])
+    const [, root, coordinator] = sources
+
+    root.send('docOps', { kind: 'test.tasks', ops: [['s', ['n'], 0]] })
+    expect(store.getState().docsOf[1]).toEqual({})
+    root.send('doc', { kind: 'test.tasks', value: { n: 1 } })
+    root.send('docOps', { kind: 'test.tasks', ops: [['s', ['n'], 2]] })
+    coordinator.send('doc', { kind: 'test.plan', value: { epics: {} } })
+    expect(store.getState().docsOf).toEqual({
+      1: { 'test.tasks': { n: 2 } },
+      7: { 'test.plan': { epics: {} } },
+    })
+    // Documents of the shown conversation are a separate replica.
+    expect(store.getState().docs).toEqual({})
+
+    // Showing another conversation leaves these streams alone.
+    store.show(7)
+    await tick()
+    expect([root.closed, coordinator.closed]).toEqual([false, false])
+    expect(sources).toHaveLength(4)
+
+    // A server that refuses the stream (a restart) gets a new one; the value stays until its snapshot.
+    root.drop(true)
+    await tick()
+    const reopened = latest()
+    expect(reopened.url).toBe(root.url)
+    expect(store.getState().docsOf[1]['test.tasks']).toEqual({ n: 2 })
+    reopened.send('doc', { kind: 'test.tasks', value: { n: 3 } })
+    root.send('doc', { kind: 'test.tasks', value: { n: 0 } })
+    expect(store.getState().docsOf[1]['test.tasks']).toEqual({ n: 3 })
+
+    // Released and watched again before the next tick: the stream carries on.
+    overview()
+    store.watchDocOf(1, 'test.overview')
+    await tick()
+    expect(reopened.closed).toBe(false)
+
+    // A kind nobody watches leaves its conversation's stream; the last one closes it.
+    tasks()
+    await tick()
+    expect(reopened.closed).toBe(false)
+    tasksAgain()
+    await tick()
+    expect(reopened.closed).toBe(true)
+    expect(latest().url).toBe('/api/events?conversation=1&docs=test.overview')
+    expect(store.getState().docsOf[1]).toEqual({})
+    plan()
+    await tick()
+    expect(coordinator.closed).toBe(true)
+    expect(store.getState().docsOf[7]).toBeUndefined()
+
+    store.stop()
+    expect(latest().closed).toBe(true)
+  })
+
   it('shows another conversation on its own stream and falls back to the root when it cannot open', async () => {
     const { store, sources, latest, onFallback } = setup()
     latest().open()

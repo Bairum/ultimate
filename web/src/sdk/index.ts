@@ -48,6 +48,7 @@ export {
   useConversations,
   useDialog,
   useDoc,
+  useDocOf,
   useDocumentRenderers,
   useExtensionUiState,
   useExtensions,

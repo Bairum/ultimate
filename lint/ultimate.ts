@@ -52,9 +52,34 @@ const root = (node: Node | undefined): Node | undefined => {
   return node
 }
 
+/** `name` or `window.name` / `globalThis.name`. */
+const isGlobal = (node: Node | undefined, name: string) =>
+  node?.type === 'Identifier'
+    ? node.name === name
+    : node?.type === 'MemberExpression' &&
+      node.object?.type === 'Identifier' &&
+      ['window', 'globalThis'].includes(node.object.name ?? '') &&
+      propertyName(node) === name
+
 export default {
   meta: { name: 'ultimate' },
   rules: {
+    'no-raw-stream': {
+      meta: { schema: [] },
+      create(context: Context) {
+        const message =
+          'Extension UI reaches the server through @/sdk: useDoc/useDocOf and the other hooks for live state, useAction or api.action for server code (extensions/README.md, SDK).'
+        return {
+          CallExpression(node: Node) {
+            if (isGlobal(node.callee, 'fetch')) context.report({ node, message })
+          },
+          NewExpression(node: Node) {
+            if (isGlobal(node.callee, 'EventSource') || isGlobal(node.callee, 'WebSocket'))
+              context.report({ node, message })
+          },
+        }
+      },
+    },
     'no-test-timeout': {
       meta: { schema: [] },
       create(context: Context) {

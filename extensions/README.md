@@ -718,8 +718,9 @@ Keep in mind:
 ## SDK (`@/sdk`)
 
 `@/sdk/*` deep imports are core internals, not extension API. Import only from `@/sdk`, `@/components/ui/*`, `@/components/ai/*`, `@/components/json-tree`, `react`, and `lucide-react`. Never call `fetch` or
-open an `EventSource` yourself: the SDK keeps one live stream per shown conversation and replays its changes, and your
-server code is reached through [actions](#actions). The surface primitives are in [Surfaces](#primitives).
+open an `EventSource` yourself (`ultimate/no-raw-stream` fails lint on it in `extensions/**/*.tsx`): the SDK keeps one
+live stream for the shown conversation and one for each other conversation whose documents are watched, replays their
+changes, and your server code is reached through [actions](#actions). The surface primitives are in [Surfaces](#primitives).
 
 | Hook                                                                      | Returns                                                                                                                                                                                                                  |
 | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -729,6 +730,7 @@ server code is reached through [actions](#actions). The surface primitives are i
 | `useTasks()`                                                              | The live task graph                                                                                                                                                                                                      |
 | `useModels()`                                                             | `GET /api/models`: providers with auth status, models with context window, reasoning, cost; `refreshModels()` fetches it again after credentials change                                                                  |
 | `useDoc(kind)`                                                            | An extension document of the shown conversation (`export const docs` in `server.ts`); `undefined` until the stream delivers it (subscribing creates it with its initial value)                                           |
+| `useDocOf(conversation, kind)`                                            | `useDoc` of a given conversation, shown or not, such as the root (`1`) or a coordinator; `undefined` while `conversation` is undefined. Hooks on one conversation share one stream                                       |
 | `useUiState(key, initial)`                                                | Durable UI state, stored with the main conversation: survives reloads and restarts, shared by every tab. `[value, set]`, JSON values only                                                                                |
 | `useExtensionUiState(key, initial)`                                       | `useUiState` under `ext.<your extension>.<key>`; use it for your own UI state                                                                                                                                            |
 | `useUltimate()`                                                           | `conversationId`, `surface`, actions (`switchConversation`, `showSurface`, `openPanel`, `closePanel`, `togglePanel`, `toggleSidebar`, `runCommand`, `open`/`close(dialog)`, `openPalette`, `focusComposer`, `setTheme`)  |

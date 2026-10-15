@@ -23,6 +23,7 @@ export interface UiState {
   /** The surface on screen, which the host records as it renders: the shown one, or the next in line after it failed. */
   surface?: { id: string; title: string }
 }
+type Docs = Readonly<Record<string, JsonObject | null>>
 export interface State {
   connection: Connection
   /** The conversation the stream should show; the server's root when absent. */
@@ -30,7 +31,9 @@ export interface State {
   /** The shown conversation's replica: snapshot plus every applied ops batch. */
   view?: ConversationView
   /** Extension documents of the shown conversation, by kind. */
-  docs: Readonly<Record<string, JsonObject | null>>
+  docs: Docs
+  /** Extension documents of given conversations (`watchDocOf`), by conversation id, then kind. */
+  docsOf: Readonly<Record<number, Docs>>
   /** The root conversation's `ultimate.ui` document, once streamed; read it through `uiState`. */
   shared?: Readonly<Record<string, JsonValue>>
   system?: SystemInfo
@@ -73,6 +76,24 @@ const names = [
   'notice',
 ] as const satisfies readonly (keyof ServerEvents)[]
 
+/** A stream of documents of one conversation (`watchDocOf`): its sorted, comma-joined kinds. */
+interface DocStream {
+  kinds: string
+  source: EventSourceLike
+  retry?: ReturnType<typeof setTimeout>
+}
+
+/**
+ * `docs` after a `doc` snapshot or `docOps` batch. Ops need their stream's snapshot: a kind without one, such as a kind
+ * watched again, waits for the reconnect that brings it.
+ */
+function applyDoc(docs: Docs, event: ServerEvents['doc'] | ServerEvents['docOps']): Docs {
+  if ('value' in event) return { ...docs, [event.kind]: event.value }
+  const current = docs[event.kind]
+  if (current === undefined) return docs
+  return { ...docs, [event.kind]: applyImmutable(current ?? {}, event.ops) }
+}
+
 export function createStore(options: StoreOptions = {}) {
   const base = options.base ?? ''
   const open = options.eventSource ?? ((url: string) => new EventSource(url))
@@ -80,6 +101,7 @@ export function createStore(options: StoreOptions = {}) {
   let state: State = {
     connection: { status: 'connecting', since: Date.now() },
     docs: {},
+    docsOf: {},
     conversations: [],
     notices: [],
     ui: {
@@ -91,10 +113,15 @@ export function createStore(options: StoreOptions = {}) {
   }
   const listeners = new Set<() => void>()
   const docKinds = new Map<string, number>()
+  /** Watch counts of documents of given conversations, by conversation id, then kind. */
+  const watchedOf = new Map<number, Map<string, number>>()
+  /** One stream per conversation in `watchedOf`, carrying all its watched kinds. */
+  const docStreams = new Map<number, DocStream>()
   let source: EventSourceLike | undefined
   let opened = false
   let retry: ReturnType<typeof setTimeout> | undefined
   let reconnect: ReturnType<typeof setTimeout> | undefined
+  let sync: ReturnType<typeof setTimeout> | undefined
   let noticeId = 0
   let stopped = true
 
@@ -135,17 +162,12 @@ export function createStore(options: StoreOptions = {}) {
         if (state.shared)
           set({ shared: applyImmutable(state.shared, (data as ServerEvents['uiOps']).ops) })
         break
-      case 'doc': {
-        const { kind, value } = data as ServerEvents['doc']
-        if (!docKinds.has(kind)) break
-        set({ docs: { ...state.docs, [kind]: value } })
-        break
-      }
+      case 'doc':
       case 'docOps': {
-        const { kind, ops } = data as ServerEvents['docOps']
-        // Ops need this stream's snapshot: a kind watched again waits for the reconnect that brings one.
-        if (!docKinds.has(kind) || state.docs[kind] === undefined) break
-        set({ docs: { ...state.docs, [kind]: applyImmutable(state.docs[kind] ?? {}, ops) } })
+        const event = data as ServerEvents['doc'] | ServerEvents['docOps']
+        if (!docKinds.has(event.kind)) break
+        const docs = applyDoc(state.docs, event)
+        if (docs !== state.docs) set({ docs })
         break
       }
       case 'tasks':
@@ -202,6 +224,51 @@ export function createStore(options: StoreOptions = {}) {
     reconnect = setTimeout(connect, 0)
   }
 
+  function openDocs(conversation: number, kinds: string) {
+    closeDocs(conversation)
+    const params = new URLSearchParams({ conversation: String(conversation), docs: kinds })
+    const stream: DocStream = { kinds, source: open(`${base}/api/events?${params}`) }
+    docStreams.set(conversation, stream)
+    stream.source.addEventListener('error', () => {
+      // EventSource retries by itself unless the server answered with an error status.
+      if (docStreams.get(conversation) === stream && stream.source.readyState === CLOSED)
+        stream.retry = setTimeout(() => openDocs(conversation, kinds), options.retryMs ?? 1000)
+    })
+    for (const name of ['doc', 'docOps'] as const)
+      stream.source.addEventListener(name, (event) => {
+        if (docStreams.get(conversation) !== stream) return
+        const docs = state.docsOf[conversation] ?? {}
+        const next = applyDoc(docs, JSON.parse((event as MessageEvent<string>).data))
+        if (next !== docs) set({ docsOf: { ...state.docsOf, [conversation]: next } })
+      })
+  }
+  function closeDocs(conversation: number) {
+    const stream = docStreams.get(conversation)
+    stream?.source.close()
+    clearTimeout(stream?.retry)
+    docStreams.delete(conversation)
+  }
+  /** Give each watched conversation one stream of exactly its watched kinds, and close the rest. */
+  function syncDocs() {
+    for (const conversation of docStreams.keys())
+      if (!watchedOf.has(conversation)) closeDocs(conversation)
+    const docsOf: Record<number, Docs> = {}
+    for (const [conversation, kinds] of watchedOf) {
+      const list = [...kinds.keys()].toSorted().join(',')
+      if (docStreams.get(conversation)?.kinds !== list) openDocs(conversation, list)
+      // Kinds nobody watches anymore go; the rest keep their value until the new stream's snapshot replaces it.
+      docsOf[conversation] = Object.fromEntries(
+        Object.entries(state.docsOf[conversation] ?? {}).filter(([kind]) => kinds.has(kind)),
+      )
+    }
+    set({ docsOf })
+  }
+  function scheduleSync() {
+    if (stopped) return
+    clearTimeout(sync)
+    sync = setTimeout(syncDocs, 0)
+  }
+
   async function refreshModels() {
     try {
       const response = await request(`${base}/api/models`)
@@ -223,13 +290,16 @@ export function createStore(options: StoreOptions = {}) {
       if (!stopped) return
       stopped = false
       connect()
+      syncDocs()
     },
     stop() {
       stopped = true
       clearTimeout(retry)
       clearTimeout(reconnect)
+      clearTimeout(sync)
       source?.close()
       source = undefined
+      for (const conversation of docStreams.keys()) closeDocs(conversation)
     },
     /** Show another conversation: its replica replaces the current one. */
     show(id: number | undefined) {
@@ -250,6 +320,23 @@ export function createStore(options: StoreOptions = {}) {
           const { [kind]: _removed, ...docs } = state.docs
           set({ docs })
         }
+      }
+    },
+    /**
+     * Stream an extension document of conversation `conversation`, shown or not, until the returned release runs.
+     * Watches of one conversation share a stream.
+     */
+    watchDocOf(conversation: number, kind: string) {
+      const kinds = watchedOf.get(conversation) ?? new Map<string, number>()
+      watchedOf.set(conversation, kinds)
+      kinds.set(kind, (kinds.get(kind) ?? 0) + 1)
+      scheduleSync()
+      return () => {
+        const left = (kinds.get(kind) ?? 1) - 1
+        if (left > 0) kinds.set(kind, left)
+        else kinds.delete(kind)
+        if (!kinds.size) watchedOf.delete(conversation)
+        scheduleSync()
       }
     },
     refreshModels,

@@ -1,5 +1,3 @@
-import { applyImmutable } from '@earendil-works/chord/delta'
-import type { Op } from '@earendil-works/chord/delta'
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -30,6 +28,7 @@ import {
   useAction,
   useConversations,
   useDoc,
+  useDocOf,
   useToolDuration,
   useUiState,
   useUltimate,
@@ -516,29 +515,6 @@ export function PlanBody({
   )
 }
 
-/** A conversation's live `ultimate.plan`, on a stream of its own: a worker's view of its coordinator's plan. */
-function usePlanOf(conversation: number | undefined) {
-  const [plan, setPlan] = useState<Plan | null>()
-  useEffect(() => {
-    if (conversation === undefined) return undefined
-    const stream = new EventSource(`/api/events?conversation=${conversation}&docs=ultimate.plan`)
-    stream.addEventListener('doc', (event) => {
-      const data = JSON.parse(event.data) as { kind: string; value: Plan | null }
-      if (data.kind === 'ultimate.plan') setPlan(data.value)
-    })
-    stream.addEventListener('docOps', (event) => {
-      const data = JSON.parse(event.data) as { kind: string; ops: Op[] }
-      if (data.kind === 'ultimate.plan')
-        setPlan((previous) => previous && applyImmutable(previous, data.ops))
-    })
-    return () => {
-      stream.close()
-      setPlan(undefined)
-    }
-  }, [conversation])
-  return plan
-}
-
 const pill =
   'pointer-events-auto flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full border border-border/70 bg-card/90 px-2.5 font-mono text-[11px] text-muted-foreground shadow-sm backdrop-blur hover:text-foreground'
 
@@ -716,7 +692,7 @@ function CoordinatorPlan({
 
 function WorkerPlan({ conversation, task }: { conversation: number; task: TaskLink }) {
   const [expanded, setExpanded] = useUiState('plan.panel', false)
-  const plan = usePlanOf(expanded ? task.coordinator : undefined)
+  const plan = useDocOf<Plan>(expanded ? task.coordinator : undefined, 'ultimate.plan')
   const openTask = useOpenTask()
   const focus = useMemo(() => ({ key: task.key }), [task.key])
   return (

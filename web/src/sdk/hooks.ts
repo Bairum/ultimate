@@ -127,6 +127,23 @@ export function useDoc<T extends JsonObject = JsonObject>(
   return useStore((state) => state.docs[kind]) as Readonly<T> | null | undefined
 }
 
+/**
+ * An extension document of conversation `conversation`, shown or not, such as the root's; `undefined` while
+ * `conversation` is undefined and until its stream delivers it. Every hook on one conversation shares one stream.
+ */
+export function useDocOf<T extends JsonObject = JsonObject>(
+  conversation: number | undefined,
+  kind: string,
+): Readonly<T> | null | undefined {
+  useEffect(
+    () => (conversation === undefined ? undefined : store.watchDocOf(conversation, kind)),
+    [conversation, kind],
+  )
+  return useStore((state) =>
+    conversation === undefined ? undefined : state.docsOf[conversation]?.[kind],
+  ) as Readonly<T> | null | undefined
+}
+
 /** The shown conversation and surface ids, and the shell's actions. */
 export function useUltimate(): UltimateContext {
   const conversationId = useStore((state) => state.view?.conversation.id)
