@@ -74,7 +74,7 @@ function capture() {
   }
 }
 
-/** Fades the previous view out, uncovering the app beneath. */
+/** Fades the previous view out, blurred, so the app beneath comes into focus. */
 function uncover() {
   if (!shown || !covering) return
   covering = false
@@ -82,7 +82,7 @@ function uncover() {
   if (document.hidden) shown.remove()
   else
     void shown
-      .animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, easing: 'ease-out' })
+      .animate([{ opacity: 1 }, { opacity: 0 }], { duration: 240, easing: 'ease-out' })
       .finished.then(() => shown.remove())
 }
 

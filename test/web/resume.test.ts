@@ -71,8 +71,8 @@ class Element {
   prepend(child: Element) {
     this.children.unshift(child)
   }
-  append(child: Element | Text) {
-    this.children.push(child)
+  append(...children: (Element | Text)[]) {
+    this.children.push(...children)
   }
   /** Every descendant element for `*`, otherwise those marked with a scroll offset. */
   querySelectorAll(selector = '*'): Element[] {
@@ -151,7 +151,8 @@ describe('resuming a reload', () => {
     const [view] = after.body.querySelectorAll()
     expect(view.id).toBe('resume')
     expect(view.inert).toBe(true)
-    const [style, scrolled] = view.querySelectorAll()
+    const [style] = view.querySelectorAll()
+    const [scrolled] = view.querySelectorAll('[data-resume-scroll]')
     expect(style.textContent).toContain('body { color: red; }')
     expect(Number(scrolled.scrollTop)).toBe(420)
   })
