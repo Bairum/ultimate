@@ -522,9 +522,14 @@ export function workspaces(host: Host) {
       if (!workspace) throw new Error('Conversation has no workspace')
       if (workspace.state === 'preparing') throw new Error('Workspace is preparing')
       if (workspace.state !== 'removed') {
-        // oxlint-disable-next-line ultimate/no-silent-catch -- FIXME(ULT-138): permission or I/O errors must not mark an existing workspace removed.
-        if (await lstat(workspace.path).catch(() => undefined))
-          await git(workspace.source, 'worktree', 'remove', workspace.path)
+        const present = await lstat(workspace.path).then(
+          () => true,
+          (error: NodeJS.ErrnoException) => {
+            if (error.code === 'ENOENT') return false
+            throw error
+          },
+        )
+        if (present) await git(workspace.source, 'worktree', 'remove', workspace.path)
         await host.harness().commit(async (tx) => {
           ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'removed'
         }, context)
