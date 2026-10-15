@@ -30,8 +30,6 @@ export function useNewConversationConfiguration(enabled = true, source?: number)
       model: choices.model ?? defaults?.model,
       thinkingLevel: choices.thinkingLevel ?? defaults?.thinkingLevel,
     },
-    /** What the user chose; the rest the server defaults the same way. */
-    choices,
     available,
     loading: enabled && available && (shown.loading || (!live && fetched.loading)),
     error: fetched.error,

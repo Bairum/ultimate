@@ -196,7 +196,7 @@ function ConversationComposer({
   const isNew = target === 'new'
   const { id, agent } = conversation
   const busy = !isNew && conversation.busy
-  // A branch shows its source's configuration, which it inherits; a new root shows the project default.
+  // A branch starts with its source's current configuration, a new root with the project default; what shows is sent.
   const source = isNew && !point?.root ? point?.from : undefined
   const defaults = useNewConversationConfiguration(isNew, source)
   const loading = isNew ? defaults.loading : conversation.loading
@@ -267,9 +267,9 @@ function ConversationComposer({
             ...(point?.at === undefined ? {} : { at: point.at }),
             ...(point?.root ? { root: true } : {}),
             ...(isolation === undefined ? {} : { isolated: isolation }),
-            ...(defaults.choices.model ? { model: defaults.choices.model } : {}),
-            ...(defaults.choices.thinkingLevel
-              ? { thinkingLevel: defaults.choices.thinkingLevel }
+            ...(defaults.configuration.model ? { model: defaults.configuration.model } : {}),
+            ...(defaults.configuration.thinkingLevel
+              ? { thinkingLevel: defaults.configuration.thinkingLevel }
               : {}),
           })
         ).id
