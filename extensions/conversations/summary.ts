@@ -27,6 +27,7 @@ import type {
   Usage,
 } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import type { LineageService } from '../lineage/server.ts'
 import { summaryModel } from './summary-model.ts'
 import { isInput } from './activity.ts'
 import type { SummaryModel, SummaryModelHost } from './summary-model.ts'
@@ -236,6 +237,7 @@ export async function generateSummary(
   withSummary: boolean,
   receipt: SummaryReceipt,
   mode: 'reply' | 'spawn' | 'intent' = 'reply',
+  root = false,
 ): Promise<SummaryResult> {
   const response = await askSummaryModel(
     models,
@@ -247,9 +249,11 @@ export async function generateSummary(
           (withSummary
             ? ' Also include "title" (at most 80 characters) and "summary" (1–2 brief sentences, at most 420 characters), focusing on the goal and current outcome.'
             : ' Do not include title or summary.')) +
-      (withSummary
-        ? ' Also include "feature": the product feature or area being worked on, in 1–3 words and at most 32 characters, using title-style capitalization, without ticket numbers or action verbs like "Fix". Keep the previous feature exactly unless the conversation has clearly moved to a different feature.'
-        : ''),
+      (!withSummary
+        ? ''
+        : root
+          ? ' Also include "feature": the product or tool this conversation builds as a whole; it is the root of a line of work, so name the whole, not the part worked on now. Use 1–3 words and at most 32 characters, title-style capitalization, without ticket numbers or action verbs like "Fix". Keep the previous feature exactly unless it names a part rather than the whole.'
+          : ' Also include "feature": the product feature or area being worked on, in 1–3 words and at most 32 characters, using title-style capitalization, without ticket numbers or action verbs like "Fix". Keep the previous feature exactly unless the conversation has clearly moved to a different feature.'),
     input,
     signal,
     receipt,
@@ -362,7 +366,9 @@ export type SummaryRequest =
   | { reason: 'spawn'; answer: EntryId; agent: string; task: string }
   | { reason: 'reply'; generation: TaskId<GenerationResult> }
 
-export type SummaryHost = Pick<ExtensionHost, 'harness' | 'metadata'> & SummaryModelHost
+export type SummaryHost = Pick<ExtensionHost, 'harness' | 'metadata'> &
+  Partial<Pick<ExtensionHost, 'use'>> &
+  SummaryModelHost
 
 /**
  * Request inside the trigger's transaction; only durable documents decide deduplication. `model` is the summary model
@@ -440,7 +446,7 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
     ),
     | { phase: 'observe' }
     | { phase: 'prepare'; answer: EntryId; summary: boolean }
-    | { phase: 'generate'; answer: EntryId; input: string; summary: boolean },
+    | { phase: 'generate'; answer: EntryId; input: string; summary: boolean; root?: boolean },
     null
   >({
     name: 'conversations.summary',
@@ -518,6 +524,10 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
                 ),
                 answer,
               ))
+        // A root's feature names what its whole tree builds, not the part its latest exchange touched.
+        const root =
+          (await host.use?.<LineageService>('lineage')?.rootOf(runtime.conversationId, context)) ===
+          runtime.conversationId
         await runtime.commit(async (tx) => {
           const state = await tx.doc(Summaries, runtime.conversationId)
           if (state.pending !== task.id || state.revision !== task.input.revision) return terminal
@@ -532,6 +542,7 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
               phase: 'generate',
               answer,
               summary: task.state.checkpoint.summary,
+              ...(root ? { root } : {}),
               input:
                 (requestText
                   ? `Original request (untrusted source text):\n${requestText}\n\n`
@@ -601,6 +612,7 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
                 },
               },
               task.input.intent ? 'intent' : task.input.spawn ? 'spawn' : 'reply',
+              checkpoint.root,
             )
             result = await runtime.memo('reply', result, context)
           }

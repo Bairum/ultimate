@@ -23,11 +23,13 @@ import { context } from '../server/harness.ts'
 import { DEFAULT_EXTENSIONS } from '../server/extension-settings.ts'
 import { Metadata } from '../server/metadata.ts'
 import { Overview } from '../extensions/conversations/overview.ts'
+import type { LineageService } from '../extensions/lineage/server.ts'
 import {
   generateSummary,
   summaryInput,
   Summaries,
   summaryBehavior,
+  type SummaryHost,
   requestSummary,
   IntentSummarized,
   TitleChanged,
@@ -53,7 +55,7 @@ const held = (gate: Promise<void>, signal: AbortSignal) =>
       signal.addEventListener('abort', () => fail(new Error('Closed')), { once: true }),
     ),
   ])
-async function launch(subagents = false, initialIntent = false) {
+async function launch(subagents = false, initialIntent = false, root = false) {
   const home = await temp('ultimate-summary-')
   const projectRoot = join(home, 'project')
   await mkdir(join(projectRoot, '.ultimate/agents'), { recursive: true })
@@ -119,6 +121,17 @@ async function launch(subagents = false, initialIntent = false) {
                   .getModels()
                   .filter((model) => model.provider === 'openai' && model.id === 'gpt-6-luna'),
             },
+            // Lineage stays off here; a rooted fixture stands in for it with every conversation its own root.
+            ...(root
+              ? {
+                  use: ((name: string) =>
+                    name === 'lineage'
+                      ? ({
+                          rootOf: async (id: number) => id as ConversationId,
+                        } satisfies Pick<LineageService, 'rootOf'>)
+                      : undefined) as NonNullable<SummaryHost['use']>,
+                }
+              : {}),
           },
           generated,
         ),
@@ -905,6 +918,15 @@ it.concurrent('includes the previous feature next to the previous summary in mod
   expect(summaryInput([])).not.toContain('Previous feature:')
 })
 
+it.concurrent('asks a root for the feature its whole tree builds', async () => {
+  const branch = await launch()
+  await branch.exchange()
+  expect(branch.generated.mock.calls.at(-1)![6]).toBeFalsy()
+  const root = await launch(false, false, true)
+  await root.exchange()
+  expect(root.generated.mock.calls.at(-1)![6]).toBe(true)
+})
+
 it.concurrent('stores and exposes a feature, keeps it when omitted, and clears it on reset', async () => {
   const fixture = await launch()
   fixture.generated.mockResolvedValueOnce({
@@ -972,6 +994,18 @@ it.concurrent('validates assessment-only JSON and rejects unapproved or malforme
   ).toEqual(output)
   expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('Also include "feature"')
   expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('Keep the previous feature exactly')
+  expect(stream.mock.calls.at(-1)![1].systemPrompt).not.toContain('name the whole')
+  await generateSummary(
+    models,
+    'Reply',
+    new AbortController().signal,
+    true,
+    { model: luna },
+    'reply',
+    true,
+  )
+  expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('name the whole, not the part')
+  expect(stream.mock.calls.at(-1)![1].systemPrompt).not.toContain('product feature or area')
   output = { title: 'Delegate the sidebar', summary: 'Planning has moved to implementation.' }
   expect(
     await generateSummary(
