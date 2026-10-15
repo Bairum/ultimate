@@ -18,6 +18,31 @@ let ready = false
 /** True when this page load painted the previous page's view: a reload, not a fresh start. */
 export const resumed = shown !== null
 
+/**
+ * What `node` shows, for the stored view: elements on screen as they are, each off screen as a blank of its size, so
+ * a long transcript stays small and scroll offsets still land. Out-of-flow elements off screen take no room, so they
+ * go; hidden ones keep no content.
+ */
+function copy(node: Node): Node {
+  if (!(node instanceof HTMLElement)) return node.cloneNode(true)
+  const box = node.getBoundingClientRect()
+  if (box.bottom < 0 || box.top > innerHeight || box.right < 0 || box.left > innerWidth) {
+    const { margin, position } = getComputedStyle(node)
+    if (position === 'absolute' || position === 'fixed') return document.createTextNode('')
+    const blank = document.createElement('div')
+    blank.style.cssText = `width:${box.width}px;height:${box.height}px;margin:${margin};flex:none`
+    return blank
+  }
+  const view = node.cloneNode(false) as HTMLElement
+  if (node.scrollTop > 0 || node.scrollLeft > 0)
+    view.dataset.resumeScroll = `${node.scrollTop},${node.scrollLeft}`
+  // A draft lives in the textarea's value, which markup leaves out.
+  if (node instanceof HTMLTextAreaElement) view.textContent = node.value
+  else if (node.getClientRects().length > 0 || getComputedStyle(node).display === 'contents')
+    for (const child of node.childNodes) view.append(copy(child))
+  return view
+}
+
 function capture() {
   // Going away again before the app rendered: the previous view is still the one to show, stored as it came.
   if (covering) {
@@ -31,18 +56,13 @@ function capture() {
     sessionStorage.removeItem(key)
     return
   }
-  const scrolled = [...document.body.querySelectorAll<HTMLElement>('*')].filter(
-    (element) => element.scrollTop > 0 || element.scrollLeft > 0,
-  )
-  for (const element of scrolled)
-    element.dataset.resumeScroll = `${element.scrollTop},${element.scrollLeft}`
-  // A draft lives in the textarea's value, which markup leaves out.
-  for (const field of document.querySelectorAll('textarea')) field.textContent = field.value
-  const html = [...document.body.children]
-    .filter((element) => element.tagName !== 'SCRIPT' && element !== shown)
-    .map((element) => (element.id === 'app' ? element.innerHTML : element.outerHTML))
-    .join('')
-  for (const element of scrolled) delete element.dataset.resumeScroll
+  const view = document.createElement('div')
+  for (const element of document.body.children) {
+    if (element.tagName === 'SCRIPT' || element === shown) continue
+    if (element.id === 'app') for (const child of element.childNodes) view.append(copy(child))
+    else view.append(copy(element))
+  }
+  const html = view.innerHTML
   const css = [...document.styleSheets]
     .flatMap((sheet) => [...sheet.cssRules].map((rule) => rule.cssText))
     .join('\n')

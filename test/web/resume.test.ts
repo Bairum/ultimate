@@ -7,7 +7,21 @@ const paint = /<script>\s*(\/\/ A reload paints[\s\S]*?)<\/script>/.exec(
   readFileSync(new URL('../../web/index.html', import.meta.url), 'utf8'),
 )![1]
 
-/** Just enough of an element for both halves: markup derived from its dataset, scroll offsets, children. */
+/** A text node: no box of its own, copied whole. */
+class Text {
+  data: string
+  constructor(data: string) {
+    this.data = data
+  }
+  cloneNode() {
+    return new Text(this.data)
+  }
+  get outerHTML() {
+    return this.data
+  }
+}
+
+/** Just enough of an element for both halves: markup derived from its dataset, scroll offsets, children, a box. */
 class Element {
   id = ''
   inert = false
@@ -17,14 +31,30 @@ class Element {
   scrollLeft = 0
   dataset: Record<string, string> = {}
   style = { cssText: '' }
-  children: Element[] = []
+  children: (Element | Text)[] = []
+  box = { top: 0, bottom: 100, left: 0, right: 100, width: 100, height: 100 }
   tagName: string
   constructor(tagName: string) {
     this.tagName = tagName
   }
+  get childNodes() {
+    return this.children
+  }
+  getBoundingClientRect() {
+    return this.box
+  }
+  getClientRects() {
+    return [this.box]
+  }
+  cloneNode(deep: boolean) {
+    const clone = Object.assign(new Element(this.tagName), { id: this.id })
+    if (deep) clone.children = this.children.map((child) => child.cloneNode(true))
+    if (deep) clone.textContent = this.textContent
+    return clone
+  }
   get outerHTML(): string {
     const scroll = this.dataset.resumeScroll
-    const attributes = `${this.id ? ` id="${this.id}"` : ''}${scroll ? ` data-resume-scroll="${scroll}"` : ''}`
+    const attributes = `${this.id ? ` id="${this.id}"` : ''}${scroll ? ` data-resume-scroll="${scroll}"` : ''}${this.style.cssText ? ` style="${this.style.cssText}"` : ''}`
     return `<${this.tagName.toLowerCase()}${attributes}>${this.innerHTML}</${this.tagName.toLowerCase()}>`
   }
   get innerHTML(): string {
@@ -41,12 +71,14 @@ class Element {
   prepend(child: Element) {
     this.children.unshift(child)
   }
-  append(child: Element) {
+  append(child: Element | Text) {
     this.children.push(child)
   }
-  /** Every descendant for `*`, otherwise those marked with a scroll offset. */
+  /** Every descendant element for `*`, otherwise those marked with a scroll offset. */
   querySelectorAll(selector = '*'): Element[] {
-    const all = this.children.flatMap((child): Element[] => [child, ...child.querySelectorAll()])
+    const all = this.children.flatMap((child): Element[] =>
+      child instanceof Element ? [child, ...child.querySelectorAll()] : [],
+    )
     return selector === '*' ? all : all.filter((element) => element.dataset.resumeScroll)
   }
 }
@@ -80,6 +112,13 @@ describe('resuming a reload', () => {
     const before = page()
     const app = Object.assign(new Element('DIV'), { id: 'app' })
     const transcript = Object.assign(new Element('DIV'), { scrollTop: 420 })
+    const earlier = new Element('P')
+    earlier.append(new Text('long ago '.repeat(1000)))
+    earlier.box = { top: -900, bottom: -600, left: 0, right: 100, width: 100, height: 300 }
+    const latest = new Element('P')
+    latest.append(new Text('just now'))
+    transcript.append(earlier)
+    transcript.append(latest)
     app.append(transcript)
     before.body.append(app)
     before.body.append(new Element('SCRIPT'))
@@ -87,6 +126,11 @@ describe('resuming a reload', () => {
     const listeners = new Map<string, () => void>()
     vi.stubGlobal('document', before.document)
     vi.stubGlobal('sessionStorage', before.sessionStorage)
+    vi.stubGlobal('HTMLElement', Element)
+    vi.stubGlobal('HTMLTextAreaElement', class extends Element {})
+    vi.stubGlobal('getComputedStyle', () => ({ margin: '16px 0px', position: 'static' }))
+    vi.stubGlobal('innerWidth', 1200)
+    vi.stubGlobal('innerHeight', 800)
     vi.stubGlobal('addEventListener', (type: string, listener: () => void) =>
       listeners.set(type, listener),
     )
@@ -95,14 +139,19 @@ describe('resuming a reload', () => {
     expect(before.items.size).toBe(0)
     rendered()
     listeners.get('pagehide')!()
+    const stored = before.items.get('ultimate.resume')!
+    // Off screen, the earlier message keeps its room but not its content.
+    expect(stored).toContain('just now')
+    expect(stored).not.toContain('long ago')
+    expect(stored).toContain('width:100px;height:300px;margin:16px 0px;flex:none')
     expect(transcript.dataset.resumeScroll).toBeUndefined()
 
-    const after = page(before.items.get('ultimate.resume'))
+    const after = page(stored)
     runInNewContext(paint, after)
-    const [view] = after.body.children
+    const [view] = after.body.querySelectorAll()
     expect(view.id).toBe('resume')
     expect(view.inert).toBe(true)
-    const [style, scrolled] = view.children
+    const [style, scrolled] = view.querySelectorAll()
     expect(style.textContent).toContain('body { color: red; }')
     expect(Number(scrolled.scrollTop)).toBe(420)
   })
