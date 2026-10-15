@@ -95,9 +95,9 @@ export function Conversations() {
   const shownTop = topOf(shownId, conversations)
   const hiddenIds = hiddenConversationIds(conversations, archived)
   const summary = shownTop && !hiddenIds.has(shownTop.id) ? overview[shownTop.id] : undefined
-  const info = useAction<{ root: number }>('lineage', 'info')
-  useEvent('lineage:root-changed', () => void info.refetch())
-  const rootId = info.data?.root
+  const info = useAction<{ roots: number[] }>('lineage', 'info')
+  useEvent('lineage:roots-changed', () => void info.refetch())
+  const roots = new Set(info.data?.roots)
   const [expanded, setExpanded] = useExtensionUiState<number[]>('expanded', [])
   const working = workingByTop(conversations)
   const topLevel = conversations.filter(
@@ -113,13 +113,13 @@ export function Conversations() {
   const hidden = topLevel
     .filter((conversation) => conversation.label !== 'lander' && hiddenIds.has(conversation.id))
     .toSorted(byInput)
-  const root = listed.find((conversation) => conversation.id === rootId)
+  const rootRows = listed.filter((conversation) => roots.has(conversation.id))
   const earlier = listed.filter(
-    (conversation) => conversation.id !== rootId && !conversation.branchOf,
+    (conversation) => !roots.has(conversation.id) && !conversation.branchOf,
   )
   const branchesBySource = new Map<number, ConversationSummary[]>()
   for (const conversation of topLevel.toSorted(byInput)) {
-    if (conversation.id === rootId || !conversation.branchOf) continue
+    if (roots.has(conversation.id) || !conversation.branchOf) continue
     const source = conversation.branchOf.conversationId
     branchesBySource.set(source, [...(branchesBySource.get(source) ?? []), conversation])
   }
@@ -154,7 +154,7 @@ export function Conversations() {
       <Row
         assessment={tasks ? currentAssessment(overview[conversation.id]) : undefined}
         archived={hiddenIds.has(conversation.id)}
-        root={conversation.id === rootId}
+        root={roots.has(conversation.id)}
         conversation={conversation}
         draft={conversation.inputAt === undefined}
         feature={overview[conversation.id]?.feature}
@@ -289,12 +289,12 @@ export function Conversations() {
             {landers.map((conversation) => tree(conversation))}
           </div>
         )}
-        {root && tree(root)}
+        {rootRows.map((root) => tree(root))}
         {listed
           .filter(
             (conversation) =>
               conversation.branchOf &&
-              conversation.id !== rootId &&
+              !roots.has(conversation.id) &&
               !listed.some((source) => source.id === conversation.branchOf?.conversationId),
           )
           .map((conversation) => tree(conversation))}
@@ -357,7 +357,7 @@ export function Conversations() {
               {hidden
                 .filter(
                   (conversation) =>
-                    conversation.id === rootId ||
+                    roots.has(conversation.id) ||
                     !hidden.some((source) => source.id === conversation.branchOf?.conversationId),
                 )
                 .map((conversation) => tree(conversation, false, true))}

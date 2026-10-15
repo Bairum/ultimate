@@ -7,7 +7,7 @@ import {
   StickyNoteIcon,
   TriangleAlertIcon,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -25,6 +25,7 @@ import {
   useCommands,
   useDialog,
   useDoc,
+  useEvent,
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, UltimateActions } from '@/sdk'
@@ -198,7 +199,7 @@ function BriefStatus() {
  */
 function BriefLookup() {
   const { conversationId } = useUltimate()
-  const info = useAction<{ root: number; branch?: BranchState }>(
+  const info = useAction<{ roots: number[]; root?: number; branch?: BranchState }>(
     'lineage',
     'info',
     { id: conversationId ?? null },
@@ -301,20 +302,54 @@ function BranchDialog() {
   )
 }
 
-/** A top-level conversation: shown, and not a subagent or other owned conversation. */
+/** The project's roots as last read, for the synchronous `when` of "Make this a root". */
+let roots: number[] = []
+function Roots() {
+  const info = useAction<{ roots: number[] }>('lineage', 'info')
+  useEvent('lineage:roots-changed', () => void info.refetch())
+  useEffect(() => {
+    if (info.data) roots = info.data.roots
+  }, [info.data])
+  return null
+}
+
+/** The shown conversation, when it is top-level (not a subagent or other owned conversation) and not a branch. */
 function topLevel() {
   const { id } = getConversation()
   const summary = getState().conversations.find((conversation) => conversation.id === id)
-  return id !== undefined && summary?.parentConversationId === undefined
+  return id !== undefined && summary?.parentConversationId === undefined && !summary?.branchOf
+}
+
+/** Where a branch starts by default: the shown tree's root, else the most recently active root. */
+async function defaultRoot() {
+  const { id } = getConversation()
+  const info = await api.action<{ roots: number[]; root?: number }>(
+    'lineage',
+    'info',
+    id === undefined ? null : { id },
+  )
+  if (info.root !== undefined) return info.root
+  const { conversations } = getState()
+  const inputAt = (root: number) =>
+    conversations.find((conversation) => conversation.id === root)?.inputAt ?? 0
+  return info.roots.toSorted((a, b) => inputAt(b) - inputAt(a) || b - a)[0]
 }
 
 export default defineWebExtension({
-  start: async (draft) => {
+  start: async ({ root, ...draft }) => {
     const isolated =
       draft.isolated ??
       (getUiState('ext.conversations.creationType') !== 'shared' &&
         getState().system?.extensions.some((extension) => extension.name === 'workspaces') === true)
-    return api.action<{ id: number }>('lineage', 'branch', { ...draft, isolated })
+    if (root) {
+      const { from: _from, at: _at, ...input } = draft
+      const started = await api.action<{ id: number }>('lineage', 'newRoot', { ...input, isolated })
+      events.emit('lineage:roots-changed', {})
+      return started
+    }
+    const from = draft.from ?? (await defaultRoot())
+    if (from === undefined) throw new Error('There is no root to branch from')
+    return api.action<{ id: number }>('lineage', 'branch', { ...draft, from, isolated })
   },
   entries: {
     'lineage.branched': Branched,
@@ -322,7 +357,7 @@ export default defineWebExtension({
     'lineage.finished': Finished,
     'pi.reset': Brief,
   },
-  slots: { 'composer.status': [BriefStatus], overlay: [BranchDialog] },
+  slots: { 'composer.status': [BriefStatus], overlay: [BranchDialog, Roots] },
   messageActions: [BranchAction],
   commands: [
     {
@@ -346,15 +381,15 @@ export default defineWebExtension({
       },
     },
     {
-      id: 'lineage.root',
-      title: 'Make this the root',
+      id: 'lineage.add-root',
+      title: 'Make this a root',
       group: 'Conversations',
-      when: topLevel,
+      when: () => topLevel() && !roots.includes(getConversation().id!),
       run: async () => {
         const { id } = getConversation()
         if (id !== undefined) {
-          await api.action('lineage', 'root', { id })
-          events.emit('lineage:root-changed', { root: id })
+          roots = (await api.action<{ roots: number[] }>('lineage', 'root', { id })).roots
+          events.emit('lineage:roots-changed', { roots })
         }
       },
     },

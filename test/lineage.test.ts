@@ -8,7 +8,7 @@ import { afterEach, beforeAll, expect, it } from 'vitest'
 import { Branch } from '../extensions/lineage/server.ts'
 import { Plan } from '../extensions/plan/server.ts'
 import { Summaries, summaryBehavior } from '../extensions/conversations/summary.ts'
-import { defineExtension } from '@earendil-works/pi-durable'
+import { defineExtension, defineTask } from '@earendil-works/pi-durable'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import type { HistoryResponse } from '../shared/protocol.ts'
@@ -105,7 +105,7 @@ it('branches with a brief, marks the source, and keeps inherited history reachab
   const publications: import('@earendil-works/pi-durable').CommitPublication[] = []
   const stop = server.harness.subscribeCommits((publication) => publications.push(publication))
   const { status, data } = await post(server, '/api/extensions/lineage/actions/branch', {
-    args: { prompt: 'Add notes between conversations' },
+    args: { from: 1, prompt: 'Add notes between conversations' },
   })
   expect(status).toBe(200)
   const id = data.result.id as ConversationId
@@ -187,20 +187,22 @@ it('branches with a brief, marks the source, and keeps inherited history reachab
 
   // The prompt section names each conversation's place in the tree.
   expect(await section(server, ROOT_CONVERSATION_ID)).toMatch(
-    /^You are the root of this project \(#1\): you hold its idea and keep the tally of what lands\./,
+    /^You are a root of this project \(#1\): you hold the idea of one line of work/,
   )
   expect(await section(server, id)).toContain(
     `You are #${id}, branched from #1 at entry ${at} for: Add notes between conversations\nRoot: #1.`,
   )
 
-  // Making the branch the root moves the root line to it.
-  await post(server, '/api/extensions/lineage/actions/root', { args: { id } })
+  // A branch already has a root, so it cannot become one.
+  const refused = await post(server, '/api/extensions/lineage/actions/root', { args: { id } })
+  expect(refused.status).not.toBe(200)
   expect(
-    (await post(server, '/api/extensions/lineage/actions/info', { args: null })).data.result,
-  ).toEqual({ root: id })
-  expect(await section(server, id)).toMatch(
-    new RegExp(`^You are the root of this project \\(#${id}\\)`),
-  )
+    (await post(server, '/api/extensions/lineage/actions/info', { args: { id } })).data.result,
+  ).toMatchObject({
+    roots: [1],
+    root: 1,
+    branch: { from: 1, intent: 'Add notes between conversations' },
+  })
 })
 
 it('lets a summary replace the provisional branch title', async () => {
@@ -210,7 +212,9 @@ it('lets a summary replace the provisional branch title', async () => {
   ).wait(context)
   failures.brief = true
   const { id } = (
-    await post(server, '/api/extensions/lineage/actions/branch', { args: { prompt: 'New intent' } })
+    await post(server, '/api/extensions/lineage/actions/branch', {
+      args: { from: 1, prompt: 'New intent' },
+    })
   ).data.result as { id: ConversationId }
   await until(
     async () => (await server.harness.snapshot(Branch, id, context))?.branch?.status === 'failed',
@@ -288,7 +292,9 @@ it('marks a failed brief and starts it again on retry', async () => {
   await (await server.root.submit({ type: 'input', content: 'An idea.' }, context)).wait(context)
   failures.brief = true
   const { id } = (
-    await post(server, '/api/extensions/lineage/actions/branch', { args: { prompt: 'Try it' } })
+    await post(server, '/api/extensions/lineage/actions/branch', {
+      args: { from: 1, prompt: 'Try it' },
+    })
   ).data.result as { id: ConversationId }
   const state = async () => (await server.harness.snapshot(Branch, id, context))?.branch
   await until(async () => (await state())?.status === 'failed')
@@ -311,7 +317,7 @@ it('names a branch by its intent and notifies only once its own work ends', asyn
   await (await server.root.submit({ type: 'input', content: 'An idea.' }, context)).wait(context)
   const { id } = (
     await post(server, '/api/extensions/lineage/actions/branch', {
-      args: { prompt: 'Fix the lost answers' },
+      args: { from: 1, prompt: 'Fix the lost answers' },
     })
   ).data.result as { id: ConversationId }
   // While the brief is written, the title is the intent, not the root's first message.
@@ -346,7 +352,7 @@ it('compacts a top-level conversation with its lineage focus', async () => {
   const marker = (await server.root.context(context)).entries[0]
   expect(marker.kind).toBe('pi.compaction')
   expect(textOf(marker.model?.[0]?.content)).toContain(
-    'LINEAGE SUMMARY of This is the root conversation',
+    'LINEAGE SUMMARY of This is a root conversation',
   )
 })
 
@@ -521,7 +527,7 @@ it.each([false, true])(
       await other.submit({ type: 'input', content: 'HOLD' }, context)
       await otherStarted.promise
       const { data } = await post(server, '/api/extensions/lineage/actions/branch', {
-        args: { prompt: intent },
+        args: { from: 1, prompt: intent },
       })
       const target = data.result.id as ConversationId
       await briefStarted.promise
@@ -574,7 +580,7 @@ it('branches in the shared checkout with workspaces disabled', async () => {
   servers.push(server)
   expect(server.host.registry.snapshot().extension('workspaces')).toBeUndefined()
   const { status, data } = await post(server, '/api/extensions/lineage/actions/branch', {
-    args: { prompt: 'Shared intent', isolated: false },
+    args: { from: 1, prompt: 'Shared intent', isolated: false },
   })
   expect(status).toBe(200)
   const id = data.result.id as ConversationId
@@ -584,4 +590,146 @@ it('branches in the shared checkout with workspaces disabled', async () => {
     async () => (await server.harness.snapshot(Branch, id, context))?.branch?.status === 'ready',
   )
   await branch.waitForIdle(context)
+})
+
+it('starts a new root whose first input is the prompt, without a brief', async () => {
+  const { server, briefs } = await fixture()
+  const { status, data } = await post(server, '/api/extensions/lineage/actions/newRoot', {
+    args: { prompt: '  A second line of work  ', isolated: false },
+  })
+  expect(status).toBe(200)
+  const id = data.result.id as ConversationId
+  const root = (await server.harness.conversation(id, context))!
+  await root.waitForIdle(context)
+  expect(await server.harness.commit((tx) => tx.conversation(id), context)).toEqual({ id })
+  expect((await server.harness.snapshot(Metadata, id, context))?.title).toBe(
+    'A second line of work',
+  )
+  expect((await server.harness.snapshot(Summaries, id, context))?.generatedTitle).toBe(
+    'A second line of work',
+  )
+  const view = await root.context(context)
+  expect(view.entries.some((entry) => entry.kind === 'pi.reset')).toBe(false)
+  expect(
+    view.messages
+      .filter((message) => message.role !== 'system')
+      .map((message) => [message.role, textOf(message.content)]),
+  ).toEqual([
+    ['user', 'A second line of work'],
+    ['assistant', 'echo A second line of work'],
+  ])
+  expect(briefs).toEqual([])
+  expect((await server.harness.snapshot(Branch, id, context))?.branch).toBeUndefined()
+  expect(
+    (await post(server, '/api/extensions/lineage/actions/info', { args: null })).data.result,
+  ).toEqual({ roots: [1, id] })
+  expect(
+    (await post(server, '/api/extensions/lineage/actions/info', { args: { id } })).data.result,
+  ).toEqual({ roots: [1, id], root: id })
+  expect(await section(server, id)).toMatch(
+    new RegExp(`^You are a root of this project \\(#${id}\\)`),
+  )
+  expect(
+    (await post(server, '/api/extensions/lineage/actions/newRoot', { args: { prompt: ' ' } }))
+      .status,
+  ).not.toBe(200)
+})
+
+const anchor = defineTask<null, { phase: 'done' }, null>({
+  name: 'lineage-test.anchor',
+  version: 1,
+  initial: () => ({ phase: 'done' }),
+  phases: {
+    done: (_task, runtime, caller) =>
+      runtime.commit(
+        () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
+        caller,
+      ),
+  },
+  abort: (_task, runtime, caller) =>
+    runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), caller),
+})
+
+it('resolves the root per tree for notes, the prompt and compaction', async () => {
+  const { server } = await fixture()
+  server.host.registry.install(defineExtension({ name: 'lineage-test', tasks: [anchor] }))
+  const fork = async (from: ConversationId) => {
+    const conversation = (await server.harness.conversation(from, context))!
+    const at = await server.harness.commit(
+      async (tx) => (await tx.appendEntry(from, { kind: 'test.point', data: {} })).id,
+      context,
+    )
+    return (await conversation.fork(at, { ownership: { kind: 'ownerless' } }, context)).id
+  }
+  const other = await second(server)
+  // ⌘K "Make this a root" adds it; adding again changes nothing.
+  for (let n = 0; n < 2; n++)
+    expect(
+      (await post(server, '/api/extensions/lineage/actions/root', { args: { id: other.id } })).data
+        .result,
+    ).toEqual({ roots: [1, other.id] })
+  const first = await fork(ROOT_CONVERSATION_ID)
+  const branch = await fork(other.id)
+  const nested = await fork(branch)
+  const subagent = await server.harness.commit(async (tx) => {
+    const owner = await tx.createTask(anchor, null, {
+      ownership: { kind: 'conversation' },
+      conversationId: nested,
+      background: true,
+    })
+    return (await tx.createConversation({ ownership: { kind: 'task', taskId: owner } })).id
+  }, context)
+  const outside = (
+    await server.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)
+  ).id
+  expect(
+    (await post(server, '/api/extensions/lineage/actions/root', { args: { id: subagent } })).status,
+  ).not.toBe(200)
+
+  const note = server.host.registry.snapshot().extension('lineage')!.tools![0]
+  const send = (from: ConversationId) =>
+    note.execute(
+      { to: 'root', text: `from ${from}` },
+      { conversationId: from } as Parameters<typeof note.execute>[1],
+      context,
+    )
+  for (const from of [first, branch, nested, subagent]) await send(from)
+  const notes = async (id: ConversationId) =>
+    (await (await server.harness.conversation(id, context))!.context(context)).entries
+      .filter((entry) => entry.kind === 'lineage.note')
+      .map((entry) => (entry.data as { text: string }).text)
+  expect(await notes(ROOT_CONVERSATION_ID)).toEqual([`from ${first}`])
+  expect(await notes(other.id)).toEqual([`from ${branch}`, `from ${nested}`, `from ${subagent}`])
+  await expect(send(outside)).rejects.toThrow(`#${outside} has no root`)
+
+  expect(await section(server, nested)).toBe(
+    `You are #${nested}.\nRoot: #${other.id}.\nZoom out when you need to: read any conversation, a root or a sibling, with codemode \`ultimate.entries(id)\` and \`ultimate.search(text)\`. Leave a \`note\` for a conversation your work affects.`,
+  )
+  expect(await section(server, outside)).not.toContain('Root:')
+  expect(await section(server, subagent)).toBeUndefined()
+  expect(
+    (await post(server, '/api/extensions/lineage/actions/info', { args: { id: subagent } })).data
+      .result,
+  ).toEqual({ roots: [1, other.id], root: other.id })
+  expect(
+    (await post(server, '/api/extensions/lineage/actions/info', { args: { id: outside } })).data
+      .result,
+  ).toEqual({ roots: [1, other.id] })
+
+  // The branch root compacts with the root focus, its branch with the branch focus.
+  for (const id of [other.id, branch])
+    await server.harness.commit(async (tx) => {
+      for (let n = 0; n < 8; n++)
+        await tx.appendEntry(id, {
+          kind: 'pi.user',
+          model: [{ role: 'user', content: `Part ${n} ${'word '.repeat(4000)}`, timestamp: n }],
+        })
+    }, context)
+  const compacted = async (id: ConversationId) => {
+    const conversation = (await server.harness.conversation(id, context))!
+    await server.harness.waitForTask(await conversation.compact(undefined, context), context)
+    return textOf((await conversation.context(context)).entries[0].model?.[0]?.content)
+  }
+  expect(await compacted(other.id)).toContain('LINEAGE SUMMARY of This is a root conversation')
+  expect(await compacted(branch)).toContain('LINEAGE SUMMARY of This is a branch')
 })
