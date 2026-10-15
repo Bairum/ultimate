@@ -873,7 +873,8 @@ export function createLander(
         if (lineage && !(await runtime.memo<boolean>(`root-note:${id}`, context))) {
           const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
           const result = index?.results[id]
-          if (result?.outcome === 'landed' && conversationId !== (await lineage.rootOf(context))) {
+          const root = await lineage.rootOf(conversationId, context)
+          if (result?.outcome === 'landed' && root !== undefined && root !== conversationId) {
             const metadata = await host
               .harness()
               .snapshot(host.metadata, conversationId as ConversationId, context)
@@ -886,7 +887,7 @@ export function createLander(
             const more = (result.commits?.length ?? 0) - commits.length
             const paths = (result.paths ?? []).slice(0, 8)
             await lineage.leaveNote(
-              'root',
+              root,
               [
                 `Landed ${result.sha!.slice(0, 7)} on ${result.target} from #${conversationId} ${title}${subject.feature ? ` (${subject.feature})` : ''}:`,
                 ...(subject.summary ? [subject.summary] : []),

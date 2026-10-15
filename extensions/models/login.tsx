@@ -25,7 +25,14 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { AuthEvent, AuthPrompt } from '@/sdk'
-import { authLabel, dialogs, getLoginTarget, openPicker, useLoginProvider } from './state.tsx'
+import {
+  authLabel,
+  dialogs,
+  getLoginTarget,
+  getPicker,
+  openPicker,
+  useLoginProvider,
+} from './state.tsx'
 import type { ProviderInfo } from './state.tsx'
 
 type AuthType = ProviderInfo['authTypes'][number]['type']
@@ -390,7 +397,7 @@ function FlowView({
               className="h-7 text-[12px]"
               onClick={() => {
                 onDone()
-                openPicker(actions, getLoginTarget())
+                openPicker(actions, getLoginTarget(), getPicker().source)
               }}
               size="sm"
               variant="outline"

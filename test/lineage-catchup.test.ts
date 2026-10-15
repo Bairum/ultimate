@@ -252,7 +252,7 @@ it('warns an isolated workspace it is behind, prioritizes old overlaps, and caps
   await ask(f.server, ROOT_CONVERSATION_ID, 'An idea')
   const { id } = (
     await post(f.server, '/api/extensions/lineage/actions/branch', {
-      args: { prompt: 'Branch task', isolated: true },
+      args: { from: 1, prompt: 'Branch task', isolated: true },
     })
   ).data.result as { id: ConversationId }
   const branch = (await f.server.harness.conversation(id, context))!

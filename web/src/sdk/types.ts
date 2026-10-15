@@ -144,6 +144,8 @@ export interface ConversationDraft {
   images?: { data: string; mimeType: string }[]
   from?: number
   at?: number
+  /** Start a new root instead of a branch. */
+  root?: boolean
   isolated?: boolean
   model?: { provider: string; modelId: string }
   thinkingLevel?: ConfigureRequest['thinkingLevel']

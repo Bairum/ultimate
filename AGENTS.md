@@ -4,18 +4,19 @@ Ultimate is a local coding agent with a web UI, built on Pi Durable (`@earendil-
 repository while it edits it: you are probably reading this as Ultimate, about to change yourself. Everything below
 tells you which change reloads how, so the conversation you are in keeps running.
 
-## How work is organised: one tree of conversations
+## How work is organised: a forest of conversation trees
 
-A project is one tree of conversations, the way a repository is one history of commits.
+A project is a forest of conversation trees, each tree like a history of commits.
 
-- **The root** holds the project's idea, its principles and the decisions that still stand. It keeps the tally:
-  every landing leaves a note in it. Go back to the root to think about the whole project.
-- **A branch** is every other line of work: a feature, a fix, an experiment. It is forked deliberately from a
-  conversation at a point, starts from a brief aimed at its intent, and then works as if it were the only
-  conversation. New conversation means branch from the root. A branch is never a subagent.
+- **Roots** each hold one line of work's idea, principles and standing decisions, and keep its tally: every landing
+  from a root's tree leaves a note in it. Start a root deliberately (New → New root) or adopt a conversation with
+  ⌘K "Make this a root". A fresh project's first conversation is its first root.
+- **A branch** is a feature, a fix, an experiment. It is forked deliberately from a conversation in a tree at a point,
+  starts from a brief aimed at its intent, and then works as if it were the only conversation.
+  New branches from the root of the tree you are in. A branch is never a subagent.
 - **Coordinators carry the work.** A branch plans, decides and verifies; subagents are for bounded execution and
   reconnaissance, and the lander is the final gate on main.
-- **Zoom out when you need to.** Read the root or any sibling with codemode `ultimate.entries(id)` and
+- **Zoom out when you need to.** Read any root or sibling with codemode `ultimate.entries(id)` and
   `ultimate.search()`; commits name the conversation that made them (`Ultimate-Conversation` trailer).
 - **Talk across the tree without waking anyone.** `note` leaves context in another conversation for its next turn;
   `notify` tells you when another conversation finishes. A conversation that resumes after main moved gets a
@@ -59,7 +60,7 @@ Discovery is clone built-ins, then `~/.ultimate/`, then `<project>/.ultimate/`; 
 Skills load from clone `skills/`, then Pi's defaults, then `~/.ultimate/skills/`, then
 `<project>/.ultimate/skills/`, with later names winning.
 The default set is `agent`, `conversations`, `workspaces`, `coding-tools`, `prompt`, `models`, `status-line`, `notices`, `theme`,
-`faux` (inert unless `ULTIMATE_FAUX=1`), `codemode`, `browser`, `onboarding`, `splash`, and `lineage` (the conversation tree: root, branches, notes). Other built-ins are opt-in
+`faux` (inert unless `ULTIMATE_FAUX=1`), `codemode`, `browser`, `onboarding`, `splash`, and `lineage` (conversation trees: roots, branches, notes). Other built-ins are opt-in
 building blocks, including `secrets`, `parallel` (web tools; requires `secrets`), and `tailscale` (remote access, user-level enablement only). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
 restart. User/project extension folders are on by default; `disable` can turn off those or defaults too. Unknown names

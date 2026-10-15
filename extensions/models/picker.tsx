@@ -13,7 +13,7 @@ import { Kbd } from '@/components/ui/kbd'
 import { cn, errorMessage, useDialog, useUltimate } from '@/sdk'
 import {
   authLabel,
-  getPickerTarget,
+  getPicker,
   dialogs,
   formatWindow,
   openLogin,
@@ -83,8 +83,8 @@ export function ModelRow({
 export function ModelPicker() {
   const [open, setOpen] = useDialog(dialogs.picker)
   const actions = useUltimate()
-  const target = getPickerTarget()
-  const { ref, models, loading } = useCurrentModel(target)
+  const { target, source } = getPicker()
+  const { ref, models, loading } = useCurrentModel(target, source)
   const [query, setQuery] = useState('')
   const [error, setError] = useState<string>()
   const providers = useMemo(

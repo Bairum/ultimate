@@ -206,7 +206,8 @@ export default (host: ExtensionHost) => {
   host.provide('conversations', {
     subject: (id, caller) => subject(host, id, caller),
   } satisfies ConversationsService)
-  host.events.on('lineage:branched', (data) => {
+  // A new branch or root is called by its intent until its summary names it.
+  const named = (data: unknown) => {
     const { tx, id, intent, waitUntil } = data as BranchedEvent
     waitUntil(
       (async () => {
@@ -215,7 +216,9 @@ export default (host: ExtensionHost) => {
         ;(await tx.doc(host.metadata, id)).title = title
       })(),
     )
-  })
+  }
+  host.events.on('lineage:branched', named)
+  host.events.on('lineage:rooted', named)
   activityBehavior(host)
   overviewBehavior(host)
   reopenOnInput(host)

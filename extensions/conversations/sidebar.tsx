@@ -12,22 +12,14 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import {
-  formatKeys,
-  useAction,
-  useEvent,
-  useExtensionUiState,
-  useNow,
-  useStore,
-  useTasks,
-  useUltimate,
-} from '@/sdk'
+import { formatKeys, useExtensionUiState, useNow, useStore, useTasks, useUltimate } from '@/sdk'
 import { hiddenConversationIds } from './visible.tsx'
 import { useOverview } from './feature.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
 import { currentAssessment, Row, ChildRow } from './rows.tsx'
 import { newKeys } from './new-dialog.tsx'
+import { useRoots } from '../lineage/roots.tsx'
 
 /** The shown conversation, also while its snapshot is still on the way. */
 const useShownId = () => useStore((state) => state.view?.conversation.id ?? state.requested)
@@ -95,10 +87,9 @@ export function Conversations() {
   const shownTop = topOf(shownId, conversations)
   const hiddenIds = hiddenConversationIds(conversations, archived)
   const summary = shownTop && !hiddenIds.has(shownTop.id) ? overview[shownTop.id] : undefined
-  const info = useAction<{ root: number }>('lineage', 'info')
-  useEvent('lineage:root-changed', () => void info.refetch())
-  const rootId = info.data?.root
+  const roots = new Set(useRoots())
   const [expanded, setExpanded] = useExtensionUiState<number[]>('expanded', [])
+  const [collapsedRoots, setCollapsedRoots] = useExtensionUiState<number[]>('collapsedRoots', [])
   const working = workingByTop(conversations)
   const topLevel = conversations.filter(
     (conversation) => conversation.parentConversationId === undefined,
@@ -113,16 +104,26 @@ export function Conversations() {
   const hidden = topLevel
     .filter((conversation) => conversation.label !== 'lander' && hiddenIds.has(conversation.id))
     .toSorted(byInput)
-  const root = listed.find((conversation) => conversation.id === rootId)
   const earlier = listed.filter(
-    (conversation) => conversation.id !== rootId && !conversation.branchOf,
+    (conversation) => !roots.has(conversation.id) && !conversation.branchOf,
   )
   const branchesBySource = new Map<number, ConversationSummary[]>()
   for (const conversation of topLevel.toSorted(byInput)) {
-    if (conversation.id === rootId || !conversation.branchOf) continue
+    if (roots.has(conversation.id) || !conversation.branchOf) continue
     const source = conversation.branchOf.conversationId
     branchesBySource.set(source, [...(branchesBySource.get(source) ?? []), conversation])
   }
+  /** The listed (or concluded) branches below `id`, at any depth. */
+  const branchesBelow = (id: number, concluded = false): ConversationSummary[] =>
+    (branchesBySource.get(id) ?? [])
+      .filter((branch) => hiddenIds.has(branch.id) === concluded)
+      .flatMap((branch) => [branch, ...branchesBelow(branch.id, concluded)])
+  const latestIn = (root: ConversationSummary) =>
+    Math.max(root.inputAt ?? 0, ...branchesBelow(root.id).map((branch) => branch.inputAt ?? 0))
+  // Trees by their newest input anywhere in them, newest first.
+  const rootRows = listed
+    .filter((conversation) => roots.has(conversation.id))
+    .toSorted((a, b) => latestIn(b) - latestIn(a) || b.id - a.id)
 
   const setArchive = (id: number, archive: boolean) => {
     const resumed = new Set([id])
@@ -147,21 +148,21 @@ export function Conversations() {
       listed.find((candidate) => !subtree.has(candidate.id))
     if (next) actions.switchConversation(next.id)
   }
-  const row = (conversation: ConversationSummary) => {
+  const row = (conversation: ConversationSummary, shown = conversation.id === shownTop?.id) => {
     const recorded = seen[conversation.id]
     const state = working.get(conversation.id)
     return (
       <Row
         assessment={tasks ? currentAssessment(overview[conversation.id]) : undefined}
         archived={hiddenIds.has(conversation.id)}
-        root={conversation.id === rootId}
+        root={roots.has(conversation.id)}
         conversation={conversation}
         draft={conversation.inputAt === undefined}
         feature={overview[conversation.id]?.feature}
         key={conversation.id}
         now={now}
         onArchive={(archive) => setArchive(conversation.id, archive)}
-        shown={conversation.id === shownTop?.id}
+        shown={shown}
         unseen={
           recorded !== undefined &&
           (conversation.answerAt ?? 0) > recorded &&
@@ -184,6 +185,41 @@ export function Conversations() {
   const tree = (conversation: ConversationSummary, nested = false, concluded = false) => {
     const children = childrenByParent.get(conversation.id) ?? []
     const open = expanded.includes(conversation.id)
+    const ownBranches = (branchesBySource.get(conversation.id) ?? []).filter(
+      (branch) => hiddenIds.has(branch.id) === concluded,
+    )
+    // A root's tree folds away completely, its sub-agents with its branches; its row then stands for the shown branch.
+    // Without branches its sub-agents are all of the tree, and their own disclosure folds it.
+    const treeBranches =
+      !nested && roots.has(conversation.id) ? branchesBelow(conversation.id, concluded) : []
+    const folded = treeBranches.length > 0 && collapsedRoots.includes(conversation.id)
+    const subagents = children.length > 0 && (
+      <Collapsible
+        open={open}
+        onOpenChange={(next) =>
+          setExpanded((previous) => [
+            ...previous.filter((id) => id !== conversation.id),
+            ...(next ? [conversation.id] : []),
+          ])
+        }
+      >
+        <CollapsibleTrigger
+          aria-label={`Sub-agents of conversation ${conversation.id}`}
+          className="group/agents ml-5 flex cursor-pointer items-center gap-1 py-1 text-[10.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/agents:rotate-90" />
+          Sub-agents · {children.length}
+        </CollapsibleTrigger>
+        <CollapsibleContent className="ml-4 border-l border-border/60">
+          {children.map((child) => tree(child, true, concluded))}
+        </CollapsibleContent>
+      </Collapsible>
+    )
+    const branches = !nested && ownBranches.length > 0 && (
+      <div className="ml-4 border-l border-border/60" data-branches-of={conversation.id}>
+        {ownBranches.map((branch) => tree(branch, false, concluded))}
+      </div>
+    )
     return (
       <div key={conversation.id}>
         {nested ? (
@@ -193,40 +229,40 @@ export function Conversations() {
             shown={shownId === conversation.id}
           />
         ) : (
-          row(conversation)
+          row(
+            conversation,
+            conversation.id === shownTop?.id ||
+              (folded && treeBranches.some((branch) => branch.id === shownTop?.id)),
+          )
         )}
-        {children.length > 0 && (
+        {treeBranches.length > 0 ? (
           <Collapsible
-            open={open}
+            open={!folded}
             onOpenChange={(next) =>
-              setExpanded((previous) => [
+              setCollapsedRoots((previous) => [
                 ...previous.filter((id) => id !== conversation.id),
-                ...(next ? [conversation.id] : []),
+                ...(next ? [] : [conversation.id]),
               ])
             }
           >
             <CollapsibleTrigger
-              aria-label={`Sub-agents of conversation ${conversation.id}`}
-              className="group/agents ml-5 flex cursor-pointer items-center gap-1 py-1 text-[10.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+              aria-label={`Branches of root ${conversation.id}`}
+              className="group/branches ml-5 flex cursor-pointer items-center gap-1 py-1 text-[10.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
             >
-              <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/agents:rotate-90" />
-              Sub-agents · {children.length}
+              <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/branches:rotate-90" />
+              Branches · {treeBranches.length}
             </CollapsibleTrigger>
-            <CollapsibleContent className="ml-4 border-l border-border/60">
-              {children.map((child) => tree(child, true, concluded))}
+            <CollapsibleContent>
+              {subagents}
+              {branches}
             </CollapsibleContent>
           </Collapsible>
+        ) : (
+          <>
+            {subagents}
+            {branches}
+          </>
         )}
-        {!nested &&
-          (branchesBySource.get(conversation.id) ?? []).some(
-            (branch) => hiddenIds.has(branch.id) === concluded,
-          ) && (
-            <div className="ml-4 border-l border-border/60" data-branches-of={conversation.id}>
-              {(branchesBySource.get(conversation.id) ?? [])
-                .filter((branch) => hiddenIds.has(branch.id) === concluded)
-                .map((branch) => tree(branch, false, concluded))}
-            </div>
-          )}
       </div>
     )
   }
@@ -289,12 +325,12 @@ export function Conversations() {
             {landers.map((conversation) => tree(conversation))}
           </div>
         )}
-        {root && tree(root)}
+        {rootRows.map((root) => tree(root))}
         {listed
           .filter(
             (conversation) =>
               conversation.branchOf &&
-              conversation.id !== rootId &&
+              !roots.has(conversation.id) &&
               !listed.some((source) => source.id === conversation.branchOf?.conversationId),
           )
           .map((conversation) => tree(conversation))}
@@ -357,7 +393,7 @@ export function Conversations() {
               {hidden
                 .filter(
                   (conversation) =>
-                    conversation.id === rootId ||
+                    roots.has(conversation.id) ||
                     !hidden.some((source) => source.id === conversation.branchOf?.conversationId),
                 )
                 .map((conversation) => tree(conversation, false, true))}

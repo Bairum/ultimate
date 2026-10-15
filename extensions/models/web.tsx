@@ -33,7 +33,7 @@ const toolbarButton =
   'flex h-7 max-w-56 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground'
 
 function ModelButton() {
-  const { target } = useComposer()
+  const { target, source } = useComposer()
   const { ref, loading } = useCurrentModel()
   const actions = useUltimate()
   return (
@@ -41,14 +41,14 @@ function ModelButton() {
       className={toolbarButton}
       disabled={loading}
       aria-label={loading ? 'Loading model' : undefined}
-      onClick={() => openPicker(actions, target)}
+      onClick={() => openPicker(actions, target, source)}
       title={
         loading
           ? 'Loading model'
           : ref
             ? `${ref.modelId} · ${ref.provider} — pick a model`
             : target === 'new'
-              ? 'Use the root conversation’s model — pick a model'
+              ? 'Use the default model — pick a model'
               : 'Pick a model'
       }
       type="button"
@@ -194,11 +194,15 @@ export default defineWebExtension({
       whileTyping: true,
       run: async () => {
         const { agent, loading } = getConversation()
-        const target = document.activeElement?.closest('[data-composer-target="new"]')
-          ? 'new'
-          : 'conversation'
+        const composer = document.activeElement?.closest<HTMLElement>(
+          '[data-composer-target="new"]',
+        )
+        const target = composer ? 'new' : 'conversation'
         if (loading) return undefined
-        const configuration = target === 'new' ? await getNewConversationConfiguration() : agent
+        const source = composer?.dataset.composerSource
+        const configuration = composer
+          ? await getNewConversationConfiguration(source ? Number(source) : undefined)
+          : agent
         const ref = configuration.model
         const thinking = configuration.thinkingLevel
         const model = getState().models?.models.find(

@@ -22,10 +22,11 @@ export const dialogs = {
 } as const
 
 /** The composer's selected model and thinking, or the shown conversation's configuration. */
-export function useCurrentModel(target?: ComposerTarget) {
+export function useCurrentModel(target?: ComposerTarget, source?: number) {
   const composer = useComposer()
   target ??= composer.target
-  const defaults = useNewConversationConfiguration(target === 'new')
+  source ??= composer.source
+  const defaults = useNewConversationConfiguration(target === 'new', source)
   const { agent, loading } = useConversation()
   const models = useModels()
   const configuration = target === 'new' ? defaults.configuration : agent
@@ -64,16 +65,18 @@ export function selectModel(model: ModelInfo, target: ComposerTarget) {
   )
 }
 
-let pickerTarget: ComposerTarget = 'conversation'
+let picker: { target: ComposerTarget; source?: number } = { target: 'conversation' }
+/** Open the model picker for `target`; a new branch's `source` supplies the model it shows as current. */
 export function openPicker(
   actions: Pick<UltimateActions, 'open'>,
   target: ComposerTarget = 'conversation',
+  source?: number,
 ) {
-  pickerTarget = target
+  picker = { target, source }
   actions.open(dialogs.picker)
 }
-export function getPickerTarget() {
-  return pickerTarget
+export function getPicker() {
+  return picker
 }
 
 /** The supported level after `current` in Pi's order, wrapping around, as Pi's Shift+Tab does. */
