@@ -132,6 +132,29 @@ export default defineConfig({
           ],
         },
       },
+      {
+        // Replaces the browser restriction above for web/src, so it repeats it and adds extensions.
+        files: ['web/src/**'],
+        rules: {
+          'no-restricted-imports': [
+            'error',
+            {
+              patterns: [
+                {
+                  group: ['node:*', '**/server/**'],
+                  message: 'Browser code cannot import Node or server modules.',
+                },
+                {
+                  group: ['**/bin/**'],
+                  allowTypeImports: true,
+                  message: 'Use host capabilities for core runtime behaviour.',
+                },
+                { group: ['**/extensions/**'], message: 'Core knows no feature; see AGENTS.md.' },
+              ],
+            },
+          ],
+        },
+      },
     ],
     options: { denyWarnings: true, typeAware: true, typeCheck: true },
   },

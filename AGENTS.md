@@ -165,7 +165,7 @@ This standing permission does not authorize releases, publishing, deployments, o
   properties), relative imports end in `.ts`.
 - Core server/web contracts live in `shared/protocol.ts`; extension-local types live with their extension.
 - Pin `@earendil-works/*` packages to exact versions; Pi Durable is experimental.
-- Checks: `pnpm check` (format, lint, types) and the tests covering your change must pass before a commit; the lander runs every suite. Keep `pnpm test` fast: no real-time waits, no spawned processes (those go to `test/e2e`), and fix or delete a flaky test rather than skipping it or raising its timeout.
+- Checks: `pnpm check` (format, lint, types) and the tests covering your change must pass before a commit; the lander runs every suite. Keep `pnpm test` fast: no real-time waits, no spawned processes (those go to `test/e2e`), and fix or delete a flaky test rather than skipping it or raising its timeout. Per-test timeouts fail lint (`ultimate/no-test-timeout`); `test/e2e` is exempt.
 - Every user-visible result is designed, not dumped: status and outcomes (a subagent report, a landing, a failure) get a
   renderer that matches the existing cards (see `extensions/subagents/messages.tsx`, `extensions/workspaces/log.tsx`),
   never plain Markdown in a message. Look at the running app and recent screenshots first, write the expected look into
@@ -173,7 +173,7 @@ This standing permission does not authorize releases, publishing, deployments, o
 
 ## Review quality
 
-A swallowed error needs a reason comment explaining why ignoring it is correct, enforced by `ultimate/no-silent-catch`.
+A swallowed error needs a reason comment explaining why ignoring it is correct; `ultimate/no-silent-catch` enforces this for empty catch blocks and empty or `undefined`-returning `.catch` handlers.
 
 Reject slop and jargon: keep code and explanations direct, minimal, and grounded in evidence. No backward-compatibility
 shims or speculative fallbacks; move forward and update callers. Tests must exercise meaningful behaviour and failure
