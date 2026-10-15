@@ -96,7 +96,7 @@ Facet-registered `onOpen` and `onClose` callbacks are facet-scoped: they end on 
 
 A server facet can export `reloadOnSettings = true` to reinstall on live settings changes even when its enablement is unchanged. Its scoped lifecycle callbacks and access registrations are cleaned up before its replacement opens.
 
-Core runtime modules must not be imported by extensions; use host capabilities instead.
+Type imports from `server/` are fine. Runtime imports need a host capability or a visible lint exception.
 
 ## Events
 
@@ -709,7 +709,9 @@ Keep in mind:
 - Ids are global: surface ids, command ids, and dialog ids start with your extension name.
 - Keep the agent on screen: a surface without a `Dock` holding `Conversation` makes the user switch away to talk.
 - Reach your server only through actions: no `fetch` to your own endpoints, no secrets in the browser.
-- One extension stays one folder: do not import another extension's files.
+- One extension stays one folder. Prefer documents, commands, events, or the SDK to cross-extension imports.
+  Importing another extension's files makes it a dependency: declare it in `vite.config.ts` `ultimate/extension-imports`.
+  Lint enforces these declarations and forbids cycles.
 - The Agent surface is an extension too: to change it for one project, copy `extensions/agent` to the project's
   `.ultimate/extensions/agent/`.
 
@@ -770,7 +772,8 @@ Keep UI state that should survive a reload in `useExtensionUiState`; keep throwa
 ## Conventions
 
 - One feature per folder; the folder name is the extension name; a README is required. Keep it small.
-- Do not import another extension's files; share through documents, commands, or the SDK.
+- Prefer documents, commands, events, or the SDK. Imports from another extension's files are dependencies:
+  declare them in `vite.config.ts` `ultimate/extension-imports`. Lint enforces declarations and forbids cycles.
 - Server facets: see `prompt/` for prompt sections and `coding-tools/server.ts` for tools; the root `AGENTS.md` explains
   reloads and durability. Server facets may `export const order = -100`: lower values come first, with the default 0
   keeping discovery order (built-in → user → project, then folder name); changing it reorders the server prompt and tools once.

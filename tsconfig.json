@@ -15,6 +15,7 @@
   },
   "include": [
     "bin",
+    "lint",
     "server",
     "shared",
     "extensions/**/*.ts",

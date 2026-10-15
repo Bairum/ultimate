@@ -15,6 +15,7 @@ import {
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+// oxlint-disable-next-line no-restricted-imports -- workspace discovery shares the core root watcher
 import { watchRoots } from '../../server/watch-roots.ts'
 import { agentRoots } from '../subagents/agents.ts'
 import { git } from './git.ts'

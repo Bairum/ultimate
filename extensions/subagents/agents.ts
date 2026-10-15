@@ -6,6 +6,7 @@ import type { Agent, AgentChange } from '@earendil-works/pi-durable'
 import { parseFrontmatter, resolveCliModel } from '@earendil-works/pi-coding-agent'
 import type { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import type { Source } from '../../server/project.ts'
+// oxlint-disable-next-line no-restricted-imports -- agent discovery follows the core project trust decision
 import { useProjectSetup } from '../../server/project-setup.ts'
 
 export interface AgentDefinition {

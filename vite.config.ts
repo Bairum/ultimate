@@ -8,12 +8,103 @@ export default defineConfig({
   resolve: { alias: { '@': fileURLToPath(new URL('web/src', import.meta.url)) } },
   lint: {
     plugins: ['typescript', 'unicorn', 'import', 'promise', 'vitest'],
+    jsPlugins: ['./lint/ultimate.ts'],
     categories: { correctness: 'error', suspicious: 'error' },
     rules: {
+      'import/no-cycle': 'error',
       'typescript/no-unsafe-type-assertion': 'off',
       'promise/always-return': 'off',
       'import/no-unassigned-import': ['error', { allow: ['**/*.css'] }],
     },
+    overrides: [
+      {
+        files: ['server/**', 'bin/**'],
+        rules: {
+          'no-restricted-imports': [
+            'error',
+            {
+              patterns: [
+                { group: ['**/extensions/**'], message: 'Core knows no feature; see AGENTS.md.' },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        files: ['shared/**'],
+        rules: {
+          'no-restricted-imports': [
+            'error',
+            {
+              patterns: [
+                { group: ['**/extensions/**'], message: 'Core knows no feature; see AGENTS.md.' },
+                {
+                  group: ['**/server/**', '**/web/**', '**/bin/**'],
+                  message: 'shared/ stays standalone.',
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        files: ['extensions/**'],
+        rules: {
+          'no-restricted-imports': [
+            'error',
+            {
+              patterns: [
+                {
+                  group: ['**/server/**', '**/bin/**'],
+                  allowTypeImports: true,
+                  message: 'Use host capabilities for core runtime behaviour.',
+                },
+              ],
+            },
+          ],
+          'ultimate/extension-imports': [
+            'error',
+            {
+              allow: {
+                automations: ['subagents'],
+                codemode: ['subagents'],
+                conversations: ['lineage', 'models', 'onboarding', 'plan', 'workspaces'],
+                instance: ['subagents', 'workspaces'],
+                lineage: ['workspaces'],
+                parallel: ['secrets'],
+                plan: ['lineage', 'workspaces'],
+                self: ['workspaces'],
+                'status-line': ['workspaces'],
+                subagents: ['conversations', 'plan', 'workspaces'],
+                tasks: ['conversations', 'plan', 'workspaces'],
+                workspaces: ['conversations', 'info', 'lineage', 'subagents'],
+              },
+            },
+          ],
+        },
+      },
+      {
+        files: ['web/src/**', 'extensions/**/*.tsx'],
+        rules: {
+          'no-restricted-imports': [
+            'error',
+            {
+              patterns: [
+                {
+                  group: ['node:*', '**/server/**'],
+                  message: 'Browser code cannot import Node or server modules.',
+                },
+                {
+                  group: ['**/bin/**'],
+                  allowTypeImports: true,
+                  message: 'Use host capabilities for core runtime behaviour.',
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
     options: { denyWarnings: true, typeAware: true, typeCheck: true },
   },
   fmt: { semi: false, singleQuote: true },

@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+// oxlint-disable-next-line no-restricted-imports -- tailscale ownership uses the shared process lock and liveness check
 import { acquireLock, alive } from '../../server/lock.ts'
 import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'

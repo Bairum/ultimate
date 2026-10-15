@@ -2,6 +2,7 @@ import { chmod, mkdir, open, rename, rm } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+// oxlint-disable-next-line no-restricted-imports -- secret writes use the shared cross-process file lock
 import { acquireLock } from '../../server/lock.ts'
 
 type Store = { secrets: Record<string, { value: string; updatedAt: string }> }

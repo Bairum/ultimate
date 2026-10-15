@@ -7,6 +7,7 @@ import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { BranchedEvent } from '../lineage/server.ts'
 import type { LandingSubject } from '../workspaces/types.ts'
+// oxlint-disable-next-line no-restricted-imports -- conversations publishes the core UI state document
 import { UiState } from '../../server/ui-state.ts'
 import { Summaries, summaryBehavior } from './summary.ts'
 import { summaryModelSetting } from './summary-model.ts'
