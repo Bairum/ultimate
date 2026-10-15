@@ -26,7 +26,7 @@ import {
   useStore,
   useUltimate,
 } from '@/sdk'
-import type { EntryRecord, UltimateActions } from '@/sdk'
+import type { EntryRecord, ToolCallView, UltimateActions } from '@/sdk'
 import { ballSize, Crystal } from './crystal.tsx'
 import { getRoots, useRoots } from './roots.tsx'
 
@@ -106,9 +106,49 @@ function Finished({ entry }: { entry: EntryRecord }) {
   )
 }
 
-/** A note another conversation (or the lander) left here. */
-function Note({ entry, core }: { entry: EntryRecord; core: React.ReactNode }) {
+/** A note between conversations, tinted yellow: as received (`Note from #N`) and as left (`Note → #N`). */
+function NoteCard({
+  label,
+  id,
+  text,
+  note,
+}: {
+  label: string
+  id?: number | string
+  text: string
+  note: 'received' | 'left'
+}) {
   const { switchConversation } = useUltimate()
+  return (
+    <section
+      className="min-w-0 rounded-md border border-l-2 border-note/25 border-l-note/60 bg-note/6"
+      data-lineage-note={note}
+    >
+      <header className="flex items-center gap-2 border-b border-note/15 px-3 py-2 font-mono text-[11px] text-foreground">
+        <StickyNoteIcon className="size-3.5 text-note" />
+        {label}
+        {typeof id === 'number' ? (
+          <button
+            className="cursor-pointer hover:underline"
+            onClick={() => switchConversation(id)}
+            title={`Open #${id}`}
+            type="button"
+          >
+            #{id}
+          </button>
+        ) : (
+          id
+        )}
+      </header>
+      <div className="min-w-0 px-3 py-2.5 text-[13px] leading-relaxed">
+        <MessageResponse>{text}</MessageResponse>
+      </div>
+    </section>
+  )
+}
+
+/** A note another conversation (or the lander, a quiet `notify`, main's catch-up) left here. */
+function Note({ entry, core }: { entry: EntryRecord; core: React.ReactNode }) {
   const { from, text, source } = entry.data as {
     from?: number
     text: string
@@ -116,33 +156,35 @@ function Note({ entry, core }: { entry: EntryRecord; core: React.ReactNode }) {
   }
   if (source === 'lander') return core
   if (source === 'finished') return <Finished entry={entry} />
+  if (source !== 'main') return <NoteCard id={from} label="Note from" note="received" text={text} />
   return (
     <section
       className="min-w-0 rounded-md border border-l-2 border-border border-l-brand/50 bg-muted/20"
-      data-lineage-note="note"
+      data-lineage-note="main"
     >
-      <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-        {source === 'main' ? (
-          <GitBranchIcon className="size-3.5 text-brand" />
-        ) : (
-          <StickyNoteIcon className="size-3.5 text-brand" />
-        )}
-        <span className="text-foreground">{source === 'main' ? 'Main catch-up' : 'Note from'}</span>
-        {from !== undefined && (
-          <button
-            className="cursor-pointer text-foreground hover:underline"
-            onClick={() => switchConversation(from)}
-            title={`Open #${from}`}
-            type="button"
-          >
-            #{from}
-          </button>
-        )}
+      <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-foreground">
+        <GitBranchIcon className="size-3.5 text-brand" />
+        Main catch-up
       </header>
       <div className="min-w-0 px-3 py-2.5 text-[13px] leading-relaxed">
         <MessageResponse>{text}</MessageResponse>
       </div>
     </section>
+  )
+}
+
+/** The `note` tool as the note it left; a failed call keeps the generic card with its error. */
+function NoteCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
+  if (call.status === 'error' || call.status === 'interrupted') return core
+  const left = /^Left a note in #(\d+)\.$/.exec(call.output)
+  const to = left ? Number(left[1]) : call.args.to
+  return (
+    <NoteCard
+      id={typeof to === 'number' ? to : typeof to === 'string' ? to : undefined}
+      label="Note →"
+      note="left"
+      text={typeof call.args.text === 'string' ? call.args.text : ''}
+    />
   )
 }
 
@@ -544,6 +586,7 @@ export default defineWebExtension({
     started.add(branch.id)
     return branch
   },
+  tools: { note: NoteCall },
   entries: {
     'lineage.branched': Branched,
     'lineage.note': Note,

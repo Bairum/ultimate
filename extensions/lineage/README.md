@@ -23,7 +23,8 @@ A project is a forest of conversation trees. Each root holds the idea of one lin
   section. Action `root` `{ id }` (⌘K "Make this a root") adds a top-level conversation that is not a branch; `info`
   returns `{ roots }`, and with `{ id }` also that conversation's `root` and `branch`.
 - **Notes**: the `note` tool `{ to: id | 'root', text }` (`'root'`: the caller's tree root) writes a `lineage.note` entry in the target without waking it;
-  its model reads `Note from #N: …` with its next input. Other extensions call `leaveNote(host, to, text, source?)`;
+  its model reads `Note from #N: …` with its next input. Both sides show it as a card tinted with the mellow yellow
+  `--note` theme token: `Note from #N` in the target, `Note → #N` for the tool call in the sender. Other extensions call `leaveNote(host, to, text, source?)`;
   `'root'` there needs `source.from` and errors when it has no root. Landings from workspaces go to the submitter's
   tree root (none when the submitter is that root or has none) with `source: 'lander'` and structured `sha`, `target`,
   `commits`, and `paths`: a compact success card links to the submitter and keeps the root's tally (up to 10 commits and 8 changed paths).
