@@ -192,15 +192,16 @@ new composer is blocked. The extension owns creation policy; `getUiState(key)` r
 
 Components mounted in named places of the shell, on every surface that renders the primitive holding them.
 
-| Slot               | Where                                                                                    |
-| ------------------ | ---------------------------------------------------------------------------------------- |
-| `sidebar`          | Left column (`<Sidebar />`); it disappears while nothing is in it                        |
-| `header.right`     | Right side of the header, before the palette button (`<Header>`)                         |
-| `statusline.left`  | Bottom status line, left; monospace, one line (`<StatusLine />`)                         |
-| `statusline.right` | Bottom status line, right (`<StatusLine />`)                                             |
-| `composer.toolbar` | Left of the composer's footer, beside the send button (`<Conversation />`)               |
-| `composer.status`  | Line under the composer; conversation-specific, monospace, one line (`<Conversation />`) |
-| `overlay`          | Always mounted at the root, above every surface: dialogs, toasts, global effects         |
+| Slot                   | Where                                                                                     |
+| ---------------------- | ----------------------------------------------------------------------------------------- |
+| `sidebar`              | Left column (`<Sidebar />`); it disappears while nothing is in it                         |
+| `header.right`         | Right side of the header, before the palette button (`<Header>`)                          |
+| `statusline.left`      | Bottom status line, left; monospace, one line (`<StatusLine />`)                          |
+| `statusline.right`     | Bottom status line, right (`<StatusLine />`)                                              |
+| `composer.toolbar`     | Left of the composer's footer, beside the send button (`<Conversation />`)                |
+| `composer.status`      | Line under the composer; conversation-specific, monospace, one line (`<Conversation />`)  |
+| `conversation.overlay` | Over the transcript and the composer (`<Conversation />`); position it `absolute inset-0` |
+| `overlay`              | Always mounted at the root, above every surface: dialogs, toasts, global effects          |
 
 ```tsx
 slots: { 'header.right': [Badge], sidebar: { component: Conversations, order: -1 } }

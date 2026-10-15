@@ -443,7 +443,10 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
     }
     // Until the summary names it, a branch is called by its intent, not by the first message it inherited.
     const title = prompt.replace(/\s+/g, ' ').slice(0, 80)
-    ;(await tx.doc(host.metadata, fork.id)).title = title
+    const metadata = await tx.doc(host.metadata, fork.id)
+    metadata.title = title
+    // The prompt is its first input, placed once the brief is written: it sorts as asked for now.
+    metadata.inputAt = Date.now()
     const writes: Promise<void>[] = []
     host.events.emit('lineage:branched', {
       tx,

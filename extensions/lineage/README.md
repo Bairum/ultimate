@@ -7,7 +7,8 @@ A project is one tree of conversations: a root that holds the idea, and branches
   isolated in its own worktree. The background task `lineage.brief` asks the branch's model to write a brief of the
   source context aimed at the prompt, places it as a `pi.reset` with `data.lineage = { from, at }`, then submits the
   prompt. The branch's model sees only the system prompt, the brief and what follows; history above stays readable.
-  The source gets a display-only `lineage.branched` entry. Doc `lineage.branch` on the branch holds
+  The source gets a display-only `lineage.branched` entry. The branch's `inputAt` is the moment it was asked for, so
+  it sorts as new while its history is the source's. Doc `lineage.branch` on the branch holds
   `{ from, at, intent, status: 'briefing' | 'ready' | 'failed', error? }`; action `retry` `{ id }` restarts a failed
   brief.
 - **Root**: doc `lineage.root` on conversation 1 (`{ root? }`, unset means 1). Action `root` `{ id }` (⌘K "Make this
@@ -35,6 +36,14 @@ A project is one tree of conversations: a root that holds the idea, and branches
   others (codemode `ultimate.entries(id)`, `ultimate.search()`).
 - **Compaction**: top-level conversations summarize with their own model and a lineage focus (root: idea, principles,
   standing decisions, tally of landings and branches; branch: intent and progress). Subagents keep Pi's default.
+
+While the brief is written, the `conversation.overlay` slot covers the branch, the source's history and its composer,
+which stay inert beneath it: a glass ball (`crystal.tsx`, adapted from React Bits' CrystalizedBall on `ogl`) that the
+history streams down into as dust. It shows only on that branch, at once when the branch was started in this tab, and
+not when the brief finished while another conversation was shown. Once the brief is ready, after at least 1.5 s, the
+ball condenses into an orb that drops into the composer; a glow spreads along it, the dimming lifts and the composer
+takes focus. A failed brief fades at once and the composer's status line says why, with Retry. `?briefing` holds the
+overlay up on the conversation shown first, and a click plays the finish, to polish it on a preview instance.
 
 New in the sidebar branches from the root; hover a stored message and choose **Branch from here** to
 branch at that entry. The contextual `lineage.branch-at` command receives `conversationId` and `entryId` through the SDK.

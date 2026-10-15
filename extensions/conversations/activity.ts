@@ -46,6 +46,10 @@ export function activityBehavior(
       }
       const inputTitle = title ? title.replace(/\s+/g, ' ').slice(0, 160) : undefined
       const previous = await host.harness().snapshot(host.metadata, id, context)
+      // The latest input only moves forward: a branch is active from the moment it was asked for, while the history
+      // it inherited is older.
+      if (previous?.inputAt !== undefined && (inputAt === undefined || inputAt < previous.inputAt))
+        inputAt = previous.inputAt
       if (
         previous?.inputTitle === inputTitle &&
         previous?.inputAt === inputAt &&

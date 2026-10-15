@@ -3,11 +3,10 @@ import {
   CircleCheckIcon,
   GitBranchIcon,
   GitForkIcon,
-  LoaderCircleIcon,
   StickyNoteIcon,
   TriangleAlertIcon,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -25,9 +24,11 @@ import {
   useCommands,
   useDialog,
   useDoc,
+  useStore,
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, UltimateActions } from '@/sdk'
+import { ballSize, Crystal } from './crystal.tsx'
 
 type BranchState = {
   from: number
@@ -212,17 +213,8 @@ function BranchBrief() {
   const { conversationId } = useUltimate()
   const branch = useDoc<{ branch?: BranchState }>('lineage.branch')?.branch
   const [retrying, setRetrying] = useState(false)
-  if (!branch || branch.status === 'ready') return null
-  if (branch.status === 'briefing')
-    return (
-      <span
-        className="flex shrink-0 items-center gap-1.5 text-brand"
-        data-lineage-status="briefing"
-      >
-        <LoaderCircleIcon className="size-3 animate-spin" />
-        Writing the brief from #{branch.from}…
-      </span>
-    )
+  // While the brief is written, the overlay over the transcript says so.
+  if (branch?.status !== 'failed') return null
   return (
     <span className="flex min-w-0 items-center gap-1.5 text-error" data-lineage-status="failed">
       <TriangleAlertIcon className="size-3 shrink-0" />
@@ -243,6 +235,209 @@ function BranchBrief() {
         Retry
       </button>
     </span>
+  )
+}
+
+/**
+ * `?briefing` holds the overlay up on the conversation shown first, to polish it; a click plays the finish, then it
+ * starts over.
+ */
+const rehearsal = new URLSearchParams(location.search).has('briefing')
+let rehearsed: number | undefined
+
+/** Branches started in this tab and not shown yet: their overlay shows at once, before `info` answers. */
+const started = new Set<number>()
+
+/** Over a branch while its brief is written: the history it inherited streaming into a crystal ball. */
+function BriefingOverlay() {
+  const { conversationId } = useUltimate()
+  if (conversationId === undefined) return null
+  if (rehearsal) {
+    rehearsed ??= conversationId
+    return conversationId === rehearsed ? <Rehearsal /> : null
+  }
+  return <BriefingOf id={conversationId} key={conversationId} />
+}
+
+/** Only while `id` is briefing: shown again later, a branch that finished meanwhile shows no overlay. */
+function BriefingOf({ id }: { id: number }) {
+  const [fresh] = useState(() => started.has(id))
+  useEffect(() => {
+    started.delete(id)
+  }, [id])
+  const info = useAction<{ root: number; branch?: BranchState }>(
+    'lineage',
+    'info',
+    { id },
+    { enabled: !fresh },
+  )
+  const branch = useDoc<{ branch?: BranchState }>('lineage.branch')?.branch
+  const [gone, setGone] = useState(false)
+  if (gone || (!fresh && info.data?.branch?.status !== 'briefing')) return null
+  return (
+    <Absorb
+      from={branch?.from}
+      onGone={() => setGone(true)}
+      outcome={branch && branch.status !== 'briefing' ? branch.status : undefined}
+    />
+  )
+}
+
+function Rehearsal() {
+  const [take, setTake] = useState(0)
+  const [outcome, setOutcome] = useState<'ready'>()
+  return (
+    <Absorb
+      from={1}
+      key={take}
+      onClick={() => setOutcome('ready')}
+      onGone={() => {
+        setOutcome(undefined)
+        setTake((current) => current + 1)
+      }}
+      outcome={outcome}
+    />
+  )
+}
+
+/** The overlay stays at least this long before the ball flows down, so a quick brief does not flash. */
+const minimum = 1500
+/** Where the ball flows to, in pixels above the bottom: into the composer. */
+const composer = 72
+
+/**
+ * The overlay over the whole conversation, which is inert beneath it: the transcript dimmed behind the ball while dust
+ * streams into it. Once the brief is ready the dimming lifts and the ball flows down into the composer, which then takes
+ * focus; a failed brief fades at once, the composer saying why.
+ */
+function Absorb({
+  from,
+  outcome,
+  onGone,
+  onClick,
+}: {
+  from?: number
+  outcome?: 'ready' | 'failed'
+  onGone: () => void
+  onClick?: () => void
+}) {
+  const theme = useStore((state) => state.ui.theme)
+  const { focusComposer } = useUltimate()
+  const root = useRef<HTMLDivElement>(null)
+  const dim = useRef<HTMLDivElement>(null)
+  const ball = useRef<HTMLDivElement>(null)
+  const glow = useRef<HTMLDivElement>(null)
+  const label = useRef<HTMLParagraphElement>(null)
+  const finish = useRef({ onGone, focusComposer })
+  finish.current = { onGone, focusComposer }
+  const [still] = useState(() => matchMedia('(prefers-reduced-motion: reduce)').matches)
+  const [shown] = useState(() => performance.now())
+  const [ended, setEnded] = useState<'ready' | 'failed'>()
+  const [landed, setLanded] = useState(false)
+  useEffect(() => {
+    if (!outcome) return undefined
+    const left = outcome === 'ready' && !still ? minimum - (performance.now() - shown) : 0
+    const timer = setTimeout(() => setEnded(outcome), Math.max(0, left))
+    return () => clearTimeout(timer)
+  }, [outcome, still, shown])
+  useLayoutEffect(() => {
+    const overlay = root.current!
+    // The conversation beneath takes no input, the composer included.
+    const beneath = [...overlay.parentElement!.children].filter(
+      (element): element is HTMLElement => element !== overlay && element instanceof HTMLElement,
+    )
+    for (const element of beneath) element.inert = true
+    // Each layer fades on its own: fading the overlay itself would leave the dimming nothing to blur.
+    const appear = [dim.current!, label.current!].map((layer) =>
+      layer.animate([{ opacity: 0 }, { opacity: 1 }], {
+        duration: still ? 0 : 350,
+        easing: 'ease-out',
+        fill: 'both',
+      }),
+    )
+    return () => {
+      for (const animation of appear) animation.cancel()
+      for (const element of beneath) element.inert = false
+    }
+  }, [still])
+  // Ready: the ball condenses and drops, and on landing a glow spreads along the composer and the dimming lifts.
+  // Failed, or with reduced motion: it all fades at once.
+  const finished = ended === 'failed' || (ended === 'ready' && still) || landed
+  useEffect(() => {
+    if (!finished) return undefined
+    const out = [{ opacity: 1 }, { opacity: 0 }]
+    const animations =
+      landed && !still
+        ? [
+            glow.current!.animate(
+              [
+                { opacity: 0, transform: 'translateX(-50%) scaleX(0.15)' },
+                { opacity: 1, transform: 'translateX(-50%) scaleX(1)', offset: 0.35 },
+                { opacity: 0, transform: 'translateX(-50%) scaleX(1.05)' },
+              ],
+              { duration: 900, easing: 'ease-out', fill: 'both' },
+            ),
+            dim.current!.animate(out, { duration: 450, easing: 'ease-in-out', fill: 'both' }),
+            ball.current!.animate(out, { delay: 300, duration: 600, fill: 'both' }),
+          ]
+        : [dim.current!, ball.current!, label.current!].map((layer) =>
+            layer.animate(out, { duration: still ? 150 : 300, fill: 'both' }),
+          )
+    void Promise.all(animations.map((animation) => animation.finished)).then(
+      () => {
+        finish.current.onGone()
+        finish.current.focusComposer()
+      },
+      // Cancelled as the overlay unmounts or a rehearsal starts over.
+      () => {},
+    )
+    return () => {
+      for (const animation of animations) animation.cancel()
+    }
+  }, [finished, landed, still])
+  useEffect(() => {
+    if (ended !== 'ready' || still) return undefined
+    const fade = label.current!.animate([{ opacity: 1 }, { opacity: 0 }], {
+      duration: 200,
+      fill: 'both',
+    })
+    return () => fade.cancel()
+  }, [ended, still])
+  return (
+    <div
+      aria-live="polite"
+      className="pointer-events-auto absolute inset-0 z-10 [container-type:size]"
+      data-lineage-status="briefing"
+      onClick={onClick}
+      ref={root}
+      role="status"
+    >
+      <div className="absolute inset-0 bg-background/85 backdrop-blur-[3px]" ref={dim} />
+      <div
+        className="absolute left-1/2 h-24 w-[min(100%,48rem)] translate-y-1/2 bg-[radial-gradient(ellipse_at_center,color-mix(in_oklab,var(--brand)_45%,transparent),transparent_70%)] opacity-0"
+        ref={glow}
+        style={{ bottom: composer }}
+      />
+      <div className="absolute inset-0" ref={ball}>
+        <Crystal
+          className="size-full"
+          color={theme === 'dark' ? '#bb9af4' : '#7b47bf'}
+          done={ended === 'ready'}
+          drop={composer}
+          onLand={() => setLanded(true)}
+          theme={theme}
+        />
+      </div>
+      <p
+        className="absolute inset-x-0 text-center font-mono text-[12px] text-muted-foreground"
+        ref={label}
+        style={{
+          top: `calc(${ballSize.top * 100}% + clamp(${ballSize.min}px, ${ballSize.fraction * 100}cqmin, ${ballSize.max}px) + 28px)`,
+        }}
+      >
+        Writing the brief{from === undefined ? '' : ` from #${from}`}…
+      </p>
+    </div>
   )
 }
 
@@ -314,7 +509,9 @@ export default defineWebExtension({
       draft.isolated ??
       (getUiState('ext.conversations.creationType') !== 'shared' &&
         getState().system?.extensions.some((extension) => extension.name === 'workspaces') === true)
-    return api.action<{ id: number }>('lineage', 'branch', { ...draft, isolated })
+    const branch = await api.action<{ id: number }>('lineage', 'branch', { ...draft, isolated })
+    started.add(branch.id)
+    return branch
   },
   entries: {
     'lineage.branched': Branched,
@@ -322,7 +519,11 @@ export default defineWebExtension({
     'lineage.finished': Finished,
     'pi.reset': Brief,
   },
-  slots: { 'composer.status': [BriefStatus], overlay: [BranchDialog] },
+  slots: {
+    'composer.status': [BriefStatus],
+    'conversation.overlay': [BriefingOverlay],
+    overlay: [BranchDialog],
+  },
   messageActions: [BranchAction],
   commands: [
     {

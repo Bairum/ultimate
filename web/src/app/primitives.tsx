@@ -39,9 +39,10 @@ export function StatusLine() {
  */
 export function Conversation({ variant = 'main' }: { variant?: 'main' | 'dock' }) {
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <Transcript dock={variant === 'dock'} />
       <Composer dock={variant === 'dock'} />
+      <Slot name="conversation.overlay" />
     </div>
   )
 }

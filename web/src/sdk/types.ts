@@ -11,6 +11,7 @@ export type SlotName =
   | 'statusline.right'
   | 'composer.toolbar'
   | 'composer.status'
+  | 'conversation.overlay'
   | 'overlay'
 
 /** A slot component, optionally with an `order` (default 0; ties keep folder-name order). */

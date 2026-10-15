@@ -255,6 +255,31 @@ it('lets a summary replace the provisional branch title', async () => {
   )
 })
 
+it('sorts a new branch from the moment it was asked for, not by the history it inherited', async () => {
+  const { server, failures } = await fixture()
+  await (
+    await server.root.submit({ type: 'input', content: 'An old idea.' }, context)
+  ).wait(context)
+  await until(
+    async () =>
+      (await server.harness.snapshot(Metadata, server.root.id, context))?.inputAt !== undefined,
+  )
+  const inherited = (await server.harness.snapshot(Metadata, server.root.id, context))!.inputAt!
+  failures.brief = true
+  const asked = Date.now()
+  const { id } = (
+    await post(server, '/api/extensions/lineage/actions/branch', { args: { prompt: 'New intent' } })
+  ).data.result as { id: ConversationId }
+  // Activity has read the inherited history: its first input names it.
+  await until(
+    async () =>
+      (await server.harness.snapshot(Metadata, id, context))?.inputTitle === 'An old idea.',
+  )
+  const inputAt = (await server.harness.snapshot(Metadata, id, context))!.inputAt!
+  expect(inputAt).toBeGreaterThanOrEqual(asked)
+  expect(inputAt).toBeGreaterThan(inherited)
+})
+
 it('leaves a note in an idle conversation without starting a run', async () => {
   const { server } = await fixture()
   const note = server.host.registry.snapshot().extension('lineage')!.tools![0]
