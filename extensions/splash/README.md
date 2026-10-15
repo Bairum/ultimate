@@ -13,7 +13,9 @@ app comes up once the page is ready.
   stays at least 0.7 s, so a warm start does not flash.
 - **First run** (onboarding's `status` action reports `firstRun`): the signature version plays slower and in full,
   with the rule, then the name lifts away as the overlay fades into onboarding's page beneath, which is already open.
-  Without the `onboarding` extension there is no first run.
+  Without the `onboarding` extension there is no first run. As its I fills in, faint lightning starts flowing around
+  it (`electric.tsx`, adapted from React Bits' ElectricLogo on `ogl`), in the theme's colours and gone with the overlay;
+  without WebGL2 or with reduced motion there is none.
 - **Reduced motion** (`prefers-reduced-motion`): the settled wordmark, then a quick fade.
 - **Never stuck**: not ready after 8 s, the core reveals the app anyway, and a small notice names the extensions still
   loading (`useReady().pending`) and those that failed (`useReady().failed`), until they load or it is dismissed.

@@ -1,6 +1,7 @@
 import { TriangleAlertIcon, XIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { api, defineWebExtension, useReady } from '@/sdk'
+import { api, defineWebExtension, useReady, useStore } from '@/sdk'
+import { Electric } from './electric.tsx'
 
 /** The core's readiness deadline: not ready by then, the app opens anyway and the notice names what is missing. */
 const timeout = 8000
@@ -31,6 +32,38 @@ const letters: readonly (readonly string[])[] = [
 ]
 const view = { x: 118, width: 13533, height: 1514 }
 
+/** The I alone, for the lightning to trace: its outline in a box of its own. */
+const charge = `data:image/svg+xml,${encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="5502 0 264 1490" width="264" height="1490"><path d="${letters[3][0]}" fill="#fff"/></svg>`,
+)}`
+
+/**
+ * The first run's spark: lightning flowing faintly around the I, centred on it in a box three times the wordmark's
+ * height so the glow has room. Theme colours: brand light in dark, brand ink in light.
+ */
+function Spark() {
+  const theme = useStore((state) => state.ui.theme)
+  return (
+    <Electric
+      arcs={0.3}
+      bend={0.5}
+      className="pointer-events-none absolute top-1/2 left-[40.76%] h-[300%] w-[24%] -translate-1/2"
+      color={theme === 'dark' ? '#e4d6ff' : '#7b47bf'}
+      crackle={1.2}
+      flicker={0.3}
+      glow={0.7}
+      glowColor={theme === 'dark' ? '#bb9af4' : '#7b47bf'}
+      intensity={0.7}
+      scale={0.328}
+      speed={1.8}
+      src={charge}
+      strands={3}
+      theme={theme}
+      thickness={1.2}
+    />
+  )
+}
+
 /** One contour's outline, or its pen. */
 const outline = (d: string, key: number, kind: 'trace' | 'pen') => (
   <path
@@ -55,26 +88,29 @@ const outline = (d: string, key: number, kind: 'trace' | 'pen') => (
  * The wordmark: per letter its fill, the outline that traces it, and the pen, a short bright dash at the head of the
  * outline. `still` draws it settled.
  */
-function Wordmark({ still }: { still: boolean }) {
+function Wordmark({ still, spark }: { still: boolean; spark: boolean }) {
   return (
-    <svg
-      aria-hidden="true"
-      className="block w-full overflow-visible"
-      viewBox={`${view.x} 0 ${view.width} ${view.height}`}
-    >
-      {letters.map((contours, index) => (
-        <g data-letter="" key={index}>
-          <path
-            className="fill-brand"
-            d={contours.join('')}
-            data-fill=""
-            fillOpacity={still ? 1 : 0}
-          />
-          {!still && contours.map((d, contour) => outline(d, contour, 'trace'))}
-          {!still && contours.map((d, contour) => outline(d, contour, 'pen'))}
-        </g>
-      ))}
-    </svg>
+    <div className="relative">
+      <svg
+        aria-hidden="true"
+        className="block w-full overflow-visible"
+        viewBox={`${view.x} 0 ${view.width} ${view.height}`}
+      >
+        {letters.map((contours, index) => (
+          <g data-letter="" key={index}>
+            <path
+              className="fill-brand"
+              d={contours.join('')}
+              data-fill=""
+              fillOpacity={still ? 1 : 0}
+            />
+            {!still && contours.map((d, contour) => outline(d, contour, 'trace'))}
+            {!still && contours.map((d, contour) => outline(d, contour, 'pen'))}
+          </g>
+        ))}
+      </svg>
+      {spark && <Spark />}
+    </div>
   )
 }
 
@@ -315,6 +351,7 @@ function Splash() {
   const [still] = useState(() => matchMedia('(prefers-reduced-motion: reduce)').matches)
   const overlay = useRef<HTMLDivElement>(null)
   const show = useRef<Show>(undefined)
+  const [signature, setSignature] = useState(false)
 
   useLayoutEffect(() => {
     if (!overlay.current) return undefined
@@ -325,7 +362,12 @@ function Splash() {
     let active = true
     api.action<{ firstRun?: boolean }>('onboarding', 'status').then(
       (status) => {
-        if (active && status.firstRun) current.signature()
+        if (!active || !status.firstRun) return
+        current.signature()
+        // The spark comes as the I fills in.
+        setTimeout(() => {
+          if (active) setSignature(true)
+        }, 1000)
       },
       // Without onboarding there is no first run.
       () => {},
@@ -357,7 +399,7 @@ function Splash() {
       tabIndex={-1}
     >
       <div className="relative w-[min(72vw,40rem)]" data-mark="">
-        <Wordmark still={still} />
+        <Wordmark spark={signature && !still} still={still} />
         <div
           className="relative mx-auto mt-[7%] h-px w-1/4 overflow-hidden bg-foreground/10 opacity-0"
           data-rule=""
