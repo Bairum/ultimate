@@ -113,8 +113,11 @@ export function Composer({ dock }: { dock?: boolean }) {
   return <ConversationComposer dock={dock} key={id} />
 }
 
-/** Where a new conversation branches from: a conversation and, optionally, one of its entries; default the root. */
-export type BranchPoint = { from?: number; at?: number }
+/**
+ * Where a new conversation branches from: a conversation and, optionally, one of its entries; default the root of the
+ * shown tree. `root` starts a new root instead.
+ */
+export type BranchPoint = { from?: number; at?: number; root?: boolean }
 
 export function NewConversationComposer({
   inputId,
@@ -199,9 +202,11 @@ function ConversationComposer({
   const start = conversationStarter(useExtensions())
   // New and each branch point keep their own draft.
   const draftId = isNew
-    ? point?.from === undefined
-      ? 'new'
-      : `branch-${point.from}${point.at === undefined ? '' : `-${point.at}`}`
+    ? point?.root
+      ? 'root'
+      : point?.from === undefined
+        ? 'new'
+        : `branch-${point.from}${point.at === undefined ? '' : `-${point.at}`}`
     : id
   if (!drafts.has(draftId)) drafts.set(draftId, createDraft(draftId))
   const draft = drafts.get(draftId)!
@@ -258,6 +263,7 @@ function ConversationComposer({
             ...(images.length ? { images } : {}),
             ...(point?.from === undefined ? {} : { from: point.from }),
             ...(point?.at === undefined ? {} : { at: point.at }),
+            ...(point?.root ? { root: true } : {}),
             ...(isolation === undefined ? {} : { isolated: isolation }),
             ...(defaults.configuration.model ? { model: defaults.configuration.model } : {}),
             ...(defaults.configuration.thinkingLevel
@@ -330,9 +336,11 @@ function ConversationComposer({
             onKeyDown={onKeyDown}
             placeholder={
               isNew
-                ? point?.from === undefined
-                  ? 'Branch from the root: what do you want to do?'
-                  : 'What should the branch do?'
+                ? point?.root
+                  ? 'Start a new root: what is it about?'
+                  : point?.from === undefined
+                    ? 'Branch from the root: what do you want to do?'
+                    : 'What should the branch do?'
                 : busy
                   ? 'Steer the run, or queue a follow-up…'
                   : 'Ask Ultimate to change something…'

@@ -31,14 +31,14 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 
-/** Which conversation is the project's root; unset means the reserved root conversation. */
-export const Root = defineDoc<{ root?: number }>({
-  kind: 'lineage.root',
+/** The project's roots, each the top of one conversation tree; a fresh project's first conversation is its first. */
+export const Roots = defineDoc<{ roots: number[] }>({
+  kind: 'lineage.roots',
   version: 1,
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
-  initial: () => ({}),
+  initial: () => ({ roots: [ROOT_CONVERSATION_ID] }),
 })
 
 export type BranchImage = { data: string; mimeType: string }
@@ -62,9 +62,12 @@ export const Branch = defineDoc<{ branch?: BranchState }>({
   initial: () => ({}),
 })
 
-export const docs = [Root, Branch, Seen]
+export const docs = [Roots, Branch, Seen]
 
-/** Subscribers enlist their own document writes in the branch's creation transaction. */
+/**
+ * `lineage:branched` and `lineage:rooted` carry it: subscribers enlist their own document writes in the new
+ * conversation's creation transaction.
+ */
 export type BranchedEvent = {
   tx: Tx
   id: ConversationId
@@ -159,9 +162,23 @@ async function ask(
   return { text: result, budget: model.contextWindow }
 }
 
-export async function rootOf(host: Pick<ExtensionHost, 'harness'>, ctx: Context) {
-  return ((await host.harness().snapshot(Root, ROOT_CONVERSATION_ID, ctx))?.root ??
-    ROOT_CONVERSATION_ID) as ConversationId
+export async function rootsOf(host: Pick<ExtensionHost, 'harness'>, ctx: Context) {
+  return ((await host.harness().snapshot(Roots, ROOT_CONVERSATION_ID, ctx))?.roots ?? [
+    ROOT_CONVERSATION_ID,
+  ]) as ConversationId[]
+}
+
+/** The root of `id`'s tree: up through owners (subagents) and fork sources (branches); undefined outside any tree. */
+export async function rootOf(host: Pick<ExtensionHost, 'harness'>, id: number, ctx: Context) {
+  const roots = await rootsOf(host, ctx)
+  return host.harness().commit(async (tx) => {
+    let record = await tx.conversation(id as ConversationId)
+    while (record && !roots.includes(record.id)) {
+      const up = record.owner?.conversationId ?? record.parent?.conversationId
+      record = up === undefined ? undefined : await tx.conversation(up)
+    }
+    return record?.id
+  }, ctx)
 }
 
 function lineage(host: ExtensionHost) {
@@ -380,30 +397,33 @@ const FINISHED_CHARS = 1500
 const finishedText = (id: number, title: string | undefined, text: string) =>
   `#${id} finished${title ? ` · ${title}` : ''}\n\nIts last answer:\n${text}`
 
-export type BranchInput = {
-  from?: number
-  at?: number
+export type RootInput = {
   prompt: string
   images?: BranchImage[]
   isolated?: boolean
   model?: ModelRef
   thinkingLevel?: ModelThinkingLevel
 }
+export type BranchInput = RootInput & { from: number; at?: number }
 
-/** Fork `from` (default: the root) at `at` (default: its latest entry) into a branch that starts from a brief. */
-export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: Context) {
-  const prompt = input.prompt.trim()
-  if (!prompt) throw new Error('A branch needs a prompt')
-  const from = (input.from ?? (await rootOf(host, ctx))) as ConversationId
-  const { startBrief } = lineage(host)
-  // Shared and isolated branches both start from the project checkout's branch tip.
-  const main = await host
+/** The project checkout's tip, where new branches and roots start, shared or isolated. */
+function head(host: ExtensionHost) {
+  return host
     .use<WorkspaceService>('workspaces')
     ?.git(host.projectRoot, 'rev-parse', 'HEAD')
     .catch(
-      // A project without a Git HEAD can branch conversations without a commit baseline.
+      // A project without a Git HEAD can start conversations without a commit baseline.
       () => undefined,
     )
+}
+
+/** Fork `from` at `at` (default: its latest entry) into a branch that starts from a brief. */
+export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: Context) {
+  const prompt = input.prompt.trim()
+  if (!prompt) throw new Error('A branch needs a prompt')
+  const from = input.from as ConversationId
+  const { startBrief } = lineage(host)
+  const main = await head(host)
   // A first branch needs a stored entry to fork from, even when the root is still empty.
   if (input.at === undefined)
     await host.harness().commit(async (tx) => {
@@ -463,7 +483,64 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
   return { id }
 }
 
-/** Leave a note in `to` (a conversation id or the root) without waking it; its model reads it with its next input. */
+/**
+ * Start a new root: an ownerless conversation added to the roots, whose first input is the prompt. It has no brief, and
+ * the input names it until its summary does. An isolated root's first request waits for its checkout in the
+ * `workspace_workflow` section, so the prompt goes in at once.
+ */
+export async function startRoot(host: ExtensionHost, input: RootInput, ctx: Context) {
+  const prompt = input.prompt.trim()
+  if (!prompt) throw new Error('A root needs a prompt')
+  const main = await head(host)
+  // Without a choice, a root starts with the first root's model, as a new conversation does.
+  const agent = await (await host.harness().conversation(ROOT_CONVERSATION_ID, ctx))!.agent(ctx)
+  const model = input.model ?? agent.model
+  const thinkingLevel = input.thinkingLevel ?? agent.thinkingLevel
+  const id = await host.harness().commit(async (tx) => {
+    const roots = await tx.doc(Roots, ROOT_CONVERSATION_ID)
+    const { id: created } = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+    await configure(tx, created, {
+      cwd: host.projectRoot,
+      ...(model ? { model } : {}),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
+    })
+    if (input.isolated) {
+      const workspaces = host.use<WorkspaceService>('workspaces')
+      if (!workspaces) throw new Error('Isolated roots require workspaces')
+      await workspaces.create(tx, created, host.projectRoot)
+    }
+    if (main) await seedSeen(tx, created, main, Date.now())
+    roots.roots.push(created)
+    const title = prompt.replace(/\s+/g, ' ').slice(0, 80)
+    ;(await tx.doc(host.metadata, created)).title = title
+    const writes: Promise<void>[] = []
+    host.events.emit('lineage:rooted', {
+      tx,
+      id: created,
+      intent: prompt,
+      waitUntil: (write) => writes.push(write),
+    } satisfies BranchedEvent)
+    await Promise.all(writes)
+    return created
+  }, ctx)
+  const images = input.images ?? []
+  await (await host.harness().conversation(id, ctx))!.submit(
+    {
+      type: 'input',
+      content: images.length
+        ? [
+            { type: 'text' as const, text: prompt },
+            ...images.map((image) => ({ type: 'image' as const, ...image })),
+          ]
+        : prompt,
+      requestId: 'lineage:root',
+    },
+    ctx,
+  )
+  return { id }
+}
+
+/** Leave a note in `to` (a conversation id, or the root of `source.from`'s tree) without waking it. */
 export async function leaveNote(
   host: Pick<ExtensionHost, 'harness'>,
   to: number | 'root',
@@ -475,7 +552,13 @@ export async function leaveNote(
     requestId?: string
   },
 ) {
-  const target = to === 'root' ? await rootOf(host, context) : (to as ConversationId)
+  let target = to as ConversationId
+  if (to === 'root') {
+    if (source?.from === undefined) throw new Error('A note to the root needs its source')
+    const root = await rootOf(host, source.from, context)
+    if (root === undefined) throw new Error(`#${source.from} has no root`)
+    target = root
+  }
   const conversation = await host.harness().conversation(target, context)
   if (!conversation) throw new Error(`No conversation #${target}`)
   const from = source?.from
@@ -511,7 +594,7 @@ export async function leaveNote(
 }
 
 const ZOOM =
-  'Zoom out when you need to: read any conversation, the root or a sibling, with codemode `ultimate.entries(id)` and `ultimate.search(text)`. Leave a `note` for a conversation your work affects.'
+  'Zoom out when you need to: read any conversation, a root or a sibling, with codemode `ultimate.entries(id)` and `ultimate.search(text)`. Leave a `note` for a conversation your work affects.'
 
 /** Whether each conversation is owned (a subagent, a lander), read once: ownership never changes after creation. */
 const owned = new Map<ConversationId, boolean>()
@@ -528,12 +611,13 @@ export async function lineageSection(
     owned.set(id, !!record.owner)
   }
   if (owned.get(id)) return undefined
-  const root = await rootOf(host, ctx)
+  const root = await rootOf(host, id, ctx)
   if (id === root)
-    return `You are the root of this project (#${root}): you hold its idea and keep the tally of what lands. Every other conversation branched from you or from a branch.\n${ZOOM}`
+    return `You are a root of this project (#${root}): you hold the idea of one line of work and keep the tally of what lands from its tree. Other roots hold other lines of work; every other conversation branched from a root or a branch.\n${ZOOM}`
+  const rooted = root === undefined ? '' : `\nRoot: #${root}.`
   const state = (await host.harness().snapshot(Branch, id, ctx))?.branch
-  if (!state) return `You are #${id}. Root: #${root}.\n${ZOOM}`
-  return `You are #${id}, branched from #${state.from} at entry ${state.at} for: ${state.intent}\nRoot: #${root}.\n${ZOOM}`
+  if (!state) return `You are #${id}.${rooted}\n${ZOOM}`
+  return `You are #${id}, branched from #${state.from} at entry ${state.at} for: ${state.intent}${rooted}\n${ZOOM}`
 }
 
 const COMPACT_SYSTEM =
@@ -541,7 +625,7 @@ const COMPACT_SYSTEM =
 
 function compactFocus(root: boolean, intent?: string) {
   return root
-    ? 'This is the root conversation of the project. Keep its idea, principles, standing decisions, and a tally of what landed and which branches were started (with their #ids and intents). Drop the details of finished work.'
+    ? 'This is a root conversation of the project. Keep its idea, principles, standing decisions, and a tally of what landed and which branches were started (with their #ids and intents). Drop the details of finished work.'
     : `This is a branch${intent ? ` started for: ${intent}` : ''}. Keep its intent and progress toward it: decisions, changed files, verification, what remains. Drop what the intent no longer needs.`
 }
 
@@ -552,48 +636,64 @@ function conversationArg(args: JsonValue) {
   return value as ConversationId
 }
 
+/** Validates the shared fields of a new branch or root. */
+function rootInput(args: JsonValue) {
+  const input = (args ?? {}) as Partial<BranchInput>
+  if (typeof input.prompt !== 'string') throw new Error('prompt must be a string')
+  if (
+    input.model !== undefined &&
+    (typeof input.model?.provider !== 'string' || typeof input.model.modelId !== 'string')
+  )
+    throw new Error('model must be { provider, modelId }')
+  if (input.images !== undefined) {
+    if (!Array.isArray(input.images) || input.images.length > maxImages)
+      throw new Error(`images must be an array of at most ${maxImages}`)
+    for (const image of input.images)
+      if (
+        !imageMimeTypes.includes(image?.mimeType) ||
+        typeof image.data !== 'string' ||
+        !image.data ||
+        Buffer.byteLength(image.data, 'base64') > maxImageBytes
+      )
+        throw new Error('Expected supported image MIME type and base64 data of at most 2 MiB')
+  }
+  return input
+}
+
 export const actions = {
-  /** The root, and with `{ id }` that conversation's branch state when it is a branch. */
+  /** The roots, and with `{ id }` that conversation's tree root and its branch state when it is a branch. */
   async info(args: JsonValue, { host }: ActionContext) {
-    const root = await rootOf(host, context)
-    if (args === null || args === undefined) return { root }
-    const branch = (await host.harness().snapshot(Branch, conversationArg(args), context))?.branch
-    return branch ? { root, branch } : { root }
+    const roots = await rootsOf(host, context)
+    if (args === null || args === undefined) return { roots }
+    const id = conversationArg(args)
+    const root = await rootOf(host, id, context)
+    const branch = (await host.harness().snapshot(Branch, id, context))?.branch
+    return { roots, ...(root === undefined ? {} : { root }), ...(branch ? { branch } : {}) }
   },
+  /** Add a top-level conversation that is not a branch to the roots. */
   async root(args: JsonValue, { host }: ActionContext) {
     const target = conversationArg(args)
-    await host.harness().commit(async (tx) => {
+    const roots = await host.harness().commit(async (tx) => {
       const record = await tx.conversation(target)
       if (!record) throw new Error(`No conversation #${target}`)
-      if (record.owner) throw new Error('A subagent cannot be the root')
-      ;(await tx.doc(Root, ROOT_CONVERSATION_ID)).root = target
+      if (record.owner) throw new Error('A subagent cannot be a root')
+      if (record.parent) throw new Error('A branch already has a root')
+      const doc = await tx.doc(Roots, ROOT_CONVERSATION_ID)
+      if (!doc.roots.includes(target)) doc.roots.push(target)
+      return [...doc.roots]
     }, context)
-    return { root: target }
+    return { roots }
   },
   async branch(args: JsonValue, { host }: ActionContext) {
-    const input = (args ?? {}) as Partial<BranchInput>
-    if (typeof input.prompt !== 'string') throw new Error('prompt must be a string')
+    const input = rootInput(args)
     for (const key of ['from', 'at'] as const)
       if (input[key] !== undefined && (!Number.isSafeInteger(input[key]) || input[key] < 1))
         throw new Error(`${key} must be a positive integer`)
-    if (
-      input.model !== undefined &&
-      (typeof input.model?.provider !== 'string' || typeof input.model.modelId !== 'string')
-    )
-      throw new Error('model must be { provider, modelId }')
-    if (input.images !== undefined) {
-      if (!Array.isArray(input.images) || input.images.length > maxImages)
-        throw new Error(`images must be an array of at most ${maxImages}`)
-      for (const image of input.images)
-        if (
-          !imageMimeTypes.includes(image?.mimeType) ||
-          typeof image.data !== 'string' ||
-          !image.data ||
-          Buffer.byteLength(image.data, 'base64') > maxImageBytes
-        )
-          throw new Error('Expected supported image MIME type and base64 data of at most 2 MiB')
-    }
+    if (input.from === undefined) throw new Error('from must be a positive integer')
     return startBranch(host, input as BranchInput, context)
+  },
+  async newRoot(args: JsonValue, { host }: ActionContext) {
+    return startRoot(host, rootInput(args) as RootInput, context)
   },
   async retry(args: JsonValue, { host }: ActionContext) {
     const target = conversationArg(args)
@@ -611,7 +711,7 @@ export const actions = {
 }
 
 export type LineageService = {
-  rootOf: (ctx: Context) => ReturnType<typeof rootOf>
+  rootOf: (id: number, ctx: Context) => ReturnType<typeof rootOf>
   leaveNote: (
     to: number | 'root',
     text: string,
@@ -620,7 +720,7 @@ export type LineageService = {
 }
 export default function lineageExtension(host: ExtensionHost) {
   host.provide('lineage', {
-    rootOf: (ctx) => rootOf(host, ctx),
+    rootOf: (id, ctx) => rootOf(host, id, ctx),
     leaveNote: (to, text, source) => leaveNote(host, to, text, source),
   } satisfies LineageService)
   const { Brief, Notify } = lineage(host)
@@ -645,7 +745,7 @@ export default function lineageExtension(host: ExtensionHost) {
               ctx,
             )
             if (!agent.model) return undefined
-            const root = (await rootOf(host, ctx)) === api.conversationId
+            const root = (await rootsOf(host, ctx)).includes(api.conversationId)
             const intent = (await api.snapshot(Branch, api.conversationId, ctx))?.branch?.intent
             const source = sourceText(
               api.conversationId,
@@ -673,7 +773,7 @@ export default function lineageExtension(host: ExtensionHost) {
       defineTool({
         name: 'note',
         description:
-          'Leave a note in another conversation (an id, or "root") without waking it; its agent reads it with its next input. Use it when your work affects that conversation.',
+          'Leave a note in another conversation (an id, or "root" for the root of your tree) without waking it; its agent reads it with its next input. Use it when your work affects that conversation.',
         parameters: Type.Object({
           to: Type.Union([Type.Integer({ minimum: 1 }), Type.Literal('root')]),
           text: Type.String({ minLength: 1 }),

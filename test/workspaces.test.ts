@@ -28,7 +28,7 @@ import { Workspaces, workspaces } from '../extensions/workspaces/workspaces.ts'
 import { git, setup } from '../extensions/workspaces/git.ts'
 import type { LanderEntry, WorkspaceIndex } from '../extensions/workspaces/types.ts'
 import { createLander } from '../extensions/workspaces/lander.ts'
-import { leaveNote, rootOf, Root } from '../extensions/lineage/server.ts'
+import { leaveNote, rootOf, Roots, startRoot } from '../extensions/lineage/server.ts'
 import { subject } from '../extensions/conversations/server.ts'
 import type { ConversationsService } from '../extensions/conversations/server.ts'
 import { Summaries } from '../extensions/conversations/summary.ts'
@@ -94,7 +94,7 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
       services.get(name) ??
       (name === 'lineage' && host.extensions().some((e) => e.name === 'lineage' && e.enabled)
         ? {
-            rootOf: (ctx: typeof context) => rootOf(host, ctx),
+            rootOf: (id: number, ctx: typeof context) => rootOf(host, id, ctx),
             leaveNote: (
               to: number | 'root',
               text: string,
@@ -639,7 +639,14 @@ it.concurrent('notes the root once for a landing even when its report phase is r
       ],
     }),
   )
-  const id = await f.create()
+  // The submitter is a branch of the root, so its landing is the root's tally.
+  const at = await f.opened.harness.commit(
+    async (tx) =>
+      (await tx.appendEntry(f.opened.root.id, { kind: 'test.branch-point', data: {} })).id,
+    context,
+  )
+  const { id } = await f.opened.root.fork(at, { ownership: { kind: 'ownerless' } }, context)
+  await f.opened.harness.commit((tx) => f.service.create(tx, id, f.projectRoot), context)
   await f.service.ready(id, context)
   const sha = await commit((await f.service.get(id, context))!.path, 'landed.txt')
   f.host.provide('conversations', {
@@ -781,13 +788,55 @@ it.concurrent('does not note the root about its own submission', async () => {
   await f.service.ready(id, context)
   await commit((await f.service.get(id, context))!.path)
   await f.opened.harness.commit(async (tx) => {
-    ;(await tx.doc(Root, ROOT_CONVERSATION_ID)).root = id
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.push(id)
   }, context)
   await f.service.submit(id, context)
   expect((await submitted(f, id))[0]).toContain('landed as')
   const view = await (await f.opened.harness.conversation(id, context))!.viewState(context)
   expect(view.value.entries.filter((entry) => entry.kind === 'lineage.note')).toHaveLength(0)
   view.dispose()
+  expect(await rootNotes(f)).toHaveLength(0)
+})
+
+it.concurrent('notes the root of the submitter’s tree and skips a conversation outside any tree', async () => {
+  const f = await lander({})
+  f.host.extensions = () =>
+    [
+      { name: 'lineage', enabled: true },
+      { name: 'workspaces', enabled: true },
+    ] as ReturnType<ExtensionHost['extensions']>
+  // A second root, and a branch of it that lands; an unrooted conversation lands too.
+  const other = await f.opened.harness.createConversation(
+    { ownership: { kind: 'ownerless' } },
+    context,
+  )
+  const at = await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.push(other.id)
+    return (await tx.appendEntry(other.id, { kind: 'test.branch-point', data: {} })).id
+  }, context)
+  const branch = await other.fork(at, { ownership: { kind: 'ownerless' } }, context)
+  await f.opened.harness.commit((tx) => f.service.create(tx, branch.id, f.projectRoot), context)
+  await f.service.ready(branch.id, context)
+  await commit((await f.service.get(branch.id, context))!.path, 'branch.txt')
+  await f.service.submit(branch.id, context)
+  expect((await submitted(f, branch.id))[0]).toContain('landed as')
+  const unrooted = await f.create()
+  await f.service.ready(unrooted, context)
+  await commit((await f.service.get(unrooted, context))!.path, 'unrooted.txt')
+  await f.service.submit(unrooted, context)
+  expect((await submitted(f, unrooted))[0]).toContain('landed as')
+  const notes = async (id: ConversationId) => {
+    const view = await (await f.opened.harness.conversation(id, context))!.viewState(context)
+    try {
+      return view.value.entries.filter((entry) => entry.kind === 'lineage.note')
+    } finally {
+      view.dispose()
+    }
+  }
+  expect((await notes(other.id)).map((note) => (note.data as { from: number }).from)).toEqual([
+    branch.id,
+  ])
+  expect(await rootNotes(f)).toHaveLength(0)
 })
 
 async function lander(settings: JsonObject, existing?: Awaited<ReturnType<typeof repository>>) {
@@ -1333,6 +1382,24 @@ it.concurrent('fix: a fix that still fails the check is not landed and leaves th
   expect(asked).toBe(1)
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
   expect(await readFile(join(f.projectRoot, 'base.txt'), 'utf8')).toBe('target')
+})
+it.concurrent('starts an isolated root whose first request sees its ready checkout', async () => {
+  const f = await fixture()
+  // This fixture's host has no event bus, so no extension labels the root.
+  f.host.events = { emit: () => {} } as unknown as ExtensionHost['events']
+  const { id } = await startRoot(f.host, { prompt: 'ASK where am I?', isolated: true }, context)
+  const conversation = (await f.opened.harness.conversation(id, context))!
+  await until(async () => f.asked.length > 0)
+  await conversation.waitForIdle(context)
+  const workspace = (await f.service.get(id, context))!
+  expect(workspace.state).toBe('ready')
+  expect((await conversation.agent(context)).cwd).toBe(workspace.path)
+  const [request] = f.asked
+  expect(JSON.stringify(request.messages)).toContain(`Workspace: ${workspace.path}`)
+  expect((await f.opened.harness.snapshot(Roots, ROOT_CONVERSATION_ID, context))?.roots).toEqual([
+    ROOT_CONVERSATION_ID,
+    id,
+  ])
 })
 it.concurrent('answers the user in the lander conversation with its definition, tools and the lander state', async () => {
   const f = await lander({})
