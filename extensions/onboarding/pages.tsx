@@ -681,7 +681,9 @@ export function FirstRun({
         )
         if (key && !key.set) events.emit('secrets:open', { name: 'PARALLEL_API_KEY' })
       })
-      .catch(() => {})
+      .catch(() => {
+        // Opening the optional key dialog is a convenience; onboarding remains usable without it.
+      })
   }, [handoff, secrets])
   const apply = async () => {
     setBusy(true)

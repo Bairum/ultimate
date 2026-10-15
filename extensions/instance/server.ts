@@ -142,7 +142,10 @@ export default function instanceExtension(
                   ['server/main.ts', false, 'Worktree is not Ultimate: missing server/main.ts'],
                   ['node_modules', true, 'Worktree has no node_modules; run pnpm install first'],
                 ] as const) {
-                  const entry = await stat(join(cwd, path)).catch(() => undefined)
+                  const entry = await stat(join(cwd, path)).catch(
+                    // An unreadable prerequisite fails the explicit preview validation below.
+                    () => undefined,
+                  )
                   if (!entry || (directory ? !entry.isDirectory() : !entry.isFile()))
                     throw new Error(message)
                 }

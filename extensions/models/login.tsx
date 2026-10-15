@@ -45,6 +45,7 @@ function useLoginFlow(flowId: string | undefined) {
 }
 /** Cancel a running flow; it may have just ended, which needs no notice. */
 const cancel = (flowId: string) =>
+  // oxlint-disable-next-line ultimate/no-silent-catch -- FIXME(ULT-138): failed cancellation can leave an active login flow without feedback.
   api.action('models', 'cancel', { flowId }, { keepalive: true }).catch(() => undefined)
 interface Method {
   provider: ProviderInfo

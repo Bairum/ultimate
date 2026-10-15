@@ -49,7 +49,10 @@ export async function projects(userHome: string, currentHome: string): Promise<P
       const project = await readJson<{ root: string; name: string; openedAt: number }>(
         join(home, 'project.json'),
       )
-      const lock = await readOwner(join(home, 'ultimate.lock')).catch(() => undefined)
+      const lock = await readOwner(join(home, 'ultimate.lock')).catch(
+        // A missing or unreadable lock supplies no live-process evidence; the project still belongs in the list.
+        () => undefined,
+      )
       return {
         ...project,
         name: project?.name ?? basename(home),

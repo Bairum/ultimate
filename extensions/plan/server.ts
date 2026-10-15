@@ -169,6 +169,7 @@ export default (host: ExtensionHost) => {
         name: 'plan',
         description:
           'Maintain the durable epic/task ledger. create {title,body}; add {epic,title,role,description,deps?}; update {key,status?,title?,description?,body?,child?,verdict?}; note {key,text} adds a task note; show {key?} reads an epic, task, or the whole ledger. Epic bodies use Request, Selected approach, Intent, Scope (in/out), binary Acceptance criteria, Implementation, Verification, Risks. Task descriptions use Outcome, Scope, Non-goals, Files, Acceptance criteria with a verification command, Constraints. Epic statuses: planning, in_progress, done, blocked. Task statuses: backlog, todo, in_progress, in_review, done, blocked, canceled. child links a conversation number; deps are task keys. body is epic-only; verdict records evidence on either an epic or a task. Children read the root coordinator’s ledger with show; only that coordinator can edit it. Read full plans with show; the prompt contains only a compact ledger.',
+        // A memoized receipt id records the result in the same transaction as the ledger change.
         replay: 'safe',
         parameters: Type.Object({
           action: Type.Union(

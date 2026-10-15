@@ -409,7 +409,10 @@ export function createLander(
         const integration = await landerPath(host.home, entry.source)
         /** Reset the lander's checkout after a failure the model looked at. */
         const reset = async () => {
-          await git(integration, 'merge', '--abort').catch(() => undefined)
+          await git(integration, 'merge', '--abort').catch(
+            // Check failures may have no merge in progress; reset and clean below still enforce cleanup.
+            () => undefined,
+          )
           await git(integration, 'reset', '--hard', '-q')
           await git(integration, 'clean', '-fdq')
         }
@@ -427,6 +430,7 @@ export function createLander(
             ? { onFailure: undefined, change: undefined }
             : await landerAgent(host, context)
           if (!onFailure || !change) {
+            // oxlint-disable-next-line ultimate/no-silent-catch -- FIXME(ULT-138): abort failure can leave the integration checkout conflicted without a cleanup diagnostic.
             await git(integration, 'merge', '--abort').catch(() => undefined)
             return fail(
               reason,

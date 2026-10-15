@@ -18,6 +18,14 @@ export default defineConfig({
     },
     overrides: [
       {
+        files: ['**/*'],
+        excludeFiles: ['test/**', 'evals/**'],
+        rules: {
+          'ultimate/replay-safe-reason': 'error',
+          'ultimate/no-silent-catch': 'error',
+        },
+      },
+      {
         files: ['server/**', 'bin/**'],
         rules: {
           'no-restricted-imports': [

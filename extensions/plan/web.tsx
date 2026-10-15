@@ -801,7 +801,9 @@ function PlanCall({ call }: { call: ToolCallView }) {
   if (call.status === 'done') {
     try {
       result = JSON.parse(call.output)
-    } catch {}
+    } catch {
+      // Error outputs may be plain text; the card can still describe the call from its arguments.
+    }
   }
   const key =
     text(call.args.key) ||

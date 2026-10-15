@@ -31,7 +31,9 @@ const writes = new Map<string, Promise<void>>()
 /** Read, change and save a settings file, one change at a time per path, preserving other keys. */
 export async function updateSettings(path: string, modify: (value: JsonObject) => void) {
   const operation = (writes.get(path) ?? Promise.resolve())
-    .catch(() => {})
+    .catch(() => {
+      // The previous caller receives its failure; later settings writes must still run.
+    })
     .then(async () => {
       const value = await readSettings(path)
       modify(value)

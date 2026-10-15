@@ -43,7 +43,10 @@ async function mainOf(
     (await git(cwd, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => ''))
   if (!target) return undefined
   // Projects without a main branch have nothing to catch up on.
-  const sha = await git(cwd, 'rev-parse', '--verify', `refs/heads/${target}`).catch(() => undefined)
+  const sha = await git(cwd, 'rev-parse', '--verify', `refs/heads/${target}`).catch(
+    // An unborn target branch has no commits to catch up on.
+    () => undefined,
+  )
   return sha ? { cwd, target, sha, ...(workspace ? { workspace: workspace.path } : {}) } : undefined
 }
 

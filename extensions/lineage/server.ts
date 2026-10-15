@@ -400,7 +400,10 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
   const main = await host
     .use<WorkspaceService>('workspaces')
     ?.git(host.projectRoot, 'rev-parse', 'HEAD')
-    .catch(() => undefined)
+    .catch(
+      // A project without a Git HEAD can branch conversations without a commit baseline.
+      () => undefined,
+    )
   // A first branch needs a stored entry to fork from, even when the root is still empty.
   if (input.at === undefined)
     await host.harness().commit(async (tx) => {

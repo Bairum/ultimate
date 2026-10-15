@@ -87,7 +87,12 @@ export function workspaces(host: Host) {
   const queues = host.resource('workspaces.land', () => new Map<string, Promise<unknown>>())
   /** Runs writes to one source checkout one at a time, across synchronous landing and the lander. */
   async function serial<T>(source: string, operation: () => Promise<T>): Promise<T> {
-    const queued = (queues.get(source) ?? Promise.resolve()).catch(() => undefined).then(operation)
+    const queued = (queues.get(source) ?? Promise.resolve())
+      .catch(
+        // The previous caller receives its failure; it must not poison the next queued operation.
+        () => undefined,
+      )
+      .then(operation)
     queues.set(source, queued)
     try {
       return await queued
@@ -143,7 +148,10 @@ export function workspaces(host: Host) {
   async function standLander(context: Context) {
     const source = await git(host.projectRoot, 'rev-parse', '--show-toplevel')
       .then((path) => realpath(path))
-      .catch(() => undefined)
+      .catch(
+        // A project outside Git has no lander checkout to prepare.
+        () => undefined,
+      )
     const target =
       source && (await git(source, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => ''))
     const { change } = await landerAgent(host, context)
@@ -281,12 +289,14 @@ export function workspaces(host: Host) {
           if (created) {
             if (registered)
               await git(workspace.source, 'worktree', 'remove', workspace.path).catch(
+                // oxlint-disable-next-line ultimate/no-silent-catch -- FIXME(ULT-138): failed cleanup can leave an orphan worktree without reporting it.
                 () => undefined,
               )
             if (
               (await git(workspace.source, 'rev-parse', workspace.branch).catch(() => '')) ===
               workspace.base
             )
+              // oxlint-disable-next-line ultimate/no-silent-catch -- FIXME(ULT-138): failed cleanup can leave an orphan branch without reporting it.
               await git(workspace.source, 'branch', '-D', workspace.branch).catch(() => undefined)
           }
           await runtime.commit(async (tx) => {
@@ -512,6 +522,7 @@ export function workspaces(host: Host) {
       if (!workspace) throw new Error('Conversation has no workspace')
       if (workspace.state === 'preparing') throw new Error('Workspace is preparing')
       if (workspace.state !== 'removed') {
+        // oxlint-disable-next-line ultimate/no-silent-catch -- FIXME(ULT-138): permission or I/O errors must not mark an existing workspace removed.
         if (await lstat(workspace.path).catch(() => undefined))
           await git(workspace.source, 'worktree', 'remove', workspace.path)
         await host.harness().commit(async (tx) => {

@@ -78,6 +78,7 @@ export default function browserExtension(host: ExtensionHost) {
         name: 'screenshot',
         description:
           'Look at a browser page; save a full-resolution PNG and return a compact image with loading errors.',
+        // A fresh isolated page only observes the UI and saves a new screenshot; it performs no interactions.
         replay: 'safe',
         parameters: Type.Object({
           ...base,

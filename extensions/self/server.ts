@@ -41,6 +41,7 @@ export default function self(host: ExtensionHost) {
         description:
           'Restart the shared Ultimate host after authorized changes to server/ or shared/. Land an isolated workspace into the running clone first.',
         parameters: Type.Object({}),
+        // The target generation is memoized before the swap, so replay reports it without restarting again.
         replay: 'safe',
         async execute(_args, api, context): Promise<ToolExecutionResult> {
           const own = await service()?.get(api.conversationId, context)

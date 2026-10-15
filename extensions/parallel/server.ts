@@ -54,6 +54,7 @@ export default function parallel(host: ExtensionHost) {
     tools: [
       defineTool({
         name: 'web_search',
+        // Repeating a search only reads public web results; it changes no project state.
         replay: 'safe',
         description:
           "Search the public web with Parallel's Search API. Returns ranked pages with titles, URLs, publication dates, and LLM-optimized excerpts. Use this to discover sources or find current information. For a known public webpage, use web_fetch instead. Output is limited to 50KB or 2,000 lines.",
@@ -132,6 +133,7 @@ export default function parallel(host: ExtensionHost) {
       }),
       defineTool({
         name: 'web_fetch',
+        // Repeating extraction only reads public pages; it changes no project state.
         replay: 'safe',
         prepareArguments(args) {
           const input = args as { url: unknown; objective?: string }

@@ -202,7 +202,9 @@ export interface DefinitionFields {
 function scalar(value: string) {
   try {
     if (parseFrontmatter(`---\nvalue: ${value}\n---\n`).frontmatter.value === value) return value
-  } catch {}
+  } catch {
+    // Invalid plain YAML is serialized as a quoted JSON string below.
+  }
   return JSON.stringify(value)
 }
 

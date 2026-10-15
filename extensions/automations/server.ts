@@ -440,6 +440,7 @@ export default function automations(host: Host & Pick<ExtensionHost, 'onOpen' | 
     tools: [
       defineTool({
         name: 'automation',
+        // Transactional receipts deduplicate changes; abort reuses the recorded task id and is idempotent.
         replay: 'safe',
         description:
           'Schedule agent prompts durably. Actions: list, create, update, pause, resume, run (now), runs, delete (keeps conversations), abort {id,runId}. create needs name, prompt, schedule; other actions use id A<n>. Schedules: cron "0 9 * * 1-5" Europe/Vienna (timezone optional), at 2026-12-01T09:00:00Z, in 30m, every 15m. Runs cost model tokens. Optional agent selects an existing agent definition that fits the job (see Available definitions in the subagents prompt), or first write <project>/.ultimate/agents/<name>.md with frontmatter name, description, model, thinking, tools and instructions in the body, then reference it so the project team shares it. Agent isolates are ignored. Optional model {provider,modelId} and thinking override the profile. Without an agent, runs copy the root agent.',

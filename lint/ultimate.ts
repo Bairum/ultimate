@@ -4,10 +4,27 @@ interface ImportNode {
   source?: { value?: unknown }
 }
 
+interface Node {
+  type: string
+  name?: string
+  value?: unknown
+  computed?: boolean
+  key?: Node
+  body?: Node | Node[]
+  argument?: Node | null
+  callee?: Node
+  property?: Node
+  arguments?: Node[]
+}
+
 interface Context {
   filename: string
   options: [{ allow?: Record<string, string[]> }?]
-  report(diagnostic: { node: ImportNode; message: string }): void
+  sourceCode: {
+    getCommentsBefore(node: Node): unknown[]
+    getCommentsInside(node: Node): unknown[]
+  }
+  report(diagnostic: { node: ImportNode | Node; message: string }): void
 }
 
 const extensionOf = (filename: string) => {
@@ -18,6 +35,75 @@ const extensionOf = (filename: string) => {
 export default {
   meta: { name: 'ultimate' },
   rules: {
+    'replay-safe-reason': {
+      meta: { schema: [] },
+      create(context: Context) {
+        return {
+          Property(node: Node & { value: Node }) {
+            if (
+              (node.computed
+                ? node.key?.value === 'replay'
+                : (node.key?.name ?? node.key?.value) === 'replay') &&
+              node.value.type === 'Literal' &&
+              node.value.value === 'safe' &&
+              !context.sourceCode.getCommentsBefore(node).length
+            )
+              context.report({
+                node,
+                message: 'Say why a rerun cannot do harm before declaring replay safe.',
+              })
+          },
+        }
+      },
+    },
+    'no-silent-catch': {
+      meta: { schema: [] },
+      create(context: Context) {
+        const check = (node: Node) => {
+          if (
+            !context.sourceCode.getCommentsBefore(node).length &&
+            !context.sourceCode.getCommentsInside(node).length
+          )
+            context.report({
+              node,
+              message: 'Say why ignoring the error is correct, or handle it.',
+            })
+        }
+        return {
+          CallExpression(node: Node) {
+            const callee = node.callee
+            if (
+              callee?.type !== 'MemberExpression' ||
+              (callee.computed ? callee.property?.value : callee.property?.name) !== 'catch'
+            )
+              return
+            const handler = node.arguments?.[0]
+            if (
+              !handler ||
+              !['ArrowFunctionExpression', 'FunctionExpression'].includes(handler.type)
+            )
+              return
+            const body = handler.body as Node
+            if (
+              (body.type === 'Identifier' && body.name === 'undefined') ||
+              (body.type === 'BlockStatement' &&
+                Array.isArray(body.body) &&
+                (body.body.length === 0 ||
+                  (body.body.length === 1 &&
+                    body.body[0].type === 'ReturnStatement' &&
+                    (!body.body[0].argument ||
+                      (body.body[0].argument.type === 'Identifier' &&
+                        body.body[0].argument.name === 'undefined')))))
+            )
+              check(handler)
+          },
+          CatchClause(node: Node) {
+            const block = node.body as Node
+            if (Array.isArray(block.body) && block.body.length === 0) check(node)
+          },
+        }
+      },
+    },
     'extension-imports': {
       meta: {
         schema: [
