@@ -83,6 +83,16 @@ export function briefPrompt(intent: string) {
   return `Write the brief a new conversation starts from. Its intent: ${intent}\nKeep the project's idea and principles, decisions and constraints that still hold, files and state relevant to the intent, open questions; cite source entries as #<conversation>/<entry> so the branch can read them in full. Leave out what the intent doesn't need. Return only the brief, in Markdown.`
 }
 
+/** A first input: the prompt, with the images pasted with it. */
+function promptContent(prompt: string, images: readonly BranchImage[] = []) {
+  return images.length
+    ? [
+        { type: 'text' as const, text: prompt },
+        ...images.map((image) => ({ type: 'image' as const, ...image })),
+      ]
+    : prompt
+}
+
 function contentText(content: Message['content']) {
   return typeof content === 'string'
     ? content
@@ -245,16 +255,10 @@ function lineage(host: ExtensionHost) {
             },
             ctx,
           )
-          const images = state.images ?? []
           await conversation.submit(
             {
               type: 'input',
-              content: images.length
-                ? [
-                    { type: 'text' as const, text: state.intent },
-                    ...images.map((image) => ({ type: 'image' as const, ...image })),
-                  ]
-                : state.intent,
+              content: promptContent(state.intent, state.images),
               requestId: 'lineage:branch',
             },
             ctx,
@@ -288,6 +292,32 @@ function lineage(host: ExtensionHost) {
         }
         return { status: 'terminal', outcome: { status: 'aborted' } }
       }, ctx),
+  })
+  /** Delivers a new root's prompt as its first input; created with the root, so a crash cannot leave it empty. */
+  const Prompt = defineTask<
+    { id: ConversationId; prompt: string; images?: BranchImage[] },
+    { phase: 'deliver' },
+    null
+  >({
+    name: 'lineage.prompt',
+    version: 1,
+    initial: () => ({ phase: 'deliver' }),
+    phases: {
+      deliver: async (task, runtime, ctx) => {
+        const { id, prompt, images } = task.input
+        // The stable request id makes a rerun after a crash find the input it already submitted.
+        await (await host.harness().conversation(id, ctx))!.submit(
+          { type: 'input', content: promptContent(prompt, images), requestId: 'lineage:root' },
+          ctx,
+        )
+        await runtime.commit(
+          () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
+          ctx,
+        )
+      },
+    },
+    abort: (_task, runtime, ctx) =>
+      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
   const startBrief = async (tx: Tx, id: ConversationId) => {
     const brief = await tx.createTask(
@@ -389,7 +419,7 @@ function lineage(host: ExtensionHost) {
     abort: (_task, runtime, ctx) =>
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
-  return { Brief, startBrief, Notify }
+  return { Brief, startBrief, Notify, Prompt }
 }
 
 /** How much of the finished conversation's last answer a notify delivers. */
@@ -485,14 +515,15 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
 
 /**
  * Start a new root: an ownerless conversation added to the roots, whose first input is the prompt. It has no brief, and
- * the input names it until its summary does. An isolated root's first request waits for its checkout in the
- * `workspace_workflow` section, so the prompt goes in at once.
+ * the input names it until its summary does. The prompt task is created with the root and submits it at once: an
+ * isolated root's first request waits for its checkout in the `workspace_workflow` section.
  */
 export async function startRoot(host: ExtensionHost, input: RootInput, ctx: Context) {
   const prompt = input.prompt.trim()
   if (!prompt) throw new Error('A root needs a prompt')
+  const { Prompt } = lineage(host)
   const main = await head(host)
-  // Without a choice, a root starts with the first root's model, as a new conversation does.
+  // Without a choice, a root starts with the project default: conversation 1's configuration.
   const agent = await (await host.harness().conversation(ROOT_CONVERSATION_ID, ctx))!.agent(ctx)
   const model = input.model ?? agent.model
   const thinkingLevel = input.thinkingLevel ?? agent.thinkingLevel
@@ -521,22 +552,14 @@ export async function startRoot(host: ExtensionHost, input: RootInput, ctx: Cont
       waitUntil: (write) => writes.push(write),
     } satisfies BranchedEvent)
     await Promise.all(writes)
+    await tx.createTask(
+      Prompt,
+      { id: created, prompt, ...(input.images?.length ? { images: input.images } : {}) },
+      { conversationId: created, ownership: { kind: 'conversation' }, background: true },
+    )
     return created
   }, ctx)
-  const images = input.images ?? []
-  await (await host.harness().conversation(id, ctx))!.submit(
-    {
-      type: 'input',
-      content: images.length
-        ? [
-            { type: 'text' as const, text: prompt },
-            ...images.map((image) => ({ type: 'image' as const, ...image })),
-          ]
-        : prompt,
-      requestId: 'lineage:root',
-    },
-    ctx,
-  )
+  host.harness().resume()
   return { id }
 }
 
@@ -723,11 +746,11 @@ export default function lineageExtension(host: ExtensionHost) {
     rootOf: (id, ctx) => rootOf(host, id, ctx),
     leaveNote: (to, text, source) => leaveNote(host, to, text, source),
   } satisfies LineageService)
-  const { Brief, Notify } = lineage(host)
+  const { Brief, Notify, Prompt } = lineage(host)
   watchSeen(host, context)
   return defineExtension({
     name: 'lineage',
-    tasks: [Brief, Notify],
+    tasks: [Brief, Notify, Prompt],
     sections: [section('lineage', (input, ctx) => lineageSection(host, input.conversationId, ctx))],
     hooks: [
       hook(GenerationTask, {

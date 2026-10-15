@@ -196,7 +196,9 @@ function ConversationComposer({
   const isNew = target === 'new'
   const { id, agent } = conversation
   const busy = !isNew && conversation.busy
-  const defaults = useNewConversationConfiguration(isNew)
+  // A branch shows its source's configuration, which it inherits; a new root shows the project default.
+  const source = isNew && !point?.root ? point?.from : undefined
+  const defaults = useNewConversationConfiguration(isNew, source)
   const loading = isNew ? defaults.loading : conversation.loading
   const inbox = isNew ? [] : conversation.inbox
   const start = conversationStarter(useExtensions())
@@ -265,9 +267,9 @@ function ConversationComposer({
             ...(point?.at === undefined ? {} : { at: point.at }),
             ...(point?.root ? { root: true } : {}),
             ...(isolation === undefined ? {} : { isolated: isolation }),
-            ...(defaults.configuration.model ? { model: defaults.configuration.model } : {}),
-            ...(defaults.configuration.thinkingLevel
-              ? { thinkingLevel: defaults.configuration.thinkingLevel }
+            ...(defaults.choices.model ? { model: defaults.choices.model } : {}),
+            ...(defaults.choices.thinkingLevel
+              ? { thinkingLevel: defaults.choices.thinkingLevel }
               : {}),
           })
         ).id
@@ -300,8 +302,9 @@ function ConversationComposer({
   }
 
   return (
-    <ComposerContext value={{ target, isolated: isolation }}>
+    <ComposerContext value={{ target, isolated: isolation, source }}>
       <div
+        data-composer-source={source}
         data-composer-target={target}
         className={cn(
           isNew ? 'nodrag nowheel flex min-h-0 flex-1 flex-col overflow-y-auto' : column(dock),

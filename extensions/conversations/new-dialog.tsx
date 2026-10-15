@@ -7,11 +7,11 @@ import {
   NewConversationComposer,
   useAction,
   useDialog,
-  useEvent,
   useStore,
   useUltimate,
 } from '@/sdk'
 import type { UltimateActions } from '@/sdk'
+import { useRoots } from '../lineage/roots.tsx'
 export const newKeys = 'mod+alt+n'
 
 /** Focus the composer once conversation `id` has rendered and no dialog (the palette) holds focus any longer. */
@@ -54,17 +54,24 @@ const mode =
 function NewConversation({ close }: { close: () => void }) {
   const actions = useUltimate()
   const shown = actions.conversationId
-  const info = useAction<{ roots: number[]; root?: number }>(
+  const roots = useRoots()
+  const info = useAction<{ root?: number }>(
     'lineage',
     'info',
     shown === undefined ? null : { id: shown },
   )
-  useEvent('lineage:roots-changed', () => void info.refetch())
+  // The shown conversation's tree root can change with the roots, such as when it is made a root.
+  const { refetch } = info
+  const asked = useRef(roots)
+  useEffect(() => {
+    if (asked.current === roots) return
+    asked.current = roots
+    void refetch()
+  }, [roots, refetch])
   const conversations = useStore((state) => state.conversations)
   const inputAt = (id: number) =>
     conversations.find((conversation) => conversation.id === id)?.inputAt ?? 0
-  const from =
-    info.data?.root ?? info.data?.roots.toSorted((a, b) => inputAt(b) - inputAt(a) || b - a)[0]
+  const from = info.data?.root ?? roots?.toSorted((a, b) => inputAt(b) - inputAt(a) || b - a)[0]
   const title = conversations.find((conversation) => conversation.id === from)?.title
   const [choice, setChoice] = useState<'branch' | 'root'>('branch')
   const root = choice === 'root' || from === undefined
@@ -73,13 +80,13 @@ function NewConversation({ close }: { close: () => void }) {
     modes.current?.parentElement
       ?.querySelector<HTMLElement>('[aria-label="Start a conversation"]')
       ?.focus()
-  }, [root, from, info.data])
+  }, [root, from, info.data, roots])
   const started = (id: number) => {
     close()
     actions.switchConversation(id)
     focusWhenShown(actions, id)
   }
-  if (!info.data) return <DialogTitle className="sr-only">New conversation</DialogTitle>
+  if (!info.data || !roots) return <DialogTitle className="sr-only">New conversation</DialogTitle>
   return (
     <>
       {/* The mode tabs are the title: which kind of conversation starts. */}

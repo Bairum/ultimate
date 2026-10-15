@@ -12,22 +12,14 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import {
-  formatKeys,
-  useAction,
-  useEvent,
-  useExtensionUiState,
-  useNow,
-  useStore,
-  useTasks,
-  useUltimate,
-} from '@/sdk'
+import { formatKeys, useExtensionUiState, useNow, useStore, useTasks, useUltimate } from '@/sdk'
 import { hiddenConversationIds } from './visible.tsx'
 import { useOverview } from './feature.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
 import { currentAssessment, Row, ChildRow } from './rows.tsx'
 import { newKeys } from './new-dialog.tsx'
+import { useRoots } from '../lineage/roots.tsx'
 
 /** The shown conversation, also while its snapshot is still on the way. */
 const useShownId = () => useStore((state) => state.view?.conversation.id ?? state.requested)
@@ -95,9 +87,7 @@ export function Conversations() {
   const shownTop = topOf(shownId, conversations)
   const hiddenIds = hiddenConversationIds(conversations, archived)
   const summary = shownTop && !hiddenIds.has(shownTop.id) ? overview[shownTop.id] : undefined
-  const info = useAction<{ roots: number[] }>('lineage', 'info')
-  useEvent('lineage:roots-changed', () => void info.refetch())
-  const roots = new Set(info.data?.roots)
+  const roots = new Set(useRoots())
   const [expanded, setExpanded] = useExtensionUiState<number[]>('expanded', [])
   const [collapsedRoots, setCollapsedRoots] = useExtensionUiState<number[]>('collapsedRoots', [])
   const working = workingByTop(conversations)
@@ -123,11 +113,11 @@ export function Conversations() {
     const source = conversation.branchOf.conversationId
     branchesBySource.set(source, [...(branchesBySource.get(source) ?? []), conversation])
   }
-  /** The listed branches below `id`, at any depth. */
-  const branchesBelow = (id: number): ConversationSummary[] =>
+  /** The listed (or concluded) branches below `id`, at any depth. */
+  const branchesBelow = (id: number, concluded = false): ConversationSummary[] =>
     (branchesBySource.get(id) ?? [])
-      .filter((branch) => !hiddenIds.has(branch.id))
-      .flatMap((branch) => [branch, ...branchesBelow(branch.id)])
+      .filter((branch) => hiddenIds.has(branch.id) === concluded)
+      .flatMap((branch) => [branch, ...branchesBelow(branch.id, concluded)])
   const latestIn = (root: ConversationSummary) =>
     Math.max(root.inputAt ?? 0, ...branchesBelow(root.id).map((branch) => branch.inputAt ?? 0))
   // Trees by their newest input anywhere in them, newest first.
@@ -195,15 +185,39 @@ export function Conversations() {
   const tree = (conversation: ConversationSummary, nested = false, concluded = false) => {
     const children = childrenByParent.get(conversation.id) ?? []
     const open = expanded.includes(conversation.id)
-    // A root tree of listed branches folds away completely; its root row then stands for the shown branch.
+    const ownBranches = (branchesBySource.get(conversation.id) ?? []).filter(
+      (branch) => hiddenIds.has(branch.id) === concluded,
+    )
+    // A root's tree folds away completely, its sub-agents with its branches; its row then stands for the shown branch.
+    // Without branches its sub-agents are all of the tree, and their own disclosure folds it.
     const treeBranches =
-      !concluded && roots.has(conversation.id) ? branchesBelow(conversation.id) : []
+      !nested && roots.has(conversation.id) ? branchesBelow(conversation.id, concluded) : []
     const folded = treeBranches.length > 0 && collapsedRoots.includes(conversation.id)
-    const branches = (
+    const subagents = children.length > 0 && (
+      <Collapsible
+        open={open}
+        onOpenChange={(next) =>
+          setExpanded((previous) => [
+            ...previous.filter((id) => id !== conversation.id),
+            ...(next ? [conversation.id] : []),
+          ])
+        }
+      >
+        <CollapsibleTrigger
+          aria-label={`Sub-agents of conversation ${conversation.id}`}
+          className="group/agents ml-5 flex cursor-pointer items-center gap-1 py-1 text-[10.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/agents:rotate-90" />
+          Sub-agents · {children.length}
+        </CollapsibleTrigger>
+        <CollapsibleContent className="ml-4 border-l border-border/60">
+          {children.map((child) => tree(child, true, concluded))}
+        </CollapsibleContent>
+      </Collapsible>
+    )
+    const branches = !nested && ownBranches.length > 0 && (
       <div className="ml-4 border-l border-border/60" data-branches-of={conversation.id}>
-        {(branchesBySource.get(conversation.id) ?? [])
-          .filter((branch) => hiddenIds.has(branch.id) === concluded)
-          .map((branch) => tree(branch, false, concluded))}
+        {ownBranches.map((branch) => tree(branch, false, concluded))}
       </div>
     )
     return (
@@ -220,28 +234,6 @@ export function Conversations() {
             conversation.id === shownTop?.id ||
               (folded && treeBranches.some((branch) => branch.id === shownTop?.id)),
           )
-        )}
-        {children.length > 0 && (
-          <Collapsible
-            open={open}
-            onOpenChange={(next) =>
-              setExpanded((previous) => [
-                ...previous.filter((id) => id !== conversation.id),
-                ...(next ? [conversation.id] : []),
-              ])
-            }
-          >
-            <CollapsibleTrigger
-              aria-label={`Sub-agents of conversation ${conversation.id}`}
-              className="group/agents ml-5 flex cursor-pointer items-center gap-1 py-1 text-[10.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/agents:rotate-90" />
-              Sub-agents · {children.length}
-            </CollapsibleTrigger>
-            <CollapsibleContent className="ml-4 border-l border-border/60">
-              {children.map((child) => tree(child, true, concluded))}
-            </CollapsibleContent>
-          </Collapsible>
         )}
         {treeBranches.length > 0 ? (
           <Collapsible
@@ -260,14 +252,16 @@ export function Conversations() {
               <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/branches:rotate-90" />
               Branches · {treeBranches.length}
             </CollapsibleTrigger>
-            <CollapsibleContent>{branches}</CollapsibleContent>
+            <CollapsibleContent>
+              {subagents}
+              {branches}
+            </CollapsibleContent>
           </Collapsible>
         ) : (
-          !nested &&
-          (branchesBySource.get(conversation.id) ?? []).some(
-            (branch) => hiddenIds.has(branch.id) === concluded,
-          ) &&
-          branches
+          <>
+            {subagents}
+            {branches}
+          </>
         )}
       </div>
     )

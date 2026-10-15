@@ -28,7 +28,7 @@ import { Workspaces, workspaces } from '../extensions/workspaces/workspaces.ts'
 import { git, setup } from '../extensions/workspaces/git.ts'
 import type { LanderEntry, WorkspaceIndex } from '../extensions/workspaces/types.ts'
 import { createLander } from '../extensions/workspaces/lander.ts'
-import { leaveNote, rootOf, Roots, startRoot } from '../extensions/lineage/server.ts'
+import lineage, { leaveNote, rootOf, Roots, startRoot } from '../extensions/lineage/server.ts'
 import { subject } from '../extensions/conversations/server.ts'
 import type { ConversationsService } from '../extensions/conversations/server.ts'
 import { Summaries } from '../extensions/conversations/summary.ts'
@@ -1387,6 +1387,8 @@ it.concurrent('starts an isolated root whose first request sees its ready checko
   const f = await fixture()
   // This fixture's host has no event bus, so no extension labels the root.
   f.host.events = { emit: () => {} } as unknown as ExtensionHost['events']
+  // Its prompt task delivers the first input.
+  f.prepared.registry.install(lineage(f.host))
   const { id } = await startRoot(f.host, { prompt: 'ASK where am I?', isolated: true }, context)
   const conversation = (await f.opened.harness.conversation(id, context))!
   await until(async () => f.asked.length > 0)

@@ -10,15 +10,17 @@ A project is a forest of conversation trees. Each root holds the idea of one lin
   The source gets a display-only `lineage.branched` entry. Doc `lineage.branch` on the branch holds
   `{ from, at, intent, status: 'briefing' | 'ready' | 'failed', error? }`; action `retry` `{ id }` restarts a failed
   brief.
-- **Roots**: doc `lineage.roots` on conversation 1 (`{ roots }`, initially `[1]`: a fresh project's first
-  conversation is its first root). A conversation's root is found by walking up owners (subagents) and fork sources
-  (branches) to the top; the top is its root when it is in `roots`, otherwise it has none (landers, conversations
-  from before lineage). Action `newRoot` `{ prompt, images?, isolated?, model?, thinkingLevel? }` → `{ id }` starts
-  an ownerless conversation, adds it to `roots`, titles it by the prompt (event `lineage:rooted`, like
-  `lineage:branched`) and submits the prompt as its first input: no brief. An isolated root's first request waits for
-  its checkout in the workspaces prompt section. Action `root` `{ id }` (⌘K "Make this a root") adds a top-level
-  conversation that is not a branch; `info` returns `{ roots }`, and with `{ id }` also that conversation's `root` and
-  `branch`.
+- **Roots**: doc `lineage.roots` on conversation 1 (`{ roots }`, initially `[1]`: a fresh project starts with its
+  first conversation as a root). Clients stream it (`useRoots()` in `roots.tsx`), so every page sees a new root at
+  once. A conversation's root is found by walking up owners (subagents) and fork sources (branches) to the top; the
+  top is its root when it is in `roots`, otherwise it has none (landers, conversations from before lineage). Action
+  `newRoot` `{ prompt, images?, isolated?, model?, thinkingLevel? }` → `{ id }` starts an ownerless conversation, adds
+  it to `roots`, titles it by the prompt (event `lineage:rooted`, like `lineage:branched`) and creates a
+  `lineage.prompt` task in the same transaction that submits the prompt as its first input (request id
+  `lineage:root`): no brief, and a crash before delivery cannot leave the root empty. Without a `model` it gets the
+  project default, conversation 1's. An isolated root's first request waits for its checkout in the workspaces prompt
+  section. Action `root` `{ id }` (⌘K "Make this a root") adds a top-level conversation that is not a branch; `info`
+  returns `{ roots }`, and with `{ id }` also that conversation's `root` and `branch`.
 - **Notes**: the `note` tool `{ to: id | 'root', text }` (`'root'`: the caller's tree root) writes a `lineage.note` entry in the target without waking it;
   its model reads `Note from #N: …` with its next input. Other extensions call `leaveNote(host, to, text, source?)`;
   `'root'` there needs `source.from` and errors when it has no root. Landings from workspaces go to the submitter's

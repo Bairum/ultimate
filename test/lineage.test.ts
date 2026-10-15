@@ -43,8 +43,8 @@ function section(server: Server, id: ConversationId) {
 }
 
 /** A faux server whose provider answers briefs with BRIEF and everything else with the last user text echoed. */
-async function fixture() {
-  const home = await temp('ultimate-lineage-')
+async function fixture(reopen?: string) {
+  const home = reopen ?? (await temp('ultimate-lineage-'))
   const server = await fauxServer({ ultimateRoot, home, userHome: home })
   servers.push(server)
   const briefs: string[] = []
@@ -71,7 +71,7 @@ async function fixture() {
     return fauxAssistantMessage(`echo ${textOf(last?.content)}`)
   }
   server.host.faux!.setResponses([route])
-  return { server, briefs, failures }
+  return { server, home, briefs, failures }
 }
 
 it('branches with a brief, marks the source, and keeps inherited history reachable', async () => {
@@ -633,6 +633,91 @@ it('starts a new root whose first input is the prompt, without a brief', async (
     (await post(server, '/api/extensions/lineage/actions/newRoot', { args: { prompt: ' ' } }))
       .status,
   ).not.toBe(200)
+})
+
+it('delivers a new root’s prompt once when the process stops before it is submitted', async () => {
+  const { server, home } = await fixture()
+  // Without the prompt task's definition the task waits, as if the process went down right after creating the root.
+  const lineage = server.host.registry.snapshot().extension('lineage')!
+  server.host.registry.install(
+    defineExtension({
+      ...lineage,
+      tasks: lineage.tasks!.filter((task) => task.definition.name !== 'lineage.prompt'),
+    }),
+  )
+  const { data } = await post(server, '/api/extensions/lineage/actions/newRoot', {
+    args: { prompt: 'Survive a crash', isolated: false },
+  })
+  const id = data.result.id as ConversationId
+  const prompts = (target: Server) =>
+    target.harness.commit(
+      async (tx) => (await tx.scanTasks({ conversationId: id, kind: 'lineage.prompt' }, 10)).items,
+      context,
+    )
+  expect((await prompts(server)).map((task) => [task.input, task.state.status])).toEqual([
+    [{ id, prompt: 'Survive a crash' }, 'pending'],
+  ])
+  expect(await kinds(server, id)).toEqual([])
+  await server.close()
+  servers.splice(servers.indexOf(server), 1)
+
+  const { server: reopened } = await fixture(home)
+  await until(async () => (await prompts(reopened))[0].state.status === 'terminal')
+  const root = (await reopened.harness.conversation(id, context))!
+  await root.waitForIdle(context)
+  // A rerun of the delivery finds the submitted input by its request id.
+  await root.submit(
+    { type: 'input', content: 'Survive a crash', requestId: 'lineage:root' },
+    context,
+  )
+  await root.waitForIdle(context)
+  expect(
+    (await root.context(context)).messages
+      .filter((message) => message.role !== 'system')
+      .map((message) => [message.role, textOf(message.content)]),
+  ).toEqual([
+    ['user', 'Survive a crash'],
+    ['assistant', 'echo Survive a crash'],
+  ])
+})
+
+it('defaults a branch to its source’s configuration and a new root to the project default', async () => {
+  const { server } = await fixture()
+  const model = { provider: 'faux', modelId: 'faux-b' }
+  const other = await server.harness.createConversation(
+    { ownership: { kind: 'ownerless' }, agent: { model, thinkingLevel: 'high' } },
+    context,
+  )
+  await post(server, '/api/extensions/lineage/actions/root', { args: { id: other.id } })
+  const defaults = async (args: unknown) =>
+    (await post(server, '/api/extensions/models/actions/defaultConfiguration', { args })).data
+  const project = await server.root.agent(context)
+  expect(project.model).toEqual({ provider: 'faux', modelId: 'faux-1' })
+  expect(await defaults({ id: other.id })).toEqual({ result: { model, thinkingLevel: 'high' } })
+  expect(await defaults(null)).toEqual({
+    result: { model: project.model, thinkingLevel: project.thinkingLevel },
+  })
+  expect((await defaults({ id: 999 })).error).toBe('No conversation #999')
+
+  // Without a choice, the branch keeps its source's configuration and a new root takes the project default.
+  const agentOf = async (id: ConversationId) =>
+    (await server.harness.conversation(id, context))!.agent(context)
+  const branch = (
+    await post(server, '/api/extensions/lineage/actions/branch', {
+      args: { from: other.id, prompt: 'Follow B', isolated: false },
+    })
+  ).data.result.id as ConversationId
+  expect(await agentOf(branch)).toMatchObject({ model, thinkingLevel: 'high' })
+  const root = (
+    await post(server, '/api/extensions/lineage/actions/newRoot', {
+      args: { prompt: 'Start C', isolated: false },
+    })
+  ).data.result.id as ConversationId
+  expect(await agentOf(root)).toMatchObject({
+    model: project.model,
+    thinkingLevel: project.thinkingLevel,
+  })
+  await (await server.harness.conversation(root, context))!.waitForIdle(context)
 })
 
 const anchor = defineTask<null, { phase: 'done' }, null>({

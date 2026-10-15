@@ -95,10 +95,17 @@ function running(host: ExtensionHost, args: JsonValue) {
 const json = <T>(value: T): Json<T> => JSON.parse(JSON.stringify(value))
 
 export const actions = {
-  /** New conversations inherit the root agent, not the conversation currently on screen. */
-  async rootConfiguration(_args: JsonValue, { host }: ActionContext) {
-    const root = (await host.harness().conversation(ROOT_CONVERSATION_ID, context))!
-    const { model, thinkingLevel } = await root.agent(context)
+  /**
+   * What a new conversation starts with unless the user chooses: a branch defaults to its source's configuration
+   * (`{ id }`), a new root to the project default (conversation 1's).
+   */
+  async defaultConfiguration(args: JsonValue, { host }: ActionContext) {
+    const id = field(args, 'id') ?? ROOT_CONVERSATION_ID
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1)
+      throw new Error('Expected a conversation id')
+    const source = await host.harness().conversation(id as ConversationId, context)
+    if (!source) throw new Error(`No conversation #${id}`)
+    const { model, thinkingLevel } = await source.agent(context)
     return json({ model, thinkingLevel })
   },
   /** Start a login flow for the calling conversation and resolve with its id; the document shows its progress. */

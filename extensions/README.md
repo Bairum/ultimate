@@ -206,13 +206,15 @@ Components mounted in named places of the shell, on every surface that renders t
 slots: { 'header.right': [Badge], sidebar: { component: Conversations, order: -1 } }
 ```
 
-`useComposer()` returns `{ target: 'conversation' | 'new' }` inside composer slots. The Agent and dock
+`useComposer()` returns `{ target: 'conversation' | 'new', source? }` inside composer slots; `source` is the
+conversation a new branch starts from. The Agent and dock
 composers target the shown conversation; `<NewConversationComposer onStarted={(id) => …} />`
 (with an optional `inputId` for focus control)
 uses the same input, toolbar and status slots to branch from the lineage root. Toolbar contributions can edit pending
 choices for `new`; conversation-specific status items should return `null` there. Pending model and thinking
 choices live in `ultimate.newConversation`; isolation uses `ext.conversations.creationType` so it agrees with
-sidebar New. Choices are passed to lineage `branch` and remembered for the next branch. Images disable send until the branch starts.
+sidebar New. Without a choice a branch shows and keeps its source's model and thinking, a new root the project
+default's (models `defaultConfiguration`); choices are passed to lineage and remembered for the next one. Images disable send until the branch starts.
 An optional `isolated` prop forces that creation mode without changing the saved preference; `useComposer().isolated`
 lets the isolation control show the forced mode. Contextual commands can receive an `entryId` alongside `conversationId`
 through `useCommands()`; a message-action component can pass its entry's id to a command.
