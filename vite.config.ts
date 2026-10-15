@@ -83,7 +83,7 @@ export default defineConfig({
                 codemode: ['subagents'],
                 conversations: ['lineage', 'models', 'onboarding', 'plan', 'workspaces'],
                 instance: ['subagents', 'workspaces'],
-                lineage: ['workspaces'],
+                lineage: ['conversations', 'workspaces'],
                 parallel: ['secrets'],
                 plan: ['lineage', 'workspaces'],
                 self: ['workspaces'],

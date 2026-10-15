@@ -1,4 +1,4 @@
-import { cn, useDocOf } from '@/sdk'
+import { cn, useConversations, useDocOf } from '@/sdk'
 import type { OverviewRow, OverviewState } from './types.ts'
 
 const none: Record<string, OverviewRow> = {}
@@ -33,6 +33,34 @@ export function FeatureTag({ feature, className }: { feature: string; className?
       title={feature}
     >
       {feature}
+    </span>
+  )
+}
+
+/**
+ * A conversation as a person recognises it: its feature tag and `title`, else its live title, then `#id` in gray. Only
+ * the name: the caller's button or link opens it.
+ */
+export function ConversationRef({
+  id,
+  title,
+  className,
+}: {
+  id: number
+  title?: string
+  className?: string
+}) {
+  const feature = useOverview()[id]?.feature
+  const live = useConversations().find((conversation) => conversation.id === id)?.title
+  const name = title ?? (feature ? undefined : live)
+  return (
+    <span
+      className={cn('inline-flex min-w-0 items-center gap-1.5', className)}
+      data-conversation-ref={id}
+    >
+      {feature && <FeatureTag className="shrink-0" feature={feature} />}
+      {name && <span className="min-w-0 truncate">{name}</span>}
+      <span className="shrink-0 text-muted-foreground/70">#{id}</span>
     </span>
   )
 }

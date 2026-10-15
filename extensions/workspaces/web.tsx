@@ -27,6 +27,7 @@ import { LandingCard } from './landing.tsx'
 import { LanderAskEntry, LanderLogEntry, LanderReport, WorkspaceCall } from './log.tsx'
 import type { WorkspaceDisk, WorkspaceInfo, WorkspaceStats } from './types.ts'
 import type { EntryRecord } from '@earendil-works/pi-durable'
+import { ConversationRef } from '../conversations/feature.tsx'
 import { Row, Rows } from '../info/rows.tsx'
 
 /** The lander's note in the root: the landing's card, from the note's own data. */
@@ -321,7 +322,7 @@ function LanderQueue() {
       <ol className="space-y-1">
         {queue.map((item) => (
           <li className="flex items-center gap-2" key={item.id}>
-            <span className="shrink-0 font-mono">#{item.conversationId}</span>
+            <ConversationRef className="max-w-1/2 font-mono" id={item.conversationId} />
             <span className="shrink-0 font-mono text-muted-foreground">{item.tip.slice(0, 7)}</span>
             <span className="min-w-0 flex-1 truncate text-muted-foreground">
               {item.state === 'landing' ? (item.step ?? 'landing') : `queued for ${item.target}`}

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { events, useEvent, useConversation, useUltimate } from '@/sdk'
+import { ConversationRef } from '../conversations/feature.tsx'
 import { TaskChip, useTaskOf } from '../plan/chip.tsx'
 import { useWorkspaceConversations } from '../workspaces/data.tsx'
 import type { AgentOrigin } from './message-types.ts'
@@ -50,6 +51,12 @@ export function AgentMessages() {
   )
 }
 
+/** Who sent a message: a subagent by its agent name, a top-level coordinator by its feature. */
+function Sender({ origin, label }: { origin: AgentOrigin; label?: string }) {
+  const agent = label ?? (origin.kind === 'report' ? origin.agent : undefined)
+  return agent ? `${agent} #${origin.sender}` : <ConversationRef id={origin.sender} />
+}
+
 export function AgentInput({ entry }: { entry: EntryRecord }) {
   const [expanded, setExpanded] = useState(false)
   const origin = entry.data as AgentOrigin
@@ -66,8 +73,8 @@ export function AgentInput({ entry }: { entry: EntryRecord }) {
     >
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <BotIcon className="size-3.5 text-brand" />
-        <span className="text-foreground">
-          {sender?.label ?? (origin.kind === 'report' ? origin.agent : 'agent')} #{origin.sender}
+        <span className="min-w-0 text-foreground">
+          <Sender origin={origin} label={sender?.label} />
         </span>
         {task && <TaskChip task={task} />}
         <span>{origin.kind === 'instruction' ? 'instruction' : 'report'}</span>
@@ -141,7 +148,7 @@ export function AgentInbox({
             className="min-w-0 truncate text-foreground"
             title={`${sender?.label ?? (origin.kind === 'report' ? origin.agent : 'agent')} #${origin.sender}`}
           >
-            {sender?.label ?? (origin.kind === 'report' ? origin.agent : 'agent')} #{origin.sender}
+            <Sender origin={origin} label={sender?.label} />
           </span>
           <span>{origin.kind}</span>
           <span className={item.mode === 'steer' ? 'text-brand' : ''}>

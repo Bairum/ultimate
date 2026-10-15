@@ -27,6 +27,7 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, ToolCallView, UltimateActions } from '@/sdk'
+import { ConversationRef } from '../conversations/feature.tsx'
 import { ballSize, Crystal } from './crystal.tsx'
 import { getRoots, useRoots } from './roots.tsx'
 
@@ -72,8 +73,8 @@ function Branched({ entry }: { entry: EntryRecord }) {
     >
       <span className="flex max-w-[70%] min-w-0 items-center gap-1.5">
         <GitForkIcon className="size-3 shrink-0" />
-        <span className="shrink-0">Branched → #{branch}</span>
-        <span className="truncate">· {intent}</span>
+        <span className="shrink-0">Branched →</span>
+        <ConversationRef id={branch} title={intent} />
       </span>
     </button>
   )
@@ -91,12 +92,13 @@ function Finished({ entry }: { entry: EntryRecord }) {
       <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <CircleCheckIcon className="size-3.5 shrink-0 text-success" />
         <button
-          className="min-w-0 cursor-pointer truncate text-left text-foreground hover:underline"
+          className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left text-foreground hover:underline"
           onClick={() => switchConversation(from)}
           title={`Open #${from}`}
           type="button"
         >
-          #{from} finished{title ? ` · ${title}` : ''}
+          <ConversationRef id={from} title={title} />
+          <span className="shrink-0">finished</span>
         </button>
       </header>
       <div className="min-w-0 px-3 py-2.5 text-[13px] leading-relaxed">
@@ -124,17 +126,17 @@ function NoteCard({
       className="min-w-0 rounded-md border border-l-2 border-note/25 border-l-note/60 bg-note/6"
       data-lineage-note={note}
     >
-      <header className="flex items-center gap-2 border-b border-note/15 px-3 py-2 font-mono text-[11px] text-foreground">
-        <StickyNoteIcon className="size-3.5 text-note" />
+      <header className="flex min-w-0 items-center gap-2 border-b border-note/15 px-3 py-2 font-mono text-[11px] text-foreground">
+        <StickyNoteIcon className="size-3.5 shrink-0 text-note" />
         {label}
         {typeof id === 'number' ? (
           <button
-            className="cursor-pointer hover:underline"
+            className="min-w-0 cursor-pointer hover:underline"
             onClick={() => switchConversation(id)}
             title={`Open #${id}`}
             type="button"
           >
-            #{id}
+            <ConversationRef id={id} />
           </button>
         ) : (
           id
@@ -213,7 +215,7 @@ function Brief({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
             }}
             role="link"
           >
-            #{lineage.from}
+            <ConversationRef id={lineage.from} />
           </span>
           · brief
         </span>
@@ -477,7 +479,14 @@ function Absorb({
           top: `calc(${ballSize.top * 100}% + clamp(${ballSize.min}px, ${ballSize.fraction * 100}cqmin, ${ballSize.max}px) + 28px)`,
         }}
       >
-        Writing the brief{from === undefined ? '' : ` from #${from}`}…
+        Writing the brief
+        {from !== undefined && (
+          <>
+            {' '}
+            from <ConversationRef id={from} />
+          </>
+        )}
+        …
       </p>
     </div>
   )
@@ -515,7 +524,7 @@ function BranchDialog() {
       <DialogContent className="gap-3 sm:max-w-xl">
         <DialogTitle className="flex items-center gap-2 text-[14px] font-medium">
           <GitForkIcon className="size-4 text-brand" />
-          Branch from #{from ?? '?'}
+          Branch from {from === undefined ? '#?' : <ConversationRef id={from} />}
           {target.at !== undefined && (
             <span className="font-mono text-[12px] text-muted-foreground">at {target.at}</span>
           )}
