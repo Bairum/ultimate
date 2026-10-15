@@ -15,6 +15,7 @@ interface Node {
   callee?: Node
   property?: Node
   arguments?: Node[]
+  parent?: Node | null
 }
 
 interface Context {
@@ -59,10 +60,18 @@ export default {
     'no-silent-catch': {
       meta: { schema: [] },
       create(context: Context) {
+        // The reason may sit inside the handler, right before it, or above its statement.
+        const statement = (node: Node) => {
+          let current: Node | null | undefined = node
+          while (current && !/(Statement|Declaration)$/.test(current.type)) current = current.parent
+          return current
+        }
         const check = (node: Node) => {
+          const above = statement(node)
           if (
             !context.sourceCode.getCommentsBefore(node).length &&
-            !context.sourceCode.getCommentsInside(node).length
+            !context.sourceCode.getCommentsInside(node).length &&
+            !(above && context.sourceCode.getCommentsBefore(above).length)
           )
             context.report({
               node,

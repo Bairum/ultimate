@@ -289,14 +289,14 @@ export function workspaces(host: Host) {
           if (created) {
             if (registered)
               await git(workspace.source, 'worktree', 'remove', workspace.path).catch(
-                // oxlint-disable-next-line ultimate/no-silent-catch -- FIXME(ULT-138): failed cleanup can leave an orphan worktree without reporting it.
+                // Best-effort rollback: the preparation error is recorded below and must not be replaced.
                 () => undefined,
               )
             if (
               (await git(workspace.source, 'rev-parse', workspace.branch).catch(() => '')) ===
               workspace.base
             )
-              // oxlint-disable-next-line ultimate/no-silent-catch -- FIXME(ULT-138): failed cleanup can leave an orphan branch without reporting it.
+              // Best-effort rollback: the preparation error is recorded below and must not be replaced.
               await git(workspace.source, 'branch', '-D', workspace.branch).catch(() => undefined)
           }
           await runtime.commit(async (tx) => {

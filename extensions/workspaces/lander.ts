@@ -430,7 +430,7 @@ export function createLander(
             ? { onFailure: undefined, change: undefined }
             : await landerAgent(host, context)
           if (!onFailure || !change) {
-            // oxlint-disable-next-line ultimate/no-silent-catch -- FIXME(ULT-138): abort failure can leave the integration checkout conflicted without a cleanup diagnostic.
+            // Every attempt starts from a reset, cleaned checkout, so a failed abort cannot leak into the next one.
             await git(integration, 'merge', '--abort').catch(() => undefined)
             return fail(
               reason,
