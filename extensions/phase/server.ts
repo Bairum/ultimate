@@ -9,6 +9,7 @@ import {
 import type { Cursor, EntryRecord } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ClassifyService, ClassifyQuestion, ClassifyAnswer } from '../classify/server.ts'
+import { isInput } from '../conversations/activity.ts'
 import { phaseState } from './state.ts'
 import type { Phase, PhaseState } from './types.ts'
 
@@ -77,12 +78,22 @@ export default function phase(
             if (!conversation) throw new Error('Conversation unavailable')
             const entries: EntryRecord[] = []
             let cursor: Cursor | undefined
+            let foundInput = false
+            let toolCalls = 0
             do {
-              const page = await conversation.entries({}, 128, cursor, context)
-              entries.push(...page.items)
+              const page = await conversation.entries({ order: 'descending' }, 64, cursor, context)
+              for (const entry of page.items) {
+                entries.push(entry)
+                foundInput ||= isInput(entry)
+                for (const message of entry.model ?? []) {
+                  if (message.role === 'assistant')
+                    toolCalls += message.content.filter((block) => block.type === 'toolCall').length
+                }
+                if (foundInput && toolCalls >= 15) break
+              }
               cursor = page.next
-            } while (cursor !== undefined)
-            entries.sort((a, b) => a.id - b.id)
+            } while (cursor !== undefined && !(foundInput && toolCalls >= 15))
+            entries.reverse()
             const result = await service.ask(
               {
                 state: phaseState(entries, [

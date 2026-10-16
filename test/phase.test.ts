@@ -1,4 +1,5 @@
 import { createModels } from '@earendil-works/pi-ai/models'
+import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import {
   createRegistry,
   Harness,
@@ -100,6 +101,79 @@ const answer = (confidence: number, choice = 'editing') => ({
   answers: { phase: { type: 'choice' as const, choice, confidence, probabilities: {} } },
   usage: { inputTokens: 0 },
 })
+it.each([
+  { calls: 16, pages: 1 },
+  { calls: 40, pages: 2 },
+])(
+  'reads only $pages recent pages for $calls calls despite old history',
+  async ({ calls, pages }) => {
+    const ask = vi.fn<ClassifyService['ask']>().mockResolvedValue(answer(0.9))
+    const f = await fixture({ ask })
+    await f.harness.commit(async (tx) => {
+      for (let i = 0; i < 160; i++) {
+        await tx.appendEntry(f.root.id, {
+          kind: 'pi.user',
+          model: [{ role: 'user', content: 'Old request', timestamp: i }],
+        })
+      }
+      await tx.appendEntry(f.root.id, {
+        kind: 'pi.user',
+        model: [{ role: 'user', content: '  Latest\n request ', timestamp: 200 }],
+      })
+      for (let i = 0; i < calls; i++) {
+        await tx.appendEntry(f.root.id, {
+          kind: 'pi.assistant',
+          model: [
+            fauxAssistantMessage([
+              fauxText(`Checking ${i}`),
+              fauxToolCall('bash', { command: `cd /project && check ${i}` }, { id: `call${i}` }),
+            ]),
+          ],
+        })
+        await tx.appendEntry(f.root.id, {
+          kind: 'pi.tool',
+          model: [
+            {
+              role: 'toolResult',
+              toolCallId: `call${i}`,
+              toolName: 'bash',
+              content: [{ type: 'text', text: i === calls - 1 ? 'Check failed' : 'OK' }],
+              isError: i === calls - 1,
+              timestamp: 300 + i,
+            },
+          ],
+        })
+      }
+    }, context)
+    const entries = vi.fn<typeof f.root.entries>(f.root.entries.bind(f.root))
+    const conversation = f.harness.conversation.bind(f.harness)
+    const wrapped = vi.spyOn(f.harness, 'conversation').mockImplementation(async (id, ctx) => {
+      const own = await conversation(id, ctx)
+      return own?.id === f.root.id ? { ...own, entries } : own
+    })
+    await f.round()
+    await until(() => ask.mock.calls.length === 1)
+    expect(entries).toHaveBeenCalledTimes(pages)
+    expect(
+      entries.mock.calls.every(([query, size]) => query.order === 'descending' && size === 64),
+    ).toBe(true)
+    const state = ask.mock.calls[0][0].state
+    expect(state).toEqual({
+      request: 'Latest request',
+      recentTools: Array.from({ length: 15 }, (_, index) => {
+        const i = calls - 15 + index
+        return {
+          tool: 'bash',
+          args: `check ${i}`,
+          ...(i === calls - 1 ? { failed: 'Check failed' } : {}),
+        }
+      }),
+      agentSaid: `Checking ${calls - 1}`,
+    })
+    await until(async () => (await f.snapshot())?.conversations[f.root.id]?.pending === undefined)
+    wrapped.mockRestore()
+  },
+)
 it('allows one in flight, stores the first low answer, holds later low answers and clears on yield', async () => {
   let release!: () => void
   const gate = new Promise<void>((resolve) => {
