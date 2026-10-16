@@ -1,3 +1,12 @@
+/** Work kept when concluding a conversation, including its owned descendants. */
+export type WorkspacePending = {
+  id: number
+  uncommitted: number
+  unlanded: number
+  busy?: string
+  reason?: string
+  descendant?: number
+}
 export type Workspace = {
   path: string
   branch: string

@@ -82,6 +82,14 @@ async function declared(path: string) {
 
 const marker = (userHome: string) => join(userHome, '.ultimate/onboarding.json')
 
+export const userActions = [
+  'decide',
+  'setExtension',
+  'adoptProjectSetup',
+  'applyFirstRun',
+  'firstRunDone',
+]
+
 export const actions = {
   status: async (_args, { host }) => {
     const folders = await host.projectExtensions()

@@ -16,7 +16,7 @@ The outer tool succeeds with the explicit message: **Script yielded to steering;
 
 Successful nested subagent results may carry `details.answerId` (a durable answer entry ID). Only a successful, non-yielded outer completion emits the deduplicated IDs as `details.subagentAnswers: number[]`. Yielded and failed results omit this receipt, even if an earlier child completed in the same script; interrupted tasks likewise do not acknowledge those answers. Nested answers remain private unless the script prints or returns them. The backend queues reports with stable answer IDs immediately, then its `afterTools` hook reads committed tool results and atomically withdraws reports acknowledged by these receipts before the Pi tool-round boundary. It does not wait for the outer task's terminal outcome to enqueue delivery. Codemode does not handle delivery, consume steering, or import the backend runtime.
 
-## Read-only introspection
+## Introspection and actions
 
 Only inside codemode (not standalone model tools):
 
@@ -24,6 +24,7 @@ Only inside codemode (not standalone model tools):
 - `ultimate.projects()` — project folders, their top-level conversation summaries, and URL when running (JSON manifests only, not other stores' SQLite).
 - `ultimate.uiState()` — durable root-conversation UI state, so you can see what the user is looking at.
 - `ultimate.extensions()` — folders, facets, tools, sections, documents, load errors.
+- `ultimate.action(extension, action, args?)` — the one write: call an extension action on behalf of this conversation, with the sandbox abort signal; omitted args become null. Returns its JSON result or throws its error. Discover actions with `ultimate.extensions()` and read their args in the extension README.
 - `ultimate.conversations()` — all stored conversation identities and ownership edges.
 - `ultimate.entries(conversationId, { kinds?, limit?, before? })` — newest-first fork-aware history, including entries before resets/compactions; `before` is an exclusive entry ID.
 - `ultimate.search(text, { conversationId?, limit? })` — case-sensitive substring over stored entry JSON, including pre-reset/pre-compaction history.
@@ -32,7 +33,11 @@ Only inside codemode (not standalone model tools):
 - `ultimate.agents()` — agent definitions, the profiles subagents and automations run with: each one's source (builtin, user, project), path, fields, and instructions, plus files that failed to parse. To change one, edit its file; for a built-in, write an override with the same name to `<project>/.ultimate/agents/` or `~/.ultimate/agents/`.
 - `ultimate.doc(kind, conversationId?)` — exported conversation document or `pi.agent`/`pi.inbox`/`pi.live`/`pi.usage`; defaults to the calling conversation.
 
-Entry/search limits default to 100 and must be 1–1000. Pagination of raw entries uses the oldest returned entry ID as `before`. Writes go through normal tools, never `ultimate.*`.
+Facets can export `userActions: string[]` to reserve actions for the UI. `ultimate.action` rejects these with
+`<extension>/<action> is a user-only action`; use the UI for project trust, secret changes, and provider login/logout.
+Normal actions remain callable. This dispatch restriction is not a sandbox against arbitrary agent code.
+
+Entry/search limits default to 100 and must be 1–1000. Pagination of raw entries uses the oldest returned entry ID as `before`. Other writes go through normal tools. Action side effects, like nested tool side effects, are not rolled back if the script fails or yields.
 
 ## Durable store
 

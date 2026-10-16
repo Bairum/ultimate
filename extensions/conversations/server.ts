@@ -7,6 +7,7 @@ import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { BranchedEvent } from '../lineage/server.ts'
 import type { LandingSubject } from '../workspaces/types.ts'
+import type { WorkspaceService } from '../workspaces/server.ts'
 // oxlint-disable-next-line no-restricted-imports -- conversations publishes the core UI state document
 import { UiState } from '../../server/ui-state.ts'
 import { Summaries, summaryBehavior } from './summary.ts'
@@ -51,6 +52,29 @@ export const order = 100
 
 /** Called by the sidebar; each acts on a top-level conversation by id. */
 export const actions = {
+  async conclude(args: JsonValue, { host }: ActionContext) {
+    const ids = conversationIds(args)
+    await host.harness().commit(async (tx) => {
+      for (const id of ids) {
+        const found = await tx.conversation(id)
+        if (!found) throw new Error(`Unknown conversation ${id}`)
+        if (found.owner)
+          throw new Error(`Conversation ${id} is owned, not a top-level conversation`)
+      }
+      const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
+      const previous = ui['ext.conversations.concluded']
+      ui['ext.conversations.concluded'] = [
+        ...new Set([...(Array.isArray(previous) ? previous : []), ...ids]),
+      ]
+    }, context)
+    const kept = (await host.use<WorkspaceService>('workspaces')?.release(ids, context)) ?? []
+    return { concluded: ids, kept }
+  },
+  async resume(args: JsonValue, { host }: ActionContext) {
+    const ids = conversationIds(args)
+    const resumed = await resume(host, ids)
+    return { resumed }
+  },
   /** `{id, title}`: a blank title removes it, so the first message names the conversation again. */
   async rename(args: JsonValue, { host }: ActionContext) {
     const id = await topLevelId(host, args)
@@ -148,32 +172,50 @@ function placedInputs(publication: CommitPublication) {
   )
 }
 
+function conversationIds(args: JsonValue): ConversationId[] {
+  const ids = args && typeof args === 'object' && !Array.isArray(args) ? args.ids : undefined
+  if (
+    !Array.isArray(ids) ||
+    ids.some((id) => typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1)
+  )
+    throw new Error('Expected conversation ids')
+  return [...new Set(ids)] as ConversationId[]
+}
+
+async function resume(host: ExtensionHost, ids: ConversationId[]) {
+  return host.harness().commit(async (tx) => {
+    const ancestors = new Set<ConversationId>()
+    for (const id of ids) {
+      let current: ConversationId | undefined = id
+      while (current !== undefined && !ancestors.has(current)) {
+        ancestors.add(current)
+        const found = await tx.conversation(current)
+        if (!found) throw new Error(`Unknown conversation ${current}`)
+        current = found.owner?.conversationId ?? found.parent?.conversationId
+      }
+    }
+    const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
+    const previous = ui['ext.conversations.concluded']
+    const removed = Array.isArray(previous)
+      ? previous.filter((id) => ancestors.has(id as ConversationId))
+      : []
+    if (removed.length)
+      ui['ext.conversations.concluded'] = (previous as JsonValue[]).filter(
+        (id) => !ancestors.has(id as ConversationId),
+      )
+    return removed
+  }, context)
+}
+
 function reopenOnInput(host: ExtensionHost) {
   let stop: (() => void) | undefined
   host.onOpen(async () => {
     stop = host.harness().subscribeCommits((publication) => {
       const ids = placedInputs(publication)
       if (!ids.length) return
-      void host
-        .harness()
-        .commit(async (tx) => {
-          const ancestors = new Set<ConversationId>()
-          for (const id of ids) {
-            let current: ConversationId | undefined = id
-            while (current !== undefined && !ancestors.has(current)) {
-              ancestors.add(current)
-              const ancestor = await tx.conversation(current)
-              current = ancestor?.owner?.conversationId ?? ancestor?.parent?.conversationId
-            }
-          }
-          const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
-          const archived = ui['ext.conversations.archived']
-          if (Array.isArray(archived) && archived.some((id) => ancestors.has(id as ConversationId)))
-            ui['ext.conversations.archived'] = archived.filter(
-              (id) => !ancestors.has(id as ConversationId),
-            )
-        }, context)
-        .catch((error) => host.notice('Unable to reopen conversation: ' + String(error)))
+      void resume(host, ids).catch((error) =>
+        host.notice('Unable to reopen conversation: ' + String(error)),
+      )
     })
   })
   host.onClose(async () => {
@@ -184,6 +226,7 @@ function reopenOnInput(host: ExtensionHost) {
 export type ConversationsService = {
   /** What conversation `id` is about now: its title, summary and feature, for a record that outlives a retitle. */
   subject: (id: ConversationId, caller: Context) => Promise<LandingSubject>
+  concluded: (caller: Context) => Promise<Set<ConversationId>>
 }
 
 export async function subject(
@@ -206,6 +249,10 @@ export async function subject(
 export default (host: ExtensionHost) => {
   host.provide('conversations', {
     subject: (id, caller) => subject(host, id, caller),
+    concluded: async (caller) => {
+      const ids = (await host.uiState(caller))['ext.conversations.concluded']
+      return new Set(Array.isArray(ids) ? (ids as ConversationId[]) : [])
+    },
   } satisfies ConversationsService)
   // A new branch or root is called by its intent until its summary names it.
   const named = (data: unknown) => {
@@ -237,7 +284,7 @@ export default (host: ExtensionHost) => {
           topLevel.set(input.conversationId, !own.owner)
         }
         if (!topLevel.get(input.conversationId)) return undefined
-        const archived = (await host.uiState(caller))['ext.conversations.archived']
+        const concluded = (await host.uiState(caller))['ext.conversations.concluded']
         // Only membership, titles and cwds go in, so the text changes rarely and prompt caches stay warm.
         const others = host
           .conversations()
@@ -246,7 +293,7 @@ export default (host: ExtensionHost) => {
               summary.id !== input.conversationId &&
               summary.parentConversationId === undefined &&
               summary.inputAt !== undefined &&
-              !(Array.isArray(archived) && archived.includes(summary.id)),
+              !(Array.isArray(concluded) && concluded.includes(summary.id)),
           )
           .toSorted((a, b) => b.inputAt! - a.inputAt!)
           .slice(0, 10)

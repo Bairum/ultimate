@@ -5,7 +5,14 @@ import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
-import { fauxServer as createServer, until, temp, removeTemp, linkDependencies } from './helpers.ts'
+import {
+  fauxServer as createServer,
+  until,
+  temp,
+  removeTemp,
+  linkDependencies,
+  post,
+} from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { Store } from '../extensions/codemode/server.ts'
 
@@ -89,6 +96,82 @@ async function run(
     state.dispose()
   }
 }
+
+it('calls extension actions with caller context and rejects missing or disabled actions', async () => {
+  const { server, options } = await fixture()
+  const path = join(options.ultimateRoot, 'extensions/action-test')
+  await mkdir(path)
+  await writeFile(
+    join(path, 'server.ts'),
+    `import { defineExtension } from '@earendil-works/pi-durable';
+    export default defineExtension({ name: 'action-test' });
+    export const actions = {
+      echo: async (args, ctx) => ({ args, conversationId: ctx.conversationId, signal: ctx.signal instanceof AbortSignal }),
+      fail: async () => { throw new Error('Action failed'); },
+    };`,
+  )
+  await until(() => !!server.extensions.action('action-test', 'echo'))
+  const result = await run(
+    server,
+    `return await ultimate.action('action-test', 'echo', { value: 42 });`,
+  )
+  expect(result.data.details.value).toEqual({
+    args: { value: 42 },
+    conversationId: server.root.id,
+    signal: true,
+  })
+  const defaults = await run(server, `return await ultimate.action('action-test', 'echo');`)
+  expect(defaults.data.details.value).toMatchObject({ args: null })
+  for (const [extension, action, error] of [
+    ['missing', 'echo', 'Unknown extension action: missing/echo'],
+    ['action-test', 'missing', 'Unknown extension action: action-test/missing'],
+    ['action-test', 'toString', 'Unknown extension action: action-test/toString'],
+    ['action-test', 'fail', 'Action failed'],
+  ]) {
+    const failed = await run(server, `return await ultimate.action('${extension}', '${action}');`)
+    expect(failed.data.isError).toBe(true)
+    expect(failed.text).toContain(error)
+  }
+  await mkdir(join(options.userHome, '.ultimate'), { recursive: true })
+  await writeFile(
+    join(options.userHome, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { disable: ['action-test'] } }),
+  )
+  await until(() => !server.extensions.action('action-test', 'echo'))
+  const disabled = await run(server, `return await ultimate.action('action-test', 'echo');`)
+  expect(disabled.data.isError).toBe(true)
+  expect(disabled.text).toContain('Unknown extension action: action-test/echo')
+})
+
+it('reserves trust and secret writes for the UI while allowing normal actions', async () => {
+  const { server, options } = await fixture()
+  await mkdir(join(options.ultimateRoot, 'server'), { recursive: true })
+  await cp(resolve('server/lock.ts'), join(options.ultimateRoot, 'server/lock.ts'))
+  for (const name of ['onboarding', 'secrets']) {
+    await cp(resolve(`extensions/${name}`), join(options.ultimateRoot, `extensions/${name}`), {
+      recursive: true,
+    })
+    await until(() => !!server.extensions.action(name, name === 'onboarding' ? 'decide' : 'set'))
+  }
+  for (const [extension, action, args] of [
+    ['onboarding', 'decide', { local: true }],
+    ['secrets', 'set', { name: 'TEST_KEY', value: 'test-value' }],
+  ] as const) {
+    const denied = await run(
+      server,
+      `return await ultimate.action('${extension}', '${action}', ${JSON.stringify(args)});`,
+    )
+    expect(denied.data.isError).toBe(true)
+    expect(denied.text).toContain(`${extension}/${action} is a user-only action`)
+    const response = await post(server, `/api/extensions/${extension}/actions/${action}`, { args })
+    expect(response.status).toBe(200)
+  }
+  const normal = await run(server, `return await ultimate.action('secrets', 'list');`)
+  expect(normal.data.isError).not.toBe(true)
+  expect(normal.data.details.value).toEqual([
+    expect.objectContaining({ name: 'TEST_KEY', set: true }),
+  ])
+})
 
 it('composes read and bash with private nested results and final JSON details', async () => {
   const { server } = await fixture()

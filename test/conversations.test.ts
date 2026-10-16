@@ -9,6 +9,9 @@ import { attach, fauxServer, post, prepareFauxServer, temp, until } from './help
 import type { ConversationSummary } from '../shared/protocol.ts'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
+import { actions as conversationActions } from '../extensions/conversations/server.ts'
+import type { ExtensionHost } from '../server/extensions.ts'
+import { actionExec } from '../server/actions.ts'
 import { currentAnswer, exchangeUser } from '../extensions/conversations/summary.ts'
 
 type Server = Awaited<ReturnType<typeof fauxServer>>
@@ -106,14 +109,16 @@ it('tells each top-level conversation about the others, and the surface on scree
     `- #${elsewhere} Elsewhere (cwd: ${home})\n`,
   )
 
-  // At most the 10 most recently active, by id; archived ones are left out before the cut.
+  // At most the 10 most recently active, by id; concluded ones are left out before the cut.
   const recent: ConversationId[] = []
   for (let index = 0; index < 9; index++) {
     recent.push(await create())
     await message(recent[index], `Recent ${index}`, 4000 + index)
   }
   expect(listed(await render('conversations', root))).toEqual([elsewhere, ...recent])
-  await post(server, '/api/ui', { set: { 'ext.conversations.archived': [recent[0]] } })
+  await post(server, '/api/extensions/conversations/actions/conclude', {
+    args: { ids: [recent[0]] },
+  })
   expect(listed(await render('conversations', root))).toEqual([
     other,
     elsewhere,
@@ -206,6 +211,7 @@ it('renames and clears top-level conversations', async () => {
     ['rename', { id: 999999, title: 'x' }, 'Unknown conversation 999999'],
     ['rename', { id: child.id, title: 'x' }, owned],
     ['reset', { id: child.id }, owned],
+    ['conclude', { ids: [child.id] }, owned],
   ] as const)
     expect(await action(name, args)).toEqual({ status: 500, data: { error } })
 
@@ -393,4 +399,70 @@ it('keeps unmarked Pi input history and makes no metadata writes on an unchanged
   })
   expect(metadataWrites).toEqual([])
   stop?.()
+})
+
+it('conclude merges concurrent additions, deduplicates ids and returns kept checkouts', async () => {
+  const { server, create, action } = await launch()
+  const first = await create()
+  const second = await create()
+  const kept = [{ id: first, uncommitted: 2, unlanded: 1 }]
+  const released: number[][] = []
+  const host = {
+    harness: () => server.harness,
+    use: () => ({
+      release: async (ids: number[]) => {
+        released.push(ids)
+        return kept
+      },
+    }),
+  } as unknown as ExtensionHost
+  const ctx = {
+    host,
+    signal: new AbortController().signal,
+    exec: actionExec('.', new AbortController().signal),
+  }
+  const results = await Promise.all([
+    conversationActions.conclude({ ids: [first, first] }, ctx),
+    conversationActions.conclude({ ids: [second] }, ctx),
+  ])
+  expect(results[0]).toEqual({ concluded: [first], kept })
+  expect(released).toEqual(expect.arrayContaining([[first], [second]]))
+  expect((await server.host.uiState(context))['ext.conversations.concluded']).toEqual([
+    first,
+    second,
+  ])
+  const rejected = await create()
+  expect(await action('conclude', { ids: [rejected, 999999] })).toEqual({
+    status: 500,
+    data: { error: 'Unknown conversation 999999' },
+  })
+  expect((await server.host.uiState(context))['ext.conversations.concluded']).toEqual([
+    first,
+    second,
+  ])
+  expect(await action('conclude', { ids: ['bad'] })).toEqual({
+    status: 500,
+    data: { error: 'Expected conversation ids' },
+  })
+})
+
+it('resume removes concluded ancestors and leaves unrelated ids alone', async () => {
+  const { server, create, action } = await launch()
+  const parent = await create()
+  const unrelated = await create()
+  const at = await server.harness.commit(
+    async (tx) => (await tx.appendEntry(parent, { kind: 'test.branch', data: {} })).id,
+    context,
+  )
+  const child = await (await server.harness.conversation(parent, context))!.fork(
+    at,
+    { ownership: { kind: 'ownerless' } },
+    context,
+  )
+  await action('conclude', { ids: [parent, child.id, unrelated] })
+  expect(await action('resume', { ids: [child.id] })).toEqual({
+    status: 200,
+    data: { result: { resumed: [parent, child.id] } },
+  })
+  expect((await server.host.uiState(context))['ext.conversations.concluded']).toEqual([unrelated])
 })

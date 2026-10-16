@@ -1,8 +1,18 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
-import { mkdtemp, mkdir, readFile, realpath, stat } from 'node:fs/promises'
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve as resolvePath } from 'node:path'
+import { basename, join, resolve as resolvePath } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Type } from '@earendil-works/pi-ai'
@@ -12,12 +22,14 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { Subagents } from '../subagents/server.ts'
 import type { TailscaleService } from '../tailscale/server.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
+import { cleanPreview, sweepPreviews } from './cleanup.ts'
 
 interface Instance {
   id: string
   url: string
   home: string
   pid: number
+  temporary: boolean
   /** The conversation whose workspace it previews, or which started it in the shared checkout. */
   conversationId: number
   faux: boolean
@@ -93,6 +105,12 @@ async function stop(instances: Map<string, Instance>, id: string) {
       clearTimeout(timer)
     }
   }
+  if (instance.temporary) {
+    await unlink(join(instance.home, 'ultimate.lock')).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error
+    })
+    await cleanPreview(instance.home)
+  }
   instances.delete(id)
 }
 
@@ -147,6 +165,8 @@ export default function instanceExtension(
     | 'use'
     | 'resource'
     | 'onClose'
+    | 'onOpen'
+    | 'notice'
     | 'home'
     | 'ultimateRoot'
     | 'projectRoot'
@@ -162,6 +182,11 @@ export default function instanceExtension(
   const instances = running(host)
   const starts = host.resource('instance.starts', () => ({ pending: 0 }))
   const ownSource = host.projectRoot === host.ultimateRoot
+  host.onOpen(async () => {
+    void sweepPreviews(tmpdir(), host.notice).catch((error: unknown) => {
+      host.notice(`Preview sweep failed: ${String(error)}`)
+    })
+  })
   return defineExtension({
     name: 'instance',
     sections: [
@@ -187,6 +212,7 @@ export default function instanceExtension(
         }),
         async execute(args, api, context) {
           let reserved = false
+          let pendingHome: string | undefined
           try {
             context.abortSignal?.throwIfAborted()
             let result: unknown
@@ -242,12 +268,30 @@ export default function instanceExtension(
               if (args.home) {
                 await mkdir(resolvePath(args.home), { recursive: true })
                 home = await realpath(resolvePath(args.home))
-              } else home = await mkdtemp(join(tmpdir(), 'ultimate-instance-'))
+              } else {
+                // Publish only after the parent's lease exists, so another host's sweep cannot race startup.
+                const staging = await mkdtemp(join(tmpdir(), '.ultimate-instance-'))
+                home = join(tmpdir(), basename(staging).slice(1))
+                try {
+                  await writeFile(
+                    join(staging, 'ultimate.lock'),
+                    JSON.stringify({ pid: process.pid }),
+                  )
+                  await writeFile(join(staging, 'project.json'), JSON.stringify({ root: project }))
+                  await rename(staging, home)
+                  pendingHome = home
+                } catch (error) {
+                  await rm(staging, { recursive: true, force: true })
+                  throw error
+                }
+              }
               if (home === (await realpath(host.home)))
                 throw new Error('A test instance cannot share the running server home')
               if ([...instances.values()].some((item) => item.home === home && live(item)))
                 throw new Error('Home is already owned by an instance')
               context.abortSignal?.throwIfAborted()
+              // Explicit homes are retained even when their name matches the automatic sweep's prefix.
+              if (args.home) await writeFile(join(home, 'instance-preserve'), '')
               const env: NodeJS.ProcessEnv = {
                 ...Object.fromEntries(
                   Object.entries(process.env).filter(
@@ -282,12 +326,14 @@ export default function instanceExtension(
                 url: '',
                 home,
                 pid: child.pid ?? 0,
+                temporary: !args.home,
                 conversationId,
                 faux: args.faux === true,
                 child,
                 output: '',
               }
               instances.set(id, item)
+              pendingHome = undefined
               starts.pending--
               reserved = false
               const append = (chunk: Buffer) => {
@@ -357,6 +403,10 @@ export default function instanceExtension(
             }
             return { output: [{ type: 'text', text: JSON.stringify(result) }] }
           } catch (error) {
+            if (pendingHome) {
+              await unlink(join(pendingHome, 'ultimate.lock'))
+              await cleanPreview(pendingHome)
+            }
             return { isError: true, output: [{ type: 'text', text: String(error) }] }
           } finally {
             if (reserved) starts.pending--

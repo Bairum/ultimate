@@ -77,6 +77,14 @@ export type ExtensionHost = Pick<
   setProjectDecision(local: boolean): Promise<void>
   /** Apply settings writes to the registry, browser facets, and styles before returning. */
   reloadExtensions(): Promise<void>
+  /** Call an installed extension action on behalf of a conversation; rejects user-only actions. */
+  invoke(
+    name: string,
+    action: string,
+    args: JsonValue,
+    signal: AbortSignal,
+    conversationId?: number,
+  ): Promise<unknown>
   doc(kind: string): ConversationDocToken<JsonObject> | undefined
   metadata: typeof Metadata
 }
@@ -198,6 +206,7 @@ export async function loadExtensions(
     return facetHost
   }
   const actions = new Map<string, Record<string, ExtensionAction>>()
+  const userActions = new Map<string, string[]>()
   const settingsReloads = new Set<string>()
   const records = new Map<string, ExtensionInfo>()
   const documents = new Map<string, ConversationDocToken<JsonObject>[]>()
@@ -207,7 +216,46 @@ export async function loadExtensions(
   let open = false
   const cleanups = new Set<() => Promise<void>>()
   const resources = new Map<string, unknown>()
+  async function invoke(
+    name: string,
+    action: string,
+    args: JsonValue,
+    signal: AbortSignal,
+    conversationId?: number,
+  ) {
+    const table = actions.get(name)
+    const fn = table && Object.hasOwn(table, action) ? table[action] : undefined
+    if (!fn) throw new Error(`Unknown extension action: ${name}/${action}`)
+    if (
+      conversationId !== undefined &&
+      (!Number.isSafeInteger(conversationId) || conversationId < 1)
+    )
+      throw new Error('Invalid conversationId')
+    return fn(args, {
+      host: facetHosts.get(name)!,
+      conversationId,
+      signal,
+      exec: async (command, commandArgs, options) => {
+        const agent =
+          conversationId === undefined
+            ? undefined
+            : await runtime
+                .harness()
+                .snapshot(AgentDoc, conversationId as ConversationId, BACKGROUND_CONTEXT)
+        return actionExec(options?.cwd ?? agent?.cwd ?? host.projectRoot, signal)(
+          command,
+          commandArgs,
+          options,
+        )
+      },
+    })
+  }
   const extensionHost: ExtensionHost = {
+    invoke: async (name, action, args, signal, conversationId) => {
+      if (userActions.get(name)?.includes(action))
+        throw new Error(`${name}/${action} is a user-only action`)
+      return invoke(name, action, args, signal, conversationId)
+    },
     events,
     provide: () => {
       throw new Error('Providers require a facet scope')
@@ -387,6 +435,14 @@ export async function loadExtensions(
           const exportedActions: Record<string, ExtensionAction> = module.actions ?? {}
           if (Object.values(exportedActions).some((action) => typeof action !== 'function'))
             throw new Error('actions must contain functions')
+          const exportedUserActions: unknown = module.userActions ?? []
+          if (
+            !Array.isArray(exportedUserActions) ||
+            exportedUserActions.some(
+              (action) => typeof action !== 'string' || !Object.hasOwn(exportedActions, action),
+            )
+          )
+            throw new Error('userActions must contain registered action names')
           const secrets = validateSecrets(module.secrets ?? [])
           host.registry.install(extension)
           const previousHost = facetHosts.get(name)
@@ -397,6 +453,7 @@ export async function loadExtensions(
           facetServices.get(facetHost)!.activate()
           if (open) await Promise.all([...facetOpeners.get(facetHost)!].map(runOpener))
           actions.set(name, exportedActions)
+          userActions.set(name, exportedUserActions)
           if (module.reloadOnSettings === true) settingsReloads.add(name)
           else settingsReloads.delete(name)
           record.actions = Object.keys(exportedActions)
@@ -423,6 +480,7 @@ export async function loadExtensions(
         if (installed.delete(name)) host.registry.uninstall({ name })
         documents.delete(name)
         actions.delete(name)
+        userActions.delete(name)
         settingsReloads.delete(name)
         record.actions = []
         delete record.server
@@ -441,6 +499,7 @@ export async function loadExtensions(
         records.delete(name)
         host.extensionSources.delete(name)
         actions.delete(name)
+        userActions.delete(name)
         settingsReloads.delete(name)
         host.builds.remove(name)
         documents.delete(name)
@@ -571,38 +630,7 @@ export async function loadExtensions(
       const table = actions.get(name)
       return table && Object.hasOwn(table, action) ? table[action] : undefined
     },
-    async invoke(
-      name: string,
-      action: string,
-      args: JsonValue,
-      signal: AbortSignal,
-      conversationId?: number,
-    ) {
-      const fn = actions.get(name)![action]
-      if (
-        conversationId !== undefined &&
-        (!Number.isSafeInteger(conversationId) || conversationId < 1)
-      )
-        throw new Error('Invalid conversationId')
-      return fn(args, {
-        host: facetHosts.get(name)!,
-        conversationId,
-        signal,
-        exec: async (command, commandArgs, options) => {
-          const agent =
-            conversationId === undefined
-              ? undefined
-              : await runtime
-                  .harness()
-                  .snapshot(AgentDoc, conversationId as ConversationId, BACKGROUND_CONTEXT)
-          return actionExec(options?.cwd ?? agent?.cwd ?? host.projectRoot, signal)(
-            command,
-            commandArgs,
-            options,
-          )
-        },
-      })
-    },
+    invoke,
     doc: findDoc,
     /** The harness is open: run the `onOpen` callbacks. */
     async opened() {

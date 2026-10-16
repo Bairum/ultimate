@@ -1,5 +1,5 @@
 import { ChevronRightIcon, ChevronDownIcon, SquarePenIcon } from 'lucide-react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
@@ -12,7 +12,19 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { formatKeys, useExtensionUiState, useNow, useStore, useTasks, useUltimate } from '@/sdk'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import type { WorkspacePending } from '../workspaces/types.ts'
+import {
+  api,
+  errorMessage,
+  formatKeys,
+  useExtensionUiState,
+  useNow,
+  useStore,
+  useSystem,
+  useTasks,
+  useUltimate,
+} from '@/sdk'
 import { hiddenConversationIds } from './visible.tsx'
 import { useOverview } from './feature.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
@@ -83,6 +95,9 @@ export function Conversations() {
       busy: foreground.has(conversation.id) || overview[conversation.id]?.runState === 'working',
     }))
   const actions = useUltimate()
+  const workspacesEnabled = useSystem()?.extensions.some(
+    (extension) => extension.name === 'workspaces' && extension.enabled,
+  )
   const sides = useSides() ?? {}
   // A root's open side chat shows in its place.
   const onScreen = useShownId()
@@ -90,10 +105,10 @@ export function Conversations() {
   const shownId = sideRoot === undefined ? onScreen : Number(sideRoot)
   const now = useNow(60_000)
   const [type, setType] = useExtensionUiState('creationType', 'isolated')
-  const [archived, setArchived] = useExtensionUiState<number[]>('archived', [])
+  const [concludedIds] = useExtensionUiState<number[]>('concluded', [])
   const [seen] = useExtensionUiState<Record<string, number>>('seen', {})
   const shownTop = topOf(shownId, conversations)
-  const hiddenIds = hiddenConversationIds(conversations, archived)
+  const hiddenIds = hiddenConversationIds(conversations, concludedIds)
   const summary = shownTop && !hiddenIds.has(shownTop.id) ? overview[shownTop.id] : undefined
   const roots = new Set(useRoots())
   const [expanded, setExpanded] = useExtensionUiState<number[]>('expanded', [])
@@ -102,7 +117,7 @@ export function Conversations() {
   const topLevel = conversations.filter(
     (conversation) => conversation.parentConversationId === undefined,
   )
-  // Lander conversations are always there, pinned above the rest and never archived.
+  // Lander conversations are always there, pinned above the rest and never concluded.
   const landers = topLevel
     .filter((conversation) => conversation.label === 'lander')
     .toSorted((a, b) => a.id - b.id)
@@ -133,28 +148,39 @@ export function Conversations() {
     .filter((conversation) => roots.has(conversation.id))
     .toSorted((a, b) => latestIn(b) - latestIn(a) || b.id - a.id)
 
-  const setArchive = (id: number, archive: boolean) => {
-    const resumed = new Set([id])
-    if (!archive) {
-      let current = conversations.find((conversation) => conversation.id === id)
-      while (current?.branchOf && !resumed.has(current.branchOf.conversationId)) {
-        resumed.add(current.branchOf.conversationId)
-        current = conversations.find(
-          (conversation) => conversation.id === current?.branchOf?.conversationId,
-        )
-      }
-    }
-    setArchived((previous) => [
-      ...previous.filter((candidate) => !resumed.has(candidate)),
-      ...(archive ? [id] : []),
-    ])
-    if (!archive || !hiddenConversationIds(conversations, [id]).has(shownTop?.id ?? -1)) return
+  const [warning, setWarning] = useState<{
+    id: number
+    work?: WorkspacePending[]
+    failure?: string
+  }>()
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string>()
+  const setConclude = async (id: number, conclude: boolean) => {
+    await api.action('conversations', conclude ? 'conclude' : 'resume', { ids: [id] })
+    if (!conclude || !hiddenConversationIds(conversations, [id]).has(shownTop?.id ?? -1)) return
     const index = listed.findIndex((conversation) => conversation.id === id)
     const subtree = hiddenConversationIds(conversations, [id])
     const next =
       listed.slice(index + 1).find((candidate) => !subtree.has(candidate.id)) ??
       listed.find((candidate) => !subtree.has(candidate.id))
     if (next) actions.switchConversation(next.id)
+  }
+  const requestConclude = async (id: number, conclude: boolean) => {
+    if (conclude && workspacesEnabled) {
+      setError(undefined)
+      try {
+        const work = await api.action<WorkspacePending[]>('workspaces', 'pending', { ids: [id] })
+        if (work.length) {
+          setWarning({ id, work })
+          return
+        }
+      } catch (failure) {
+        setWarning({ id, failure: errorMessage(failure) })
+        // Unhandled ActionErrors become notices; the dialog still lets the user conclude.
+        throw failure
+      }
+    }
+    await setConclude(id, conclude)
   }
   const row = (conversation: ConversationSummary, shown = conversation.id === shownTop?.id) => {
     const recorded = seen[conversation.id]
@@ -168,7 +194,7 @@ export function Conversations() {
       <Row
         activity={overview[conversation.id]?.activity}
         assessment={tasks ? currentAssessment(overview[conversation.id]) : undefined}
-        archived={hiddenIds.has(conversation.id)}
+        concluded={hiddenIds.has(conversation.id)}
         root={roots.has(conversation.id)}
         side={side}
         conversation={conversation}
@@ -176,7 +202,7 @@ export function Conversations() {
         feature={overview[conversation.id]?.feature}
         key={conversation.id}
         now={now}
-        onArchive={(archive) => setArchive(conversation.id, archive)}
+        onConclude={(conclude) => void requestConclude(conversation.id, conclude)}
         shown={shown}
         unseen={
           recorded !== undefined &&
@@ -284,6 +310,66 @@ export function Conversations() {
 
   return (
     <div className="flex flex-1 flex-col pb-2">
+      <Dialog
+        open={!!warning}
+        onOpenChange={(open) => {
+          if (!open) setWarning(undefined)
+        }}
+      >
+        <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-md" showCloseButton={false}>
+          <div className="px-5 pt-5 pb-4">
+            <DialogTitle className="text-[14px] font-medium">Conclude #{warning?.id}?</DialogTitle>
+            <DialogDescription className="mt-2 text-[13px] leading-relaxed break-words">
+              {warning?.failure ? (
+                <>
+                  Couldn't check #{warning.id}'s checkout: {warning.failure}. Conclude anyway?
+                </>
+              ) : (
+                <>
+                  {warning?.work
+                    ?.map((item) => {
+                      const parts = [
+                        item.uncommitted > 0
+                          ? `${item.uncommitted} uncommitted ${item.uncommitted === 1 ? 'file' : 'files'}`
+                          : undefined,
+                        item.unlanded > 0
+                          ? `${item.unlanded} unlanded ${item.unlanded === 1 ? 'commit' : 'commits'}`
+                          : undefined,
+                      ].filter(Boolean)
+                      return `#${item.id}${item.id !== warning.id ? ', a subagent,' : ''} has ${parts.join(' and ')}.`
+                    })
+                    .join(' ')}{' '}
+                  Its checkout is kept until that work lands or is discarded.
+                </>
+              )}
+            </DialogDescription>
+            {error && <p className="mt-3 font-mono text-[12px] break-words text-error">{error}</p>}
+          </div>
+          <div className="flex justify-end gap-2 border-t border-border/70 bg-sidebar px-5 py-3">
+            <Button onClick={() => setWarning(undefined)} size="sm" variant="ghost">
+              Cancel
+            </Button>
+            <Button
+              disabled={pending}
+              size="sm"
+              onClick={async () => {
+                if (!warning) return
+                setPending(true)
+                try {
+                  await setConclude(warning.id, true)
+                  setWarning(undefined)
+                } catch (failure) {
+                  setError(errorMessage(failure))
+                } finally {
+                  setPending(false)
+                }
+              }}
+            >
+              {pending ? 'Concluding…' : 'Conclude'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <div className="mb-1 flex h-10 shrink-0 items-center gap-2 border-b border-border/70 pr-1.5 pl-4 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
         Conversations
         <Tooltip>
@@ -396,8 +482,8 @@ export function Conversations() {
         )}
         {hidden.length > 0 && (
           <Collapsible className="pt-1">
-            <CollapsibleTrigger className="group/archived flex w-full cursor-pointer items-center gap-1 px-4 py-1 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase outline-none hover:text-foreground focus-visible:text-foreground">
-              <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/archived:rotate-90" />
+            <CollapsibleTrigger className="group/concluded flex w-full cursor-pointer items-center gap-1 px-4 py-1 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase outline-none hover:text-foreground focus-visible:text-foreground">
+              <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/concluded:rotate-90" />
               Concluded · {hidden.length}
             </CollapsibleTrigger>
             <CollapsibleContent

@@ -15,17 +15,44 @@ Each conversation has one record in the root `ultimate.workspaces` document.
 Its path is `<home>/worktrees/<conversationId>`; its branch includes the home hash and conversation ID.
 Preparation runs `isolates.worktree.setup` with `ULTIMATE_SOURCE` set to the source checkout.
 Setup commands must be safe to repeat after interruption.
-The first model request waits for preparation; failed or removed workspaces block tools with the reason.
+The first model request waits for preparation. Before every tool call, the workspace must be ready with a
+present, registered checkout. Otherwise the tool is blocked with the reason; the model can still reply and
+explain why it cannot use the checkout.
+A removed workspace is recreated at the same path on the next model request. An existing branch with unlanded
+commits is checked out unchanged, with its tip as the new base; a merged or missing branch starts at the current
+target tip. Nested isolates prepare their source ancestor checkouts first.
+The existing `workspace_workflow` prompt section starts and waits for the same durable preparation task used
+on creation; setup commands run again before the model can use tools.
 Failed setup keeps its output tail and never force-removes dirty output. Start a new conversation to try again.
 
 The Workspaces panel shows the lander queue, statistics over every checkout, and the shown conversation's checkout,
-read-only: landing goes through agents, and removing a checkout only happens when someone asks an agent to clean up.
+read-only: landing goes through agents. Concluding a conversation can release its clean, landed checkout.
 `isolation` says why the project cannot be isolated, if it cannot; `info {id}` reads the record and current tips; `create {cwd?, title?}` returns a new conversation ID.
 `workspace land` fast-forwards the saved source branch to the clean, verified workspace tip.
 Unrelated dirty files in the source checkout do not block; `git merge --ff-only` refuses only real overlap.
 If the target changed or diverged, update the workspace onto it and verify again; landing never rebases or pushes.
-`discard {id}` removes a clean checkout and keeps its branch and history; it is the cleanup path for top-level
-checkouts (the `subagent` tool's `discard` covers worktree children).
+`pending {ids}` reports `{id, uncommitted, unlanded}` for checkouts with work at risk, including transitively
+owned subagents. The `workspaces` service exposes `pending(ids, ctx)` and `release(ids, ctx)`; release removes
+only clean, fully landed checkouts, deletes merged branches, and returns checkouts kept for pending work or
+`busy` reasons (running or queued input). Descendants release before ancestors; a kept descendant also keeps its
+ancestors, reported with `descendant: <id>`. The removal transaction also checks current records sourced transitively
+from the checkout, so a descendant resumed during the batch keeps its source ancestors. Nested recreation checks
+its source parent's `ready` state and folder in the transaction that starts preparation; otherwise it readies the
+parent and retries. Source queues are acquired ancestor-first for that decision and filesystem recovery.
+Git writes are serialized per source and removal is never forced.
+Release atomically checks run admission and marks the record `removed` before deleting the folder. Requests wait
+on that same source queue before checking the record and recreating. Reconciliation and recreation finish
+interrupted removals; newly found pending work is kept and the checkout returns to `ready`. Unlanded counts include
+commits reachable from either the branch or HEAD, including detached work. Refused removals report `reason` and
+restore `ready` only if the folder remains a registered worktree. If removal succeeded before branch cleanup
+failed, the record stays `removed` with the error so the next input can recreate it. Recovery through `ready()`
+returns the kept record and retains the reason in workspace info.
+On open, a background reconciliation releases concluded conversations' eligible checkouts; failures become notices.
+`release(ids, ctx, signal?)` stops between checkouts when aborted. Closing aborts reconciliation and waits only
+for the current checkout to finish, not the remaining batch.
+`discard {id}` explicitly removes a clean checkout and keeps its branch until reuse (the `subagent` tool's
+`discard` covers worktree children). All removed checkouts follow the same recreation rule above, preserving
+unlanded branch history, including after explicit discard.
 `stats` counts checkouts by state, ready ones by commits (landed on the target, ahead, none yet) and uncommitted
 changes; `disk` measures the worktrees directory with `du`, and on btrfs also the real size with shared blocks counted
 once (`btrfs filesystem du`). Measuring takes seconds, so one runs at a time and its result is reused for a minute.
@@ -138,4 +165,5 @@ of the current code's own task waits for the next submit or open, so a determini
 
 Top-level mains use `workspace status`, `workspace submit` and `workspace land` for their own checkout.
 Landing reports commits and changed paths, with a restart hint for core changes to the running clone.
-Conclude and clear context never remove a checkout. Landing never restarts Ultimate.
+Conclude releases only idle checkouts with no uncommitted or unlanded work; clear context never removes one.
+Landing never removes a checkout or restarts Ultimate.

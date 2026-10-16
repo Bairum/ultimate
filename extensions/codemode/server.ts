@@ -145,6 +145,22 @@ function globals(
       execute: () => host.extensions(),
     },
     {
+      name: 'action',
+      description:
+        "Call an extension action, as the UI does, on behalf of this conversation; ultimate.extensions() lists each extension's actions, its README their args.",
+      signature: '(extension: string, action: string, args?: unknown): Promise<unknown>',
+      execute: (values) => {
+        const [extension, action, args = null] = values as [string, string, unknown?]
+        return host.invoke(
+          extension,
+          action,
+          args as JsonValue,
+          context.abortSignal!,
+          conversationId,
+        )
+      },
+    },
+    {
       name: 'conversations',
       description: 'All stored conversation identities and ownership edges.',
       signature: '(): Promise<unknown[]>',

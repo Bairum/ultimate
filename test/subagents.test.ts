@@ -180,6 +180,9 @@ async function fixture(
       conversations: () => [],
       projects: async () => [],
       extensions: () => [],
+      invoke: async () => {
+        throw new Error('Not used')
+      },
       reloadExtensions: async () => {},
       projectSetup: async () => ({ config: false, decision: null }),
       projectSettings: async () => ({}),

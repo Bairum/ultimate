@@ -37,18 +37,23 @@ any pasted images. The same page serves lineage's "Branch…" and "Branch from h
 Shared choices only select the type, remembered in
 `ext.conversations.creationType` across tabs, reloads and restarts. New isolated conversation explicitly branches
 in its own checkout without changing that preference. Errors preserve the prompt for retry.
-Conclude and clear context never remove checkouts or commits. The Workspaces panel shows checkouts read-only.
+Conclude releases clean, fully landed checkouts, including owned subagent checkouts. Uncommitted files,
+unlanded commits, and busy checkouts are kept; Clear context never removes checkouts or commits.
+The Workspaces panel shows checkouts read-only.
 
 On hover or focus, a row's `…` menu offers Rename (inline; also on double-click; Enter or leaving the field saves,
 Escape cancels, and after either key focus returns to the row), Clear context… (asks first; not while the conversation
-itself works, as the server refuses), and Conclude. Concluded rows and their branches/subagents sit in a collapsed "Concluded · N" group at the bottom.
+itself works, as the server refuses), and Conclude. Before concluding, the UI calls workspaces `pending {ids}`.
+When a conversation or its subagents have uncommitted files or unlanded commits, a confirmation dialog names the
+work and explains that its checkout is kept until the work lands or is discarded. Otherwise it concludes at once.
+Concluded rows and their branches/subagents sit in a collapsed "Concluded · N" group at the bottom.
 Resume brings them back; sending to a concluded branch resumes it and any concluded ancestors automatically.
 Concluding the shown subtree shows another live conversation when one exists.
 
 Commands, under Conversations: `conversations.new` ("New conversation", `mod+alt+n`), `conversations.reset`
 ("Clear the context" of the shown top-level conversation, when it is idle and has entries), and
 `conversations.summary-model` ("Summary model…", see [Summary model](#summary-model)). The UI state keeps concluded
-ids in `ext.conversations.archived` and, in `ext.conversations.seen`, the latest answer time seen per top-level
+ids in `ext.conversations.concluded` and, in `ext.conversations.seen`, the latest answer time seen per top-level
 conversation; a conversation not recorded there counts as seen.
 
 ## Server facet
@@ -66,13 +71,24 @@ such as lineage notes do not.
 
 The `conversations` prompt section goes to every top-level conversation (not a subagent). It names the
 conversation's own id and lists the other top-level conversations that have a message and are not concluded (the web
-keeps concluded ids in the UI state `ext.conversations.archived`): at most the 10 most recently active, listed by id,
+reads server-owned concluded ids from UI state `ext.conversations.concluded`): at most the 10 most recently active, listed by id,
 each as `#<id> <title or "untitled">` with its cwd when that differs. It holds no busy state or times, so it changes
 only when that list, a title, or a cwd does, and prompt caches stay warm. It reminds the agent that the others share the
 checkout unless a cwd says otherwise, and how to look at them with codemode's `ultimate.entries(id)` and
 `ultimate.taskGraph()`. Without other conversations there is no section.
 
-Actions, each on a top-level conversation; bad args, unknown conversations, and subagents throw:
+Actions are callable from the browser with `api.action` or by agents with
+`await ultimate.action('conversations', 'conclude', {ids: [N]})` in codemode. The browser never rewrites the concluded
+list. No state-key migration runs automatically.
+
+- `conclude {ids:number[]}`: validates top-level conversations (unknown ids and subagents throw), deduplicates and
+  adds them to `ext.conversations.concluded` in one transaction, then calls workspaces `release`. Returns
+  `{ concluded: number[], kept: {id, uncommitted, unlanded, busy?}[] }`; `kept` explains which checkouts remain.
+- `resume {ids:number[]}`: transactionally removes ids and their concluded ancestors from the list, returning
+  `{ resumed: number[] }` for the removed ids. The next input recreates a released checkout from the target tip;
+  Resume itself does not create one.
+
+The single-conversation actions below reject bad args, unknown conversations, and subagents:
 
 - `rename {id, title}`: sets the `ultimate.metadata` title, with whitespace runs (newlines too) collapsed to one space,
   trimmed, and cut to at most 160 characters; a blank title removes it, so the first message names the conversation
@@ -174,7 +190,8 @@ footer names the project file to edit. Two actions back it:
 thinking level is stripped, so model ids may contain colons (`x-ai/grok-4.3:batch:high`).
 
 It provides the `conversations` service: `subject(id)` returns a conversation's current title, summary and feature,
-which workspaces snapshots for each submission.
+which workspaces snapshots for each submission. `concluded(caller)` returns a `Promise<Set<ConversationId>>`
+from the server-owned concluded list, used by workspaces to release checkouts on open.
 
 ## How status and summaries flow
 

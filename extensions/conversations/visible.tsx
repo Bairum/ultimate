@@ -5,9 +5,9 @@ export function hiddenConversationIds(
     parentConversationId?: number
     branchOf?: { conversationId: number }
   }[],
-  archived: readonly number[],
+  concluded: readonly number[],
 ) {
-  const hidden = new Set(archived)
+  const hidden = new Set(concluded)
   let changed = true
   while (changed) {
     changed = false

@@ -39,9 +39,9 @@ interface Tree {
 function build(
   graph: TaskGraph | undefined,
   conversations: readonly ConversationSummary[],
-  archived: number[],
+  concluded: number[],
 ) {
-  const hidden = hiddenConversationIds(conversations, archived)
+  const hidden = hiddenConversationIds(conversations, concluded)
   const all = Object.values(graph?.tasks ?? {}).toSorted((a, b) => a.id - b.id)
   const hiddenTasks = new Set(
     all.filter((task) => hidden.has(task.conversationId)).map((task) => task.id),
@@ -234,8 +234,8 @@ function TasksPanel() {
   const graph = useTasks()
   const conversations = useConversations()
   const { live } = useConversation()
-  const [archived] = useUiState<number[]>('ext.conversations.archived', [])
-  const { tasks, top, ...rest } = build(graph, conversations, archived)
+  const [concluded] = useUiState<number[]>('ext.conversations.concluded', [])
+  const { tasks, top, ...rest } = build(graph, conversations, concluded)
   const overview = useOverview()
   const now = useNow(1000, tasks.length > 0)
   // A start time never changes, so only tasks without one yet are asked for.

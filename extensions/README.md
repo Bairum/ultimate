@@ -452,7 +452,7 @@ The `ActionContext` import is type-only. The path above is right for `.ultimate/
 (built-ins use `../../server/actions.ts`); in another project nothing type-checks it and the import is erased, so it
 runs either way.
 
-- **Arguments come from the browser**: validate them before they reach a command line. `exec` takes an argument list,
+- **Arguments are untrusted, from the browser or an agent**: make actions safe to call from an agent and validate args before they reach a command line. `exec` takes an argument list,
   never a shell string, so quoting is never the problem; meaning is.
 - **Return small JSON shaped for the UI**, not raw command output. Ask CLIs for JSON (`gh … --json`) and limit how much
   they return.
@@ -485,11 +485,23 @@ Call actions from the UI in one of two ways:
 </Button>
 ```
 
-Actions are browser-only: requests require `Sec-Fetch-Site: same-origin` or a loopback `Origin` matching the server's
-port. A plain agent `curl` receives 403. This prevents accidental calls, not deliberate header forgery. For an intentional
-local test, emulate the browser:
-`curl -s -X POST -H 'Sec-Fetch-Site: same-origin' -H 'Content-Type: application/json' -d '{"args":null}' <url>/api/extensions/todos/actions/list`
-answers `{"result": …}` or `{"error": …}` (the URL is in the system prompt and the Info panel).
+Agents call actions in codemode with `await ultimate.action('todos', 'list', args)`, returning the result directly
+or throwing the action's error. Calls run in-process on behalf of the calling conversation, with the sandbox abort
+signal; omitted args become null. `ultimate.extensions()` lists actions; document their args in your README.
+
+A server facet may export `userActions: string[]` alongside `actions` to reserve named actions for the UI.
+Every name must refer to a registered action; invalid declarations fail facet installation. Use this for choices
+only the user should make, such as granting project trust, managing secrets, or logging in to providers:
+
+```ts
+export const userActions = ['decide']
+```
+
+Codemode rejects these calls with `<extension>/<action> is a user-only action`; the HTTP path still calls them.
+This is an explicit opt-out from agent action dispatch, not a security sandbox against arbitrary agent code.
+
+The HTTP endpoint remains browser-only: requests require `Sec-Fetch-Site: same-origin` or a loopback `Origin`
+matching the server's port. A plain agent `curl` receives 403; use `ultimate.action` instead of forging browser headers.
 
 ## Surfaces
 
@@ -730,7 +742,7 @@ For a request such as "build a triage surface for this repo's GitHub issues":
 3. **Write `server.ts`**: `defineExtension({ name })` and `actions` that wrap those commands with `ctx.exec`, validate
    their args, and return small JSON shaped for the UI. Return setup states (missing tool, no login, no repository)
    as data, so the UI can say what to do.
-4. **Check each action with `curl`** (see [Actions](#actions)) before any UI exists.
+4. **Check each action with codemode `ultimate.action`** (see [Actions](#actions)) before any UI exists.
 5. **Write `web.tsx`** from the Commits example: keep `Header`, `Dock` with `Conversation variant="dock"`, and
    `StatusLine`; replace the list and the detail. Read with `useAction`, act with `api.action` then `refetch`, keep
    the selection and filters in `useExtensionUiState`, and hand work to the agent with `api.submit(text, 'followUp')`,
