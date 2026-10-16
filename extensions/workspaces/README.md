@@ -15,17 +15,29 @@ Each conversation has one record in the root `ultimate.workspaces` document.
 Its path is `<home>/worktrees/<conversationId>`; its branch includes the home hash and conversation ID.
 Preparation runs `isolates.worktree.setup` with `ULTIMATE_SOURCE` set to the source checkout.
 Setup commands must be safe to repeat after interruption.
-The first model request waits for preparation; failed or removed workspaces block tools with the reason.
+The first model request waits for preparation; failed workspaces block tools with the reason.
+A removed workspace is recreated at the same path from the current target tip on the next model request.
+The existing `workspace_workflow` prompt section starts and waits for the same durable preparation task used
+on creation; setup commands run again before the model can use tools.
 Failed setup keeps its output tail and never force-removes dirty output. Start a new conversation to try again.
 
 The Workspaces panel shows the lander queue, statistics over every checkout, and the shown conversation's checkout,
-read-only: landing goes through agents, and removing a checkout only happens when someone asks an agent to clean up.
+read-only: landing goes through agents. Concluding a conversation can release its clean, landed checkout.
 `isolation` says why the project cannot be isolated, if it cannot; `info {id}` reads the record and current tips; `create {cwd?, title?}` returns a new conversation ID.
 `workspace land` fast-forwards the saved source branch to the clean, verified workspace tip.
 Unrelated dirty files in the source checkout do not block; `git merge --ff-only` refuses only real overlap.
 If the target changed or diverged, update the workspace onto it and verify again; landing never rebases or pushes.
-`discard {id}` removes a clean checkout and keeps its branch and history; it is the cleanup path for top-level
-checkouts (the `subagent` tool's `discard` covers worktree children).
+`pending {ids}` reports `{id, uncommitted, unlanded}` for checkouts with work at risk, including transitively
+owned subagents. The `workspaces` service exposes `pending(ids, ctx)` and `release(ids, ctx)`; release removes
+only clean, fully landed checkouts, deletes merged branches, and returns checkouts kept for pending work or
+`busy` reasons (running or queued input). Git writes are serialized per source and removal is never forced.
+On open, a background reconciliation releases concluded conversations' eligible checkouts; failures become notices.
+`release(ids, ctx, signal?)` stops between checkouts when aborted. Closing aborts reconciliation and waits only
+for the current checkout to finish, not the remaining batch.
+`discard {id}` explicitly removes a clean checkout and keeps its branch until reuse (the `subagent` tool's
+`discard` covers worktree children). All removed checkouts follow one recreation rule: the branch resets to the
+current target tip on the next model request, including explicitly discarded checkouts. Commit history on an
+unmerged discarded branch must be saved elsewhere before reuse.
 `stats` counts checkouts by state, ready ones by commits (landed on the target, ahead, none yet) and uncommitted
 changes; `disk` measures the worktrees directory with `du`, and on btrfs also the real size with shared blocks counted
 once (`btrfs filesystem du`). Measuring takes seconds, so one runs at a time and its result is reused for a minute.
@@ -138,4 +150,5 @@ of the current code's own task waits for the next submit or open, so a determini
 
 Top-level mains use `workspace status`, `workspace submit` and `workspace land` for their own checkout.
 Landing reports commits and changed paths, with a restart hint for core changes to the running clone.
-Conclude and clear context never remove a checkout. Landing never restarts Ultimate.
+Conclude releases only idle checkouts with no uncommitted or unlanded work; clear context never removes one.
+Landing never removes a checkout or restarts Ultimate.

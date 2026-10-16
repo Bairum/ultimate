@@ -37,7 +37,21 @@ function workspaceId(args: JsonValue) {
     throw new Error('Expected a workspace conversation id')
   return id as ConversationId
 }
+/** Temporary adapter until conversations provides concluded(ctx). */
+async function concluded(host: ExtensionHost) {
+  const ids = (await host.uiState(context))['ext.conversations.archived']
+  return Array.isArray(ids) ? ids.filter((id): id is number => typeof id === 'number') : []
+}
 export const actions = {
+  pending(args: JsonValue, { host }: ActionContext) {
+    const ids = args && typeof args === 'object' && !Array.isArray(args) ? args.ids : undefined
+    if (
+      !Array.isArray(ids) ||
+      ids.some((id) => typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1)
+    )
+      throw new Error('Expected workspace conversation ids')
+    return workspaces(host).pending(ids as number[], context)
+  },
   async create(args: JsonValue, { host }: ActionContext) {
     const input = (args ?? {}) as { cwd?: string; title?: string }
     if (input.cwd !== undefined && typeof input.cwd !== 'string')
@@ -137,6 +151,8 @@ export default function workspaceExtension(host: ExtensionHost) {
   let unsubscribe: (() => void) | undefined
   let stopWatching: (() => void) | undefined
   let pending: ReturnType<typeof setTimeout> | undefined
+  let releasing: Promise<unknown> | undefined
+  let releaseController: AbortController | undefined
   // A lander task that faults leaves its queue behind. One run by older code, as on a reload of this code that changed
   // the Workspaces document, is replaced at once; a fault of this code's own task would only repeat, so it waits for
   // the next submit or open. Opening (and each reload while open) picks up any such queue. An aborted task stays
@@ -146,6 +162,13 @@ export default function workspaceExtension(host: ExtensionHost) {
       host.notice(`Lander setup failed: ${String(error)}`)
     })
   host.onOpen(async () => {
+    releaseController = new AbortController()
+    const { signal } = releaseController
+    releasing = concluded(host)
+      .then((ids) => service.release(ids, context, signal))
+      .catch((error: unknown) => {
+        host.notice(`Workspace release failed: ${String(error)}`)
+      })
     unsubscribe?.()
     unsubscribe = host.harness().subscribeCommits((publication) => {
       for (const change of publication.changes) {
@@ -173,6 +196,8 @@ export default function workspaceExtension(host: ExtensionHost) {
     await resume()
   })
   host.onClose(async () => {
+    releaseController?.abort()
+    await releasing
     unsubscribe?.()
     unsubscribe = undefined
     stopWatching?.()
@@ -189,7 +214,7 @@ export default function workspaceExtension(host: ExtensionHost) {
           if (workspace?.state === 'failed')
             return { block: `Workspace setup failed: ${workspace.error}; start a new conversation` }
           if (workspace?.state === 'removed')
-            return { block: 'This workspace was removed; start a new conversation' }
+            return { block: 'Workspace was removed; send a new input to recreate it' }
           const landing = await service.landerOwnsCheckout(api.conversationId, caller)
           return landing ? { block: landing } : undefined
         },

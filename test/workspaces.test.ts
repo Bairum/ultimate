@@ -7,17 +7,24 @@ import {
   access,
   symlink,
   realpath,
+  unlink,
 } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { defineExtension, defineTool, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import {
+  defineExtension,
+  defineTask,
+  defineTool,
+  ROOT_CONVERSATION_ID,
+} from '@earendil-works/pi-durable'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
 import type { ConversationId, JsonObject, TaskId } from '@earendil-works/pi-durable'
 import { afterAll, expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
+import { UiState } from '../server/ui-state.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { ActionContext } from '../server/actions.ts'
 import workspaceExtension, {
@@ -115,6 +122,7 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
       return resources.get(key) as T
     },
     restart,
+    notice: vi.fn<ExtensionHost['notice']>(),
     onOpen: (callback: () => Promise<void>) => openers.push(callback),
     onClose: (close: () => Promise<void>) => closers.push(close),
     build: () => ({ id: 'test-build' }),
@@ -562,7 +570,7 @@ it.concurrent('refuses another running conversation and queued input; own tool l
     await git(workspace.path, 'rev-parse', 'HEAD'),
   )
 })
-it.concurrent('discard refuses dirty, keeps the branch, and blocks removed-workspace tools', async () => {
+it.concurrent('discard refuses dirty, keeps the branch until reuse, and recreates before tools', async () => {
   const f = await fixture()
   const id = await f.create()
   await f.service.ready(id, context)
@@ -573,8 +581,9 @@ it.concurrent('discard refuses dirty, keeps the branch, and blocks removed-works
   await actions.discard({ id }, { host: f.host } as ActionContext)
   expect(await git(f.projectRoot, 'rev-parse', workspace.branch)).toBe(tip)
   const result = await f.call(id, 'write_commit')
-  expect(JSON.stringify(result)).toContain('This workspace was removed; start a new conversation')
-  expect(f.writes).toBe(0)
+  expect(JSON.stringify(result)).toContain('committed')
+  expect(f.writes).toBe(1)
+  expect((await f.service.get(id, context))!.state).toBe('ready')
   await expect(access(join(f.projectRoot, 'change.txt'))).rejects.toThrow('ENOENT')
 })
 it.concurrent('isolated restart refuses before landing and accepts a clean running clone at the landed tip', async () => {
@@ -1838,4 +1847,223 @@ it.concurrent('fix: the lander model resolves a conflict with the remote target,
   expect(steps.slice(steps.indexOf('fixing'))).toEqual(
     expect.arrayContaining(['merging', 'checking: grep -q resolved base.txt']),
   )
+})
+
+it.concurrent('pending and release preserve dirty and unlanded work, removing only landed checkouts', async () => {
+  const f = await fixture()
+  const clean = await f.create()
+  const dirty = await f.create()
+  const ahead = await f.create()
+  for (const id of [clean, dirty, ahead]) await f.service.ready(id, context)
+  const cleanWorkspace = (await f.service.get(clean, context))!
+  const dirtyWorkspace = (await f.service.get(dirty, context))!
+  const aheadWorkspace = (await f.service.get(ahead, context))!
+  await commit(cleanWorkspace.path)
+  await f.service.land(clean, context)
+  await writeFile(join(dirtyWorkspace.path, 'dirty.txt'), 'dirty')
+  await commit(aheadWorkspace.path, 'ahead.txt')
+  const expected = [
+    { id: dirty, uncommitted: 1, unlanded: 0 },
+    { id: ahead, uncommitted: 0, unlanded: 1 },
+  ]
+  expect(
+    await actions.pending({ ids: [clean, dirty, ahead] }, { host: f.host } as ActionContext),
+  ).toEqual(expected)
+  expect(await f.service.release([clean, dirty, ahead], context)).toEqual(expected)
+  await expect(access(cleanWorkspace.path)).rejects.toThrow('ENOENT')
+  expect(await git(f.projectRoot, 'worktree', 'list', '--porcelain')).not.toContain(
+    cleanWorkspace.path,
+  )
+  expect(await git(f.projectRoot, 'branch', '--list', cleanWorkspace.branch)).toBe('')
+  expect((await f.service.get(clean, context))!.state).toBe('removed')
+  expect(await readFile(join(dirtyWorkspace.path, 'dirty.txt'), 'utf8')).toBe('dirty')
+  expect(await git(aheadWorkspace.path, 'rev-list', '--count', `main..HEAD`)).toBe('1')
+  expect(await f.service.release([clean], context)).toEqual([])
+})
+
+it.concurrent('release includes transitively owned checkouts but not unrelated conversations', async () => {
+  const f = await fixture()
+  const parent = await f.create()
+  await f.service.ready(parent, context)
+  const Owner = defineTask<null, { phase: 'done' }, null>({
+    name: 'test.owner',
+    version: 1,
+    abort: (_task, runtime, ctx) =>
+      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+    initial: () => ({ phase: 'done' }),
+    phases: {
+      done: (_task, runtime, ctx) =>
+        runtime.commit(
+          () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
+          ctx,
+        ),
+    },
+  })
+  f.prepared.registry.install(defineExtension({ name: 'test-owner', tasks: [Owner] }))
+  const childOf = async (owner: ConversationId) => {
+    const id = await f.opened.harness.commit(async (tx) => {
+      const taskId = await tx.createTask(Owner, null, {
+        conversationId: owner,
+        ownership: { kind: 'conversation' },
+        background: true,
+      })
+      const child = await tx.createConversation({ ownership: { kind: 'task', taskId } })
+      await f.service.create(tx, child.id, f.projectRoot)
+      return child.id
+    }, context)
+    f.opened.harness.resume()
+    await f.service.ready(id, context)
+    return id
+  }
+  const child = await childOf(parent)
+  const grandchild = await childOf(child)
+  const unrelated = await f.create()
+  await f.service.ready(unrelated, context)
+  const dirty = (await f.service.get(grandchild, context))!
+  await writeFile(join(dirty.path, 'dirty.txt'), 'dirty')
+  const expected = [{ id: grandchild, uncommitted: 1, unlanded: 0 }]
+  expect(await f.service.pending([parent], context)).toEqual(expected)
+  expect(await f.service.release([parent], context)).toEqual(expected)
+  for (const id of [parent, child]) {
+    const workspace = (await f.service.get(id, context))!
+    expect(workspace.state).toBe('removed')
+    await expect(access(workspace.path)).rejects.toThrow('ENOENT')
+  }
+  expect((await f.service.get(unrelated, context))!.state).toBe('ready')
+})
+
+it.concurrent('release keeps a busy clean checkout without waiting', async () => {
+  const f = await fixture()
+  const id = await f.create()
+  await f.service.ready(id, context)
+  let finish!: () => void
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  f.prepared.faux!.setResponses([
+    async () => {
+      await gate
+      return fauxAssistantMessage('done')
+    },
+  ])
+  const conversation = (await f.opened.harness.conversation(id, context))!
+  const submission = await conversation.submit({ type: 'input', content: 'hold' }, context)
+  try {
+    expect(await f.service.release([id], context)).toEqual([
+      { id, uncommitted: 0, unlanded: 0, busy: expect.stringMatching(/running|queued/) },
+    ])
+    expect((await f.service.get(id, context))!.state).toBe('ready')
+  } finally {
+    finish()
+    await submission.wait(context)
+    await conversation.waitForIdle(context)
+  }
+})
+
+it.concurrent('next input recreates a released checkout at the current target and reruns setup before the model', async () => {
+  const f = await fixture(['printf setup > setup-marker; printf setup-marker > .gitignore'])
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  // Commit setup output so release can safely remove the checkout.
+  await git(workspace.path, 'add', '.gitignore')
+  await git(workspace.path, 'commit', '-m', 'ignore setup marker')
+  await f.service.land(id, context)
+  expect(await f.service.release([id], context)).toEqual([])
+  const tip = await commit(f.projectRoot, 'new-target.txt')
+  let requested = false
+  f.prepared.faux!.setResponses([
+    async () => {
+      expect((await f.service.get(id, context))!.state).toBe('ready')
+      expect(await git(workspace.path, 'rev-parse', 'HEAD')).toBe(tip)
+      expect(await readFile(join(workspace.path, 'setup-marker'), 'utf8')).toBe('setup')
+      requested = true
+      return fauxAssistantMessage('recreated')
+    },
+  ])
+  const conversation = (await f.opened.harness.conversation(id, context))!
+  await (await conversation.submit({ type: 'input', content: 'resume' }, context)).wait(context)
+  await conversation.waitForIdle(context)
+  expect(requested).toBe(true)
+  expect((await f.service.get(id, context))!).toMatchObject({
+    state: 'ready',
+    path: workspace.path,
+    base: tip,
+  })
+  expect(await git(workspace.path, 'status', '--porcelain')).toBe('')
+})
+
+it.concurrent('open reconciles concluded checkouts in the background', async () => {
+  const f = await fixture()
+  const concluded = await f.create()
+  const active = await f.create()
+  for (const id of [concluded, active]) await f.service.ready(id, context)
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(UiState, ROOT_CONVERSATION_ID))['ext.conversations.archived'] = [concluded]
+  }, context)
+  await f.reopen()
+  await until(async () => (await f.service.get(concluded, context))!.state === 'removed')
+  await expect(access((await f.service.get(concluded, context))!.path)).rejects.toThrow('ENOENT')
+  expect((await f.service.get(active, context))!.state).toBe('ready')
+})
+
+it.concurrent('release handles failed checkouts but never removes detached unlanded work', async () => {
+  const f = await fixture()
+  const failed = await f.create()
+  const detached = await f.create()
+  for (const id of [failed, detached]) await f.service.ready(id, context)
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(failed)].state = 'failed'
+  }, context)
+  const failedWorkspace = (await f.service.get(failed, context))!
+  await writeFile(join(failedWorkspace.path, 'output.txt'), 'failed setup output')
+  expect(await f.service.pending([failed], context)).toEqual([
+    { id: failed, uncommitted: 1, unlanded: 0 },
+  ])
+  expect(await f.service.release([failed], context)).toEqual([
+    { id: failed, uncommitted: 1, unlanded: 0 },
+  ])
+  await unlink(join(failedWorkspace.path, 'output.txt'))
+  expect(await f.service.release([failed], context)).toEqual([])
+  const workspace = (await f.service.get(detached, context))!
+  await git(workspace.path, 'checkout', '--detach')
+  const tip = await commit(workspace.path)
+  await expect(f.service.release([detached], context)).rejects.toThrow('recorded branch tip')
+  expect(await git(workspace.path, 'rev-parse', 'HEAD')).toBe(tip)
+})
+
+it.concurrent('aborting release finishes the current checkout and leaves the remaining batch untouched', async () => {
+  const f = await fixture()
+  const ids = [await f.create(), await f.create(), await f.create()]
+  for (const id of ids) await f.service.ready(id, context)
+  const workspacesBefore = await Promise.all(ids.map((id) => f.service.get(id, context)))
+  const deletingBranch = await holdGit(f.projectRoot, 'branch')
+  const controller = new AbortController()
+  let finished = false
+  const releasing = f.service.release(ids, context, controller.signal).then((kept) => {
+    finished = true
+    return kept
+  })
+  try {
+    // Hold the first checkout's final branch deletion, after its folder has been removed.
+    await deletingBranch.started()
+    controller.abort()
+    expect(finished).toBe(false)
+    await expect(access(workspacesBefore[0]!.path)).rejects.toThrow('ENOENT')
+  } finally {
+    await deletingBranch.release()
+    await releasing
+  }
+  expect(finished).toBe(true)
+  expect(await git(f.projectRoot, 'branch', '--list', workspacesBefore[0]!.branch)).toBe('')
+  const registered = await git(f.projectRoot, 'worktree', 'list', '--porcelain')
+  for (let i = 1; i < ids.length; i++) {
+    const workspace = workspacesBefore[i]!
+    expect((await f.service.get(ids[i], context))!.state).toBe('ready')
+    await access(workspace.path)
+    expect(registered).toContain(workspace.path)
+    expect(await git(f.projectRoot, 'branch', '--list', workspace.branch)).toContain(
+      workspace.branch,
+    )
+  }
 })

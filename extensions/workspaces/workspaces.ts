@@ -12,7 +12,7 @@ import {
   LiveDoc,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, TaskId, Tx } from '@earendil-works/pi-durable'
+import type { ConversationId, Cursor, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ConversationsService } from '../conversations/server.ts'
 import { git, isolatable, setup } from './git.ts'
@@ -24,6 +24,7 @@ import type {
   WorkspaceDisk,
   WorkspaceInfo,
   WorkspaceStats,
+  WorkspacePending,
 } from './types.ts'
 
 const exec = promisify(execFile)
@@ -83,6 +84,24 @@ type Host = Pick<
   | 'extensions'
   | 'metadata'
 >
+async function changes(
+  id: ConversationId,
+  workspace: WorkspaceIndex['items'][string],
+): Promise<WorkspacePending> {
+  return {
+    id,
+    uncommitted: (await git(workspace.path, 'status', '--porcelain')).split('\n').filter(Boolean)
+      .length,
+    unlanded: Number(
+      await git(
+        workspace.source,
+        'rev-list',
+        '--count',
+        `${workspace.target}..${workspace.branch}`,
+      ),
+    ),
+  }
+}
 export function workspaces(host: Host) {
   const queues = host.resource('workspaces.land', () => new Map<string, Promise<unknown>>())
   /** Runs writes to one source checkout one at a time, across synchronous landing and the lander. */
@@ -212,7 +231,11 @@ export function workspaces(host: Host) {
   }
   const get = async (id: ConversationId, context: Context) =>
     (await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context))?.items[String(id)]
-  const Preparation = defineTask<{ id: ConversationId }, { phase: 'prepare' }, null>({
+  const Preparation = defineTask<
+    { id: ConversationId; reset?: boolean },
+    { phase: 'prepare' },
+    null
+  >({
     name: 'workspaces.prepare',
     version: 1,
     initial: () => ({ phase: 'prepare' }),
@@ -241,11 +264,12 @@ export function workspaces(host: Host) {
               throw new Error(`Workspace path already exists: ${workspace.path}`)
             if (await git(workspace.source, 'branch', '--list', workspace.branch)) {
               if (
-                !resumed ||
-                (await git(workspace.source, 'rev-parse', workspace.branch)) !== workspace.base
+                !task.input.reset &&
+                (!resumed ||
+                  (await git(workspace.source, 'rev-parse', workspace.branch)) !== workspace.base)
               )
                 throw new Error(`Workspace branch already exists: ${workspace.branch}`)
-              await git(workspace.source, 'branch', '-D', workspace.branch)
+              if (!task.input.reset) await git(workspace.source, 'branch', '-D', workspace.branch)
             }
             await runtime.memo('started', true, context)
             created = true
@@ -253,7 +277,7 @@ export function workspaces(host: Host) {
               workspace.source,
               'worktree',
               'add',
-              '-b',
+              task.input.reset ? '-B' : '-b',
               workspace.branch,
               workspace.path,
               workspace.base,
@@ -313,12 +337,101 @@ export function workspaces(host: Host) {
         return { status: 'terminal', outcome: { status: 'aborted' } }
       }, context),
   })
-  async function idle(id: ConversationId, context: Context, own = false) {
-    if (own) return
+  async function busy(id: ConversationId, context: Context) {
     if ((await host.harness().snapshot(LiveDoc, id, context))?.run)
-      throw new Error('Conversation is running; wait or stop it before landing or removal')
+      return 'Conversation is running; wait or stop it before landing or removal'
     if ((await host.harness().snapshot(InboxDoc, id, context))?.items.length)
-      throw new Error('Conversation has queued input; wait or cancel it first')
+      return 'Conversation has queued input; wait or cancel it first'
+    return undefined
+  }
+  async function idle(id: ConversationId, context: Context, own = false) {
+    const reason = !own && (await busy(id, context))
+    if (reason) throw new Error(reason)
+  }
+  async function candidates(ids: number[], context: Context) {
+    const owned = new Set(ids)
+    await host.harness().commit(async (tx) => {
+      const rows = []
+      let cursor: Cursor | undefined
+      do {
+        const page = await tx.scanConversations({}, 256, cursor)
+        rows.push(...page.items)
+        cursor = page.next
+      } while (cursor !== undefined)
+      let size: number
+      do {
+        size = owned.size
+        for (const row of rows)
+          if (row.owner && owned.has(row.owner.conversationId)) owned.add(row.id)
+      } while (size !== owned.size)
+    }, context)
+    return [...owned] as ConversationId[]
+  }
+  async function presentCheckout(id: ConversationId, context: Context) {
+    const workspace = await get(id, context)
+    if (!workspace || !['ready', 'failed'].includes(workspace.state)) return undefined
+    return (await lstat(workspace.path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error
+      return undefined
+    }))
+      ? workspace
+      : undefined
+  }
+  async function pending(ids: number[], context: Context): Promise<WorkspacePending[]> {
+    const result: WorkspacePending[] = []
+    for (const id of await candidates(ids, context)) {
+      const workspace = await presentCheckout(id, context)
+      if (!workspace) continue
+      const item = await changes(id, workspace)
+      if (item.uncommitted || item.unlanded) result.push(item)
+    }
+    return result
+  }
+  async function release(
+    ids: number[],
+    context: Context,
+    signal?: AbortSignal,
+  ): Promise<WorkspacePending[]> {
+    const kept: WorkspacePending[] = []
+    if (signal?.aborted) return kept
+    for (const id of await candidates(ids, context)) {
+      if (signal?.aborted) break
+      const record = await get(id, context)
+      if (!record) continue
+      await serial(record.source, async () => {
+        if (signal?.aborted) return
+        const workspace = await presentCheckout(id, context)
+        if (!workspace) return
+        const item = await changes(id, workspace)
+        const reason = await busy(id, context)
+        if (reason) item.busy = reason
+        if (item.uncommitted || item.unlanded || reason) {
+          kept.push(item)
+          return
+        }
+        if (
+          (await git(workspace.path, 'rev-parse', 'HEAD')) !==
+          (await git(workspace.source, 'rev-parse', workspace.branch))
+        )
+          throw new Error(`Workspace #${id} no longer checks out its recorded branch tip`)
+        // Never force: Git refuses uncommitted changes made since the status check.
+        await git(workspace.source, 'worktree', 'remove', workspace.path)
+        await host.harness().commit(async (tx) => {
+          ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'removed'
+        }, context)
+        if (await git(workspace.source, 'branch', '--list', workspace.branch)) {
+          await git(
+            workspace.source,
+            'merge-base',
+            '--is-ancestor',
+            workspace.branch,
+            workspace.target,
+          )
+          await git(workspace.source, 'branch', '-D', workspace.branch)
+        }
+      })
+    }
+    return kept
   }
   async function land(id: ConversationId, context: Context, own = false): Promise<LandResult> {
     const record = await get(id, context)
@@ -466,6 +579,8 @@ export function workspaces(host: Host) {
     get,
     land,
     submit,
+    pending,
+    release,
     async create(tx: Tx, id: ConversationId, cwd: string) {
       if (
         !host.extensions().some((extension) => extension.name === 'workspaces' && extension.enabled)
@@ -495,12 +610,35 @@ export function workspaces(host: Host) {
       return index.items[String(id)]
     },
     async ready(id: ConversationId, context: Context) {
-      if ((await get(id, context))?.state !== 'preparing') return
+      const record = await get(id, context)
+      if (!record) return
       const harness = host.harness()
+      if (record.state === 'removed')
+        await serial(record.source, async () => {
+          await harness.commit(async (tx) => {
+            const workspace = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)]
+            if (workspace.state !== 'removed') return
+            workspace.base = await git(workspace.source, 'rev-parse', workspace.target)
+            workspace.state = 'preparing'
+            delete workspace.error
+            delete workspace.landed
+            await tx.createTask(
+              Preparation,
+              { id, reset: true },
+              { conversationId: id, ownership: { kind: 'conversation' }, background: true },
+            )
+          }, context)
+        })
+      if ((await get(id, context))?.state !== 'preparing') return
+      harness.resume()
       const task = await harness.commit(
         async (tx) =>
-          (await tx.scanTasks({ conversationId: id, kind: Preparation.definition.name }, 1))
-            .items[0],
+          (
+            await tx.scanTasks(
+              { conversationId: id, kind: Preparation.definition.name, order: 'descending' },
+              1,
+            )
+          ).items[0],
         context,
       )
       if (task) await harness.waitForTask(task.id, context)
