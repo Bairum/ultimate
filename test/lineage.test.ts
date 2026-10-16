@@ -7,9 +7,11 @@ import { estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate'
 import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import { afterEach, beforeAll, expect, it } from 'vitest'
-import { abstract, Branch, branchOf, Tally } from '../extensions/lineage/server.ts'
+import { abstract, Branch, branchOf, rootOf, Tally } from '../extensions/lineage/server.ts'
+import type { LineageService } from '../extensions/lineage/server.ts'
 import { Plan } from '../extensions/plan/server.ts'
 import { Summaries, summaryBehavior } from '../extensions/conversations/summary.ts'
+import type { SummaryHost } from '../extensions/conversations/summary.ts'
 import { defineExtension, defineTask } from '@earendil-works/pi-durable'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -439,7 +441,7 @@ it('turns a conversation with history into a tally with one genesis that branche
   ])
 })
 
-it('lets a summary replace the provisional branch title', async () => {
+it('summarizes a branch into its title and its abstract in the tree root', async () => {
   const { server } = await fixture()
   const existing = server.host.registry.snapshot().extension('conversations')!
   server.host.registry.install(
@@ -458,12 +460,23 @@ it('lets a summary replace the provisional branch title', async () => {
                 .getModels()
                 .filter((model) => model.provider === 'openai' && model.id === 'gpt-6-luna'),
           },
+          use: ((name: string) =>
+            name === 'lineage'
+              ? ({
+                  rootOf: (id: number, ctx: typeof context) =>
+                    rootOf({ harness: () => server.harness }, id, ctx),
+                  branchOf: (id: number, ctx: typeof context) =>
+                    branchOf({ harness: () => server.harness }, id, ctx),
+                  abstract,
+                } satisfies Pick<LineageService, 'rootOf' | 'branchOf' | 'abstract'>)
+              : undefined) as NonNullable<SummaryHost['use']>,
         },
         async () => ({
           assessment: 'done',
           activity: 'Finished the new work.',
           title: 'Summarized branch',
           summary: 'Finished the new work.',
+          abstract: 'Ask: new intent\nDiverged: none\nState: done',
         }),
       ),
     }),
@@ -476,6 +489,15 @@ it('lets a summary replace the provisional branch title', async () => {
   )
   expect((await server.harness.snapshot(Summaries, id, context))?.generatedTitle).toBe(
     'Summarized branch',
+  )
+  await until(
+    async () =>
+      (await server.harness.snapshot(Tally, ROOT_CONVERSATION_ID, context))?.abstracts[id] !==
+      undefined,
+  )
+  const { messages } = await server.root.context(context)
+  expect(textOf(messages.at(-1)!.content)).toMatch(
+    new RegExp(`^Abstract of #${id} Summarized branch as of #${id}/\\d+:\nAsk: new intent`),
   )
 })
 

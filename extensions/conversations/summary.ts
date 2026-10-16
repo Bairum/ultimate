@@ -27,9 +27,7 @@ import type {
   Usage,
 } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { Context } from '@earendil-works/chord'
-import type { LineageService as ExistingLineageService } from '../lineage/server.ts'
-
+import type { LineageService } from '../lineage/server.ts'
 import { summaryModel } from './summary-model.ts'
 import { isInput } from './activity.ts'
 import type { SummaryModel, SummaryModelHost } from './summary-model.ts'
@@ -43,15 +41,6 @@ import type {
   SummaryStatus,
   TitleChange,
 } from './types.ts'
-
-type LineageService = Pick<ExistingLineageService, 'rootOf'> & {
-  branchOf(id: number, ctx: Context): Promise<{ root: number; intent?: string } | undefined>
-  abstract(
-    tx: Tx,
-    id: number,
-    data: { text: string; at: number; title?: string; feature?: string },
-  ): Promise<void>
-}
 
 export const TitleChanged = defineEntry<TitleChange>('conversations.title-changed')
 
@@ -712,6 +701,16 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
               ...modelOf(response, model),
               at: now,
             })
+          // Lineage reads conversation records, so the abstract goes before this transaction's first entry.
+          if (checkpoint.abstract && result.abstract && completed !== undefined) {
+            await host.use?.<LineageService>('lineage')?.abstract(tx, runtime.conversationId, {
+              text: result.abstract,
+              at: checkpoint.answer,
+              title: result.title ?? state.generatedTitle,
+              feature: result.feature ?? state.feature,
+            })
+            state.abstract = result.abstract
+          }
           if (completed !== undefined) {
             state.assessment = {
               inputId: completed,
@@ -750,15 +749,6 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
               }
               state.generatedTitle = result.title
             }
-          }
-          if (checkpoint.abstract && result.abstract && completed !== undefined) {
-            await host.use?.<LineageService>('lineage')?.abstract(tx, runtime.conversationId, {
-              text: result.abstract,
-              at: checkpoint.answer,
-              title: result.title ?? state.generatedTitle,
-              feature: result.feature ?? state.feature,
-            })
-            state.abstract = result.abstract
           }
           return terminal
         }, context)
