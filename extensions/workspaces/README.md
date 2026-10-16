@@ -15,7 +15,9 @@ Each conversation has one record in the root `ultimate.workspaces` document.
 Its path is `<home>/worktrees/<conversationId>`; its branch includes the home hash and conversation ID.
 Preparation runs `isolates.worktree.setup` with `ULTIMATE_SOURCE` set to the source checkout.
 Setup commands must be safe to repeat after interruption.
-The first model request waits for preparation; failed workspaces block tools with the reason.
+The first model request waits for preparation. Before every tool call, the workspace must be ready with a
+present, registered checkout. Otherwise the tool is blocked with the reason; the model can still reply and
+explain why it cannot use the checkout.
 A removed workspace is recreated at the same path on the next model request. An existing branch with unlanded
 commits is checked out unchanged, with its tip as the new base; a merged or missing branch starts at the current
 target tip. Nested isolates prepare their source ancestor checkouts first.
@@ -41,8 +43,10 @@ Git writes are serialized per source and removal is never forced.
 Release atomically checks run admission and marks the record `removed` before deleting the folder. Requests wait
 on that same source queue before checking the record and recreating. Reconciliation and recreation finish
 interrupted removals; newly found pending work is kept and the checkout returns to `ready`. Unlanded counts include
-commits reachable from either the branch or HEAD, including detached work. Refused removals restore `ready` and
-report `reason`; recovery through `ready()` returns the kept record and retains the reason in workspace info.
+commits reachable from either the branch or HEAD, including detached work. Refused removals report `reason` and
+restore `ready` only if the folder remains a registered worktree. If removal succeeded before branch cleanup
+failed, the record stays `removed` with the error so the next input can recreate it. Recovery through `ready()`
+returns the kept record and retains the reason in workspace info.
 On open, a background reconciliation releases concluded conversations' eligible checkouts; failures become notices.
 `release(ids, ctx, signal?)` stops between checkouts when aborted. Closing aborts reconciliation and waits only
 for the current checkout to finish, not the remaining batch.

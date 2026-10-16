@@ -103,6 +103,20 @@ async function changes(
     ),
   }
 }
+async function registeredCheckout(workspace: WorkspaceIndex['items'][string]) {
+  const present = await lstat(workspace.path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error
+    return undefined
+  })
+  if (!present) return false
+  const listed = await git(workspace.path, 'worktree', 'list', '--porcelain').catch(
+    // A folder Git cannot inspect is not a usable registered checkout.
+    () => '',
+  )
+  return listed
+    .split('\n\n')
+    .some((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
+}
 export function workspaces(host: Host) {
   const queues = host.resource('workspaces.land', () => new Map<string, Promise<unknown>>())
   /** Runs writes to one source checkout one at a time, across synchronous landing and the lander. */
@@ -443,9 +457,10 @@ export function workspaces(host: Host) {
       return undefined
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
+      const present = await registeredCheckout(workspace)
       await host.harness().commit(async (tx) => {
         const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)]
-        saved.state = 'ready'
+        saved.state = present ? 'ready' : 'removed'
         saved.error = reason
       }, context)
       return { ...item, reason }
@@ -661,6 +676,17 @@ export function workspaces(host: Host) {
     host.harness().resume()
     return result
   }
+  async function unavailable(id: ConversationId, context: Context) {
+    const workspace = await get(id, context)
+    if (!workspace) return undefined
+    if (workspace.state === 'failed')
+      return `Workspace setup failed: ${workspace.error}; start a new conversation`
+    if (workspace.state !== 'ready')
+      return `Workspace is ${workspace.state}: ${workspace.error ?? 'checkout is not ready; send a new input to retry'}`
+    if (!(await registeredCheckout(workspace)))
+      return `Workspace checkout is missing or unregistered: ${workspace.path}${workspace.error ? `; ${workspace.error}` : ''}`
+    return undefined
+  }
   async function ready(
     id: ConversationId,
     context: Context,
@@ -763,6 +789,7 @@ export function workspaces(host: Host) {
     landerOwnsCheckout,
     started,
     get,
+    unavailable,
     land,
     submit,
     pending,

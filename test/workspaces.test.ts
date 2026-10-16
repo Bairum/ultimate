@@ -2299,3 +2299,105 @@ it.concurrent('refused release and recovery restore ready and report the reason 
   )
   expect(await git(workspace.path, 'rev-parse', 'HEAD')).toBe(workspace.base)
 })
+
+it.concurrent('a branch deletion failure after removing the worktree stays removed and the next request recreates it', async () => {
+  const f = await fixture()
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  const branch = await holdGit(f.projectRoot, 'branch', true)
+  const releasing = f.service.release([id], context)
+  try {
+    await branch.started()
+    await expect(access(workspace.path)).rejects.toThrow('ENOENT')
+  } finally {
+    await branch.release()
+  }
+  expect(await releasing).toEqual([{ id, uncommitted: 0, unlanded: 0, reason: expect.any(String) }])
+  expect((await f.service.get(id, context))!).toMatchObject({
+    state: 'removed',
+    error: expect.any(String),
+  })
+  expect(await git(f.projectRoot, 'worktree', 'list', '--porcelain')).not.toContain(workspace.path)
+  const result = await f.call(id, 'bash', { command: 'pwd' })
+  expect(JSON.stringify(result)).toContain(workspace.path)
+  expect((await f.service.get(id, context))!.state).toBe('ready')
+  await access(workspace.path)
+})
+
+it.concurrent('a persistent branch deletion failure blocks tools with its reason while the model can explain', async () => {
+  const f = await fixture()
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  await writeFile(
+    join(f.projectRoot, '.git/hooks/reference-transaction'),
+    `#!/bin/sh
+cat >/dev/null
+[ "$1" = prepared ] || exit 0
+case "$(tr '\\0' ' ' < /proc/$PPID/cmdline)" in "git branch -D "*) exit 1 ;; esac
+`,
+    { mode: 0o755 },
+  )
+  const kept = await f.service.release([id], context)
+  expect(kept).toEqual([{ id, uncommitted: 0, unlanded: 0, reason: expect.any(String) }])
+  const result = await f.call(id, 'write_commit')
+  expect(result?.role === 'toolResult' && result.isError).toBe(true)
+  expect(
+    result?.role === 'toolResult' &&
+      result.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n'),
+  ).toContain(kept[0].reason!)
+  expect(f.writes).toBe(0)
+  const conversation = (await f.opened.harness.conversation(id, context))!
+  const view = await conversation.viewState(context)
+  try {
+    const reply = view.value.entries
+      .flatMap((entry) => entry.model ?? [])
+      .findLast((message) => message.role === 'assistant')
+    expect(
+      reply?.role === 'assistant' &&
+        reply.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n'),
+    ).toContain(kept[0].reason!)
+  } finally {
+    view.dispose()
+  }
+  expect((await f.service.get(id, context))!).toMatchObject({
+    state: 'removed',
+    error: kept[0].reason,
+  })
+  await expect(access(workspace.path)).rejects.toThrow('ENOENT')
+})
+
+it.concurrent('recovery does not mark an unregistered folder ready or run tools there', async () => {
+  const f = await fixture()
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  await f.service.release([id], context)
+  await mkdir(workspace.path)
+  await writeFile(join(workspace.path, 'unrelated.txt'), 'keep me')
+  const result = await f.call(id, 'write_commit')
+  expect(result?.role === 'toolResult' && result.isError).toBe(true)
+  expect(JSON.stringify(result)).toContain('Workspace is removed:')
+  expect(f.writes).toBe(0)
+  expect((await f.service.get(id, context))!.state).toBe('removed')
+  expect(await readFile(join(workspace.path, 'unrelated.txt'), 'utf8')).toBe('keep me')
+})
+
+it.concurrent('the tool gate blocks a checkout removed after the provider request began', async () => {
+  const f = await fixture()
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  f.prepared.faux!.setResponses([
+    async () => {
+      await git(workspace.source, 'worktree', 'remove', workspace.path)
+      return fauxAssistantMessage(fauxToolCall('write_commit', {}), { stopReason: 'toolUse' })
+    },
+    fauxAssistantMessage('blocked'),
+  ])
+  const result = await f.call(id, 'write_commit')
+  expect(result?.role === 'toolResult' && result.isError).toBe(true)
+  expect(JSON.stringify(result)).toContain('Workspace checkout is missing or unregistered:')
+  expect(f.writes).toBe(0)
+})

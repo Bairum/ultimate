@@ -209,11 +209,8 @@ export default function workspaceExtension(host: ExtensionHost) {
     hooks: [
       hook(ToolTask, {
         beforeTool: async (_call, api, caller) => {
-          const workspace = await service.get(api.conversationId, caller)
-          if (workspace?.state === 'failed')
-            return { block: `Workspace setup failed: ${workspace.error}; start a new conversation` }
-          if (workspace?.state === 'removed')
-            return { block: 'Workspace was removed; send a new input to recreate it' }
+          const reason = await service.unavailable(api.conversationId, caller)
+          if (reason) return { block: reason }
           const landing = await service.landerOwnsCheckout(api.conversationId, caller)
           return landing ? { block: landing } : undefined
         },
