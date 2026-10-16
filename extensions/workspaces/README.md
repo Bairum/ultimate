@@ -32,8 +32,11 @@ once (`btrfs filesystem du`). Measuring takes seconds, so one runs at a time and
 
 ## Lander
 
-`workspace submit` queues a top-level main's clean tip in the root document's `queue`
-and returns its position and lander conversation at once; the main keeps working. One `workspaces.lander` task per
+`workspace submit` requires a non-empty `divergence` string: how the delivered result differs from the original
+request (new agreements, different approach or library, changed scope), or "None" when it matches. It queues a
+top-level main's clean tip in the root document's `queue` and returns its position and lander conversation at once;
+the main keeps working. The submission saves `divergence` and `at`, the submitter's latest visible entry at submit
+time, as a breadcrumb; synchronous `workspace land` is unchanged. One `workspaces.lander` task per
 source checkout (`landers`) processes that source's entries in order; merging, checks, fast-forward and push are
 code, and a model runs only on a failure or when someone writes to the lander.
 
@@ -59,7 +62,10 @@ rows and ends in a quiet "full log in #<lander>" link. The lander's report messa
 a success, warning (landed, push failed) or error accent and the same collapsed steps. Nobody has to open the lander
 conversation; it keeps the full log, grouped by submission, and shows in the Agents tab.
 With lineage enabled, the report phase also leaves a replay-safe landing note in the submitter's tree root, unless
-the submitter is that root or has none. Failed submissions leave no root note; notes never wake the root.
+the submitter is that root or has none. Its data includes `divergence` and `at` alongside `from`, `sha`, `target`,
+`commits` and `paths`; model text cites `#<from>/<at>` and always includes `Diverged: …`, even for "None".
+The shared landing card in the root and submitter shows a quiet Diverged line and the breadcrumb.
+Failed submissions leave no root note; notes never wake the root.
 
 What lands is named once, at submit: the queue entry keeps the submitter's `subject` (title, summary and feature)
 from the `conversations` service's `subject(id)`, so a later retitle does not rename it. The result, the lander log's

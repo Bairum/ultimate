@@ -1,6 +1,6 @@
 The project's conversations in the Agent surface's sidebar: branch, switch, rename, clear, and conclude them.
-Several run at once, each a separate agent, and each knows about the others. A summary model (GPT-6 Luna by default)
-automatically gives top-level conversations concise titles and sidebar summaries, and assesses each final reply without
+Several branches run at once as separate agents; lineage roots keep their shared tally without running turns.
+A summary model (GPT-6 Luna by default) automatically gives top-level conversations concise titles and sidebar summaries, and assesses each final reply without
 changing the main agent.
 
 ## Sidebar
@@ -92,8 +92,8 @@ helper in `summary.ts`: `intent`, `spawn`, and `reply`. The existing version-1 t
 initial intent adds an optional input field, so live reply and spawn tasks remain resumable.
 
 `GenerationTask.beforeRequest` requests an initial title and intent summary before the main model request.
-It inspects stored entries since the current head marker: exactly one user input and no assistant reply,
-only in top-level conversations. A durable `intentRequested` flag prevents tools, request retries and recovery
+It inspects the conversation's own stored entries since the current head marker (not inherited fork history):
+exactly one user input and no assistant reply, only in top-level conversations. A durable `intentRequested` flag prevents tools, request retries and recovery
 from requesting it again. Established conversations are not backfilled on later inputs, including when the summary
 model becomes available later. Clear context removes the flag so a new context can request its own intent.
 Intent describes the requested goal, not completed work; it can publish while the main agent is busy.
@@ -107,6 +107,15 @@ The `GenerationTask.onYield` hook schedules a background observer. It waits for 
 only counts an exchange when an input submission completed with that answer (not an intermediate yield).
 The [summary model](#summary-model) assesses each completed reply, including subagent replies, in a background task.
 Top-level conversations also get a title and summary on exchanges 1, 4, 7, and so on, in the same request.
+For a top-level non-root conversation in a lineage tree, that same request produces an abstract after every completed
+exchange, independent of the title/summary cadence. It uses the original branch intent, previous abstract and transcript:
+Ask, Diverged (agreements, approach/library or scope changes, or none), State (including named commits), Areas and Open
+questions, capped at 1200 characters. Acceptance calls the lineage service's `abstract` in the same transaction as the
+reply assessment, with `at` pointing to the answer entry, and saves the text in summary state. A newer abstract omits
+the previous one from the root's model context; the root shows only the latest per conversation. Roots, owned
+conversations such as subagents, and conversations outside trees such as landers produce no abstract. Neither do
+stale answers, failed or interrupted exchanges, or missing lineage or summary models. Exchange and intent detection use own entries, so inherited inputs and answers
+do not count as the branch's work.
 A summary delayed by newer work is included with the next current reply. Tools and partial replies do not trigger reply assessments.
 Successful subagent creation additionally schedules a parent title/summary refresh in the creation transaction,
 before either foreground waiting or background return. It describes the plan and delegation now starting, using

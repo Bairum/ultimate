@@ -63,6 +63,8 @@ Ask the user to choose, offering defaults. Ask only questions whose answers chan
 Both work without setup: the shipped `reviewer` reviews alone on the parent's model, and `workspace submit` merges and
 fast-forwards with no checks and no push. Ultimate's own clone is the working example: copy from its `.ultimate/agents/`
 and `.ultimate/settings.json`, then adjust models and commands.
+Worker reports and submissions state divergence from the task as given (agreements, approach, scope), or "None";
+`workspace submit` requires that `divergence` string, and lander reports distinguish any additional changes.
 
 - **Review team:** agent definitions, so it can live in `<project>/.ultimate/agents/` or, for every project, in
   `~/.ultimate/agents/` (a project's file wins by name). Override `reviewer` with a lead that lists `subagent` in

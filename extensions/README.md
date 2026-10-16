@@ -23,6 +23,11 @@ existing extension and change it:
 
 An optional `inbox` renderer wraps each queued composer input with `{ item, core, cancel }`. Return `core` for inputs you do not own; when replacing it, include `cancel` to retain core cancellation. Like entry renderers, the last facet in discovery order wins and runs behind an extension boundary with core fallback. Keep provenance and domain-specific UI in the extension.
 
+An optional `composer` renderer receives `{ core, dock? }` for the shown conversation's composer (`dock` marks a
+narrow side region). Return `core` where you do not own it; otherwise render the replacement. The last facet in
+discovery order wins, behind an extension boundary with core fallback. It does not replace the start-page composer.
+Lineage uses this to make a tally's composer start a branch instead of sending an input to the root.
+
 ## Where extensions live
 
 Ultimate looks for extension folders in three places. When two have the same folder name, the later place wins and

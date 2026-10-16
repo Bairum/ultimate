@@ -8,19 +8,22 @@ tells you which change reloads how, so the conversation you are in keeps running
 
 A project is a forest of conversation trees, each tree like a history of commits.
 
-- **Roots** each hold one line of work's idea, principles and standing decisions, and keep its tally: every landing
-  from a root's tree leaves a note in it. Start a root deliberately (New → New root) or adopt a conversation with
-  ⌘K "Make this a root". A fresh project's first conversation is its first root.
-- **A branch** is a feature, a fix, an experiment. It is forked deliberately from a conversation in a tree at a point,
-  starts from a brief aimed at its intent, and then works as if it were the only conversation.
-  New branches from the root of the tree you are in. A branch is never a subagent.
+- **Roots** keep non-agent tallies: prompts, each conversation's latest abstract, and landings with divergence and
+  `#conversation/entry` breadcrumbs. New → New root creates a tally and its first branch. ⌘K "Make this a root"
+  converts a conversation's history into a genesis distillation; older roots can still run until converted.
+  A tally runs no turns: typing in it starts a branch. Its composer shows estimated context tokens; manual compaction
+  reshapes the tally, keeping the idea and standing decisions without deleting history.
+- **A branch** is a feature, a fix, an experiment. New forks the shown tree's root tip; "Branch from here" forks a
+  chosen entry. No brief: the branch inherits that context, then gets your prompt. A branch is never a subagent.
 - **Coordinators carry the work.** A branch plans, decides and verifies; subagents are for bounded execution and
   reconnaissance, and the lander is the final gate on main.
 - **Zoom out when you need to.** Read any root or sibling with codemode `ultimate.entries(id)` and
   `ultimate.search()`; commits name the conversation that made them (`Ultimate-Conversation` trailer).
 - **Talk across the tree without waking anyone.** `note` leaves context in another conversation for its next turn;
-  `notify` tells you when another conversation finishes. A conversation that resumes after main moved gets a
-  catch-up of what landed, overlaps first.
+  `notify` tells you when another conversation finishes. Resuming a branch brings a catch-up of its tree's tally
+  (older updates collapse when needed), then new target commits, overlaps first.
+- **State divergence.** Reports and `workspace submit` say how the result differs from the task as given: new
+  agreements, a different approach or changed scope. Say "None" when it matches.
 - **Conclude** a conversation when its work is done; it stays readable and can be resumed.
 - **UI polish lands when the user says so.** For small look-and-feel work (an animation, a loading state, spacing,
   a card), keep a faux preview of the branch's checkout running (`instance start` with `faux: true`), give the user

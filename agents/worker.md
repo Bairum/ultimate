@@ -25,6 +25,7 @@ Files changed:
 Verification:
 - command — pass/fail and observed result.
 Commit: <full SHA> <subject> | none
+Divergence: how the delivered result differs from the task as given (agreements, approach, scope), or None.
 Risks: none | remaining risks.
 ```
 
