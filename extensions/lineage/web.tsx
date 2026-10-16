@@ -241,7 +241,7 @@ function NoteCard({
   )
 }
 
-/** A note another conversation (or the lander, a quiet `notify`, main's catch-up) left here. */
+/** A note another conversation (or the lander, a quiet `notify`, a catch-up on the tally and main) left here. */
 function Note({ entry, core }: { entry: EntryRecord; core: React.ReactNode }) {
   const { from, text, source } = entry.data as {
     from?: number
@@ -258,7 +258,7 @@ function Note({ entry, core }: { entry: EntryRecord; core: React.ReactNode }) {
     >
       <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-foreground">
         <GitBranchIcon className="size-3.5 text-brand" />
-        Main catch-up
+        Catch-up
       </header>
       <div className="min-w-0 px-3 py-2.5 text-[13px] leading-relaxed">
         <MessageResponse>{text}</MessageResponse>

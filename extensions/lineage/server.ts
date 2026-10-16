@@ -32,6 +32,7 @@ import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
+import type { Tree } from './catchup.ts'
 
 /** The project's roots, each the top of one conversation tree; a fresh project's first conversation is its first. */
 export const Roots = defineDoc<{ roots: number[] }>({
@@ -562,6 +563,10 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
       throw new Error(`Entry ${at} is not in conversation #${from}`)
     // Table reads precede the transaction's first table write, the fork.
     const root = await climb(tx, await tx.conversation(from), roots)
+    const tip =
+      root === undefined
+        ? undefined
+        : (await tx.scanEntries({ conversationId: root }, 1)).items[0]?.id
     const fork = await tx.forkConversation(from, at, { ownership: { kind: 'ownerless' } })
     await configure(tx, fork.id, {
       cwd: host.projectRoot,
@@ -574,6 +579,8 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
       await workspaces.create(tx, fork.id, host.projectRoot)
     }
     if (main) await seedSeen(tx, fork.id, main, Date.now())
+    // The branch knows its tally up to here; its own prompt node, appended below, is no news to it.
+    if (tip !== undefined) (await tx.doc(Seen, fork.id)).tally = tip
     ;(await tx.doc(Branch, fork.id)).branch = { from, at, intent: prompt }
     // Until the summary names it, a branch is called by its intent, not by the first message it inherited.
     const title = prompt.replace(/\s+/g, ' ').slice(0, 80)
@@ -828,6 +835,14 @@ export const actions = {
   },
 }
 
+/** The tally `id` catches up on: its tree root's, once that root is a tally. */
+async function treeOf(tx: Tx, id: ConversationId): Promise<Tree | undefined> {
+  const root = await tallyRoot(tx, id, (await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots)
+  if (root === undefined) return undefined
+  const { since, abstracts } = await tx.doc(Tally, root)
+  return since === undefined ? undefined : { root, since, abstracts }
+}
+
 /** A tally runs no turns: typing in it starts a branch, so an input placed in one is refused with its transaction. */
 async function refuseTally(tx: Tx, id: ConversationId) {
   if (!(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.includes(id)) return
@@ -863,7 +878,7 @@ export default function lineageExtension(host: ExtensionHost) {
       hook(GenerationTask, {
         beforeInput: async (input, api, ctx) => {
           await refuseTally(api.tx, api.conversationId)
-          return catchup(host, input, api, ctx)
+          return catchup(host, input, api, ctx, treeOf)
         },
       }),
       hook(CompactionTask, {
