@@ -56,7 +56,7 @@ function Cwd() {
   const inRepo = !workspace && cwd === system.code.ultimateRoot
   return (
     <Item
-      className="min-w-0 text-foreground/80"
+      className="min-w-0 overflow-hidden text-foreground/80"
       tip={
         <>
           {workspace?.path ?? cwd}
@@ -70,9 +70,9 @@ function Cwd() {
         </>
       }
     >
-      <span className="shrink-0">{elidePath(shown, 40)}</span>
+      <span className="truncate">{elidePath(shown, 40)}</span>
       {inRepo && branch && (
-        <span className="max-w-96 truncate text-muted-foreground">
+        <span className="max-w-96 shrink-[9] truncate text-muted-foreground">
           ({branch}
           {dirty && <span className="text-warning">*</span>})
         </span>
@@ -159,6 +159,8 @@ function Tokens() {
   if (!parts.length) return null
   return (
     <Item
+      // On a phone the status line below already sums the usage.
+      className="max-md:hidden"
       tip={
         <>
           <div className="grid grid-cols-[auto_auto] gap-x-3">

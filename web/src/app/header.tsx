@@ -1,5 +1,5 @@
 import { cn } from 'cn'
-import { PanelLeftIcon, PanelRightIcon } from 'lucide-react'
+import { CommandIcon, PanelLeftIcon, PanelRightIcon } from 'lucide-react'
 import { Fragment } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
@@ -12,14 +12,14 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { ConversationSummary } from '../../../shared/protocol.ts'
-import { actions, shellKeys } from '../sdk/actions.ts'
+import { actions } from '../sdk/actions.ts'
 import { ROOT } from '../sdk/api.ts'
 import {
   useConversation,
   useConversations,
   useExtensions,
   useStore,
-  useUiState,
+  useRegionOpen,
 } from '../sdk/hooks.ts'
 import { HOME, panelItems, slotItems, surfaceItems } from '../sdk/registry.ts'
 import { Slot } from './boundary.tsx'
@@ -45,7 +45,7 @@ export function IconButton({
         <Button
           aria-label={label}
           className={cn(
-            'size-7 text-muted-foreground hover:text-foreground',
+            'size-7 text-muted-foreground hover:text-foreground pointer-coarse:size-9',
             active && 'text-foreground',
           )}
           onClick={onClick}
@@ -80,7 +80,7 @@ function ancestors(id: number | undefined, conversations: readonly ConversationS
 const nameOf = (conversation: ConversationSummary) =>
   conversation.id === ROOT ? 'main' : (conversation.label ?? `#${conversation.id}`)
 
-/** Where the shown conversation sits: its ancestors, a busy dot, and its title. */
+/** Where the shown conversation sits: its ancestors (beyond a phone), a busy dot, and its title. */
 function Trail() {
   const { busy } = useConversation()
   // The requested conversation while its snapshot loads, so a switch keeps naming where it goes.
@@ -95,14 +95,14 @@ function Trail() {
       {trail.map((conversation) => (
         <Fragment key={conversation.id}>
           <button
-            className="shrink-0 rounded-sm px-1 font-mono text-[12px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="shrink-0 rounded-sm px-1 font-mono text-[12px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground max-md:hidden"
             onClick={() => actions.switchConversation(conversation.id)}
             title={conversation.id === ROOT ? 'The main conversation' : conversation.title}
             type="button"
           >
             {nameOf(conversation)}
           </button>
-          <span className="-mx-1 shrink-0 text-muted-foreground/40">/</span>
+          <span className="-mx-1 shrink-0 text-muted-foreground/40 max-md:hidden">/</span>
         </Fragment>
       ))}
       {busy && <span className="size-1.5 shrink-0 animate-pulse-dot rounded-full bg-brand" />}
@@ -196,7 +196,7 @@ export function Header({ children }: { children?: ReactNode }) {
   const records = useExtensions()
   const sidebar = useRegion('sidebar') && slotItems(records, 'sidebar').length > 0
   const panels = useRegion('panels') && panelItems(records).length > 0
-  const [panelOpen] = useUiState(shellKeys.panelOpen, false)
+  const panelOpen = useRegionOpen('panels')
   return (
     <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border/70 px-2">
       {sidebar && (
@@ -211,7 +211,7 @@ export function Header({ children }: { children?: ReactNode }) {
         <Slot name="header.right" variant="inline" />
         <Button
           aria-label="Command palette"
-          className="h-7 gap-1.5 px-2 font-mono text-[11px] text-muted-foreground hover:text-foreground"
+          className="h-7 gap-1.5 px-2 font-mono text-[11px] text-muted-foreground hover:text-foreground max-md:hidden"
           onClick={actions.openPalette}
           size="sm"
           variant="ghost"
@@ -219,6 +219,11 @@ export function Header({ children }: { children?: ReactNode }) {
           commands
           <Shortcut keys="mod+k" />
         </Button>
+        <span className="md:hidden">
+          <IconButton label="Command palette" onClick={actions.openPalette}>
+            <CommandIcon className="size-4" />
+          </IconButton>
+        </span>
         {panels && (
           <IconButton
             active={panelOpen}

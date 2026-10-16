@@ -71,7 +71,7 @@ export function ModelRow({
         <span className="w-11 text-right" title="context window">
           {formatWindow(model.contextWindow)}
         </span>
-        <span className="w-20 text-right" title="$ per million input / output tokens">
+        <span className="w-20 text-right max-sm:hidden" title="$ per million input / output tokens">
           ${price(model.cost.input)}/{price(model.cost.output)}
         </span>
       </span>

@@ -167,6 +167,11 @@
   html {
     color-scheme: light;
   }
+  /* An app, not a page: swipes and scrolls past an end never navigate back or pull to refresh. */
+  html,
+  body {
+    overscroll-behavior: none;
+  }
   html.dark {
     color-scheme: dark;
   }
@@ -193,6 +198,15 @@
       animation: none !important;
       transition: none !important;
     }
+  }
+}
+
+/* Touch browsers zoom into a focused field set smaller than 16px. Unlayered, so it wins over text utilities. */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
   }
 }
 

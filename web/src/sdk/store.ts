@@ -22,6 +22,11 @@ export interface UiState {
   theme: 'dark' | 'light'
   /** The surface on screen, which the host records as it renders: the shown one, or the next in line after it failed. */
   surface?: { id: string; title: string }
+  /**
+   * Whether the sidebar and the panel are open below desktop width, where they are this tab's own (viewport.ts), per
+   * viewport: folding a phone shows the conversation, unfolding it brings back what docked beside it.
+   */
+  open?: Partial<Record<'phone' | 'tablet', { sidebar?: boolean; panels?: boolean }>>
 }
 type Docs = Readonly<Record<string, JsonObject | null>>
 export interface State {

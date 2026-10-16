@@ -235,7 +235,7 @@ function CopyLink({
     <Button
       aria-label={`Copy link to ${id}`}
       className={cn(
-        'h-5 shrink-0 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground opacity-0 group-hover/row:opacity-100 hover:text-foreground focus-visible:opacity-100',
+        'h-5 shrink-0 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground opacity-0 group-hover/row:opacity-100 hover:text-foreground focus-visible:opacity-100 pointer-coarse:opacity-100',
         copied && 'opacity-100',
         className,
       )}
