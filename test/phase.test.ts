@@ -202,6 +202,33 @@ it.each([
     wrapped.mockRestore()
   },
 )
+it('reads only the current request, not earlier runs or inherited branch history', async () => {
+  const ask = vi.fn<ClassifyService['ask']>().mockResolvedValue(answer(0.9))
+  const f = await fixture({ ask })
+  await f.harness.commit(async (tx) => {
+    const add = (kind: string, model: unknown) =>
+      tx.appendEntry(f.root.id, { kind, model: [model] } as never)
+    await add('pi.user', { role: 'user', content: 'Land the work', timestamp: 1 })
+    await add(
+      'pi.assistant',
+      fauxAssistantMessage([
+        fauxToolCall('bash', { command: 'git commit -m done' }, { id: 'old' }),
+      ]),
+    )
+    await add('pi.user', { role: 'user', content: 'Start the new branch', timestamp: 2 })
+    await add(
+      'pi.assistant',
+      fauxAssistantMessage([fauxToolCall('bash', { command: 'rg phase' }, { id: 'new' })]),
+    )
+  }, context)
+  await f.round()
+  await until(() => ask.mock.calls.length === 1)
+  expect(ask.mock.calls[0][0].state).toMatchObject({
+    request: 'Start the new branch',
+    recentTools: [{ tool: 'bash', args: 'rg phase' }],
+  })
+  await until(async () => (await f.snapshot())?.conversations[f.root.id]?.pending === undefined)
+})
 it('allows one in flight, stores the first low answer, holds later low answers and clears on yield', async () => {
   let release!: () => void
   const gate = new Promise<void>((resolve) => {

@@ -86,21 +86,17 @@ export default function phase(
             if (!conversation) throw new Error('Conversation unavailable')
             const entries: EntryRecord[] = []
             let cursor: Cursor | undefined
-            let foundInput = false
-            let toolCalls = 0
+            let request = false
+            // Only the current request's work: older runs, and a branch's inherited parent history, describe other work.
             do {
               const page = await conversation.entries({ order: 'descending' }, 64, cursor, context)
               for (const entry of page.items) {
                 entries.push(entry)
-                foundInput ||= isInput(entry)
-                for (const message of entry.model ?? []) {
-                  if (message.role === 'assistant')
-                    toolCalls += message.content.filter((block) => block.type === 'toolCall').length
-                }
-                if (foundInput && toolCalls >= 15) break
+                request = isInput(entry)
+                if (request) break
               }
               cursor = page.next
-            } while (cursor !== undefined && !(foundInput && toolCalls >= 15))
+            } while (cursor !== undefined && !request)
             entries.reverse()
             const result = await service.ask(
               {
