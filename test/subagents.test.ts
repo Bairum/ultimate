@@ -1029,9 +1029,12 @@ it('attributes real queued instructions and reports by submission identity and d
   )
   const instruction = (await f.opened.harness.snapshot(InboxDoc, child.conversationId, context))!
     .items[0]
-  expect(instruction.entry).toMatchObject({
-    kind: 'subagents.instruction',
-    data: { sender: 1, kind: 'instruction', body: 'queued instruction' },
+  expect(instruction).toMatchObject({
+    mode: 'steer',
+    entry: {
+      kind: 'subagents.instruction',
+      data: { sender: 1, kind: 'instruction', body: 'queued instruction' },
+    },
   })
   const human = await childHandle.submit(
     { type: 'input', content: 'queued instruction', whenBusy: 'followUp' },

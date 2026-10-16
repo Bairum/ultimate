@@ -95,7 +95,7 @@ function SubagentCall({ call }: { call: ToolCallView }) {
     ) : (
       <>
         {action} <span className="text-foreground/80">#{childId ?? '?'}</span>
-        {call.args.steer === true && ' (steer)'} {instruction}
+        {call.args.steer === false && ' (follow-up)'} {instruction}
       </>
     )
   return (
