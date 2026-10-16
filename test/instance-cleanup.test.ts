@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -25,13 +26,14 @@ async function fixture() {
   const home = join(root, 'ultimate-instance-dead')
   await mkdir(home)
   await writeFile(join(home, 'project.json'), JSON.stringify({ root: source }))
-  return { root, source, home }
+  const branch = `ultimate/${createHash('sha256').update(home).digest('hex').slice(0, 6)}-1`
+  return { root, source, home, branch }
 }
 it('sweeps dead homes, their nested worktrees and branches but preserves neighbours', async () => {
-  const { root, source, home } = await fixture()
+  const { root, source, home, branch } = await fixture()
   const worker = join(home, 'worktrees', '1')
   const lander = join(home, 'lander', 'hash')
-  await git(source, 'worktree', 'add', '-b', 'preview-worker', worker)
+  await git(source, 'worktree', 'add', '-b', branch, worker)
   await git(source, 'worktree', 'add', '--detach', lander)
   await writeFile(join(worker, 'dirty'), 'preview scratch')
   // project.json may name a linked checkout, not the common repository's main checkout.
@@ -51,7 +53,7 @@ it('sweeps dead homes, their nested worktrees and branches but preserves neighbo
   expect(await git(source, 'branch', '--format=%(refname)')).toBe(
     before
       .split('\n')
-      .filter((branch) => !branch.endsWith('/preview-worker'))
+      .filter((ref) => ref !== `refs/heads/${branch}`)
       .concat('refs/heads/neighbour')
       .toSorted()
       .join('\n'),
@@ -122,7 +124,7 @@ it('leaves an explicitly preserved home alone even with the automatic preview pr
 it.each([true, false])(
   'cleans a home after its project checkout was deleted (checkouts: %s)',
   async (checkouts) => {
-    const { root, source, home } = await fixture()
+    const { root, source, home, branch } = await fixture()
     const project = join(root, 'released-project')
     await git(source, 'worktree', 'add', '-b', 'released-project', project)
     await writeFile(join(home, 'project.json'), JSON.stringify({ root: project }))
@@ -132,7 +134,7 @@ it.each([true, false])(
     if (checkouts) {
       await git(source, 'worktree', 'add', '--detach', join(home, 'lander', 'hash'))
       const worker = join(home, 'worktrees', '1')
-      await git(source, 'worktree', 'add', '-b', 'preview-worker', worker)
+      await git(source, 'worktree', 'add', '-b', branch, worker)
       await writeFile(join(worker, 'dirty'), 'preview scratch')
     }
     const notices: string[] = []
@@ -141,5 +143,26 @@ it.each([true, false])(
     expect(await stat(home).catch(() => undefined)).toBeUndefined()
     expect(await git(source, 'worktree', 'list', '--porcelain')).toBe(beforeTrees)
     expect(await git(source, 'branch', '--format=%(refname)')).toBe(beforeBranches)
+  },
+)
+
+it.each(['feature-x', 'ultimate/foreign-1'])(
+  'removes a preview checkout but preserves foreign branch %s and its unmerged commit',
+  async (branch) => {
+    const { root, source, home } = await fixture()
+    await git(source, 'switch', '-c', branch)
+    await writeFile(join(source, 'feature'), 'real unmerged work')
+    await git(source, 'add', 'feature')
+    await git(source, 'commit', '-m', 'Unmerged feature')
+    const tip = await git(source, 'rev-parse', branch)
+    await git(source, 'switch', 'main')
+    const worker = join(home, 'worktrees', '1')
+    await git(source, 'worktree', 'add', worker, branch)
+    const notices: string[] = []
+    await sweepPreviews(root, (message) => notices.push(message))
+    expect(notices).toEqual([])
+    expect(await stat(home).catch(() => undefined)).toBeUndefined()
+    expect(await git(source, 'worktree', 'list', '--porcelain')).not.toContain(worker)
+    expect(await git(source, 'rev-parse', '--verify', `refs/heads/${branch}`)).toBe(tip)
   },
 )

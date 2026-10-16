@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { readdir, rm, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -45,6 +46,7 @@ export async function cleanPreview(home: string) {
         )
       }
     }
+    const branchPrefix = `ultimate/${createHash('sha256').update(home).digest('hex').slice(0, 6)}-`
     for (const common of repositories) {
       const records = (
         await git(common, '--git-dir', common, 'worktree', 'list', '--porcelain', '-z')
@@ -58,7 +60,8 @@ export async function cleanPreview(home: string) {
           continue
         const branch = fields.find((field) => field.startsWith('branch refs/heads/'))?.slice(18)
         await git(common, '--git-dir', common, 'worktree', 'remove', '--force', path)
-        if (branch) await git(common, '--git-dir', common, 'branch', '-D', '--', branch)
+        if (branch?.startsWith(branchPrefix))
+          await git(common, '--git-dir', common, 'branch', '-D', '--', branch)
       }
       await git(common, '--git-dir', common, 'worktree', 'prune')
     }

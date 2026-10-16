@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { cp, readFile, stat, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -355,7 +356,8 @@ it('removes preview registrations, branches and temporary homes on stop and shut
       )
       // Include a dirty, branch-backed preview isolate as well as the detached lander created on open.
       const worker = join(preview.home, 'worktrees', 'test')
-      await git(f.source, 'worktree', 'add', '-b', 'preview-test', worker)
+      const branch = `ultimate/${createHash('sha256').update(preview.home).digest('hex').slice(0, 6)}-1`
+      await git(f.source, 'worktree', 'add', '-b', branch, worker)
       await writeFile(join(worker, 'scratch'), 'uncommitted preview scratch')
       if (shutdown) await f.stopAll()
       else await f.run({ action: 'stop', id: preview.id })
