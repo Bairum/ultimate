@@ -21,6 +21,7 @@ import {
   useExtensionUiState,
   useNow,
   useStore,
+  useSystem,
   useTasks,
   useUltimate,
 } from '@/sdk'
@@ -94,6 +95,9 @@ export function Conversations() {
       busy: foreground.has(conversation.id) || overview[conversation.id]?.runState === 'working',
     }))
   const actions = useUltimate()
+  const workspacesEnabled = useSystem()?.extensions.some(
+    (extension) => extension.name === 'workspaces' && extension.enabled,
+  )
   const sides = useSides() ?? {}
   // A root's open side chat shows in its place.
   const onScreen = useShownId()
@@ -144,7 +148,11 @@ export function Conversations() {
     .filter((conversation) => roots.has(conversation.id))
     .toSorted((a, b) => latestIn(b) - latestIn(a) || b.id - a.id)
 
-  const [warning, setWarning] = useState<{ id: number; work: WorkspacePending[] }>()
+  const [warning, setWarning] = useState<{
+    id: number
+    work?: WorkspacePending[]
+    failure?: string
+  }>()
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string>()
   const setConclude = async (id: number, conclude: boolean) => {
@@ -158,12 +166,18 @@ export function Conversations() {
     if (next) actions.switchConversation(next.id)
   }
   const requestConclude = async (id: number, conclude: boolean) => {
-    if (conclude) {
-      const work = await api.action<WorkspacePending[]>('workspaces', 'pending', { ids: [id] })
-      if (work.length) {
-        setError(undefined)
-        setWarning({ id, work })
-        return
+    if (conclude && workspacesEnabled) {
+      setError(undefined)
+      try {
+        const work = await api.action<WorkspacePending[]>('workspaces', 'pending', { ids: [id] })
+        if (work.length) {
+          setWarning({ id, work })
+          return
+        }
+      } catch (failure) {
+        setWarning({ id, failure: errorMessage(failure) })
+        // Unhandled ActionErrors become notices; the dialog still lets the user conclude.
+        throw failure
       }
     }
     await setConclude(id, conclude)
@@ -306,20 +320,28 @@ export function Conversations() {
           <div className="px-5 pt-5 pb-4">
             <DialogTitle className="text-[14px] font-medium">Conclude #{warning?.id}?</DialogTitle>
             <DialogDescription className="mt-2 text-[13px] leading-relaxed break-words">
-              {warning?.work
-                .map((item) => {
-                  const parts = [
-                    item.uncommitted > 0
-                      ? `${item.uncommitted} uncommitted ${item.uncommitted === 1 ? 'file' : 'files'}`
-                      : undefined,
-                    item.unlanded > 0
-                      ? `${item.unlanded} unlanded ${item.unlanded === 1 ? 'commit' : 'commits'}`
-                      : undefined,
-                  ].filter(Boolean)
-                  return `#${item.id}${item.id !== warning.id ? ', a subagent,' : ''} has ${parts.join(' and ')}.`
-                })
-                .join(' ')}{' '}
-              Its checkout is kept until that work lands or is discarded.
+              {warning?.failure ? (
+                <>
+                  Couldn't check #{warning.id}'s checkout: {warning.failure}. Conclude anyway?
+                </>
+              ) : (
+                <>
+                  {warning?.work
+                    ?.map((item) => {
+                      const parts = [
+                        item.uncommitted > 0
+                          ? `${item.uncommitted} uncommitted ${item.uncommitted === 1 ? 'file' : 'files'}`
+                          : undefined,
+                        item.unlanded > 0
+                          ? `${item.unlanded} unlanded ${item.unlanded === 1 ? 'commit' : 'commits'}`
+                          : undefined,
+                      ].filter(Boolean)
+                      return `#${item.id}${item.id !== warning.id ? ', a subagent,' : ''} has ${parts.join(' and ')}.`
+                    })
+                    .join(' ')}{' '}
+                  Its checkout is kept until that work lands or is discarded.
+                </>
+              )}
             </DialogDescription>
             {error && <p className="mt-3 font-mono text-[12px] break-words text-error">{error}</p>}
           </div>
