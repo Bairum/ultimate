@@ -116,7 +116,7 @@ and restarts land on the same view. The `surfaces` extension tells the agent whi
 - "Build a small extension that …" — it reads [extensions/README.md](extensions/README.md), writes
   `extensions/<name>/web.tsx`, and the UI hot-reloads in front of you.
 - "Take a screenshot of yourself and tell me what looks off" — it can see and drive its own UI.
-- "Delegate to a scout: …" — subagents run as their own conversations (Agents tab, `open #id`).
+- "Delegate to a worker: …" — subagents run as their own conversations (Agents tab, `open #id`).
 - "Use codemode to check which of your extensions failed to load" — one sandboxed script over its own runtime.
 - Change something in `server/` and ask it to `restart`: a new process boots and type-checks next to the old one, and the
   conversation carries on in the new generation. A failed boot rolls back.

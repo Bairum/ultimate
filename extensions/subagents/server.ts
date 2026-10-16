@@ -759,7 +759,7 @@ An epic means the full flow: tasks, isolated workers, land, and review before it
 2. Write the epic with the plan tool and binary acceptance criteria.
 3. Once you write an epic, every unit of work is a task in it via plan add.
    Give each task a self-contained description for its child.
-4. Delegate implementation to workers in worktree isolates, reconnaissance to scouts.
+4. Delegate implementation to workers in worktree isolates.
    Parallel by default: start independent tasks as background children in the same tool round.
    Wait for their answers instead of polling; children touching the same files run sequentially.
    Link each child to its task with plan; record dependencies and status.

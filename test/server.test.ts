@@ -374,7 +374,7 @@ export default host => { host.resource('cleanup.process',()=>{
       prompt: orderedSource('prompt', -100),
     })
     // This demo finishes without requiring the fixture to expose coding tools.
-    await post(server, '/api/conversations/1/submit', { text: 'Return the word SCOUT.' })
+    await post(server, '/api/conversations/1/submit', { text: 'Return the word DONE.' })
     await server.harness.waitForIdle(context)
     const folder = join(options.ultimateRoot, 'extensions/0-new')
     await mkdir(folder)
@@ -383,7 +383,7 @@ export default host => { host.resource('cleanup.process',()=>{
     expect(
       server.extensions.info().find((item) => item.name === '0-new')?.server?.error,
     ).toBeUndefined()
-    await post(server, '/api/conversations/1/submit', { text: 'Return the word SCOUT.' })
+    await post(server, '/api/conversations/1/submit', { text: 'Return the word DONE.' })
     await server.harness.waitForIdle(context)
     const view = await server.root.viewState(context)
     const systems = view.value.entries.filter((entry) => entry.kind === 'pi.system')
@@ -399,7 +399,7 @@ export default host => { host.resource('cleanup.process',()=>{
     servers.splice(servers.indexOf(server), 1)
     const reopened = await createServer(options)
     servers.push(reopened)
-    await post(reopened, '/api/conversations/1/submit', { text: 'Return the word SCOUT.' })
+    await post(reopened, '/api/conversations/1/submit', { text: 'Return the word DONE.' })
     await reopened.harness.waitForIdle(context)
     const next = await reopened.root.viewState(context)
     expect(

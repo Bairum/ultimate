@@ -15,7 +15,7 @@ import type { BranchedEvent } from '../lineage/server.ts'
 export type Task = {
   key: string
   title: string
-  role: 'worker' | 'scout' | 'reviewer'
+  role: 'worker' | 'reviewer'
   description: string
   deps: string[]
   status: 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'done' | 'blocked' | 'canceled'
@@ -178,9 +178,7 @@ export default (host: ExtensionHost) => {
           title: Type.Optional(Type.String()),
           body: Type.Optional(Type.String()),
           epic: Type.Optional(Type.String()),
-          role: Type.Optional(
-            Type.Union(['worker', 'scout', 'reviewer'].map((v) => Type.Literal(v))),
-          ),
+          role: Type.Optional(Type.Union(['worker', 'reviewer'].map((v) => Type.Literal(v)))),
           description: Type.Optional(Type.String()),
           deps: Type.Optional(Type.Array(Type.String())),
           key: Type.Optional(Type.String()),

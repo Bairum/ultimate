@@ -62,20 +62,21 @@ export default async function fauxExtension(host: ExtensionHost) {
           ),
         ])
       }
-      if (last?.role === 'user' && last.content === 'delegate to scout') {
+      if (last?.role === 'user' && last.content === 'delegate to worker') {
         return fauxAssistantMessage(
           [
             fauxToolCall('subagent', {
               action: 'start',
-              agent: 'scout',
-              task: 'Return the word SCOUT.',
+              agent: 'worker',
+              isolate: 'none',
+              task: 'Return the word DONE.',
             }),
           ],
           { stopReason: 'toolUse' },
         )
       }
-      if (last?.role === 'user' && last.content === 'Return the word SCOUT.') {
-        return fauxAssistantMessage([fauxText('SCOUT')])
+      if (last?.role === 'user' && last.content === 'Return the word DONE.') {
+        return fauxAssistantMessage([fauxText('DONE')])
       }
       if (last?.role === 'toolResult' && last.toolName === 'subagent') {
         return fauxAssistantMessage([
