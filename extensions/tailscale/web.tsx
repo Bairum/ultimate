@@ -8,12 +8,13 @@ import {
   ShieldCheckIcon,
   TriangleAlertIcon,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api, cn, defineWebExtension, errorMessage, useAction, useSystem, useUltimate } from '@/sdk'
+import { encode } from 'uqr'
 
 /** What the `status` action returns; `Status` in server.ts. */
 interface Status {
@@ -330,11 +331,42 @@ function TailscalePanel() {
   )
 }
 
-/** "tailnet" with a dot while this Ultimate is reachable there; opens the panel. */
+/**
+ * `text` as a QR code to scan with a phone: one SVG path with a rectangle per run of dark modules in a row, black on
+ * white in either theme so every camera reads it.
+ */
+function QrCode({ text }: { text: string }) {
+  const { size, path } = useMemo(() => {
+    const qr = encode(text, { border: 2 })
+    let d = ''
+    qr.data.forEach((row, y) => {
+      for (let x = 0; x < qr.size; x++) {
+        if (!row[x]) continue
+        const start = x
+        while (row[x + 1]) x++
+        d += `M${start} ${y}h${x - start + 1}v1h${start - x - 1}z`
+      }
+    })
+    return { size: qr.size, path: d }
+  }, [text])
+  return (
+    <svg
+      aria-label={`QR code for ${text}`}
+      className="size-36 rounded-sm bg-white"
+      role="img"
+      shapeRendering="crispEdges"
+      viewBox={`0 0 ${size} ${size}`}
+    >
+      <path d={path} fill="black" />
+    </svg>
+  )
+}
+
+/** "tailnet" with a dot while this Ultimate is reachable there; opens the panel. Hover for its URL as a QR code. */
 function Indicator() {
   const { data } = useStatus()
   const ui = useUltimate()
-  if (data?.state !== 'ready') return null
+  if (data?.state !== 'ready' || !data.url) return null
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -348,7 +380,8 @@ function Indicator() {
         </button>
       </TooltipTrigger>
       <TooltipContent className="font-mono text-[11px]" side="top">
-        {data.url}
+        <QrCode text={data.url} />
+        <div className="mt-1.5">{data.url}</div>
         <div className="text-muted-foreground">only {data.allow.join(', ')}</div>
       </TooltipContent>
     </Tooltip>
