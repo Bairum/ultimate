@@ -48,6 +48,8 @@ function target(serve: Serve, dns: string, port: number) {
 export interface TailscaleService {
   status(): Status
 }
+/** A claimed HTTPS port. A project's entry outlives its server so the project keeps its address; a preview's does not. */
+type Entry = { port: number; owner: string; temporary?: true }
 export const reloadOnSettings = true
 const run = promisify(execFile)
 const statuses = new WeakMap<ExtensionHost, Status>()
@@ -70,6 +72,10 @@ export default function tailscale(host: ExtensionHost) {
   let dnsName: string | undefined
   const ownerToken = `${process.pid}:${randomUUID()}`
   const registryPath = join(host.userHome, '.ultimate/tailscale.json')
+  // A preview (another Ultimate's `instance`) claims a port under its own temporary home, never its project's, so it
+  // cannot take the address of the server that previews the same folder.
+  const preview = Boolean(process.env.ULTIMATE_INSTANCE_OWNER)
+  const key = preview ? host.home : host.projectRoot
   let remove: (() => void) | undefined
   let opening: Promise<void> | undefined
   let running: Promise<void> | undefined
@@ -83,9 +89,7 @@ export default function tailscale(host: ExtensionHost) {
     set({ state, allow: status.allow, hint })
     host.notice(`Tailscale: ${hint}`)
   }
-  async function withRegistry<T>(
-    use: (value: { ports: Record<string, { port: number; owner: string }> }) => Promise<T>,
-  ) {
+  async function withRegistry<T>(use: (value: { ports: Record<string, Entry> }) => Promise<T>) {
     await mkdir(join(host.userHome, '.ultimate'), { recursive: true })
     const lock = await acquireLock(registryPath + '.lock', { pid: process.pid }, 120000).catch(
       (error) => {
@@ -101,7 +105,7 @@ export default function tailscale(host: ExtensionHost) {
       },
     )
     try {
-      let value: { ports: Record<string, { port: number; owner: string }> } = { ports: {} }
+      let value: { ports: Record<string, Entry> } = { ports: {} }
       try {
         value = JSON.parse(await readFile(registryPath, 'utf8'))
       } catch (error) {
@@ -203,13 +207,15 @@ export default function tailscale(host: ExtensionHost) {
           ),
         )
         live.add(host.system().process.url)
-        for (const entry of Object.values(registry.ports)) {
+        for (const [name, entry] of Object.entries(registry.ports)) {
           const proxy = target(serve, dns, entry.port)
-          if (proxy && !alive(Number(entry.owner.split(':')[0])) && !live.has(proxy)) {
+          const dead = !alive(Number(entry.owner.split(':')[0]))
+          if (proxy && dead && !live.has(proxy)) {
             await command(['serve', `--https=${entry.port}`, 'off'])
             delete serve.Web?.[`${dns}:${entry.port}`]
             delete serve.TCP?.[String(entry.port)]
           }
+          if (dead && entry.temporary) delete registry.ports[name]
         }
         const used = new Set([
           443,
@@ -217,13 +223,13 @@ export default function tailscale(host: ExtensionHost) {
           ...Object.keys(serve.TCP ?? {}).map(Number),
           ...Object.keys(serve.Web ?? {}).map((authority) => Number(authority.split(':').at(-1))),
         ])
-        let port = registry.ports[host.projectRoot]?.port
+        let port = registry.ports[key]?.port
         if (port !== undefined) {
           const mapping = serve.Web?.[`${dns}:${port}`]
           const ownTarget = target(serve, dns, port)
           if (
             Object.entries(registry.ports).some(
-              ([root, assigned]) => root !== host.projectRoot && assigned.port === port,
+              ([root, assigned]) => root !== key && assigned.port === port,
             ) ||
             Object.keys(serve.Web ?? {}).some(
               (authority) =>
@@ -254,7 +260,11 @@ export default function tailscale(host: ExtensionHost) {
           `--https=${port}`,
           `http://127.0.0.1:${localPort}`,
         ])
-        registry.ports[host.projectRoot] = { port, owner: ownerToken }
+        registry.ports[key] = {
+          port,
+          owner: ownerToken,
+          ...(preview && { temporary: true as const }),
+        }
         ownedPort = port
         localTarget = `http://127.0.0.1:${localPort}`
         dnsName = dns
@@ -295,10 +305,11 @@ export default function tailscale(host: ExtensionHost) {
     if (ownedPort !== undefined) {
       try {
         await withRegistry(async (value) => {
-          if (value.ports[host.projectRoot]?.owner !== ownerToken) return
+          if (value.ports[key]?.owner !== ownerToken) return
           const serve = JSON.parse((await command(['serve', 'status', '--json'])).stdout) as Serve
           if (target(serve, dnsName!, ownedPort!) === localTarget)
             await command(['serve', `--https=${ownedPort}`, 'off'])
+          if (preview) delete value.ports[key]
         })
       } catch (error) {
         fail('error', `Could not remove Serve mapping: ${String(error)}`)
