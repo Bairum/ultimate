@@ -76,6 +76,12 @@ export type ToolRenderer = ComponentType<{ call: ToolCallView; core: ReactNode }
 /** `core` is the core's rendering of the entry: return it for entries you leave alone, or wrap it. */
 export type EntryRenderer = ComponentType<{ entry: EntryRecord; core: ReactNode }>
 
+/**
+ * A link in Markdown (messages, reports): `href` and the link's `children`, and `core`, the rendering so far, starting
+ * with the default link that asks before opening in a new tab. Return `core` for links you leave alone.
+ */
+export type LinkRenderer = ComponentType<{ href: string; children: ReactNode; core: ReactNode }>
+
 export type InboxRenderer = ComponentType<{ item: InboxItem; core: ReactNode; cancel: ReactNode }>
 
 /** What a document renderer receives: the shown conversation's document of its kind, live. */
@@ -163,6 +169,8 @@ export interface WebExtension {
   /** Entry renderers by entry kind; they also replace the core renderer of a `pi.*` kind. */
   entries?: Readonly<Record<string, EntryRenderer>>
   inbox?: InboxRenderer
+  /** Renders links in Markdown; renderers compose in discovery order, each wrapping the one before it. */
+  link?: LinkRenderer
   /** Starts a new conversation; the last contribution in discovery order wins. */
   start?: (draft: ConversationDraft) => Promise<{ id: number }>
   /** Contributions to the hover action row on stored messages, in discovery order. */

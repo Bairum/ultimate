@@ -11,6 +11,7 @@ import {
   slotItems,
   surfaceItems,
   toolRenderers,
+  linkRenderers,
   messageItems,
   conversationStarter,
 } from '../../web/src/sdk/registry.ts'
@@ -162,6 +163,7 @@ describe('web extension registry', () => {
       [{ slots: { overlay: { order: 1 } } }, /^slots must/],
       [{ tools: { bash: 'Bash' } }, /^tools must be an object/],
       [{ entries: [Good] }, /^entries must be an object/],
+      [{ link: [Good] }, /^link must be a link renderer component/],
       [{ documents: {} }, /^documents must be an array of \{ kind, title, icon\?, component \}/],
       [{ documents: [{ kind: 'x', title: 'X' }] }, /^documents must/],
       [{ documents: [{ kind: 1, title: 'X', component: Good }] }, /^documents must/],
@@ -234,6 +236,7 @@ describe('web extension registry', () => {
       [path('a')]: async () =>
         module({
           tools: { bash: First },
+          link: First,
           entries: { 'pi.user': First },
           panels: [{ id: 'info', title: 'Info', component: First, order: 2 }],
           documents: [
@@ -244,6 +247,7 @@ describe('web extension registry', () => {
       [path('b')]: async () =>
         module({
           tools: { bash: Second },
+          link: Second,
           entries: { 'pi.compaction': Second, 'pi.user': Second },
           panels: [{ id: 'tasks', title: 'Tasks', component: Second, order: 1 }],
           documents: [{ kind: 'ultimate.plan', title: 'My plan', component: Second }],
@@ -255,6 +259,11 @@ describe('web extension registry', () => {
       { extension: 'b', version: 1, component: Second },
     ])
     expect(toolRenderers(records, 'read')).toEqual([])
+    // Link renderers compose like tool renderers, each wrapping the one before it.
+    expect(linkRenderers(records)).toEqual([
+      { extension: 'a', version: 1, component: First },
+      { extension: 'b', version: 1, component: Second },
+    ])
     // Entry renderers compose instead of replacing each other: all of them, in folder order.
     expect(entryRenderers(records, 'pi.user').map((renderer) => renderer.extension)).toEqual([
       'a',

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtemp, mkdir, realpath, stat } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -9,6 +9,7 @@ import { defineExtension, defineTool, section } from '@earendil-works/pi-durable
 import type { ExtensionAction } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Subagents } from '../subagents/server.ts'
+import type { TailscaleService } from '../tailscale/server.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
 
 interface Instance {
@@ -42,6 +43,11 @@ function running(host: Pick<ExtensionHost, 'resource' | 'onClose'>) {
   })
   return instances
 }
+/** What `list` shows of a preview. */
+const listed = ({ id, url, conversationId, faux }: Instance) => ({ id, url, conversationId, faux })
+/** Previews the tool stopped, kept so that links to them can say they no longer run; process-local too. */
+const stopped = (host: Pick<ExtensionHost, 'resource'>) =>
+  host.resource('instance.stopped', () => new Map<string, ReturnType<typeof listed>>())
 async function stop(instances: Map<string, Instance>, id: string) {
   const instance = instances.get(id)
   if (!instance) throw new Error(`Unknown instance: ${id}`)
@@ -58,12 +64,47 @@ async function stop(instances: Map<string, Instance>, id: string) {
   instances.delete(id)
 }
 
+/**
+ * Where the tailnet reaches each preview, by pid. A non-faux preview's own `tailscale` extension records its HTTPS port in
+ * the user's registry under an owner token that starts with its pid; the host's tailscale status knows the DNS name.
+ */
+async function tailnet(host: Pick<ExtensionHost, 'use' | 'userHome'>) {
+  const published = host.use<TailscaleService>('tailscale')?.status().url
+  if (!published) return new Map<number, string>()
+  let registry: { ports?: Record<string, { port: number; owner: string }> }
+  try {
+    registry = JSON.parse(await readFile(join(host.userHome, '.ultimate/tailscale.json'), 'utf8'))
+  } catch {
+    // Missing or unreadable, the registry names no addresses; the previews themselves still list.
+    return new Map<number, string>()
+  }
+  const { hostname } = new URL(published)
+  return new Map(
+    Object.values(registry.ports ?? {}).map(({ port, owner }) => [
+      Number(owner.split(':')[0]),
+      `https://${hostname}:${port}`,
+    ]),
+  )
+}
+
 export const actions: Record<string, ExtensionAction> = {
-  /** The running instances that serve their UI, for the title bar's switcher. */
-  list: (_args, { host }) =>
-    [...running(host).values()]
-      .filter((item) => item.url && live(item))
-      .map(({ id, url, conversationId, faux }) => ({ id, url, conversationId, faux })),
+  /**
+   * The instances that served their UI, running or not since, for the title bar's switcher and preview links. A start
+   * that failed is not among them.
+   */
+  list: async (_args, { host }) => {
+    const addresses = await tailnet(host)
+    return [
+      ...[...running(host).values()]
+        .filter((item) => item.url)
+        .map((item) => ({
+          ...listed(item),
+          running: live(item),
+          ...(live(item) && addresses.has(item.pid) && { tailnet: addresses.get(item.pid) }),
+        })),
+      ...[...stopped(host).values()].map((item) => ({ ...item, running: false })),
+    ]
+  },
 }
 
 export default function instanceExtension(
@@ -117,7 +158,9 @@ export default function instanceExtension(
             let result: unknown
             if (args.action === 'list') result = [...instances.values()].filter(live).map(info)
             else if (args.action === 'stop') {
+              const item = instances.get(args.id ?? '')
               await stop(instances, args.id ?? '')
+              if (item?.url) stopped(host).set(item.id, listed(item))
               result = { stopped: args.id }
             } else if (args.action === 'logs') {
               const item = instances.get(args.id ?? '')

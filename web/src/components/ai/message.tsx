@@ -1,9 +1,14 @@
 // Adapted from vercel/ai-elements packages/elements/src/message.tsx (Apache-2.0, see LICENSE).
-// Changes: `from` is a plain role, no branches or actions; only the code plugin; denser typography.
+// Changes: `from` is a plain role, no branches or actions; only the code plugin; denser typography; links go through
+// the extensions' `link` renderers.
 import { cn } from 'cn'
-import type { ComponentProps, HTMLAttributes } from 'react'
+import type { ComponentProps, HTMLAttributes, ReactNode } from 'react'
 import { memo } from 'react'
-import { Streamdown } from 'streamdown'
+import { defaultComponents, Streamdown } from 'streamdown'
+import type { ExtraProps } from 'streamdown'
+import { ExtensionBoundary } from '../../app/boundary.tsx'
+import { useExtensions } from '../../sdk/hooks.ts'
+import { linkRenderers } from '../../sdk/registry.ts'
 import { codePlugin } from './code-block.tsx'
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & { from: 'user' | 'assistant' }
@@ -31,6 +36,33 @@ export const MessageContent = ({ className, ...props }: HTMLAttributes<HTMLDivEl
   />
 )
 
+const CoreLink = defaultComponents.a
+/** A link as the `link` renderers compose it, starting with Streamdown's, which asks before opening a new tab. */
+function Link(props: ComponentProps<'a'> & ExtraProps) {
+  const renderers = linkRenderers(useExtensions())
+  const core = <CoreLink {...props} />
+  const { href, children } = props
+  // Streamdown marks a link whose Markdown is still streaming.
+  if (!href || href === 'streamdown:incomplete-link') return core
+  return renderers.reduce<ReactNode>(
+    (inner, { extension, version, component: Renderer }) => (
+      <ExtensionBoundary
+        extension={extension}
+        fallback={inner}
+        key={extension}
+        variant="inline"
+        version={version}
+      >
+        <Renderer core={inner} href={href}>
+          {children}
+        </Renderer>
+      </ExtensionBoundary>
+    ),
+    core,
+  )
+}
+
+const components = { a: Link }
 const plugins = { code: codePlugin }
 const controls = { code: { copy: true, download: false }, table: false, mermaid: false } as const
 
@@ -39,6 +71,7 @@ export const MessageResponse = memo(
   ({ className, ...props }: ComponentProps<typeof Streamdown>) => (
     <Streamdown
       className={cn('markdown min-w-0', className)}
+      components={components}
       controls={controls}
       lineNumbers={false}
       plugins={plugins}

@@ -13,6 +13,7 @@ export type {
   DocumentProps,
   EntryRenderer,
   InboxRenderer,
+  LinkRenderer,
   PanelContribution,
   SlotName,
   SurfaceContribution,

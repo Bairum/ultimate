@@ -78,6 +78,7 @@ else if (args[0] === 'serve') {
       system: () => ({ process: { url: `http://127.0.0.1:${localPort}` } }),
       onOpen: (fn: () => Promise<void>) => openers.push(fn),
       onClose: (fn: () => Promise<void>) => cleanups.push(fn),
+      provide: () => {},
     } as unknown as ExtensionHost
     tailscale(host)
     let closed = false

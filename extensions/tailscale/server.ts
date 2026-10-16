@@ -44,6 +44,10 @@ function target(serve: Serve, dns: string, port: number) {
     return undefined
   return proxy && /^http:\/\/127\.0\.0\.1:\d+$/.test(proxy) ? proxy : undefined
 }
+/** What the `tailscale` service gives other extensions: this server's status, `url` once it is published. */
+export interface TailscaleService {
+  status(): Status
+}
 export const reloadOnSettings = true
 const run = promisify(execFile)
 const statuses = new WeakMap<ExtensionHost, Status>()
@@ -283,6 +287,7 @@ export default function tailscale(host: ExtensionHost) {
   if (host.faux) return defineExtension({ name: 'tailscale' })
   host.onOpen(begin)
   retries.set(host, begin)
+  host.provide('tailscale', { status: () => status } satisfies TailscaleService)
   host.onClose(async () => {
     closed = true
     await opening

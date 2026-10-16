@@ -181,7 +181,7 @@ No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, entries, messageActions, messageDetails, start, documents, commands })`; every key is optional. Extensions load
+`defineWebExtension({ slots, panels, surfaces, tools, entries, link, messageActions, messageDetails, start, documents, commands })`; every key is optional. Extensions load
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
 
 A `start(draft)` contribution starts a new conversation from the start page composer's prompt, images, branch point
@@ -278,6 +278,19 @@ header would toggle it.
 Tool renderers also receive `core`, starting with the generic tool card. Like entry renderers, they compose in
 discovery order (built-in → user → project): each receives the previous rendering, and its error boundary falls back
 to that rendering. Return `core` to leave it unchanged, wrap it to decorate it, or replace it with your own card.
+
+### Link renderers
+
+`link` renders the links in Markdown that `MessageResponse` shows (messages, reports). It receives `{ href, children,
+core }`; `core` starts as Streamdown's link, which asks "Open external link?" before opening a new tab. Like tool
+renderers, link renderers compose in discovery order behind error boundaries that fall back to `core`: return `core`
+for links you leave alone. A link still streaming never reaches them. `instance` renders links to its previews as chips
+that open in the window.
+
+```tsx
+link: ({ href, children, core }) =>
+  href.startsWith('https://docs.example.com/') ? <a href={href}>{children}</a> : core
+```
 
 ### Message actions
 
