@@ -1,11 +1,14 @@
-import { useConversations, useDocOf } from '@/sdk'
+import { useConversations, useDocOf, useExtensions } from '@/sdk'
 import type { Phase, PhaseState } from './types.ts'
 
 export type DisplayPhase = Phase | 'waiting'
 export function usePhase(conversationId: number | undefined): DisplayPhase | undefined {
   const conversations = useConversations()
   const phases = useDocOf<PhaseState>(1, 'ultimate.conversation-phases')
-  if (conversationId === undefined) return undefined
+  const enabled = useExtensions().some(
+    (extension) => extension.name === 'phase' && extension.extension,
+  )
+  if (!enabled || conversationId === undefined) return undefined
   if (conversations.find((conversation) => conversation.id === conversationId)?.busy)
     return phases?.conversations[conversationId]?.phase
   const descendants = new Set([conversationId])

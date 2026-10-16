@@ -51,7 +51,7 @@ const terminal = {
 export default function phase(
   host: Pick<ExtensionHost, 'use' | 'harness' | 'projectRoot' | 'conversations'>,
 ) {
-  const ClassifyTask = defineTask<null, { phase: 'classify' }, null>({
+  const ClassifyTask = defineTask<{ generation: number }, { phase: 'classify' }, null>({
     name: 'phase.classify',
     version: 1,
     initial: () => ({ phase: 'classify' }),
@@ -114,10 +114,10 @@ export default function phase(
         await runtime.commit(async (tx) => {
           const state = await tx.doc(Phases, ROOT_CONVERSATION_ID)
           const row = state.conversations[runtime.conversationId]
-          // A yield or a newer run has invalidated this answer.
           if (row?.pending === task.id) {
             delete row.pending
             if (
+              row.generation === task.input.generation &&
               answer?.type === 'choice' &&
               answer.choice in question.criteria &&
               (answer.confidence >= 0.6 || !row.phase)
@@ -138,25 +138,45 @@ export default function phase(
     tasks: [ClassifyTask],
     hooks: [
       hook(GenerationTask, {
+        beforeRequest: async (_request, api, context) => {
+          await host.harness().commit(async (tx) => {
+            const state = await tx.doc(Phases, ROOT_CONVERSATION_ID)
+            const row = state.conversations[api.conversationId]
+            if (row?.generation === api.taskId) return
+            state.conversations[api.conversationId] = {
+              generation: api.taskId,
+              ...(row?.pending !== undefined ? { pending: row.pending } : {}),
+            }
+          }, context)
+        },
         afterTools: async (_assistant, _results, api, context) => {
           if (!host.use<ClassifyService>('classify')) return
           await host.harness().commit(async (tx) => {
             const state = await tx.doc(Phases, ROOT_CONVERSATION_ID)
             if (state.conversations[api.conversationId]?.pending !== undefined) return
-            const pending = await tx.createTask(ClassifyTask, null, {
-              ownership: { kind: 'conversation' },
-              conversationId: api.conversationId,
-              background: true,
-            })
+            const pending = await tx.createTask(
+              ClassifyTask,
+              { generation: api.taskId },
+              {
+                ownership: { kind: 'conversation' },
+                conversationId: api.conversationId,
+                background: true,
+                abandonOnRestart: true,
+              },
+            )
             state.conversations[api.conversationId] = {
               ...state.conversations[api.conversationId],
+              generation: api.taskId,
               pending,
             }
           }, context)
         },
         onYield: async (_answer, api, context) => {
           await host.harness().commit(async (tx) => {
-            delete (await tx.doc(Phases, ROOT_CONVERSATION_ID)).conversations[api.conversationId]
+            const state = await tx.doc(Phases, ROOT_CONVERSATION_ID)
+            const pending = state.conversations[api.conversationId]?.pending
+            if (pending === undefined) delete state.conversations[api.conversationId]
+            else state.conversations[api.conversationId] = { pending }
           }, context)
           return undefined
         },

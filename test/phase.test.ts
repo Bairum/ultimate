@@ -85,16 +85,33 @@ async function fixture(service?: ClassifyService) {
     use: (() => service) as Parameters<typeof phase>[0]['use'],
   })
   registry.install(extension)
-  harness = await Harness.open(new MemoryStorage(), { models: createModels(), registry }, context)
-  cleanups.push(() => harness.close(context))
+  const storage = new MemoryStorage()
+  storage.close = async () => {}
+  const options = { models: createModels(), registry }
+  harness = await Harness.open(storage, options, context)
+  cleanups.push(async () => {
+    await harness.close(context)
+  })
   const root = await harness.root(context)
   harness.resume()
   const hooks = extension.hooks![0].handlers as GenerationHooks
-  const api = { conversationId: root.id } as HookApi
-  const round = () => hooks.afterTools(1 as never, [], api, context)
+  let api = { conversationId: root.id, taskId: 1000 } as HookApi
+  const startRun = async () => {
+    api = { ...api, taskId: api.taskId + 1 } as HookApi
+    await hooks.beforeRequest({} as never, api, context)
+  }
+  const round = async () => {
+    await hooks.beforeRequest({} as never, api, context)
+    await hooks.afterTools(1 as never, [], api, context)
+  }
   const snapshot = () => harness.snapshot(Phases, ROOT_CONVERSATION_ID, context)
   const yieldRun = () => hooks.onYield({} as never, api, context)
-  return { harness, root, round, snapshot, yieldRun }
+  const reopen = async () => {
+    await harness.close(context)
+    harness = await Harness.open(storage, options, context)
+    harness.resume()
+  }
+  return { harness, root, round, snapshot, yieldRun, startRun, reopen }
 }
 const answer = (confidence: number, choice = 'editing') => ({
   model: 'fake',
@@ -205,7 +222,7 @@ it('allows one in flight, stores the first low answer, holds later low answers a
 it('does not schedule without classify', async () => {
   const f = await fixture()
   await f.round()
-  expect((await f.snapshot())?.conversations ?? {}).toEqual({})
+  expect((await f.snapshot())?.conversations[f.root.id]?.pending).toBeUndefined()
   expect((await f.harness.inspect(context)).tasks).toHaveLength(0)
 })
 it('settles provider errors quietly and clears pending', async () => {
@@ -245,5 +262,61 @@ it('does not resurrect a yielded row when an answer arrives late', async () => {
   await f.yieldRun()
   release()
   await until(async () => (await f.harness.inspect(context)).tasks.length === 0)
+  expect((await f.snapshot())?.conversations).toEqual({})
+})
+
+it.each(['stop', 'yield'])(
+  'keeps the in-flight lock across %s and rejects the previous run answer',
+  async (end) => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const ask = vi.fn<ClassifyService['ask']>().mockResolvedValue(answer(0.9, 'editing'))
+    const f = await fixture({ ask })
+    await f.round()
+    await until(async () => (await f.snapshot())?.conversations[f.root.id]?.phase === 'editing')
+    // Repeated request hooks in the same generation must retain its accepted phase.
+    ask.mockImplementationOnce(async () => {
+      await gate
+      return answer(0.9, 'exploring')
+    })
+    await f.round()
+    await until(() => ask.mock.calls.length === 2)
+    expect((await f.snapshot())?.conversations[f.root.id]?.phase).toBe('editing')
+    const pending = (await f.snapshot())!.conversations[f.root.id].pending
+    if (end === 'stop') await f.root.abort(context)
+    else await f.yieldRun()
+    await f.startRun()
+    expect((await f.snapshot())!.conversations[f.root.id]).toMatchObject({ pending })
+    expect((await f.snapshot())!.conversations[f.root.id].phase).toBeUndefined()
+    await f.round()
+    expect(ask).toHaveBeenCalledTimes(2)
+    release()
+    await until(async () => (await f.snapshot())?.conversations[f.root.id]?.pending === undefined)
+    expect((await f.snapshot())?.conversations[f.root.id]?.phase).toBeUndefined()
+    ask.mockResolvedValue(answer(0.9, 'verifying'))
+    await f.round()
+    await until(async () => (await f.snapshot())?.conversations[f.root.id]?.phase === 'verifying')
+    expect(ask).toHaveBeenCalledTimes(3)
+  },
+)
+it('abandons a request on restart without resending and clears pending', async () => {
+  const ask = vi.fn<ClassifyService['ask']>(async (_request, signal) => {
+    await new Promise<void>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+    })
+    return answer(0.9)
+  })
+  const f = await fixture({ ask })
+  await f.round()
+  await until(() => ask.mock.calls.length === 1)
+  const pending = (await f.snapshot())!.conversations[f.root.id].pending!
+  expect((await f.harness.getTask(pending as HookApi['taskId'], context))?.abandonOnRestart).toBe(
+    true,
+  )
+  await f.reopen()
+  await until(async () => (await f.snapshot())?.conversations[f.root.id]?.pending === undefined)
+  expect(ask).toHaveBeenCalledTimes(1)
   expect((await f.snapshot())?.conversations).toEqual({})
 })

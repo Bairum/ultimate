@@ -6,5 +6,11 @@ export type Phase =
   | 'fixing'
   | 'delegating'
   | 'wrapping_up'
-export type PhaseRow = { phase?: Phase; confidence?: number; at?: number; pending?: number }
+export type PhaseRow = {
+  generation?: number
+  phase?: Phase
+  confidence?: number
+  at?: number
+  pending?: number
+}
 export type PhaseState = { conversations: Record<string, PhaseRow> }
