@@ -22,6 +22,10 @@ A project is a forest of conversation trees, each tree like a history of commits
   `notify` tells you when another conversation finishes. A conversation that resumes after main moved gets a
   catch-up of what landed, overlaps first.
 - **Conclude** a conversation when its work is done; it stays readable and can be resumed.
+- **UI polish lands when the user says so.** For small look-and-feel work (an animation, a loading state, spacing,
+  a card), keep a faux preview of the branch's checkout running (`instance start` with `faux: true`), give the user
+  its URL, and iterate there: commit each round in the branch, but do not `workspace submit` until the user has
+  clicked around and approved it. Larger UI features and anything with behaviour behind it land as usual.
 
 `extensions/lineage/README.md` has the mechanics.
 
