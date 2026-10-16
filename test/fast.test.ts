@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai'
 import type { Api, Model, ProviderStreams, SimpleStreamOptions } from '@earendil-works/pi-ai'
@@ -6,7 +6,8 @@ import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
-import { fastModels, fastStream } from '../extensions/fast/server.ts'
+import type { ActionContext } from '../server/actions.ts'
+import { actions, fastModels, fastStream } from '../extensions/fast/server.ts'
 import { temp } from './helpers.ts'
 
 /** An OpenAI Responses stand-in that records the payload each request would send. */
@@ -63,4 +64,33 @@ it('reads fastModels from project settings over user settings and rejects other 
   expect(notices).toEqual([
     'Invalid fastModels ["anthropic/claude-opus-5-5"]: expected ["openai/<id>", …]; fast mode is off',
   ])
+})
+
+it('toggles a model in the user settings and refuses while the project decides', async () => {
+  const userHome = await temp()
+  let project: JsonObject = {}
+  const ctx = {
+    host: { userHome, projectSettings: async () => project, notice: () => {} },
+  } as unknown as ActionContext
+  const file = join(userHome, '.ultimate/settings.json')
+  await mkdir(join(userHome, '.ultimate'), { recursive: true })
+  await writeFile(file, JSON.stringify({ summaryModel: 'openai/gpt-6-luna' }))
+  expect(await actions.set({ model: 'openai/gpt-6.1-sol', on: true }, ctx)).toEqual({
+    models: ['openai/gpt-6.1-sol'],
+    project: false,
+  })
+  expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+    summaryModel: 'openai/gpt-6-luna',
+    fastModels: ['openai/gpt-6.1-sol'],
+  })
+  await actions.set({ model: 'openai/gpt-6.1-sol', on: false }, ctx)
+  expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ summaryModel: 'openai/gpt-6-luna' })
+  await expect(actions.set({ model: 'anthropic/claude-opus-5-5', on: true }, ctx)).rejects.toThrow(
+    'Expected',
+  )
+  project = { fastModels: [] }
+  await expect(actions.set({ model: 'openai/gpt-6.1-sol', on: true }, ctx)).rejects.toThrow(
+    'project settings',
+  )
+  expect(await actions.status(null, ctx)).toEqual({ models: [], project: true })
 })

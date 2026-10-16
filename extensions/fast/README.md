@@ -7,6 +7,10 @@ which replaces the user's list:
 { "fastModels": ["openai/gpt-6.1-sol"] }
 ```
 
+The composer toolbar shows a **fast** toggle while an `openai/` model is selected. It adds that model to the user's
+`fastModels` or removes it (the `set` action), so it applies to every request to the model, not just the shown
+conversation. While a project's settings set the list, the toggle is disabled and the project file decides.
+
 Every request to a listed model goes fast: conversations, subagents whose definition names it (workers, the lander,
 reviewers), and summaries. The list is read at each request, so a change applies to the next one. Only `openai/`
 models are accepted; any other entry turns fast mode off with a notice.
