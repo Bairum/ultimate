@@ -150,7 +150,7 @@ async function fixture() {
   }
   return { root, source, prepared, opened, service, call, run, main, close }
 }
-it('selects shared, isolated main and owned child checkouts without trusting worktree config', async () => {
+it('selects shared, isolated main and owned child checkouts with the main project decision', async () => {
   const f = await fixture()
   try {
     expect(await f.call('instance', { action: 'start', subagent: 999999, faux: true })).toContain(
@@ -183,8 +183,8 @@ it('selects shared, isolated main and owned child checkouts without trusting wor
     expect(new Set([shared.url, own.url, selected.url]).size).toBe(3)
     expect(new Set([shared.home, own.home, selected.home, f.prepared.home]).size).toBe(4)
     await assertProject(shared, f.source, true)
-    await assertProject(own, main.workspace.path, null)
-    await assertProject(selected, childWorkspace.path, null)
+    await assertProject(own, main.workspace.path, true)
+    await assertProject(selected, childWorkspace.path, true)
     expect(await f.run({ action: 'start', faux: true })).toContain('At most three')
     for (const preview of [selected, shared, own]) {
       expect(await f.call('instance', { action: 'logs', id: preview.id })).toContain(preview.url)
