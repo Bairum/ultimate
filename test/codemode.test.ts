@@ -90,6 +90,52 @@ async function run(
   }
 }
 
+it('calls extension actions with caller context and rejects missing or disabled actions', async () => {
+  const { server, options } = await fixture()
+  const path = join(options.ultimateRoot, 'extensions/action-test')
+  await mkdir(path)
+  await writeFile(
+    join(path, 'server.ts'),
+    `import { defineExtension } from '@earendil-works/pi-durable';
+    export default defineExtension({ name: 'action-test' });
+    export const actions = {
+      echo: async (args, ctx) => ({ args, conversationId: ctx.conversationId, signal: ctx.signal instanceof AbortSignal }),
+      fail: async () => { throw new Error('Action failed'); },
+    };`,
+  )
+  await until(() => !!server.extensions.action('action-test', 'echo'))
+  const result = await run(
+    server,
+    `return await ultimate.action('action-test', 'echo', { value: 42 });`,
+  )
+  expect(result.data.details.value).toEqual({
+    args: { value: 42 },
+    conversationId: server.root.id,
+    signal: true,
+  })
+  const defaults = await run(server, `return await ultimate.action('action-test', 'echo');`)
+  expect(defaults.data.details.value).toMatchObject({ args: null })
+  for (const [extension, action, error] of [
+    ['missing', 'echo', 'Unknown extension action: missing/echo'],
+    ['action-test', 'missing', 'Unknown extension action: action-test/missing'],
+    ['action-test', 'toString', 'Unknown extension action: action-test/toString'],
+    ['action-test', 'fail', 'Action failed'],
+  ]) {
+    const failed = await run(server, `return await ultimate.action('${extension}', '${action}');`)
+    expect(failed.data.isError).toBe(true)
+    expect(failed.text).toContain(error)
+  }
+  await mkdir(join(options.userHome, '.ultimate'), { recursive: true })
+  await writeFile(
+    join(options.userHome, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { disable: ['action-test'] } }),
+  )
+  await until(() => !server.extensions.action('action-test', 'echo'))
+  const disabled = await run(server, `return await ultimate.action('action-test', 'echo');`)
+  expect(disabled.data.isError).toBe(true)
+  expect(disabled.text).toContain('Unknown extension action: action-test/echo')
+})
+
 it('composes read and bash with private nested results and final JSON details', async () => {
   const { server } = await fixture()
   const path = join(server.host.home, 'demo.txt')

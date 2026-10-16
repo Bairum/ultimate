@@ -77,6 +77,14 @@ export type ExtensionHost = Pick<
   setProjectDecision(local: boolean): Promise<void>
   /** Apply settings writes to the registry, browser facets, and styles before returning. */
   reloadExtensions(): Promise<void>
+  /** Call an installed extension action on behalf of a conversation. */
+  invoke(
+    name: string,
+    action: string,
+    args: JsonValue,
+    signal: AbortSignal,
+    conversationId?: number,
+  ): Promise<unknown>
   doc(kind: string): ConversationDocToken<JsonObject> | undefined
   metadata: typeof Metadata
 }
@@ -207,7 +215,42 @@ export async function loadExtensions(
   let open = false
   const cleanups = new Set<() => Promise<void>>()
   const resources = new Map<string, unknown>()
+  async function invoke(
+    name: string,
+    action: string,
+    args: JsonValue,
+    signal: AbortSignal,
+    conversationId?: number,
+  ) {
+    const table = actions.get(name)
+    const fn = table && Object.hasOwn(table, action) ? table[action] : undefined
+    if (!fn) throw new Error(`Unknown extension action: ${name}/${action}`)
+    if (
+      conversationId !== undefined &&
+      (!Number.isSafeInteger(conversationId) || conversationId < 1)
+    )
+      throw new Error('Invalid conversationId')
+    return fn(args, {
+      host: facetHosts.get(name)!,
+      conversationId,
+      signal,
+      exec: async (command, commandArgs, options) => {
+        const agent =
+          conversationId === undefined
+            ? undefined
+            : await runtime
+                .harness()
+                .snapshot(AgentDoc, conversationId as ConversationId, BACKGROUND_CONTEXT)
+        return actionExec(options?.cwd ?? agent?.cwd ?? host.projectRoot, signal)(
+          command,
+          commandArgs,
+          options,
+        )
+      },
+    })
+  }
   const extensionHost: ExtensionHost = {
+    invoke,
     events,
     provide: () => {
       throw new Error('Providers require a facet scope')
@@ -571,38 +614,7 @@ export async function loadExtensions(
       const table = actions.get(name)
       return table && Object.hasOwn(table, action) ? table[action] : undefined
     },
-    async invoke(
-      name: string,
-      action: string,
-      args: JsonValue,
-      signal: AbortSignal,
-      conversationId?: number,
-    ) {
-      const fn = actions.get(name)![action]
-      if (
-        conversationId !== undefined &&
-        (!Number.isSafeInteger(conversationId) || conversationId < 1)
-      )
-        throw new Error('Invalid conversationId')
-      return fn(args, {
-        host: facetHosts.get(name)!,
-        conversationId,
-        signal,
-        exec: async (command, commandArgs, options) => {
-          const agent =
-            conversationId === undefined
-              ? undefined
-              : await runtime
-                  .harness()
-                  .snapshot(AgentDoc, conversationId as ConversationId, BACKGROUND_CONTEXT)
-          return actionExec(options?.cwd ?? agent?.cwd ?? host.projectRoot, signal)(
-            command,
-            commandArgs,
-            options,
-          )
-        },
-      })
-    },
+    invoke,
     doc: findDoc,
     /** The harness is open: run the `onOpen` callbacks. */
     async opened() {
