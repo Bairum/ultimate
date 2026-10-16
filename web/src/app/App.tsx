@@ -4,7 +4,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { shellKeys } from '../sdk/actions.ts'
 import { ROOT } from '../sdk/api.ts'
 import { store, uiState } from '../sdk/client.ts'
-import { errorMessage } from '../sdk/format.ts'
+import { errorMessage, shortenPath } from '../sdk/format.ts'
 import {
   ExtensionNameContext,
   useConversation,
@@ -13,9 +13,11 @@ import {
   useReady,
   useShownSurface,
   useStore,
+  useSystem,
 } from '../sdk/hooks.ts'
 import { HOME, surfaceItems } from '../sdk/registry.ts'
 import type { SurfaceItem } from '../sdk/registry.ts'
+import type { SystemInfo } from '../../../shared/protocol.ts'
 import { rendered } from '../sdk/resume.ts'
 import { ExtensionErrors, Slot } from './boundary.tsx'
 import { useShortcuts } from './keyboard.ts'
@@ -107,19 +109,39 @@ function Surfaces({ surfaces }: { surfaces: readonly SurfaceItem[] }) {
   )
 }
 
-/** The window title: the shown conversation on Agent, the surface elsewhere; a dot while the agent works. */
+/**
+ * The project as tabs name it: its folder from home. A branch's checkout (`<home>/worktrees/<id>`) is the project's
+ * name and that conversation, and a server with a home outside `~/.ultimate/projects`, as test previews have, says
+ * it is a preview.
+ */
+function projectTitle(system: SystemInfo | undefined) {
+  if (!system) return undefined
+  const { home } = system.machine
+  const worktree = /\/\.ultimate\/projects\/(.+)-[\da-f]{8}\/worktrees\/(\d+)$/.exec(
+    system.project.root,
+  )
+  const project = worktree
+    ? `${worktree[1]} #${worktree[2]}`
+    : shortenPath(system.project.root, { home })
+  return system.persistence.path.startsWith(`${home}/.ultimate/projects/`)
+    ? project
+    : `preview · ${project}`
+}
+
+/**
+ * The window title: the project's folder first, so tabs of several projects tell apart, then the shown conversation on
+ * Agent or the surface elsewhere; a dot while the agent works.
+ */
 function useDocumentTitle(surface: { id: string; title: string } | undefined) {
   const { id, busy } = useConversation()
   const label = useConversations().find((conversation) => conversation.id === id)?.label
+  const project = projectTitle(useSystem())
   const app = surface && surface.id !== HOME ? surface.title : undefined
   useEffect(() => {
-    const name = app
-      ? `${app} · Ultimate`
-      : id === ROOT || id === undefined
-        ? 'Ultimate'
-        : `${label ?? `#${id}`} · Ultimate`
+    const shown = app ?? (id === ROOT || id === undefined ? undefined : (label ?? `#${id}`))
+    const name = [project ?? 'Ultimate', shown].filter(Boolean).join(' · ')
     document.title = busy ? `● ${name}` : name
-  }, [app, label, busy, id])
+  }, [app, label, busy, id, project])
 }
 
 /** Command shortcuts, which start with the app. */
