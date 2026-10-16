@@ -1,15 +1,8 @@
 import { cn } from 'cn'
-import { CommandIcon, PanelLeftIcon, PanelRightIcon } from 'lucide-react'
+import { PanelLeftIcon, PanelRightIcon } from 'lucide-react'
 import { Fragment } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { ConversationSummary } from '../../../shared/protocol.ts'
 import { actions } from '../sdk/actions.ts'
@@ -21,10 +14,10 @@ import {
   useStore,
   useRegionOpen,
 } from '../sdk/hooks.ts'
-import { HOME, panelItems, slotItems, surfaceItems } from '../sdk/registry.ts'
+import { panelItems, slotItems } from '../sdk/registry.ts'
 import { Slot } from './boundary.tsx'
 import { Shortcut } from './palette.tsx'
-import { useRegion, useSurfaceId } from './surface.ts'
+import { useRegion } from './surface.ts'
 
 export function IconButton({
   label,
@@ -125,72 +118,9 @@ function Trail() {
   )
 }
 
-/** The brand, which opens the list of surfaces; away from Agent it names the shown one. */
-function SurfaceSwitcher() {
-  const surfaces = surfaceItems(useExtensions())
-  const shown = useSurfaceId()
-  const current = surfaces.find((surface) => surface.id === shown)
-  const Icon = current?.icon
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <button
-          className="flex shrink-0 items-center gap-2 rounded-sm px-1 text-[11px] font-semibold tracking-[0.28em] text-brand transition-opacity outline-none hover:opacity-80 focus-visible:ring-1 focus-visible:ring-ring"
-          title="Switch surface"
-          type="button"
-        >
-          ULTIMATE
-          {current && current.id !== HOME && (
-            <span className="flex items-center gap-1.5 text-[13px] font-medium tracking-normal text-foreground">
-              {Icon && <Icon className="size-3.5 text-muted-foreground" />}
-              {current.title}
-            </span>
-          )}
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-96" sideOffset={6}>
-        <DropdownMenuLabel className="px-2 pt-1 pb-1.5 font-mono text-[10.5px] font-normal tracking-wider text-muted-foreground uppercase">
-          Surfaces
-        </DropdownMenuLabel>
-        {surfaces.map((surface, index) => {
-          const Item = surface.icon
-          const active = surface.id === shown
-          return (
-            <DropdownMenuItem
-              className="items-start gap-2.5 py-1.5"
-              data-surface={surface.id}
-              key={surface.id}
-              onSelect={() => actions.showSurface(surface.id)}
-            >
-              <Item
-                className={cn('mt-0.5 size-4', active ? 'text-brand' : 'text-muted-foreground')}
-              />
-              <span className="min-w-0 flex-1">
-                <span className={cn('block text-[13px]', active && 'text-brand')}>
-                  {surface.title}
-                </span>
-                {surface.description && (
-                  <span className="block truncate text-[12px] text-muted-foreground">
-                    {surface.description}
-                  </span>
-                )}
-              </span>
-              {index < 9 && (
-                <span className="mt-0.5 shrink-0">
-                  <Shortcut keys={`mod+${index + 1}`} />
-                </span>
-              )}
-            </DropdownMenuItem>
-          )
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
 /**
- * The top bar: the brand with the surface switcher, `children` (the shown conversation's trail by default), the
- * `header.right` slot, and the command palette. It toggles the sidebar and panel when the surface renders them.
+ * The top bar of a surface: `children` (the shown conversation's trail by default) and the `header.right` slot. It
+ * toggles the sidebar and panel when the surface renders them.
  */
 export function Header({ children }: { children?: ReactNode }) {
   const records = useExtensions()
@@ -204,26 +134,9 @@ export function Header({ children }: { children?: ReactNode }) {
           <PanelLeftIcon className="size-4" />
         </IconButton>
       )}
-      <SurfaceSwitcher />
-      <span className="h-4 w-px shrink-0 bg-border" />
       <div className="flex min-w-0 items-center gap-2">{children ?? <Trail />}</div>
       <div className="ml-auto flex items-center gap-1">
         <Slot name="header.right" variant="inline" />
-        <Button
-          aria-label="Command palette"
-          className="h-7 gap-1.5 px-2 font-mono text-[11px] text-muted-foreground hover:text-foreground max-md:hidden"
-          onClick={actions.openPalette}
-          size="sm"
-          variant="ghost"
-        >
-          commands
-          <Shortcut keys="mod+k" />
-        </Button>
-        <span className="md:hidden">
-          <IconButton label="Command palette" onClick={actions.openPalette}>
-            <CommandIcon className="size-4" />
-          </IconButton>
-        </span>
         {panels && (
           <IconButton
             active={panelOpen}

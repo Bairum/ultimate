@@ -107,6 +107,12 @@ export default async function fauxExtension(host: ExtensionHost) {
       ) {
         return fauxAssistantMessage([fauxToolCall('restart', {})], { stopReason: 'toolUse' })
       }
+      if (last?.role === 'user' && last.content === 'fail demo') {
+        return fauxAssistantMessage([], {
+          stopReason: 'error',
+          errorMessage: 'Demo failure: the provider refused the request.',
+        })
+      }
       if (last?.role === 'user' && last.content === 'leave a note') {
         return fauxAssistantMessage(
           [

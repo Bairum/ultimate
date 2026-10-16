@@ -8,4 +8,6 @@ Set `faux: true` for token-free testing; otherwise previews use real models. No 
 
 Logs returns the last 200 lines; list shows running instances. At most three may run, including starts in progress; shutdown stops them all. Temporary homes remain for inspection. The tool is not replay-safe. Returned URLs work with screenshot or browser.
 
-`web.tsx` renders instance cards with URL, pid and home, plus collapsible logs.
+Each instance records the conversation it previews (or that started it in the shared checkout) and whether it is faux. The `list` action (`POST /api/extensions/instance/actions/list`) returns the running ones as `{ id, url, conversationId, faux }`.
+
+`web.tsx` renders instance cards with URL, pid and home, plus collapsible logs. While previews run, the title bar shows a switcher after the project name (`2 previews ▾`) listing "This project" and each preview as `#<conversation> <title>  faux · :<port>`; it asks every 5 s and when opened. Choosing a preview shows its whole UI in a frame below the title bar, which the embedded page leaves out, and the switcher names it (`● #12 · faux · :41234`). "This project", another surface, or the preview stopping returns to this project; a reload does too. Pages opened from elsewhere than loopback, such as the tailnet, list no previews, since their URLs are loopback-only.

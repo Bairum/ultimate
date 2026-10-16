@@ -22,7 +22,7 @@ The Tailscale panel (palette: `Tailscale…`) shows the `status` action, read wh
 - **disabled:** a switch that enables `tailscale` in `~/.ultimate/settings.json` through onboarding's `setExtension` action with user scope; it never offers project scope. The panel loads only with the extension, so this state shows when your settings disable it and a project enables it, and on faux servers. **Check again** rereads the user settings.
 - **starting:** a quiet spinner.
 
-While ready, the status line shows `● tailnet`; hover for the URL, click to open the panel.
+While ready, the title bar shows `● tailnet`; hover for the URL, click to open the panel.
 
 ## Stable ports, handoff, and recovery
 

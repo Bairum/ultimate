@@ -195,12 +195,15 @@ new composer is blocked. The extension owns creation policy; `getUiState(key)` r
 
 ### Slots
 
-Components mounted in named places of the shell, on every surface that renders the primitive holding them.
+Components mounted in named places of the shell, on every surface that renders the primitive holding them, and in the
+title bar the host shows above every surface.
 
 | Slot                   | Where                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------- |
 | `sidebar`              | Left column (`<Sidebar />`); it disappears while nothing is in it                         |
-| `header.right`         | Right side of the header, before the palette button (`<Header>`)                          |
+| `titlebar.left`        | Title bar above every surface, after the project name; monospace, one line                |
+| `titlebar.right`       | Title bar, right, before the palette button                                               |
+| `header.right`         | Right side of the header, before the panel toggle (`<Header>`)                            |
 | `statusline.left`      | Bottom status line, left; monospace, one line (`<StatusLine />`)                          |
 | `statusline.right`     | Bottom status line, right (`<StatusLine />`)                                              |
 | `composer.toolbar`     | Left of the composer's footer, beside the send button (`<Conversation />`)                |
@@ -478,9 +481,9 @@ with the sidebar and the right panel. An app surface puts its own UI first and k
 usually docked beside it. The `surfaces` extension adds the agent's surface-awareness prompt; the UI itself
 works without it. The `documents` extension provides the Documents tab.
 
-- **Switching**: the brand at the top left opens the switcher (Agent first, then by `order`, then title); ⌘K has
-  "Switch to …"; `mod+1…9` select the first nine (Ctrl+1…9 off macOS, which Chrome lets the page take before its tab
-  switching). In code: `useUltimate().showSurface(id)` or
+- **Switching**: the title bar lists the surfaces (Agent first, then by `order`, then title); on phones the brand
+  opens them as a menu. ⌘K has "Switch to …"; `mod+1…9` select the first nine (Ctrl+1…9 off macOS, which Chrome lets
+  the page take before its tab switching). In code: `useUltimate().showSurface(id)` or
   `context.showSurface(id)` in a command. Switching never interrupts the agent: the run goes on, and the transcript and
   the composer's draft are where they were.
 - **Durable**: the choice is UI state `shell.surface`; it survives reloads and restarts and follows every tab. Until the
@@ -499,7 +502,7 @@ The contribution:
 | Field         | Meaning                                                                                                 |
 | ------------- | ------------------------------------------------------------------------------------------------------- |
 | `id`          | Global and stored in `shell.surface`: use the extension name (`commits`) or prefix it (`commits.graph`) |
-| `title`       | Shown in the switcher, the header, ⌘K, and the window title                                             |
+| `title`       | Shown in the switcher, the title bar, ⌘K, and the window title                                          |
 | `icon`        | A `lucide-react` icon                                                                                   |
 | `description` | One line under the title in the switcher                                                                |
 | `order`       | Position after Agent; lower first (default 0), then by title. It decides which `mod+<n>` selects it     |
@@ -507,8 +510,10 @@ The contribution:
 
 ### Layout
 
-The host renders the surface inside a column that fills the window (`flex h-dvh flex-col`). Compose it top to bottom,
-and make the middle row `flex min-h-0 flex-1` so it takes the rest and scrolls inside, not the page:
+The host renders the surface inside a column that fills the window (`flex h-dvh flex-col`), under its title bar: the
+brand, the project, the surfaces, and the palette button (none when Ultimate is embedded in an iframe).
+Compose the surface top to bottom, and make the middle row `flex min-h-0 flex-1` so it takes the rest and scrolls
+inside, not the page:
 
 ```tsx
 function MyApp() {
@@ -533,7 +538,7 @@ Import them from `@/sdk`. Each is a thin wrapper over the shell's own parts; the
 
 | Primitive                                 | What it renders                                                                                                                                                                                                                                                                                     |
 | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `<Header>`                                | The top bar: the brand with the surface switcher, then its children (by default the shown conversation's trail), the `header.right` slot, and the palette button. It adds the sidebar and panel toggles when the surface renders them.                                                              |
+| `<Header>`                                | The surface's top bar: its children (by default the shown conversation's trail) and the `header.right` slot. It adds the sidebar and panel toggles when the surface renders them.                                                                                                                   |
 | `<StatusLine />`                          | The bottom line with the `statusline.left` and `statusline.right` slots                                                                                                                                                                                                                             |
 | `<Conversation variant="main" \| "dock">` | The shown conversation: transcript and composer, filling their box. `main` centres a reading column; `dock` fits a narrow region.                                                                                                                                                                   |
 | `<Dock title? side?>`                     | A collapsible, resizable side region, `right` by default; `title` (default `conversation`) labels it. Drag the inner edge to resize, double-click it to reset. Collapsed, it is a rail that pulses while the agent works. Open state and width persist per surface (`shell.dock.<surface>.<side>`). |

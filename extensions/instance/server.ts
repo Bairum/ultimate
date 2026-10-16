@@ -6,16 +6,65 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
+import type { ExtensionAction } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Subagents } from '../subagents/server.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
 
-const info = ({ id, url, home, pid }: { id: string; url: string; home: string; pid: number }) => ({
+interface Instance {
+  id: string
+  url: string
+  home: string
+  pid: number
+  /** The conversation whose workspace it previews, or which started it in the shared checkout. */
+  conversationId: number
+  faux: boolean
+  child: ChildProcess
+  output: string
+}
+
+const info = ({ id, url, home, pid, conversationId, faux }: Instance) => ({
   id,
   url,
   home,
   pid,
+  conversationId,
+  faux,
 })
+const live = (item: Instance) => item.child.exitCode === null && item.child.signalCode === null
+/** The instances this process runs, shared by the tool and the actions; shutdown stops them all. */
+function running(host: Pick<ExtensionHost, 'resource' | 'onClose'>) {
+  const instances: Map<string, Instance> = host.resource('instance', () => {
+    host.onClose(async () => {
+      await Promise.all([...instances.keys()].map((id) => stop(instances, id)))
+    })
+    return new Map<string, Instance>()
+  })
+  return instances
+}
+async function stop(instances: Map<string, Instance>, id: string) {
+  const instance = instances.get(id)
+  if (!instance) throw new Error(`Unknown instance: ${id}`)
+  if (instance.child.pid !== undefined && live(instance)) {
+    const exited = new Promise<void>((resolve) => instance.child.once('exit', () => resolve()))
+    instance.child.kill('SIGTERM')
+    const timer = setTimeout(() => instance.child.kill('SIGKILL'), 5000)
+    try {
+      await exited
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  instances.delete(id)
+}
+
+export const actions: Record<string, ExtensionAction> = {
+  /** The running instances that serve their UI, for the title bar's switcher. */
+  list: (_args, { host }) =>
+    [...running(host).values()]
+      .filter((item) => item.url && live(item))
+      .map(({ id, url, conversationId, faux }) => ({ id, url, conversationId, faux })),
+}
 
 export default function instanceExtension(
   host: Pick<
@@ -35,43 +84,9 @@ export default function instanceExtension(
   >,
 ) {
   const service = () => host.use<WorkspaceService>('workspaces')
-  const instances = host.resource('instance', () => {
-    host.onClose(async () => {
-      await Promise.all([...instances.keys()].map(stop))
-    })
-    return new Map<
-      string,
-      {
-        id: string
-        url: string
-        home: string
-        pid: number
-        child: ChildProcess
-        output: string
-      }
-    >()
-  })
+  const instances = running(host)
   const starts = host.resource('instance.starts', () => ({ pending: 0 }))
   const ownSource = host.projectRoot === host.ultimateRoot
-  async function stop(id: string) {
-    const instance = instances.get(id)
-    if (!instance) throw new Error(`Unknown instance: ${id}`)
-    if (
-      instance.child.pid !== undefined &&
-      instance.child.exitCode === null &&
-      instance.child.signalCode === null
-    ) {
-      const exited = new Promise<void>((resolve) => instance.child.once('exit', () => resolve()))
-      instance.child.kill('SIGTERM')
-      const timer = setTimeout(() => instance.child.kill('SIGKILL'), 5000)
-      try {
-        await exited
-      } finally {
-        clearTimeout(timer)
-      }
-    }
-    instances.delete(id)
-  }
   return defineExtension({
     name: 'instance',
     sections: [
@@ -100,25 +115,16 @@ export default function instanceExtension(
           try {
             context.abortSignal?.throwIfAborted()
             let result: unknown
-            if (args.action === 'list')
-              result = [...instances.values()]
-                .filter((item) => item.child.exitCode === null && item.child.signalCode === null)
-                .map(info)
+            if (args.action === 'list') result = [...instances.values()].filter(live).map(info)
             else if (args.action === 'stop') {
-              await stop(args.id ?? '')
+              await stop(instances, args.id ?? '')
               result = { stopped: args.id }
             } else if (args.action === 'logs') {
               const item = instances.get(args.id ?? '')
               if (!item) throw new Error(`Unknown instance: ${args.id}`)
               result = item.output.split('\n').slice(-200).join('\n')
             } else {
-              if (
-                [...instances.values()].filter(
-                  (item) => item.child.exitCode === null && item.child.signalCode === null,
-                ).length +
-                  starts.pending >=
-                3
-              )
+              if ([...instances.values()].filter(live).length + starts.pending >= 3)
                 throw new Error('At most three instances may run at once')
               starts.pending++
               reserved = true
@@ -162,14 +168,7 @@ export default function instanceExtension(
               } else home = await mkdtemp(join(tmpdir(), 'ultimate-instance-'))
               if (home === (await realpath(host.home)))
                 throw new Error('A test instance cannot share the running server home')
-              if (
-                [...instances.values()].some(
-                  (item) =>
-                    item.home === home &&
-                    item.child.exitCode === null &&
-                    item.child.signalCode === null,
-                )
-              )
+              if ([...instances.values()].some((item) => item.home === home && live(item)))
                 throw new Error('Home is already owned by an instance')
               context.abortSignal?.throwIfAborted()
               const env: NodeJS.ProcessEnv = {
@@ -201,11 +200,13 @@ export default function instanceExtension(
                 stdio: ['ignore', 'pipe', 'pipe'],
               })
               const id = randomUUID()
-              const item = {
+              const item: Instance = {
                 id,
                 url: '',
                 home,
                 pid: child.pid ?? 0,
+                conversationId,
+                faux: args.faux === true,
                 child,
                 output: '',
               }
@@ -273,7 +274,7 @@ export default function instanceExtension(
                 if (!ready) throw new Error(`Instance did not become ready:\n${item.output}`)
                 result = info(item)
               } catch (error) {
-                await stop(id)
+                await stop(instances, id)
                 throw error
               }
             }

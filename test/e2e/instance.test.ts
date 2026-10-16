@@ -5,7 +5,7 @@ import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { expect, it } from 'vitest'
 import { context, prepareHarness } from '../../server/harness.ts'
 import { Metadata } from '../../server/metadata.ts'
-import instance from '../../extensions/instance/server.ts'
+import instance, { actions } from '../../extensions/instance/server.ts'
 import subagents, { Subagents } from '../../extensions/subagents/server.ts'
 import workspaceExtension from '../../extensions/workspaces/server.ts'
 import { workspaces } from '../../extensions/workspaces/workspaces.ts'
@@ -161,8 +161,16 @@ async function fixture({ foreign = false } = {}) {
     for (const preview of previews) await removeTemp(preview.home)
     await removeTemp(root)
   }
-  return { root, source, prepared, opened, service, call, run, main, close }
+  const list = async () =>
+    (await actions.list(null, { host } as never)) as Omit<Preview, 'home' | 'pid'>[]
+  return { root, source, prepared, opened, service, call, run, list, main, close }
 }
+const listed = (preview: Preview, conversationId: number) => ({
+  id: preview.id,
+  url: preview.url,
+  conversationId,
+  faux: true,
+})
 it('selects shared, isolated main and owned child checkouts with the main project decision', async () => {
   const f = await fixture()
   try {
@@ -199,9 +207,17 @@ it('selects shared, isolated main and owned child checkouts with the main projec
     await assertProject(own, main.workspace.path, true)
     await assertProject(selected, childWorkspace.path, true)
     expect(await f.run({ action: 'start', faux: true })).toContain('At most three')
+    expect(await f.list()).toEqual(
+      expect.arrayContaining([
+        listed(own, main.id),
+        listed(shared, f.opened.root.id),
+        listed(selected, child.conversationId),
+      ]),
+    )
     for (const preview of [selected, shared, own]) {
       expect(await f.call('instance', { action: 'logs', id: preview.id })).toContain(preview.url)
       await f.run({ action: 'stop', id: preview.id })
+      expect((await f.list()).map(({ id }) => id)).not.toContain(preview.id)
       await removeTemp(preview.home)
     }
     await f.service.discard(child.conversationId, context)
