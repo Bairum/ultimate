@@ -1,11 +1,13 @@
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import type { Message } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
+import { estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate'
 import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import { afterEach, beforeAll, expect, it } from 'vitest'
-import { Branch } from '../extensions/lineage/server.ts'
+import { abstract, Branch, branchOf, Tally } from '../extensions/lineage/server.ts'
 import { Plan } from '../extensions/plan/server.ts'
 import { Summaries, summaryBehavior } from '../extensions/conversations/summary.ts'
 import { defineExtension, defineTask } from '@earendil-works/pi-durable'
@@ -42,24 +44,21 @@ function section(server: Server, id: ConversationId) {
   return lineage.render({ conversationId: id } as Parameters<typeof lineage.render>[0], context)
 }
 
-/** A faux server whose provider answers briefs with BRIEF and everything else with the last user text echoed. */
+/**
+ * A faux server whose provider answers lineage summaries with LINEAGE SUMMARY and everything else with the last user
+ * text echoed; `requests` keeps every conversation request's messages.
+ */
 async function fixture(reopen?: string) {
   const home = reopen ?? (await temp('ultimate-lineage-'))
   const server = await fauxServer({ ultimateRoot, home, userHome: home })
   servers.push(server)
-  const briefs: string[] = []
-  const failures = { brief: false }
+  const requests: Message[][] = []
   const route: FauxResponseFactory = (transcript) => {
     server.host.faux!.appendResponses([route])
     const [system, first] = transcript.messages
-    if (textOf(system.content).startsWith('Write the brief')) {
-      briefs.push(textOf(first.content))
-      return failures.brief
-        ? fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'provider down' })
-        : fauxAssistantMessage('BRIEF: keep going')
-    }
     if (textOf(system.content).startsWith('You condense'))
       return fauxAssistantMessage(`LINEAGE SUMMARY of ${textOf(first.content).slice(0, 40)}`)
+    requests.push([...transcript.messages])
     const final = transcript.messages.at(-1)!
     if (final.role === 'toolResult') return fauxAssistantMessage(`Tool: ${textOf(final.content)}`)
     const last = transcript.messages.findLast((message) => message.role === 'user')
@@ -71,17 +70,38 @@ async function fixture(reopen?: string) {
     return fauxAssistantMessage(`echo ${textOf(last?.content)}`)
   }
   server.host.faux!.setResponses([route])
-  return { server, home, briefs, failures }
+  return { server, home, requests }
 }
 
-it('branches with a brief, marks the source, and keeps inherited history reachable', async () => {
-  const { server, briefs } = await fixture()
-  await (
-    await server.root.submit(
-      { type: 'input', content: 'We build a tree of conversations.' },
-      context,
-    )
-  ).wait(context)
+const branchFrom = async (server: Server, args: Record<string, unknown>) => {
+  const { status, data } = await post(server, '/api/extensions/lineage/actions/branch', { args })
+  expect([status, data.error]).toEqual([200, undefined])
+  return data.result.id as ConversationId
+}
+
+/** Wait until `id`'s prompt is delivered and answered. */
+const settled = async (server: Server, id: ConversationId) => {
+  const conversation = (await server.harness.conversation(id, context))!
+  await conversation.waitForIdle(context)
+  return conversation
+}
+
+/** The model's view of a conversation as [role, text] pairs, system messages left out. */
+const said = (messages: readonly Message[]) =>
+  messages
+    .filter((message) => message.role !== 'system')
+    .map((message) => [message.role, textOf(message.content)])
+
+const tallyTokens = async (server: Server, id: ConversationId) =>
+  (await (await server.harness.conversation(id, context))!.context(context)).messages.reduce(
+    (sum, message) => sum + estimateMessageTokens(message),
+    0,
+  )
+
+const image = { type: 'image', data: 'aW1n', mimeType: 'image/png' } as const
+
+it('branches from a tally: the root gets the prompt node, the branch starts from the tally and its prompt', async () => {
+  const { server, requests } = await fixture()
   await server.harness.commit(async (tx) => {
     ;(await tx.doc(Plan, server.root.id)).epics.E1 = {
       key: 'E1',
@@ -91,32 +111,21 @@ it('branches with a brief, marks the source, and keeps inherited history reachab
       tasks: {},
     }
   }, context)
-  // Ordinary forks (including subagent history forks) still inherit the ledger.
-  const forkAt = await server.harness.commit(
-    async (tx) => (await tx.appendEntry(server.root.id, { kind: 'test.after-plan', data: {} })).id,
-    context,
-  )
-  const ordinary = await server.root.fork(forkAt, { ownership: { kind: 'ownerless' } }, context)
-  expect(Object.keys((await server.harness.snapshot(Plan, ordinary.id, context))!.epics)).toEqual([
-    'E1',
-  ])
-  const { messages: seen } = await server.root.context(context)
-  const answer = (await server.root.entries({}, 1, undefined, context)).items[0].id
   const publications: import('@earendil-works/pi-durable').CommitPublication[] = []
   const stop = server.harness.subscribeCommits((publication) => publications.push(publication))
-  const { status, data } = await post(server, '/api/extensions/lineage/actions/branch', {
-    args: { from: 1, prompt: 'Add notes between conversations' },
-  })
-  expect(status).toBe(200)
-  const id = data.result.id as ConversationId
+  const first = await branchFrom(server, { from: 1, prompt: 'Add notes between conversations' })
   stop()
   const creation = publications.find((publication) =>
-    publication.changes.some((change) => change.type === 'conversation' && change.value.id === id),
+    publication.changes.some(
+      (change) => change.type === 'conversation' && change.value.id === first,
+    ),
   )!
   const initialized = (kind: string) =>
     creation.changes.find(
       (change) =>
-        change.type === 'document' && change.conversationId === id && change.record.kind === kind,
+        change.type === 'document' &&
+        change.conversationId === first &&
+        change.record.kind === kind,
     )
   expect(initialized(Metadata.definition.kind)).toMatchObject({
     value: { title: 'Add notes between conversations' },
@@ -125,79 +134,106 @@ it('branches with a brief, marks the source, and keeps inherited history reachab
     value: { generatedTitle: 'Add notes between conversations' },
   })
   expect(initialized(Plan.definition.kind)).toMatchObject({ value: { next: 1, epics: {} } })
-  const branch = (await server.harness.conversation(id, context))!
-  await until(
-    async () => (await server.harness.snapshot(Branch, id, context))?.branch?.status === 'ready',
-  )
-  await branch.waitForIdle(context)
+  await settled(server, first)
   // A branch starts with an empty plan; the root keeps its own.
-  expect((await server.harness.snapshot(Plan, id, context))?.epics).toEqual({})
+  expect((await server.harness.snapshot(Plan, first, context))?.epics).toEqual({})
   expect(
     Object.keys((await server.harness.snapshot(Plan, server.root.id, context))!.epics),
   ).toEqual(['E1'])
 
-  // The brief read the source context, tagged with entry ids.
-  expect(briefs).toHaveLength(1)
-  expect(briefs[0]).toContain('We build a tree of conversations.')
-  expect(briefs[0]).toMatch(/#1\/\d+/)
-
-  // The source got a display-only marker its model never sees.
-  const source = await server.root.context(context)
-  const marker = source.entries.at(-1)!
-  expect(marker.kind).toBe('lineage.branched')
-  expect(marker.model).toBeUndefined()
-  // `at` defaults to the source's latest entry: the answer, or a display entry written after it.
-  const { at } = marker.data as { at: number }
-  expect(at).toBeGreaterThanOrEqual(answer)
-  expect(at).toBeLessThan(marker.id)
-  expect(marker.data).toEqual({ branch: id, at, intent: 'Add notes between conversations' })
-  expect(source.messages).toEqual(seen)
-
-  // The branch's model sees the brief reset, then the prompt and its answer.
-  const view = await branch.context(context)
-  // Display entries (a branch is top-level, so it gets the sidebar summary) carry no model message.
-  expect(view.entries.filter((entry) => entry.model).map((entry) => entry.kind)).toEqual([
-    'pi.reset',
-    'pi.user',
-    'pi.system',
-    'pi.assistant',
+  // The empty root became a tally at the reset its first branch forked from.
+  const tally = await server.root.context(context)
+  const [reset, node] = tally.entries
+  expect(reset.kind).toBe('pi.reset')
+  expect((await server.harness.snapshot(Tally, server.root.id, context))?.since).toBe(reset.id)
+  expect(node.kind).toBe('lineage.branched')
+  expect(node.data).toEqual({
+    branch: first,
+    at: reset.id,
+    intent: 'Add notes between conversations',
+  })
+  expect(said(tally.messages)).toEqual([
+    [
+      'user',
+      `#${first} was started from the tally (#1/${reset.id}) with the prompt:\nAdd notes between conversations`,
+    ],
   ])
-  expect(view.entries[0].data).toEqual({ lineage: { from: 1, at } })
-  const said = view.messages
-    .filter((message) => message.role !== 'system')
-    .map((message) => [message.role, textOf(message.content)])
-  expect(said).toEqual([
-    ['user', `<brief from="#1/${at}">\nBRIEF: keep going\n</brief>`],
+  // The first branch reads its prompt once, as its own input, with no brief.
+  const view = await (await server.harness.conversation(first, context))!.context(context)
+  expect(view.entries.map((entry) => entry.kind)).not.toContain('lineage.branched')
+  expect(view.entries.filter((entry) => entry.kind === 'pi.reset')).toEqual([reset])
+  expect(said(view.messages)).toEqual([
     ['user', 'Add notes between conversations'],
     ['assistant', 'echo Add notes between conversations'],
   ])
-  expect((await branch.agent(context)).cwd).toBe(server.host.projectRoot)
+  expect((await server.harness.snapshot(Branch, first, context))?.branch).toEqual({
+    from: 1,
+    at: reset.id,
+    intent: 'Add notes between conversations',
+  })
+
+  // The next branch starts from the tally's tip: its first request is the tally, then its prompt with the image.
+  const later = await branchFrom(server, {
+    from: 1,
+    prompt: 'Look at this',
+    images: [{ data: image.data, mimeType: image.mimeType }],
+  })
+  await settled(server, later)
+  const request = requests.find(
+    (messages) =>
+      textOf(messages.findLast((message) => message.role === 'user')?.content) === 'Look at this',
+  )!
+  expect(said(request)).toEqual([
+    [
+      'user',
+      `#${first} was started from the tally (#1/${reset.id}) with the prompt:\nAdd notes between conversations`,
+    ],
+    ['user', 'Look at this'],
+  ])
+  expect(request.at(-1)!.content).toEqual([{ type: 'text', text: 'Look at this' }, image])
+  const nodes = (await server.root.context(context)).entries.filter(
+    (entry) => entry.kind === 'lineage.branched',
+  )
+  expect(nodes.map((entry) => entry.data)).toEqual([
+    { branch: first, at: reset.id, intent: 'Add notes between conversations' },
+    { branch: later, at: node.id, intent: 'Look at this', images: 1 },
+  ])
+  expect(textOf(nodes[1].model?.[0]?.content)).toBe(
+    `#${later} was started from the tally (#1/${node.id}) with the prompt:\nLook at this\n(1 image, in #${later})`,
+  )
+  // Images are counted in the tally, never copied into it.
+  expect(JSON.stringify(nodes[1])).not.toContain(image.data)
+  await until(
+    async () =>
+      (await server.harness.snapshot(Tally, server.root.id, context))?.tokens ===
+      (await tallyTokens(server, server.root.id)),
+  )
 
   // History pages from the branch back into the entries it inherited.
   const history = (await (
-    await fetch(`${server.url}/api/conversations/${id}/history?before=${view.entries[0].id}`)
+    await fetch(
+      `${server.url}/api/conversations/${later}/history?before=${view.entries.at(-1)!.id}`,
+    )
   ).json()) as HistoryResponse
   expect(
     history.entries.some(
-      (entry: EntryRecord) =>
-        entry.conversationId === ROOT_CONVERSATION_ID &&
-        textOf(entry.model?.[0]?.content) === 'We build a tree of conversations.',
+      (entry: EntryRecord) => entry.conversationId === ROOT_CONVERSATION_ID && entry.id === node.id,
     ),
   ).toBe(true)
 
-  // The prompt section names each conversation's place in the tree.
-  expect(await section(server, ROOT_CONVERSATION_ID)).toMatch(
-    /^You are a root of this project \(#1\): you hold the idea of one line of work/,
+  // A tally gets no prompt section, since it never requests; a branch learns where its context starts.
+  expect(await section(server, ROOT_CONVERSATION_ID)).toBeUndefined()
+  expect(await section(server, first)).toContain(
+    `You are #${first}, branched from #1 at entry ${reset.id} for: Add notes between conversations\nRoot: #1.\nYour context starts with the tally of your tree`,
   )
-  expect(await section(server, id)).toContain(
-    `You are #${id}, branched from #1 at entry ${at} for: Add notes between conversations\nRoot: #1.`,
-  )
-
   // A branch already has a root, so it cannot become one.
-  const refused = await post(server, '/api/extensions/lineage/actions/root', { args: { id } })
+  const refused = await post(server, '/api/extensions/lineage/actions/root', {
+    args: { id: first },
+  })
   expect(refused.status).not.toBe(200)
   expect(
-    (await post(server, '/api/extensions/lineage/actions/info', { args: { id } })).data.result,
+    (await post(server, '/api/extensions/lineage/actions/info', { args: { id: first } })).data
+      .result,
   ).toMatchObject({
     roots: [1],
     root: 1,
@@ -205,22 +241,206 @@ it('branches with a brief, marks the source, and keeps inherited history reachab
   })
 })
 
-it('lets a summary replace the provisional branch title', async () => {
-  const { server, failures } = await fixture()
-  await (
-    await server.root.submit({ type: 'input', content: 'Inherited idea.' }, context)
-  ).wait(context)
-  failures.brief = true
-  const { id } = (
-    await post(server, '/api/extensions/lineage/actions/branch', {
-      args: { from: 1, prompt: 'New intent' },
-    })
-  ).data.result as { id: ConversationId }
-  await until(
-    async () => (await server.harness.snapshot(Branch, id, context))?.branch?.status === 'failed',
+it('writes the prompt node of a branch of a branch into the tree root and marks its source', async () => {
+  const { server, requests } = await fixture()
+  const first = await branchFrom(server, { from: 1, prompt: 'First line' })
+  await settled(server, first)
+  const answer = (
+    await (await server.harness.conversation(first, context))!.context(context)
+  ).entries.at(-1)!
+  const nested = await branchFrom(server, { from: first, prompt: 'Go deeper' })
+  await settled(server, nested)
+
+  const root = await server.root.context(context)
+  const node = root.entries.at(-1)!
+  expect(node.data).toEqual({ branch: nested, at: answer.id, intent: 'Go deeper', from: first })
+  expect(textOf(node.model?.[0]?.content)).toBe(
+    `#${nested} was started from #${first}/${answer.id} with the prompt:\nGo deeper`,
   )
-  expect((await server.harness.snapshot(Summaries, id, context))?.generatedTitle).toBe('New intent')
-  expect(server.api.conversations().find((item) => item.id === id)?.title).toBe('New intent')
+  // The source keeps a display-only marker; its model never sees it.
+  const source = await (await server.harness.conversation(first, context))!.context(context)
+  const marker = source.entries.at(-1)!
+  expect(marker.kind).toBe('lineage.branched')
+  expect(marker.model).toBeUndefined()
+  expect(marker.data).toEqual({ branch: nested, at: answer.id, intent: 'Go deeper' })
+  // The nested branch reads its source as it was at the fork (which forked before its own node), then its prompt once.
+  const request = requests.find(
+    (messages) =>
+      textOf(messages.findLast((message) => message.role === 'user')?.content) === 'Go deeper',
+  )!
+  expect(said(request).map(([, text]) => text)).toEqual([
+    'First line',
+    'echo First line',
+    'Go deeper',
+  ])
+  expect(await section(server, nested)).toContain(
+    `You are #${nested}, branched from #${first} at entry ${answer.id} for: Go deeper\nRoot: #1.`,
+  )
+})
+
+it('refuses inputs in a tally and keeps notes as writes', async () => {
+  const { server } = await fixture()
+  const first = await branchFrom(server, { from: 1, prompt: 'Start' })
+  await settled(server, first)
+  await expect(server.root.submit({ type: 'input', content: 'Run here' }, context)).rejects.toThrow(
+    '#1 is a tally and runs no turns; start a branch from it instead',
+  )
+  const refused = await post(server, '/api/conversations/1/submit', { text: 'Run here' })
+  expect(refused.status).not.toBe(200)
+  const note = server.host.registry.snapshot().extension('lineage')!.tools![0]
+  await note.execute(
+    { to: 'root', text: 'Landed something.' },
+    { conversationId: first } as Parameters<typeof note.execute>[1],
+    context,
+  )
+  const view = await server.root.context(context)
+  expect(view.entries.map((entry) => entry.kind)).toEqual([
+    'pi.reset',
+    'lineage.branched',
+    'lineage.note',
+  ])
+  expect(
+    (await server.harness.snapshot(LiveDoc, ROOT_CONVERSATION_ID, context))?.run,
+  ).toBeUndefined()
+  // The note changed the tally's context, so its count follows.
+  await until(
+    async () =>
+      (await server.harness.snapshot(Tally, server.root.id, context))?.tokens ===
+      (await tallyTokens(server, server.root.id)),
+  )
+})
+
+it('keeps one model-visible abstract per conversation in its tree root', async () => {
+  const { server } = await fixture()
+  server.host.registry.install(defineExtension({ name: 'lineage-test', tasks: [anchor] }))
+  const lineage = {
+    branchOf: (id: number, ctx: typeof context) =>
+      branchOf({ harness: () => server.harness }, id, ctx),
+    abstract,
+  }
+  const first = await branchFrom(server, { from: 1, prompt: 'Abstract me' })
+  await settled(server, first)
+  const at = (
+    await (await server.harness.conversation(first, context))!.context(context)
+  ).entries.at(-1)!.id
+  expect(await lineage.branchOf(first, context)).toEqual({ root: 1, intent: 'Abstract me' })
+  const write = (id: number, text: string) =>
+    server.harness.commit(
+      (tx) => lineage.abstract(tx, id, { text, at, title: 'Abstracts', feature: 'Tally' }),
+      context,
+    )
+  await write(first, 'Ask: one. State: started.')
+  await write(first, 'Ask: one. State: done.')
+  const view = await server.root.context(context)
+  const abstracts = view.entries.filter((entry) => entry.kind === 'lineage.abstract')
+  expect(abstracts.map((entry) => entry.data)).toEqual([
+    {
+      conversation: first,
+      at,
+      text: 'Ask: one. State: started.',
+      title: 'Abstracts',
+      feature: 'Tally',
+    },
+    {
+      conversation: first,
+      at,
+      text: 'Ask: one. State: done.',
+      title: 'Abstracts',
+      feature: 'Tally',
+    },
+  ])
+  expect(abstracts[1].edits).toEqual([{ target: abstracts[0].id, action: 'omit' }])
+  // Only the newest abstract reaches the model.
+  expect(said(view.messages).map(([, text]) => text)).toEqual([
+    `#${first} was started from the tally (#1/${view.entries[0].id}) with the prompt:\nAbstract me`,
+    `Abstract of #${first} Abstracts as of #${first}/${at}:\nAsk: one. State: done.`,
+  ])
+  const tally = (await server.harness.snapshot(Tally, server.root.id, context))!
+  expect(tally.abstracts).toEqual({ [first]: abstracts[1].id })
+  await until(
+    async () =>
+      (await server.harness.snapshot(Tally, server.root.id, context))?.tokens ===
+      (await tallyTokens(server, server.root.id)),
+  )
+
+  // Roots, subagents and conversations outside any tree write no abstract.
+  const subagent = await server.harness.commit(async (tx) => {
+    const owner = await tx.createTask(anchor, null, {
+      ownership: { kind: 'conversation' },
+      conversationId: first,
+      background: true,
+    })
+    return (await tx.createConversation({ ownership: { kind: 'task', taskId: owner } })).id
+  }, context)
+  const outside = (
+    await server.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)
+  ).id
+  for (const id of [ROOT_CONVERSATION_ID, subagent, outside]) {
+    expect(await lineage.branchOf(id, context)).toBeUndefined()
+    await write(id, 'Nothing')
+  }
+  expect(
+    (await server.root.context(context)).entries.filter(
+      (entry) => entry.kind === 'lineage.abstract',
+    ),
+  ).toHaveLength(2)
+})
+
+it('turns a conversation with history into a tally with one genesis that branches start from', async () => {
+  const { server, requests } = await fixture()
+  await (
+    await server.root.submit(
+      { type: 'input', content: 'We build a tree of conversations.' },
+      context,
+    )
+  ).wait(context)
+  const tip = (await server.root.context(context)).entries.at(-1)!.id
+  // A root with history is no tally until it is converted: it still runs.
+  expect((await server.harness.snapshot(Tally, server.root.id, context))?.since).toBeUndefined()
+  for (let n = 0; n < 2; n++)
+    expect(
+      (await post(server, '/api/extensions/lineage/actions/root', { args: { id: 1 } })).data.result,
+    ).toEqual({ roots: [1] })
+  await until(
+    async () =>
+      (await server.harness.snapshot(Tally, server.root.id, context))?.since !== undefined,
+  )
+  const view = await server.root.context(context)
+  expect(view.entries).toHaveLength(1)
+  const [genesis] = view.entries
+  expect(genesis).toMatchObject({ kind: 'pi.reset', data: { lineage: { tally: true } } })
+  expect(genesis.head).toBe(genesis.id)
+  expect(textOf(genesis.model?.[0]?.content)).toBe(
+    `<tally from="#1/${tip}">\nLINEAGE SUMMARY of This is the tally of one line of work: t\n</tally>`,
+  )
+  const converts = await server.harness.commit(
+    async (tx) =>
+      (await tx.scanTasks({ conversationId: ROOT_CONVERSATION_ID, kind: 'lineage.convert' }, 10))
+        .items,
+    context,
+  )
+  expect(converts.map((task) => task.state.status)).toEqual(['terminal'])
+  await expect(server.root.submit({ type: 'input', content: 'More' }, context)).rejects.toThrow(
+    'is a tally',
+  )
+  // Converting again changes nothing.
+  await post(server, '/api/extensions/lineage/actions/root', { args: { id: 1 } })
+  expect((await server.root.context(context)).entries).toEqual([genesis])
+
+  const next = await branchFrom(server, { from: 1, prompt: 'Carry on' })
+  await settled(server, next)
+  const request = requests.find(
+    (messages) =>
+      textOf(messages.findLast((message) => message.role === 'user')?.content) === 'Carry on',
+  )!
+  expect(said(request).map(([, text]) => text)).toEqual([
+    textOf(genesis.model?.[0]?.content),
+    'Carry on',
+  ])
+})
+
+it('lets a summary replace the provisional branch title', async () => {
+  const { server } = await fixture()
   const existing = server.host.registry.snapshot().extension('conversations')!
   server.host.registry.install(
     defineExtension({
@@ -248,8 +468,8 @@ it('lets a summary replace the provisional branch title', async () => {
       ),
     }),
   )
-  failures.brief = false
-  await post(server, '/api/extensions/lineage/actions/retry', { args: { id } })
+  const id = await branchFrom(server, { from: 1, prompt: 'New intent' })
+  expect(server.api.conversations().find((item) => item.id === id)?.title).toBe('New intent')
   await until(
     async () =>
       (await server.harness.snapshot(Metadata, id, context))?.title === 'Summarized branch',
@@ -260,7 +480,7 @@ it('lets a summary replace the provisional branch title', async () => {
 })
 
 it('sorts a new branch from the moment it was asked for, not by the history it inherited', async () => {
-  const { server, failures } = await fixture()
+  const { server } = await fixture()
   await (
     await server.root.submit({ type: 'input', content: 'An old idea.' }, context)
   ).wait(context)
@@ -269,18 +489,9 @@ it('sorts a new branch from the moment it was asked for, not by the history it i
       (await server.harness.snapshot(Metadata, server.root.id, context))?.inputAt !== undefined,
   )
   const inherited = (await server.harness.snapshot(Metadata, server.root.id, context))!.inputAt!
-  failures.brief = true
   const asked = Date.now()
-  const { id } = (
-    await post(server, '/api/extensions/lineage/actions/branch', {
-      args: { from: server.root.id, prompt: 'New intent' },
-    })
-  ).data.result as { id: ConversationId }
-  // Activity has read the inherited history: its first input names it.
-  await until(
-    async () =>
-      (await server.harness.snapshot(Metadata, id, context))?.inputTitle === 'An old idea.',
-  )
+  const id = await branchFrom(server, { from: server.root.id, prompt: 'New intent' })
+  await settled(server, id)
   const inputAt = (await server.harness.snapshot(Metadata, id, context))!.inputAt!
   expect(inputAt).toBeGreaterThanOrEqual(asked)
   expect(inputAt).toBeGreaterThan(inherited)
@@ -314,53 +525,19 @@ it('leaves a note in an idle conversation without starting a run', async () => {
   expect(tasks).toEqual([])
 })
 
-it('marks a failed brief and starts it again on retry', async () => {
-  const { server, failures } = await fixture()
-  await (await server.root.submit({ type: 'input', content: 'An idea.' }, context)).wait(context)
-  failures.brief = true
-  const { id } = (
-    await post(server, '/api/extensions/lineage/actions/branch', {
-      args: { from: 1, prompt: 'Try it' },
-    })
-  ).data.result as { id: ConversationId }
-  const state = async () => (await server.harness.snapshot(Branch, id, context))?.branch
-  await until(async () => (await state())?.status === 'failed')
-  expect((await state())?.error).toBe('provider down')
-  const branch = (await server.harness.conversation(id, context))!
-  expect((await branch.context(context)).entries.some((entry) => entry.kind === 'pi.reset')).toBe(
-    false,
-  )
-  failures.brief = false
-  expect(
-    (await post(server, '/api/extensions/lineage/actions/retry', { args: { id } })).status,
-  ).toBe(200)
-  await until(async () => (await state())?.status === 'ready')
-  await branch.waitForIdle(context)
-  expect((await branch.context(context)).entries[0].kind).toBe('pi.reset')
-})
-
-it('names a branch by its intent and notifies only once its own work ends', async () => {
+it('notifies with the branch’s own answer, never one it inherited', async () => {
   const { server } = await fixture()
   await (await server.root.submit({ type: 'input', content: 'An idea.' }, context)).wait(context)
-  const { id } = (
-    await post(server, '/api/extensions/lineage/actions/branch', {
-      args: { from: 1, prompt: 'Fix the lost answers' },
-    })
-  ).data.result as { id: ConversationId }
-  // While the brief is written, the title is the intent, not the root's first message.
+  const id = await branchFrom(server, { from: 1, prompt: 'Fix the lost answers' })
   expect((await server.harness.snapshot(Metadata, id, context))?.title).toBe('Fix the lost answers')
   await server.root.submit({ type: 'input', content: `NOTIFY ${JSON.stringify({ id })}` }, context)
-  await until(
-    async () => (await server.harness.snapshot(Branch, id, context))?.branch?.status === 'ready',
-  )
-  await (await server.harness.conversation(id, context))!.waitForIdle(context)
+  await settled(server, id)
   await until(async () =>
     (await server.root.context(context)).entries.some((entry) => entry.kind === 'lineage.finished'),
   )
   const finished = (await server.root.context(context)).entries.find(
     (entry) => entry.kind === 'lineage.finished',
   )!
-  // The branch's own answer, never one it inherited from the root.
   expect((finished.data as { text: string }).text).toBe('echo Fix the lost answers')
 })
 
@@ -378,9 +555,7 @@ it('compacts a top-level conversation with its lineage focus', async () => {
   await server.harness.waitForTask(task, context)
   const marker = (await server.root.context(context)).entries[0]
   expect(marker.kind).toBe('pi.compaction')
-  expect(textOf(marker.model?.[0]?.content)).toContain(
-    'LINEAGE SUMMARY of This is a root conversation',
-  )
+  expect(textOf(marker.model?.[0]?.content)).toContain('LINEAGE SUMMARY of This is the tally')
 })
 
 /** A faux server where `NOTIFY {json}` calls the notify tool and `HOLD` answers only once released. */
@@ -513,88 +688,65 @@ it('keeps one pending notify per target and delivers it once across a reopen', a
   expect(entries).not.toContain('lineage.finished')
 })
 
-it.each([false, true])(
-  'notifies after the brief and run without waiting for the branch’s pending notify (old checkpoint: %s)',
-  async (oldCheckpoint) => {
-    const { server } = await fixture()
-    const other = await second(server)
-    const brief = Promise.withResolvers<void>()
-    const run = Promise.withResolvers<void>()
-    const unrelated = Promise.withResolvers<void>()
-    const briefStarted = Promise.withResolvers<void>()
-    const runStarted = Promise.withResolvers<void>()
-    const otherStarted = Promise.withResolvers<void>()
-    const intent = `NOTIFY ${JSON.stringify({ id: other.id, wake: false })}`
-    const route: FauxResponseFactory = async (transcript) => {
-      server.host.faux!.appendResponses([route])
-      if (textOf(transcript.messages[0].content).startsWith('Write the brief')) {
-        briefStarted.resolve()
-        await brief.promise
-        return fauxAssistantMessage('BRIEF: start the branch')
-      }
-      const last = transcript.messages.at(-1)!
-      const text = textOf(last.content)
-      if (last.role === 'toolResult') return fauxAssistantMessage('Branch run finished')
-      if (text === 'HOLD') {
-        otherStarted.resolve()
-        await unrelated.promise
-      }
-      if (text === intent) {
-        runStarted.resolve()
-        await run.promise
-      }
-      if (text.startsWith('NOTIFY '))
-        return fauxAssistantMessage([fauxToolCall('notify', JSON.parse(text.slice(7)))], {
-          stopReason: 'toolUse',
-        })
-      return fauxAssistantMessage(`echo ${text}`)
+it('notifies after the branch’s run without waiting for the branch’s own pending notify', async () => {
+  const { server } = await fixture()
+  const other = await second(server)
+  const run = Promise.withResolvers<void>()
+  const unrelated = Promise.withResolvers<void>()
+  const runStarted = Promise.withResolvers<void>()
+  const otherStarted = Promise.withResolvers<void>()
+  const intent = `NOTIFY ${JSON.stringify({ id: other.id, wake: false })}`
+  const route: FauxResponseFactory = async (transcript) => {
+    server.host.faux!.appendResponses([route])
+    // A system prompt that changed since the last run follows the history the branch inherited.
+    const last = transcript.messages.findLast((message) => message.role !== 'system')!
+    const text = textOf(last.content)
+    if (last.role === 'toolResult') return fauxAssistantMessage('Branch run finished')
+    if (text === 'HOLD') {
+      otherStarted.resolve()
+      await unrelated.promise
     }
-    server.host.faux!.setResponses([route])
-    try {
-      await other.submit({ type: 'input', content: 'HOLD' }, context)
-      await otherStarted.promise
-      const { data } = await post(server, '/api/extensions/lineage/actions/branch', {
-        args: { from: 1, prompt: intent },
+    if (text === intent) {
+      runStarted.resolve()
+      await run.promise
+    }
+    if (text.startsWith('NOTIFY '))
+      return fauxAssistantMessage([fauxToolCall('notify', JSON.parse(text.slice(7)))], {
+        stopReason: 'toolUse',
       })
-      const target = data.result.id as ConversationId
-      await briefStarted.promise
-      const state = (await server.harness.snapshot(Branch, target, context))!.branch!
-      expect(state.status).toBe('briefing')
-      expect(state.brief).toBeDefined()
-      if (oldCheckpoint)
-        await server.harness.commit(async (tx) => {
-          delete (await tx.doc(Branch, target)).branch!.brief
-        }, context)
-      await ask(server, server.root.id, `NOTIFY ${JSON.stringify({ id: target, wake: false })}`)
-      expect(await pendingNotifies(server)).toHaveLength(1)
-      expect(await kinds(server, server.root.id)).not.toContain('lineage.note')
-      brief.resolve()
-      await runStarted.promise
-      expect(await pendingNotifies(server)).toHaveLength(1)
-      expect(await kinds(server, server.root.id)).not.toContain('lineage.note')
-      run.resolve()
-      await until(async () => (await pendingNotifies(server)).length === 0)
-      const notes = (await server.root.context(context)).entries.filter(
-        (entry) => entry.kind === 'lineage.note',
-      )
-      expect(notes).toHaveLength(1)
-      expect(notes[0].data).toMatchObject({ from: target, text: 'Branch run finished' })
-      const pending = await server.harness.commit(
-        async (tx) =>
-          (await tx.scanTasks({ conversationId: target, kind: 'lineage.notify' }, 50)).items.filter(
-            (task) => task.state.status !== 'terminal',
-          ),
-        context,
-      )
-      expect(pending.map((task) => task.input)).toEqual([{ target: other.id, wake: false }])
-      expect((await server.harness.snapshot(LiveDoc, other.id, context))?.run).toBeDefined()
-    } finally {
-      brief.resolve()
-      run.resolve()
-      unrelated.resolve()
-    }
-  },
-)
+    return fauxAssistantMessage(`echo ${text}`)
+  }
+  server.host.faux!.setResponses([route])
+  try {
+    await other.submit({ type: 'input', content: 'HOLD' }, context)
+    await otherStarted.promise
+    await ask(server, server.root.id, 'An idea.')
+    const target = await branchFrom(server, { from: 1, prompt: intent })
+    await ask(server, server.root.id, `NOTIFY ${JSON.stringify({ id: target, wake: false })}`)
+    await runStarted.promise
+    expect(await pendingNotifies(server)).toHaveLength(1)
+    expect(await kinds(server, server.root.id)).not.toContain('lineage.note')
+    run.resolve()
+    await until(async () => (await pendingNotifies(server)).length === 0)
+    const notes = (await server.root.context(context)).entries.filter(
+      (entry) => entry.kind === 'lineage.note',
+    )
+    expect(notes).toHaveLength(1)
+    expect(notes[0].data).toMatchObject({ from: target, text: 'Branch run finished' })
+    const pending = await server.harness.commit(
+      async (tx) =>
+        (await tx.scanTasks({ conversationId: target, kind: 'lineage.notify' }, 50)).items.filter(
+          (task) => task.state.status !== 'terminal',
+        ),
+      context,
+    )
+    expect(pending.map((task) => task.input)).toEqual([{ target: other.id, wake: false }])
+    expect((await server.harness.snapshot(LiveDoc, other.id, context))?.run).toBeDefined()
+  } finally {
+    run.resolve()
+    unrelated.resolve()
+  }
+})
 
 it('branches in the shared checkout with workspaces disabled', async () => {
   const home = await temp('ultimate-lineage-no-workspaces-')
@@ -606,65 +758,55 @@ it('branches in the shared checkout with workspaces disabled', async () => {
   const server = await fauxServer({ ultimateRoot: source, home, userHome: home })
   servers.push(server)
   expect(server.host.registry.snapshot().extension('workspaces')).toBeUndefined()
-  const { status, data } = await post(server, '/api/extensions/lineage/actions/branch', {
-    args: { from: 1, prompt: 'Shared intent', isolated: false },
-  })
-  expect(status).toBe(200)
-  const id = data.result.id as ConversationId
-  const branch = (await server.harness.conversation(id, context))!
-  expect(branch.id).toBe(id)
-  await until(
-    async () => (await server.harness.snapshot(Branch, id, context))?.branch?.status === 'ready',
-  )
-  await branch.waitForIdle(context)
+  const id = await branchFrom(server, { from: 1, prompt: 'Shared intent', isolated: false })
+  const conversation = await settled(server, id)
+  expect((await conversation.agent(context)).cwd).toBe(server.host.projectRoot)
 })
 
-it('starts a new root whose first input is the prompt, without a brief', async () => {
-  const { server, briefs } = await fixture()
+it('starts a new root as an empty tally with its first branch', async () => {
+  const { server } = await fixture()
   const { status, data } = await post(server, '/api/extensions/lineage/actions/newRoot', {
     args: { prompt: '  A second line of work  ', isolated: false },
   })
   expect(status).toBe(200)
-  const id = data.result.id as ConversationId
-  const root = (await server.harness.conversation(id, context))!
-  await root.waitForIdle(context)
-  expect(await server.harness.commit((tx) => tx.conversation(id), context)).toEqual({ id })
-  expect((await server.harness.snapshot(Metadata, id, context))?.title).toBe(
+  const { id, root } = data.result as { id: ConversationId; root: ConversationId }
+  const conversation = await settled(server, id)
+  expect(await server.harness.commit((tx) => tx.conversation(root), context)).toEqual({ id: root })
+  expect((await server.harness.snapshot(Metadata, root, context))?.title).toBe(
     'A second line of work',
   )
-  expect((await server.harness.snapshot(Summaries, id, context))?.generatedTitle).toBe(
+  expect((await server.harness.snapshot(Summaries, root, context))?.generatedTitle).toBe(
     'A second line of work',
   )
-  const view = await root.context(context)
-  expect(view.entries.some((entry) => entry.kind === 'pi.reset')).toBe(false)
-  expect(
-    view.messages
-      .filter((message) => message.role !== 'system')
-      .map((message) => [message.role, textOf(message.content)]),
-  ).toEqual([
+  const tally = await (await server.harness.conversation(root, context))!.context(context)
+  expect(tally.entries.map((entry) => entry.kind)).toEqual(['pi.reset', 'lineage.branched'])
+  expect((await server.harness.snapshot(Tally, root, context))?.since).toBe(tally.entries[0].id)
+  expect(said((await conversation.context(context)).messages)).toEqual([
     ['user', 'A second line of work'],
     ['assistant', 'echo A second line of work'],
   ])
-  expect(briefs).toEqual([])
-  expect((await server.harness.snapshot(Branch, id, context))?.branch).toBeUndefined()
+  expect((await server.harness.snapshot(Branch, id, context))?.branch).toEqual({
+    from: root,
+    at: tally.entries[0].id,
+    intent: 'A second line of work',
+  })
   expect(
     (await post(server, '/api/extensions/lineage/actions/info', { args: null })).data.result,
-  ).toEqual({ roots: [1, id] })
+  ).toEqual({ roots: [1, root] })
   expect(
-    (await post(server, '/api/extensions/lineage/actions/info', { args: { id } })).data.result,
-  ).toEqual({ roots: [1, id], root: id })
-  expect(await section(server, id)).toMatch(
-    new RegExp(`^You are a root of this project \\(#${id}\\)`),
-  )
+    (await post(server, '/api/extensions/lineage/actions/info', { args: { id: root } })).data
+      .result,
+  ).toEqual({ roots: [1, root], root })
+  expect(await section(server, root)).toBeUndefined()
   expect(
     (await post(server, '/api/extensions/lineage/actions/newRoot', { args: { prompt: ' ' } }))
       .status,
   ).not.toBe(200)
 })
 
-it('delivers a new root’s prompt once when the process stops before it is submitted', async () => {
+it('delivers a branch’s prompt once when the process stops before it is submitted', async () => {
   const { server, home } = await fixture()
-  // Without the prompt task's definition the task waits, as if the process went down right after creating the root.
+  // Without the prompt task's definition the task waits, as if the process went down right after creating the branch.
   const lineage = server.host.registry.snapshot().extension('lineage')!
   server.host.registry.install(
     defineExtension({
@@ -672,10 +814,7 @@ it('delivers a new root’s prompt once when the process stops before it is subm
       tasks: lineage.tasks!.filter((task) => task.definition.name !== 'lineage.prompt'),
     }),
   )
-  const { data } = await post(server, '/api/extensions/lineage/actions/newRoot', {
-    args: { prompt: 'Survive a crash', isolated: false },
-  })
-  const id = data.result.id as ConversationId
+  const id = await branchFrom(server, { from: 1, prompt: 'Survive a crash', isolated: false })
   const prompts = (target: Server) =>
     target.harness.commit(
       async (tx) => (await tx.scanTasks({ conversationId: id, kind: 'lineage.prompt' }, 10)).items,
@@ -684,25 +823,24 @@ it('delivers a new root’s prompt once when the process stops before it is subm
   expect((await prompts(server)).map((task) => [task.input, task.state.status])).toEqual([
     [{ id, prompt: 'Survive a crash' }, 'pending'],
   ])
-  expect(await kinds(server, id)).toEqual([])
+  expect(
+    (await (await server.harness.conversation(id, context))!.context(context)).entries.filter(
+      (entry) => entry.conversationId === id,
+    ),
+  ).toEqual([])
   await server.close()
   servers.splice(servers.indexOf(server), 1)
 
   const { server: reopened } = await fixture(home)
   await until(async () => (await prompts(reopened))[0].state.status === 'terminal')
-  const root = (await reopened.harness.conversation(id, context))!
-  await root.waitForIdle(context)
+  const conversation = await settled(reopened, id)
   // A rerun of the delivery finds the submitted input by its request id.
-  await root.submit(
-    { type: 'input', content: 'Survive a crash', requestId: 'lineage:root' },
+  await conversation.submit(
+    { type: 'input', content: 'Survive a crash', requestId: 'lineage:prompt' },
     context,
   )
-  await root.waitForIdle(context)
-  expect(
-    (await root.context(context)).messages
-      .filter((message) => message.role !== 'system')
-      .map((message) => [message.role, textOf(message.content)]),
-  ).toEqual([
+  await conversation.waitForIdle(context)
+  expect(said((await conversation.context(context)).messages)).toEqual([
     ['user', 'Survive a crash'],
     ['assistant', 'echo Survive a crash'],
   ])
@@ -729,22 +867,20 @@ it('defaults a branch to its source’s configuration and a new root to the proj
   // Without a choice, the branch keeps its source's configuration and a new root takes the project default.
   const agentOf = async (id: ConversationId) =>
     (await server.harness.conversation(id, context))!.agent(context)
-  const branch = (
-    await post(server, '/api/extensions/lineage/actions/branch', {
-      args: { from: other.id, prompt: 'Follow B', isolated: false },
-    })
-  ).data.result.id as ConversationId
-  expect(await agentOf(branch)).toMatchObject({ model, thinkingLevel: 'high' })
-  const root = (
+  const followed = await branchFrom(server, { from: other.id, prompt: 'Follow B', isolated: false })
+  expect(await agentOf(followed)).toMatchObject({ model, thinkingLevel: 'high' })
+  const created = (
     await post(server, '/api/extensions/lineage/actions/newRoot', {
       args: { prompt: 'Start C', isolated: false },
     })
-  ).data.result.id as ConversationId
-  expect(await agentOf(root)).toMatchObject({
-    model: project.model,
-    thinkingLevel: project.thinkingLevel,
-  })
-  await (await server.harness.conversation(root, context))!.waitForIdle(context)
+  ).data.result as { id: ConversationId; root: ConversationId }
+  for (const id of [created.root, created.id])
+    expect(await agentOf(id)).toMatchObject({
+      model: project.model,
+      thinkingLevel: project.thinkingLevel,
+    })
+  await settled(server, followed)
+  await settled(server, created.id)
 })
 
 const anchor = defineTask<null, { phase: 'done' }, null>({
@@ -842,6 +978,6 @@ it('resolves the root per tree for notes, the prompt and compaction', async () =
     await server.harness.waitForTask(await conversation.compact(undefined, context), context)
     return textOf((await conversation.context(context)).entries[0].model?.[0]?.content)
   }
-  expect(await compacted(other.id)).toContain('LINEAGE SUMMARY of This is a root conversation')
+  expect(await compacted(other.id)).toContain('LINEAGE SUMMARY of This is the tally')
   expect(await compacted(branch)).toContain('LINEAGE SUMMARY of This is a branch')
 })

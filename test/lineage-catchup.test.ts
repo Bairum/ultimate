@@ -6,7 +6,7 @@ import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterEach, beforeAll, expect, it } from 'vitest'
-import { Branch, leaveNote } from '../extensions/lineage/server.ts'
+import { leaveNote } from '../extensions/lineage/server.ts'
 import { Seen } from '../extensions/lineage/catchup.ts'
 import { context } from '../server/harness.ts'
 import { fauxServer, post, sourceCopy, temp, until } from './helpers.ts'
@@ -256,9 +256,6 @@ it('warns an isolated workspace it is behind, prioritizes old overlaps, and caps
     })
   ).data.result as { id: ConversationId }
   const branch = (await f.server.harness.conversation(id, context))!
-  await until(
-    async () => (await f.server.harness.snapshot(Branch, id, context))?.branch?.status === 'ready',
-  )
   await branch.waitForIdle(context)
   const workspace = (await branch.agent(context)).cwd!
   await writeFile(join(workspace, 'schema.ts'), 'own workspace change\n')

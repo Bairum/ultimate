@@ -1428,13 +1428,19 @@ it.concurrent('fix: a fix that still fails the check is not landed and leaves th
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
   expect(await readFile(join(f.projectRoot, 'base.txt'), 'utf8')).toBe('target')
 })
-it.concurrent('starts an isolated root whose first request sees its ready checkout', async () => {
+it.concurrent('starts a root whose isolated first branch’s first request sees its ready checkout', async () => {
   const f = await fixture()
   // This fixture's host has no event bus, so no extension labels the root.
   f.host.events = { emit: () => {} } as unknown as ExtensionHost['events']
   // Its prompt task delivers the first input.
   f.prepared.registry.install(lineage(f.host))
-  const { id } = await startRoot(f.host, { prompt: 'ASK where am I?', isolated: true }, context)
+  const { id, root } = await startRoot(
+    f.host,
+    { prompt: 'ASK where am I?', isolated: true },
+    context,
+  )
+  // The root is a tally that never runs, so it gets no checkout; its branch does.
+  expect(await f.service.get(root, context)).toBeUndefined()
   const conversation = (await f.opened.harness.conversation(id, context))!
   await until(async () => f.asked.length > 0)
   await conversation.waitForIdle(context)
@@ -1445,7 +1451,7 @@ it.concurrent('starts an isolated root whose first request sees its ready checko
   expect(JSON.stringify(request.messages)).toContain(`Workspace: ${workspace.path}`)
   expect((await f.opened.harness.snapshot(Roots, ROOT_CONVERSATION_ID, context))?.roots).toEqual([
     ROOT_CONVERSATION_ID,
-    id,
+    root,
   ])
 })
 it.concurrent('answers the user in the lander conversation with its definition, tools and the lander state', async () => {
