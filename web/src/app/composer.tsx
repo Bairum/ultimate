@@ -18,7 +18,7 @@ import { useConversation, useExtensions, useModels } from '../sdk/hooks.ts'
 import { isMac } from '../sdk/keys.ts'
 import type { ModelsResponse } from '../../../shared/protocol.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
-import { conversationStarter, inboxRenderer } from '../sdk/registry.ts'
+import { composerRenderer, conversationStarter, inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
 import { ComposerContext, useNewConversationConfiguration } from '../sdk/composer.tsx'
 
@@ -110,7 +110,15 @@ function Inbox({ items }: { items: readonly InboxItem[] }) {
 
 export function Composer({ dock }: { dock?: boolean }) {
   const { id } = useConversation()
-  return <ConversationComposer dock={dock} key={id} />
+  const renderer = composerRenderer(useExtensions())
+  const core = <ConversationComposer dock={dock} key={id} />
+  if (!renderer) return core
+  const Renderer = renderer.component
+  return (
+    <ExtensionBoundary extension={renderer.extension} fallback={core} version={renderer.version}>
+      <Renderer core={core} dock={dock} />
+    </ExtensionBoundary>
+  )
 }
 
 /**
@@ -124,11 +132,15 @@ export function NewConversationComposer({
   onStarted,
   isolated,
   branch,
+  dock,
+  placeholder,
 }: {
   isolated?: boolean
   inputId?: string
   onStarted: (id: number) => void
   branch?: BranchPoint
+  dock?: boolean
+  placeholder?: string
 }) {
   return (
     <ConversationComposer
@@ -137,6 +149,8 @@ export function NewConversationComposer({
       inputId={inputId}
       onStarted={onStarted}
       branch={branch}
+      dock={dock}
+      placeholder={placeholder}
     />
   )
 }
@@ -183,9 +197,11 @@ function ConversationComposer({
   onStarted,
   isolated: isolation,
   branch: point,
+  placeholder,
 }: {
   isolated?: boolean
   branch?: BranchPoint
+  placeholder?: string
   dock?: boolean
   target?: 'conversation' | 'new'
   inputId?: string
@@ -327,7 +343,8 @@ function ConversationComposer({
             onChange={(event) => update(event.target.value)}
             onKeyDown={onKeyDown}
             placeholder={
-              isNew
+              placeholder ??
+              (isNew
                 ? point?.root
                   ? 'Start a new root: what is it about?'
                   : point?.from === undefined
@@ -335,7 +352,7 @@ function ConversationComposer({
                     : 'What should the branch do?'
                 : busy
                   ? 'Steer the run, or queue a follow-up…'
-                  : 'Ask Ultimate to change something…'
+                  : 'Ask Ultimate to change something…')
             }
             value={text}
           />

@@ -100,12 +100,18 @@ const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 
 /**
  * Over the conversation while a new one is written: an empty conversation page with room to think. Once it starts, the
- * page holds until the new conversation shows beneath it, then fades into it: into the briefing ball for a branch.
+ * page holds until the new conversation shows beneath it with its first message, then fades into it.
  */
 export function StartPage() {
   const point = decode(useSyncExternalStore(subscribe, current))
   const actions = useUltimate()
   const shown = actions.conversationId
+  // A branch inherits its source's entries; its prompt, placed just after it starts, is the first of its own.
+  const prompted = useConversation((conversation) =>
+    conversation.entries.some(
+      (entry) => entry.conversationId === conversation.id && entry.kind === 'pi.user',
+    ),
+  )
   const [leaving, setLeaving] = useState<{ id: number; point: StartPoint }>()
   // Showing another conversation closes the page; its draft stays for next time. While one loads, none shows.
   const last = useRef(shown)
@@ -123,7 +129,7 @@ export function StartPage() {
   return (
     <Page
       key={`${showing.from ?? ''}.${showing.at ?? ''}`}
-      leaving={leaving !== undefined && shown === leaving.id}
+      leaving={leaving !== undefined && shown === leaving.id && prompted}
       onGone={() => setLeaving(undefined)}
       onStarted={(id) => {
         setLeaving({ id, point: showing })
@@ -171,11 +177,7 @@ function Page({
         ]
     return () => {
       for (const animation of appear) animation.cancel()
-      // A briefing overlay that took over keeps the conversation inert.
-      const briefing = page.parentElement?.querySelector(
-        ':scope > [data-lineage-status="briefing"]',
-      )
-      if (!briefing) for (const element of beneath) element.inert = false
+      for (const element of beneath) element.inert = false
     }
   }, [])
   // The new conversation shows beneath: the page lets go of it, the words it held drifting up into what follows.
@@ -314,8 +316,8 @@ function Branch({
         </div>
         <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
           {at === undefined
-            ? 'Starts from a brief of its latest context, aimed at what you write below.'
-            : `Starts from a brief of its context up to entry ${at}, aimed at what you write below.`}
+            ? 'Continues from its latest context; what you write below is its first message.'
+            : `Continues from its context up to entry ${at}; what you write below is its first message.`}
         </p>
         {quote && (
           <blockquote className="mt-5 max-h-36 overflow-hidden border-l-2 border-brand/40 pl-3 text-[13px] leading-relaxed text-foreground/75 mask-b-from-60%">
@@ -408,8 +410,8 @@ function New({
             )}
             <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
               {root
-                ? 'An independent tree with no brief: what you write below is its first message.'
-                : 'Starts from a brief of the root’s latest context, aimed at what you write below.'}
+                ? 'An independent tree: a new tally, and a first branch started with what you write below.'
+                : 'Starts from the root’s tally of prompts, abstracts and landings; what you write below is its first message.'}
             </p>
           </>
         )}

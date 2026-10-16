@@ -3,6 +3,7 @@ import { events } from './events.ts'
 import { errorMessage } from './format.ts'
 import type {
   CommandContribution,
+  ComposerRenderer,
   Contribution,
   DocumentContribution,
   EntryRenderer,
@@ -116,6 +117,7 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   tools: [objectOf(isComponent), 'an object of tool name → component'],
   entries: [objectOf(isComponent), 'an object of entry kind → component'],
   inbox: [isComponent, 'an inbox renderer component'],
+  composer: [isComponent, 'a composer renderer component'],
   start: [isFunction, 'a conversation starter function'],
   messageActions: [arrayOf(isComponent), 'an array of message action components'],
   messageDetails: [arrayOf(isComponent), 'an array of message detail components'],
@@ -389,6 +391,19 @@ export function documentItems(records: readonly ExtensionRecord[]): Map<string, 
     for (const document of extension?.documents ?? [])
       byKind.set(document.kind, { ...document, extension: name, version })
   return byKind
+}
+
+export function composerRenderer(
+  records: readonly ExtensionRecord[],
+): { extension: string; version: number; component: ComposerRenderer } | undefined {
+  for (const record of records.toReversed())
+    if (record.extension?.composer)
+      return {
+        extension: record.name,
+        version: record.version,
+        component: record.extension.composer,
+      }
+  return undefined
 }
 
 export function inboxRenderer(

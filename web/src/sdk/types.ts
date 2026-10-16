@@ -76,6 +76,9 @@ export type EntryRenderer = ComponentType<{ entry: EntryRecord; core: ReactNode 
 
 export type InboxRenderer = ComponentType<{ item: InboxItem; core: ReactNode; cancel: ReactNode }>
 
+/** Wraps the shown conversation's composer (`core`); `dock` when it sits in a narrow side region. */
+export type ComposerRenderer = ComponentType<{ core: ReactNode; dock?: boolean }>
+
 /** What a document renderer receives: the shown conversation's document of its kind, live. */
 export interface DocumentProps {
   value: Readonly<JsonObject>
@@ -161,6 +164,8 @@ export interface WebExtension {
   /** Entry renderers by entry kind; they also replace the core renderer of a `pi.*` kind. */
   entries?: Readonly<Record<string, EntryRenderer>>
   inbox?: InboxRenderer
+  /** Replaces the shown conversation's composer where it returns something other than `core`; the last facet wins. */
+  composer?: ComposerRenderer
   /** Starts a new conversation; the last contribution in discovery order wins. */
   start?: (draft: ConversationDraft) => Promise<{ id: number }>
   /** Contributions to the hover action row on stored messages, in discovery order. */
