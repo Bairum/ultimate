@@ -67,7 +67,7 @@ import { ToolCallBlock } from './tool-call.tsx'
 
 /** The shown conversation; `dock` fits it into a narrow side region. */
 export function Transcript({ dock }: { dock?: boolean }) {
-  const { id, loading } = useConversation()
+  const { id, loading, busy } = useConversation()
   // A conversation without messages opens as it is: no placeholder, nothing rising in.
   const messages = useStore((state) => {
     const shown = state.conversations.find(
@@ -135,7 +135,13 @@ export function Transcript({ dock }: { dock?: boolean }) {
   // Keyed so a conversation never inherits the previous one's scroll position or follow state.
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <Conversation className="min-h-0" contextRef={stick} key={id}>
+      {/* Follow a streaming reply smoothly; otherwise late growth, such as an image decoding, just stays at the bottom. */}
+      <Conversation
+        className="min-h-0"
+        contextRef={stick}
+        key={id}
+        resize={busy ? 'smooth' : 'instant'}
+      >
         <ConversationContent className={cn(column(dock), 'gap-3 pt-6 pb-10')}>
           <TranscriptEntries />
         </ConversationContent>
