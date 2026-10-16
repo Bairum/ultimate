@@ -146,6 +146,29 @@ it.each([true, false])(
   },
 )
 
+it('cleans a home whose checkout points at a repository that no longer exists', async () => {
+  const { root, home } = await fixture()
+  const gone = join(root, 'gone')
+  await mkdir(gone)
+  await git(gone, 'init', '-b', 'main')
+  await git(
+    gone,
+    '-c',
+    'user.name=T',
+    '-c',
+    'user.email=t@example.com',
+    'commit',
+    '--allow-empty',
+    '-m',
+    'Initial',
+  )
+  await git(gone, 'worktree', 'add', '--detach', join(home, 'lander', 'hash'))
+  await rm(gone, { recursive: true, force: true })
+  const notices: string[] = []
+  await sweepPreviews(root, (message) => notices.push(message))
+  expect(notices).toEqual([])
+  expect(await stat(home).catch(() => undefined)).toBeUndefined()
+})
 it.each(['feature-x', 'ultimate/foreign-1'])(
   'removes a preview checkout but preserves foreign branch %s and its unmerged commit',
   async (branch) => {

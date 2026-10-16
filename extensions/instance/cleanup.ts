@@ -36,14 +36,18 @@ export async function cleanPreview(home: string) {
       )
       for (const checkout of checkouts) {
         if (!checkout.isDirectory()) continue
-        repositories.add(
-          await git(
-            join(directory, checkout.name),
-            'rev-parse',
-            '--path-format=absolute',
-            '--git-common-dir',
-          ),
-        )
+        const common = await git(
+          join(directory, checkout.name),
+          'rev-parse',
+          '--path-format=absolute',
+          '--git-common-dir',
+        ).catch((error: unknown) => {
+          // Its repository is gone (a preview of a deleted temporary project): nothing is registered to release.
+          if ((error as { stderr?: string }).stderr?.includes('not a git repository'))
+            return undefined
+          throw error
+        })
+        if (common) repositories.add(common)
       }
     }
     const branchPrefix = `ultimate/${createHash('sha256').update(home).digest('hex').slice(0, 6)}-`
