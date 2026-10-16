@@ -352,7 +352,7 @@ function QrCode({ text }: { text: string }) {
   return (
     <svg
       aria-label={`QR code for ${text}`}
-      className="size-36 rounded-sm bg-white"
+      className="mx-auto block size-36 rounded-sm bg-white"
       role="img"
       shapeRendering="crispEdges"
       viewBox={`0 0 ${size} ${size}`}
