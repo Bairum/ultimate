@@ -199,15 +199,21 @@ export default function workspaceExtension(host: ExtensionHost) {
       defineTool({
         name: 'workspace',
         description:
-          'Inspect your workspace and source tips; submit your clean, verified tip to the lander, which merges it into the target branch, runs the configured checks, fast-forwards the target, pushes when configured, and reports back; or land it synchronously by fast-forward (never rebases or pushes).',
+          'Inspect your workspace and source tips; submit your clean, verified tip to the lander, which merges it into the target branch, runs the configured checks, fast-forwards the target, pushes when configured, and reports back (submit requires divergence from the original request); or land it synchronously by fast-forward (never rebases or pushes).',
         parameters: Type.Object({
           action: Type.Union([
             Type.Literal('status'),
             Type.Literal('submit'),
             Type.Literal('land'),
           ]),
+          divergence: Type.Optional(
+            Type.String({
+              description:
+                "Required for submit. How the delivered result differs from what was originally asked: new agreements, a different approach or library, changed scope. Say 'None' when it matches.",
+            }),
+          ),
         }),
-        async execute({ action }, api, caller) {
+        async execute({ action, divergence }, api, caller) {
           if (action === 'status')
             return finish({
               conversationId: api.conversationId,
@@ -224,7 +230,8 @@ export default function workspaceExtension(host: ExtensionHost) {
             )
               throw new Error(`Only a top-level main conversation can ${action} its own workspace`)
           }, caller)
-          if (action === 'submit') return finish(await service.submit(api.conversationId, caller))
+          if (action === 'submit')
+            return finish(await service.submit(api.conversationId, divergence ?? '', caller))
           return finish(await service.land(api.conversationId, caller, true))
         },
       }),

@@ -125,6 +125,8 @@ export function LanderReport({ entry }: { entry: EntryRecord }) {
     <div data-lander-report={toneOf(outcome)}>
       <LandingCard
         from={outcome.conversationId ?? own}
+        sourceEntry={outcome.at}
+        divergence={outcome.divergence}
         headline={headline(outcome, outcome.target)}
         subject={outcome.subject}
         tone={toneOf(outcome)}
@@ -344,6 +346,8 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
     return (
       <div data-lander-outcome={data.outcome}>
         <LandingCard
+          sourceEntry={data.sourceEntry}
+          divergence={data.divergence}
           at={
             <time className="shrink-0 text-[11px] text-muted-foreground/60">{time(data.at)}</time>
           }

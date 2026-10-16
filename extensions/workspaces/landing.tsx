@@ -7,7 +7,17 @@ import { FeatureTag } from '../conversations/feature.tsx'
 import type { LandingSubject } from './types.ts'
 
 /** "open #id", with a dot while that conversation works. */
-export function Open({ id, className, label }: { id: number; className?: string; label?: string }) {
+export function Open({
+  id,
+  className,
+  label,
+  entry,
+}: {
+  id: number
+  className?: string
+  label?: string
+  entry?: number
+}) {
   const { switchConversation } = useUltimate()
   const busy = useConversations().find((conversation) => conversation.id === id)?.busy
   return (
@@ -24,6 +34,7 @@ export function Open({ id, className, label }: { id: number; className?: string;
       {busy && <span className="size-1.5 shrink-0 animate-pulse-dot rounded-full bg-brand" />}
       <SquareArrowOutUpRightIcon className="size-3" />
       open {label ? `${label} ` : ''}#{id}
+      {entry !== undefined ? `/${entry}` : ''}
     </Button>
   )
 }
@@ -73,6 +84,8 @@ export function LandingCard({
   subject,
   from,
   at,
+  divergence,
+  sourceEntry,
   children,
 }: {
   tone: LandingTone
@@ -81,6 +94,8 @@ export function LandingCard({
   /** The submitting conversation. */
   from: number
   at?: ReactNode
+  divergence?: string
+  sourceEntry?: number
   children?: ReactNode
 }) {
   const [border, color, Icon] = tones[tone]
@@ -96,6 +111,7 @@ export function LandingCard({
         <div className="flex min-w-0 items-center gap-2">
           <Icon className={cn('size-3.5 shrink-0', color)} />
           <Subject className="flex-1" from={from} subject={subject} />
+          {sourceEntry !== undefined && <Open id={from} entry={sourceEntry} />}
         </div>
         {subject?.summary && (
           <p className="pl-5.5 font-sans text-[12.5px] leading-relaxed text-muted-foreground">
@@ -108,6 +124,12 @@ export function LandingCard({
           <span className="min-w-0 flex-1 break-words text-foreground/90">{headline}</span>
           {at}
         </div>
+        {divergence && (
+          <p className="flex items-baseline gap-2 text-muted-foreground">
+            <span className="shrink-0 text-[11px]">Diverged</span>
+            <span className="min-w-0 font-sans text-[12.5px] break-words">{divergence}</span>
+          </p>
+        )}
         {children}
       </div>
     </section>

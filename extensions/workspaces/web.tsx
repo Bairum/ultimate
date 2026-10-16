@@ -31,23 +31,39 @@ import { Row, Rows } from '../info/rows.tsx'
 
 /** The lander's note in the root: the landing's card, from the note's own data. */
 function LandingNote({ entry }: { entry: EntryRecord }) {
-  const { from, sha, target, title, summary, feature, commits, paths, more, pushed } =
-    entry.data as {
-      from: number
-      sha: string
-      target: string
-      title?: string
-      summary?: string
-      feature?: string
-      commits: { sha: string; subject: string }[]
-      paths: string[]
-      more: number
-      pushed?: string
-    }
+  const {
+    from,
+    at,
+    divergence,
+    sha,
+    target,
+    title,
+    summary,
+    feature,
+    commits,
+    paths,
+    more,
+    pushed,
+  } = entry.data as {
+    from: number
+    at?: number
+    divergence?: string
+    sha: string
+    target: string
+    title?: string
+    summary?: string
+    feature?: string
+    commits: { sha: string; subject: string }[]
+    paths: string[]
+    more: number
+    pushed?: string
+  }
   return (
     <div data-lineage-note="lander">
       <LandingCard
         from={from}
+        sourceEntry={at}
+        divergence={divergence}
         headline={`Landed ${sha.slice(0, 7)} on ${target}${pushed ? ` · pushed to ${pushed}` : ''}`}
         subject={{
           ...(title ? { title } : {}),
