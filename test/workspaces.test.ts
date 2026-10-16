@@ -1127,7 +1127,10 @@ it.concurrent('reruns only the failing command of a group, reports its output tw
   f.host.projectSettings = async () => ({
     lander: {
       checks: [
-        ['true', `if [ -f '${marker}' ]; then echo ok; exit 0; fi; touch '${marker}'; exit 1`],
+        [
+          'true',
+          `if [ -f '${marker}' ]; then echo ok; exit 0; fi; touch '${marker}'; echo FIRST_RUN_FAILED; exit 1`,
+        ],
       ],
     },
   })
@@ -1141,6 +1144,10 @@ it.concurrent('reruns only the failing command of a group, reports its output tw
   expect(flaky.findLast((line) => line.check)!.check).toMatchObject({
     result: 'flaky',
     summary: 'ok',
+  })
+  // The run that failed keeps its output in the log, so the flake can be diagnosed later.
+  expect(flaky.findLast((line) => line.check?.result === 'failed')).toMatchObject({
+    output: expect.stringContaining('FIRST_RUN_FAILED'),
   })
   expect(flaky.at(-1)).toMatchObject({
     outcome: 'landed',

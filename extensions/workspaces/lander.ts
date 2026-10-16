@@ -321,7 +321,8 @@ export function createLander(
           (await runtime.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!.queue.find(
             (item) => item.id === id,
           )?.landed
-        const step = (text: string, result?: LanderEntry['check']) =>
+        /** Log a step; a check's `output` tail goes to the lander log only, not the submission's steps. */
+        const step = (text: string, result?: LanderEntry['check'], output?: string) =>
           runtime.commit(async (tx) => {
             const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue.find(
               (item) => item.id === id,
@@ -330,6 +331,7 @@ export function createLander(
             await log(tx, runtime.conversationId, saved, {
               step: text,
               ...(result ? { check: result } : {}),
+              ...(output ? { output } : {}),
             })
           }, context)
         /** Record the outcome, log it and report it to the submitter, in one commit. */
@@ -706,11 +708,12 @@ export function createLander(
                   const ran = await run(command)
                   const result = ran.failure === undefined ? 'passed' : 'failed'
                   // Logged before the memo: a crash in between reruns the check and logs it again, as it ran.
-                  await step(`checked: ${command}`, {
-                    command,
-                    result,
-                    ...(ran.summary ? { summary: ran.summary } : {}),
-                  })
+                  // A failure keeps its output tail, so a check that passes on its rerun can still be diagnosed.
+                  await step(
+                    `checked: ${command}`,
+                    { command, result, ...(ran.summary ? { summary: ran.summary } : {}) },
+                    ran.failure,
+                  )
                   first = await runtime.memo(key, result, context)
                 }
                 if (first === 'passed') return {}

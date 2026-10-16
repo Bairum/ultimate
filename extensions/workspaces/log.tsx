@@ -98,18 +98,23 @@ function OutcomeBody({ outcome }: { outcome: LanderOutcome }) {
           </p>
         </div>
       )}
-      {outcome.output && (
-        <Collapsible className="group/tail">
-          <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 text-muted-foreground hover:text-foreground">
-            <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/tail:rotate-90" />
-            Output
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <ToolOutput className="px-0" isError output={outcome.output} />
-          </CollapsibleContent>
-        </Collapsible>
-      )}
+      {outcome.output && <OutputTail output={outcome.output} />}
     </>
+  )
+}
+
+/** A failure's output tail, collapsed. */
+function OutputTail({ output }: { output: string }) {
+  return (
+    <Collapsible className="group/tail">
+      <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 text-muted-foreground hover:text-foreground">
+        <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/tail:rotate-90" />
+        Output
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <ToolOutput className="px-0" isError output={output} />
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 
@@ -384,7 +389,16 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
       </div>
     )
   }
-  return <StepLine active={landing} done={done} failed={failed} row={data as LanderStep} />
+  const line = <StepLine active={landing} done={done} failed={failed} row={data as LanderStep} />
+  if (!data.output) return line
+  return (
+    <div className="font-mono text-[11px]">
+      {line}
+      <div className="pl-9">
+        <OutputTail output={data.output} />
+      </div>
+    </div>
+  )
 }
 
 /** The lander task handing a failure to its model: a quiet line naming the mode, above the model's run. */

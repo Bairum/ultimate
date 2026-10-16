@@ -87,6 +87,8 @@ lander's sidebar row shows the feature it lands or landed last.
    reruns once: passing then is reported as flaky, failing again reports the output tail once every command of its
    group settled. Each command keeps its own memo, steps and flaky note. A passed or flaky check records its last
    output line (ANSI stripped, at most 200 characters) as `summary`, shown muted after the command on its step row.
+   A failed run's log entry keeps its output tail as `output` (not in `steps`), under a collapsed "Output" in the
+   lander's log, so a check that then passed as flaky can still be diagnosed.
 4. Fast-forwards the target branch in the source checkout (`merge --ff-only` when it is checked out). If the target
    moved meanwhile it starts again, at most three attempts.
 5. With `lander.push`, pushes the target branch (never forced); a rejection integrates again once, then is reported.
