@@ -22,6 +22,7 @@ import {
   memo,
   startTransition,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -53,6 +54,7 @@ import {
   useExtensions,
   useModels,
   useNow,
+  useStore,
   useSystem,
 } from '../sdk/hooks.ts'
 import { entryRenderers, messageItems } from '../sdk/registry.ts'
@@ -66,11 +68,18 @@ import { ToolCallBlock } from './tool-call.tsx'
 /** The shown conversation; `dock` fits it into a narrow side region. */
 export function Transcript({ dock }: { dock?: boolean }) {
   const { id, loading } = useConversation()
+  // A conversation without messages opens as it is: no placeholder, nothing rising in.
+  const messages = useStore((state) => {
+    const shown = state.conversations.find(
+      (conversation) => conversation.id === (state.requested ?? id),
+    )
+    return shown?.inputAt !== undefined || shown?.answerAt !== undefined
+  })
   const stick = useRef<StickToBottomContext>(null)
   const skeleton = useRef<HTMLDivElement>(null)
-  // The placeholder outlives loading by its fade-out, which crosses over with the rows rising in.
-  const [placeholder, setPlaceholder] = useState(loading)
-  if (loading && !placeholder) setPlaceholder(true)
+  // The placeholder outlives loading by its fade-out, which crosses over with the rows coming in.
+  const [placeholder, setPlaceholder] = useState(loading && messages)
+  if (loading && messages && !placeholder) setPlaceholder(true)
   useLayoutEffect(() => {
     if (loading || !placeholder) return undefined
     if (!skeleton.current || matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -90,34 +99,38 @@ export function Transcript({ dock }: { dock?: boolean }) {
     )
     return () => fade.cancel()
   }, [loading, placeholder])
-  // Paint a newly shown conversation at its newest row; sticking to the bottom only scrolls a frame later.
-  useLayoutEffect(() => {
-    const scroll = stick.current?.scrollRef.current
-    const content = stick.current?.contentRef.current
-    if (!scroll || !content) return
-    scroll.scrollTop = scroll.scrollHeight
-    // Its rows on screen then rise into place from the bottom up, unless a resumed reload already shows them.
-    if (id === undefined || covered() || matchMedia('(prefers-reduced-motion: reduce)').matches)
-      return
+  // Rows on screen come into focus from the bottom up, unless there are none or a resumed reload already shows them.
+  // Opacity and blur only: a moving row would suspend the browser's scroll anchoring while older rows render above.
+  const reveal = useEffectEvent((scroll: HTMLElement, content: HTMLElement) => {
+    if (!messages || covered() || matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    // Rows settle shorter as they finish rendering, pulling rows from above into view: animate a screen of those too.
     const view = scroll.getBoundingClientRect()
     const rows = [...content.children].filter((row) => {
       const box = row.getBoundingClientRect()
-      return box.height > 0 && box.bottom > view.top && box.top < view.bottom
+      return box.height > 0 && box.bottom > view.top - view.height && box.top < view.bottom
     })
     rows.toReversed().forEach((row, index) =>
       row.animate(
         [
-          { opacity: 0, transform: 'translateY(6px)' },
-          { opacity: 1, transform: 'none' },
+          { opacity: 0, filter: 'blur(4px)' },
+          { opacity: 1, filter: 'none' },
         ],
         {
-          delay: index * 40,
+          delay: index * 30,
           duration: 450,
           easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
           fill: 'backwards',
         },
       ),
     )
+  })
+  // Paint a newly shown conversation at its newest row; sticking to the bottom only scrolls a frame later.
+  useLayoutEffect(() => {
+    const scroll = stick.current?.scrollRef.current
+    const content = stick.current?.contentRef.current
+    if (!scroll || !content) return
+    scroll.scrollTop = scroll.scrollHeight
+    if (id !== undefined) reveal(scroll, content)
   }, [id])
   // Keyed so a conversation never inherits the previous one's scroll position or follow state.
   return (
