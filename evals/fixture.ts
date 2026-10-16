@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -57,6 +57,19 @@ export const toolResult = (
   timestamp: Date.now(),
 })
 
+const base = [
+  'agent',
+  'coding-tools',
+  'prompt',
+  'models',
+  'notices',
+  'theme',
+  'codemode',
+  'onboarding',
+  'splash',
+  'lineage',
+]
+
 export async function start(
   options: {
     project?: { files?: Record<string, string>; git?: boolean }
@@ -110,16 +123,17 @@ export async function start(
     }
     const config = join(userHome, '.ultimate')
     await mkdir(config, { recursive: true })
+    // Every built-in is on by default; an eval loads the coding agent plus only what it measures.
+    const loaded = [...base, ...(options.extensions?.enable ?? [])]
     await writeFile(join(config, 'onboarding.json'), '{"firstRunDone":true}')
     await writeFile(
       join(config, 'settings.json'),
       JSON.stringify({
         extensions: {
-          enable: options.extensions?.enable ?? [],
           disable: [
-            ...['workspaces', 'conversations', 'status-line', 'browser', 'faux'].filter(
-              (name) => !options.extensions?.enable?.includes(name),
-            ),
+            ...(await readdir(resolve('extensions'), { withFileTypes: true }))
+              .filter((entry) => entry.isDirectory() && !loaded.includes(entry.name))
+              .map((entry) => entry.name),
             ...(options.extensions?.disable ?? []),
           ],
         },

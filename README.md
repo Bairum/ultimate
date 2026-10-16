@@ -20,8 +20,9 @@ place.
 - **One familiar core everywhere.** The conversation, Pi's tools, the model and login, and the way it works are the same
   in every project; only the project's own pieces differ. Your personal additions live in `~/.ultimate/` and follow you
   to every project.
-- **Start bare, add building blocks.** A fresh Ultimate is Pi's coding agent. Subagents, plans, documents, and the other
-  built-ins ship in the clone and are switched on per machine or per project (see "Building blocks" below).
+- **Everything on, switch off what you don't need.** A fresh Ultimate is Pi's coding agent with every built-in:
+  subagents, plans, documents, automations, remote access and the rest ship in the clone and are on by default; turn any
+  of them off per machine or per project (see "Building blocks" below).
 - **One long conversation per project.** Ultimate is a long-running conversation, not a fresh session per task.
   Compaction keeps it going, so it accumulates what it learns about the project.
 - **You can build whole applications in it, too.** A surface is a full-screen app next to the docked agent.
@@ -32,7 +33,7 @@ place.
 ## Start
 
 By default you get Pi's coding agent in a web UI: read, write, edit, bash, codemode, and browser debugging tools,
-with the conversation, model and thinking controls, login, and footer. Other built-ins are opt-in.
+with the conversation, model and thinking controls, login, and footer, plus every other built-in building block.
 
 Needs Node 26 and pnpm, and a `pi` login (Ultimate shares `~/.pi/agent`: credentials, models, settings, skills). The
 screenshot and browser tools need a Chromium: `/usr/bin/chromium`, Google Chrome, Playwright's cached Chromium, or
@@ -86,33 +87,28 @@ source stays in the clone; the tools and the conversation work in your project.
 
 ## Building blocks
 
-Built-ins live in the clone's `extensions/`. Enabled by default: `agent`, `conversations`, `coding-tools`, `prompt`,
-`models`, `status-line`, `notices`, `theme`, `faux` (inert outside demo mode), `codemode`, `browser`, `onboarding`,
-and `splash`. Available but off: `clock`, `documents`, `info`, `instance`, `plan`, `self`,
-`subagents`, `surfaces`, and `tasks`. Each folder's README describes the building block.
+Built-ins live in the clone's `extensions/`, and every one is on by default; `faux` stays inert outside demo mode,
+and `tailscale` exposes Ultimate only to your own Tailscale login. Each folder's README describes the building block.
 
-Enable them in `~/.ultimate/settings.json` for this machine or `<project>/.ultimate/settings.json` for this project:
+Turn them off in `~/.ultimate/settings.json` for this machine or `<project>/.ultimate/settings.json` for this project:
 
 ```json
-{ "extensions": { "enable": ["self", "subagents", "surfaces", "documents"] } }
+{ "extensions": { "disable": ["tailscale", "claude-code"] } }
 ```
 
-Settings layer defaults → machine → project; later layers win. `extensions.disable` can turn off any extension.
-Changes apply live, with no restart. User and project extension folders are enabled by default: adding the folder
-is the opt-in. This repository's [.ultimate/settings.json](.ultimate/settings.json) is the suggested full setup;
-it enables all the building blocks, so `pnpm start` in the clone gives you everything once you choose its setup.
+Settings layer defaults → machine → project; later layers win, and `extensions.enable` turns one back on.
+Changes apply live, with no restart. User and project extension folders are on by default too: adding the folder
+is the opt-in.
 
 ## Surfaces
 
 A surface is a full-screen app made of extensions: the **Agent** surface is the conversation you start with; another
 can be anything you build. Switch with the menu on the ULTIMATE brand, `⌘K` → "Switch to …", or `mod+1…9`. The agent
 stays docked on every surface and knows which one you are looking at, and the choice is durable: reloads, other tabs,
-and restarts land on the same view. Enable `surfaces` for the agent to know which surface you are viewing;
-enable `documents` if the app needs the Documents tab. Surface UI contributions themselves work without either.
+and restarts land on the same view. The `surfaces` extension tells the agent which surface you are viewing, and
+`documents` provides the Documents tab; surface UI contributions themselves work without either.
 
 ## What to try
-
-These examples use the full setup above; enable the corresponding building blocks in other projects.
 
 - Ask it anything about this repository; watch tool calls, diffs, and thinking stream in.
 - "Build a surface for …" — a whole app with its UI, server actions, and the agent docked beside it; switch to it while

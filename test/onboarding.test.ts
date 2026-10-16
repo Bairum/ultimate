@@ -39,7 +39,7 @@ it('gates project resources, remembers choices, and applies onboarding settings 
     JSON.stringify({
       defaultSurface: 'workbench',
       custom: { keep: 1 },
-      extensions: { enable: ['subagents'], extra: 'keep' },
+      extensions: { disable: ['subagents'], extra: 'keep' },
     }),
   )
   const options = {
@@ -81,8 +81,8 @@ it('gates project resources, remembers choices, and applies onboarding settings 
         skills: ['local-skill'],
         extensions: ['x'],
         replaces: [],
-        enable: ['subagents'],
-        disable: [],
+        enable: [],
+        disable: ['subagents'],
       },
     })
     expect(server.system.current().project).toMatchObject({
@@ -91,8 +91,8 @@ it('gates project resources, remembers choices, and applies onboarding settings 
       settings: {},
     })
     expect(enabled('x')).toBe(false)
-    expect(enabled('subagents')).toBe(false)
-    expect(await tools()).not.toContain('subagent')
+    expect(enabled('subagents')).toBe(true)
+    expect(await tools()).toContain('subagent')
     expect(server.system.current().skills.some((skill) => skill.name === 'local-skill')).toBe(false)
     expect(
       (await action('extensions')).find((entry: { name: string }) => entry.name === 'x'),
@@ -103,36 +103,32 @@ it('gates project resources, remembers choices, and applies onboarding settings 
       readme: 'A local extension.',
     })
     const denied = await post(server, '/api/extensions/onboarding/actions/setExtension', {
-      args: { name: 'clock', enabled: true, scope: 'project' },
+      args: { name: 'splash', enabled: false, scope: 'project' },
     })
     expect(denied.status).toBe(500)
     expect(denied.data.error).toContain('local setup')
     await action('decide', { local: true })
     expect(enabled('x')).toBe(true)
-    expect(enabled('subagents')).toBe(true)
-    expect(await tools()).toContain('subagent')
+    expect(enabled('subagents')).toBe(false)
+    expect(await tools()).not.toContain('subagent')
     expect((await web()).some((path) => path.endsWith('/x/web.tsx'))).toBe(true)
     expect(server.system.current().skills.some((skill) => skill.name === 'local-skill')).toBe(true)
-    const agents = await post(server, '/api/extensions/subagents/actions/definitions', { args: {} })
-    expect(
-      agents.data.result.definitions.some((agent: { name: string }) => agent.name === 'y'),
-    ).toBe(true)
     expect(projectDecision(project, home)).toBe(true)
     await server.close()
     server = await fauxServer(options)
     expect(server.system.current().project.decision).toBe(true)
     expect(enabled('x')).toBe(true)
-    await action('setExtension', { name: 'clock', enabled: true, scope: 'project' })
-    expect(enabled('clock')).toBe(true)
-    expect((await web()).some((path) => path.endsWith('/clock/web.tsx'))).toBe(true)
-    await action('setExtension', { name: 'clock', enabled: false, scope: 'project' })
-    expect(enabled('clock')).toBe(false)
-    expect((await web()).some((path) => path.endsWith('/clock/web.tsx'))).toBe(false)
+    await action('setExtension', { name: 'splash', enabled: false, scope: 'project' })
+    expect(enabled('splash')).toBe(false)
+    expect((await web()).some((path) => path.endsWith('/splash/web.tsx'))).toBe(false)
+    await action('setExtension', { name: 'splash', enabled: true, scope: 'project' })
+    expect(enabled('splash')).toBe(true)
+    expect((await web()).some((path) => path.endsWith('/splash/web.tsx'))).toBe(true)
     const projectSettings = JSON.parse(await readFile(projectFile, 'utf8'))
     expect(projectSettings).toMatchObject({
       custom: { keep: 1 },
       defaultSurface: 'workbench',
-      extensions: { extra: 'keep', enable: ['subagents'], disable: ['clock'] },
+      extensions: { extra: 'keep', enable: ['splash'], disable: ['subagents'] },
     })
     await Promise.all(
       ['info', 'documents'].map((name) =>
@@ -162,15 +158,15 @@ it('gates project resources, remembers choices, and applies onboarding settings 
       extensions: { extra: 2, enable: [], disable: ['theme'] },
     })
     expect(
-      (await action('extensions')).find((entry: { name: string }) => entry.name === 'clock').layer,
+      (await action('extensions')).find((entry: { name: string }) => entry.name === 'splash').layer,
     ).toBe('project')
     expect(
       (await action('extensions')).find((entry: { name: string }) => entry.name === 'theme').layer,
     ).toBe('user')
     await action('decide', { local: false })
     expect(enabled('x')).toBe(false)
-    expect(enabled('subagents')).toBe(false)
-    expect(await tools()).not.toContain('subagent')
+    expect(enabled('subagents')).toBe(true)
+    expect(await tools()).toContain('subagent')
     expect((await web()).some((path) => path.endsWith('/x/web.tsx'))).toBe(false)
     expect(server.system.current().skills.some((skill) => skill.name === 'local-skill')).toBe(false)
     const adoptDenied = await post(server, '/api/extensions/onboarding/actions/adoptProjectSetup', {
@@ -180,17 +176,11 @@ it('gates project resources, remembers choices, and applies onboarding settings 
     await action('decide', { local: true })
     await action('adoptProjectSetup')
     await action('decide', { local: false })
-    expect(enabled('subagents')).toBe(true)
+    expect(enabled('subagents')).toBe(false)
     expect(JSON.parse(await readFile(userFile, 'utf8'))).toMatchObject({
       custom: 'user',
-      extensions: { extra: 2, enable: ['subagents'], disable: ['theme', 'clock'] },
+      extensions: { extra: 2, enable: ['splash'], disable: ['theme', 'subagents'] },
     })
-    const globalAgents = await post(server, '/api/extensions/subagents/actions/definitions', {
-      args: {},
-    })
-    expect(
-      globalAgents.data.result.definitions.some((agent: { name: string }) => agent.name === 'y'),
-    ).toBe(false)
     await action('firstRunDone')
     expect((await action('status')).firstRun).toBe(false)
     await server.close()

@@ -42,7 +42,7 @@ if (process.argv.includes('status')) {
   const projectRoot = join(home, 'project')
   await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
   const settings = join(projectRoot, '.ultimate/settings.json')
-  await writeFile(settings, JSON.stringify({ extensions: { enable: ['claude-code'] } }))
+  await writeFile(settings, '{}')
   const server = await fauxServer({
     ultimateRoot: resolve('.'),
     projectRoot,
@@ -218,7 +218,8 @@ if (process.argv.includes('status')) {
     await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
     await writeFile(
       join(projectRoot, '.ultimate/settings.json'),
-      JSON.stringify({ extensions: { enable: ['claude-code'] } }),
+      // A real (not faux) server: keep it off this machine's tailnet.
+      JSON.stringify({ extensions: { disable: ['tailscale'] } }),
     )
     new ProjectTrustStore(join(home, '.ultimate')).set(projectRoot, true)
     const root = await sourceCopy(home)

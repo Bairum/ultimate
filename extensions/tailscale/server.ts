@@ -132,7 +132,7 @@ export default function tailscale(host: ExtensionHost) {
     if (ownedPort !== undefined || closed) return
     try {
       let settings: {
-        extensions?: { enable?: string[]; disable?: string[] }
+        extensions?: { disable?: string[] }
         tailscale?: { allow?: string[] }
       }
       try {
@@ -143,13 +143,10 @@ export default function tailscale(host: ExtensionHost) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
         settings = {}
       }
-      if (
-        !settings.extensions?.enable?.includes('tailscale') ||
-        settings.extensions.disable?.includes('tailscale')
-      ) {
+      if (settings.extensions?.disable?.includes('tailscale')) {
         fail(
           'disabled',
-          'Enable tailscale in ~/.ultimate/settings.json; project settings cannot enable remote access.',
+          '~/.ultimate/settings.json disables tailscale; project settings cannot enable remote access.',
         )
         return
       }
@@ -163,7 +160,12 @@ export default function tailscale(host: ExtensionHost) {
         try {
           await access(cli, constants.X_OK)
         } catch {
-          fail('not-installed', 'Install Tailscale and put its CLI on PATH.')
+          // On by default, so a machine without Tailscale gets a status, not a notice on every start.
+          set({
+            state: 'not-installed',
+            allow: [],
+            hint: 'Install Tailscale and put its CLI on PATH.',
+          })
           return
         }
         output = (await command(['status', '--json'])).stdout
@@ -277,6 +279,8 @@ export default function tailscale(host: ExtensionHost) {
     running ??= start().finally(() => (running = undefined))
     return (opening = running)
   }
+  // Faux servers are token-free demos and tests; they never change the machine's Serve mappings.
+  if (host.faux) return defineExtension({ name: 'tailscale' })
   host.onOpen(begin)
   retries.set(host, begin)
   host.onClose(async () => {

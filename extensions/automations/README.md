@@ -1,6 +1,4 @@
-Durable schedules for agent prompts, with every run kept as a conversation. Opt-in; requires the `subagents` extension enabled. Runs use model tokens, so pause schedules you do not need.
-
-Enable `automations` and `subagents` in `extensions.enable`. This repository enables both; automations is not in the default set.
+Durable schedules for agent prompts, with every run kept as a conversation. Requires the `subagents` extension. Runs use model tokens, so pause schedules you do not need.
 
 The supervisor terminal dashboard shows `automations/scheduler: ready · durable scheduler` after the harness opens.
 This facet-scoped status reports availability, not idleness or run counts; it adds no polling and does not change the

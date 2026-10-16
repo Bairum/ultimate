@@ -1,22 +1,4 @@
 {
-  "extensions": {
-    "enable": [
-      "automations",
-      "claude-code",
-      "classify",
-      "documents",
-      "info",
-      "instance",
-      "phase",
-      "plan",
-      "self",
-      "subagents",
-      "surfaces",
-      "tasks",
-      "clock"
-    ],
-    "disable": []
-  },
   "isolates": {
     "worktree": {
       "setup": ["pnpm install --frozen-lockfile --prefer-offline"]

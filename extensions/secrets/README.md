@@ -1,4 +1,4 @@
-Manage user-global secrets through metadata-only server actions, shared by every Ultimate project. Opt in by enabling `secrets` in settings.
+Manage user-global secrets through metadata-only server actions, shared by every Ultimate project.
 
 Values live in `~/.ultimate/secrets.json`, plaintext at 0600 in a 0700 directory, like Pi's `auth.json`. This is not a vault: the agent's shell runs as the same user and can access the file. Prompt guidance prevents accidental reading, not malicious access. Never include values in conversations, notices, documents, or logs.
 
