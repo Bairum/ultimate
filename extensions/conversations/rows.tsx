@@ -92,9 +92,9 @@ export function Row({
   draft,
   working,
   unseen,
-  archived,
+  concluded,
   now,
-  onArchive,
+  onConclude,
   feature,
   assessment,
   activity,
@@ -109,9 +109,9 @@ export function Row({
   draft: boolean
   working?: 'self' | 'subagents'
   unseen: boolean
-  archived: boolean
+  concluded: boolean
   now: number
-  onArchive: (archive: boolean) => void
+  onConclude: (conclude: boolean) => void
   assessment?: Assessment
   activity?: string
   feature?: string
@@ -321,9 +321,9 @@ export function Row({
               Clear context…
             </DropdownMenuItem>
             {!lander && (
-              <DropdownMenuItem className="text-[12.5px]" onSelect={() => onArchive(!archived)}>
+              <DropdownMenuItem className="text-[12.5px]" onSelect={() => onConclude(!concluded)}>
                 <CircleCheckIcon />
-                {archived ? 'Resume' : 'Conclude'}
+                {concluded ? 'Resume' : 'Conclude'}
               </DropdownMenuItem>
             )}
           </DropdownMenuContent>

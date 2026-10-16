@@ -731,6 +731,7 @@ it.concurrent('notes the root once for a landing even when its report phase is r
   await f.service.ready(id, context)
   const sha = await commit((await f.service.get(id, context))!.path, 'landed.txt')
   f.host.provide('conversations', {
+    concluded: async () => new Set<ConversationId>(),
     subject: (conversation, ctx) => subject(f.host, conversation, ctx),
   } satisfies ConversationsService)
   await f.opened.harness.commit(async (tx) => {
@@ -1999,8 +2000,9 @@ it.concurrent('open reconciles concluded checkouts in the background', async () 
   const active = await f.create()
   for (const id of [concluded, active]) await f.service.ready(id, context)
   await f.opened.harness.commit(async (tx) => {
-    ;(await tx.doc(UiState, ROOT_CONVERSATION_ID))['ext.conversations.archived'] = [concluded]
+    ;(await tx.doc(UiState, ROOT_CONVERSATION_ID))['ext.conversations.concluded'] = [concluded]
   }, context)
+  f.host.provide('conversations', { concluded: async () => new Set([concluded]) })
   await f.reopen()
   await until(async () => (await f.service.get(concluded, context))!.state === 'removed')
   await expect(access((await f.service.get(concluded, context))!.path)).rejects.toThrow('ENOENT')

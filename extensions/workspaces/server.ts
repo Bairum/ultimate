@@ -17,6 +17,7 @@ import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- workspace discovery shares the core root watcher
 import { watchRoots } from '../../server/watch-roots.ts'
+import type { ConversationsService } from '../conversations/server.ts'
 import { agentRoots } from '../subagents/agents.ts'
 import { empty, git, isolatable, noCommit, noRepository } from './git.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
@@ -36,11 +37,6 @@ function workspaceId(args: JsonValue) {
   if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1)
     throw new Error('Expected a workspace conversation id')
   return id as ConversationId
-}
-/** Temporary adapter until conversations provides concluded(ctx). */
-async function concluded(host: ExtensionHost) {
-  const ids = (await host.uiState(context))['ext.conversations.archived']
-  return Array.isArray(ids) ? ids.filter((id): id is number => typeof id === 'number') : []
 }
 export const actions = {
   pending(args: JsonValue, { host }: ActionContext) {
@@ -164,8 +160,11 @@ export default function workspaceExtension(host: ExtensionHost) {
   host.onOpen(async () => {
     releaseController = new AbortController()
     const { signal } = releaseController
-    releasing = concluded(host)
-      .then((ids) => service.release(ids, context, signal))
+    releasing = (
+      host.use<ConversationsService>('conversations')?.concluded(context) ??
+      Promise.resolve(new Set<ConversationId>())
+    )
+      .then((ids) => service.release([...ids], context, signal))
       .catch((error: unknown) => {
         host.notice(`Workspace release failed: ${String(error)}`)
       })
