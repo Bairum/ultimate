@@ -1,4 +1,4 @@
-import { ChevronRightIcon, RotateCwIcon, TriangleAlertIcon } from 'lucide-react'
+import { ChevronRightIcon, RotateCwIcon, TriangleAlertIcon, ZapIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Shimmer } from '@/components/ai/shimmer'
@@ -233,6 +233,56 @@ function Build() {
   )
 }
 
+/** How long the hot-reload toast stays after the last update. */
+const hotLifetime = 3000
+
+/** `extensions/lineage/web.tsx?t=1` as `lineage/web.tsx`: enough to recognise the file. */
+const hotFile = (path: string) => path.split('?')[0].split('/').slice(-2).join('/')
+
+/**
+ * A quiet toast above the bottom right of the status line when Vite applies a hot update without reloading the page:
+ * the modules it re-ran (its accept boundaries, not necessarily the edited file). Updates arriving meanwhile join it
+ * and keep it up.
+ */
+function HotReloaded() {
+  const [files, setFiles] = useState<readonly string[]>([])
+  useEffect(() => {
+    const hot = import.meta.hot
+    if (!hot) return undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const updated = ({ updates }: { updates: { acceptedPath: string }[] }) => {
+      // Vite's own virtual modules mean nothing to a reader.
+      const paths = updates
+        .map((update) => update.acceptedPath)
+        .filter((path) => !path.startsWith('/@id/'))
+      if (paths.length === 0) return
+      setFiles((shown) => [...new Set([...shown, ...paths.map(hotFile)])])
+      clearTimeout(timer)
+      timer = setTimeout(() => setFiles([]), hotLifetime)
+    }
+    hot.on('vite:afterUpdate', updated)
+    return () => {
+      hot.off('vite:afterUpdate', updated)
+      clearTimeout(timer)
+    }
+  }, [])
+  if (files.length === 0) return null
+  // Tailwind rebuilds its stylesheet on every source change: name it only when nothing else changed.
+  const scripts = files.filter((file) => !file.endsWith('.css'))
+  const named = scripts.length > 0 ? scripts : files
+  return (
+    <div
+      className="pointer-events-none fixed right-3 bottom-9 z-40 flex max-w-96 animate-in items-center gap-1.5 rounded-md border border-border/80 bg-popover px-2.5 py-1.5 font-mono text-[11.5px] text-muted-foreground shadow-lg fade-in-0 slide-in-from-bottom-1"
+      role="status"
+    >
+      <ZapIcon className="size-3.5 shrink-0 text-brand" />
+      <span className="shrink-0 text-foreground/90">Hot reloaded</span>
+      <span className="truncate">{named.slice(0, 2).join(', ')}</span>
+      {named.length > 2 && <span className="shrink-0">+{named.length - 2}</span>}
+    </div>
+  )
+}
+
 interface BuildLine {
   id: string
   generation?: number
@@ -357,5 +407,6 @@ export default defineWebExtension({
   slots: {
     'header.right': CoreStale,
     'statusline.right': { component: Build, order: 1 },
+    overlay: HotReloaded,
   },
 })

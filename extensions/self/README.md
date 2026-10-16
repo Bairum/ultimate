@@ -7,3 +7,6 @@ An isolated conversation must first land into the running Ultimate clone. Restar
 Restart affects all conversations. Landing never restarts automatically. `POST /api/restart` requests the same swap; reconnect to `/api/events` to observe readiness.
 
 `web.tsx` renders restart results, the core-changed header badge, build information, and transcript reload markers.
+When Vite applies a hot update without reloading the page, a quiet toast above the bottom right of the status line
+names the modules it re-ran for 3 s; updates arriving meanwhile join it. Tailwind's stylesheet, rebuilt on every
+source change, is named only when nothing else changed.
