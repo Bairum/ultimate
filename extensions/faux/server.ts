@@ -54,11 +54,11 @@ export default async function fauxExtension(host: ExtensionHost) {
       if (
         system?.role === 'system' &&
         typeof system.content === 'string' &&
-        system.content.startsWith('Write the brief')
+        system.content.startsWith('You condense')
       ) {
         return fauxAssistantMessage([
           fauxText(
-            '## Idea\n\nUltimate is one tree of conversations: a root and its branches (#1/11).\n\n## For this branch\n\n- Keep it minimal; reuse the existing card language.\n- Open: how notes reach an idle conversation.',
+            '## Idea\n\nUltimate is one tree of conversations: a tally root and its branches (#1/11).\n\n## Standing decisions\n\n- Keep it minimal; reuse the existing card language.\n- Open: how notes reach an idle conversation.',
           ),
         ])
       }
