@@ -3,6 +3,7 @@ import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi
 import {
   createRegistry,
   Harness,
+  LiveDoc,
   MemoryStorage,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
@@ -96,12 +97,22 @@ async function fixture(service?: ClassifyService) {
   harness.resume()
   const hooks = extension.hooks![0].handlers as GenerationHooks
   let api = { conversationId: root.id, taskId: 1000 } as HookApi
-  const startRun = async () => {
+  let run = 1
+  // Like Pi, every request runs in a new generation that takes over the run and its inputs.
+  const handOver = async () => {
     api = { ...api, taskId: api.taskId + 1 } as HookApi
+    await harness.commit(async (tx) => {
+      const live = await tx.doc(LiveDoc, root.id)
+      live.run = { taskId: api.taskId, inputs: [run] } as never
+    }, context)
     await hooks.beforeRequest({} as never, api, context)
   }
+  const startRun = async () => {
+    run++
+    await handOver()
+  }
   const round = async () => {
-    await hooks.beforeRequest({} as never, api, context)
+    await handOver()
     await hooks.afterTools(1 as never, [], api, context)
   }
   const snapshot = () => harness.snapshot(Phases, ROOT_CONVERSATION_ID, context)
@@ -276,7 +287,7 @@ it.each(['stop', 'yield'])(
     const f = await fixture({ ask })
     await f.round()
     await until(async () => (await f.snapshot())?.conversations[f.root.id]?.phase === 'editing')
-    // Repeated request hooks in the same generation must retain its accepted phase.
+    // Later rounds of the same run hand over to new generations and keep its accepted phase.
     ask.mockImplementationOnce(async () => {
       await gate
       return answer(0.9, 'exploring')

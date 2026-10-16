@@ -7,7 +7,8 @@ export type Phase =
   | 'delegating'
   | 'wrapping_up'
 export type PhaseRow = {
-  generation?: number
+  /** The run's first input submission. */
+  run?: number
   phase?: Phase
   confidence?: number
   at?: number

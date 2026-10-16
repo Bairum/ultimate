@@ -4,9 +4,10 @@ import {
   defineTask,
   GenerationTask,
   hook,
+  LiveDoc,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { Cursor, EntryRecord } from '@earendil-works/pi-durable'
+import type { ConversationId, Cursor, EntryRecord, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ClassifyService, ClassifyQuestion, ClassifyAnswer } from '../classify/server.ts'
 import { isInput } from '../conversations/activity.ts'
@@ -43,6 +44,13 @@ export const Phases = defineDoc<PhaseState>({
   initial: () => ({ conversations: {} }),
 })
 export const docs = [Phases]
+/**
+ * A run's identity: its first input. Pi hands a run to a new generation after every tool round, so a generation id
+ * would forget the phase between rounds; the run's inputs move with it.
+ */
+async function runOf(tx: Tx, id: ConversationId) {
+  return (await tx.doc(LiveDoc, id)).run?.inputs[0]
+}
 const terminal = {
   status: 'terminal' as const,
   outcome: { status: 'completed' as const, result: null },
@@ -51,7 +59,7 @@ const terminal = {
 export default function phase(
   host: Pick<ExtensionHost, 'use' | 'harness' | 'projectRoot' | 'conversations'>,
 ) {
-  const ClassifyTask = defineTask<{ generation: number }, { phase: 'classify' }, null>({
+  const ClassifyTask = defineTask<{ run: number }, { phase: 'classify' }, null>({
     name: 'phase.classify',
     version: 1,
     initial: () => ({ phase: 'classify' }),
@@ -117,7 +125,7 @@ export default function phase(
           if (row?.pending === task.id) {
             delete row.pending
             if (
-              row.generation === task.input.generation &&
+              row.run === task.input.run &&
               answer?.type === 'choice' &&
               answer.choice in question.criteria &&
               (answer.confidence >= 0.6 || !row.phase)
@@ -140,11 +148,12 @@ export default function phase(
       hook(GenerationTask, {
         beforeRequest: async (_request, api, context) => {
           await host.harness().commit(async (tx) => {
+            const run = await runOf(tx, api.conversationId)
             const state = await tx.doc(Phases, ROOT_CONVERSATION_ID)
             const row = state.conversations[api.conversationId]
-            if (row?.generation === api.taskId) return
+            if (run === undefined || row?.run === run) return
             state.conversations[api.conversationId] = {
-              generation: api.taskId,
+              run,
               ...(row?.pending !== undefined ? { pending: row.pending } : {}),
             }
           }, context)
@@ -152,11 +161,13 @@ export default function phase(
         afterTools: async (_assistant, _results, api, context) => {
           if (!host.use<ClassifyService>('classify')) return
           await host.harness().commit(async (tx) => {
+            const run = await runOf(tx, api.conversationId)
             const state = await tx.doc(Phases, ROOT_CONVERSATION_ID)
-            if (state.conversations[api.conversationId]?.pending !== undefined) return
+            if (run === undefined || state.conversations[api.conversationId]?.pending !== undefined)
+              return
             const pending = await tx.createTask(
               ClassifyTask,
-              { generation: api.taskId },
+              { run },
               {
                 ownership: { kind: 'conversation' },
                 conversationId: api.conversationId,
@@ -166,7 +177,7 @@ export default function phase(
             )
             state.conversations[api.conversationId] = {
               ...state.conversations[api.conversationId],
-              generation: api.taskId,
+              run,
               pending,
             }
           }, context)
