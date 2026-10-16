@@ -196,7 +196,7 @@ title bar the host shows above every surface.
 | Slot                   | Where                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------- |
 | `sidebar`              | Left column (`<Sidebar />`); it disappears while nothing is in it                         |
-| `titlebar.left`        | Title bar above every surface, after the surfaces; monospace, one line                    |
+| `titlebar.left`        | Title bar above every surface, after the project name; monospace, one line                |
 | `titlebar.right`       | Title bar, right, before the palette button                                               |
 | `header.right`         | Right side of the header, before the panel toggle (`<Header>`)                            |
 | `statusline.left`      | Bottom status line, left; monospace, one line (`<StatusLine />`)                          |

@@ -1,8 +1,25 @@
-import { ChevronRightIcon, ExternalLinkIcon } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon } from 'lucide-react'
+import { useEffect, useSyncExternalStore } from 'react'
 import { Shimmer } from '@/components/ai/shimmer'
 import { Tool, ToolContent, ToolHeader, ToolOutput, ToolSection } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { defineWebExtension, shortenPath, useSystem, useToolDuration } from '@/sdk'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  cn,
+  defineWebExtension,
+  shortenPath,
+  useAction,
+  useConversations,
+  useStore,
+  useSystem,
+  useToolDuration,
+} from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 
 interface Instance {
@@ -115,4 +132,137 @@ function InstanceCall({ call }: { call: ToolCallView }) {
   )
 }
 
-export default defineWebExtension({ tools: { instance: InstanceCall } })
+/** What the `list` action returns. */
+interface Preview {
+  id: string
+  url: string
+  conversationId: number
+  faux: boolean
+}
+
+/** Previews bind to loopback, so a page opened from elsewhere, such as the tailnet, cannot show them. */
+const loopback = /^(127\.0\.0\.1|localhost|\[::1\])$|\.localhost$/.test(location.hostname)
+
+/** The preview shown below the title bar, in memory: a reload returns to this project. */
+let shown: Preview | undefined
+const listeners = new Set<() => void>()
+function show(preview: Preview | undefined) {
+  shown = preview
+  for (const listener of listeners) listener()
+}
+const useShown = () =>
+  useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    () => shown,
+  )
+
+const port = (url: string) => `:${new URL(url).port}`
+
+/**
+ * Switches between this project and the previews `instance` runs, after the project name in the title bar. Hidden
+ * while there are none; it asks every 5 s, and when the menu opens.
+ */
+function Switcher() {
+  const current = useShown()
+  const conversations = useConversations()
+  const { data, refetch } = useAction<Preview[]>('instance', 'list', null, {
+    // A failed poll leaves the last list; the next one tries again.
+    onError: () => {},
+  })
+  useEffect(() => {
+    const timer = setInterval(() => void refetch(), 5000)
+    return () => clearInterval(timer)
+  }, [refetch])
+  useEffect(() => {
+    if (current && data && !data.some((preview) => preview.id === current.id)) show(undefined)
+  }, [current, data])
+  if (!data?.length) return null
+  const title = (preview: Preview) =>
+    conversations.find((conversation) => conversation.id === preview.conversationId)?.title
+  return (
+    <DropdownMenu modal={false} onOpenChange={(open) => open && void refetch()}>
+      <DropdownMenuTrigger asChild>
+        <button
+          className={cn(
+            'flex h-5 shrink-0 items-center gap-1.5 rounded-sm px-1.5 transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
+            current && 'bg-brand/10 text-foreground',
+          )}
+          title="Switch instance"
+          type="button"
+        >
+          {current ? (
+            <>
+              <span className="size-1.5 rounded-full bg-brand" />#{current.conversationId}
+              {current.faux && ' · faux'} · {port(current.url)}
+            </>
+          ) : (
+            `${data.length} ${data.length === 1 ? 'preview' : 'previews'}`
+          )}
+          <ChevronDownIcon className="size-3 opacity-60" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-80" sideOffset={4}>
+        <DropdownMenuLabel className="px-2 pt-1 pb-1.5 font-mono text-[10.5px] font-normal tracking-wider text-muted-foreground uppercase">
+          Instances
+        </DropdownMenuLabel>
+        <DropdownMenuItem className="gap-2 py-1.5" onSelect={() => show(undefined)}>
+          <span className={cn('flex-1 text-[13px]', !current && 'text-brand')}>This project</span>
+          <span className="font-mono text-[11px] text-muted-foreground">{port(location.href)}</span>
+        </DropdownMenuItem>
+        {data.map((preview) => (
+          <DropdownMenuItem
+            className="gap-2 py-1.5"
+            data-instance={preview.id}
+            key={preview.id}
+            onSelect={() => show(preview)}
+          >
+            <span
+              className={cn(
+                'min-w-0 flex-1 truncate text-[13px]',
+                current?.id === preview.id && 'text-brand',
+              )}
+            >
+              #{preview.conversationId}
+              {title(preview) && <span className="text-muted-foreground"> {title(preview)}</span>}
+            </span>
+            <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+              {preview.faux && 'faux · '}
+              {port(preview.url)}
+            </span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * The shown preview's whole UI, below the title bar and above the surfaces. Showing another surface of this project
+ * returns to it.
+ */
+function Embedded() {
+  const current = useShown()
+  const surface = useStore((state) => state.ui.surface?.id)
+  useEffect(() => () => show(undefined), [surface])
+  if (!current) return null
+  return (
+    <div className="fixed inset-x-0 top-7 bottom-0 z-40 bg-background">
+      {/* oxlint-disable-next-line react/iframe-missing-sandbox -- a whole Ultimate on its own origin, trusted as in its own tab */}
+      <iframe
+        allow="clipboard-read; clipboard-write"
+        className="size-full border-0"
+        key={current.id}
+        src={current.url}
+        title={`Preview #${current.conversationId}`}
+      />
+    </div>
+  )
+}
+
+export default defineWebExtension({
+  tools: { instance: InstanceCall },
+  slots: { 'titlebar.left': loopback ? [Switcher] : [], overlay: [Embedded] },
+})

@@ -379,7 +379,7 @@ function Indicator() {
           tailnet
         </button>
       </TooltipTrigger>
-      <TooltipContent className="font-mono text-[11px]" side="top">
+      <TooltipContent className="font-mono text-[11px]" side="bottom">
         <QrCode text={data.url} />
         <div className="mt-1.5">{data.url}</div>
         <div className="text-muted-foreground">only {data.allow.join(', ')}</div>
@@ -389,7 +389,7 @@ function Indicator() {
 }
 
 export default defineWebExtension({
-  slots: { 'statusline.right': [Indicator] },
+  slots: { 'titlebar.right': [Indicator] },
   panels: [{ id: 'tailscale', title: 'Tailscale', icon: NetworkIcon, component: TailscalePanel }],
   commands: [
     {

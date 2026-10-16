@@ -140,9 +140,8 @@ function SurfaceItems() {
 }
 
 /**
- * The bar above every surface, styled like the status line: the brand with the surface switcher, the project, the
- * surfaces, `titlebar.left`; then
- * `titlebar.right` and the command palette.
+ * The bar above every surface, styled like the status line: the brand with the surface switcher, the project,
+ * `titlebar.left`, the surfaces; then `titlebar.right` and the command palette.
  */
 export function TitleBar() {
   const project = projectTitle(useSystem())
@@ -155,8 +154,8 @@ export function TitleBar() {
             {project}
           </span>
         )}
-        <SurfaceItems />
         <Slot name="titlebar.left" variant="inline" />
+        <SurfaceItems />
       </div>
       <div className="flex shrink-0 items-center gap-3 whitespace-nowrap">
         <Slot name="titlebar.right" variant="inline" />
