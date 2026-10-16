@@ -377,7 +377,7 @@ const turns = [
   [['w-3/4', 'w-2/3'], ['w-1/2']],
 ]
 /** Enough turns to fill a tall window; the transcript's bottom shows first, so the top ones clip. */
-const skeletonBlocks = [...turns, ...turns].flatMap(([before, after]) => [
+const skeletonBlocks = [...turns, ...turns, ...turns].flatMap(([before, after]) => [
   'h-11 rounded-lg',
   ...before.map((width) => `h-3 rounded-sm ${width}`),
   'h-8',
@@ -401,7 +401,7 @@ function TranscriptSkeleton({ dock, ref }: { dock?: boolean; ref: Ref<HTMLDivEle
             className="animate-enter"
             key={index}
             style={{
-              animationDelay: `${80 + Math.min(skeletonBlocks.length - 1 - index, 24) * 20}ms`,
+              animationDelay: `${80 + (skeletonBlocks.length - 1 - index) * 12}ms`,
             }}
           >
             <Skeleton className={className} />
