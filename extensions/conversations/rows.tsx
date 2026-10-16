@@ -18,6 +18,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { api, cn, useUltimate } from '@/sdk'
 import { FeatureTag } from './feature.tsx'
 import { TaskChip, useTaskOf } from '../plan/chip.tsx'
+import { PhaseLabel, usePhase } from '../phase/chip.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import { useWorkspaceIndex } from '../workspaces/data.tsx'
 import type { Assessment, OverviewRow } from './types.ts'
@@ -95,6 +96,7 @@ export function Row({
   onArchive,
   feature,
   assessment,
+  activity,
   root,
 }: {
   root?: boolean
@@ -107,8 +109,12 @@ export function Row({
   now: number
   onArchive: (archive: boolean) => void
   assessment?: Assessment
+  activity?: string
   feature?: string
 }) {
+  const phase = usePhase(conversation.id)
+  const displayPhase = working ? phase : undefined
+  const hasActivity = !!(displayPhase || activity)
   const actions = useUltimate()
   const [editing, setEditing] = useState(false)
   const cancelled = useRef(false)
@@ -158,7 +164,7 @@ export function Row({
     <div
       className={cn(
         'group relative mx-2 flex items-center rounded-md transition-colors',
-        hasMetadata ? 'h-11' : 'h-7',
+        hasActivity ? 'h-[58px]' : hasMetadata ? 'h-11' : 'h-7',
         shown ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/50',
       )}
       data-conversation={conversation.id}
@@ -238,6 +244,17 @@ export function Row({
                   {ago(latest, now)}
                 </span>
               )}
+            </span>
+          )}
+          {hasActivity && (
+            <span className="flex w-full min-w-0 items-center gap-1 pr-5 pl-[18px] text-[11px] leading-4 text-muted-foreground/70">
+              {displayPhase && (
+                <span className="shrink-0 text-brand">
+                  <PhaseLabel phase={displayPhase} />
+                </span>
+              )}
+              {displayPhase && activity && <span>·</span>}
+              {activity && <span className="truncate">{activity}</span>}
             </span>
           )}
         </button>

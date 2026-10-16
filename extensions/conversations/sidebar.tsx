@@ -153,6 +153,7 @@ export function Conversations() {
     const state = working.get(conversation.id)
     return (
       <Row
+        activity={overview[conversation.id]?.activity}
         assessment={tasks ? currentAssessment(overview[conversation.id]) : undefined}
         archived={hiddenIds.has(conversation.id)}
         root={roots.has(conversation.id)}
