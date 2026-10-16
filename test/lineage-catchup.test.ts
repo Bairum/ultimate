@@ -446,3 +446,38 @@ it('tells a branch its tree’s root was distilled into a tally after it forked'
   )
   expect(text).not.toContain('<tally')
 })
+
+it('catches a branch up from the tally position it inherited: an older fork point, a branch of a branch', async () => {
+  const f = await catchupFixture()
+  const a = await branchFrom(f.server, { from: 1, prompt: 'Feature A' })
+  const nodeA = (await f.server.root.context(context)).entries.at(-1)!
+  const b = await branchFrom(f.server, { from: 1, prompt: 'Feature B' })
+  await writeAbstract(f.server, b, 'Ask: b\nState: in progress', 'B')
+
+  // Forked at A's node, the branch has not seen B: its first input catches up on it.
+  const c = await branchFrom(f.server, { from: 1, at: nodeA.id, prompt: 'Feature C' })
+  const [early] = await catchups(f.server, c)
+  expect((early.data as { text: string }).text).toBe(
+    [
+      "Meanwhile in #1's tree:",
+      `**#${b} B** · Tally — abstract as of #${b}/1:\n- Ask: b\n- State: in progress`,
+      'Check whether any of this already covers or changes what you are about to do.',
+    ].join('\n\n'),
+  )
+  expect(early.data).toMatchObject({ tally: await tipOf(f.server) })
+
+  // A catches up; a branch of A inherits the position that catch-up left the tally at.
+  await ask(f.server, a, 'continue A')
+  const [caught] = await catchups(f.server, a)
+  expect((caught.data as { tally: number }).tally).toBe(await tipOf(f.server))
+  const d = await branchFrom(f.server, { from: 1, prompt: 'Feature D' })
+  const nested = await branchFrom(f.server, { from: a, prompt: 'Nested in A' })
+  const [late] = await catchups(f.server, nested)
+  expect((late.data as { text: string }).text).toBe(
+    [
+      "Meanwhile in #1's tree:",
+      `**#${d}** started: Feature D`,
+      'Check whether any of this already covers or changes what you are about to do.',
+    ].join('\n\n'),
+  )
+})

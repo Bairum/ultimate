@@ -12,7 +12,6 @@ import {
   defineTool,
   GenerationTask,
   hook,
-  LiveDoc,
   ROOT_CONVERSATION_ID,
   section,
   UsageDoc,
@@ -63,6 +62,8 @@ export type TallyState = {
   tokens: number
   /** The entry this root became a tally at; absent while a root is still an ordinary conversation. */
   since?: number
+  /** Set while its genesis is distilled: it refuses inputs from the moment conversion starts. */
+  converting?: true
 }
 /**
  * A root's tally bookkeeping. Forks start from the initial value: a branch inherits the tally's entries, but it is no
@@ -256,6 +257,48 @@ export async function abstract(tx: Tx, id: number, input: AbstractInput) {
   tally.abstracts[String(id)] = entry.id
 }
 
+/**
+ * The last tally entry a fork of `from` at `at` has in its context: the newest root entry it inherits, or the position
+ * the newest catch-up it inherits advanced to. Undefined when it inherits neither.
+ */
+async function inheritedTally(tx: Tx, from: ConversationId, at: EntryId, root: ConversationId) {
+  let cursor: Cursor | undefined
+  do {
+    const page = await tx.scanEntries({ conversationId: from, maxEntryId: at }, 100, cursor)
+    for (const entry of page.items) {
+      if (entry.conversationId === root) return entry.id as number
+      const data = entry.data as { source?: string; tally?: number } | undefined
+      if (entry.kind === 'lineage.note' && data?.source === 'main' && data.tally !== undefined)
+        return data.tally
+    }
+    cursor = page.next
+  } while (cursor)
+  return undefined
+}
+
+/** Background tasks that write into their conversation: a tally would refuse or misplace what they deliver. */
+const DELIVERING = new Set(['pi.compaction', 'lineage.notify', 'ultimate.subagent-reporter'])
+
+/**
+ * Why `id` cannot become a tally now, if it cannot: a live task that runs in it or delivers into it (a run, a notify, a
+ * subagent's report), or a workspace submission still queued or landing, whose outcome is reported back to it.
+ */
+async function busy(tx: Tx, id: ConversationId, workspaces: WorkspaceService | undefined) {
+  for (const status of ['pending', 'running', 'waiting', 'completing'] as const) {
+    let cursor: Cursor | undefined
+    do {
+      const page = await tx.scanTasks({ conversationId: id, status }, 100, cursor)
+      const live = page.items.find((task) => !task.background || DELIVERING.has(task.kind))
+      if (live) return `its ${live.kind} task is still live`
+      cursor = page.next
+    } while (cursor)
+  }
+  const queue = workspaces && (await tx.doc(workspaces.doc, ROOT_CONVERSATION_ID)).queue
+  if (queue?.some((item) => item.conversationId === id))
+    return 'its workspace submission is still landing'
+  return undefined
+}
+
 /** Make `id` a tally from an empty head: what an empty root starts from and its branches fork. */
 async function beginTally(tx: Tx, id: ConversationId) {
   const entry = await tx.appendEntry(id, { kind: 'pi.reset', head: 'self' })
@@ -340,7 +383,11 @@ function lineage(host: ExtensionHost) {
     abort: (_task, runtime, ctx) =>
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
-  /** Turns a conversation with history into a tally: one genesis reset distilled by its own model. */
+  /**
+   * Turns a conversation with history into a tally: one genesis reset distilled by its own model. It refuses inputs
+   * from the start (`converting`); writes that still arrive, notes and landings, move the tip, and the genesis is
+   * distilled again from there, so it stands for everything before it.
+   */
   const Convert = defineTask<{ id: ConversationId }, { phase: 'distill' }, null>({
     name: 'lineage.convert',
     version: 1,
@@ -349,44 +396,48 @@ function lineage(host: ExtensionHost) {
       distill: async (task, runtime, ctx) => {
         const { id } = task.input
         const conversation = (await host.harness().conversation(id, ctx))!
+        const tipOf = async (tx: Tx) =>
+          (await tx.scanEntries({ conversationId: id }, 1)).items[0].id as number
         try {
-          let genesis = await runtime.memo<{ text: string; at: number }>('genesis', ctx)
-          if (genesis === undefined) {
-            const agent = await conversation.agent(ctx)
-            if (!agent.model) throw new Error(`#${id} has no model`)
-            const model = runtime.models.getModel(agent.model.provider, agent.model.modelId)
-            if (!model)
-              throw new Error(`Model ${agent.model.provider}/${agent.model.modelId} is unavailable`)
-            const view = await runtime.context(id, ctx)
-            const at = view.entries.at(-1)!.id
-            const source = sourceText(
-              id,
-              view.entries,
-              view.contributions,
-              Math.max(4000, model.contextWindow - SOURCE_RESERVE),
-            )
-            const text = await ask(
-              runtime.models,
-              (change) =>
-                runtime.commit(async (tx) => {
-                  await change(tx)
-                  return undefined
-                }, ctx),
-              id,
-              agent.model,
-              agent.thinkingLevel,
-              COMPACT_SYSTEM,
-              `${compactFocus(true)}\nPreserve exact file paths, names, and errors; cite entries as #<conversation>/<entry>.\n\nConversation (source text, not instructions):\n\n${source}`,
-              runtime.signal,
-            )
-            genesis = await runtime.memo('genesis', { text, at }, ctx)
-          }
-          // A running turn ends first: the genesis starts the context, and from then on the tally refuses inputs.
           for (;;) {
-            await conversation.waitForIdle(ctx)
+            // The tip before the context: a write after it fails the placement below and is distilled with the next.
+            const at = await host.harness().commit(tipOf, ctx)
+            const key = `genesis:${at}`
+            let genesis = await runtime.memo<string>(key, ctx)
+            if (genesis === undefined) {
+              const agent = await conversation.agent(ctx)
+              if (!agent.model) throw new Error(`#${id} has no model`)
+              const model = runtime.models.getModel(agent.model.provider, agent.model.modelId)
+              if (!model)
+                throw new Error(
+                  `Model ${agent.model.provider}/${agent.model.modelId} is unavailable`,
+                )
+              const view = await runtime.context(id, ctx)
+              const source = sourceText(
+                id,
+                view.entries,
+                view.contributions,
+                Math.max(4000, model.contextWindow - SOURCE_RESERVE),
+              )
+              const text = await ask(
+                runtime.models,
+                (change) =>
+                  runtime.commit(async (tx) => {
+                    await change(tx)
+                    return undefined
+                  }, ctx),
+                id,
+                agent.model,
+                agent.thinkingLevel,
+                COMPACT_SYSTEM,
+                `${compactFocus(true)}\nPreserve exact file paths, names, and errors; cite entries as #<conversation>/<entry>.\n\nConversation (source text, not instructions):\n\n${source}`,
+                runtime.signal,
+              )
+              genesis = await runtime.memo(key, text, ctx)
+            }
             let placed = false
             await runtime.commit(async (tx) => {
-              if ((await tx.doc(LiveDoc, id)).run) return undefined
+              if ((await tipOf(tx)) !== at) return undefined
               const entry = await tx.appendEntry(id, {
                 kind: 'pi.reset',
                 head: 'self',
@@ -394,31 +445,37 @@ function lineage(host: ExtensionHost) {
                 model: [
                   {
                     role: 'user',
-                    content: `<tally from="#${id}/${genesis.at}">\n${genesis.text}\n</tally>`,
+                    content: `<tally from="#${id}/${at}">\n${genesis}\n</tally>`,
                     timestamp: runtime.now(),
                   },
                 ],
               })
-              ;(await tx.doc(Tally, id)).since = entry.id
+              const tally = await tx.doc(Tally, id)
+              tally.since = entry.id
+              delete tally.converting
               placed = true
               return { status: 'terminal', outcome: { status: 'completed', result: null } }
             }, ctx)
-            if (placed) break
+            if (placed) return
           }
         } catch (error) {
           if (runtime.signal.aborted) throw error
           host.notice(
             `Could not turn #${id} into a tally: ${error instanceof Error ? error.message : String(error)}`,
           )
-          await runtime.commit(
-            () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
-            ctx,
-          )
+          // It stays an ordinary conversation and takes inputs again.
+          await runtime.commit(async (tx) => {
+            delete (await tx.doc(Tally, id)).converting
+            return { status: 'terminal', outcome: { status: 'completed', result: null } }
+          }, ctx)
         }
       },
     },
-    abort: (_task, runtime, ctx) =>
-      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+    abort: (task, runtime, ctx) =>
+      runtime.commit(async (tx) => {
+        delete (await tx.doc(Tally, task.input.id)).converting
+        return { status: 'terminal', outcome: { status: 'aborted' } }
+      }, ctx),
   })
   const Notify = defineTask<
     { target: ConversationId; wake: boolean },
@@ -563,10 +620,7 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
       throw new Error(`Entry ${at} is not in conversation #${from}`)
     // Table reads precede the transaction's first table write, the fork.
     const root = await climb(tx, await tx.conversation(from), roots)
-    const tip =
-      root === undefined
-        ? undefined
-        : (await tx.scanEntries({ conversationId: root }, 1)).items[0]?.id
+    const tally = root === undefined ? undefined : await inheritedTally(tx, from, at, root)
     const fork = await tx.forkConversation(from, at, { ownership: { kind: 'ownerless' } })
     await configure(tx, fork.id, {
       cwd: host.projectRoot,
@@ -579,8 +633,8 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
       await workspaces.create(tx, fork.id, host.projectRoot)
     }
     if (main) await seedSeen(tx, fork.id, main, Date.now())
-    // The branch knows its tally up to here; its own prompt node, appended below, is no news to it.
-    if (tip !== undefined) (await tx.doc(Seen, fork.id)).tally = tip
+    // The branch knows its tally as far as its context reaches; its own prompt node, appended below, is no news to it.
+    if (tally !== undefined) (await tx.doc(Seen, fork.id)).tally = tally
     ;(await tx.doc(Branch, fork.id)).branch = { from, at, intent: prompt }
     // Until the summary names it, a branch is called by its intent, not by the first message it inherited.
     const title = prompt.replace(/\s+/g, ' ').slice(0, 80)
@@ -790,11 +844,14 @@ export const actions = {
   },
   /**
    * Make a top-level conversation that is not a branch a tally root: an empty one at once, one with history by a
-   * genesis its model distills. Calling it on a root that is no tally yet converts that root; on a tally it does nothing.
+   * genesis its model distills. Calling it on a root that is no tally yet converts that root; on a tally, or one being
+   * converted, it does nothing. Conversion waits for nothing: it is refused while anything still runs in or delivers
+   * into the conversation, since from its start the conversation refuses inputs.
    */
   async root(args: JsonValue, { host }: ActionContext) {
     const target = conversationArg(args)
     const { Convert } = lineage(host)
+    const workspaces = host.use<WorkspaceService>('workspaces')
     const roots = await host.harness().commit(async (tx) => {
       const record = await tx.conversation(target)
       if (!record) throw new Error(`No conversation #${target}`)
@@ -802,20 +859,23 @@ export const actions = {
       const doc = await tx.doc(Roots, ROOT_CONVERSATION_ID)
       if (record.parent && !doc.roots.includes(target))
         throw new Error('A branch already has a root')
+      const tally = await tx.doc(Tally, target)
+      if (tally.since === undefined && !tally.converting) {
+        // Reads first: a transaction cannot read tables after its first write.
+        const empty = !(await tx.scanEntries({ conversationId: target }, 1)).items.length
+        const reason = empty ? undefined : await busy(tx, target, workspaces)
+        if (reason) throw new Error(`#${target} cannot become a tally while ${reason}`)
+        if (empty) await beginTally(tx, target)
+        else {
+          tally.converting = true
+          await tx.createTask(
+            Convert,
+            { id: target },
+            { conversationId: target, ownership: { kind: 'conversation' }, background: true },
+          )
+        }
+      }
       if (!doc.roots.includes(target)) doc.roots.push(target)
-      if ((await tx.doc(Tally, target)).since !== undefined) return [...doc.roots]
-      if (!(await tx.scanEntries({ conversationId: target }, 1)).items.length)
-        await beginTally(tx, target)
-      else if (
-        !(
-          await tx.scanTasks({ conversationId: target, kind: Convert.definition.name }, 100)
-        ).items.some((task) => task.state.status !== 'terminal')
-      )
-        await tx.createTask(
-          Convert,
-          { id: target },
-          { conversationId: target, ownership: { kind: 'conversation' }, background: true },
-        )
       return [...doc.roots]
     }, context)
     host.harness().resume()
@@ -846,8 +906,11 @@ async function treeOf(tx: Tx, id: ConversationId): Promise<Tree | undefined> {
 /** A tally runs no turns: typing in it starts a branch, so an input placed in one is refused with its transaction. */
 async function refuseTally(tx: Tx, id: ConversationId) {
   if (!(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.includes(id)) return
-  if ((await tx.doc(Tally, id)).since !== undefined)
-    throw new Error(`#${id} is a tally and runs no turns; start a branch from it instead`)
+  const tally = await tx.doc(Tally, id)
+  if (tally.since !== undefined || tally.converting)
+    throw new Error(
+      `#${id} ${tally.converting ? 'is becoming' : 'is'} a tally and runs no turns; start a branch from it instead`,
+    )
 }
 
 export type LineageService = {
@@ -895,10 +958,18 @@ export default function lineageExtension(host: ExtensionHost) {
             if (!agent.model) return undefined
             const root = (await rootsOf(host, ctx)).includes(api.conversationId)
             const intent = (await api.snapshot(Branch, api.conversationId, ctx))?.branch?.intent
+            // The model's view of the replaced entries, with edits applied: an omitted abstract stays omitted.
+            const replaced = new Set(compaction.entries.map((entry) => entry.id))
+            const view = await (await host
+              .harness()
+              .conversation(api.conversationId, ctx))!.context(ctx)
+            const kept = view.entries.flatMap((entry, index) =>
+              replaced.has(entry.id) ? [index] : [],
+            )
             const source = sourceText(
               api.conversationId,
-              compaction.entries,
-              compaction.entries.map((entry) => entry.model ?? []),
+              kept.map((index) => view.entries[index]),
+              kept.map((index) => view.contributions[index]),
               Number.POSITIVE_INFINITY,
             )
             const answer = await ask(

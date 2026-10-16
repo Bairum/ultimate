@@ -16,14 +16,18 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
   conversation 1's default. Creation emits `lineage:rooted` for the root and `lineage:branched` for the branch.
   Typing in a tally's composer starts a branch from its tip; the server refuses inputs to tallies.
   Action `root` `{ id }` (⌘K "Make this a root") adopts a top-level non-branch conversation or converts an existing
-  root. With history, a durable `lineage.convert` task asks its own model for a genesis distillation and writes a
-  `pi.reset` with `head: 'self'`, `data.lineage = { tally: true }` and model text `<tally from="#R/at">…</tally>`.
-  Empty roots begin with an empty reset; converting a tally again does nothing. Roots with history from before
+  root. With history, it is refused while the conversation has a live run, compaction, notify or subagent report, or a
+  workspace submission queued or landing; otherwise `lineage.tally.converting` refuses inputs at once and a durable
+  `lineage.convert` task asks its own model for a genesis distillation. It writes a `pi.reset` with `head: 'self'`,
+  `data.lineage = { tally: true }` and model text `<tally from="#R/at">…</tally>` only while `at` is still the tip;
+  writes that arrived meanwhile (notes, landings) are distilled again with it. A failure clears `converting` and
+  leaves a notice. Empty roots begin with an empty reset; converting a tally again does nothing. Roots with history from before
   tallies keep their ordinary composer and can run until converted. `info` returns `{ roots }`, and with `{ id }`
   also its `root` and `branch` when present.
 - **Tally**: conversation-scoped doc `lineage.tally` (latest history) holds
-  `{ abstracts: Record<string, number>, tokens: number, since?: number }`: each conversation's latest abstract entry,
-  estimated model-visible context tokens, and the entry where the root became a tally. Forks start with an empty doc,
+  `{ abstracts: Record<string, number>, tokens: number, since?: number, converting?: true }`: each conversation's
+  latest abstract entry, estimated model-visible context tokens, the entry where the root became a tally, and whether
+  its genesis is being distilled. Forks start with an empty doc,
   not the source's bookkeeping. Tokens are recounted from active context after commits that append root entries,
   including resets and compaction. The root composer status shows the estimate as "Tally · … tokens".
   `lineage.abstract` entries hold `{ conversation, at, text, title?, feature? }`, with `at` pointing to the answer
@@ -43,8 +47,10 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
   with `source: 'finished'`. Request id
   `lineage:notify:<target>:<task>` deduplicates delivery; calling again for the same id aborts the pending task.
 - **Catch-up on resume**: `lineage.seen` `{ main?, at?, tally? }` tracks the target commit and last accounted-for root
-  entry. Branch creation seeds `tally` to the root tip before its own prompt node. Older conversations without it
-  start from `lineage.tally.since`. On an idle resume, the transactional `GenerationTask.beforeInput` hook builds
+  entry. Branch creation seeds `tally` to the position its fork inherits: the newest root entry in its history up to
+  the fork point, or the `data.tally` of the newest catch-up note there, which every catch-up records. Without either
+  it starts from `lineage.tally.since`. Prompts of the conversations it was forked from are left out: it reads them as
+  their inputs. On an idle resume, the transactional `GenerationTask.beforeInput` hook builds
   "Meanwhile in #R's tree": latest model-visible abstracts (preferred over prompts), prompts without an abstract,
   landings with divergence and breadcrumbs, notes, and any new tally distillation. It excludes the caller's own
   activity. Within about 6000 tokens it keeps the newest material in full, collapsing older conversations to one-line
@@ -60,7 +66,8 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
   the prompt cache.
 - **Compaction**: manual compaction reshapes a tally without deleting history. Its own model keeps the idea,
   principles, standing decisions and each conversation's id, prompt, outcome, divergence, commits and breadcrumbs,
-  merging superseded detail. Branch compaction focuses on intent and progress; subagents keep Pi's default.
+  merging superseded detail. Every top-level conversation's summary source is its model view with edits applied, so
+  omitted abstracts stay out. Branch compaction focuses on intent and progress; subagents keep Pi's default.
 
 Other extensions use `host.use<LineageService>('lineage')` (`server.ts`): `rootOf(id, ctx)` resolves tree membership,
 `leaveNote(to, text, source?)` writes without waking, and `branchOf(id, ctx)` returns `{ root, intent? }` for top-level

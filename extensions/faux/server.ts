@@ -136,9 +136,10 @@ export default async function fauxExtension(host: ExtensionHost) {
         return fauxAssistantMessage([fauxText('Noted: it finished.')])
       }
       if (last?.role === 'user' && last.content === 'submit workspace') {
-        return fauxAssistantMessage([fauxToolCall('workspace', { action: 'submit' })], {
-          stopReason: 'toolUse',
-        })
+        return fauxAssistantMessage(
+          [fauxToolCall('workspace', { action: 'submit', divergence: 'None' })],
+          { stopReason: 'toolUse' },
+        )
       }
       if (last?.role === 'toolResult' && last.toolName === 'restart') {
         return fauxAssistantMessage([

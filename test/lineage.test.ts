@@ -7,7 +7,15 @@ import { estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate'
 import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import { afterEach, beforeAll, expect, it } from 'vitest'
-import { abstract, Branch, branchOf, rootOf, Tally } from '../extensions/lineage/server.ts'
+import {
+  abstract,
+  Branch,
+  branchOf,
+  leaveNote,
+  rootOf,
+  Tally,
+} from '../extensions/lineage/server.ts'
+import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 import type { LineageService } from '../extensions/lineage/server.ts'
 import { Plan } from '../extensions/plan/server.ts'
 import { Summaries, summaryBehavior } from '../extensions/conversations/summary.ts'
@@ -55,11 +63,14 @@ async function fixture(reopen?: string) {
   const server = await fauxServer({ ultimateRoot, home, userHome: home })
   servers.push(server)
   const requests: Message[][] = []
+  const condensed: string[] = []
   const route: FauxResponseFactory = (transcript) => {
     server.host.faux!.appendResponses([route])
     const [system, first] = transcript.messages
-    if (textOf(system.content).startsWith('You condense'))
+    if (textOf(system.content).startsWith('You condense')) {
+      condensed.push(textOf(first.content))
       return fauxAssistantMessage(`LINEAGE SUMMARY of ${textOf(first.content).slice(0, 40)}`)
+    }
     requests.push([...transcript.messages])
     const final = transcript.messages.at(-1)!
     if (final.role === 'toolResult') return fauxAssistantMessage(`Tool: ${textOf(final.content)}`)
@@ -72,7 +83,7 @@ async function fixture(reopen?: string) {
     return fauxAssistantMessage(`echo ${textOf(last?.content)}`)
   }
   server.host.faux!.setResponses([route])
-  return { server, home, requests }
+  return { server, home, requests, condensed }
 }
 
 const branchFrom = async (server: Server, args: Record<string, unknown>) => {
@@ -441,6 +452,144 @@ it('turns a conversation with history into a tally with one genesis that branche
   ])
 })
 
+it('refuses to convert while a task runs in or delivers into the conversation, or a submission lands', async () => {
+  const { server } = await fixture()
+  const gates = new Map<string, PromiseWithResolvers<void>>()
+  const gate = (name: string) => {
+    if (!gates.has(name)) gates.set(name, Promise.withResolvers())
+    return gates.get(name)!
+  }
+  const route: FauxResponseFactory = async (transcript) => {
+    server.host.faux!.appendResponses([route])
+    const last = transcript.messages.at(-1)!
+    const text = textOf(last.content)
+    if (last.role === 'toolResult') return fauxAssistantMessage(`Tool: ${text}`)
+    if (text.startsWith('NOTIFY '))
+      return fauxAssistantMessage([fauxToolCall('notify', JSON.parse(text.slice(7)))], {
+        stopReason: 'toolUse',
+      })
+    if (text.startsWith('HOLD ')) await gate(text).promise
+    return fauxAssistantMessage(`echo ${text}`)
+  }
+  server.host.faux!.setResponses([route])
+  const convert = async () =>
+    (await post(server, '/api/extensions/lineage/actions/root', { args: { id: 1 } })).data
+  const other = await second(server)
+  await other.submit({ type: 'input', content: 'HOLD other' }, context)
+
+  // A running turn.
+  await server.root.submit({ type: 'input', content: 'HOLD root' }, context)
+  expect((await convert()).error).toBe(
+    '#1 cannot become a tally while its pi.generation task is still live',
+  )
+  gate('HOLD root').resolve()
+  await server.root.waitForIdle(context)
+
+  // A pending notify, which would deliver into it.
+  await ask(server, ROOT_CONVERSATION_ID, `NOTIFY ${JSON.stringify({ id: other.id, wake: false })}`)
+  expect((await convert()).error).toBe(
+    '#1 cannot become a tally while its lineage.notify task is still live',
+  )
+  gate('HOLD other').resolve()
+  await until(async () => (await pendingNotifies(server)).length === 0)
+
+  // A workspace submission whose outcome is reported back to it.
+  const submission = {
+    id: 'submission',
+    conversationId: 1,
+    source: server.host.projectRoot,
+    target: 'main',
+    tip: 'abc',
+    at: 1,
+    divergence: 'None',
+    state: 'queued' as const,
+    steps: [],
+  }
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue.push(submission)
+  }, context)
+  expect((await convert()).error).toBe(
+    '#1 cannot become a tally while its workspace submission is still landing',
+  )
+  // Refusals change nothing: it still runs.
+  expect(
+    (await server.harness.snapshot(Tally, server.root.id, context))?.converting,
+  ).toBeUndefined()
+  await ask(server, ROOT_CONVERSATION_ID, 'Still running')
+
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue = []
+  }, context)
+  await server.root.waitForIdle(context)
+  expect((await convert()).result).toEqual({ roots: [1] })
+  await until(
+    async () =>
+      (await server.harness.snapshot(Tally, server.root.id, context))?.since !== undefined,
+  )
+})
+
+it('distills the genesis again when the tally moved meanwhile, and refuses inputs while converting', async () => {
+  const { server } = await fixture()
+  const condensed: string[] = []
+  let fail = true
+  const held = Promise.withResolvers<void>()
+  const route: FauxResponseFactory = async (transcript) => {
+    server.host.faux!.appendResponses([route])
+    const [system, first] = transcript.messages
+    if (textOf(system.content).startsWith('You condense')) {
+      condensed.push(textOf(first.content))
+      if (fail) return fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'Overloaded' })
+      if (condensed.length === 2) await held.promise
+      return fauxAssistantMessage(`GENESIS ${condensed.length}`)
+    }
+    return fauxAssistantMessage(`echo ${textOf(transcript.messages.at(-1)!.content)}`)
+  }
+  server.host.faux!.setResponses([route])
+  const convert = () => post(server, '/api/extensions/lineage/actions/root', { args: { id: 1 } })
+  const tally = () => server.harness.snapshot(Tally, server.root.id, context)
+  await ask(server, ROOT_CONVERSATION_ID, 'We build a tree.')
+  await server.root.waitForIdle(context)
+
+  // A failed distillation leaves an ordinary conversation behind, with a notice.
+  expect((await convert()).status).toBe(200)
+  await until(async () => (await tally())?.converting === undefined)
+  expect((await tally())?.since).toBeUndefined()
+  await until(() =>
+    server.system
+      .current()
+      .extensionDiagnostics.includes('Could not turn #1 into a tally: Overloaded'),
+  )
+  await ask(server, ROOT_CONVERSATION_ID, 'Still mine.')
+  await server.root.waitForIdle(context)
+
+  fail = false
+  expect((await convert()).status).toBe(200)
+  await until(() => condensed.length === 2)
+  expect((await tally())?.converting).toBe(true)
+  await expect(server.root.submit({ type: 'input', content: 'Sneak in' }, context)).rejects.toThrow(
+    '#1 is becoming a tally and runs no turns; start a branch from it instead',
+  )
+  // Converting again while it converts starts nothing.
+  expect((await convert()).data.result).toEqual({ roots: [1] })
+  await leaveNote({ harness: () => server.harness }, ROOT_CONVERSATION_ID, 'Landed meanwhile.', {
+    from: 7,
+  })
+  const note = (await server.root.context(context)).entries.at(-1)!
+  held.resolve()
+  await until(async () => (await tally())?.since !== undefined)
+
+  // The note arrived after the first distillation began, so the genesis was distilled again with it.
+  expect(condensed).toHaveLength(3)
+  expect(condensed[1]).not.toContain('Landed meanwhile.')
+  expect(condensed[2]).toContain('Note from #7: Landed meanwhile.')
+  const [genesis, ...rest] = (await server.root.context(context)).entries
+  expect(rest).toEqual([])
+  expect(textOf(genesis.model?.[0]?.content)).toBe(
+    `<tally from="#1/${note.id}">\nGENESIS 3\n</tally>`,
+  )
+  expect((await tally())?.converting).toBeUndefined()
+})
+
 it('summarizes a branch into its title and its abstract in the tree root', async () => {
   const { server } = await fixture()
   const existing = server.host.registry.snapshot().extension('conversations')!
@@ -578,6 +727,26 @@ it('compacts a top-level conversation with its lineage focus', async () => {
   const marker = (await server.root.context(context)).entries[0]
   expect(marker.kind).toBe('pi.compaction')
   expect(textOf(marker.model?.[0]?.content)).toContain('LINEAGE SUMMARY of This is the tally')
+})
+
+it('compacts a tally from its model view, without the abstracts it omitted', async () => {
+  const { server, condensed } = await fixture()
+  const first = await branchFrom(server, { from: 1, prompt: 'Abstract me' })
+  await settled(server, first)
+  for (const text of ['State: started.', 'State: done.'])
+    await server.harness.commit((tx) => abstract(tx, first, { text, at: 1 }), context)
+  await server.harness.commit(async (tx) => {
+    for (let n = 0; n < 8; n++)
+      await tx.appendEntry(server.root.id, {
+        kind: 'pi.user',
+        model: [{ role: 'user', content: `Part ${n} ${'word '.repeat(4000)}`, timestamp: n }],
+      })
+  }, context)
+  await server.harness.waitForTask(await server.root.compact(undefined, context), context)
+  expect((await server.root.context(context)).entries[0].kind).toBe('pi.compaction')
+  const source = condensed.at(-1)!
+  expect(source).toContain(`Abstract of #${first} as of #${first}/1:\nState: done.`)
+  expect(source).not.toContain('State: started.')
 })
 
 /** A faux server where `NOTIFY {json}` calls the notify tool and `HOLD` answers only once released. */

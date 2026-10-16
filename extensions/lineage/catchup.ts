@@ -271,6 +271,14 @@ export async function tallyText(
     cursor = page.next
   } while (cursor)
   const tip = entries.at(-1)?.id
+  // The prompts of the conversations it was forked from are in its context already, as their first inputs.
+  const sources = new Set<number>()
+  for (
+    let up = (await tx.conversation(id))?.parent?.conversationId;
+    up !== undefined && up !== root;
+    up = (await tx.conversation(up))?.parent?.conversationId
+  )
+    sources.add(up)
   const activities = new Map<number, Activity>()
   const of = (conversation: number, entry: EntryRecord) => {
     let activity = activities.get(conversation)
@@ -297,7 +305,7 @@ export async function tallyText(
       if (data.feature) activity.feature = data.feature as string
     } else if (entry.kind === 'lineage.branched') {
       const conversation = data.branch as number
-      if (conversation === id) continue
+      if (conversation === id || sources.has(conversation)) continue
       of(conversation, entry).prompt = oneLine((data.intent as string).split('\n')[0])
     } else if (entry.kind === 'lineage.note' && typeof data.from === 'number' && data.from !== id) {
       const activity = of(data.from, entry)
@@ -403,7 +411,8 @@ export async function catchup(
     entries: [
       {
         kind: 'lineage.note',
-        data: { source: 'main', text },
+        // Where this catch-up left the tally: a fork of this conversation inherits that position.
+        data: { source: 'main', text, ...(seen.tally === undefined ? {} : { tally: seen.tally }) },
         model: [{ role: 'user' as const, content: text, timestamp: Date.now() }],
       },
     ],
