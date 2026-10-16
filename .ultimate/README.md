@@ -1,19 +1,15 @@
 This is Ultimate's own repository, and this setup is the one it is built with: Ultimate plans, delegates, checks its
 work, and changes its own code while you talk to it.
 
-## What it turns on
+## What it adds
 
-- `plan`: a durable ledger of epics and tasks, so long work survives restarts.
-- `subagents`: hands bounded work to workers, each in its own git worktree.
-- `tasks`: the live task graph in the right panel: what runs, and for whom.
-- `self`: knowledge of its own code, and `restart` to swap in a core change.
-- `instance`: a second Ultimate on a working tree, to try a change before it goes live.
-- `surfaces`: tells the agent which screen you are looking at.
-- `documents`: the Documents tab, where extension state such as the plan shows.
-- `info`: machine, process, code, and extensions in the right panel.
-- `exclusive-commands`: one `pnpm test` at a time across conversations.
-- `automations`: prompts that run on a schedule; every run is a conversation you can open.
-- `clock`: the time in the status line.
+Every built-in is already on; this setup adds how the repository is landed and reviewed:
+
+- `settings.json`: each worktree isolate installs its dependencies, and the lander runs `pnpm check`, then
+  `pnpm test`, `pnpm test:e2e` and `pnpm eval` in parallel, and pushes to `origin`.
+- `agents/lander.md`: the lander fixes a submission that fails to land, then lands it once every check passes again.
+- `agents/reviewer.md`: the review lead starts every `reviewer-*` definition (`reviewer-astra`, `reviewer-sol`) in
+  parallel and returns one merged verdict.
 
 ## How to work with it
 
