@@ -893,8 +893,8 @@ export function createLander(
             await lineage.leaveNote(
               root,
               [
+                // The submit-time summary is often stale and the tally carries the abstract: the card shows it, the model does not.
                 `Landed ${result.sha!.slice(0, 7)} on ${result.target} from #${conversationId}/${result.at} ${title}${subject.feature ? ` (${subject.feature})` : ''}:`,
-                ...(subject.summary ? [subject.summary] : []),
                 `Diverged: ${result.divergence}`,
                 ...commits.map((commit) => commit.subject),
                 ...(more ? [`and ${more} more`] : []),

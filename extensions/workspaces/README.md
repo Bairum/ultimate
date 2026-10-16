@@ -63,7 +63,9 @@ a success, warning (landed, push failed) or error accent and the same collapsed 
 conversation; it keeps the full log, grouped by submission, and shows in the Agents tab.
 With lineage enabled, the report phase also leaves a replay-safe landing note in the submitter's tree root, unless
 the submitter is that root or has none. Its data includes `divergence` and `at` alongside `from`, `sha`, `target`,
-`commits` and `paths`; model text cites `#<from>/<at>` and always includes `Diverged: …`, even for "None".
+`commits` and `paths`; model text cites `#<from>/<at>` and always includes `Diverged: …`, even for "None". The
+submit-time summary stays in the data and on the card but not in the model text: it is often stale, and the tally's
+abstract of the submitter tells its story.
 The shared landing card in the root and submitter shows a quiet Diverged line and the breadcrumb.
 Failed submissions leave no root note; notes never wake the root.
 

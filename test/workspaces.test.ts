@@ -785,7 +785,7 @@ it.concurrent('notes the root once for a landing even when its report phase is r
     paths: ['landed.txt'],
   })
   expect((notes[0].data as { text: string }).text).toContain(
-    `Landed ${sha.slice(0, 7)} on main from #${id}/${submittedAt} Write the feature (Landing):\nAdds the landed file.\nDiverged: Added a landing file instead of changing the UI.`,
+    `Landed ${sha.slice(0, 7)} on main from #${id}/${submittedAt} Write the feature (Landing):\nDiverged: Added a landing file instead of changing the UI.`,
   )
   await f.reopen()
   expect(await rootNotes(f)).toHaveLength(1)
