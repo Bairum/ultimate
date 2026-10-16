@@ -30,6 +30,7 @@ import {
 import type { ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
+import type { StickToBottomContext } from 'use-stick-to-bottom'
 import { useEvent } from '../sdk/events.ts'
 import { api } from '../sdk/client.ts'
 import { Button } from '@/components/ui/button'
@@ -63,10 +64,17 @@ import { ToolCallBlock } from './tool-call.tsx'
 /** The shown conversation; `dock` fits it into a narrow side region. */
 export function Transcript({ dock }: { dock?: boolean }) {
   const { id } = useConversation()
+  const stick = useRef<StickToBottomContext>(null)
+  // Paint a newly shown conversation at its newest row; sticking to the bottom only scrolls a frame later.
+  useLayoutEffect(() => {
+    const scroll = stick.current?.scrollRef.current
+    if (scroll) scroll.scrollTop = scroll.scrollHeight
+  }, [id])
+  // Keyed so a conversation never inherits the previous one's scroll position or follow state.
   return (
-    <Conversation className="min-h-0">
+    <Conversation className="min-h-0" contextRef={stick} key={id}>
       <ConversationContent className={cn(column(dock), 'gap-3 pt-6 pb-10')}>
-        <TranscriptEntries key={id} />
+        <TranscriptEntries />
       </ConversationContent>
       <ConversationScrollButton />
     </Conversation>
