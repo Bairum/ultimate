@@ -22,6 +22,7 @@
     ".ultimate/extensions/**/*.tsx",
     "shared/protocol.ts",
     "extensions/conversations/types.ts",
+    "extensions/phase/types.ts",
     "extensions/conversations/summary-model-ref.ts",
     "extensions/models/switches.ts",
     "extensions/status-line/context.ts",

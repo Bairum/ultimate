@@ -65,7 +65,7 @@ Skills load from clone `skills/`, then Pi's defaults, then `~/.ultimate/skills/`
 `<project>/.ultimate/skills/`, with later names winning.
 The default set is `agent`, `conversations`, `workspaces`, `coding-tools`, `prompt`, `models`, `status-line`, `notices`, `theme`,
 `faux` (inert unless `ULTIMATE_FAUX=1`), `codemode`, `browser`, `onboarding`, `splash`, and `lineage` (conversation trees: roots, branches, notes). Other built-ins are opt-in
-building blocks, including `secrets`, `parallel` (web tools; requires `secrets`), and `tailscale` (remote access, user-level enablement only). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
+building blocks, including `secrets`, `parallel` (web tools; requires `secrets`), `classify` (Jev typed judgments; requires `secrets`), `phase` (working phases; requires `classify`), and `tailscale` (remote access, user-level enablement only). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
 restart. User/project extension folders are on by default; `disable` can turn off those or defaults too. Unknown names
 produce a notice. `summaryModel` (`"provider/id[:thinking]"`, default `openai/gpt-6-luna:medium`; project over user)
