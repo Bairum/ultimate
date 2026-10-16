@@ -136,8 +136,10 @@
   --radius-xl: calc(var(--radius) + 4px);
   --animate-shimmer: shimmer 1.6s linear infinite;
   --animate-pulse-dot: pulse-dot 1.2s ease-in-out infinite;
-  /* Rises softly into place; stagger with animation-delay. */
-  --animate-enter: enter 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  /* Fades softly in; stagger with animation-delay. Opacity only, so a fixed background inside stays on the viewport. */
+  --animate-fade-in: fade-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  /* One soft band of light crossing the whole window, off screen at both ends so the loop never shows. */
+  --animate-sweep: sweep 2.4s linear infinite;
 
   @keyframes shimmer {
     from {
@@ -147,10 +149,17 @@
       background-position: 0% center;
     }
   }
-  @keyframes enter {
+  @keyframes fade-in {
     from {
       opacity: 0;
-      transform: translateY(6px);
+    }
+  }
+  @keyframes sweep {
+    from {
+      background-position: 100% 0;
+    }
+    to {
+      background-position: 0% 0;
     }
   }
   @keyframes pulse-dot {

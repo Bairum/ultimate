@@ -28,14 +28,13 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { ReactNode, Ref } from 'react'
+import type { ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
 import type { StickToBottomContext } from 'use-stick-to-bottom'
 import { useEvent } from '../sdk/events.ts'
 import { api } from '../sdk/client.ts'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
 import {
   Conversation,
   ConversationContent,
@@ -64,6 +63,7 @@ import { column } from './layout.ts'
 import { indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
 import type { ToolResult } from './model.ts'
 import { ToolCallBlock } from './tool-call.tsx'
+import { TranscriptSkeleton } from './transcript-skeleton.tsx'
 
 /** The shown conversation; `dock` fits it into a narrow side region. */
 export function Transcript({ dock }: { dock?: boolean }) {
@@ -382,52 +382,6 @@ function TranscriptEntries() {
         <div aria-hidden="true" data-history-anchor-space style={{ height: tailSpace }} />
       )}
     </TranscriptContext>
-  )
-}
-
-/** Placeholder turns: a user message, then a reply's lines around its tool row, widths varied to read like text. */
-const turns = [
-  [
-    ['w-11/12', 'w-3/5'],
-    ['w-4/5', 'w-2/5'],
-  ],
-  [['w-full', 'w-2/3', 'w-1/2'], ['w-3/4']],
-  [['w-5/6'], ['w-11/12', 'w-3/5']],
-  [['w-3/4', 'w-2/3'], ['w-1/2']],
-]
-/** Enough turns to fill a tall window; the transcript's bottom shows first, so the top ones clip. */
-const skeletonBlocks = [...turns, ...turns, ...turns].flatMap(([before, after]) => [
-  'h-11 rounded-lg',
-  ...before.map((width) => `h-3 rounded-sm ${width}`),
-  'h-8',
-  ...after.map((width) => `h-3 rounded-sm ${width}`),
-])
-
-/**
- * Stands in for a loading conversation where its rows will be, building up from the bottom after a moment, so a
- * quick switch barely shows it.
- */
-function TranscriptSkeleton({ dock, ref }: { dock?: boolean; ref: Ref<HTMLDivElement> }) {
-  return (
-    <div
-      aria-hidden="true"
-      className="pointer-events-none absolute inset-0 flex flex-col justify-end overflow-hidden pb-10 [scrollbar-gutter:stable_both-edges] [mask-image:linear-gradient(to_bottom,transparent,black_6rem)]"
-      ref={ref}
-    >
-      <div className={cn(column(dock), 'flex flex-col gap-3')}>
-        {skeletonBlocks.map((className, index) => (
-          <div
-            className="animate-enter"
-            key={index}
-            style={{
-              animationDelay: `${80 + (skeletonBlocks.length - 1 - index) * 12}ms`,
-            }}
-          >
-            <Skeleton className={className} />
-          </div>
-        ))}
-      </div>
-    </div>
   )
 }
 
