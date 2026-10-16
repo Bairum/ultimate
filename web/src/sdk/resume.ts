@@ -17,6 +17,8 @@ let ready = false
 
 /** True when this page load painted the previous page's view: a reload, not a fresh start. */
 export const resumed = shown !== null
+/** True while the previous page's view still covers the app. */
+export const covered = () => covering
 
 /**
  * What `node` shows, for the stored view: elements on screen as they are, each off screen as a blank of its size, so
