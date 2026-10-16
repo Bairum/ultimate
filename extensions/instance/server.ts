@@ -30,7 +30,6 @@ interface Instance {
   home: string
   pid: number
   temporary: boolean
-  project: string
   /** The conversation whose workspace it previews, or which started it in the shared checkout. */
   conversationId: number
   faux: boolean
@@ -110,7 +109,7 @@ async function stop(instances: Map<string, Instance>, id: string) {
     await unlink(join(instance.home, 'ultimate.lock')).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error
     })
-    await cleanPreview(instance.home, instance.project)
+    await cleanPreview(instance.home)
   }
   instances.delete(id)
 }
@@ -328,7 +327,6 @@ export default function instanceExtension(
                 home,
                 pid: child.pid ?? 0,
                 temporary: !args.home,
-                project,
                 conversationId,
                 faux: args.faux === true,
                 child,

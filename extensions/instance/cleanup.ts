@@ -1,13 +1,13 @@
 import { DatabaseSync } from 'node:sqlite'
-import { readdir, readFile, rm, stat } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { readdir, rm, stat } from 'node:fs/promises'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 // Cleanup must use the same owner validation and PID semantics as the storage lock.
 // oxlint-disable-next-line no-restricted-imports
 import { alive, readOwner } from '../../server/lock.ts'
 import { git } from '../workspaces/git.ts'
 
 /** Hold both lock transactions throughout cleanup; PID sidecars also protect startup and shutdown gaps. */
-export async function cleanPreview(home: string, project?: string) {
+export async function cleanPreview(home: string) {
   const locks: DatabaseSync[] = []
   try {
     for (const name of ['ultimate.lock', 'storage.lock']) {
@@ -22,44 +22,45 @@ export async function cleanPreview(home: string, project?: string) {
         throw error
       }
     }
-    if (!project) {
-      try {
-        project = (
-          JSON.parse(await readFile(join(home, 'project.json'), 'utf8')) as { root: string }
-        ).root
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    // The original project checkout may have been released. Discover repositories from the previews themselves.
+    const repositories = new Set<string>()
+    for (const name of ['lander', 'worktrees']) {
+      const directory = join(home, name)
+      const checkouts = await readdir(directory, { withFileTypes: true }).catch(
+        (error: NodeJS.ErrnoException) => {
+          // A preview without isolates or a lander has no checkout directory.
+          if (error.code === 'ENOENT') return []
+          throw error
+        },
+      )
+      for (const checkout of checkouts) {
+        if (!checkout.isDirectory()) continue
+        repositories.add(
+          await git(
+            join(directory, checkout.name),
+            'rev-parse',
+            '--path-format=absolute',
+            '--git-common-dir',
+          ),
+        )
       }
     }
-    if (project) {
-      // The project may itself be a linked worktree. Its common directory survives removal of its checkouts.
-      const common = await git(
-        project,
-        'rev-parse',
-        '--path-format=absolute',
-        '--git-common-dir',
-      ).catch((error: unknown) => {
-        // A preview of a non-Git project has no worktree registrations to release.
-        if ((error as { stderr?: string }).stderr?.includes('not a git repository'))
-          return undefined
-        throw error
-      })
-      if (common) {
-        const source = dirname(common)
-        const records = (await git(source, 'worktree', 'list', '--porcelain', '-z')).split('\0\0')
-        for (const record of records) {
-          const fields = record.split('\0')
-          const path = fields.find((field) => field.startsWith('worktree '))?.slice(9)
-          if (!path) continue
-          const inside = relative(resolve(home), path)
-          if (!inside || inside === '..' || inside.startsWith('..' + sep) || isAbsolute(inside))
-            continue
-          const branch = fields.find((field) => field.startsWith('branch refs/heads/'))?.slice(18)
-          await git(source, 'worktree', 'remove', '--force', path)
-          if (branch) await git(source, 'branch', '-D', '--', branch)
-        }
-        await git(source, 'worktree', 'prune')
+    for (const common of repositories) {
+      const records = (
+        await git(common, '--git-dir', common, 'worktree', 'list', '--porcelain', '-z')
+      ).split('\0\0')
+      for (const record of records) {
+        const fields = record.split('\0')
+        const path = fields.find((field) => field.startsWith('worktree '))?.slice(9)
+        if (!path) continue
+        const inside = relative(resolve(home), path)
+        if (!inside || inside === '..' || inside.startsWith('..' + sep) || isAbsolute(inside))
+          continue
+        const branch = fields.find((field) => field.startsWith('branch refs/heads/'))?.slice(18)
+        await git(common, '--git-dir', common, 'worktree', 'remove', '--force', path)
+        if (branch) await git(common, '--git-dir', common, 'branch', '-D', '--', branch)
       }
+      await git(common, '--git-dir', common, 'worktree', 'prune')
     }
     await rm(home, { recursive: true, force: true })
     return true

@@ -118,3 +118,28 @@ it('leaves an explicitly preserved home alone even with the automatic preview pr
   })
   expect((await stat(home)).isDirectory()).toBe(true)
 })
+
+it.each([true, false])(
+  'cleans a home after its project checkout was deleted (checkouts: %s)',
+  async (checkouts) => {
+    const { root, source, home } = await fixture()
+    const project = join(root, 'released-project')
+    await git(source, 'worktree', 'add', '-b', 'released-project', project)
+    await writeFile(join(home, 'project.json'), JSON.stringify({ root: project }))
+    await git(source, 'worktree', 'remove', project)
+    const beforeTrees = await git(source, 'worktree', 'list', '--porcelain')
+    const beforeBranches = await git(source, 'branch', '--format=%(refname)')
+    if (checkouts) {
+      await git(source, 'worktree', 'add', '--detach', join(home, 'lander', 'hash'))
+      const worker = join(home, 'worktrees', '1')
+      await git(source, 'worktree', 'add', '-b', 'preview-worker', worker)
+      await writeFile(join(worker, 'dirty'), 'preview scratch')
+    }
+    const notices: string[] = []
+    await sweepPreviews(root, (message) => notices.push(message))
+    expect(notices).toEqual([])
+    expect(await stat(home).catch(() => undefined)).toBeUndefined()
+    expect(await git(source, 'worktree', 'list', '--porcelain')).toBe(beforeTrees)
+    expect(await git(source, 'branch', '--format=%(refname)')).toBe(beforeBranches)
+  },
+)
