@@ -191,6 +191,9 @@ extension, subject to the parent's tool subset; they follow their assigned role,
 
 Definitions live in `agents/`, `~/.ultimate/agents/`, and the project root's `.ultimate/agents/` (later wins by name), and are reread at every start; the Agents tab lists them. See `extensions/subagents/README.md` for frontmatter. Shipped models inherit the parent's model.
 
+Review goes through one `reviewer`: here a Luna lead (`.ultimate/agents/reviewer.md`) that starts every `reviewer-*`
+definition in parallel and returns one merged verdict. Add a reviewer by adding a `reviewer-<name>.md`.
+
 ## Borrowed from Pi
 
 - `server/http.ts` — adapted HTTP dispatcher, not exported; prevents early provider stream termination. undici in package.json exists only for this file. Drop when Pi exports configureHttpDispatcher and applyHttpProxySettings; keep the MIT notice until then.

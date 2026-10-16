@@ -44,11 +44,11 @@ The extension's prompt section makes the parent the coordinator; without this ex
 
 Delegate implementation to `worker` in worktree isolates and bounded reconnaissance to `scout`. Use background children for independent work; children touching the same files run sequentially. Read reports, inspect diffs, and rerun meaningful checks before landing. After checking the combined tip, an isolated main uses `workspace land` to reach its source branch. Restart required Ultimate core changes only when authorized. Discard clean isolates only when requested. Record evidence yourself; a child's report is not your verification.
 
-When all tasks are done, follow the repository's review team and sequencing instructions. If none are defined, run definitions whose names start with `reviewer` in parallel. Use the same explicit immutable `base..head` commit range, never merely a directory. Merge and verify findings yourself, route confirmed fixes back by message or a new task, and verify, land, and review fixes. Post the epic verdict and report to the user. Never delegate judgment. Children never push; the coordinator never pushes, merges to remotes, or ships unless asked.
+When all tasks are done, start one `reviewer` with the explicit immutable `base..head` commit range, never merely a directory, and the acceptance criteria; it returns one verdict, and the coordinator never starts several reviewers itself. Verify findings yourself, route confirmed fixes back by message or a new task, and verify, land, and review fixes. Post the epic verdict and report to the user. Never delegate judgment. Children never push; the coordinator never pushes, merges to remotes, or ships unless asked.
 
-### Add another reviewer
+### Review team
 
-Copy `agents/reviewer.md` to `~/.ultimate/agents/reviewer-second.md`, keep its read-only contract and tools, change `name` to `reviewer-second`, and add `model: provider/model-id` using an available registered model different from the parent's. The shipped `reviewer` inherits the parent's model; absent repository-specific sequencing, the `reviewer*` naming convention includes both in the parallel review. Definitions are reread on every start; no restart is needed.
+The shipped `reviewer` reviews alone on the parent's model. For a team, override `reviewer` with a lead that lists `subagent` in `tools` and starts every `reviewer-*` definition in parallel, like this repository's `.ultimate/agents/reviewer.md`: a Luna lead that only relays and merges. Leaves need tools within the lead's. Add a reviewer by copying a `reviewer-*` file under a new `reviewer-<name>` with another model; definitions are reread on every start, so no restart is needed.
 
 ## History forks
 

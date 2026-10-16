@@ -773,10 +773,10 @@ An epic means the full flow: tasks, isolated workers, land, and review before it
    Use restart only for required server/ and shared/ changes after verification and authorization.
    Discard a child's clean isolate only when explicitly requested; never auto-clean up.
 7. Record verification evidence with plan and set the task done; only you do this.
-8. When all tasks are done, follow the repository's review team and sequencing instructions.
-   If none are defined, run reviewer definitions in parallel.
-   Use the same explicit immutable base..head commit range, not a directory.
-   Merge and verify the findings yourself; never delegate the verdict.
+8. When all tasks are done, start one reviewer with the explicit immutable base..head commit
+   range, not a directory, and the acceptance criteria. It runs any review team and returns one
+   verdict; never start several reviewers yourself.
+   Verify the findings yourself; never delegate the verdict.
    Message the responsible worker with confirmed fixes, or create a new task.
    Verify, land, and review fixes before concluding.
 9. Post the verdict on the epic with plan and report to the user.
