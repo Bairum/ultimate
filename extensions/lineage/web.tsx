@@ -87,7 +87,7 @@ function Started({ entry }: { entry: EntryRecord }) {
         <GitForkIcon className="size-3.5 shrink-0 text-brand" />
         <span className="shrink-0 text-foreground">Started</span>
         <button
-          className="flex min-w-0 cursor-pointer text-foreground hover:underline"
+          className="flex min-w-0 cursor-pointer overflow-hidden text-foreground hover:underline"
           onClick={() => switchConversation(branch)}
           title={`Open #${branch}`}
           type="button"
