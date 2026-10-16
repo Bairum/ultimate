@@ -45,16 +45,9 @@ converting?: true }`: each conversation's open abstract, estimated model-visible
   has one open at a time: `lineage.roots` keeps them as `sides` (root → side chat), so every client sees them with the
   roots. Doc `lineage.side` on the side chat holds `{ root, at, ending?, ended?, branch? }`. It writes nothing into
   the tally while open: no prompt node, no `lineage.branch`, no abstracts (`branchOf` is undefined for it); catch-up
-  applies as in any tree conversation. It reads but does not edit: its `pi.agent` selects exactly `read`, `search`,
-  `git`, `codemode`, `web_search`, `web_fetch` and `propose_branch` (arrays, so a tool added later never reaches it);
-  codemode's `tools.*` calls only these, and its `ultimate.*` only reads. Lineage defines the deferred side-chat tools:
-  `search` `{ pattern, path?, glob? }` runs ripgrep in the project (no shell, no config file), and `git`
-  `{ command, revision?, path?, pattern?, limit? }` runs `log`, `show`, `diff`, `blame`, `grep` or `status` with an
-  argv lineage builds from those fields, so no option the model writes reaches git. Both run with a minimal
-  environment (no inherited `GIT_*`, no global or system git config), git with external diff, textconv and fsmonitor
-  switched off, and both cap their output at 30 000 characters.
+  applies as in any tree conversation. It has every tool a coordinator has, plus the deferred `propose_branch`.
   `propose_branch` may only be called by an open side chat. A branch forked from a side chat's message
-  ("Branch from here") gets ordinary tools: every branch starts with the tool configuration cleared.
+  ("Branch from here") does not keep it: every branch starts with the tool configuration cleared.
   `propose_branch` `{ prompt }` renders as a "Proposed branch" card whose "Start branch…" opens the start page with
   that prompt. It ends only when the user ends it, with action
   `endSide` `{ root, side, mode, prompt?, images?, isolated?, model?, thinkingLevel? }`, refused unless `side` is

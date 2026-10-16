@@ -1,7 +1,3 @@
-import { execFile } from 'node:child_process'
-import { access, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import { promisify } from 'node:util'
 import type { Message } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
@@ -10,22 +6,12 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterEach, beforeAll, expect, it } from 'vitest'
 import { Summaries, summaryBehavior } from '../extensions/conversations/summary.ts'
 import type { SummaryHost } from '../extensions/conversations/summary.ts'
-import {
-  abstract,
-  branchOf,
-  gitArgs,
-  readEnv,
-  rootOf,
-  Roots,
-  Side,
-  Tally,
-} from '../extensions/lineage/server.ts'
+import { abstract, branchOf, rootOf, Roots, Side, Tally } from '../extensions/lineage/server.ts'
 import type { LineageService } from '../extensions/lineage/server.ts'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import { fauxServer, post, sourceCopy, temp, until } from './helpers.ts'
 
-const exec = promisify(execFile)
 let ultimateRoot: string
 beforeAll(async () => {
   ultimateRoot = await sourceCopy(await temp())
@@ -164,109 +150,24 @@ it('opens a side chat from the tally’s tip, one at a time, without writing int
   expect(branch.error).toBe(`#${id} is no tally`)
 })
 
-const allowed = ['codemode', 'git', 'propose_branch', 'read', 'search', 'web_fetch', 'web_search']
-
-it('keeps a side chat read-only: it gets exactly the reading tools and propose_branch', async () => {
+it('gives a side chat every ordinary tool and propose_branch on top', async () => {
   const { server, requests } = await fixture()
   const id = await opened(server)
   const agent = await (await server.harness.conversation(id, context))!.agent(context)
-  expect(agent.tools.map((tool) => tool.name).toSorted()).toEqual(allowed)
-  expect(agent.callable.map((tool) => tool.name).toSorted()).toEqual(allowed)
-  // Elsewhere the side chat's own tools are not offered.
+  const offered = agent.tools.map((tool) => tool.name)
+  for (const name of ['bash', 'edit', 'write', 'note', 'subagent', 'propose_branch'])
+    expect(offered).toContain(name)
+  // Elsewhere propose_branch is not offered.
   const root = await server.root.agent(context)
-  for (const name of ['propose_branch', 'search', 'git'])
-    expect(root.tools.map((tool) => tool.name)).not.toContain(name)
+  expect(root.tools.map((tool) => tool.name)).not.toContain('propose_branch')
 
   const conversation = (await server.harness.conversation(id, context))!
-  await conversation.submit({ type: 'input', content: 'edit' }, context)
-  await conversation.waitForIdle(context)
-  const result = (await conversation.context(context)).messages.findLast(
-    (message) => message.role === 'toolResult',
-  )
-  expect(result?.isError).toBe(true)
-  expect(textOf(result?.content)).toMatch(/edit/)
   await conversation.submit({ type: 'input', content: 'propose' }, context)
   await conversation.waitForIdle(context)
   expect(textOf(requests.at(-1)!.messages.at(-1)?.content)).toMatch(/^Proposed\./)
   expect(await action(server, 'sideDraft', { root: 1, side: id })).toMatchObject({
     result: { prompt: 'Build the store' },
   })
-})
-
-it('reads git and searches the code, and refuses git commands that change anything', async () => {
-  const { server } = await fixture()
-  const tools = server.host.registry.snapshot().extension('lineage')!.tools!
-  const run = (name: string, args: Record<string, unknown>) =>
-    tools
-      .find((tool) => tool.name === name)!
-      .execute(args as never, {} as never, context)
-      .then((result) => textOf((result as { output: unknown }).output))
-  for (const args of [
-    { command: 'commit' },
-    { command: 'checkout' },
-    { command: 'log', revision: '--output=x.patch' },
-    { command: 'diff', revision: '-o' },
-    { command: 'log', revision: 'HEAD;touch x' },
-  ])
-    await expect(run('git', args)).rejects.toThrow(/^(git |Not a revision)/)
-  const found = await run('search', {
-    pattern: 'name: PROPOSE',
-    path: 'extensions',
-    glob: '*.ts',
-  })
-  expect(found).toContain('extensions/lineage/server.ts:')
-  expect(await run('search', { pattern: 'no such text [a]nywhere' })).toBe('No matches.')
-})
-
-it('runs no program git could be told to run: inherited environment or repository config', async () => {
-  const repo = await temp('ultimate-side-git-')
-  const marker = join(repo, 'ran')
-  const helper = join(repo, 'helper.sh')
-  await writeFile(helper, `#!/bin/sh\ntouch ${marker}\ncat\n`, { mode: 0o755 })
-  const git = (...args: string[]) => exec('git', args, { cwd: repo })
-  await git('init', '-q')
-  await git(
-    '-c',
-    'user.name=t',
-    '-c',
-    'user.email=t@t',
-    'commit',
-    '-q',
-    '--allow-empty',
-    '-m',
-    'base',
-  )
-  await writeFile(join(repo, 'file.txt'), 'one\n')
-  await git('add', 'file.txt')
-  await git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'file')
-  await writeFile(join(repo, 'file.txt'), 'two\n')
-  // Every way a reading command could start a program: diff/textconv drivers, fsmonitor, pagers, the environment.
-  await writeFile(join(repo, '.gitattributes'), 'file.txt diff=run\n')
-  for (const [key, value] of [
-    ['diff.external', helper],
-    ['diff.run.command', helper],
-    ['diff.run.textconv', helper],
-    ['core.fsmonitor', helper],
-    ['core.pager', helper],
-  ])
-    await git('config', key, value)
-  const previous = process.env.GIT_EXTERNAL_DIFF
-  process.env.GIT_EXTERNAL_DIFF = helper
-  try {
-    for (const request of [
-      { command: 'diff' },
-      { command: 'show', path: 'file.txt' },
-      { command: 'log', path: 'file.txt' },
-      { command: 'blame', path: 'file.txt' },
-      { command: 'status' },
-      { command: 'grep', pattern: 'two' },
-    ] as const)
-      await exec('git', gitArgs(request), { cwd: repo, env: readEnv() })
-  } finally {
-    if (previous === undefined) delete process.env.GIT_EXTERNAL_DIFF
-    else process.env.GIT_EXTERNAL_DIFF = previous
-  }
-  await expect(access(marker)).rejects.toThrow('ENOENT')
 })
 
 it('refuses to end or draft for a side chat that is no longer the open one', async () => {
@@ -305,7 +206,7 @@ it('gives a branch started from a side chat’s message ordinary tools', async (
   const agent = await (await settled(server, branch.result.id)).agent(context)
   const offered = agent.tools.map((tool) => tool.name)
   for (const name of ['bash', 'edit', 'write', 'note']) expect(offered).toContain(name)
-  for (const name of ['propose_branch', 'search', 'git']) expect(offered).not.toContain(name)
+  expect(offered).not.toContain('propose_branch')
 })
 
 it('writes no abstract for a side chat’s exchange', async () => {

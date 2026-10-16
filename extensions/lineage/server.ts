@@ -1,5 +1,3 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
@@ -932,112 +930,6 @@ export async function startRoot(host: ExtensionHost, input: RootInput, ctx: Cont
 }
 
 const PROPOSE = 'propose_branch'
-/**
- * The tools a side chat runs with, exactly: it reads and talks, and changes nothing. A list rather than removals, so a
- * tool added later never reaches it. Codemode's `tools.*` calls only these; its `ultimate.*` only reads.
- */
-const SIDE_TOOLS = ['read', 'search', 'git', 'codemode', 'web_search', 'web_fetch', PROPOSE]
-/** The git commands a side chat may run: they read the repository. */
-const GIT_READS = ['log', 'show', 'diff', 'blame', 'grep', 'status'] as const
-type GitRead = (typeof GIT_READS)[number]
-/** At most this much of a side chat's search or git output reaches its model. */
-const OUTPUT_CHARS = 30_000
-
-const exec = promisify(execFile)
-/** Run a reading command in the project, without a shell; its output capped for the model. */
-async function readOut(
-  host: ExtensionHost,
-  file: string,
-  args: string[],
-  env: NodeJS.ProcessEnv,
-  signal?: AbortSignal,
-) {
-  const { stdout } = await exec(file, args, {
-    cwd: host.projectRoot,
-    timeout: 30_000,
-    maxBuffer: 4 * 1024 * 1024,
-    ...(signal ? { signal } : {}),
-    env,
-  })
-  return stdout.length > OUTPUT_CHARS
-    ? `${stdout.slice(0, OUTPUT_CHARS)}\n[Cut at ${OUTPUT_CHARS} characters; narrow it down.]`
-    : stdout || 'No output.'
-}
-/** Why a command failed: what it printed to stderr, else the error. */
-const failure = (error: unknown) =>
-  (error as { stderr?: string }).stderr?.trim() ||
-  (error instanceof Error ? error.message : String(error))
-
-/**
- * The environment a side chat's commands run in: only what finding programs and text needs. Nothing inherited can name
- * a program for git to run (GIT_EXTERNAL_DIFF, GIT_PAGER, GIT_CONFIG_*), and git reads no global or system config.
- */
-export function readEnv(): NodeJS.ProcessEnv {
-  return {
-    PATH: process.env.PATH,
-    ...(process.env.LANG ? { LANG: process.env.LANG } : {}),
-    GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_GLOBAL: '/dev/null',
-    GIT_OPTIONAL_LOCKS: '0',
-    GIT_PAGER: 'cat',
-  }
-}
-
-export type GitRequest = {
-  command: GitRead
-  revision?: string
-  path?: string
-  pattern?: string
-  limit?: number
-}
-const revisionPattern = /^[\w./~^@{}:+-]+$/
-/**
- * The argv of a side chat's `git` call, built here from fields, never passed through: no option the model writes reaches
- * git. Settings in the repository's own config that could run a program are switched off per command.
- */
-export function gitArgs({ command, revision, path, pattern, limit }: GitRequest) {
-  if (!GIT_READS.includes(command))
-    throw new Error(`git ${command} is not allowed; a side chat runs ${GIT_READS.join(', ')}`)
-  if (revision !== undefined && (revision.startsWith('-') || !revisionPattern.test(revision)))
-    throw new Error(`Not a revision: ${revision}`)
-  const rev = revision ? [revision] : []
-  const paths = path ? ['--', path] : []
-  const count = String(Math.min(Math.max(Math.trunc(limit ?? 30), 1), 200))
-  const safe = ['-c', 'core.fsmonitor=false', '-c', 'diff.external=', '--no-pager']
-  const own: Record<GitRead, () => string[]> = {
-    log: () => [
-      'log',
-      '--no-ext-diff',
-      '--no-textconv',
-      '--date=short',
-      '--format=%h %ad %an  %s',
-      '-n',
-      count,
-      ...rev,
-      ...paths,
-    ],
-    show: () => [
-      'show',
-      '--no-ext-diff',
-      '--no-textconv',
-      '--stat',
-      '--patch',
-      ...(rev.length ? rev : ['HEAD']),
-      ...paths,
-    ],
-    diff: () => ['diff', '--no-ext-diff', '--no-textconv', ...rev, ...paths],
-    blame: () => {
-      if (!path) throw new Error('git blame needs a path')
-      return ['blame', '--no-textconv', ...rev, '--', path]
-    },
-    grep: () => {
-      if (!pattern) throw new Error('git grep needs a pattern')
-      return ['grep', '--line-number', '-e', pattern, ...rev, ...paths]
-    },
-    status: () => ['status', '--short', '--branch'],
-  }
-  return [...safe, ...own[command]()]
-}
 /** At most this long, a side chat's note. */
 const NOTE_CHARS = 800
 
@@ -1072,10 +964,8 @@ export async function openSide(host: ExtensionHost, input: SideInput, ctx: Conte
       ...(input.model ? { model: input.model } : {}),
       ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     })
-    // By name, as Pi stores them: a tool's extension may be reloading right now. Arrays select exactly these.
-    const agent = await tx.doc(AgentDoc, fork.id)
-    agent.tools = [...SIDE_TOOLS]
-    agent.modelTools = [...SIDE_TOOLS]
+    // A side chat has every tool a coordinator has, and propose_branch on top (deferred, so loaded here by name).
+    ;(await tx.doc(AgentDoc, fork.id)).modelTools = { add: [PROPOSE] }
     if (main) await seedSeen(tx, fork.id, main, Date.now())
     // It starts with the whole tally.
     ;(await tx.doc(Seen, fork.id)).tally = at
@@ -1375,7 +1265,7 @@ export async function lineageSection(
   const rooted = root === undefined ? '' : `\nRoot: #${root}.`
   const side = (await host.harness().snapshot(Side, id, ctx))?.side
   if (side)
-    return `You are #${id}, a side chat with #${side.root}, the root of your tree, as of its entry ${side.at}. Your context is its tally: the prompt each conversation was started with, the latest abstract of each, and every landing, with #<conversation>/<entry> breadcrumbs to read in full with codemode \`ultimate.entries(id)\`.\nTalk the line of work through with the user, from the tally, the history and the code. Nothing you say enters the tally until the user ends this side chat: as a note of what it settled, as a branch, or discarded.\nYou are read-only: you read files, search the code with \`search\`, read history with \`git\` (${GIT_READS.join(', ')}, built from fields; no free-form options), and use codemode and the web tools; nothing edits, runs commands or writes elsewhere. Changes become branches: once one is settled, draft its first prompt with \`propose_branch\`, and the user starts it.`
+    return `You are #${id}, a side chat with #${side.root}, the root of your tree, as of its entry ${side.at}. Your context is its tally: the prompt each conversation was started with, the latest abstract of each, and every landing, with #<conversation>/<entry> breadcrumbs to read in full with codemode \`ultimate.entries(id)\`.\nTalk the line of work through with the user, from the tally, the history and the code. Nothing you say enters the tally until the user ends this side chat: as a note of what it settled, as a branch, or discarded.\nYou have every tool. When a change is settled and worth its own branch, draft that branch's first prompt with \`propose_branch\`, and the user starts it.`
   const state = (await host.harness().snapshot(Branch, id, ctx))?.branch
   if (!state) return `You are #${id}.${rooted}\n${ZOOM}`
   return `You are #${id}, branched from #${state.from} at entry ${state.at} for: ${state.intent}${rooted}\nYour context starts with the tally of your tree, kept in its root: the prompt each conversation was started with, the latest abstract of each, and every landing, with #<conversation>/<entry> breadcrumbs to read in full with codemode \`ultimate.entries(id)\`.\n${ZOOM}`
@@ -1696,81 +1586,6 @@ export default function lineageExtension(host: ExtensionHost) {
                 text: 'Proposed. The user starts the branch from the card, or ends the side chat another way.',
               },
             ],
-          }
-        },
-      }),
-      // Side chats read the code with these instead of bash.
-      defineTool({
-        name: 'search',
-        deferred: true,
-        // It only reads files; a rerun changes nothing.
-        replay: 'safe',
-        description:
-          'Search the project with ripgrep: matching lines as path:line:text. `pattern` is a regular expression, `path` a file or directory relative to the project (default: all of it), `glob` limits the files (e.g. "*.ts").',
-        parameters: Type.Object({
-          pattern: Type.String({ minLength: 1 }),
-          path: Type.Optional(Type.String({ minLength: 1 })),
-          glob: Type.Optional(Type.String({ minLength: 1 })),
-        }),
-        async execute({ pattern, path, glob }, _api, ctx) {
-          // The pattern and path cannot be read as options; without a config file, no --pre program runs.
-          const args = [
-            '--no-config',
-            '--line-number',
-            '--no-heading',
-            '--color=never',
-            '--max-columns=300',
-            '--max-columns-preview',
-            ...(glob ? [`--glob=${glob}`] : []),
-            `--regexp=${pattern}`,
-            '--',
-            path ?? '.',
-          ]
-          let text: string
-          try {
-            text = await readOut(host, 'rg', args, readEnv(), ctx.abortSignal)
-          } catch (error) {
-            // ripgrep exits 1 when nothing matched.
-            if ((error as { code?: unknown }).code !== 1)
-              throw new Error(`rg: ${failure(error)}`, { cause: error })
-            text = 'No matches.'
-          }
-          return { output: [{ type: 'text', text }] }
-        },
-      }),
-      defineTool({
-        name: 'git',
-        deferred: true,
-        // Only reading commands run, built from fields (gitArgs); a rerun changes nothing.
-        replay: 'safe',
-        description: `Read the project's git history: \`command\` is one of ${GIT_READS.join(', ')}. \`revision\` is a commit, branch or range (e.g. "HEAD~5..HEAD"), \`path\` limits it to a file or directory, \`pattern\` is what \`grep\` looks for, \`limit\` caps \`log\` (default 30).`,
-        parameters: Type.Object({
-          command: Type.Union([
-            Type.Literal('log'),
-            Type.Literal('show'),
-            Type.Literal('diff'),
-            Type.Literal('blame'),
-            Type.Literal('grep'),
-            Type.Literal('status'),
-          ]),
-          revision: Type.Optional(Type.String({ minLength: 1 })),
-          path: Type.Optional(Type.String({ minLength: 1 })),
-          pattern: Type.Optional(Type.String({ minLength: 1 })),
-          limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
-        }),
-        async execute(request, _api, ctx) {
-          const argv = gitArgs(request)
-          try {
-            return {
-              output: [
-                {
-                  type: 'text',
-                  text: await readOut(host, 'git', argv, readEnv(), ctx.abortSignal),
-                },
-              ],
-            }
-          } catch (error) {
-            throw new Error(`git ${request.command}: ${failure(error)}`, { cause: error })
           }
         },
       }),
