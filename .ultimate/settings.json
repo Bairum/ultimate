@@ -3,9 +3,11 @@
     "enable": [
       "automations",
       "claude-code",
+      "classify",
       "documents",
       "info",
       "instance",
+      "phase",
       "plan",
       "self",
       "subagents",

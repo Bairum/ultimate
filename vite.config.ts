@@ -81,6 +81,7 @@ export default defineConfig({
               allow: {
                 automations: ['subagents'],
                 classify: ['secrets'],
+                phase: ['classify', 'conversations'],
                 codemode: ['subagents'],
                 conversations: ['lineage', 'models', 'onboarding', 'plan', 'workspaces'],
                 instance: ['subagents', 'workspaces'],
