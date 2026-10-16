@@ -297,7 +297,7 @@ async function busy(tx: Tx, id: ConversationId, workspaces: WorkspaceService | u
   if (queue?.some((item) => item.conversationId === id))
     return 'its workspace submission is still landing'
   // A landed submission leaves the queue before the lander reports back to its submitter.
-  for (const status of ['running', 'waiting'] as const) {
+  for (const status of ['pending', 'running', 'waiting', 'completing'] as const) {
     let cursor: Cursor | undefined
     do {
       const page = await tx.scanTasks({ kind: 'workspaces.lander', status }, 100, cursor)
