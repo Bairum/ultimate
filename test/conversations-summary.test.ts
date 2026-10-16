@@ -1,6 +1,6 @@
 // First: helpers mocks the faux provider's token pacing, which must apply before the server modules load.
 import { fauxServer, post, prepareFauxServer, sourceCopy, temp, until } from './helpers.ts'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { Subagents } from '../extensions/subagents/server.ts'
 import { join } from 'node:path'
@@ -20,7 +20,6 @@ import {
 } from '@earendil-works/pi-durable'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
-import { DEFAULT_EXTENSIONS } from '../server/extension-settings.ts'
 import { Metadata } from '../server/metadata.ts'
 import { Overview } from '../extensions/conversations/overview.ts'
 import type { LineageService } from '../extensions/lineage/server.ts'
@@ -59,13 +58,15 @@ async function launch(subagents = false, initialIntent = false, root = false) {
   const home = await temp('ultimate-summary-')
   const projectRoot = join(home, 'project')
   await mkdir(join(projectRoot, '.ultimate/agents'), { recursive: true })
-  // Only the extensions under test: each default one adds to every boot and reopen.
+  // Only the extensions under test: each other one adds to every boot and reopen.
+  const tested = ['conversations', ...(subagents ? ['subagents'] : [])]
   await writeFile(
     join(projectRoot, '.ultimate/settings.json'),
     JSON.stringify({
       extensions: {
-        enable: subagents ? ['subagents'] : [],
-        disable: DEFAULT_EXTENSIONS.filter((name) => name !== 'conversations'),
+        disable: (await readdir(join(ultimateRoot, 'extensions'), { withFileTypes: true }))
+          .filter((entry) => entry.isDirectory() && !tested.includes(entry.name))
+          .map((entry) => entry.name),
       },
     }),
   )

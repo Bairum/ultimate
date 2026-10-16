@@ -49,10 +49,7 @@ function decided(extension: ExtensionInfo, local: boolean): [string, string] {
   const verb = extension.enabled ? 'enables' : 'disables'
   if (extension.source === 'project' && !local)
     return ['setup not in use', "Part of this project's setup, which is not in use"]
-  if (extension.layer === 'default')
-    return extension.enabled
-      ? ['default', 'On: part of the default set']
-      : ['opt-in', 'Off: built-ins outside the default set are opt-in']
+  if (extension.layer === 'default') return ['default', 'On: built-ins are on by default']
   if (extension.layer === 'user')
     return ['your settings', `${state}: ~/.ultimate/settings.json ${verb} it`]
   if (extension.layer === 'project')

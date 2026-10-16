@@ -3,24 +3,6 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { useProjectSetup } from './project-setup.ts'
 
-export const DEFAULT_EXTENSIONS = [
-  'agent',
-  'conversations',
-  'workspaces',
-  'coding-tools',
-  'prompt',
-  'models',
-  'status-line',
-  'notices',
-  'theme',
-  'faux',
-  'codemode',
-  'browser',
-  'onboarding',
-  'splash',
-  'lineage',
-] as const
-
 export function extensionSettingsFiles(projectRoot: string, userHome = homedir()) {
   return [join(userHome, '.ultimate/settings.json'), join(projectRoot, '.ultimate/settings.json')]
 }

@@ -144,14 +144,14 @@ test('E4 delegates symbol lookup without reading in the parent', async () => {
   try {
     const c = await ultimate.conversation()
     const turn = await c.run(
-      'Use a scout subagent to find which file defines parseFoo and tell me the path. Do not read or search the files yourself. Use a shared checkout, not a worktree.',
+      'Use a worker subagent to find which file defines parseFoo and tell me the path. Do not read or search the files yourself. Use a shared checkout, not a worktree.',
     )
     expect(
       turn.toolCalls.some(
         (call) =>
           call.name === 'subagent' &&
           call.arguments.action === 'start' &&
-          call.arguments.agent === 'scout' &&
+          call.arguments.agent === 'worker' &&
           !call.isError,
       ),
     ).toBe(true)
@@ -161,10 +161,10 @@ test('E4 delegates symbol lookup without reading in the parent', async () => {
     expect(turn.text).toContain('src/parser.ts')
     expect(
       (await ultimate.conversations()).some(
-        (item) => item.parentConversationId === c.id && item.label === 'scout',
+        (item) => item.parentConversationId === c.id && item.label === 'worker',
       ),
     ).toBe(true)
-    measure('E4-scout', turn)
+    measure('E4-delegate', turn)
   } finally {
     await ultimate.stop()
   }

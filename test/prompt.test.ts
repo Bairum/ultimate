@@ -8,7 +8,9 @@ it('renders only enabled guidance, lists off building blocks, and adds self guid
   const home = await temp()
   vi.stubEnv('PI_CODING_AGENT_DIR', join(home, 'pi'))
   const projectRoot = join(home, 'project')
-  await mkdir(projectRoot)
+  await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
+  const settings = join(projectRoot, '.ultimate/settings.json')
+  await writeFile(settings, JSON.stringify({ extensions: { disable: ['self'] } }))
   const server = await fauxServer({
     ultimateRoot: resolve('.'),
     projectRoot,
@@ -20,6 +22,7 @@ it('renders only enabled guidance, lists off building blocks, and adds self guid
       const agent = await server.root.agent(context)
       const sections: Record<string, string> = {}
       for (const extension of server.host.registry.snapshot().installed()) {
+        if (!['prompt', 'self'].includes(extension.name)) continue
         for (const section of extension.sections ?? []) {
           const value = await section.render(
             {
@@ -34,16 +37,17 @@ it('renders only enabled guidance, lists off building blocks, and adds self guid
       }
       return sections
     }
-    expect((await render()).self).toBeUndefined()
+    const withoutSelf = await render()
+    expect(withoutSelf.self).toBeUndefined()
+    expect(withoutSelf.building_blocks).toContain('- self:')
 
-    await mkdir(join(projectRoot, '.ultimate'))
-    const settings = join(projectRoot, '.ultimate/settings.json')
-    await writeFile(settings, JSON.stringify({ extensions: { enable: ['self'] } }))
+    await writeFile(settings, '{}')
     server.vite.watcher.emit('change', settings)
     await until(() => !!server.host.registry.snapshot().extension('self'))
     const withSelf = await render()
     expect(withSelf.self).toBeDefined()
-    expect(withSelf.building_blocks).not.toContain('- self:')
+    // Every built-in is on, so nothing is left to list.
+    expect(withSelf.building_blocks).toBeUndefined()
 
     const checkout = join(home, 'isolated-work')
     await mkdir(checkout)
@@ -56,20 +60,6 @@ it('renders only enabled guidance, lists off building blocks, and adds self guid
       expect(skills).toHaveBeenLastCalledWith(checkout)
     }
     skills.mockRestore()
-
-    await writeFile(
-      settings,
-      JSON.stringify({
-        extensions: { enable: server.extensions.info().map((entry) => entry.name) },
-      }),
-    )
-    server.vite.watcher.emit('change', settings)
-    await until(() => server.extensions.info().every((entry) => entry.enabled))
-    const agent = await server.root.agent(context)
-    const blocks = agent.sections.find((section) => section.key === 'building_blocks')!
-    expect(
-      await blocks.render({ agent } as Parameters<typeof blocks.render>[0], context),
-    ).toBeUndefined()
   } finally {
     await server.close()
     await removeTemp(home)

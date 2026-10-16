@@ -5,6 +5,8 @@ import tailscale, { actions } from '../extensions/tailscale/server.ts'
 import type { Status } from '../extensions/tailscale/server.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { createAccess } from '../server/request-security.ts'
+import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
+import { createServer } from '../server/main.ts'
 import { fauxServer, linkDependencies, post, temp, until } from './helpers.ts'
 
 const closes: (() => Promise<void>)[] = []
@@ -19,13 +21,9 @@ const node = {
   User: { '7': { LoginName: 'owner@example.com' } },
   CertDomains: ['rog.example.ts.net'],
 }
-async function fixture(
-  settings: unknown = { extensions: { enable: ['tailscale'] } },
-  scenario: Record<string, unknown> = {},
-) {
+async function fixture(scenario: Record<string, unknown> = {}) {
   const home = await temp()
   await mkdir(join(home, '.ultimate'))
-  await writeFile(join(home, '.ultimate/settings.json'), JSON.stringify(settings))
   const config = join(home, 'config.json')
   const log = join(home, 'argv.jsonl')
   await writeFile(config, JSON.stringify({ node, serve: {}, ...scenario }))
@@ -103,32 +101,42 @@ else if (args[0] === 'serve') {
   return { home, config, invocations, instance }
 }
 
-it('applies user-only settings through the real loader and tears down on live settings reload', async () => {
-  const f = await fixture()
-  const repo = join(f.home, 'repo')
-  await mkdir(join(repo, 'web'), { recursive: true })
-  await mkdir(join(repo, '.ultimate'), { recursive: true })
-  await cp(resolve('extensions/tailscale'), join(repo, 'extensions/tailscale'), { recursive: true })
-  await mkdir(join(repo, 'server'))
-  await cp(resolve('server/lock.ts'), join(repo, 'server/lock.ts'))
-  await linkDependencies(repo)
+async function repo(home: string) {
+  const root = join(home, 'repo')
+  await mkdir(join(root, 'web'), { recursive: true })
+  await mkdir(join(root, '.ultimate'), { recursive: true })
+  await cp(resolve('extensions/tailscale'), join(root, 'extensions/tailscale'), { recursive: true })
+  await mkdir(join(root, 'server'))
+  await cp(resolve('server/lock.ts'), join(root, 'server/lock.ts'))
+  await linkDependencies(root)
   await writeFile(
-    join(repo, 'vite.config.ts'),
+    join(root, 'vite.config.ts'),
     "export default { root: 'web', optimizeDeps: { noDiscovery: true } }",
   )
-  await writeFile(join(repo, 'web/index.html'), '<html>Preview</html>')
+  await writeFile(join(root, 'web/index.html'), '<html>Preview</html>')
   await writeFile(
-    join(repo, '.ultimate/settings.json'),
+    join(root, '.ultimate/settings.json'),
     '{"extensions":{"enable":["tailscale"]},"tailscale":{"allow":["project-attacker"]}}',
   )
-  const server = await fauxServer({
-    ultimateRoot: repo,
-    projectRoot: repo,
+  new ProjectTrustStore(join(home, '.ultimate')).set(root, true)
+  return root
+}
+
+it('is on by default, applies user-only settings through the real loader and tears down on live settings reload', async () => {
+  const f = await fixture()
+  const root = await repo(f.home)
+  const server = await createServer({
+    ultimateRoot: root,
+    projectRoot: root,
     userHome: f.home,
     home: join(f.home, 'state'),
     port: 0,
+    faux: false,
   })
-  closes.push(() => server.close())
+  closes.push(async () => {
+    await server.vite.watcher.close()
+    await server.close()
+  })
   const status = async () =>
     (await post(server, '/api/extensions/tailscale/actions/status', { args: null })).data
       .result as Status
@@ -136,11 +144,14 @@ it('applies user-only settings through the real loader and tears down on live se
   expect(server.system.current().access.origins).toHaveLength(1)
   await writeFile(
     join(f.home, '.ultimate/settings.json'),
-    '{"extensions":{"enable":["tailscale"]},"tailscale":{"allow":["changed@example.com"]}}',
+    '{"tailscale":{"allow":["changed@example.com"]}}',
   )
   await until(async () => (await status()).allow.includes('changed@example.com'))
   expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(1)
-  await writeFile(join(f.home, '.ultimate/settings.json'), '{}')
+  await writeFile(
+    join(f.home, '.ultimate/settings.json'),
+    '{"extensions":{"disable":["tailscale"]}}',
+  )
   await until(async () => (await status()).state === 'disabled')
   await until(
     async () => (await f.invocations()).filter((args) => args.includes('off')).length === 2,
@@ -154,15 +165,25 @@ it('applies user-only settings through the real loader and tears down on live se
         message.includes('project settings cannot enable remote access'),
       ),
   )
-  expect(
-    server.system
-      .current()
-      .extensionDiagnostics.some((message) =>
-        message.includes('project settings cannot enable remote access'),
-      ),
-  ).toBe(true)
 })
 
+it('never exposes a faux server', async () => {
+  const f = await fixture()
+  const root = await repo(f.home)
+  const server = await fauxServer({
+    ultimateRoot: root,
+    projectRoot: root,
+    userHome: f.home,
+    home: join(f.home, 'state'),
+    port: 0,
+  })
+  closes.push(() => server.close())
+  expect(
+    (await post(server, '/api/extensions/tailscale/actions/status', { args: null })).data.result,
+  ).toEqual({ state: 'disabled', allow: [] })
+  expect(server.system.current().access.origins).toEqual([])
+  expect(await f.invocations()).toEqual([])
+})
 it('serves, verifies the owner login by default, and tears down only its port', async () => {
   const f = await fixture()
   const app = await f.instance()
@@ -221,7 +242,7 @@ it('replaces a stale own loopback mapping and leaves foreign mappings untouched'
       'rog.example.ts.net:4747': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4790' } } },
     },
   }
-  const f = await fixture(undefined, { serve })
+  const f = await fixture({ serve })
   await writeFile(
     join(f.home, '.ultimate/tailscale.json'),
     JSON.stringify({ ports: { '/project/a': { port: 4747, owner: `${process.pid}:previous` } } }),
@@ -240,7 +261,7 @@ it('skips foreign ports for new projects and refuses foreign targets on existing
       'rog.example.ts.net:4747': { Handlers: { '/': { Proxy: 'http://foreign.example:9000' } } },
     },
   }
-  const f = await fixture(undefined, { serve })
+  const f = await fixture({ serve })
   const newApp = await f.instance('/project/new')
   expect((await newApp.status()).url).toBe('https://rog.example.ts.net:4748')
   await newApp.close()
@@ -267,7 +288,7 @@ it.each([
     'sudo tailscale set --operator=$USER',
   ],
 ])('reports actionable failure states (%s)', async (scenario, state, hint) => {
-  const f = await fixture(undefined, scenario)
+  const f = await fixture(scenario)
   const app = await f.instance()
   expect(await app.status()).toMatchObject({ state, hint: expect.stringContaining(hint) })
   expect(app.access.origins()).toEqual([])
@@ -275,7 +296,7 @@ it.each([
   expect((await f.invocations()).filter((args) => args.includes('off'))).toEqual([])
 })
 it('retries a failed start on request, one start at a time, and does nothing once ready', async () => {
-  const f = await fixture(undefined, { node: { ...node, CertDomains: [] } })
+  const f = await fixture({ node: { ...node, CertDomains: [] } })
   const app = await f.instance()
   expect((await app.status()).state).toBe('https-disabled')
   const config = JSON.parse(await readFile(f.config, 'utf8'))
@@ -294,7 +315,7 @@ it('retries a failed start on request, one start at a time, and does nothing onc
   expect(await retry()).toEqual(first)
   expect(await f.invocations()).toHaveLength(calls)
 })
-it('reports not installed without attempting Serve', async () => {
+it('reports not installed quietly without attempting Serve', async () => {
   const f = await fixture()
   vi.stubEnv('PATH', join(f.home, 'missing'))
   const app = await f.instance()
@@ -302,6 +323,7 @@ it('reports not installed without attempting Serve', async () => {
     state: 'not-installed',
     hint: expect.stringContaining('Install Tailscale'),
   })
+  expect(app.notices).toEqual([])
   expect(await f.invocations()).toEqual([])
 })
 it('hands ownership to an overlapping successor and does not remove foreign replacements', async () => {
@@ -320,7 +342,7 @@ it('hands ownership to an overlapping successor and does not remove foreign repl
   expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(0)
 })
 it('recovers dead registry owners and leaves unowned mappings intact', async () => {
-  const f = await fixture(undefined, {
+  const f = await fixture({
     serve: {
       Web: {
         'rog.example.ts.net:4748': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4998' } } },
@@ -342,7 +364,7 @@ it('recovers dead registry owners and leaves unowned mappings intact', async () 
   expect((await f.invocations()).filter((args) => args.includes('--https=4749'))).toEqual([])
 })
 it('keeps a live preview owner absent from the project supervisor list', async () => {
-  const f = await fixture(undefined, {
+  const f = await fixture({
     serve: {
       Web: { 'rog.example.ts.net:4748': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4998' } } } },
     },

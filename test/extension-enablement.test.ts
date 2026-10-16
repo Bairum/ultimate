@@ -226,19 +226,19 @@ it('layers settings live, installs and uninstalls tools and web facets, and noti
   const initialBuild = server.host.build().id
   const promptLoaded = server.extensions.info().find((entry) => entry.name === 'prompt')
     ?.server?.loadedAt
-  expect(server.host.build().extensions.subagents).toBeUndefined()
-  await mkdir(config)
-  await writeFile(settings, JSON.stringify({ extensions: { enable: ['subagents'] } }))
-  await until(async () => (await tools(server)).includes('subagent'))
-  expect((await web(server)).some((path) => path.includes('/subagents/'))).toBe(true)
-  expect(server.host.build().id).not.toBe(initialBuild)
   expect(server.host.build().extensions.subagents).toBeDefined()
+  await mkdir(config)
+  await writeFile(settings, JSON.stringify({ extensions: { disable: ['subagents'] } }))
+  await until(async () => !(await tools(server)).includes('subagent'))
+  expect((await web(server)).some((path) => path.includes('/subagents/'))).toBe(false)
+  expect(server.host.build().id).not.toBe(initialBuild)
+  expect(server.host.build().extensions.subagents).toBeUndefined()
   expect(server.extensions.info().find((entry) => entry.name === 'prompt')?.server?.loadedAt).toBe(
     promptLoaded,
   )
   await rm(settings)
-  await until(async () => !(await tools(server)).includes('subagent'))
-  expect((await web(server)).some((path) => path.includes('/subagents/'))).toBe(false)
+  await until(async () => (await tools(server)).includes('subagent'))
+  expect((await web(server)).some((path) => path.includes('/subagents/'))).toBe(true)
   expect(server.host.build().id).toBe(initialBuild)
   const folder = join(config, 'extensions/local')
   await mkdir(folder, { recursive: true })
@@ -299,15 +299,15 @@ it('layers settings live, installs and uninstalls tools and web facets, and noti
 })
 
 it('retains valid enablement through invalid edits and delivers startup diagnostics to later clients', async () => {
-  const valid = { extensions: { enable: ['subagents', 'unknown-startup'] } }
+  const valid = { extensions: { enable: ['unknown-startup'], disable: ['subagents'] } }
   const { home, server } = await fixture(JSON.stringify(valid))
   const settings = join(home, '.ultimate/settings.json')
   const connection = await attach(server)
   try {
     expect(connection.system().extensionDiagnostics).toEqual(['Unknown extension: unknown-startup'])
-    expect(await tools(server)).toContain('subagent')
+    expect(await tools(server)).not.toContain('subagent')
     const build = server.host.build().id
-    const loadedAt = server.extensions.info().find((entry) => entry.name === 'subagents')
+    const loadedAt = server.extensions.info().find((entry) => entry.name === 'plan')
       ?.server?.loadedAt
     for (const invalid of [
       '{"extensions":',
@@ -321,11 +321,11 @@ it('retains valid enablement through invalid edits and delivers startup diagnost
           .current()
           .extensionDiagnostics.some((message) => message.startsWith(settings + ':')),
       )
-      expect(await tools(server)).toContain('subagent')
-      expect((await web(server)).some((path) => path.includes('/subagents/'))).toBe(true)
+      expect(await tools(server)).not.toContain('subagent')
+      expect((await web(server)).some((path) => path.includes('/subagents/'))).toBe(false)
       expect(server.host.build().id).toBe(build)
       expect(
-        server.extensions.info().find((entry) => entry.name === 'subagents')?.server?.loadedAt,
+        server.extensions.info().find((entry) => entry.name === 'plan')?.server?.loadedAt,
       ).toBe(loadedAt)
       await writeFile(settings, JSON.stringify(valid))
       server.vite.watcher.emit('change', settings)
@@ -342,11 +342,11 @@ it('retains valid enablement through invalid edits and delivers startup diagnost
     server.vite.watcher.emit('change', settings)
     await until(() => notices() > before)
     expect(server.host.build().id).toBe(build)
-    await writeFile(settings, JSON.stringify({ extensions: { enable: ['plan'] } }))
+    await writeFile(settings, JSON.stringify({ extensions: { disable: ['plan'] } }))
     server.vite.watcher.emit('change', settings)
     await until(
       async () =>
-        !(await tools(server)).includes('subagent') && (await tools(server)).includes('plan'),
+        (await tools(server)).includes('subagent') && !(await tools(server)).includes('plan'),
     )
     // Registry changes happen before the refreshed system snapshot is published.
     await until(() => server.system.current().extensionDiagnostics.length === 0)
@@ -356,7 +356,7 @@ it('retains valid enablement through invalid edits and delivers startup diagnost
   }
 })
 
-it('enables the full repository set', async () => {
+it('enables every built-in by default', async () => {
   const home = await temp()
   homes.push(home)
   const root = await sourceCopy(home)
@@ -368,16 +368,9 @@ it('enables the full repository set', async () => {
     home: join(home, 'state'),
   })
   servers.push(server)
-  expect(server.extensions.info().find((entry) => entry.name === 'tailscale')?.enabled).toBe(false)
-  expect(
-    server.extensions
-      .info()
-      .filter((entry) => !['tailscale', 'secrets', 'parallel'].includes(entry.name))
-      .every((entry) => entry.enabled && !entry.server?.error),
-  ).toBe(true)
-  expect(
-    discovered
-      .filter((entry) => !['tailscale', 'secrets', 'parallel'].includes(entry.name))
-      .every((entry) => entry.enabled),
-  ).toBe(true)
+  expect(server.extensions.info().every((entry) => entry.enabled && !entry.server?.error)).toBe(
+    true,
+  )
+  expect(discovered.every((entry) => entry.enabled)).toBe(true)
+  expect(discovered.map((entry) => entry.name)).toContain('tailscale')
 })

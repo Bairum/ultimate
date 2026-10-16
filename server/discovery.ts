@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { discoveryRoots } from './project.ts'
 import type { Source } from './project.ts'
 import { useProjectSetup } from './project-setup.ts'
-import { DEFAULT_EXTENSIONS, extensionSettings } from './extension-settings.ts'
+import { extensionSettings } from './extension-settings.ts'
 
 const sourceOrder = { builtin: 0, user: 1, project: 2 }
 
@@ -66,9 +66,7 @@ export async function discoverExtensions(
   const entries = [...winners.values()]
     .map((entry) => ({
       ...entry,
-      enabled:
-        overrides.get(entry.name) ??
-        (entry.source !== 'builtin' || DEFAULT_EXTENSIONS.some((name) => name === entry.name)),
+      enabled: overrides.get(entry.name) ?? true,
     }))
     .toSorted(compareExtensions)
   return Object.assign(entries, { settings })

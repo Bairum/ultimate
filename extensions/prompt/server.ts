@@ -96,7 +96,6 @@ export default function prompt(host: ExtensionHost) {
           }),
           'Enable names with "extensions": { "enable": [...] } in ~/.ultimate/settings.json (this machine) or <project>/.ultimate/settings.json (the host project). Changes apply live with no restart.',
           `The running host uses ${host.projectRoot}/.ultimate/settings.json and ${host.projectRoot}/.ultimate/extensions/; editing these in a separate work checkout does not change the host's configuration or hot-reload its extensions.`,
-          `${host.ultimateRoot}/.ultimate/settings.json is the suggested full setup.`,
         ].join('\n')
       }),
       section('environment', (input) => {

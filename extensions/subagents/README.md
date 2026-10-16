@@ -26,7 +26,7 @@ Source and foreground Open offer a header Return button back to the receiving co
 
 ### Token-free preview
 
-Start a faux instance, accept its project setup, send `delegate to scout`, and use the foreground card's Open button to inspect the attributed child instruction.
+Start a faux instance, accept its project setup, send `delegate to worker`, and use the foreground card's Open button to inspect the attributed child instruction.
 
 ## Queued agent inputs
 
@@ -42,7 +42,7 @@ Click a definition in the Agents tab, or New, for its config view: description, 
 
 The extension's prompt section makes the parent the coordinator; without this extension, that steering is absent. Do quick fixes and simple questions directly. For substantive work, inspect the code, recommend one approach, and ask only for decisions affecting behaviour or scope. Use the `plan` tool to write an epic with binary acceptance criteria and one self-contained task per unit of work; link children and record dependencies and status.
 
-Delegate implementation to `worker` in worktree isolates and bounded reconnaissance to `scout`. Use background children for independent work; children touching the same files run sequentially. Read reports, inspect diffs, and rerun meaningful checks before landing. After checking the combined tip, an isolated main uses `workspace land` to reach its source branch. Restart required Ultimate core changes only when authorized. Discard clean isolates only when requested. Record evidence yourself; a child's report is not your verification.
+Delegate implementation to `worker` in worktree isolates. Use background children for independent work; children touching the same files run sequentially. Read reports, inspect diffs, and rerun meaningful checks before landing. After checking the combined tip, an isolated main uses `workspace land` to reach its source branch. Restart required Ultimate core changes only when authorized. Discard clean isolates only when requested. Record evidence yourself; a child's report is not your verification.
 
 When all tasks are done, start one `reviewer` with the explicit immutable `base..head` commit range, never merely a directory, and the acceptance criteria; it returns one verdict, and the coordinator never starts several reviewers itself. Verify findings yourself, route confirmed fixes back by message or a new task, and verify, land, and review fixes. Post the epic verdict and report to the user. Never delegate judgment. Children never push; the coordinator never pushes, merges to remotes, or ships unless asked.
 

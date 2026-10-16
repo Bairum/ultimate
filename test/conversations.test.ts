@@ -76,9 +76,9 @@ it('tells each top-level conversation about the others, and the surface on scree
   expect(await render('conversations', root)).toBeUndefined()
 
   // An owned child (a subagent) is never listed and gets neither section.
-  await post(server, '/api/conversations/1/submit', { text: 'delegate to scout' })
+  await post(server, '/api/conversations/1/submit', { text: 'delegate to worker' })
   await server.harness.waitForIdle(context)
-  const child = server.api.conversations().find((item) => item.label === 'scout')!
+  const child = server.api.conversations().find((item) => item.label === 'worker')!
   expect(child.inputAt).toEqual(expect.any(Number))
   expect(child.parentConversationId).toBe(root)
   expect(child.branchOf).toBeUndefined()
@@ -195,9 +195,9 @@ it('renames and clears top-level conversations', async () => {
     status: 200,
     data: { result: { ok: true } },
   })
-  await post(server, '/api/conversations/1/submit', { text: 'delegate to scout' })
+  await post(server, '/api/conversations/1/submit', { text: 'delegate to worker' })
   await server.harness.waitForIdle(context)
-  const child = server.api.conversations().find((item) => item.label === 'scout')!
+  const child = server.api.conversations().find((item) => item.label === 'worker')!
   const owned = `Conversation ${child.id} is owned, not a top-level conversation`
   for (const [name, args, error] of [
     ['rename', null, 'Expected a conversation id'],

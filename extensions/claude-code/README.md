@@ -1,6 +1,6 @@
-Claude Code is an opt-in experimental provider that uses the external CLI login, with a setup panel and no in-app OAuth flow.
+Claude Code is an experimental provider that uses the external CLI login, with a setup panel and no in-app OAuth flow.
 
-Enable `claude-code` in `extensions.enable` in user or project settings. It is enabled in this repository's suggested setup, not in Ultimate's defaults. Existing Anthropic models and the default model are unchanged.
+It is on by default; turn it off with `claude-code` in `extensions.disable`. Existing Anthropic models and the default model are unchanged.
 
 Install the CLI with `npm install -g @anthropic-ai/claude-code`, then run `claude auth login` in a terminal. Open **Claude Code setup…** in the command palette and refresh status. Select a Claude Code model in the existing model picker once the CLI reports a login. Login/logout remain external (`claude auth logout`); refresh after changing them. Successful status checks also refresh the browser's model cache, so login/logout updates the picker without a page reload. Unreadable CLI status is reported as an unconfirmed login by upstream. Status action failures have a retry state.
 

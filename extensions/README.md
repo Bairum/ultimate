@@ -34,19 +34,16 @@ replaces the whole extension, both facets:
 | `user`    | `~/.ultimate/extensions/`         | Your additions, in every project                                   |
 | `project` | `<project>/.ultimate/extensions/` | One project's tools and apps, committed with the project; wins all |
 
-Built-ins are available building blocks, not automatically enabled features. A new built-in stays off unless added
-explicitly to `DEFAULT_EXTENSIONS` in `server/extension-settings.ts`. Enable one with
-`{ "extensions": { "enable": ["hello"] } }` in `~/.ultimate/settings.json` (this machine) or
-`<project>/.ultimate/settings.json` (this project). Settings layer defaults → machine → project; later layers win.
-`extensions.disable` can turn off defaults or user/project extensions too. User and project extension folders are
-enabled by default: adding the folder is the opt-in. Settings changes apply live without a restart; unknown names
-produce a notice. The clone's `.ultimate/settings.json` is the suggested full setup.
+Every extension folder is on by default, built-in, user or project: adding the folder is the opt-in. Turn one off
+with `{ "extensions": { "disable": ["hello"] } }` in `~/.ultimate/settings.json` (this machine) or
+`<project>/.ultimate/settings.json` (this project), and back on with `extensions.enable`. Settings layer defaults →
+machine → project; later layers win. Settings changes apply live without a restart; unknown names produce a notice.
 
-The `secrets` and `parallel` built-ins are opt-in; enable both for parallel.ai web tools. Secrets are user-global, not project state.
+The `parallel` web tools read their key from `secrets`. Secrets are user-global, not project state.
 
 A server facet may export `secrets: { name: string; description: string; url?: string }[]`. Names must match `^[A-Z][A-Z0-9_]*$`, descriptions must be non-empty, and optional URLs must use http(s). Installed declarations appear in `ExtensionInfo.server.secrets` and the Secrets panel; values never appear in extension info. Other server facets may import `readSecret(userHome, name)` from `extensions/secrets/store.ts`, like automations imports subagent helpers.
 
-The `tailscale` built-in is opt-in **only in the user settings**; project settings cannot enable remote exposure. See [tailscale](tailscale/README.md) for stable project URLs and owner-login admission.
+The `tailscale` built-in exposes Ultimate to your own Tailscale login by default; only user settings set its allowlist, and a project cannot turn on what they disable. See [tailscale](tailscale/README.md) for stable project URLs and owner-login admission.
 
 The project is the directory Ultimate was started in (`ultimate [dir]`); the Info panel lists every extension with its
 source when `info` is enabled; the building-blocks prompt names the clone root. Put a project's app in its `.ultimate/extensions/<name>/`. When the
@@ -178,8 +175,8 @@ export default defineWebExtension({
 })
 ```
 
-Add a `README.md`, enable `hello` in settings if it is a built-in, and the item appears in the status line.
-For a project extension, use `<project>/.ultimate/extensions/hello/` instead; it is enabled automatically.
+Add a `README.md`, and the item appears in the status line.
+For a project extension, use `<project>/.ultimate/extensions/hello/` instead; it is enabled automatically too.
 No restart, no reload.
 
 ## Contributions
@@ -327,7 +324,7 @@ ran on another model or thinking level than the one before it this way.
 ### Documents
 
 Extension documents are durable state on a conversation: a ledger, a store, login flows. The Documents tab
-(enable `documents` in settings) lists every kind the server facets export for the shown conversation and shows each through
+(the `documents` extension) lists every kind the server facets export for the shown conversation and shows each through
 the renderer a web facet registers for it, or as a JSON tree without one. To give yours a view:
 
 1. Export the document from `server.ts`: `export const docs = [Plan]`, conversation-scoped tokens from `defineDoc`.
@@ -473,8 +470,8 @@ answers `{"result": …}` or `{"error": …}` (the URL is in the system prompt a
 
 The window shows one surface at a time. **Agent** is the built-in home surface (`extensions/agent`): the conversation
 with the sidebar and the right panel. An app surface puts its own UI first and keeps the agent one keystroke away,
-usually docked beside it. Enable `surfaces` in settings for the agent's surface-awareness prompt; the UI itself
-works without it. Enable `documents` if your app needs the Documents tab.
+usually docked beside it. The `surfaces` extension adds the agent's surface-awareness prompt; the UI itself
+works without it. The `documents` extension provides the Documents tab.
 
 - **Switching**: the brand at the top left opens the switcher (Agent first, then by `order`, then title); ⌘K has
   "Switch to …"; `mod+1…9` select the first nine (Ctrl+1…9 off macOS, which Chrome lets the page take before its tab

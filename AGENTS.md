@@ -63,17 +63,14 @@ others load; see [Events](extensions/README.md#events).
 Discovery is clone built-ins, then `~/.ultimate/`, then `<project>/.ultimate/`; later names replace earlier ones.
 Skills load from clone `skills/`, then Pi's defaults, then `~/.ultimate/skills/`, then
 `<project>/.ultimate/skills/`, with later names winning.
-The default set is `agent`, `conversations`, `workspaces`, `coding-tools`, `prompt`, `models`, `status-line`, `notices`, `theme`,
-`faux` (inert unless `ULTIMATE_FAUX=1`), `codemode`, `browser`, `onboarding`, `splash`, and `lineage` (conversation trees: roots, branches, notes). Other built-ins are opt-in
-building blocks, including `secrets`, `parallel` (web tools; requires `secrets`), `classify` (Jev typed judgments; requires `secrets`), `phase` (working phases; requires `classify`), and `tailscale` (remote access, user-level enablement only). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
+Every built-in is on by default, including `faux` (inert unless `ULTIMATE_FAUX=1`), `lineage` (conversation trees: roots, branches, notes), `parallel` (web tools; reads `secrets`), `classify` (Jev typed judgments; reads `secrets`), `phase` (working phases; requires `classify`), and `tailscale` (remote access; inert on faux servers, and only user settings can turn it off for good). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
-restart. User/project extension folders are on by default; `disable` can turn off those or defaults too. Unknown names
+restart. User/project extension folders are on by default too; `disable` turns off any extension. Unknown names
 produce a notice. `summaryModel` (`"provider/id[:thinking]"`, default `openai/gpt-6-luna:medium`; project over user)
 picks the model for automatic titles, summaries and reply assessments; set it in either file or with
 the "Summary model…" command, and it applies to the next request.
-User config is independent of `ULTIMATE_HOME`. This repository's `.ultimate/settings.json` enables the suggested full
-setup. Enable `self` for its guidance and `restart` tool, `surfaces` for surface awareness, and `documents` for the
-Documents tab.
+User config is independent of `ULTIMATE_HOME`. This repository's `.ultimate/settings.json` holds only its isolate setup
+and lander checks.
 
 A project's `.ultimate/` applies only once it is chosen: its `extensions/`, the project `extensions` settings layer,
 `agents/`, and `skills/` load only when the project decision is local. Decisions are kept per project path with Pi's
