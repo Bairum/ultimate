@@ -24,6 +24,8 @@ The Tailscale panel (palette: `Tailscale…`) shows the `status` action, read wh
 
 While ready, the title bar shows `● tailnet`; hover for the URL, click to open the panel.
 
+Other extensions read the status through the `tailscale` service, `host.use<TailscaleService>('tailscale')?.status()`; `instance` takes the DNS name of its `url` for its previews' tailnet addresses.
+
 ## Stable ports, handoff, and recovery
 
 `~/.ultimate/tailscale.json` stores `{ "ports": { "<absolute project root>": { "port": 4747, "owner": "<pid>:<random token>" } } }`. A new project prefers its local supervisor port if free, otherwise the next free port from 4747. Port 443, existing Serve mappings, and other registry assignments are excluded. Registry entries remain after shutdown; prune unused entries by hand when their project is not running.

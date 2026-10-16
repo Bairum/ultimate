@@ -1,5 +1,6 @@
 import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon } from 'lucide-react'
 import { useEffect, useSyncExternalStore } from 'react'
+import type { MouseEvent, ReactNode } from 'react'
 import { Shimmer } from '@/components/ai/shimmer'
 import { Tool, ToolContent, ToolHeader, ToolOutput, ToolSection } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -37,23 +38,38 @@ function result(output: string): unknown {
   }
 }
 
-/** One instance: its URL as a link, pid, home, and id. */
+/** One instance: its URL as a preview link, pid, home, and id. */
 function Card({ instance, status }: { instance: Instance; status: string }) {
   const system = useSystem()
+  const target = usePreviewTarget(instance.url, true)
   return (
     <div className="flex flex-col gap-0.5 rounded-sm border border-border/70 bg-terminal px-2.5 py-1.5">
       <div className="flex items-center gap-2">
-        <span className="size-1.5 shrink-0 rounded-full bg-success" />
-        <a
-          className="flex items-center gap-1 text-brand hover:underline"
-          href={instance.url}
-          rel="noreferrer"
-          target="_blank"
-        >
-          {instance.url}
-          <ExternalLinkIcon className="size-3" />
-        </a>
-        <span className="text-muted-foreground/70">{status}</span>
+        <span
+          className={cn(
+            'size-1.5 shrink-0 rounded-full',
+            target?.kind === 'off' ? 'bg-muted-foreground/50' : 'bg-success',
+          )}
+        />
+        {target?.kind === 'off' ? (
+          <span className="text-muted-foreground" title={target.reason}>
+            {instance.url}
+          </span>
+        ) : (
+          <a
+            className="flex items-center gap-1 text-brand hover:underline"
+            href={target?.href ?? instance.url}
+            onClick={target?.open}
+            rel="noreferrer"
+            target={target?.kind === 'tailnet' ? '_blank' : undefined}
+          >
+            {instance.url}
+            {target?.kind === 'tailnet' && <ExternalLinkIcon className="size-3" />}
+          </a>
+        )}
+        <span className="text-muted-foreground/70">
+          {target?.kind === 'off' ? target.reason.toLowerCase() : status}
+        </span>
         <span className="ml-auto text-[11px] text-muted-foreground/70">pid {instance.pid}</span>
       </div>
       <div className="flex gap-3 text-[11px] text-muted-foreground/70">
@@ -138,52 +154,154 @@ interface Preview {
   url: string
   conversationId: number
   faux: boolean
+  /** False once it exited or was stopped. */
+  running: boolean
+  /** Where the tailnet reaches it while it runs, when it publishes itself there. */
+  tailnet?: string
 }
 
-/** Previews bind to loopback, so a page opened from elsewhere, such as the tailnet, cannot show them. */
-const loopback = /^(127\.0\.0\.1|localhost|\[::1\])$|\.localhost$/.test(location.hostname)
+const isLoopback = (hostname: string) =>
+  /^(127\.0\.0\.1|localhost|\[::1\])$|\.localhost$/.test(hostname)
+/** Previews bind to loopback, so a page opened from elsewhere, such as the tailnet, cannot frame them. */
+const loopback = isLoopback(location.hostname)
 
-/** The preview shown below the title bar, in memory: a reload returns to this project. */
-let shown: Preview | undefined
+/**
+ * In memory: the previews `list` returned last, which `Poll` asks for, and the preview shown below the title bar at
+ * a URL of it. A reload returns to this project.
+ */
+let previews: Preview[] | undefined
+let shown: { preview: Preview; url: string } | undefined
+let refetch = () => {}
 const listeners = new Set<() => void>()
-function show(preview: Preview | undefined) {
-  shown = preview
+const changed = () => {
   for (const listener of listeners) listener()
 }
-const useShown = () =>
-  useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
+const subscribe = (listener: () => void) => {
+  listeners.add(listener)
+  return () => listeners.delete(listener)
+}
+function show(preview: Preview | undefined, url = preview?.url) {
+  shown = preview && url ? { preview, url } : undefined
+  changed()
+}
+const useShown = () => useSyncExternalStore(subscribe, () => shown)
+const usePreviews = () => useSyncExternalStore(subscribe, () => previews)
+
+/** Asks for the previews every 5 s, for the switcher and preview links; showing one that stopped returns. */
+function Poll() {
+  const { data, refetch: again } = useAction<Preview[]>('instance', 'list', null, {
+    // A failed poll leaves the last list; the next one tries again.
+    onError: () => {},
+  })
+  useEffect(() => {
+    refetch = () => void again()
+    const timer = setInterval(refetch, 5000)
+    return () => clearInterval(timer)
+  }, [again])
+  useEffect(() => {
+    if (!data) return
+    previews = data
+    if (shown && !data.some((preview) => preview.running && preview.id === shown?.preview.id))
+      shown = undefined
+    changed()
+  }, [data])
+  return null
+}
+
+/**
+ * What a link to `href` does. `self`: this server, opened in place. `frame`: a running preview, shown below the title
+ * bar. `tailnet`: a running preview opened from elsewhere, at its tailnet address in a new tab, since such a page has
+ * no switcher to return from the frame. `off`: a preview that no longer runs, or one not reachable from here.
+ * Undefined for other links, including loopback ports this server never ran a preview on, which stay as they are;
+ * `own` says `href` is a preview's own URL, which is then `off` when unknown.
+ */
+type Target =
+  | { kind: 'self' | 'tailnet'; href: string; open?: undefined }
+  | { kind: 'frame'; href: string; open: (event: MouseEvent) => void }
+  | { kind: 'off'; reason: string; href?: undefined; open?: undefined }
+function usePreviewTarget(href: string, own = false): Target | undefined {
+  const list = usePreviews()
+  const system = useSystem()
+  const url = URL.parse(href)
+  if (!url || !/^https?:$/.test(url.protocol) || !isLoopback(url.hostname) || !url.port)
+    return undefined
+  const path = url.pathname + url.search + url.hash
+  if (system && url.port === new URL(system.process.url).port)
+    return { kind: 'self', href: new URL(path, location.origin).href }
+  const known = list?.filter((item) => new URL(item.url).port === url.port) ?? []
+  const live = known.find((item) => item.running)
+  if (!live) return known.length || own ? { kind: 'off', reason: 'Not running' } : undefined
+  if (!loopback)
+    return live.tailnet
+      ? { kind: 'tailnet', href: new URL(path, live.tailnet).href }
+      : { kind: 'off', reason: 'Only on this machine' }
+  const frame = new URL(path, live.url).href
+  return {
+    kind: 'frame',
+    href: frame,
+    open: (event) => {
+      event.preventDefault()
+      show(live, frame)
     },
-    () => shown,
+  }
+}
+
+/** A link to a preview as a chip with a live dot; links to this server open in place, other links stay as they are. */
+function PreviewLink({
+  href,
+  children,
+  core,
+}: {
+  href: string
+  children: ReactNode
+  core: ReactNode
+}) {
+  const target = usePreviewTarget(href)
+  if (!target) return core
+  if (target.kind === 'self') return <a href={target.href}>{children}</a>
+  const chip =
+    'inline-flex max-w-full items-center gap-1.5 rounded-sm bg-muted/60 px-1.5 align-baseline font-mono text-[11.5px] leading-5 wrap-anywhere'
+  if (target.kind === 'off')
+    return (
+      <span
+        className={cn(chip, 'text-muted-foreground')}
+        data-preview-link="off"
+        title={target.reason}
+      >
+        <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/50" />
+        {children}
+      </span>
+    )
+  // A button, not a link: the transcript's link styles would win over the chip's.
+  return (
+    <button
+      className={cn(chip, 'text-left text-foreground transition-colors hover:bg-accent')}
+      data-preview-link={target.kind}
+      onClick={target.open ?? (() => window.open(target.href, '_blank', 'noreferrer'))}
+      title={target.kind === 'tailnet' ? `Open ${target.href}` : 'Show preview'}
+      type="button"
+    >
+      <span className="size-1.5 shrink-0 rounded-full bg-brand" />
+      {children}
+    </button>
   )
+}
 
 const port = (url: string) => `:${new URL(url).port}`
 
 /**
  * Switches between this project and the previews `instance` runs, after the project name in the title bar. Hidden
- * while there are none; it asks every 5 s, and when the menu opens.
+ * while there are none; the list refreshes when the menu opens.
  */
 function Switcher() {
-  const current = useShown()
+  const current = useShown()?.preview
+  const data = usePreviews()?.filter((preview) => preview.running)
   const conversations = useConversations()
-  const { data, refetch } = useAction<Preview[]>('instance', 'list', null, {
-    // A failed poll leaves the last list; the next one tries again.
-    onError: () => {},
-  })
-  useEffect(() => {
-    const timer = setInterval(() => void refetch(), 5000)
-    return () => clearInterval(timer)
-  }, [refetch])
-  useEffect(() => {
-    if (current && data && !data.some((preview) => preview.id === current.id)) show(undefined)
-  }, [current, data])
   if (!data?.length) return null
   const title = (preview: Preview) =>
     conversations.find((conversation) => conversation.id === preview.conversationId)?.title
   return (
-    <DropdownMenu modal={false} onOpenChange={(open) => open && void refetch()}>
+    <DropdownMenu modal={false} onOpenChange={(open) => open && refetch()}>
       <DropdownMenuTrigger asChild>
         <button
           className={cn(
@@ -248,15 +366,16 @@ function Embedded() {
   const surface = useStore((state) => state.ui.surface?.id)
   useEffect(() => () => show(undefined), [surface])
   if (!current) return null
+  const { preview, url } = current
   return (
     <div className="fixed inset-x-0 top-7 bottom-0 z-40 bg-background">
       {/* oxlint-disable-next-line react/iframe-missing-sandbox -- a whole Ultimate on its own origin, trusted as in its own tab */}
       <iframe
         allow="clipboard-read; clipboard-write"
         className="size-full border-0"
-        key={current.id}
-        src={current.url}
-        title={`Preview #${current.conversationId}`}
+        key={preview.id}
+        src={url}
+        title={`Preview #${preview.conversationId}`}
       />
     </div>
   )
@@ -264,5 +383,6 @@ function Embedded() {
 
 export default defineWebExtension({
   tools: { instance: InstanceCall },
-  slots: { 'titlebar.left': loopback ? [Switcher] : [], overlay: [Embedded] },
+  link: PreviewLink,
+  slots: { 'titlebar.left': loopback ? [Switcher] : [], overlay: [Poll, Embedded] },
 })

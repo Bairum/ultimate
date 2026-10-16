@@ -162,14 +162,18 @@ async function fixture({ foreign = false } = {}) {
     await removeTemp(root)
   }
   const list = async () =>
-    (await actions.list(null, { host } as never)) as Omit<Preview, 'home' | 'pid'>[]
-  return { root, source, prepared, opened, service, call, run, list, main, close }
+    (await actions.list(null, { host } as never)) as (Omit<Preview, 'home' | 'pid'> & {
+      tailnet?: string
+      running: boolean
+    })[]
+  return { root, source, prepared, opened, service, services, call, run, list, main, close }
 }
 const listed = (preview: Preview, conversationId: number) => ({
   id: preview.id,
   url: preview.url,
   conversationId,
   faux: true,
+  running: true,
 })
 it('selects shared, isolated main and owned child checkouts with the main project decision', async () => {
   const f = await fixture()
@@ -214,10 +218,39 @@ it('selects shared, isolated main and owned child checkouts with the main projec
         listed(selected, child.conversationId),
       ]),
     )
-    for (const preview of [selected, shared, own]) {
+    // A preview's own tailscale extension registers its port under its pid; the host's status names the DNS name.
+    await writeFile(
+      join(f.root, '.ultimate/tailscale.json'),
+      JSON.stringify({
+        ports: {
+          [main.workspace.path]: { port: 41234, owner: `${own.pid}:token` },
+          '/elsewhere': { port: 41235, owner: '1:token' },
+        },
+      }),
+    )
+    expect((await f.list()).every((preview) => !('tailnet' in preview))).toBe(true)
+    f.services.set('tailscale', {
+      status: () => ({ state: 'ready', url: 'https://rog.example.ts.net:4747', allow: [] }),
+    })
+    expect(
+      Object.fromEntries((await f.list()).map((preview) => [preview.id, preview.tailnet])),
+    ).toEqual({
+      [own.id]: 'https://rog.example.ts.net:41234',
+      [shared.id]: undefined,
+      [selected.id]: undefined,
+    })
+    for (const [preview, conversationId] of [
+      [selected, child.conversationId],
+      [shared, f.opened.root.id],
+      [own, main.id],
+    ] as const) {
       expect(await f.call('instance', { action: 'logs', id: preview.id })).toContain(preview.url)
       await f.run({ action: 'stop', id: preview.id })
-      expect((await f.list()).map(({ id }) => id)).not.toContain(preview.id)
+      // Stopped previews stay listed as not running, without a tailnet address, so links to them can say so.
+      expect((await f.list()).find(({ id }) => id === preview.id)).toEqual({
+        ...listed(preview, conversationId),
+        running: false,
+      })
       await removeTemp(preview.home)
     }
     await f.service.discard(child.conversationId, context)
@@ -269,7 +302,14 @@ it('cleans up a failed or aborted preview and allows its home to be reused', asy
     ) as Preview
     process.kill(preview.pid, 'SIGTERM')
     await until(async () => JSON.parse(await f.run({ action: 'list' })).length === 0)
+    // Exited on its own, the preview stays listed as not running; a start that failed never was.
+    expect((await f.list()).map(({ id, running }) => ({ id, running }))).toEqual([
+      { id: preview.id, running: false },
+    ])
     await f.run({ action: 'stop', id: preview.id })
+    expect((await f.list()).map(({ id, running }) => ({ id, running }))).toEqual([
+      { id: preview.id, running: false },
+    ])
   } finally {
     await f.close()
   }

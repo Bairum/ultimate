@@ -8,6 +8,7 @@ import type {
   DocumentContribution,
   EntryRenderer,
   InboxRenderer,
+  LinkRenderer,
   PanelContribution,
   SlotName,
   SurfaceContribution,
@@ -118,6 +119,7 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   entries: [objectOf(isComponent), 'an object of entry kind → component'],
   inbox: [isComponent, 'an inbox renderer component'],
   composer: [isComponent, 'a composer renderer component'],
+  link: [isComponent, 'a link renderer component'],
   start: [isFunction, 'a conversation starter function'],
   messageActions: [arrayOf(isComponent), 'an array of message action components'],
   messageDetails: [arrayOf(isComponent), 'an array of message detail components'],
@@ -433,6 +435,16 @@ export function toolRenderers(
 ): { extension: string; version: number; component: ToolRenderer }[] {
   return records.flatMap((record) => {
     const component = record.extension?.tools?.[name]
+    return component ? [{ extension: record.name, version: record.version, component }] : []
+  })
+}
+
+/** Every Markdown link renderer in discovery order: each receives the previous rendering as `core`. */
+export function linkRenderers(
+  records: readonly ExtensionRecord[],
+): { extension: string; version: number; component: LinkRenderer }[] {
+  return records.flatMap((record) => {
+    const component = record.extension?.link
     return component ? [{ extension: record.name, version: record.version, component }] : []
   })
 }
