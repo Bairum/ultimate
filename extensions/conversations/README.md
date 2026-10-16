@@ -29,7 +29,7 @@ A child linked to a plan task leads with the plan's `TaskChip` and shows the tas
 A row switches to its child, highlights selection and keeps the top-level summary visible. History forks are not
 invented delegation edges. Expansion is persisted in `ext.conversations.expanded`; buttons support keyboard access.
 
-New conversation (the button, `mod+alt+n`, or the palette) opens a pending branch composer on the Agent surface.
+New conversation (the button, `mod+alt+n`, or the palette) opens lineage's start page on the Agent surface.
 It creates nothing until sent; sending calls lineage `branch` from the root's latest entry with the prompt and
 chosen model/thinking level and any pasted images. The same composer serves lineage's "Branch from here". The dropdown's Isolated and Shared choices only select the type, remembered in
 `ext.conversations.creationType` across tabs, reloads and restarts. New isolated conversation explicitly branches
