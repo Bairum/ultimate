@@ -38,13 +38,20 @@ async function openWindow(port: number) {
       if (available('omarchy-launch-webapp')) {
         command = 'omarchy-launch-webapp'
       } else {
-        const browser = ['google-chrome-stable', 'google-chrome', 'chromium', 'brave'].find(
-          available,
-        )
+        const browser = [
+          'google-chrome-stable',
+          'google-chrome',
+          'chromium',
+          'chromium-browser',
+          'brave',
+          'brave-browser',
+          'microsoft-edge',
+          'vivaldi',
+        ].find(available)
         if (browser) {
           command = browser
           args = [`--app=${url}`]
-        }
+        } else console.error('--app needs a Chrome-family browser on PATH; opening a normal tab')
       }
     }
   }
@@ -76,7 +83,7 @@ const lock = await acquireLock(lockPath, {
   ) {
     const owner = await readOwner(lockPath)
     if (owner?.port !== undefined) {
-      await openWindow(owner.port)
+      if (!values['no-open'] && process.env.ULTIMATE_NO_OPEN !== '1') await openWindow(owner.port)
       process.exit(0)
     }
   }
