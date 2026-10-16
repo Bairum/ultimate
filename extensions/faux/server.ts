@@ -22,6 +22,35 @@ export default async function fauxExtension(host: ExtensionHost) {
       faux.appendResponses([demo])
       const last = transcript.messages.findLast((message) => message.role !== 'system')
       const system = transcript.messages[0]
+      const asked = transcript.messages.findLastIndex((message) => message.role === 'user')
+      if (transcript.messages[asked]?.content === 'phases demo') {
+        const steps = [
+          [
+            fauxText('Looking at the scratch file first.'),
+            fauxToolCall('bash', {
+              command: `printf 'before\\n' > ${shellPath}; grep -n before ${shellPath}; sleep 4`,
+            }),
+          ],
+          [
+            fauxText('Changing before to after.'),
+            fauxToolCall('edit', { path: scratch, oldText: 'before', newText: 'after' }),
+          ],
+          [
+            fauxText('Running the tests.'),
+            fauxToolCall('bash', { command: 'echo "pnpm test"; sleep 4; echo "12 passed"' }),
+          ],
+          [
+            fauxText('Tests pass; committing.'),
+            fauxToolCall('bash', { command: 'echo "git commit -m demo"; sleep 3' }),
+          ],
+        ]
+        const step = transcript.messages
+          .slice(asked)
+          .filter((message) => message.role === 'toolResult').length
+        return step < steps.length
+          ? fauxAssistantMessage(steps[step], { stopReason: 'toolUse' })
+          : fauxAssistantMessage([fauxText('Phases demo complete.')])
+      }
       if (
         system?.role === 'system' &&
         typeof system.content === 'string' &&
