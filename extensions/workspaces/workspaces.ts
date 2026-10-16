@@ -389,7 +389,16 @@ export function workspaces(host: Host) {
       return result
     })
   }
-  async function submit(id: ConversationId, context: Context): Promise<SubmitResult> {
+  async function submit(
+    id: ConversationId,
+    divergence: string,
+    context: Context,
+  ): Promise<SubmitResult> {
+    if (!divergence?.trim())
+      throw new Error(
+        "Submitting requires divergence: describe changes from the original request, or say 'None'.",
+      )
+    divergence = divergence.trim()
     const workspace = await get(id, context)
     if (!workspace) throw new Error('Conversation has no workspace')
     if (workspace.state !== 'ready') throw new Error(`Workspace is ${workspace.state}`)
@@ -405,6 +414,9 @@ export function workspaces(host: Host) {
       const row = await tx.conversation(id)
       if (!row || row.owner)
         throw new Error('Only a top-level main conversation submits its own workspace')
+      const at = (await tx.scanEntries({ conversationId: id }, 1)).items[0]?.id
+      if (at === undefined)
+        throw new Error('Submitting requires a conversation entry for its breadcrumb')
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       const { source, target } = index.items[String(id)]
       // Reads first: a transaction cannot read tables after its first write.
@@ -419,7 +431,8 @@ export function workspaces(host: Host) {
         source,
         target,
         tip,
-        at: Date.now(),
+        at,
+        divergence,
         state: 'queued' as const,
         ...(subject ? { subject } : {}),
         steps: [],

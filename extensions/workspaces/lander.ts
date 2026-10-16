@@ -85,6 +85,8 @@ export const log = (
       tip: entry.tip,
       target: entry.target,
       at,
+      sourceEntry: entry.at,
+      divergence: entry.divergence,
       ...(entry.subject && (data.step === 'queued' || data.step === 'started' || data.outcome)
         ? { subject: entry.subject }
         : {}),
@@ -339,6 +341,8 @@ export function createLander(
             if (outcome.sha) draft.items[String(entry.conversationId)].landed = outcome.sha
             draft.results[id] = {
               ...outcome,
+              at: entry.at,
+              divergence: entry.divergence,
               target: entry.target,
               tip: entry.tip,
               lander: runtime.conversationId,
@@ -889,8 +893,9 @@ export function createLander(
             await lineage.leaveNote(
               root,
               [
-                `Landed ${result.sha!.slice(0, 7)} on ${result.target} from #${conversationId} ${title}${subject.feature ? ` (${subject.feature})` : ''}:`,
+                `Landed ${result.sha!.slice(0, 7)} on ${result.target} from #${conversationId}/${result.at} ${title}${subject.feature ? ` (${subject.feature})` : ''}:`,
                 ...(subject.summary ? [subject.summary] : []),
+                `Diverged: ${result.divergence}`,
                 ...commits.map((commit) => commit.subject),
                 ...(more ? [`and ${more} more`] : []),
                 `Changed: ${paths.join(', ')}`,
@@ -900,6 +905,8 @@ export function createLander(
                 from: conversationId,
                 requestId: `lander-root:${id}`,
                 data: {
+                  at: result.at,
+                  divergence: result.divergence,
                   sha: result.sha!,
                   target: result.target,
                   commits,
