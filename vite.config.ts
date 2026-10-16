@@ -80,6 +80,7 @@ export default defineConfig({
             {
               allow: {
                 automations: ['subagents'],
+                classify: ['secrets'],
                 codemode: ['subagents'],
                 conversations: ['lineage', 'models', 'onboarding', 'plan', 'workspaces'],
                 instance: ['subagents', 'workspaces'],
