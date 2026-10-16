@@ -16,10 +16,16 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { attach, temp, removeTemp, until } from '../helpers.ts'
 
 type Preview = { id: string; url: string; home: string; pid: number }
-async function assertProject(preview: Preview, path: string, decision: boolean | null) {
+async function assertProject(
+  preview: Preview,
+  path: string,
+  decision: boolean | null,
+  source = path,
+) {
   const client = await attach(preview)
   try {
     expect(client.system().execution.defaultCwd).toBe(path)
+    expect(client.system().code.ultimateRoot).toBe(source)
     expect(client.system().project.decision).toBe(decision)
     expect(client.system().persistence.path).toBe(join(preview.home, 'state.sqlite'))
     expect(client.system().process.pid).toBe(preview.pid)
@@ -28,7 +34,7 @@ async function assertProject(preview: Preview, path: string, decision: boolean |
   }
   expect((await fetch(`${preview.url}/api/models`)).status).toBe(200)
 }
-async function fixture() {
+async function fixture({ foreign = false } = {}) {
   const root = await temp('ultimate-preview-')
   const checkout = resolve('.')
   const source = join(root, 'source')
@@ -47,10 +53,17 @@ async function fixture() {
   )
   await git(source, 'add', '.ultimate/settings.json', '.gitignore')
   await git(source, 'commit', '-m', 'Configure preview setup')
-  new ProjectTrustStore(join(root, '.ultimate')).set(source, true)
+  const project = foreign ? join(root, 'app') : source
+  if (foreign) {
+    await git(root, 'init', '-b', 'main', project)
+    await writeFile(join(project, 'README.md'), 'An app, not Ultimate\n')
+    await git(project, 'add', 'README.md')
+    await git(project, 'commit', '-m', 'Start app')
+  }
+  new ProjectTrustStore(join(root, '.ultimate')).set(project, true)
   const prepared = await prepareHarness({
     ultimateRoot: source,
-    projectRoot: source,
+    projectRoot: project,
     home: join(root, 'home'),
     userHome: root,
     faux: true,
@@ -61,7 +74,7 @@ async function fixture() {
   const cleanups: (() => Promise<void>)[] = []
   const host = {
     ...prepared,
-    projectSettings: () => projectSettings(source, root),
+    projectSettings: () => projectSettings(project, root),
     harness: () => opened.harness,
     metadata: Metadata,
     provide: (name: string, value: unknown) => {
@@ -134,7 +147,7 @@ async function fixture() {
       {
         ownership: { kind: 'ownerless' },
         agent: { model: { provider: 'faux', modelId: 'faux-1' } },
-        init: (tx, id) => service.create(tx, id, source).then(() => undefined),
+        init: (tx, id) => service.create(tx, id, project).then(() => undefined),
       },
       context,
     )
@@ -194,6 +207,20 @@ it('selects shared, isolated main and owned child checkouts with the main projec
     await f.service.discard(child.conversationId, context)
     await f.service.discard(main.id, context)
     expect(await f.run({ action: 'start', faux: true }, main.id)).toContain('active, ready')
+  } finally {
+    await f.close()
+  }
+}, 120000)
+it('previews a workspace of another project on the host Ultimate', async () => {
+  const f = await fixture({ foreign: true })
+  try {
+    const main = await f.main()
+    const preview = JSON.parse(
+      await f.call('instance', { action: 'start', faux: true }, main.id),
+    ) as Preview
+    expect(await readFile(join(main.workspace.path, 'README.md'), 'utf8')).toContain('not Ultimate')
+    await assertProject(preview, main.workspace.path, true, f.source)
+    await f.run({ action: 'stop', id: preview.id })
   } finally {
     await f.close()
   }

@@ -52,6 +52,7 @@ export default function instanceExtension(
     >()
   })
   const starts = host.resource('instance.starts', () => ({ pending: 0 }))
+  const ownSource = host.projectRoot === host.ultimateRoot
   async function stop(id: string) {
     const instance = instances.get(id)
     if (!instance) throw new Error(`Unknown instance: ${id}`)
@@ -74,10 +75,10 @@ export default function instanceExtension(
   return defineExtension({
     name: 'instance',
     sections: [
-      section(
-        'test_core_changes',
-        () =>
-          'Before restarting after core changes, start a second instance, check its API and UI using browser/screenshot, then stop it. Use faux for token-free smoke tests. Instances are temporary and process-local.',
+      section('test_core_changes', () =>
+        ownSource
+          ? 'Before restarting after core changes, start a second instance, check its API and UI using browser/screenshot, then stop it. Use faux for token-free smoke tests. Instances are temporary and process-local.'
+          : "To check changes to this project's .ultimate/ extensions, agents or settings, start a second instance: it runs this Ultimate with your workspace as its project. Look at it with browser/screenshot, then stop it. Use faux for token-free checks. It does not run the project's own app.",
       ),
     ],
     tools: [
@@ -137,17 +138,21 @@ export default function instanceExtension(
               if (workspace) {
                 if (workspace.state !== 'ready')
                   throw new Error('Preview requires an active, ready workspace')
-                cwd = project = workspace.path
-                for (const [path, directory, message] of [
-                  ['server/main.ts', false, 'Worktree is not Ultimate: missing server/main.ts'],
-                  ['node_modules', true, 'Worktree has no node_modules; run pnpm install first'],
-                ] as const) {
-                  const entry = await stat(join(cwd, path)).catch(
-                    // An unreadable prerequisite fails the explicit preview validation below.
-                    () => undefined,
-                  )
-                  if (!entry || (directory ? !entry.isDirectory() : !entry.isFile()))
-                    throw new Error(message)
+                project = workspace.path
+                // In another project the workspace holds that project, so the host's Ultimate runs it.
+                if (ownSource) {
+                  cwd = workspace.path
+                  for (const [path, directory, message] of [
+                    ['server/main.ts', false, 'Worktree is not Ultimate: missing server/main.ts'],
+                    ['node_modules', true, 'Worktree has no node_modules; run pnpm install first'],
+                  ] as const) {
+                    const entry = await stat(join(cwd, path)).catch(
+                      // An unreadable prerequisite fails the explicit preview validation below.
+                      () => undefined,
+                    )
+                    if (!entry || (directory ? !entry.isDirectory() : !entry.isFile()))
+                      throw new Error(message)
+                  }
                 }
               }
               let home: string
