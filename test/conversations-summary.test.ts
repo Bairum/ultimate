@@ -54,7 +54,16 @@ const held = (gate: Promise<void>, signal: AbortSignal) =>
       signal.addEventListener('abort', () => fail(new Error('Closed')), { once: true }),
     ),
   ])
-async function launch(subagents = false, initialIntent = false, root = false) {
+async function launch(subagents = false, initialIntent = false, root = false, branch = false) {
+  const abstract = vi.fn<
+    (
+      tx: import('@earendil-works/pi-durable').Tx,
+      id: number,
+      data: { text: string; at: number },
+    ) => Promise<void>
+  >(async (tx, id, data) => {
+    await tx.appendEntry(id as ConversationId, { kind: 'test.abstract', data })
+  })
   const home = await temp('ultimate-summary-')
   const projectRoot = join(home, 'project')
   await mkdir(join(projectRoot, '.ultimate/agents'), { recursive: true })
@@ -98,6 +107,7 @@ async function launch(subagents = false, initialIntent = false, root = false) {
     activity: 'Added concise summaries to the sidebar.',
     title: 'Improve the conversation sidebar',
     summary: 'Added concise summaries to the sidebar.',
+    ...(branch ? { abstract: 'Ask: improve sidebar\nDiverged: none\nState: done' } : {}),
   }))
   const install = (registry = server.host.registry) => {
     vi.spyOn(server.host.modelRuntime, 'getAvailableSnapshot').mockImplementation(() =>
@@ -123,13 +133,19 @@ async function launch(subagents = false, initialIntent = false, root = false) {
                   .filter((model) => model.provider === 'openai' && model.id === 'gpt-6-luna'),
             },
             // Lineage stays off here; a rooted fixture stands in for it with every conversation its own root.
-            ...(root
+            ...(root || branch
               ? {
                   use: ((name: string) =>
                     name === 'lineage'
                       ? ({
-                          rootOf: async (id: number) => id as ConversationId,
-                        } satisfies Pick<LineageService, 'rootOf'>)
+                          rootOf: async (id: number) => (root ? (id as ConversationId) : undefined),
+                          branchOf: async () =>
+                            branch ? { root: 1, intent: 'Improve the sidebar' } : undefined,
+                          abstract,
+                        } satisfies Pick<LineageService, 'rootOf'> & {
+                          branchOf: unknown
+                          abstract: unknown
+                        })
                       : undefined) as NonNullable<SummaryHost['use']>,
                 }
               : {}),
@@ -156,6 +172,7 @@ async function launch(subagents = false, initialIntent = false, root = false) {
       return server
     },
     generated,
+    abstract,
     spawn: (answer: EntryId) =>
       server.harness.commit(
         (tx) =>
@@ -638,7 +655,7 @@ it.concurrent('protects preexisting and in-flight manual titles, and blank renam
 })
 
 it.concurrent('clears summary and cadence on reset, drops stale completion and isolates provider errors', async () => {
-  const fixture = await launch()
+  const fixture = await launch(false, false, false, true)
   let release!: () => void
   const gate = new Promise<void>((done) => {
     release = done
@@ -650,6 +667,7 @@ it.concurrent('clears summary and cadence on reset, drops stale completion and i
       activity: 'Implemented the requested sidebar changes.',
       title: 'A stale generated title',
       summary: 'Stale summary.',
+      abstract: 'A stale abstract.',
     }
   })
   fixture.server.host.faux!.setResponses([fauxAssistantMessage('Done.')])
@@ -676,6 +694,7 @@ it.concurrent('clears summary and cadence on reset, drops stale completion and i
     at: expect.any(Number),
   })
   expect((await fixture.read())?.summary).toBeUndefined()
+  expect(fixture.abstract).not.toHaveBeenCalled()
   expect(await fixture.titleChanges()).toEqual([])
   for (let count = 2; count <= 4; count++) await fixture.exchange()
   await until(async () => (await fixture.read())?.status === 'ready')
@@ -723,8 +742,19 @@ it.concurrent('assesses owned children without renaming them, summarizes ownerle
     })
     return created
   }, context)
-  const entry = (await root.context(context)).entries[0]
+  const entry = await fixture.server.harness.commit(
+    (tx) =>
+      tx.appendEntry(root.id, {
+        kind: 'pi.assistant',
+        model: [fauxAssistantMessage('Historical answer.')],
+      }),
+    context,
+  )
   const fork = await root.fork(entry.id, { ownership: { kind: 'ownerless' } }, context)
+  const inherited = await fixture.entries(fork.id)
+  expect(inherited.some((item) => item.kind === 'pi.user')).toBe(true)
+  expect(inherited.some((item) => item.kind === 'pi.assistant')).toBe(true)
+  expect(inherited.every((item) => item.conversationId === root.id)).toBe(true)
   for (const id of [child.id, fork.id]) {
     fixture.server.host.faux!.setResponses([fauxAssistantMessage('Child answer.')])
     const conversation = (await fixture.server.harness.conversation(id, context))!
@@ -755,7 +785,7 @@ it.concurrent('assesses owned children without renaming them, summarizes ownerle
       'ready',
   )
   expect((await fixture.server.harness.snapshot(Summaries, fork.id, context))?.exchanges).toBe(1)
-  expect(fixture.generated).toHaveBeenCalledTimes(2)
+  expect(fixture.generated).toHaveBeenCalledTimes(3)
   expect(await fixture.titleChanges(child.id)).toEqual([])
   expect(await fixture.titleChanges(fork.id)).toEqual([
     expect.objectContaining({
@@ -763,9 +793,58 @@ it.concurrent('assesses owned children without renaming them, summarizes ownerle
     }),
   ])
   await fixture.exchange()
-  expect(fixture.generated).toHaveBeenCalledTimes(3)
-  expect(fixture.generated.mock.calls.some((call) => call[5] === 'intent')).toBe(false)
+  expect(fixture.generated).toHaveBeenCalledTimes(4)
+  expect(fixture.generated.mock.calls.filter((call) => call[5] === 'intent')).toHaveLength(1)
 })
+
+it.concurrent.each([false, true])(
+  'does not request abstracts without a branch, lineage=%s',
+  async (lineage) => {
+    const fixture = await launch(false, false, lineage)
+    await fixture.exchange()
+    expect(fixture.abstract).not.toHaveBeenCalled()
+    expect(fixture.generated.mock.calls[0][7]).toBeUndefined()
+    expect((await fixture.read())?.abstract).toBeUndefined()
+  },
+)
+
+it.concurrent('writes each branch abstract atomically with its accepted answer and reuses it next time', async () => {
+  const fixture = await launch(false, false, false, true)
+  await fixture.exchange()
+  const state = await fixture.read()
+  expect(fixture.abstract).toHaveBeenCalledTimes(1)
+  expect(fixture.abstract.mock.calls[0].slice(1)).toEqual([
+    fixture.server.root.id,
+    expect.objectContaining({ at: state?.lastAnswer, text: state?.abstract }),
+  ])
+  expect((await fixture.entries()).filter((entry) => entry.kind === 'test.abstract')).toHaveLength(
+    1,
+  )
+  expect(fixture.generated.mock.calls[0][1]).toContain('Improve the sidebar')
+  expect(fixture.generated.mock.calls[0][7]).toBe(true)
+  await fixture.exchange()
+  expect(fixture.abstract).toHaveBeenCalledTimes(2)
+  expect(fixture.generated.mock.calls[1][1]).toContain(`Previous abstract:\n${state?.abstract}`)
+  expect(fixture.generated.mock.calls[1][3]).toBe(false)
+  expect((await fixture.action('reset')).status).toBe(200)
+  expect((await fixture.read())?.abstract).toBeUndefined()
+})
+
+it.concurrent.each(['error', 'aborted'] as const)(
+  'does not abstract an %s main answer',
+  async (stopReason) => {
+    const fixture = await launch(false, false, false, true)
+    fixture.server.host.faux!.setResponses([fauxAssistantMessage('Unfinished.', { stopReason })])
+    const submission = await fixture.server.root.submit({ type: 'input', content: 'Work' }, context)
+    await submission.wait(context)
+    await fixture.server.root.waitForIdle(context)
+    await until(
+      async () => Object.values((await fixture.server.harness.inspect(context)).tasks).length === 0,
+    )
+    expect(fixture.abstract).not.toHaveBeenCalled()
+    expect((await fixture.read())?.abstract).toBeUndefined()
+  },
+)
 
 it.concurrent('rejects an older response after a newer scheduled summary has completed', async () => {
   const fixture = await launch()
@@ -993,6 +1072,34 @@ it.concurrent('validates assessment-only JSON and rejects unapproved or malforme
   ).toEqual(output)
   expect(getModel).toHaveBeenCalledWith('openai', 'gpt-6-luna')
   expect(stream.mock.calls.at(-1)![1].systemPrompt).not.toContain('"feature"')
+  expect(stream.mock.calls.at(-1)![1].systemPrompt).not.toContain('"abstract"')
+  output = { assessment: 'done', activity: 'Done.', abstract: `  ${'x'.repeat(1300)}  ` }
+  const abstractResult = await generateSummary(
+    models,
+    'Reply',
+    new AbortController().signal,
+    false,
+    { model: luna },
+    'reply',
+    false,
+    true,
+  )
+  expect(abstractResult.abstract).toBe('x'.repeat(1200))
+  expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('"abstract"')
+  expect(stream.mock.calls.at(-1)![2]?.maxTokens).toBe(2048)
+  output = { assessment: 'done', activity: 'Done.' }
+  await expect(
+    generateSummary(
+      models,
+      'Reply',
+      new AbortController().signal,
+      false,
+      { model: luna },
+      'reply',
+      false,
+      true,
+    ),
+  ).rejects.toThrow('Invalid abstract response')
   output = {
     assessment: 'done',
     activity: 'Done.',
