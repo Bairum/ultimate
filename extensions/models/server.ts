@@ -94,6 +94,8 @@ function running(host: ExtensionHost, args: JsonValue) {
 /** Prompts and events as plain JSON: a document holds no `undefined`. */
 const json = <T>(value: T): Json<T> => JSON.parse(JSON.stringify(value))
 
+export const userActions = ['login', 'answer', 'cancel', 'logout']
+
 export const actions = {
   /**
    * What a new conversation starts with unless the user chooses: a branch defaults to its source's configuration

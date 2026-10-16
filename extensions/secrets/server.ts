@@ -12,6 +12,8 @@ export default defineExtension({
     ),
   ],
 })
+export const userActions = ['set', 'delete']
+
 export const actions: Record<string, ExtensionAction> = {
   async list(_args, { host }) {
     const items = new Map<

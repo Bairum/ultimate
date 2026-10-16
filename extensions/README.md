@@ -489,6 +489,17 @@ Agents call actions in codemode with `await ultimate.action('todos', 'list', arg
 or throwing the action's error. Calls run in-process on behalf of the calling conversation, with the sandbox abort
 signal; omitted args become null. `ultimate.extensions()` lists actions; document their args in your README.
 
+A server facet may export `userActions: string[]` alongside `actions` to reserve named actions for the UI.
+Every name must refer to a registered action; invalid declarations fail facet installation. Use this for choices
+only the user should make, such as granting project trust, managing secrets, or logging in to providers:
+
+```ts
+export const userActions = ['decide']
+```
+
+Codemode rejects these calls with `<extension>/<action> is a user-only action`; the HTTP path still calls them.
+This is an explicit opt-out from agent action dispatch, not a security sandbox against arbitrary agent code.
+
 The HTTP endpoint remains browser-only: requests require `Sec-Fetch-Site: same-origin` or a loopback `Origin`
 matching the server's port. A plain agent `curl` receives 403; use `ultimate.action` instead of forging browser headers.
 

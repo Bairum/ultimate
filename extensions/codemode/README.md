@@ -33,6 +33,10 @@ Only inside codemode (not standalone model tools):
 - `ultimate.agents()` — agent definitions, the profiles subagents and automations run with: each one's source (builtin, user, project), path, fields, and instructions, plus files that failed to parse. To change one, edit its file; for a built-in, write an override with the same name to `<project>/.ultimate/agents/` or `~/.ultimate/agents/`.
 - `ultimate.doc(kind, conversationId?)` — exported conversation document or `pi.agent`/`pi.inbox`/`pi.live`/`pi.usage`; defaults to the calling conversation.
 
+Facets can export `userActions: string[]` to reserve actions for the UI. `ultimate.action` rejects these with
+`<extension>/<action> is a user-only action`; use the UI for project trust, secret changes, and provider login/logout.
+Normal actions remain callable. This dispatch restriction is not a sandbox against arbitrary agent code.
+
 Entry/search limits default to 100 and must be 1–1000. Pagination of raw entries uses the oldest returned entry ID as `before`. Other writes go through normal tools. Action side effects, like nested tool side effects, are not rolled back if the script fails or yields.
 
 ## Durable store

@@ -5,7 +5,14 @@ import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
-import { fauxServer as createServer, until, temp, removeTemp, linkDependencies } from './helpers.ts'
+import {
+  fauxServer as createServer,
+  until,
+  temp,
+  removeTemp,
+  linkDependencies,
+  post,
+} from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { Store } from '../extensions/codemode/server.ts'
 
@@ -134,6 +141,36 @@ it('calls extension actions with caller context and rejects missing or disabled 
   const disabled = await run(server, `return await ultimate.action('action-test', 'echo');`)
   expect(disabled.data.isError).toBe(true)
   expect(disabled.text).toContain('Unknown extension action: action-test/echo')
+})
+
+it('reserves trust and secret writes for the UI while allowing normal actions', async () => {
+  const { server, options } = await fixture()
+  await mkdir(join(options.ultimateRoot, 'server'), { recursive: true })
+  await cp(resolve('server/lock.ts'), join(options.ultimateRoot, 'server/lock.ts'))
+  for (const name of ['onboarding', 'secrets']) {
+    await cp(resolve(`extensions/${name}`), join(options.ultimateRoot, `extensions/${name}`), {
+      recursive: true,
+    })
+    await until(() => !!server.extensions.action(name, name === 'onboarding' ? 'decide' : 'set'))
+  }
+  for (const [extension, action, args] of [
+    ['onboarding', 'decide', { local: true }],
+    ['secrets', 'set', { name: 'TEST_KEY', value: 'test-value' }],
+  ] as const) {
+    const denied = await run(
+      server,
+      `return await ultimate.action('${extension}', '${action}', ${JSON.stringify(args)});`,
+    )
+    expect(denied.data.isError).toBe(true)
+    expect(denied.text).toContain(`${extension}/${action} is a user-only action`)
+    const response = await post(server, `/api/extensions/${extension}/actions/${action}`, { args })
+    expect(response.status).toBe(200)
+  }
+  const normal = await run(server, `return await ultimate.action('secrets', 'list');`)
+  expect(normal.data.isError).not.toBe(true)
+  expect(normal.data.details.value).toEqual([
+    expect.objectContaining({ name: 'TEST_KEY', set: true }),
+  ])
 })
 
 it('composes read and bash with private nested results and final JSON details', async () => {
