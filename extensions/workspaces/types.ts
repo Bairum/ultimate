@@ -4,6 +4,7 @@ export type WorkspacePending = {
   uncommitted: number
   unlanded: number
   busy?: string
+  descendant?: number
 }
 export type Workspace = {
   path: string

@@ -16,7 +16,9 @@ Its path is `<home>/worktrees/<conversationId>`; its branch includes the home ha
 Preparation runs `isolates.worktree.setup` with `ULTIMATE_SOURCE` set to the source checkout.
 Setup commands must be safe to repeat after interruption.
 The first model request waits for preparation; failed workspaces block tools with the reason.
-A removed workspace is recreated at the same path from the current target tip on the next model request.
+A removed workspace is recreated at the same path on the next model request. An existing branch with unlanded
+commits is checked out unchanged, with its tip as the new base; a merged or missing branch starts at the current
+target tip. Nested isolates prepare their source ancestor checkouts first.
 The existing `workspace_workflow` prompt section starts and waits for the same durable preparation task used
 on creation; setup commands run again before the model can use tools.
 Failed setup keeps its output tail and never force-removes dirty output. Start a new conversation to try again.
@@ -30,14 +32,17 @@ If the target changed or diverged, update the workspace onto it and verify again
 `pending {ids}` reports `{id, uncommitted, unlanded}` for checkouts with work at risk, including transitively
 owned subagents. The `workspaces` service exposes `pending(ids, ctx)` and `release(ids, ctx)`; release removes
 only clean, fully landed checkouts, deletes merged branches, and returns checkouts kept for pending work or
-`busy` reasons (running or queued input). Git writes are serialized per source and removal is never forced.
+`busy` reasons (running or queued input). Descendants release before ancestors; a kept descendant also keeps its
+ancestors, reported with `descendant: <id>`. Git writes are serialized per source and removal is never forced.
+Release atomically checks run admission and marks the record `removed` before deleting the folder. Requests wait
+on that same source queue before checking the record and recreating. Reconciliation and recreation finish
+interrupted removals; newly found pending work is kept and the checkout returns to `ready`.
 On open, a background reconciliation releases concluded conversations' eligible checkouts; failures become notices.
 `release(ids, ctx, signal?)` stops between checkouts when aborted. Closing aborts reconciliation and waits only
 for the current checkout to finish, not the remaining batch.
 `discard {id}` explicitly removes a clean checkout and keeps its branch until reuse (the `subagent` tool's
-`discard` covers worktree children). All removed checkouts follow one recreation rule: the branch resets to the
-current target tip on the next model request, including explicitly discarded checkouts. Commit history on an
-unmerged discarded branch must be saved elsewhere before reuse.
+`discard` covers worktree children). All removed checkouts follow the same recreation rule above, preserving
+unlanded branch history, including after explicit discard.
 `stats` counts checkouts by state, ready ones by commits (landed on the target, ahead, none yet) and uncommitted
 changes; `disk` measures the worktrees directory with `du`, and on btrfs also the real size with shared blocks counted
 once (`btrfs filesystem du`). Measuring takes seconds, so one runs at a time and its result is reused for a minute.
