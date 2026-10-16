@@ -481,3 +481,19 @@ it('catches a branch up from the tally position it inherited: an older fork poin
     ].join('\n\n'),
   )
 })
+
+it('names a source branch’s prompt when the fork was made before that prompt', async () => {
+  const f = await catchupFixture()
+  const a = await branchFrom(f.server, { from: 1, prompt: 'Feature A' })
+  const forkedAt = (await f.server.harness.commit((tx) => tx.conversation(a), context))!.parent!.at
+  // Forked from A at the tally entry A started from: A's prompt is not in its context.
+  const early = await branchFrom(f.server, { from: a, at: forkedAt, prompt: 'Before A asked' })
+  const [note] = await catchups(f.server, early)
+  expect((note.data as { text: string }).text).toBe(
+    [
+      "Meanwhile in #1's tree:",
+      `**#${a}** started: Feature A`,
+      'Check whether any of this already covers or changes what you are about to do.',
+    ].join('\n\n'),
+  )
+})

@@ -195,6 +195,22 @@ async function catchupText(
   ].join('\n\n')
 }
 
+/** The first input `id` placed itself; its own entries all follow the entry it was forked at. */
+async function firstInput(tx: Tx, id: ConversationId, forkedAt = 0) {
+  let cursor
+  do {
+    const page = await tx.scanEntries(
+      { conversationId: id, minEntryId: (forkedAt + 1) as EntryId, order: 'ascending' },
+      100,
+      cursor,
+    )
+    const first = page.items.find((entry) => entry.conversationId === id && entry.input)
+    if (first) return first.id
+    cursor = page.next
+  } while (cursor)
+  return undefined
+}
+
 /** A tally a top-level conversation catches up on: its tree root, once that root is a tally. */
 export type Tree = { root: ConversationId; since: number; abstracts: Record<string, number> }
 
@@ -271,14 +287,18 @@ export async function tallyText(
     cursor = page.next
   } while (cursor)
   const tip = entries.at(-1)?.id
-  // The prompts of the conversations it was forked from are in its context already, as their first inputs.
+  // The prompts of the conversations it was forked from are in its context already, as their first inputs, when every
+  // fork on the way up was made at or after that input.
   const sources = new Set<number>()
-  for (
-    let up = (await tx.conversation(id))?.parent?.conversationId;
-    up !== undefined && up !== root;
-    up = (await tx.conversation(up))?.parent?.conversationId
-  )
-    sources.add(up)
+  let cut = Number.POSITIVE_INFINITY
+  for (let record = await tx.conversation(id); record?.parent;) {
+    cut = Math.min(cut, record.parent.at)
+    const up = record.parent.conversationId
+    if (up === root) break
+    record = await tx.conversation(up)
+    const first = await firstInput(tx, up, record?.parent?.at)
+    if (first !== undefined && first <= cut) sources.add(up)
+  }
   const activities = new Map<number, Activity>()
   const of = (conversation: number, entry: EntryRecord) => {
     let activity = activities.get(conversation)

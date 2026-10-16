@@ -296,6 +296,23 @@ async function busy(tx: Tx, id: ConversationId, workspaces: WorkspaceService | u
   const queue = workspaces && (await tx.doc(workspaces.doc, ROOT_CONVERSATION_ID)).queue
   if (queue?.some((item) => item.conversationId === id))
     return 'its workspace submission is still landing'
+  // A landed submission leaves the queue before the lander reports back to its submitter.
+  for (const status of ['running', 'waiting'] as const) {
+    let cursor: Cursor | undefined
+    do {
+      const page = await tx.scanTasks({ kind: 'workspaces.lander', status }, 100, cursor)
+      if (
+        page.items.some((task) => {
+          const checkpoint = (
+            task.state as { checkpoint?: { phase?: string; conversationId?: number } }
+          ).checkpoint
+          return checkpoint?.phase === 'report' && checkpoint.conversationId === id
+        })
+      )
+        return 'the lander is still reporting its submission'
+      cursor = page.next
+    } while (cursor)
+  }
   return undefined
 }
 
