@@ -2039,7 +2039,13 @@ it.concurrent('release handles failed checkouts but never removes detached unlan
   const workspace = (await f.service.get(detached, context))!
   await git(workspace.path, 'checkout', '--detach')
   const tip = await commit(workspace.path)
-  await expect(f.service.release([detached], context)).rejects.toThrow('recorded branch tip')
+  expect(await f.service.release([detached], context)).toEqual([
+    { id: detached, uncommitted: 0, unlanded: 1 },
+  ])
+  expect((await f.service.get(detached, context))!.state).toBe('ready')
+  expect(
+    JSON.stringify(await f.call(detached, 'bash', { command: 'git rev-parse HEAD' })),
+  ).toContain(tip)
   expect(await git(workspace.path, 'rev-parse', 'HEAD')).toBe(tip)
 })
 
@@ -2229,4 +2235,67 @@ it.concurrent('failed setup while recreating a discarded branch preserves its un
   await f.call(id, 'bash', { command: 'pwd' })
   expect((await f.service.get(id, context))!.state).toBe('failed')
   expect(await git(f.projectRoot, 'rev-parse', workspace.branch)).toBe(tip)
+})
+
+it.concurrent('resuming a child after its removal keeps the parent in the same release batch', async () => {
+  const { f, parent, child, parentWorkspace, childWorkspace } = await nestedFixture()
+  const deletingChildBranch = await holdGit(f.projectRoot, 'branch')
+  const queues = f.host.resource('workspaces.land', () => new Map<string, Promise<unknown>>())
+  const queued = vi.spyOn(queues, 'set')
+  const releasing = f.service.release([parent], context)
+  const conversation = (await f.opened.harness.conversation(child, context))!
+  let request: ReturnType<typeof conversation.submit> | undefined
+  try {
+    await deletingChildBranch.started()
+    expect((await f.service.get(child, context))!.state).toBe('removed')
+    await expect(access(childWorkspace.path)).rejects.toThrow('ENOENT')
+    request = conversation.submit(
+      { type: 'input', content: 'resume child between removals' },
+      context,
+    )
+    await request
+    // The child readies its parent, then holds the parent's source queue while waiting for child removal.
+    await until(
+      () => queued.mock.calls.filter(([source]) => source === parentWorkspace.source).length >= 2,
+    )
+  } finally {
+    await deletingChildBranch.release()
+  }
+  const kept = await releasing
+  queued.mockRestore()
+  await (await request).wait(context)
+  await conversation.waitForIdle(context)
+  expect(kept).toEqual([{ id: parent, uncommitted: 0, unlanded: 0, descendant: child }])
+  for (const id of [parent, child]) {
+    const workspace = (await f.service.get(id, context))!
+    expect(workspace.state).toBe('ready')
+    await access(workspace.path)
+  }
+})
+
+it.concurrent('refused release and recovery restore ready and report the reason without moving detached HEAD', async () => {
+  const f = await fixture()
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  await commit(workspace.path)
+  await f.service.land(id, context)
+  // Both commits are landed, but HEAD is intentionally not the recorded branch tip.
+  await git(workspace.path, 'checkout', '--detach', workspace.base)
+  expect(await f.service.release([id], context)).toEqual([
+    { id, uncommitted: 0, unlanded: 0, reason: expect.stringContaining('recorded branch tip') },
+  ])
+  expect((await f.service.get(id, context))!.state).toBe('ready')
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'removed'
+  }, context)
+  expect(await f.service.ready(id, context)).toMatchObject({
+    id,
+    reason: expect.stringContaining('recorded branch tip'),
+  })
+  expect((await f.service.get(id, context))!.state).toBe('ready')
+  expect(JSON.stringify(await f.call(id, 'bash', { command: 'git rev-parse HEAD' }))).toContain(
+    workspace.base,
+  )
+  expect(await git(workspace.path, 'rev-parse', 'HEAD')).toBe(workspace.base)
 })

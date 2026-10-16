@@ -94,10 +94,11 @@ async function changes(
       .length,
     unlanded: Number(
       await git(
-        workspace.source,
+        workspace.path,
         'rev-list',
         '--count',
         `${workspace.target}..${workspace.branch}`,
+        `${workspace.target}..HEAD`,
       ),
     ),
   }
@@ -408,37 +409,49 @@ export function workspaces(host: Host) {
     workspace: WorkspaceIndex['items'][string],
     context: Context,
   ) {
-    if (await presentCheckout(id, context)) {
-      const item = await changes(id, workspace)
-      if (item.uncommitted || item.unlanded) {
-        await host.harness().commit(async (tx) => {
-          ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'ready'
-        }, context)
-        return item
+    let item: WorkspacePending = { id, uncommitted: 0, unlanded: 0 }
+    try {
+      if (await presentCheckout(id, context)) {
+        item = await changes(id, workspace)
+        if (item.uncommitted || item.unlanded) {
+          await host.harness().commit(async (tx) => {
+            ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'ready'
+          }, context)
+          return item
+        }
+        if (
+          (await git(workspace.path, 'rev-parse', 'HEAD')) !==
+          (await git(workspace.source, 'rev-parse', workspace.branch))
+        )
+          throw new Error(`Workspace #${id} no longer checks out its recorded branch tip`)
+        // Never force: Git refuses uncommitted changes made since the status check.
+        await git(workspace.source, 'worktree', 'remove', workspace.path)
       }
-      if (
-        (await git(workspace.path, 'rev-parse', 'HEAD')) !==
-        (await git(workspace.source, 'rev-parse', workspace.branch))
-      )
-        throw new Error(`Workspace #${id} no longer checks out its recorded branch tip`)
-      // Never force: Git refuses uncommitted changes made since the status check.
-      await git(workspace.source, 'worktree', 'remove', workspace.path)
+      if (await git(workspace.source, 'branch', '--list', workspace.branch)) {
+        const merged = await git(
+          workspace.source,
+          'merge-base',
+          '--is-ancestor',
+          workspace.branch,
+          workspace.target,
+        ).then(
+          () => true,
+          () => false,
+        )
+        if (merged) await git(workspace.source, 'branch', '-D', workspace.branch)
+      }
+      return undefined
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      await host.harness().commit(async (tx) => {
+        const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)]
+        saved.state = 'ready'
+        saved.error = reason
+      }, context)
+      return { ...item, reason }
     }
-    if (await git(workspace.source, 'branch', '--list', workspace.branch)) {
-      const merged = await git(
-        workspace.source,
-        'merge-base',
-        '--is-ancestor',
-        workspace.branch,
-        workspace.target,
-      ).then(
-        () => true,
-        () => false,
-      )
-      if (merged) await git(workspace.source, 'branch', '-D', workspace.branch)
-    }
-    return undefined
   }
+
   async function release(
     ids: number[],
     context: Context,
@@ -470,6 +483,16 @@ export function workspaces(host: Host) {
           const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
           if (live.run) return 'Conversation is running; wait or stop it before removal'
           if (inbox.items.length) return 'Conversation has queued input; wait or cancel it first'
+          const sources = new Set([workspace.path])
+          let size: number
+          do {
+            size = sources.size
+            for (const [child, descendant] of Object.entries(index.items)) {
+              if (!sources.has(descendant.source)) continue
+              sources.add(descendant.path)
+              if (descendant.state !== 'removed') item.descendant = Number(child)
+            }
+          } while (size !== sources.size)
           if (!item.uncommitted && !item.unlanded && !item.descendant)
             index.items[String(id)].state = 'removed'
           else if (present && index.items[String(id)].state === 'removed')
@@ -638,55 +661,86 @@ export function workspaces(host: Host) {
     host.harness().resume()
     return result
   }
-  async function ready(id: ConversationId, context: Context) {
+  async function ready(
+    id: ConversationId,
+    context: Context,
+  ): Promise<WorkspacePending | undefined> {
     const record = await get(id, context)
-    if (!record) return
+    if (!record) return undefined
     const harness = host.harness()
     const index = await harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
     const parent = Object.entries(index?.items ?? {}).find(
       ([, workspace]) => workspace.path === record.source,
     )?.[0]
-    if (parent) await ready(Number(parent) as ConversationId, context)
-    await serial(record.source, async () => {
-      const workspace = (await get(id, context))!
-      if (workspace.state === 'ready' && !(await presentCheckout(id, context))) {
-        await harness.commit(async (tx) => {
-          ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'removed'
-        }, context)
-      } else if (workspace.state !== 'removed') return
-      if (await finishRemoval(id, workspace, context)) return
-      const exists = Boolean(await git(workspace.source, 'branch', '--list', workspace.branch))
-      const preserve =
-        exists &&
-        !(await git(
+    const recreate = () =>
+      serial(record.source, async () => {
+        if (parent && (await get(Number(parent) as ConversationId, context))?.state !== 'ready')
+          return true
+        const workspace = (await get(id, context))!
+        if (workspace.state === 'ready' && !(await presentCheckout(id, context))) {
+          await harness.commit(async (tx) => {
+            ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'removed'
+          }, context)
+        } else if (workspace.state !== 'removed') return false
+        const remaining = await finishRemoval(id, workspace, context)
+        if (remaining) return remaining
+        const exists = Boolean(await git(workspace.source, 'branch', '--list', workspace.branch))
+        const preserve =
+          exists &&
+          !(await git(
+            workspace.source,
+            'merge-base',
+            '--is-ancestor',
+            workspace.branch,
+            workspace.target,
+          ).then(
+            () => true,
+            () => false,
+          ))
+        const base = await git(
           workspace.source,
-          'merge-base',
-          '--is-ancestor',
-          workspace.branch,
-          workspace.target,
-        ).then(
-          () => true,
-          () => false,
-        ))
-      const base = await git(
-        workspace.source,
-        'rev-parse',
-        preserve ? workspace.branch : workspace.target,
-      )
-      await harness.commit(async (tx) => {
-        const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)]
-        saved.base = base
-        saved.state = 'preparing'
-        delete saved.error
-        delete saved.landed
-        await tx.createTask(
-          Preparation,
-          { id, reset: true, preserve },
-          { conversationId: id, ownership: { kind: 'conversation' }, background: true },
+          'rev-parse',
+          preserve ? workspace.branch : workspace.target,
         )
-      }, context)
-    })
-    if ((await get(id, context))?.state !== 'preparing') return
+        return harness.commit(async (tx) => {
+          const savedIndex = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+          if (parent) {
+            const source = savedIndex.items[parent]
+            if (
+              source.state !== 'ready' ||
+              !(await lstat(source.path).catch((error: NodeJS.ErrnoException) => {
+                if (error.code !== 'ENOENT') throw error
+                return undefined
+              }))
+            )
+              return true
+          }
+          const saved = savedIndex.items[String(id)]
+          saved.base = base
+          saved.state = 'preparing'
+          delete saved.error
+          delete saved.landed
+          await tx.createTask(
+            Preparation,
+            { id, reset: true, preserve },
+            { conversationId: id, ownership: { kind: 'conversation' }, background: true },
+          )
+          return false
+        }, context)
+      })
+    let retry: boolean | WorkspacePending
+    do {
+      if (parent) {
+        const parentId = Number(parent) as ConversationId
+        await ready(parentId, context)
+        const source = (await get(parentId, context))!
+        if (source.state === 'failed')
+          throw new Error(`Source workspace #${parent} setup failed: ${source.error}`)
+        retry = await serial(source.source, recreate)
+      } else retry = await recreate()
+    } while (retry === true)
+    if (typeof retry === 'object') return retry
+    if ((await get(id, context))?.state !== 'preparing') return undefined
     harness.resume()
     const task = await harness.commit(
       async (tx) =>
@@ -699,6 +753,7 @@ export function workspaces(host: Host) {
       context,
     )
     if (task) await harness.waitForTask(task.id, context)
+    return undefined
   }
   return {
     Preparation,

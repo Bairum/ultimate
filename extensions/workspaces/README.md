@@ -33,10 +33,16 @@ If the target changed or diverged, update the workspace onto it and verify again
 owned subagents. The `workspaces` service exposes `pending(ids, ctx)` and `release(ids, ctx)`; release removes
 only clean, fully landed checkouts, deletes merged branches, and returns checkouts kept for pending work or
 `busy` reasons (running or queued input). Descendants release before ancestors; a kept descendant also keeps its
-ancestors, reported with `descendant: <id>`. Git writes are serialized per source and removal is never forced.
+ancestors, reported with `descendant: <id>`. The removal transaction also checks current records sourced transitively
+from the checkout, so a descendant resumed during the batch keeps its source ancestors. Nested recreation checks
+its source parent's `ready` state and folder in the transaction that starts preparation; otherwise it readies the
+parent and retries. Source queues are acquired ancestor-first for that decision and filesystem recovery.
+Git writes are serialized per source and removal is never forced.
 Release atomically checks run admission and marks the record `removed` before deleting the folder. Requests wait
 on that same source queue before checking the record and recreating. Reconciliation and recreation finish
-interrupted removals; newly found pending work is kept and the checkout returns to `ready`.
+interrupted removals; newly found pending work is kept and the checkout returns to `ready`. Unlanded counts include
+commits reachable from either the branch or HEAD, including detached work. Refused removals restore `ready` and
+report `reason`; recovery through `ready()` returns the kept record and retains the reason in workspace info.
 On open, a background reconciliation releases concluded conversations' eligible checkouts; failures become notices.
 `release(ids, ctx, signal?)` stops between checkouts when aborted. Closing aborts reconciliation and waits only
 for the current checkout to finish, not the remaining batch.
