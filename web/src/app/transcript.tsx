@@ -443,6 +443,9 @@ function EmptyState() {
             </Fragment>
           ))}
         </div>
+        <div className="mt-4 border-t border-border/70 pt-4 font-sans text-[13px] text-muted-foreground">
+          New here? Ask <span className="text-foreground/85">How does Ultimate work?</span>
+        </div>
       </div>
     </ConversationEmptyState>
   )
