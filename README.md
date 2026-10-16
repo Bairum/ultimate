@@ -73,8 +73,9 @@ Supervisor changes require a **manual stop and restart with `pnpm start`**; a co
 
 ### In your project
 
-`ultimate [dir] [--port N] [--no-open]` starts Ultimate for a project (default: the current directory). Ultimate's own
-source stays in the clone; the tools and the conversation work in your project.
+`ultimate [dir] [--port N] [--no-open] [--app]` starts Ultimate for a project (default: the current directory). Ultimate's own
+source stays in the clone; the tools and the conversation work in your project. `--app` opens a chromeless
+Chrome app window at `http://ultimate.localhost:<port>`; running it again opens the already-running project.
 
 - **`.ultimate/` in your project** tailors it: `extensions/`, `agents/`, `skills/`, and an optional `settings.json`
   (`defaultSurface` picks the surface to open). Ultimate also reads your personal `~/.ultimate/` the same way. Lookup

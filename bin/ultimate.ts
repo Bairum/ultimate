@@ -5,7 +5,7 @@ import { once } from 'node:events'
 import { mkdir, realpath } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 import { projectHome } from '../server/project.ts'
-import { acquireLock, retireStorageOwner, pause } from '../server/lock.ts'
+import { acquireLock, readOwner, retireStorageOwner, pause } from '../server/lock.ts'
 import { watch, existsSync } from 'node:fs'
 import { watchRoots } from '../server/watch-roots.ts'
 import { join, resolve as resolvePath } from 'node:path'
@@ -21,10 +21,37 @@ import { dashboard } from './dashboard.ts'
 
 const ultimateRoot = resolvePath(fileURLToPath(new URL('..', import.meta.url)))
 const { values, positionals } = parseArgs({
-  options: { port: { type: 'string' }, 'no-open': { type: 'boolean' } },
+  options: { port: { type: 'string' }, 'no-open': { type: 'boolean' }, app: { type: 'boolean' } },
   allowPositionals: true,
 })
-if (positionals.length > 1) throw new Error('Usage: ultimate [dir] [--port N] [--no-open]')
+if (positionals.length > 1) throw new Error('Usage: ultimate [dir] [--port N] [--no-open] [--app]')
+const available = (name: string) =>
+  process.env.PATH?.split(':').some((path) => existsSync(join(path, name)))
+async function openWindow(port: number) {
+  const url = `http://${values.app ? 'ultimate.localhost' : '127.0.0.1'}:${port}`
+  let command = process.platform === 'darwin' ? 'open' : 'xdg-open'
+  let args = [url]
+  if (values.app) {
+    if (process.platform === 'darwin') {
+      args = ['-na', 'Google Chrome', '--args', `--app=${url}`]
+    } else {
+      if (available('omarchy-launch-webapp')) {
+        command = 'omarchy-launch-webapp'
+      } else {
+        const browser = ['google-chrome-stable', 'google-chrome', 'chromium', 'brave'].find(
+          available,
+        )
+        if (browser) {
+          command = browser
+          args = [`--app=${url}`]
+        }
+      }
+    }
+  }
+  const opener = spawn(command, args, { detached: true, stdio: 'ignore' })
+  opener.on('error', (error) => console.error(`Cannot open ${url}: ${error.message}`))
+  opener.unref()
+}
 const projectRoot = await realpath(positionals[0] ?? process.cwd()).catch((error) => {
   console.error(
     `Cannot open project ${positionals[0] ?? process.cwd()}: ${error.code ?? error.message}`,
@@ -41,7 +68,18 @@ const lock = await acquireLock(lockPath, {
   pid: process.pid,
   port,
   project: projectRoot,
-}).catch((error) => {
+}).catch(async (error) => {
+  if (
+    values.app &&
+    error instanceof Error &&
+    error.message.startsWith('Ultimate is already running')
+  ) {
+    const owner = await readOwner(lockPath)
+    if (owner?.port !== undefined) {
+      await openWindow(owner.port)
+      process.exit(0)
+    }
+  }
   console.error(String(error))
   process.exit(1)
 })
@@ -327,12 +365,7 @@ async function start(core: Core) {
     announced = true
     display.log('info', 'supervisor', `Ultimate: ${publicUrl}`)
     if (!values['no-open'] && process.env.ULTIMATE_NO_OPEN !== '1') {
-      const opener = spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [publicUrl], {
-        detached: true,
-        stdio: 'ignore',
-      })
-      opener.on('error', () => {})
-      opener.unref()
+      await openWindow(publicPort)
     }
   }
 }

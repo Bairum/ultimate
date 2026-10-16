@@ -65,7 +65,8 @@ export function loopbackAuthority(authority: string | undefined, port: string) {
   try {
     const url = new URL(`http://${authority}`)
     return (
-      ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) &&
+      (['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) ||
+        url.hostname.endsWith('.localhost')) &&
       (url.port || '80') === port &&
       !url.username &&
       !url.password &&
