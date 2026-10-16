@@ -18,18 +18,19 @@ The two-page first run, the project question, and the Extensions panel that turn
   choices. Continue applies it all with `applyFirstRun`, and the app switches live; with `parallel` on and
   `PARALLEL_API_KEY` missing, the Secrets panel then opens at that key. Skip, Escape, and the close button (ignored
   while Continue applies) keep the defaults, record the first run, and defer the project question for the tab.
-- **Project card** (outside the first run, a project with `.ultimate/` and no decision): "Use this project's setup?"
-  with the same chips and disclosure, and "Use it" or "Keep global", which both remember the choice. Escape and the
-  close button ("Decide later") defer it for the tab; until a choice is made the global setup is in use. The
-  Extensions panel opens it again ("About this setup").
+- **Project card** (a project with `.ultimate/` and no decision): "Use this project's setup?" with the same chips and
+  disclosure, and "Use it" or "Keep global", which both remember the choice. It never opens by itself: while the
+  decision is open, a quiet "project setup" entry on the right of the status line opens it, and so does the Extensions
+  panel ("About this setup"). Escape and the close button ("Decide later") just close it; until a choice is made the
+  global setup is in use.
 - **Extensions panel** (right-panel tab, palette "Extensions…"): the project decision with a way to change it,
   "Use this project's setup everywhere", and every extension, on and available, with its source, the layer that
   decided it, its README line, and a switch. Switches save to this project (when its setup is in use) or everywhere.
   Turning off `agent` or `onboarding` asks first, because the panel goes with them. Failures show on the row; the
   list follows system info, so a change shows once it is live.
 
-An automated browser (`navigator.webdriver`, as in the agent's `browser` and `screenshot` tools) gets neither the first
-run nor the project card unasked; the Extensions panel still opens the card.
+An automated browser (`navigator.webdriver`, as in the agent's `browser` and `screenshot` tools) does not get the first
+run.
 
 The pages are dialogs: Escape or the close button dismisses them, focus moves into them and back to the composer.
 The first-run splash fades into page 1, already open beneath it.

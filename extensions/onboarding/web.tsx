@@ -1,42 +1,27 @@
-import { BlocksIcon } from 'lucide-react'
-import { useEffect, useReducer, useRef, useState } from 'react'
-import {
-  api,
-  defineWebExtension,
-  getState,
-  useAction,
-  useDialog,
-  useSystem,
-  useUltimate,
-} from '@/sdk'
+import { BlocksIcon, FolderCogIcon } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { api, defineWebExtension, useAction, useDialog, useSystem, useUltimate } from '@/sdk'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { FirstRun, ProjectCard } from './pages.tsx'
 import { ExtensionsPanel } from './panel.tsx'
 import { projectDialog } from './parts.tsx'
 import type { Status } from './parts.tsx'
 
-/** Closing the project question without a choice defers it for this tab; a new tab or window asks again. */
-const later = (root: string) => `ultimate.onboarding.later:${root}`
-
 /**
  * The first run's two pages, which also ask about an undecided project setup; afterwards, that question as a compact
- * card. Each closes with Escape.
+ * card that opens only when asked for, from the status line or the Extensions panel. Each closes with Escape.
  */
 function Onboarding() {
   const system = useSystem()
   const status = useAction<Status>('onboarding', 'status')
   const ui = useUltimate()
-  const [reopened, setReopened] = useDialog(projectDialog)
+  const [cardOpen, setCardOpen] = useDialog(projectDialog)
   const [finished, setFinished] = useState(false)
-  const [, deferred] = useReducer((count: number) => count + 1, 0)
   const project = system?.project
-  // Until status answers, neither shows; without an answer there is no first run. A page driven by automation, such
-  // as the agent's browser tool, gets neither unasked: the Extensions panel still opens the project card.
+  // Until status answers, the first run does not show; without an answer there is none. A page driven by automation,
+  // such as the agent's browser tool, does not get it.
   const settled = !navigator.webdriver && (status.data !== undefined || status.error !== undefined)
   const firstRun = settled && status.data?.firstRun === true && !finished
-  const undecided = project?.config === true && project.decision === null
-  const asking =
-    settled && !firstRun && undecided && sessionStorage.getItem(later(project.root)) === null
-  const cardOpen = !firstRun && (reopened || asking)
   // Each opening reads the setup again, so agents, skills, and folders added since show.
   const { refetch } = status
   const wasOpen = useRef(false)
@@ -45,41 +30,56 @@ function Onboarding() {
     wasOpen.current = cardOpen
   }, [cardOpen, refetch])
   if (!project) return null
-  const defer = () => {
-    if (getState().system?.project.decision !== null) return
-    sessionStorage.setItem(later(project.root), '1')
-    deferred()
-  }
   return (
     <>
       <FirstRun
-        askProject={undecided}
+        askProject={project.config && project.decision === null}
         onClosed={() => ui.focusComposer()}
         onDone={(skipped) => {
           setFinished(true)
-          if (!skipped) return
-          // Skipped: the defaults stay, and the project question waits for another tab.
-          void api.action('onboarding', 'firstRunDone')
-          defer()
+          // Skipped: the defaults stay, and the status line keeps offering the project question.
+          if (skipped) void api.action('onboarding', 'firstRunDone')
         }}
         open={firstRun}
         status={status.data}
       />
       <ProjectCard
         adds={status.data?.adds}
-        onClose={() => {
-          setReopened(false)
-          defer()
-        }}
+        onClose={() => setCardOpen(false)}
         onClosed={() => ui.focusComposer()}
-        open={cardOpen}
+        open={!firstRun && cardOpen}
       />
     </>
   )
 }
 
+/** While the project's setup is undecided, a quiet status-line entry that opens the question. */
+function Undecided() {
+  const system = useSystem()
+  const ui = useUltimate()
+  const project = system?.project
+  if (!project?.config || project.decision !== null) return null
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          className="-mx-1 flex items-center gap-1.5 rounded-sm px-1 transition-colors hover:bg-accent hover:text-foreground"
+          onClick={() => ui.open(projectDialog)}
+          type="button"
+        >
+          <FolderCogIcon className="size-3 text-brand" />
+          project setup
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="text-[11px]" side="top">
+        This folder has its own setup. Using global until you choose.
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 export default defineWebExtension({
-  slots: { overlay: [Onboarding] },
+  slots: { overlay: [Onboarding], 'statusline.right': [Undecided] },
   panels: [{ id: 'extensions', title: 'Extensions', icon: BlocksIcon, component: ExtensionsPanel }],
   commands: [
     {
