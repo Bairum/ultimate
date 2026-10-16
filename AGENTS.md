@@ -73,7 +73,8 @@ Every built-in is on by default, including `faux` (inert unless `ULTIMATE_FAUX=1
 restart. User/project extension folders are on by default too; `disable` turns off any extension. Unknown names
 produce a notice. `summaryModel` (`"provider/id[:thinking]"`, default `openai/gpt-6-luna:medium`; project over user)
 picks the model for automatic titles, summaries and reply assessments; set it in either file or with
-the "Summary model…" command, and it applies to the next request.
+the "Summary model…" command, and it applies to the next request. `fastModels` (`["openai/<id>", …]`; project over
+user) runs those models on the priority tier through the `fast` extension, at a higher usage rate.
 User config is independent of `ULTIMATE_HOME`. This repository's `.ultimate/settings.json` holds only its isolate setup
 and lander checks.
 
@@ -210,6 +211,7 @@ definition in parallel and returns one merged verdict. Add a reviewer by adding 
 - `web/src/sdk/events.ts` — adapted Pi event bus using browser-safe sets instead of node:events, with Pi's exported EventBus type and handler-error semantics. Drop when Pi ships a browser-safe bus.
 - `extensions/coding-tools/web.tsx` — internal bash exit_code diagnostic message drives exitOf and untyped details.patch/details.diff drive Edit. Drop when Pi exports structured bash outcomes and structured diff rows for rendering.
 - `extensions/self/web.tsx` — internal remove-all pi.system entry immediately precedes a reordered re-add, hidden here. Drop when Pi exposes prompt reorder metadata instead of requiring entry-sequence inference.
+- `extensions/fast/server.ts` — sets service_tier through onPayload because pi-ai's simple stream options drop serviceTier. Drop when buildBaseOptions forwards serviceTier and Pi Durable stream settings accept it.
 - `extensions/subagents/server.ts` — internal ToolTaskInput.assistant locates the calling assistant for history forks. Drop when ToolExecutionApi exposes the calling assistant entry ID.
 
 On a Pi upgrade, run `rg "Pi upstream:"` and recheck each marked item against the new version; test/pi-upstream.test.ts checks that every tracked marker matches the installed package version and its path appears in this list, and every backticked path in this list is tracked and contains a marker.
