@@ -1,7 +1,7 @@
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import type { JsonObject } from '@earendil-works/pi-durable'
 
@@ -29,10 +29,31 @@ export async function projectSettings(
   }
 }
 
-export function projectDecision(projectRoot: string, userHome = homedir()) {
+/**
+ * Where a folder's decision is kept: a linked git worktree shares its main checkout's, so a new worktree of a chosen
+ * project needs no choice of its own.
+ */
+export function decisionRoot(projectRoot: string) {
   const root = realpathSync(resolve(projectRoot))
+  let link: string
+  try {
+    link = readFileSync(join(root, '.git'), 'utf8')
+  } catch (error) {
+    // No `.git` file: a main checkout (a `.git` directory) or a folder outside git keeps its own decision.
+    if (['ENOENT', 'EISDIR'].includes((error as NodeJS.ErrnoException).code!)) return root
+    throw error
+  }
+  const gitdir = resolve(root, link.match(/^gitdir: (.+)$/m)![1])
+  // A submodule's `.git` file has no `commondir`; it keeps its own decision too.
+  if (!existsSync(join(gitdir, 'commondir'))) return root
+  const common = resolve(gitdir, readFileSync(join(gitdir, 'commondir'), 'utf8').trim())
+  return basename(common) === '.git' ? realpathSync(dirname(common)) : root
+}
+
+export function projectDecision(projectRoot: string, userHome = homedir()) {
   const path = join(userHome, '.ultimate/trust.json')
   try {
+    const root = decisionRoot(projectRoot)
     const entry = new ProjectTrustStore(join(userHome, '.ultimate')).getEntry(root)
     errors.delete(path)
     return entry?.path === root ? entry.decision : null

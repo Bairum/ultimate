@@ -49,6 +49,7 @@ This default-on built-in exports browser actions (no model tools):
   user's `extensions.enable` and drops it from `disable`, false drops it from `enable`. Records the first run, then
   applies the settings and, when `local` is given, the project decision with one reload.
 - `decide { local }`: saves the project choice with Pi's `ProjectTrustStore` in `.ultimate` and reloads extensions and web facets.
+  A linked git worktree reads and saves its main checkout's choice, so new worktrees of a decided project never ask.
 - `setExtension { name, enabled, scope }`: updates user or project settings, preserving other keys. Project writes require a local decision.
 - `adoptProjectSetup`: merges project enable/disable lists into user settings.
 - `extensions`: discovered names, sources, effective enablement, deciding layers, and README first sentences, including project folders not yet selected.

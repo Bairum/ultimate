@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path'
 import { expect, it } from 'vitest'
 import { fauxServer, post, temp, removeTemp } from './helpers.ts'
 import { context } from '../server/harness.ts'
+import { git } from '../extensions/workspaces/git.ts'
 import { projectDecision } from '../server/project-setup.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 
@@ -210,6 +211,42 @@ it('does not inherit a parent project choice', async () => {
     await mkdir(project, { recursive: true })
     new ProjectTrustStore(join(home, '.ultimate')).set(join(home, 'parent'), true)
     expect(projectDecision(project, home)).toBe(null)
+  } finally {
+    await removeTemp(home)
+  }
+})
+
+it('shares one choice between a checkout and its linked worktrees', async () => {
+  const home = await temp('ultimate-trust-worktree-')
+  try {
+    const main = join(home, 'main')
+    const worktree = join(home, 'worktree')
+    await mkdir(join(main, '.ultimate/agents'), { recursive: true })
+    await writeFile(join(main, '.ultimate/agents/y.md'), '---\nname: y\ndescription: Y\n---\nY.')
+    await git(main, 'init', '-b', 'main')
+    await git(main, 'add', '.')
+    await git(main, '-c', 'user.name=T', '-c', 'user.email=t@example.com', 'commit', '-m', 'base')
+    await git(main, 'worktree', 'add', worktree, '-b', 'branch')
+    expect(projectDecision(worktree, home)).toBe(null)
+    new ProjectTrustStore(join(home, '.ultimate')).set(main, true)
+    expect(projectDecision(worktree, home)).toBe(true)
+    // A worktree's own entry is not consulted, and choosing from it decides for the checkout.
+    new ProjectTrustStore(join(home, '.ultimate')).set(worktree, false)
+    expect(projectDecision(worktree, home)).toBe(true)
+    const server = await fauxServer({
+      ultimateRoot: resolve('.'),
+      projectRoot: worktree,
+      userHome: home,
+      home: join(home, 'state'),
+      localSetup: false,
+    })
+    try {
+      expect(server.system.current().project.decision).toBe(true)
+      await post(server, '/api/extensions/onboarding/actions/decide', { args: { local: false } })
+      expect(projectDecision(main, home)).toBe(false)
+    } finally {
+      await server.close()
+    }
   } finally {
     await removeTemp(home)
   }

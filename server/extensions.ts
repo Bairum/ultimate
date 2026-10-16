@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { compareExtensions, discoverExtensions } from './discovery.ts'
-import { projectSetup, projectSettings, projectDiagnostics } from './project-setup.ts'
+import { decisionRoot, projectSetup, projectSettings, projectDiagnostics } from './project-setup.ts'
 import { createEventBus, ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import type { EventBus } from '@earendil-works/pi-coding-agent'
 import { discoveryRoots, projects } from './project.ts'
@@ -67,7 +67,7 @@ export type ExtensionHost = Pick<
   projects(): Promise<ProjectInfo[]>
   /** Discovered extensions, including disabled project folders, with effective deciding layers. */
   extensions(): ExtensionInfo[]
-  /** Project setup availability, exact-root decision, and capped README. */
+  /** Project setup availability, the decision of the root (a linked worktree's main checkout), and capped README. */
   projectSetup(): ReturnType<typeof projectSetup>
   /** Parsed project settings only after a local decision; otherwise empty. Invalid JSON reports a notice and returns empty. */
   projectSettings(): Promise<JsonObject>
@@ -275,7 +275,10 @@ export async function loadExtensions(
         }))
     },
     setProjectDecision: async (local) => {
-      new ProjectTrustStore(join(host.userHome, '.ultimate')).set(host.projectRoot, local)
+      new ProjectTrustStore(join(host.userHome, '.ultimate')).set(
+        decisionRoot(host.projectRoot),
+        local,
+      )
       await extensionHost.reloadExtensions()
     },
     reloadExtensions: async () => {

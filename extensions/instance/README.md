@@ -4,7 +4,7 @@ Run an on-demand second Ultimate to test core changes before restarting the shar
 
 Start uses a temporary home unless a separate home is supplied. A preview cannot share the host's home or another running preview's home. The child binds to localhost port zero; the tool reads its `Ultimate: <URL>` stdout line and checks `/api/models`. Startup has a 60-second deadline, with the output tail included in errors.
 
-Set `faux: true` for token-free testing; otherwise previews use real models. No state or project trust decisions are copied. Each preview keeps its own SQLite storage and Vite cache.
+Set `faux: true` for token-free testing; otherwise previews use real models. No state is copied; a workspace preview follows its main checkout's project decision, as every linked worktree does. Each preview keeps its own SQLite storage and Vite cache.
 
 Logs returns the last 200 lines; list shows running instances. At most three may run, including starts in progress; shutdown stops them all. Temporary homes remain for inspection. The tool is not replay-safe. Returned URLs work with screenshot or browser.
 
