@@ -34,7 +34,7 @@ It creates nothing until sent; sending calls lineage `branch` from the root's la
 chosen model/thinking level and any pasted images. The same composer serves lineage's "Branch from here". The dropdown's Isolated and Shared choices only select the type, remembered in
 `ext.conversations.creationType` across tabs, reloads and restarts. New isolated conversation explicitly branches
 in its own checkout without changing that preference. Errors preserve the prompt for retry.
-Conclude and clear context never remove checkouts or commits. The menu retains Manage workspaces.
+Conclude and clear context never remove checkouts or commits. The Workspaces panel shows checkouts read-only.
 
 On hover or focus, a row's `…` menu offers Rename (inline; also on double-click; Enter or leaving the field saves,
 Escape cancels, and after either key focus returns to the row), Clear context… (asks first; not while the conversation

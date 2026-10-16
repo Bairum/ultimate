@@ -315,7 +315,7 @@ export function Conversations() {
               className="cursor-pointer text-xs"
               onSelect={() => actions.openPanel('workspaces')}
             >
-              Manage workspaces
+              Workspaces
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

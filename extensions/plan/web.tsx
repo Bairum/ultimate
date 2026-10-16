@@ -3,7 +3,6 @@ import {
   ChevronRightIcon,
   ClipboardListIcon,
   GitBranchIcon,
-  GitMergeIcon,
   LinkIcon,
   SquareArrowOutUpRightIcon,
   XIcon,
@@ -34,7 +33,7 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { ConversationSummary, ToolCallView } from '@/sdk'
-import { stateLabel, useWorkspaceAction, useWorkspaces } from '../workspaces/data.tsx'
+import { stateLabel, useWorkspaces } from '../workspaces/data.tsx'
 import type { WorkspaceInfo } from '../workspaces/types.ts'
 import { StatusIcon, TaskChip, statusOf, useOpenTask, useTaskOf } from './chip.tsx'
 import type { TaskLink } from './chip.tsx'
@@ -115,8 +114,8 @@ function useRefresh(refetch: () => unknown, key: string) {
 }
 
 /**
- * The linked child's workspace: branch, state, commits ahead, and Land through the `workspaces` actions. Refetched
- * when the child or its parent settles, since either may have committed or landed.
+ * The linked child's workspace: branch, state and commits ahead. Refetched when the child or its parent settles,
+ * since either may have committed or landed.
  */
 function IsolateRow({ child, parent }: { child: ConversationSummary; parent: number }) {
   const conversations = useConversations()
@@ -129,7 +128,6 @@ function IsolateRow({ child, parent }: { child: ConversationSummary; parent: num
     { enabled: !!recorded },
   )
   useRefresh(() => recorded && refetch(), `${child.busy} ${parentBusy}`)
-  const { pending, outcome, land } = useWorkspaceAction(child.id, refetch)
   if (!isolate) return null
   return (
     <div className="font-mono text-[11px] text-muted-foreground">
@@ -159,30 +157,7 @@ function IsolateRow({ child, parent }: { child: ConversationSummary; parent: num
             ↑{isolate.ahead}
           </span>
         )}
-        {/* A landed branch with nothing new needs no button; later commits bring it back. */}
-        {isolate.state === 'ready' && !(isolate.landed && isolate.ahead === 0) && (
-          <Button
-            className="ml-auto h-5 shrink-0 gap-1 px-1.5 text-[11px]"
-            disabled={child.busy || pending !== undefined}
-            onClick={() => void land()}
-            size="xs"
-            variant="ghost"
-          >
-            <GitMergeIcon className="size-3" />
-            {pending ? 'Landing…' : 'Land'}
-          </Button>
-        )}
       </div>
-      {outcome && (
-        <p
-          className={cn(
-            'leading-snug break-words whitespace-pre-wrap',
-            outcome.error && 'text-error',
-          )}
-        >
-          {outcome.text}
-        </p>
-      )}
     </div>
   )
 }

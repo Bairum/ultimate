@@ -62,12 +62,6 @@ export const actions = {
   info(args: JsonValue, { host }: ActionContext) {
     return workspaces(host).info(workspaceId(args), context)
   },
-  land(args: JsonValue, { host }: ActionContext) {
-    return workspaces(host).land(workspaceId(args), context)
-  },
-  submit(args: JsonValue, { host }: ActionContext) {
-    return workspaces(host).submit(workspaceId(args), context)
-  },
   discard(args: JsonValue, { host }: ActionContext) {
     return workspaces(host).discard(workspaceId(args), context)
   },

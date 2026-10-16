@@ -12,13 +12,11 @@ import {
   formatBytes,
   useAction,
   useConversation,
-  useTasks,
   useUltimate,
 } from '@/sdk'
 import {
   stateLabel,
   useLanderQueue,
-  useWorkspaceAction,
   useWorkspaceConversations as useConversations,
   useWorkspaces,
 } from './data.tsx'
@@ -115,13 +113,6 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
   const actions = useUltimate()
   const shown = useConversation().id === conversation.id
   const [open, setOpen] = useState(shown)
-  const [confirming, setConfirming] = useState(false)
-  const tasks = useTasks()
-  const busy =
-    conversation.busy ||
-    Object.values(tasks?.tasks ?? {}).some(
-      (task) => task.conversationId === conversation.id && !task.background,
-    )
   const info = useAction<WorkspaceInfo | null>(
     'workspaces',
     'info',
@@ -130,10 +121,6 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
       enabled: false,
       onError: () => undefined,
     },
-  )
-  const { pending, outcome, land, submit, remove } = useWorkspaceAction(
-    conversation.id,
-    info.refetch,
   )
   const queued = useLanderQueue().find((item) => item.conversationId === conversation.id)
   const recorded = conversation.workspace!
@@ -148,11 +135,6 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
   useEffect(() => {
     if (open) void refetch()
   }, [recorded.state, recorded.landed, conversation.busy, open, refetch])
-  const disabled =
-    busy ||
-    pending !== undefined ||
-    workspace.state === 'removed' ||
-    workspace.state === 'preparing'
   const ahead = info.data?.ahead
   const fields = [
     ['Path', workspace.path],
@@ -161,7 +143,6 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
     ...(typeof ahead === 'number' ? [['Ahead', `${ahead} commit${ahead === 1 ? '' : 's'}`]] : []),
     ...(workspace.landed ? [['Last landed', workspace.landed.slice(0, 7)]] : []),
   ]
-  const error = outcome?.error ? outcome.text : info.error?.message
   return (
     <Collapsible
       className="border-b border-border/60"
@@ -225,88 +206,16 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
             </div>
           ))}
         </dl>
-        {busy && (
-          <p role="status" className="text-muted-foreground">
-            Conversation is running.
-          </p>
-        )}
         {workspace.state === 'failed' && (
           <p role="alert" className="break-words whitespace-pre-wrap text-error">
             {workspace.error}
           </p>
         )}
-        {error && (
+        {info.error && (
           <p role="alert" className="break-words whitespace-pre-wrap text-error">
-            {error}
+            {info.error.message}
           </p>
         )}
-        {outcome && !outcome.error && (
-          <p role="status" className="text-muted-foreground">
-            {outcome.text}
-          </p>
-        )}
-        {workspace.state !== 'removed' &&
-          (confirming ? (
-            <div className="space-y-2 rounded-md border border-border/70 p-3">
-              <p>Remove this checkout? Its branch and commits stay.</p>
-              <div className="flex gap-2">
-                <Button
-                  className="cursor-pointer"
-                  onClick={() => setConfirming(false)}
-                  size="sm"
-                  variant="ghost"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  className="cursor-pointer"
-                  disabled={disabled}
-                  onClick={() => {
-                    setConfirming(false)
-                    void remove()
-                  }}
-                  size="sm"
-                  variant="outline"
-                >
-                  Remove
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {!conversation.parentConversationId && conversation.ownerTaskId === undefined && (
-                <Button
-                  className="cursor-pointer"
-                  disabled={
-                    pending !== undefined || workspace.state !== 'ready' || queued !== undefined
-                  }
-                  onClick={() => void submit()}
-                  size="sm"
-                  variant="outline"
-                >
-                  {pending === 'submit' ? 'Submitting…' : 'Submit'}
-                </Button>
-              )}
-              <Button
-                className="cursor-pointer"
-                disabled={disabled || workspace.state !== 'ready'}
-                onClick={() => void land()}
-                size="sm"
-                variant="ghost"
-              >
-                {pending === 'land' ? 'Landing…' : 'Land'}
-              </Button>
-              <Button
-                className="cursor-pointer"
-                disabled={disabled}
-                onClick={() => setConfirming(true)}
-                size="sm"
-                variant="ghost"
-              >
-                {pending === 'discard' ? 'Removing…' : 'Remove…'}
-              </Button>
-            </div>
-          ))}
       </CollapsibleContent>
     </Collapsible>
   )
@@ -420,7 +329,7 @@ function Stats() {
   )
 }
 
-/** The lander queue, the statistics, and the shown conversation's checkout with its actions. */
+/** The lander queue, the statistics, and the shown conversation's checkout. */
 function WorkspacesPanel() {
   const shownId = useConversation().id
   const shown = useConversations().find(
