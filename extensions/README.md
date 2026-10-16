@@ -26,7 +26,10 @@ An optional `inbox` renderer wraps each queued composer input with `{ item, core
 An optional `composer` renderer receives `{ core, dock? }` for the shown conversation's composer (`dock` marks a
 narrow side region). Return `core` where you do not own it; otherwise render the replacement. The last facet in
 discovery order wins, behind an extension boundary with core fallback. It does not replace the start-page composer.
-Lineage uses this to make a tally's composer start a branch instead of sending an input to the root.
+Lineage uses this to make a tally's composer open a side chat or start a branch instead of sending an input to the
+root, and to put a side chat's end bar above its composer. `NewConversationComposer` takes an optional `start` that
+replaces the extensions' starter for that composer, and `prompt`, the text it holds while its draft is empty.
+`switchConversation(id, { replace: true })` takes the current history entry instead of adding one, as a redirect does.
 
 ## Where extensions live
 
@@ -190,7 +193,8 @@ No restart, no reload.
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
 
 A `start(draft)` contribution starts a new conversation from the start page composer's prompt, images, branch point
-(or `root: true`) and configuration, returning `Promise<{ id: number }>`. The last starter in discovery order wins; without one, the
+(or `root: true`) and configuration, returning `Promise<{ id: number }>`; `alternate: true` marks a draft sent with ⌥↵
+instead of ↵, the starter's second way to start. The last starter in discovery order wins; without one, the
 new composer is blocked. The extension owns creation policy; `getUiState(key)` reads pending local UI choices too.
 
 ### Slots

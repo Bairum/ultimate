@@ -1,30 +1,35 @@
-import { GitBranchIcon, SproutIcon, XIcon } from 'lucide-react'
+import { GitBranchIcon, LoaderCircleIcon, SproutIcon, XIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import {
+  api,
   cn,
+  getState,
+  getUiState,
   NewConversationComposer,
   useAction,
   useConversation,
   useStore,
   useUltimate,
 } from '@/sdk'
-import type { EntryRecord } from '@/sdk'
+import type { ConversationDraft, EntryRecord } from '@/sdk'
 import { ConversationRef } from '../conversations/feature.tsx'
 import { useRoots } from './roots.tsx'
 
 /**
  * Where a new conversation starts: a branch of `from` at entry `at`, or without `from` New, which branches from the
- * shown tree's root or starts a new root.
+ * shown tree's root or starts a new root. With `side`, the branch ends that side chat of root `from`.
  */
-export type StartPoint = { from?: number; at?: number }
+export type StartPoint = { from?: number; at?: number; side?: number }
 
 /**
- * The start page lives in the URL (`?new`, `?new=<from>` or `?new=<from>.<at>`), so Back closes it and a reload keeps
- * it. The entry it pushed carries `marker`, so closing it goes back rather than leaving a duplicate behind.
+ * The start page lives in the URL (`?new`, `?new=<from>`, `?new=<from>.<at>`, or `?new=<from>&side=<side>`), so Back
+ * closes it and a reload keeps it. The entry it pushed carries `marker`, so closing it goes back rather than leaving a
+ * duplicate behind.
  */
 const param = 'new'
+const sideParam = 'side'
 const marker = 'lineage.start'
 const listeners = new Set<() => void>()
 const notify = () => {
@@ -38,13 +43,20 @@ function subscribe(listener: () => void) {
     removeEventListener('popstate', listener)
   }
 }
-const current = () => new URLSearchParams(location.search).get(param)
+function current() {
+  const search = new URLSearchParams(location.search)
+  const value = search.get(param)
+  const side = search.get(sideParam)
+  return value === null || side === null ? value : `${value}~${side}`
+}
 
 const valid = (id: number | undefined) => id !== undefined && Number.isSafeInteger(id) && id > 0
 function decode(value: string | null): StartPoint | undefined {
   if (value === null) return undefined
-  const [from, at] = value.split('.').map(Number)
+  const [point, side] = value.split('~')
+  const [from, at] = point.split('.').map(Number)
   if (!valid(from)) return {}
+  if (valid(Number(side))) return { from, side: Number(side) }
   return { from, ...(valid(at) ? { at } : {}) }
 }
 
@@ -52,20 +64,28 @@ function decode(value: string | null): StartPoint | undefined {
 let isolation: boolean | undefined
 /** What the entry a branch starts at says, as the message action saw it: the history it sits in may not be loaded. */
 let excerpt: { at: number; text: string } | undefined
+/** The prompt a side chat proposed for the branch it ends in, as its card passed it. */
+let proposed: { side: number; prompt: string } | undefined
 
 /** Show the start page over the conversation. */
 export function openStart(
   point: StartPoint,
-  options: { isolated?: boolean; excerpt?: string } = {},
+  options: { isolated?: boolean; excerpt?: string; prompt?: string } = {},
 ) {
   isolation = options.isolated
   excerpt =
     point.at !== undefined && options.excerpt ? { at: point.at, text: options.excerpt } : undefined
+  proposed =
+    point.side !== undefined && options.prompt
+      ? { side: point.side, prompt: options.prompt }
+      : undefined
   const url = new URL(location.href)
   url.searchParams.set(
     param,
     point.from === undefined ? '' : `${point.from}${point.at === undefined ? '' : `.${point.at}`}`,
   )
+  if (point.side === undefined) url.searchParams.delete(sideParam)
+  else url.searchParams.set(sideParam, String(point.side))
   if (current() !== null) history.replaceState(history.state, '', url)
   else history.pushState({ ...history.state, [marker]: true }, '', url)
   notify()
@@ -76,6 +96,7 @@ function drop(conversation?: number) {
   if (current() === null) return
   const url = new URL(location.href)
   url.searchParams.delete(param)
+  url.searchParams.delete(sideParam)
   if (conversation !== undefined) url.searchParams.set('conversation', String(conversation))
   const { [marker]: _pushed, ...state } = (history.state ?? {}) as Record<string, unknown>
   history.replaceState(state, '', url)
@@ -128,7 +149,7 @@ export function StartPage() {
   if (!showing || (shown === undefined && !leaving)) return null
   return (
     <Page
-      key={`${showing.from ?? ''}.${showing.at ?? ''}`}
+      key={`${showing.from ?? ''}.${showing.at ?? ''}~${showing.side ?? ''}`}
       leaving={leaving !== undefined && shown === leaving.id && prompted}
       onGone={() => setLeaving(undefined)}
       onStarted={(id) => {
@@ -235,6 +256,8 @@ function Page({
       </button>
       {point.from === undefined ? (
         <New intro={intro} onStarted={onStarted} />
+      ) : point.side !== undefined ? (
+        <SideBranch intro={intro} onStarted={onStarted} root={point.from} side={point.side} />
       ) : (
         <Branch from={point.from} at={point.at} intro={intro} onStarted={onStarted} />
       )}
@@ -281,6 +304,96 @@ function Composer({
       isolated={isolation}
       onStarted={onStarted}
     />
+  )
+}
+
+/**
+ * Whether a new branch is isolated: as `draft` chose, else by the creation-type preference, where the project can be
+ * isolated.
+ */
+export async function isolated(draft: Pick<ConversationDraft, 'isolated'>) {
+  return (
+    draft.isolated ??
+    (getUiState('ext.conversations.creationType') !== 'shared' &&
+      getState().system?.extensions.some((extension) => extension.name === 'workspaces') === true &&
+      !(await api.action<{ reason?: string }>('workspaces', 'isolation', {})).reason)
+  )
+}
+
+/**
+ * The branch side chat `side` of `root` ends in: a note of what it settled goes into the tally first, and the branch
+ * starts right after it. Its prompt is the side chat's last proposal, else one the summary model drafts.
+ */
+function SideBranch({
+  root,
+  side,
+  intro,
+  onStarted,
+}: {
+  root: number
+  side: number
+  intro: React.RefObject<HTMLDivElement | null>
+  onStarted: (id: number) => void
+}) {
+  const given = proposed?.side === side ? proposed.prompt : undefined
+  const draft = useAction<{ prompt: string }>(
+    'lineage',
+    'sideDraft',
+    { root },
+    { enabled: given === undefined, onError: () => {} },
+  )
+  const prompt = given ?? draft.data?.prompt
+  const ready = prompt !== undefined || draft.error !== undefined
+  return (
+    <>
+      <Intro
+        head={
+          <div className={eyebrow}>
+            <GitBranchIcon className="size-3.5" />
+            New branch
+          </div>
+        }
+        intro={intro}
+      >
+        <div className="mt-3 flex min-w-0 items-baseline gap-2 text-[15px] font-medium">
+          <span className="shrink-0 text-muted-foreground">from</span>
+          <ConversationRef className="min-w-0" id={root} />
+        </div>
+        <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
+          Ends side chat #{side}: a note of what it settled goes into the tally, and the branch
+          starts right after it with what you write below.
+        </p>
+        {!ready && (
+          <p
+            className="mt-4 flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground"
+            role="status"
+          >
+            <LoaderCircleIcon className="size-3 motion-safe:animate-spin" />
+            Drafting its prompt…
+          </p>
+        )}
+        {draft.error && (
+          <p className="mt-4 font-mono text-[11px] text-error">No draft: {draft.error.message}</p>
+        )}
+      </Intro>
+      {ready && (
+        <NewConversationComposer
+          branch={{ from: root }}
+          inputId="start-input"
+          isolated={isolation}
+          onStarted={onStarted}
+          prompt={prompt}
+          start={async ({ root: _root, from: _from, at: _at, alternate: _alternate, ...input }) =>
+            api.action<{ id: number }>('lineage', 'endSide', {
+              ...input,
+              root,
+              mode: 'branch',
+              isolated: await isolated(input),
+            })
+          }
+        />
+      )}
+    </>
   )
 }
 

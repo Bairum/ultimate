@@ -14,7 +14,8 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
   those trees have none. Action `newRoot` `{ prompt, images?, isolated?, model?, thinkingLevel? }` → `{ id, root }`
   creates an empty tally, then its first branch; `id` is the branch to open. The root uses the chosen model or
   conversation 1's default. Creation emits `lineage:rooted` for the root and `lineage:branched` for the branch.
-  Typing in a tally's composer starts a branch from its tip; the server refuses inputs to tallies.
+  Typing in a tally's composer opens a side chat with it (↵) or starts a branch from its tip (⌥↵); the server refuses
+  inputs to tallies.
   Action `root` `{ id }` (⌘K "Make this a root") adopts a top-level non-branch conversation or converts an existing
   root. With history, it is refused while the conversation has a live run, compaction, notify or subagent report, or a
   workspace submission queued or landing; otherwise `lineage.tally.converting` refuses inputs at once and a durable
@@ -36,6 +37,27 @@ converting?: true }`: each conversation's open abstract, estimated model-visible
   `edits` replace the anchor's text in place, so the tally never reorders. An anchor a compaction or genesis replaced
   takes no edits; the next abstract opens a new one. Storage stays append-only. The transcript shows each anchor as a
   card with its newest carrier's text and `#N/at` breadcrumb; carriers render nothing, and a frozen anchor hides.
+- **Side chats**: a conversation with a tally at this point in time, before anything becomes a branch. Action `side`
+  `{ root, prompt, images?, model?, thinkingLevel? }` → `{ id }` forks the tally's tip as an ownerless conversation in
+  the shared checkout (never isolated) with label `side chat`; the `lineage.prompt` task delivers its prompt. A root
+  has one open at a time: `lineage.roots` keeps them as `sides` (root → side chat), so every client sees them with the
+  roots. Doc `lineage.side` on the side chat holds `{ root, at, ending?, ended?, branch? }`. It writes nothing into
+  the tally while open: no prompt node, no `lineage.branch`, no abstracts (`branchOf` is undefined for it); catch-up
+  applies as in any tree conversation. It reads but does not edit: its `pi.agent` removes `edit`, `write`, `note` and
+  `subagent`, and loads the deferred `propose_branch` tool, which only an open side chat may call. Bash stays for
+  reading (rg, git log, read-only checks), and its prompt section says so; a shell cannot be restricted to reading,
+  and without it the chat could not search the code. `propose_branch` `{ prompt }` renders as a "Proposed branch" card
+  whose "Start branch…" opens the start page with that prompt. It ends only when the user ends it, with action
+  `endSide` `{ root, mode, prompt?, images?, isolated?, model?, thinkingLevel? }`:
+  `discard` closes it and the tally gets nothing; `note` has the summary model (else the side chat's own) write what
+  it settled, at most 800 characters, appended to the root as a model-visible `lineage.note`
+  `{ text, from, source: 'side' }` reading `Side chat #S: …`; `branch` writes the note, then starts a branch from the
+  tally's tip right after it, so the branch inherits the note; its prompt node carries `side` and reads
+  `#B was started from the tally (#R/at), ending side chat #S, with the prompt:`. Note and branch run in the
+  durable `lineage.side` task: the model's answer is memoised, the note commits with the close (or the step to the
+  branch), and the branch with the task's end, so a rerun writes each once. `sideDraft` `{ root }` → `{ prompt }`
+  returns the side chat's last proposal, else one the summary model drafts. An ended side chat takes no input and
+  stays readable. Ending is refused while it still answers.
 - **Notes**: `note` `{ to: id | 'root', text }` writes a `lineage.note` without waking the target; `'root'` resolves
   the caller's tree root. Its model reads `Note from #N: …` with its next input, or a future branch inherits it from
   the tally. Note cards use the mellow yellow `--note` theme token. `ConversationRef` names conversations by feature,
@@ -79,19 +101,26 @@ converting?: true }`: each conversation's open abstract, estimated model-visible
 
 Other extensions use `host.use<LineageService>('lineage')` (`server.ts`): `rootOf(id, ctx)` resolves tree membership,
 `leaveNote(to, text, source?)` writes without waking, and `branchOf(id, ctx)` returns `{ root, intent? }` for top-level
-non-root conversations in a tree (undefined for roots, owned conversations and outsiders).
+non-root conversations in a tree (undefined for roots, owned conversations, side chats and outsiders).
 `abstract(tx, id, { text, at, title?, feature? })` opens or updates `id`'s abstract in that root in the caller's
 transaction, before its first table write because it reads conversation records; it is a no-op wherever `branchOf`
 is undefined. The conversations summarizer uses this to publish an abstract after each completed exchange.
 
 New, "Branch…" and "Branch from here" open the start page (`start.tsx`) in `conversation.overlay`, with the
 conversation beneath inert. It shows New's Branch / New root tabs, source and quoted branch point above the
-new-conversation composer. Its URL (`?new`, `?new=<from>`, `?new=<from>.<at>`) survives reload; Back or Esc closes it,
+new-conversation composer. Its URL (`?new`, `?new=<from>`, `?new=<from>.<at>`, or `?new=<root>&side=<side>` for the
+branch a side chat ends in, prefilled with its draft) survives reload; Back or Esc closes it,
 switching conversations closes it, and each start point keeps its draft. Sending opens the new branch and the page
 fades into its first message. There is no briefing overlay or retry action. Old stored brief resets still render;
 a genesis reset instead shows a collapsible "Tally starts here" card.
 
 New in the sidebar branches from the shown tree's root, else the most recently active root; `root: true` starts a
-new root and its first branch. A tally replaces its conversation composer through the SDK's `composer` renderer,
-using the same start path and remembered Isolated/Shared preference. Hover a stored message and choose
+new root and its first branch. A tally replaces its conversation composer through the SDK's `composer` renderer:
+↵ opens a side chat (`start` prop of `NewConversationComposer`), ⌥↵ (`alternate` in the draft) starts a branch with
+the same start path and remembered Isolated/Shared preference. Its status line shows "Tally · … tokens" and both
+keys. A root with an open side chat shows the side chat instead (a replacing redirect, so Back leaves): its view is
+the tally as it was when the chat opened, then the chat, with a "Side chat · #S [Branch…] [Keep as note] [Discard]" bar
+above its composer; an ended one shows how it ended instead of a composer. The sidebar lists no side chats; a root
+with an open one is marked "side chat" and stands for it. A side note renders as a quiet "Side chat · #S" card with
+"→ #B" when it started a branch. Hover a stored message and choose
 **Branch from here** to fork at that entry; `lineage.branch-at` receives `conversationId` and `entryId` through the SDK.

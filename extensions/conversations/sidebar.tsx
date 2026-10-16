@@ -19,7 +19,8 @@ import type { WorkspaceConversation as ConversationSummary } from '../workspaces
 import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
 import { currentAssessment, Row, ChildRow } from './rows.tsx'
 import { newKeys } from './new.tsx'
-import { useRoots } from '../lineage/roots.tsx'
+import { useRoots, useSides } from '../lineage/roots.tsx'
+import { sideLabel } from '../lineage/side.tsx'
 
 /** The shown conversation, also while its snapshot is still on the way. */
 const useShownId = () => useStore((state) => state.view?.conversation.id ?? state.requested)
@@ -74,12 +75,19 @@ export function Conversations() {
       .map((task) => task.conversationId),
   )
   // The task graph reflects the run; the timestamp/title list can lag.
-  const conversations = useConversations().map((conversation) => ({
-    ...conversation,
-    busy: foreground.has(conversation.id) || overview[conversation.id]?.runState === 'working',
-  }))
+  // Side chats are not listed: an open one shows in its root's place, an ended one through its note.
+  const conversations = useConversations()
+    .filter((conversation) => conversation.label !== sideLabel)
+    .map((conversation) => ({
+      ...conversation,
+      busy: foreground.has(conversation.id) || overview[conversation.id]?.runState === 'working',
+    }))
   const actions = useUltimate()
-  const shownId = useShownId()
+  const sides = useSides() ?? {}
+  // A root's open side chat shows in its place.
+  const onScreen = useShownId()
+  const sideRoot = Object.keys(sides).find((root) => sides[root] === onScreen)
+  const shownId = sideRoot === undefined ? onScreen : Number(sideRoot)
   const now = useNow(60_000)
   const [type, setType] = useExtensionUiState('creationType', 'isolated')
   const [archived, setArchived] = useExtensionUiState<number[]>('archived', [])
@@ -150,13 +158,19 @@ export function Conversations() {
   }
   const row = (conversation: ConversationSummary, shown = conversation.id === shownTop?.id) => {
     const recorded = seen[conversation.id]
-    const state = working.get(conversation.id)
+    const side = sides[String(conversation.id)] as number | undefined
+    const state =
+      working.get(conversation.id) ??
+      (side !== undefined && (foreground.has(side) || overview[side]?.runState === 'working')
+        ? 'self'
+        : undefined)
     return (
       <Row
         activity={overview[conversation.id]?.activity}
         assessment={tasks ? currentAssessment(overview[conversation.id]) : undefined}
         archived={hiddenIds.has(conversation.id)}
         root={roots.has(conversation.id)}
+        side={side}
         conversation={conversation}
         draft={conversation.inputAt === undefined}
         feature={overview[conversation.id]?.feature}

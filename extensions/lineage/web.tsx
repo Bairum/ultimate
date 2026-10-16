@@ -15,23 +15,25 @@ import {
   api,
   cn,
   defineWebExtension,
+  formatKeys,
   formatTime,
   formatTokens,
   getConversation,
   getState,
-  getUiState,
   NewConversationComposer,
   useComposer,
   useConversation,
+  useConversations,
   useDocOf,
   useTranscript,
   useUltimate,
 } from '@/sdk'
-import type { EntryRecord, ToolCallView } from '@/sdk'
+import type { ConversationDraft, EntryRecord, ToolCallView } from '@/sdk'
 import { ConversationRef } from '../conversations/feature.tsx'
 import { Open } from '../workspaces/landing.tsx'
 import { getRoots, useRoots } from './roots.tsx'
-import { entryText, openStart, StartPage } from './start.tsx'
+import { ProposeCall, SideComposer, sideLabel, SideNote, SideRedirect } from './side.tsx'
+import { entryText, isolated, openStart, StartPage } from './start.tsx'
 
 type Tally = { tokens: number; since?: number }
 const tallyKind = 'lineage.tally'
@@ -69,12 +71,13 @@ function Branched({ entry }: { entry: EntryRecord }) {
 /** The tally's prompt node: which branch started, from where, with what prompt (three lines until opened). */
 function Started({ entry }: { entry: EntryRecord }) {
   const { switchConversation } = useUltimate()
-  const { branch, at, intent, images, from } = entry.data as {
+  const { branch, at, intent, images, from, side } = entry.data as {
     branch: number
     at: number
     intent: string
     images?: number
     from?: number
+    side?: number
   }
   const [open, setOpen] = useState(false)
   const timestamp = entry.model?.[0]?.timestamp
@@ -102,6 +105,16 @@ function Started({ entry }: { entry: EntryRecord }) {
             type="button"
           >
             from #{from}/{at}
+          </button>
+        )}
+        {side !== undefined && (
+          <button
+            className="shrink-0 cursor-pointer hover:text-foreground hover:underline"
+            onClick={() => switchConversation(side)}
+            title={`Open side chat #${side}`}
+            type="button"
+          >
+            after side chat #{side}
           </button>
         )}
         {timestamp !== undefined && (
@@ -256,9 +269,10 @@ function Note({ entry, core }: { entry: EntryRecord; core: React.ReactNode }) {
   const { from, text, source } = entry.data as {
     from?: number
     text: string
-    source?: 'lander' | 'finished' | 'main'
+    source?: 'lander' | 'finished' | 'main' | 'side'
   }
   if (source === 'lander') return core
+  if (source === 'side') return <SideNote entry={entry} />
   if (source === 'finished') return <Finished entry={entry} />
   if (source !== 'main') return <NoteCard id={from} label="Note from" note="received" text={text} />
   return (
@@ -374,6 +388,9 @@ function Reset({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   return core
 }
 
+/** What starts a branch from a tally's composer; ↵ opens a side chat. */
+const branchKeys = formatKeys('alt+enter')[0].join(' ')
+
 /** The root a composer starts branches of; set by `TallyComposer` for its status line. */
 const TallyContext = createContext<number | undefined>(undefined)
 
@@ -381,7 +398,15 @@ const TallyContext = createContext<number | undefined>(undefined)
 function ComposerStatus() {
   const tally = use(TallyContext)
   const { target } = useComposer()
-  if (tally !== undefined) return <TallyTokens id={tally} />
+  if (tally !== undefined)
+    return (
+      <>
+        <TallyTokens id={tally} />
+        <span className="text-muted-foreground/70 pointer-coarse:hidden">
+          <Kbd>↵</Kbd> side chat · <Kbd>{branchKeys}</Kbd> branch
+        </span>
+      </>
+    )
   return target === 'new' ? (
     <span className="text-muted-foreground/70 pointer-coarse:hidden">
       <Kbd>↵</Kbd> start · <Kbd>esc</Kbd> close
@@ -398,10 +423,17 @@ function TallyTokens({ id }: { id: number }) {
   )
 }
 
-/** A root's composer starts a branch from its tip; other conversations keep theirs. */
+/**
+ * A root's composer opens a side chat with it, or starts a branch from its tip; a side chat's ends it. Other
+ * conversations keep theirs.
+ */
 function RootComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
   const id = useConversation((conversation) => conversation.id)
   const roots = useRoots()
+  const side = useConversations().some(
+    (conversation) => conversation.id === id && conversation.label === sideLabel,
+  )
+  if (id !== undefined && side) return <SideComposer core={core} dock={dock} id={id} key={id} />
   if (id === undefined || !roots?.includes(id)) return core
   return <TallyComposer core={core} dock={dock} id={id} key={id} />
 }
@@ -423,7 +455,18 @@ function TallyComposer({ id, core, dock }: { id: number; core: ReactNode; dock?:
         branch={{ from: id }}
         dock={dock}
         onStarted={switchConversation}
-        placeholder="Start a branch from this tally…"
+        placeholder={`Talk it through in a side chat, or ${branchKeys} to start a branch…`}
+        start={(draft) =>
+          draft.alternate
+            ? start(draft)
+            : api.action<{ id: number }>('lineage', 'side', {
+                root: id,
+                prompt: draft.prompt,
+                ...(draft.images ? { images: draft.images } : {}),
+                ...(draft.model ? { model: draft.model } : {}),
+                ...(draft.thinkingLevel ? { thinkingLevel: draft.thinkingLevel } : {}),
+              })
+        }
       />
     </TallyContext>
   )
@@ -445,10 +488,10 @@ function BranchAction({ entry }: { entry: EntryRecord }) {
   )
 }
 
-/** Keeps the roots streaming, for the synchronous `when` of "Make this a root". */
+/** Keeps the roots streaming, for the synchronous `when` of "Make this a root", and shows a root's open side chat. */
 function Roots() {
   useRoots()
-  return null
+  return <SideRedirect />
 }
 
 /** The shown conversation, when it is top-level (not a subagent or other owned conversation) and not a branch. */
@@ -487,24 +530,25 @@ async function defaultRoot() {
   return info.roots.toSorted((a, b) => inputAt(b) - inputAt(a) || b - a)[0]
 }
 
+/** A new branch from `draft.from` (default: the shown tree's root), or a new root. */
+async function start({ root, alternate: _alternate, ...draft }: ConversationDraft) {
+  // The preference isolates only where the project can be isolated; an explicit choice is passed on as is.
+  const isolation = await isolated(draft)
+  if (root) {
+    const { from: _from, at: _at, ...input } = draft
+    return api.action<{ id: number; root: number }>('lineage', 'newRoot', {
+      ...input,
+      isolated: isolation,
+    })
+  }
+  const from = draft.from ?? (await defaultRoot())
+  if (from === undefined) throw new Error('There is no root to branch from')
+  return api.action<{ id: number }>('lineage', 'branch', { ...draft, from, isolated: isolation })
+}
+
 export default defineWebExtension({
-  start: async ({ root, ...draft }) => {
-    // The preference isolates only where the project can be isolated; an explicit choice is passed on as is.
-    const isolated =
-      draft.isolated ??
-      (getUiState('ext.conversations.creationType') !== 'shared' &&
-        getState().system?.extensions.some((extension) => extension.name === 'workspaces') ===
-          true &&
-        !(await api.action<{ reason?: string }>('workspaces', 'isolation', {})).reason)
-    if (root) {
-      const { from: _from, at: _at, ...input } = draft
-      return api.action<{ id: number; root: number }>('lineage', 'newRoot', { ...input, isolated })
-    }
-    const from = draft.from ?? (await defaultRoot())
-    if (from === undefined) throw new Error('There is no root to branch from')
-    return api.action<{ id: number }>('lineage', 'branch', { ...draft, from, isolated })
-  },
-  tools: { note: NoteCall },
+  start,
+  tools: { note: NoteCall, propose_branch: ProposeCall },
   entries: {
     'lineage.branched': Branched,
     'lineage.note': Note,

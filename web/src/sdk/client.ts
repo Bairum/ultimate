@@ -64,6 +64,10 @@ store.subscribe(() => {
   localStorage.setItem('ultimate.theme', ui.theme)
   document.documentElement.classList.toggle('dark', ui.theme === 'dark')
 })
+/** The next selection replaces the current history entry rather than pushing one, as a redirect does. */
+export function replaceNextSelection() {
+  replaceSelection = true
+}
 // The stream follows `shell.conversation`, whichever tab or action set it.
 function followSelection() {
   if (!initialized) return

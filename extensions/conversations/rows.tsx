@@ -5,6 +5,7 @@ import {
   CircleHelpIcon,
   EllipsisIcon,
   EraserIcon,
+  MessagesSquareIcon,
   PencilIcon,
 } from 'lucide-react'
 import { useRef, useState } from 'react'
@@ -98,8 +99,11 @@ export function Row({
   assessment,
   activity,
   root,
+  side,
 }: {
   root?: boolean
+  /** The root's open side chat, which shows in its place. */
+  side?: number
   conversation: ConversationSummary
   shown: boolean
   draft: boolean
@@ -224,6 +228,15 @@ export function Row({
                 <span className="flex shrink-0 items-center gap-1">
                   <GitBranchIcon aria-label="Root" className="size-2.5" />
                   root
+                </span>
+              )}
+              {side !== undefined && (
+                <span
+                  className="flex shrink-0 items-center gap-1 text-brand"
+                  title={`Side chat #${side} is open`}
+                >
+                  <MessagesSquareIcon aria-label="Side chat" className="size-2.5" />
+                  side chat
                 </span>
               )}
               {feature && !lander && <FeatureTag feature={feature} />}

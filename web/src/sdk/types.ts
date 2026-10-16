@@ -105,7 +105,8 @@ export interface DocumentContribution {
 
 /** Navigation and shell actions, passed to commands and returned by `useUltimate()`. */
 export interface UltimateActions {
-  switchConversation: (id: number) => void
+  /** `replace` takes the current browser history entry instead of adding one, as a redirect does. */
+  switchConversation: (id: number, options?: { replace?: boolean }) => void
   /** Show surface `id` (`agent` is the home); the conversation keeps running. */
   showSurface: (id: string) => void
   /** Open the right panel, on tab `id` when given. */
@@ -157,6 +158,8 @@ export interface ConversationDraft {
   at?: number
   /** Start a new root instead of a branch. */
   root?: boolean
+  /** Sent with ⌥↵ (Alt+Enter) rather than ↵: the starter's second way to start. */
+  alternate?: boolean
   isolated?: boolean
   model?: { provider: string; modelId: string }
   thinkingLevel?: ConfigureRequest['thinkingLevel']

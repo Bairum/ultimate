@@ -1,4 +1,4 @@
-import { registry, store, uiState } from './client.ts'
+import { registry, replaceNextSelection, store, uiState } from './client.ts'
 import { errorMessage } from './format.ts'
 import {
   HOME,
@@ -99,8 +99,9 @@ function closeOverlays() {
 }
 
 export const actions: UltimateActions = {
-  switchConversation: (id) => {
+  switchConversation: (id, options) => {
     closeOverlays()
+    if (options?.replace) replaceNextSelection()
     uiState.set(shellKeys.conversation, id)
   },
   showSurface: (id) => {

@@ -17,6 +17,7 @@ import { errorMessage } from '../sdk/format.ts'
 import { useConversation, useExtensions, useModels } from '../sdk/hooks.ts'
 import { isMac } from '../sdk/keys.ts'
 import type { ModelsResponse } from '../../../shared/protocol.ts'
+import type { WebExtension } from '../sdk/types.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
 import { composerRenderer, conversationStarter, inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
@@ -134,6 +135,8 @@ export function NewConversationComposer({
   branch,
   dock,
   placeholder,
+  start,
+  prompt,
 }: {
   isolated?: boolean
   inputId?: string
@@ -141,6 +144,10 @@ export function NewConversationComposer({
   branch?: BranchPoint
   dock?: boolean
   placeholder?: string
+  /** Starts the conversation instead of the extensions' starter. */
+  start?: ConversationStarter
+  /** What the composer holds while its draft is empty, such as a drafted prompt. */
+  prompt?: string
 }) {
   return (
     <ConversationComposer
@@ -151,9 +158,12 @@ export function NewConversationComposer({
       branch={branch}
       dock={dock}
       placeholder={placeholder}
+      start={start}
+      prompt={prompt}
     />
   )
 }
+type ConversationStarter = NonNullable<WebExtension['start']>
 
 type Draft = {
   text: string
@@ -198,10 +208,14 @@ function ConversationComposer({
   isolated: isolation,
   branch: point,
   placeholder,
+  start: starter,
+  prompt,
 }: {
   isolated?: boolean
   branch?: BranchPoint
   placeholder?: string
+  start?: ConversationStarter
+  prompt?: string
   dock?: boolean
   target?: 'conversation' | 'new'
   inputId?: string
@@ -216,7 +230,8 @@ function ConversationComposer({
   const defaults = useNewConversationConfiguration(isNew, source)
   const loading = isNew ? defaults.loading : conversation.loading
   const inbox = isNew ? [] : conversation.inbox
-  const start = conversationStarter(useExtensions())
+  const extensionStarter = conversationStarter(useExtensions())
+  const start = starter ?? extensionStarter
   // New and each branch point keep their own draft.
   const draftId = isNew
     ? point?.root
@@ -240,9 +255,9 @@ function ConversationComposer({
   const models = useModels()
   const key = draft.key
   useEffect(() => {
-    const stored = key ? (localStorage.getItem(key) ?? '') : ''
+    const stored = (key ? localStorage.getItem(key) : null) || (prompt ?? '')
     if (stored !== draft.get().text) draft.set({ text: stored, revision: draft.get().revision + 1 })
-  }, [draft, key])
+  }, [draft, key, prompt])
   const update = (value: string) => {
     draft.set({ text: value, revision: draft.get().revision + 1 })
     if (!key) return
@@ -259,7 +274,7 @@ function ConversationComposer({
           : blockedBy(isNew ? defaults.configuration : agent, models)
   const empty = !text.trim() && images.length === 0
 
-  async function send(whenBusy?: 'steer' | 'followUp') {
+  async function send(whenBusy?: 'steer' | 'followUp', alternate = false) {
     if (
       loading ||
       empty ||
@@ -281,6 +296,7 @@ function ConversationComposer({
             ...(point?.from === undefined ? {} : { from: point.from }),
             ...(point?.at === undefined ? {} : { at: point.at }),
             ...(point?.root ? { root: true } : {}),
+            ...(alternate ? { alternate } : {}),
             ...(isolation === undefined ? {} : { isolated: isolation }),
             ...(defaults.configuration.model ? { model: defaults.configuration.model } : {}),
             ...(defaults.configuration.thinkingLevel
@@ -312,7 +328,7 @@ function ConversationComposer({
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
     event.preventDefault()
-    void send(event.altKey ? 'followUp' : 'steer')
+    void send(event.altKey ? 'followUp' : 'steer', event.altKey)
   }
 
   return (
