@@ -21,42 +21,43 @@ import { dashboard } from './dashboard.ts'
 
 const ultimateRoot = resolvePath(fileURLToPath(new URL('..', import.meta.url)))
 const { values, positionals } = parseArgs({
-  options: { port: { type: 'string' }, 'no-open': { type: 'boolean' }, app: { type: 'boolean' } },
+  options: { port: { type: 'string' }, 'no-open': { type: 'boolean' } },
   allowPositionals: true,
 })
-if (positionals.length > 1) throw new Error('Usage: ultimate [dir] [--port N] [--no-open] [--app]')
+if (positionals.length > 1) throw new Error('Usage: ultimate [dir] [--port N] [--no-open]')
+const opening = !values['no-open'] && process.env.ULTIMATE_NO_OPEN !== '1'
 const available = (name: string) =>
   process.env.PATH?.split(':').some((path) => existsSync(join(path, name)))
-async function openWindow(port: number) {
-  const url = `http://${values.app ? 'ultimate.localhost' : '127.0.0.1'}:${port}`
+/** Opens a chromeless app window, like an installed web app, in the first Chrome-family browser; else a tab. */
+function openWindow(port: number) {
+  const app = `http://ultimate.localhost:${port}`
+  const tab = `http://127.0.0.1:${port}`
   let command = process.platform === 'darwin' ? 'open' : 'xdg-open'
-  let args = [url]
-  if (values.app) {
-    if (process.platform === 'darwin') {
-      args = ['-na', 'Google Chrome', '--args', `--app=${url}`]
-    } else {
-      if (available('omarchy-launch-webapp')) {
-        command = 'omarchy-launch-webapp'
-      } else {
-        const browser = [
-          'google-chrome-stable',
-          'google-chrome',
-          'chromium',
-          'chromium-browser',
-          'brave',
-          'brave-browser',
-          'microsoft-edge',
-          'vivaldi',
-        ].find(available)
-        if (browser) {
-          command = browser
-          args = [`--app=${url}`]
-        } else console.error('--app needs a Chrome-family browser on PATH; opening a normal tab')
-      }
+  let args = [tab]
+  if (process.platform === 'darwin') {
+    if (existsSync('/Applications/Google Chrome.app'))
+      args = ['-na', 'Google Chrome', '--args', `--app=${app}`]
+  } else if (available('omarchy-launch-webapp')) {
+    command = 'omarchy-launch-webapp'
+    args = [app]
+  } else {
+    const browser = [
+      'google-chrome-stable',
+      'google-chrome',
+      'chromium',
+      'chromium-browser',
+      'brave',
+      'brave-browser',
+      'microsoft-edge',
+      'vivaldi',
+    ].find(available)
+    if (browser) {
+      command = browser
+      args = [`--app=${app}`]
     }
   }
   const opener = spawn(command, args, { detached: true, stdio: 'ignore' })
-  opener.on('error', (error) => console.error(`Cannot open ${url}: ${error.message}`))
+  opener.on('error', (error) => console.error(`Cannot open ${tab}: ${error.message}`))
   opener.unref()
 }
 const projectRoot = await realpath(positionals[0] ?? process.cwd()).catch((error) => {
@@ -76,16 +77,11 @@ const lock = await acquireLock(lockPath, {
   port,
   project: projectRoot,
 }).catch(async (error) => {
-  if (
-    values.app &&
-    error instanceof Error &&
-    error.message.startsWith('Ultimate is already running')
-  ) {
-    const owner = await readOwner(lockPath)
-    if (owner?.port !== undefined) {
-      if (!values['no-open'] && process.env.ULTIMATE_NO_OPEN !== '1') await openWindow(owner.port)
-      process.exit(0)
-    }
+  // Starting a running project again opens its window.
+  const owner = opening && (await readOwner(lockPath))
+  if (owner && owner.port !== undefined && String(error).includes('already running')) {
+    openWindow(owner.port)
+    process.exit(0)
   }
   console.error(String(error))
   process.exit(1)
@@ -371,9 +367,7 @@ async function start(core: Core) {
   if (!announced) {
     announced = true
     display.log('info', 'supervisor', `Ultimate: ${publicUrl}`)
-    if (!values['no-open'] && process.env.ULTIMATE_NO_OPEN !== '1') {
-      await openWindow(publicPort)
-    }
+    if (opening) openWindow(publicPort)
   }
 }
 async function swap(old: Core, requestId: string, previousBuild?: BuildInfo) {
