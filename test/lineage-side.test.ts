@@ -1,3 +1,7 @@
+import { execFile } from 'node:child_process'
+import { access, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
 import type { Message } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
@@ -6,12 +10,22 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterEach, beforeAll, expect, it } from 'vitest'
 import { Summaries, summaryBehavior } from '../extensions/conversations/summary.ts'
 import type { SummaryHost } from '../extensions/conversations/summary.ts'
-import { abstract, branchOf, rootOf, Roots, Side, Tally } from '../extensions/lineage/server.ts'
+import {
+  abstract,
+  branchOf,
+  gitArgs,
+  readEnv,
+  rootOf,
+  Roots,
+  Side,
+  Tally,
+} from '../extensions/lineage/server.ts'
 import type { LineageService } from '../extensions/lineage/server.ts'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import { fauxServer, post, sourceCopy, temp, until } from './helpers.ts'
 
+const exec = promisify(execFile)
 let ultimateRoot: string
 beforeAll(async () => {
   ultimateRoot = await sourceCopy(await temp())
@@ -188,16 +202,13 @@ it('reads git and searches the code, and refuses git commands that change anythi
       .execute(args as never, {} as never, context)
       .then((result) => textOf((result as { output: unknown }).output))
   for (const args of [
-    ['commit', '-m', 'x'],
-    ['checkout', 'main'],
-    ['push'],
-    ['-c', 'core.pager=sh', 'log'],
-    ['diff', '--output=x.patch'],
-    ['log', '-o', 'x'],
-    ['grep', '-Ovim', 'x'],
-    ['grep', '--open-files-in-pager', 'x'],
+    { command: 'commit' },
+    { command: 'checkout' },
+    { command: 'log', revision: '--output=x.patch' },
+    { command: 'diff', revision: '-o' },
+    { command: 'log', revision: 'HEAD;touch x' },
   ])
-    await expect(run('git', { args })).rejects.toThrow(/^git /)
+    await expect(run('git', args)).rejects.toThrow(/^(git |Not a revision)/)
   const found = await run('search', {
     pattern: 'name: PROPOSE',
     path: 'extensions',
@@ -205,6 +216,57 @@ it('reads git and searches the code, and refuses git commands that change anythi
   })
   expect(found).toContain('extensions/lineage/server.ts:')
   expect(await run('search', { pattern: 'no such text [a]nywhere' })).toBe('No matches.')
+})
+
+it('runs no program git could be told to run: inherited environment or repository config', async () => {
+  const repo = await temp('ultimate-side-git-')
+  const marker = join(repo, 'ran')
+  const helper = join(repo, 'helper.sh')
+  await writeFile(helper, `#!/bin/sh\ntouch ${marker}\ncat\n`, { mode: 0o755 })
+  const git = (...args: string[]) => exec('git', args, { cwd: repo })
+  await git('init', '-q')
+  await git(
+    '-c',
+    'user.name=t',
+    '-c',
+    'user.email=t@t',
+    'commit',
+    '-q',
+    '--allow-empty',
+    '-m',
+    'base',
+  )
+  await writeFile(join(repo, 'file.txt'), 'one\n')
+  await git('add', 'file.txt')
+  await git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'file')
+  await writeFile(join(repo, 'file.txt'), 'two\n')
+  // Every way a reading command could start a program: diff/textconv drivers, fsmonitor, pagers, the environment.
+  await writeFile(join(repo, '.gitattributes'), 'file.txt diff=run\n')
+  for (const [key, value] of [
+    ['diff.external', helper],
+    ['diff.run.command', helper],
+    ['diff.run.textconv', helper],
+    ['core.fsmonitor', helper],
+    ['core.pager', helper],
+  ])
+    await git('config', key, value)
+  const previous = process.env.GIT_EXTERNAL_DIFF
+  process.env.GIT_EXTERNAL_DIFF = helper
+  try {
+    for (const request of [
+      { command: 'diff' },
+      { command: 'show', path: 'file.txt' },
+      { command: 'log', path: 'file.txt' },
+      { command: 'blame', path: 'file.txt' },
+      { command: 'status' },
+      { command: 'grep', pattern: 'two' },
+    ] as const)
+      await exec('git', gitArgs(request), { cwd: repo, env: readEnv() })
+  } finally {
+    if (previous === undefined) delete process.env.GIT_EXTERNAL_DIFF
+    else process.env.GIT_EXTERNAL_DIFF = previous
+  }
+  await expect(access(marker)).rejects.toThrow('ENOENT')
 })
 
 it('refuses to end or draft for a side chat that is no longer the open one', async () => {
