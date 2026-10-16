@@ -918,6 +918,16 @@ it.concurrent('includes the previous feature next to the previous summary in mod
   expect(summaryInput([])).not.toContain('Previous feature:')
 })
 
+it.concurrent('keeps the start and end of a long reply and marks what it left out', () => {
+  const report = `Verdict: NEEDS CHANGES\n${'finding '.repeat(500)}\nResidual risks: none.`
+  const input = summaryInput([
+    { role: 'assistant', content: [{ type: 'text', text: report }] } as never,
+  ])
+  expect(input).toContain('assistant: Verdict: NEEDS CHANGES')
+  expect(input).toContain(`[… ${report.length - 2400} characters omitted for length …]`)
+  expect(input.endsWith('Residual risks: none.')).toBe(true)
+})
+
 it.concurrent('asks a root for the feature its whole tree builds', async () => {
   const branch = await launch()
   await branch.exchange()
