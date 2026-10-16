@@ -530,10 +530,13 @@ async function defaultRoot() {
 
 export default defineWebExtension({
   start: async ({ root, ...draft }) => {
+    // The preference isolates only where the project can be isolated; an explicit choice is passed on as is.
     const isolated =
       draft.isolated ??
       (getUiState('ext.conversations.creationType') !== 'shared' &&
-        getState().system?.extensions.some((extension) => extension.name === 'workspaces') === true)
+        getState().system?.extensions.some((extension) => extension.name === 'workspaces') ===
+          true &&
+        !(await api.action<{ reason?: string }>('workspaces', 'isolation', {})).reason)
     if (root) {
       const { from: _from, at: _at, ...input } = draft
       return api.action<{ id: number }>('lineage', 'newRoot', { ...input, isolated })

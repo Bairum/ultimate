@@ -1,8 +1,13 @@
 # Workspaces
 
-New isolated conversation creates a separate Git checkout; ordinary New stays shared.
-Subagents can select `isolate: "worktree"` for the same setup.
-Check out a source branch first; uncommitted source changes are not included.
+An isolated conversation gets its own Git checkout. New is isolated unless the start page's Isolated switch is off
+(remembered in `ext.conversations.creationType`); New isolated conversation always is. Subagents can select
+`isolate: "worktree"` for the same setup. Uncommitted source changes are not included.
+
+Isolation needs a Git repository with a checked-out branch and a first commit. Until a project has them, `isolation`
+returns `{ reason }`, the Isolated switch is off and disabled with that reason, New starts shared conversations,
+an explicit isolated start fails with the reason, and the project has no lander; the next open after the first commit
+stands it.
 
 Each conversation has one record in the root `ultimate.workspaces` document.
 Its path is `<home>/worktrees/<conversationId>`; its branch includes the home hash and conversation ID.
@@ -13,7 +18,7 @@ Failed setup keeps its output tail and never force-removes dirty output. Start a
 
 The Workspaces panel shows the lander queue, statistics over every checkout, and the shown conversation's checkout,
 read-only: landing goes through agents, and removing a checkout only happens when someone asks an agent to clean up.
-`info {id}` reads the record and current tips; `create {cwd?, title?}` returns a new conversation ID.
+`isolation` says why the project cannot be isolated, if it cannot; `info {id}` reads the record and current tips; `create {cwd?, title?}` returns a new conversation ID.
 `workspace land` fast-forwards the saved source branch to the clean, verified workspace tip.
 Unrelated dirty files in the source checkout do not block; `git merge --ff-only` refuses only real overlap.
 If the target changed or diverged, update the workspace onto it and verify again; landing never rebases or pushes.

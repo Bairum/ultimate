@@ -354,10 +354,35 @@ it.concurrent('failed setup keeps its output tail, removes its empty branch, and
   expect(f.writes).toBe(0)
   await expect(access(join(f.projectRoot, 'change.txt'))).rejects.toThrow('ENOENT')
 })
+it.concurrent('runs shared-only until a fresh repository has its first commit, then stands its lander', async () => {
+  const directory = await temp('ultimate-workspaces-fresh-')
+  const projectRoot = join(directory, 'project')
+  await mkdir(projectRoot)
+  const f = await fixture([], { directory, projectRoot, home: join(directory, 'state') })
+  const isolation = () => actions.isolation({}, { host: f.host } as ActionContext)
+  const landers = async () =>
+    Object.keys(
+      (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+        .landerConversations,
+    )
+  expect(await isolation()).toEqual({ reason: 'Isolation needs a Git repository' })
+  await git(projectRoot, 'init', '-b', 'main')
+  await f.reopen()
+  expect(await isolation()).toEqual({ reason: 'Isolation needs a first commit' })
+  await expect(f.create()).rejects.toThrow('Isolation needs a first commit')
+  expect(await landers()).toEqual([])
+  await git(projectRoot, 'config', 'user.email', 'test@example.com')
+  await git(projectRoot, 'config', 'user.name', 'Test')
+  await commit(projectRoot)
+  await f.reopen()
+  expect(await isolation()).toEqual({})
+  expect(await landers()).toEqual([await realpath(projectRoot)])
+  await f.service.ready(await f.create(), context)
+})
 it.concurrent('rejects a detached source and preserves existing paths and branches instead of adopting them', async () => {
   const f = await fixture()
   await git(f.projectRoot, 'switch', '--detach')
-  await expect(f.create()).rejects.toThrow('Check out a branch first')
+  await expect(f.create()).rejects.toThrow('Isolation needs a checked-out branch')
   await git(f.projectRoot, 'switch', 'main')
   for (const existing of ['path', 'branch'] as const) {
     const id = await f.opened.harness.commit(async (tx) => {

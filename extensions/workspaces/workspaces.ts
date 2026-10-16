@@ -15,7 +15,7 @@ import {
 import type { ConversationId, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ConversationsService } from '../conversations/server.ts'
-import { git, setup } from './git.ts'
+import { git, isolatable, setup } from './git.ts'
 import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
 import type {
   LandResult,
@@ -143,17 +143,12 @@ export function workspaces(host: Host) {
   }
   /**
    * Make sure the project's checkout has its lander conversation, configured from the effective `lander` definition;
-   * every lander conversation follows the definition as it is now. Idempotent; a project outside git has none.
+   * every lander conversation follows the definition as it is now. Idempotent; a project that cannot be isolated (outside
+   * Git, or before its first commit) has none until it can.
    */
   async function standLander(context: Context) {
-    const source = await git(host.projectRoot, 'rev-parse', '--show-toplevel')
-      .then((path) => realpath(path))
-      .catch(
-        // A project outside Git has no lander checkout to prepare.
-        () => undefined,
-      )
-    const target =
-      source && (await git(source, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => ''))
+    const checkout = await isolatable(host.projectRoot)
+    const { source, target } = 'source' in checkout ? checkout : {}
     const { change } = await landerAgent(host, context)
     // The conversation's cwd exists from the start, at the target tip, so it can answer before any submission.
     const path = source && target && (await landerCheckout(host.home, source))
@@ -463,9 +458,9 @@ export function workspaces(host: Host) {
         !host.extensions().some((extension) => extension.name === 'workspaces' && extension.enabled)
       )
         throw new Error('Enable workspaces to create an isolated conversation')
-      const source = await realpath(await git(cwd, 'rev-parse', '--show-toplevel'))
-      const target = await git(source, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => '')
-      if (!target) throw new Error('Check out a branch first')
+      const checkout = await isolatable(cwd)
+      if ('reason' in checkout) throw new Error(checkout.reason)
+      const { source, target } = checkout
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       if (index.items[String(id)]) throw new Error('Conversation already has a workspace')
       await mkdir(join(host.home, 'worktrees'), { recursive: true })

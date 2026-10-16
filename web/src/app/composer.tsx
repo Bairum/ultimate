@@ -340,7 +340,7 @@ function ConversationComposer({
             value={text}
           />
           <PromptInputFooter>
-            <PromptInputTools>
+            <PromptInputTools className="shrink-0">
               <Slot name="composer.toolbar" variant="inline" />
             </PromptInputTools>
             <div className="flex min-w-0 items-center gap-2">

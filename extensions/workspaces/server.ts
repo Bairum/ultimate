@@ -18,7 +18,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- workspace discovery shares the core root watcher
 import { watchRoots } from '../../server/watch-roots.ts'
 import { agentRoots } from '../subagents/agents.ts'
-import { git } from './git.ts'
+import { git, isolatable } from './git.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
 export type WorkspaceService = ReturnType<typeof workspaces> & {
   git: typeof git
@@ -58,6 +58,11 @@ export const actions = {
     }, context)
     host.harness().resume()
     return { id }
+  },
+  /** Why the project cannot start isolated conversations, if it cannot. */
+  async isolation(_args: JsonValue, { host }: ActionContext) {
+    const checkout = await isolatable(host.projectRoot)
+    return 'reason' in checkout ? { reason: checkout.reason } : {}
   },
   info(args: JsonValue, { host }: ActionContext) {
     return workspaces(host).info(workspaceId(args), context)

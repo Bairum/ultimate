@@ -75,8 +75,9 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
 function IsolationToggle() {
   const { target, isolated: isolation } = useComposer()
   const [creation, setCreation] = useUiState<string>('ext.conversations.creationType', 'isolated')
+  const { reason } = useAction<{ reason?: string }>('workspaces', 'isolation', {}).data ?? {}
   if (target !== 'new') return null
-  const isolated = isolation ?? creation !== 'shared'
+  const isolated = isolation ?? (!reason && creation !== 'shared')
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -86,6 +87,7 @@ function IsolationToggle() {
             isolated
               ? 'border-brand/60 bg-brand/15 text-foreground'
               : 'border-transparent text-muted-foreground hover:text-foreground',
+            reason && 'cursor-default hover:text-muted-foreground',
           )}
           data-isolated={isolated}
         >
@@ -94,16 +96,20 @@ function IsolationToggle() {
           <Switch
             aria-label="Isolated"
             checked={isolated}
-            disabled={isolation !== undefined}
+            disabled={isolation !== undefined || !!reason}
             className="ml-0.5"
             onCheckedChange={(on) => setCreation(on ? 'isolated' : 'shared')}
           />
         </label>
       </TooltipTrigger>
       <TooltipContent>
-        {isolated
-          ? 'New isolated conversation: its own Git checkout'
-          : 'New shared conversation, in this checkout'}
+        {reason
+          ? isolated
+            ? reason
+            : `${reason}, so it shares this folder`
+          : isolated
+            ? 'New isolated conversation: its own Git checkout'
+            : 'New shared conversation, in this checkout'}
       </TooltipContent>
     </Tooltip>
   )
