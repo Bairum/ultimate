@@ -89,6 +89,7 @@ export default defineConfig({
                 parallel: ['secrets'],
                 plan: ['lineage', 'workspaces'],
                 self: ['workspaces'],
+                sounds: ['conversations'],
                 'status-line': ['workspaces'],
                 subagents: ['conversations', 'plan', 'workspaces'],
                 tasks: ['conversations', 'plan', 'workspaces'],
