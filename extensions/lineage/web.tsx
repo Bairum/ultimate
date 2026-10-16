@@ -9,8 +9,8 @@ import {
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
+import { Kbd } from '@/components/ui/kbd'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
   api,
   useAction,
@@ -18,18 +18,16 @@ import {
   getConversation,
   getState,
   getUiState,
-  NewConversationComposer,
   useComposer,
-  useCommands,
-  useDialog,
   useDoc,
   useStore,
   useUltimate,
 } from '@/sdk'
-import type { EntryRecord, ToolCallView, UltimateActions } from '@/sdk'
+import type { EntryRecord, ToolCallView } from '@/sdk'
 import { ConversationRef } from '../conversations/feature.tsx'
 import { ballSize, Crystal } from './crystal.tsx'
 import { getRoots, useRoots } from './roots.tsx'
+import { entryText, openStart, StartPage } from './start.tsx'
 
 type BranchState = {
   from: number
@@ -37,18 +35,6 @@ type BranchState = {
   intent: string
   status: 'briefing' | 'ready' | 'failed'
   error?: string
-}
-
-const branchDialog = 'lineage.branch'
-let target: { from?: number; at?: number } = {}
-
-/** Open the Branch dialog for `from` at entry `at` (default: its latest entry). */
-export function openBranch(
-  actions: Pick<UltimateActions, 'open'>,
-  from: { from: number; at?: number },
-) {
-  target = from
-  actions.open(branchDialog)
 }
 
 function userText(entry: EntryRecord) {
@@ -231,9 +217,15 @@ function Brief({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   )
 }
 
-/** Under the composer of a branch: the brief being written, or why it failed. */
+/** Under the composer of a branch: the brief being written, or why it failed; on the start page, its keys. */
 function BriefStatus() {
-  return useComposer().target === 'new' ? null : <BriefLookup />
+  return useComposer().target === 'new' ? (
+    <span className="text-muted-foreground/70 pointer-coarse:hidden">
+      <Kbd>↵</Kbd> start · <Kbd>esc</Kbd> close
+    </span>
+  ) : (
+    <BriefLookup />
+  )
 }
 
 /**
@@ -493,57 +485,18 @@ function Absorb({
 }
 
 function BranchAction({ entry }: { entry: EntryRecord }) {
-  const actions = useUltimate()
-  const branch = useCommands().find((command) => command.id === 'lineage.branch-at')
-  if (!branch) return null
   return (
     <button
       aria-label="Branch from here"
       title="Branch from here"
       className="cursor-pointer rounded p-0.5 transition-colors hover:text-foreground"
       onClick={() =>
-        void branch.run({
-          ...actions,
-          conversationId: entry.conversationId,
-          entryId: entry.id,
-        })
+        openStart({ from: entry.conversationId, at: entry.id }, { excerpt: entryText(entry) })
       }
       type="button"
     >
       <GitBranchIcon className="size-3" />
     </button>
-  )
-}
-
-function BranchDialog() {
-  const [open, setOpen] = useDialog(branchDialog)
-  const actions = useUltimate()
-  const from = target.from ?? actions.conversationId
-  return (
-    <Dialog onOpenChange={setOpen} open={open}>
-      <DialogContent className="gap-3 sm:max-w-xl">
-        <DialogTitle className="flex items-center gap-2 text-[14px] font-medium">
-          <GitForkIcon className="size-4 text-brand" />
-          Branch from {from === undefined ? '#?' : <ConversationRef id={from} />}
-          {target.at !== undefined && (
-            <span className="font-mono text-[12px] text-muted-foreground">at {target.at}</span>
-          )}
-        </DialogTitle>
-        <DialogDescription className="text-[13px]">
-          A new conversation starts from a brief of this one, aimed at what you write here.
-        </DialogDescription>
-        <NewConversationComposer
-          branch={{
-            ...(from === undefined ? {} : { from }),
-            ...(target.at === undefined ? {} : { at: target.at }),
-          }}
-          onStarted={(id) => {
-            setOpen(false)
-            actions.switchConversation(id)
-          }}
-        />
-      </DialogContent>
-    </Dialog>
   )
 }
 
@@ -604,8 +557,8 @@ export default defineWebExtension({
   },
   slots: {
     'composer.status': [BriefStatus],
-    'conversation.overlay': [BriefingOverlay],
-    overlay: [BranchDialog, Roots],
+    'conversation.overlay': [BriefingOverlay, StartPage],
+    overlay: [Roots],
   },
   messageActions: [BranchAction],
   commands: [
@@ -616,7 +569,7 @@ export default defineWebExtension({
       when: (context) => context.entryId !== undefined,
       run: (context) => {
         if (context.conversationId !== undefined && context.entryId !== undefined)
-          openBranch(context, { from: context.conversationId, at: context.entryId })
+          openStart({ from: context.conversationId, at: context.entryId })
       },
     },
     {
@@ -624,9 +577,9 @@ export default defineWebExtension({
       title: 'Branch…',
       group: 'Conversations',
       when: () => getConversation().id !== undefined,
-      run: (context) => {
+      run: () => {
         const { id } = getConversation()
-        if (id !== undefined) openBranch(context, { from: id })
+        if (id !== undefined) openStart({ from: id })
       },
     },
     {

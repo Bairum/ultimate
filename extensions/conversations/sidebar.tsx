@@ -18,7 +18,7 @@ import { useOverview } from './feature.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
 import { currentAssessment, Row, ChildRow } from './rows.tsx'
-import { newKeys } from './new-dialog.tsx'
+import { newKeys } from './new.tsx'
 import { useRoots } from '../lineage/roots.tsx'
 
 /** The shown conversation, also while its snapshot is still on the way. */

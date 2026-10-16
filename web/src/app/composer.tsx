@@ -133,7 +133,6 @@ export function NewConversationComposer({
   return (
     <ConversationComposer
       target="new"
-      dock
       isolated={isolated}
       inputId={inputId}
       onStarted={onStarted}
@@ -295,7 +294,6 @@ function ConversationComposer({
     }
   }
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (isNew && event.key === 'Escape') event.currentTarget.blur()
     if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
     event.preventDefault()
     void send(event.altKey ? 'followUp' : 'steer')
@@ -306,31 +304,22 @@ function ConversationComposer({
       <div
         data-composer-source={source}
         data-composer-target={target}
-        className={cn(
-          isNew ? 'nodrag nowheel flex min-h-0 flex-1 flex-col overflow-y-auto' : column(dock),
-          'pb-2',
-        )}
+        className={cn(column(dock), 'pb-2')}
       >
         <Inbox items={inbox} />
         <PromptInput
-          className={isNew ? 'min-h-0 flex-1' : undefined}
           onSubmit={(event) => {
             event.preventDefault()
             void send()
           }}
         >
           <ImagePreviews
-            className={
-              isNew ? 'max-h-14 shrink-0 flex-nowrap overflow-auto [&_img]:max-h-10!' : undefined
-            }
             images={images}
             disabled={loading || sending || reading}
             remove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
           />
           <PromptInputTextarea
-            className={isNew ? 'min-h-0 flex-1' : undefined}
-            autoFocus={!isNew}
-            maxHeight={isNew ? 96 : undefined}
+            autoFocus
             readOnly={loading || sending}
             onPaste={(event) => void paste(event)}
             id={inputId ?? 'composer-input'}

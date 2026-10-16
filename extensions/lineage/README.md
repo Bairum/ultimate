@@ -1,8 +1,8 @@
 A project is a forest of conversation trees. Each root holds the idea of one line of work and keeps its tally; branches fork from any conversation at any entry, each starting from a brief aimed at its intent.
 
 - **Branch** (⌘K "Branch…", "Branch from here" on a message, or action `branch`
-  `{ from, at?, prompt, images?, isolated?, model?, thinkingLevel? }` → `{ id }`). Every branch starts in the same
-  composer as New (model, Isolated, pasted images); images go with the prompt into the branch's first input. It
+  `{ from, at?, prompt, images?, isolated?, model?, thinkingLevel? }` → `{ id }`). Every branch starts on the same
+  start page as New (model, Isolated, pasted images); images go with the prompt into the branch's first input. It
   forks the source at `at` (default: its latest entry) as an ownerless conversation in the project root, optionally
   isolated in its own worktree. The background task `lineage.brief` asks the branch's model to write a brief of the
   source context aimed at the prompt, places it as a `pi.reset` with `data.lineage = { from, at }`, then submits the
@@ -25,7 +25,7 @@ A project is a forest of conversation trees. Each root holds the idea of one lin
 - **Notes**: the `note` tool `{ to: id | 'root', text }` (`'root'`: the caller's tree root) writes a `lineage.note` entry in the target without waking it;
   its model reads `Note from #N: …` with its next input. Both sides show it as a card tinted with the mellow yellow
   `--note` theme token: `Note from <feature> #N` in the target, `Note → <feature> #N` for the tool call in the sender.
-  Cards, markers and the branch dialog name a conversation with `ConversationRef` (conversations' `feature.tsx`):
+  Cards, markers and the start page name a conversation with `ConversationRef` (conversations' `feature.tsx`):
   its feature tag, else its title, then `#N` in gray. Model-facing text keeps the bare `#N`. Other extensions call `leaveNote(host, to, text, source?)`;
   `'root'` there needs `source.from` and errors when it has no root. Landings from workspaces go to the submitter's
   tree root (none when the submitter is that root or has none) with `source: 'lander'` and structured `sha`, `target`,
@@ -49,6 +49,14 @@ A project is a forest of conversation trees. Each root holds the idea of one lin
   and how to read the others; it never lists the other roots, so it stays cache-stable (codemode `ultimate.entries(id)`, `ultimate.search()`).
 - **Compaction**: top-level conversations summarize with their own model and a lineage focus (root: idea, principles,
   standing decisions, tally of landings and branches, for every conversation in `roots`; branch: intent and progress). Subagents keep Pi's default.
+
+New, "Branch…" and "Branch from here" open the start page (`start.tsx`): an empty conversation page in the
+`conversation.overlay` slot, with the conversation beneath inert, what starts (New's Branch / New root tabs, the source
+and the quoted entry of a branch) centred like an empty conversation, and the new-conversation composer docked where
+every composer sits. It lives in the URL (`?new`, `?new=<from>`, `?new=<from>.<at>`): Back or Esc closes it, a reload
+keeps it, showing another conversation closes it, and each start point keeps its draft. Once sent, its history entry
+becomes the new conversation's, and the page holds until that conversation shows beneath it, then fades into it: into
+the briefing ball for a branch, into the first message for a new root.
 
 While the brief is written, the `conversation.overlay` slot covers the branch, the source's history and its composer,
 which stay inert beneath it: a glass ball (`crystal.tsx`, adapted from React Bits' CrystalizedBall on `ogl`) that the
