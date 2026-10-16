@@ -22,6 +22,7 @@ import {
   useToolDuration,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
+import { at } from './links.ts'
 
 interface Instance {
   id: string
@@ -225,17 +226,16 @@ function usePreviewTarget(href: string, own = false): Target | undefined {
   const url = URL.parse(href)
   if (!url || !/^https?:$/.test(url.protocol) || !isLoopback(url.hostname) || !url.port)
     return undefined
-  const path = url.pathname + url.search + url.hash
   if (system && url.port === new URL(system.process.url).port)
-    return { kind: 'self', href: new URL(path, location.origin).href }
+    return { kind: 'self', href: at(location.origin, url) }
   const known = list?.filter((item) => new URL(item.url).port === url.port) ?? []
   const live = known.find((item) => item.running)
   if (!live) return known.length || own ? { kind: 'off', reason: 'Not running' } : undefined
   if (!loopback)
     return live.tailnet
-      ? { kind: 'tailnet', href: new URL(path, live.tailnet).href }
+      ? { kind: 'tailnet', href: at(live.tailnet, url) }
       : { kind: 'off', reason: 'Only on this machine' }
-  const frame = new URL(path, live.url).href
+  const frame = at(live.url, url)
   return {
     kind: 'frame',
     href: frame,

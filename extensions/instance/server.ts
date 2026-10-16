@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
@@ -33,21 +34,52 @@ const info = ({ id, url, home, pid, conversationId, faux }: Instance) => ({
   faux,
 })
 const live = (item: Instance) => item.child.exitCode === null && item.child.signalCode === null
-/** The instances this process runs, shared by the tool and the actions; shutdown stops them all. */
-function running(host: Pick<ExtensionHost, 'resource' | 'onClose'>) {
+/** The instances this process runs, shared by the tool and the actions; shutdown stops them all and remembers them. */
+function running(host: Pick<ExtensionHost, 'resource' | 'onClose' | 'home'>) {
   const instances: Map<string, Instance> = host.resource('instance', () => {
     host.onClose(async () => {
+      const served = [...instances.values()].filter((item) => item.url)
       await Promise.all([...instances.keys()].map((id) => stop(instances, id)))
+      for (const item of served) remember(host, item)
     })
     return new Map<string, Instance>()
   })
   return instances
 }
 /** What `list` shows of a preview. */
-const listed = ({ id, url, conversationId, faux }: Instance) => ({ id, url, conversationId, faux })
-/** Previews the tool stopped, kept so that links to them can say they no longer run; process-local too. */
-const stopped = (host: Pick<ExtensionHost, 'resource'>) =>
-  host.resource('instance.stopped', () => new Map<string, ReturnType<typeof listed>>())
+const listed = ({
+  id,
+  url,
+  conversationId,
+  faux,
+}: Pick<Instance, 'id' | 'url' | 'conversationId' | 'faux'>) => ({ id, url, conversationId, faux })
+type Listed = ReturnType<typeof listed>
+const portOf = (url: string) => new URL(url).port
+/**
+ * Previews that no longer run, by port, so that links to them can say so: the last 50, kept in the home across
+ * restarts, since a restart stops every preview.
+ */
+export const stopped = (host: Pick<ExtensionHost, 'resource' | 'home'>) =>
+  host.resource('instance.stopped', () => {
+    const byPort = new Map<string, Listed>()
+    try {
+      const saved = JSON.parse(readFileSync(join(host.home, 'previews.json'), 'utf8')) as Listed[]
+      for (const item of saved) byPort.set(portOf(item.url), item)
+    } catch {
+      // No previews stopped in this home yet, or an unreadable file: links to earlier ones stay ordinary links.
+    }
+    return byPort
+  })
+export function remember(
+  host: Pick<ExtensionHost, 'resource' | 'home'>,
+  item: Pick<Instance, 'id' | 'url' | 'conversationId' | 'faux'>,
+) {
+  const byPort = stopped(host)
+  byPort.delete(portOf(item.url))
+  byPort.set(portOf(item.url), listed(item))
+  for (const port of [...byPort.keys()].slice(0, -50)) byPort.delete(port)
+  writeFileSync(join(host.home, 'previews.json'), JSON.stringify([...byPort.values()]))
+}
 async function stop(instances: Map<string, Instance>, id: string) {
   const instance = instances.get(id)
   if (!instance) throw new Error(`Unknown instance: ${id}`)
@@ -102,7 +134,9 @@ export const actions: Record<string, ExtensionAction> = {
           running: live(item),
           ...(live(item) && addresses.has(item.pid) && { tailnet: addresses.get(item.pid) }),
         })),
-      ...[...stopped(host).values()].map((item) => ({ ...item, running: false })),
+      ...[...stopped(host).values()]
+        .filter((item) => ![...running(host).values()].some((run) => run.url === item.url))
+        .map((item) => ({ ...item, running: false })),
     ]
   },
 }
@@ -160,7 +194,7 @@ export default function instanceExtension(
             else if (args.action === 'stop') {
               const item = instances.get(args.id ?? '')
               await stop(instances, args.id ?? '')
-              if (item?.url) stopped(host).set(item.id, listed(item))
+              if (item?.url) remember(host, item)
               result = { stopped: args.id }
             } else if (args.action === 'logs') {
               const item = instances.get(args.id ?? '')

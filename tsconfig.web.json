@@ -29,6 +29,7 @@
     "extensions/status-line/turns.ts",
     "extensions/sounds/cues.ts",
     "extensions/sounds/tones.ts",
+    "extensions/instance/links.ts",
     "extensions/workspaces/types.ts",
     "extensions/subagents/message-types.ts",
     "test/web"
