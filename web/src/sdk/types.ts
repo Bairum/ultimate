@@ -6,6 +6,8 @@ import type { ConfigureRequest } from '../../../shared/protocol.ts'
 /** Named places in the shell that extensions fill with components. */
 export type SlotName =
   | 'sidebar'
+  | 'titlebar.left'
+  | 'titlebar.right'
   | 'header.right'
   | 'statusline.left'
   | 'statusline.right'

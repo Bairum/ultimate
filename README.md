@@ -105,7 +105,7 @@ is the opt-in.
 ## Surfaces
 
 A surface is a full-screen app made of extensions: the **Agent** surface is the conversation you start with; another
-can be anything you build. Switch with the menu on the ULTIMATE brand, `⌘K` → "Switch to …", or `mod+1…9`. The agent
+can be anything you build. Switch in the title bar, `⌘K` → "Switch to …", or `mod+1…9`. The agent
 stays docked on every surface and knows which one you are looking at, and the choice is durable: reloads, other tabs,
 and restarts land on the same view. The `surfaces` extension tells the agent which surface you are viewing, and
 `documents` provides the Documents tab; surface UI contributions themselves work without either.

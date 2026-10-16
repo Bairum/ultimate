@@ -4,7 +4,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { shellKeys } from '../sdk/actions.ts'
 import { ROOT } from '../sdk/api.ts'
 import { store, uiState } from '../sdk/client.ts'
-import { errorMessage, shortenPath } from '../sdk/format.ts'
+import { errorMessage } from '../sdk/format.ts'
 import {
   ExtensionNameContext,
   useConversation,
@@ -17,13 +17,13 @@ import {
 } from '../sdk/hooks.ts'
 import { HOME, surfaceItems } from '../sdk/registry.ts'
 import type { SurfaceItem } from '../sdk/registry.ts'
-import type { SystemInfo } from '../../../shared/protocol.ts'
 import { rendered } from '../sdk/resume.ts'
 import { ExtensionErrors, Slot } from './boundary.tsx'
 import { useShortcuts } from './keyboard.ts'
 import { CommandPalette } from './palette.tsx'
 import { Conversation, Header, StatusLine } from './primitives.tsx'
 import { SurfaceContext } from './surface.ts'
+import { TitleBar, projectTitle } from './titlebar.tsx'
 
 /** Records the surface on screen, for the window title, `useUltimate().surface`, and the agent's prompt. */
 function onScreen({ id, title }: { id: string; title: string }) {
@@ -42,6 +42,9 @@ function Frame() {
     </>
   )
 }
+
+/** An Ultimate shown inside another one's window, under that one's title bar, shows none of its own. */
+const embedded = window.top !== window
 
 /** The missing surface last reported, so it is reported once until it shows again. */
 let reported: string | undefined
@@ -107,25 +110,6 @@ function Surfaces({ surfaces }: { surfaces: readonly SurfaceItem[] }) {
       surface={surface}
     />
   )
-}
-
-/**
- * The project as tabs name it: its folder from home. A branch's checkout (`<home>/worktrees/<id>`) is the project's
- * name and that conversation, and a server with a home outside `~/.ultimate/projects`, as test previews have, says
- * it is a preview.
- */
-function projectTitle(system: SystemInfo | undefined) {
-  if (!system) return undefined
-  const { home } = system.machine
-  const worktree = /\/\.ultimate\/projects\/(.+)-[\da-f]{8}\/worktrees\/(\d+)$/.exec(
-    system.project.root,
-  )
-  const project = worktree
-    ? `${worktree[1]} #${worktree[2]}`
-    : shortenPath(system.project.root, { home })
-  return system.persistence.path.startsWith(`${home}/.ultimate/projects/`)
-    ? project
-    : `preview · ${project}`
 }
 
 /**
@@ -195,6 +179,7 @@ export function App() {
   return (
     <TooltipProvider delayDuration={400}>
       <div className="flex h-dvh flex-col">
+        {loaded && !embedded && <TitleBar />}
         {loaded && !pending && <Surfaces surfaces={line} />}
       </div>
       {loaded && <Shortcuts />}
