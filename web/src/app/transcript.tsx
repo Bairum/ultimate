@@ -34,6 +34,7 @@ import type { StickToBottomContext } from 'use-stick-to-bottom'
 import { useEvent } from '../sdk/events.ts'
 import { api } from '../sdk/client.ts'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Conversation,
   ConversationContent,
@@ -55,6 +56,7 @@ import {
   useSystem,
 } from '../sdk/hooks.ts'
 import { entryRenderers, messageItems } from '../sdk/registry.ts'
+import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary } from './boundary.tsx'
 import { column } from './layout.ts'
 import { indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
@@ -68,7 +70,31 @@ export function Transcript({ dock }: { dock?: boolean }) {
   // Paint a newly shown conversation at its newest row; sticking to the bottom only scrolls a frame later.
   useLayoutEffect(() => {
     const scroll = stick.current?.scrollRef.current
-    if (scroll) scroll.scrollTop = scroll.scrollHeight
+    const content = stick.current?.contentRef.current
+    if (!scroll || !content) return
+    scroll.scrollTop = scroll.scrollHeight
+    // Its rows on screen then rise into place from the bottom up, unless a resumed reload already shows them.
+    if (id === undefined || covered() || matchMedia('(prefers-reduced-motion: reduce)').matches)
+      return
+    const view = scroll.getBoundingClientRect()
+    const rows = [...content.children].filter((row) => {
+      const box = row.getBoundingClientRect()
+      return box.height > 0 && box.bottom > view.top && box.top < view.bottom
+    })
+    rows.toReversed().forEach((row, index) =>
+      row.animate(
+        [
+          { opacity: 0, transform: 'translateY(6px)' },
+          { opacity: 1, transform: 'none' },
+        ],
+        {
+          delay: index * 40,
+          duration: 450,
+          easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+          fill: 'backwards',
+        },
+      ),
+    )
   }, [id])
   // Keyed so a conversation never inherits the previous one's scroll position or follow state.
   return (
@@ -270,11 +296,7 @@ function TranscriptEntries() {
   })
   return (
     <TranscriptContext value={entries}>
-      {loading && (
-        <div className="mt-[30vh] animate-appear text-center font-mono text-[12px]">
-          <Shimmer>Loading conversation…</Shimmer>
-        </div>
-      )}
+      {loading && <TranscriptSkeleton />}
       {!loading && entries.length > 0 && !exhausted && (
         <div className="flex flex-col items-center gap-1">
           <Button
@@ -317,6 +339,36 @@ function TranscriptEntries() {
       )}
     </TranscriptContext>
   )
+}
+
+/** Placeholder turns: a user message, then a reply's lines around its tool row, widths varied to read like text. */
+const skeleton = [
+  [
+    ['w-11/12', 'w-3/5'],
+    ['w-4/5', 'w-2/5'],
+  ],
+  [['w-full', 'w-2/3', 'w-1/2'], ['w-3/4']],
+  [['w-5/6'], ['w-11/12', 'w-3/5']],
+  [['w-3/4', 'w-2/3'], ['w-1/2']],
+].flatMap(([before, after]) => [
+  'h-11 rounded-lg',
+  ...before.map((width) => `h-3 rounded-sm ${width}`),
+  'h-8',
+  ...after.map((width) => `h-3 rounded-sm ${width}`),
+])
+
+/** Stands in for a loading conversation, building up from the bottom. */
+function TranscriptSkeleton() {
+  return skeleton.map((className, index) => (
+    <div
+      aria-hidden="true"
+      className="animate-enter"
+      key={index}
+      style={{ animationDelay: `${(skeleton.length - 1 - index) * 30}ms` }}
+    >
+      <Skeleton className={className} />
+    </div>
+  ))
 }
 
 /** What this Ultimate is and runs on, before the first message. */
