@@ -55,9 +55,17 @@ export const Branch = defineDoc<{ branch?: BranchState }>({
   initial: () => ({}),
 })
 
+/** A conversation's liquid abstract: its `anchor` entry keeps its place in the tally and shows the latest text. */
+export type OpenAbstract = {
+  anchor: number
+  at: number
+  text: string
+  title?: string
+  feature?: string
+}
 export type TallyState = {
-  /** Each conversation's latest abstract entry in this root; older ones are omitted from the model's context. */
-  abstracts: Record<string, number>
+  /** Each conversation's open abstract, until a landing freezes it. */
+  abstracts: Record<string, OpenAbstract>
   /** Estimated tokens of the root's model-visible context. */
   tokens: number
   /** The entry this root became a tally at; absent while a root is still an ordinary conversation. */
@@ -226,35 +234,40 @@ export async function branchOf(host: Pick<ExtensionHost, 'harness'>, id: number,
 export type AbstractInput = { text: string; at: number; title?: string; feature?: string }
 /**
  * Write `id`'s abstract into its tree's root in the caller's transaction, before that transaction's first table write
- * (it reads conversation records). The new abstract omits the previous one from the root's context, so the model sees
- * only each conversation's latest. A no-op where `branchOf` is undefined.
+ * (it reads conversation records). An abstract is liquid until its conversation lands: while one is open, a carrier
+ * entry without model messages replaces the open anchor's text in place, so the tally never reorders. Otherwise it
+ * appends a model-visible abstract that becomes the anchor. A no-op where `branchOf` is undefined.
  */
 export async function abstract(tx: Tx, id: number, input: AbstractInput) {
   const roots = (await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots
   const root = await tallyRoot(tx, id as ConversationId, roots)
   if (root === undefined) return
   const tally = await tx.doc(Tally, root)
-  const previous = tally.abstracts[String(id)] as EntryId | undefined
+  const open = tally.abstracts[String(id)] as OpenAbstract | undefined
+  // An anchor a compaction or genesis replaced is out of the context: an edit of it would change nothing.
+  const marker = open && (await tx.latestHeadMarker(root))
+  const anchor = open && (!marker || open.anchor >= marker.head) ? open.anchor : undefined
   const { text, at, title, feature } = input
-  const entry = await tx.appendEntry(root, {
-    kind: 'lineage.abstract',
-    data: {
-      conversation: id,
-      at,
-      text,
-      ...(title ? { title } : {}),
-      ...(feature ? { feature } : {}),
+  const state = { at, text, ...(title ? { title } : {}), ...(feature ? { feature } : {}) }
+  const data = { conversation: id, ...state }
+  const model = [
+    {
+      role: 'user' as const,
+      content: `Abstract of #${id}${title ? ` ${title}` : ''} as of #${id}/${at}:\n${text}`,
+      timestamp: Date.now(),
     },
-    model: [
-      {
-        role: 'user',
-        content: `Abstract of #${id}${title ? ` ${title}` : ''} as of #${id}/${at}:\n${text}`,
-        timestamp: Date.now(),
-      },
-    ],
-    ...(previous === undefined ? {} : { edits: [{ target: previous, action: 'omit' as const }] }),
-  })
-  tally.abstracts[String(id)] = entry.id
+  ]
+  const entry = await tx.appendEntry(
+    root,
+    anchor === undefined
+      ? { kind: 'lineage.abstract', data, model }
+      : {
+          kind: 'lineage.abstract',
+          data: { ...data, anchor },
+          edits: [{ target: anchor as EntryId, action: 'replace', messages: model }],
+        },
+  )
+  tally.abstracts[String(id)] = { anchor: anchor ?? entry.id, ...state }
 }
 
 /**
@@ -730,7 +743,10 @@ export async function startRoot(host: ExtensionHost, input: RootInput, ctx: Cont
   return { id, root }
 }
 
-/** Leave a note in `to` (a conversation id, or the root of `source.from`'s tree) without waking it. */
+/**
+ * Leave a note in `to` (a conversation id, or the root of `source.from`'s tree) without waking it. A landing in a tally
+ * freezes its submitter's open abstract: the note carries that state, and the anchor leaves the context with it.
+ */
 export async function leaveNote(
   host: Pick<ExtensionHost, 'harness'>,
   to: number | 'root',
@@ -752,30 +768,62 @@ export async function leaveNote(
   const conversation = await host.harness().conversation(target, context)
   if (!conversation) throw new Error(`No conversation #${target}`)
   const from = source?.from
-  await conversation.submit(
-    {
-      type: 'write',
-      ...(source?.requestId ? { requestId: source.requestId } : {}),
-      entry: {
+  const requestId = source?.requestId
+  const data = {
+    ...source?.data,
+    text,
+    ...(from === undefined ? {} : { from }),
+    ...(source?.source ? { source: source.source } : {}),
+  }
+  const content =
+    source?.source === 'lander'
+      ? `Note from the lander: ${text}`
+      : source?.source === 'finished'
+        ? finishedText(from!, source.data?.title as string | undefined, text)
+        : `Note from #${from ?? '?'}: ${text}`
+  if (
+    source?.source === 'lander' &&
+    from !== undefined &&
+    (await host.harness().commit(async (tx) => {
+      const tally = await tx.doc(Tally, target)
+      const open = tally.abstracts[String(from)] as OpenAbstract | undefined
+      if (tally.since === undefined || !open) return false
+      // A rerun after a crash finds the landing it wrote; a newer anchor stays open.
+      if (requestId && (await tx.submissionByRequest(target, requestId))) return true
+      // A tally runs no turns, so the write is placed at once, as an idle conversation's would be.
+      const { anchor, ...state } = open
+      const entry = await tx.appendEntry(target, {
         kind: 'lineage.note',
-        data: {
-          ...source?.data,
-          text,
-          ...(from === undefined ? {} : { from }),
-          ...(source?.source ? { source: source.source } : {}),
-        },
+        data: { ...data, abstract: state },
         model: [
           {
             role: 'user',
-            content:
-              source?.source === 'lander'
-                ? `Note from the lander: ${text}`
-                : source?.source === 'finished'
-                  ? finishedText(from!, source.data?.title as string | undefined, text)
-                  : `Note from #${from ?? '?'}: ${text}`,
+            content: `${content}\n\nState at landing (abstract as of #${from}/${state.at}):\n${state.text}`,
             timestamp: Date.now(),
           },
         ],
+        edits: [{ target: anchor as EntryId, action: 'omit' }],
+      })
+      await tx.createSubmission({
+        conversationId: target,
+        ...(requestId ? { requestId } : {}),
+        type: 'write',
+        status: 'done',
+        entry: entry.id,
+      })
+      delete tally.abstracts[String(from)]
+      return true
+    }, context))
+  )
+    return target
+  await conversation.submit(
+    {
+      type: 'write',
+      ...(requestId ? { requestId } : {}),
+      entry: {
+        kind: 'lineage.note',
+        data,
+        model: [{ role: 'user', content, timestamp: Date.now() }],
       },
     },
     context,
