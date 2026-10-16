@@ -35,29 +35,37 @@ converting?: true }`: each conversation's open abstract, estimated model-visible
   answer summarized. An abstract is liquid until its conversation lands, like an uncommitted working tree: the first
   one is model-visible and becomes the anchor; later ones are carriers without model messages (`anchor` set) whose
   `edits` replace the anchor's text in place, so the tally never reorders. An anchor a compaction or genesis replaced
-  takes no edits; the next abstract opens a new one. Storage stays append-only. The transcript shows each anchor as a
-  card with its newest carrier's text and `#N/at` breadcrumb; carriers render nothing, and a frozen anchor hides.
+  takes no edits; the next abstract opens a new one. While a compaction of the tally runs, an update opens a new anchor
+  too and omits the old one, since the compaction may replace it after the update. Storage stays append-only. The
+  transcript shows each anchor as a card with its newest carrier's text and `#N/at` breadcrumb; carriers render
+  nothing, and a frozen anchor hides.
 - **Side chats**: a conversation with a tally at this point in time, before anything becomes a branch. Action `side`
   `{ root, prompt, images?, model?, thinkingLevel? }` → `{ id }` forks the tally's tip as an ownerless conversation in
   the shared checkout (never isolated) with label `side chat`; the `lineage.prompt` task delivers its prompt. A root
   has one open at a time: `lineage.roots` keeps them as `sides` (root → side chat), so every client sees them with the
   roots. Doc `lineage.side` on the side chat holds `{ root, at, ending?, ended?, branch? }`. It writes nothing into
   the tally while open: no prompt node, no `lineage.branch`, no abstracts (`branchOf` is undefined for it); catch-up
-  applies as in any tree conversation. It reads but does not edit: its `pi.agent` removes `edit`, `write`, `note` and
-  `subagent`, and loads the deferred `propose_branch` tool, which only an open side chat may call. Bash stays for
-  reading (rg, git log, read-only checks), and its prompt section says so; a shell cannot be restricted to reading,
-  and without it the chat could not search the code. `propose_branch` `{ prompt }` renders as a "Proposed branch" card
-  whose "Start branch…" opens the start page with that prompt. It ends only when the user ends it, with action
-  `endSide` `{ root, mode, prompt?, images?, isolated?, model?, thinkingLevel? }`:
+  applies as in any tree conversation. It reads but does not edit: its `pi.agent` selects exactly `read`, `search`,
+  `git`, `codemode`, `web_search`, `web_fetch` and `propose_branch` (arrays, so a tool added later never reaches it);
+  codemode's `tools.*` calls only these, and its `ultimate.*` only reads. Lineage defines the deferred side-chat tools:
+  `search` `{ pattern, path?, glob? }` runs ripgrep in the project (no shell, no config file), `git` `{ args }` runs
+  only `log`, `show`, `diff`, `blame`, `grep`, `status` and `ls-files` and refuses `--output`,
+  `--open-files-in-pager` and short options containing `o` or `O`; both cap their output at 30 000 characters.
+  `propose_branch` may only be called by an open side chat. A branch forked from a side chat's message
+  ("Branch from here") gets ordinary tools: every branch starts with the tool configuration cleared.
+  `propose_branch` `{ prompt }` renders as a "Proposed branch" card whose "Start branch…" opens the start page with
+  that prompt. It ends only when the user ends it, with action
+  `endSide` `{ root, side, mode, prompt?, images?, isolated?, model?, thinkingLevel? }`, refused unless `side` is
+  still the root's open side chat, so a stale page cannot end a newer one:
   `discard` closes it and the tally gets nothing; `note` has the summary model (else the side chat's own) write what
   it settled, at most 800 characters, appended to the root as a model-visible `lineage.note`
   `{ text, from, source: 'side' }` reading `Side chat #S: …`; `branch` writes the note, then starts a branch from the
   tally's tip right after it, so the branch inherits the note; its prompt node carries `side` and reads
   `#B was started from the tally (#R/at), ending side chat #S, with the prompt:`. Note and branch run in the
   durable `lineage.side` task: the model's answer is memoised, the note commits with the close (or the step to the
-  branch), and the branch with the task's end, so a rerun writes each once. `sideDraft` `{ root }` → `{ prompt }`
-  returns the side chat's last proposal, else one the summary model drafts. An ended side chat takes no input and
-  stays readable. Ending is refused while it still answers.
+  branch), and the branch with the task's end, so a rerun writes each once. `sideDraft` `{ root, side }` →
+  `{ prompt }` returns the side chat's last proposal, else one the summary model drafts. An ended side chat takes no
+  input and stays readable. Ending is refused while it still answers.
 - **Notes**: `note` `{ to: id | 'root', text }` writes a `lineage.note` without waking the target; `'root'` resolves
   the caller's tree root. Its model reads `Note from #N: …` with its next input, or a future branch inherits it from
   the tally. Note cards use the mellow yellow `--note` theme token. `ConversationRef` names conversations by feature,
@@ -69,7 +77,9 @@ converting?: true }`: each conversation's open abstract, estimated model-visible
   lander note for a submitter with an open abstract carries it as `abstract` `{ at, text, title?, feature? }` and a
   `State at landing (abstract as of #N/at):` block, omits the anchor in the same write and closes it, so the frozen
   state lives only in the landing; the card shows it as a collapsed "State at landing". The next abstract opens a new
-  anchor after the landing. The write is placed in its own transaction with the same request-id deduplication.
+  anchor after the landing. Every lander note in a tally is placed in one transaction that checks for an open
+  abstract and freezes it if there is one, with request-id deduplication, so no abstract can open between the check
+  and the landing.
 - **Notify**: `notify` `{ id, wake? }` starts `lineage.notify` in the caller. It waits until the target and its
   subagents are idle, then delivers `#id finished · <title>` with its last own answer (≤1500 chars), not an inherited
   source answer. `wake` (default true) submits a follow-up placed as `lineage.finished`; `wake: false` leaves a note

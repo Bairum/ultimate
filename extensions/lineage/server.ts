@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
@@ -276,7 +278,11 @@ export async function abstract(tx: Tx, id: number, input: AbstractInput) {
   const open = tally.abstracts[String(id)] as OpenAbstract | undefined
   // An anchor a compaction or genesis replaced is out of the context: an edit of it would change nothing.
   const marker = open && (await tx.latestHeadMarker(root))
-  const anchor = open && (!marker || open.anchor >= marker.head) ? open.anchor : undefined
+  // A running compaction may replace the anchor too, after this commit: the update opens a new anchor below its range
+  // and omits the old one, which then either went into the summary or stays and is hidden.
+  const compacting = !!open && (await liveTask(tx, root, CompactionTask.definition.name))
+  const anchor =
+    open && !compacting && (!marker || open.anchor >= marker.head) ? open.anchor : undefined
   const { text, at, title, feature } = input
   const state = { at, text, ...(title ? { title } : {}), ...(feature ? { feature } : {}) }
   const data = { conversation: id, ...state }
@@ -290,7 +296,14 @@ export async function abstract(tx: Tx, id: number, input: AbstractInput) {
   const entry = await tx.appendEntry(
     root,
     anchor === undefined
-      ? { kind: 'lineage.abstract', data, model }
+      ? {
+          kind: 'lineage.abstract',
+          data,
+          model,
+          ...(compacting
+            ? { edits: [{ target: open.anchor as EntryId, action: 'omit' as const }] }
+            : {}),
+        }
       : {
           kind: 'lineage.abstract',
           data: { ...data, anchor },
@@ -317,6 +330,13 @@ async function inheritedTally(tx: Tx, from: ConversationId, at: EntryId, root: C
     cursor = page.next
   } while (cursor)
   return undefined
+}
+
+/** Whether a task of `kind` is live in conversation `id`. */
+async function liveTask(tx: Tx, id: ConversationId, kind: string) {
+  for (const status of ['pending', 'running', 'waiting', 'completing'] as const)
+    if ((await tx.scanTasks({ conversationId: id, kind, status }, 1)).items.length) return true
+  return false
 }
 
 /** Background tasks that write into their conversation: a tally would refuse or misplace what they deliver. */
@@ -820,6 +840,10 @@ async function forkBranch(
     ...(input.model ? { model: input.model } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
   })
+  // A branch gets ordinary tools whatever its source ran with: a side chat's reading tools stay with the side chat.
+  const agent = await tx.doc(AgentDoc, fork.id)
+  delete agent.tools
+  delete agent.modelTools
   if (input.isolated) {
     const workspaces = host.use<WorkspaceService>('workspaces')
     if (!workspaces) throw new Error('Isolated branches require workspaces')
@@ -907,12 +931,52 @@ export async function startRoot(host: ExtensionHost, input: RootInput, ctx: Cont
   return { id, root }
 }
 
-/**
- * Tools a side chat goes without: it reads and talks, and edits nothing. A note would reach the tally before the user
- * decided, and a subagent could edit for it. Bash stays, for reading (rg, git log, tests); its prompt says so.
- */
-const SIDE_REMOVED = ['edit', 'write', 'note', 'subagent']
 const PROPOSE = 'propose_branch'
+/**
+ * The tools a side chat runs with, exactly: it reads and talks, and changes nothing. A list rather than removals, so a
+ * tool added later never reaches it. Codemode's `tools.*` calls only these; its `ultimate.*` only reads.
+ */
+const SIDE_TOOLS = ['read', 'search', 'git', 'codemode', 'web_search', 'web_fetch', PROPOSE]
+/** The git commands a side chat may run: they read the repository. */
+const GIT_READS = ['log', 'show', 'diff', 'blame', 'grep', 'status', 'ls-files']
+/** At most this much of a side chat's search or git output reaches its model. */
+const OUTPUT_CHARS = 30_000
+
+const exec = promisify(execFile)
+/** Run a reading command in the project, without a shell; its output capped for the model. */
+async function readOut(host: ExtensionHost, file: string, args: string[], signal?: AbortSignal) {
+  const { stdout } = await exec(file, args, {
+    cwd: host.projectRoot,
+    timeout: 30_000,
+    maxBuffer: 4 * 1024 * 1024,
+    ...(signal ? { signal } : {}),
+    // Git status would otherwise refresh the index.
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+  })
+  return stdout.length > OUTPUT_CHARS
+    ? `${stdout.slice(0, OUTPUT_CHARS)}\n[Cut at ${OUTPUT_CHARS} characters; narrow it down.]`
+    : stdout || 'No output.'
+}
+/** Why a command failed: what it printed to stderr, else the error. */
+const failure = (error: unknown) =>
+  (error as { stderr?: string }).stderr?.trim() ||
+  (error instanceof Error ? error.message : String(error))
+
+/** The arguments of a side chat's `git` call; throws for a command that is not a read or an option that writes. */
+export function gitArgs(args: readonly string[]) {
+  const [command, ...rest] = args
+  if (!GIT_READS.includes(command))
+    throw new Error(`git ${command ?? ''} is not allowed; a side chat runs ${GIT_READS.join(', ')}`)
+  // --output writes a file; -O and --open-files-in-pager (git grep) run a program. Short clusters with o are refused too.
+  const writing = rest.find(
+    (arg) => /^--(output|open-files-in-pager)(=|$)/.test(arg) || /^-[^-]*[oO]/.test(arg),
+  )
+  if (writing)
+    throw new Error(
+      `git ${command} ${writing} is not allowed in a side chat; pass option values as separate arguments`,
+    )
+  return ['--no-pager', command, ...rest]
+}
 /** At most this long, a side chat's note. */
 const NOTE_CHARS = 800
 
@@ -947,10 +1011,10 @@ export async function openSide(host: ExtensionHost, input: SideInput, ctx: Conte
       ...(input.model ? { model: input.model } : {}),
       ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     })
-    // By name, as Pi stores them: the edit tools may belong to an extension reloading right now.
+    // By name, as Pi stores them: a tool's extension may be reloading right now. Arrays select exactly these.
     const agent = await tx.doc(AgentDoc, fork.id)
-    agent.tools = { remove: [...SIDE_REMOVED] }
-    agent.modelTools = { add: [PROPOSE] }
+    agent.tools = [...SIDE_TOOLS]
+    agent.modelTools = [...SIDE_TOOLS]
     if (main) await seedSeen(tx, fork.id, main, Date.now())
     // It starts with the whole tally.
     ;(await tx.doc(Seen, fork.id)).tally = at
@@ -1029,7 +1093,21 @@ async function proposal(tx: Tx, id: ConversationId) {
   return undefined
 }
 
-export type EndInput = { root: number; mode: SideEnd } & Partial<RootInput>
+/**
+ * The open side chat of `root`, which must be `side`: a page still showing an older one must not end, or draft for, the
+ * one opened since.
+ */
+async function openSideOf(tx: Tx, root: number, side: number) {
+  const id = (await tx.doc(Roots, ROOT_CONVERSATION_ID)).sides?.[String(root)] as
+    | ConversationId
+    | undefined
+  if (id === undefined) throw new Error(`#${root} has no open side chat`)
+  if (id !== side) throw new Error(`Side chat #${side} is not the open side chat of #${root}`)
+  return id
+}
+
+/** `side`: the side chat the user ends, which must still be the root's open one. */
+export type EndInput = { root: number; side: number; mode: SideEnd } & Partial<RootInput>
 
 /**
  * End the root's open side chat: `discard` leaves the tally as it is; `note` appends a note of what it settled, written
@@ -1041,10 +1119,7 @@ export async function endSide(host: ExtensionHost, input: EndInput, ctx: Context
   if (input.mode === 'branch' && !prompt) throw new Error('A branch needs a prompt')
   const { SideTask } = lineage(host)
   const task = await host.harness().commit(async (tx) => {
-    const id = (await tx.doc(Roots, ROOT_CONVERSATION_ID)).sides?.[String(root)] as
-      | ConversationId
-      | undefined
-    if (id === undefined) throw new Error(`#${root} has no open side chat`)
+    const id = await openSideOf(tx, root, input.side)
     const side = (await tx.doc(Side, id)).side!
     if (side.ending) throw new Error(`Side chat #${id} is already ending`)
     if (await answering(tx, id)) throw new Error(`Side chat #${id} is still answering`)
@@ -1080,13 +1155,10 @@ export async function endSide(host: ExtensionHost, input: EndInput, ctx: Context
 }
 
 /** A first prompt for the branch a side chat ends in: its last proposal, else one the summary model drafts. */
-export async function draftSide(host: ExtensionHost, root: number, ctx: Context) {
+export async function draftSide(host: ExtensionHost, root: number, side: number, ctx: Context) {
   const { SideTask } = lineage(host)
   const drafted = await host.harness().commit(async (tx) => {
-    const id = (await tx.doc(Roots, ROOT_CONVERSATION_ID)).sides?.[String(root)] as
-      | ConversationId
-      | undefined
-    if (id === undefined) throw new Error(`#${root} has no open side chat`)
+    const id = await openSideOf(tx, root, side)
     const proposed = await proposal(tx, id)
     if (proposed) return { prompt: proposed }
     return {
@@ -1165,29 +1237,34 @@ export async function leaveNote(
       : source?.source === 'finished'
         ? finishedText(from!, source.data?.title as string | undefined, text)
         : `Note from #${from ?? '?'}: ${text}`
+  // A landing in a tally is placed with the check for an open abstract in one transaction: none can open in between.
   if (
     source?.source === 'lander' &&
     from !== undefined &&
     (await host.harness().commit(async (tx) => {
       const tally = await tx.doc(Tally, target)
-      const open = tally.abstracts[String(from)] as OpenAbstract | undefined
-      if (tally.since === undefined || !open) return false
+      if (tally.since === undefined) return false
       // A rerun after a crash finds the landing it wrote; a newer anchor stays open.
       if (requestId && (await tx.submissionByRequest(target, requestId))) return true
       // A tally runs no turns, so the write is placed at once, as an idle conversation's would be.
-      const { anchor, ...state } = open
-      const entry = await tx.appendEntry(target, {
-        kind: 'lineage.note',
-        data: { ...data, abstract: state },
-        model: [
-          {
-            role: 'user',
-            content: `${content}\n\nState at landing (abstract as of #${from}/${state.at}):\n${state.text}`,
-            timestamp: Date.now(),
-          },
-        ],
-        edits: [{ target: anchor as EntryId, action: 'omit' }],
-      })
+      const open = tally.abstracts[String(from)] as OpenAbstract | undefined
+      const model = { role: 'user' as const, content, timestamp: Date.now() }
+      let entry
+      if (open) {
+        const { anchor, ...state } = open
+        entry = await tx.appendEntry(target, {
+          kind: 'lineage.note',
+          data: { ...data, abstract: state },
+          model: [
+            {
+              ...model,
+              content: `${content}\n\nState at landing (abstract as of #${from}/${state.at}):\n${state.text}`,
+            },
+          ],
+          edits: [{ target: anchor as EntryId, action: 'omit' }],
+        })
+        delete tally.abstracts[String(from)]
+      } else entry = await tx.appendEntry(target, { kind: 'lineage.note', data, model: [model] })
       await tx.createSubmission({
         conversationId: target,
         ...(requestId ? { requestId } : {}),
@@ -1195,7 +1272,6 @@ export async function leaveNote(
         status: 'done',
         entry: entry.id,
       })
-      delete tally.abstracts[String(from)]
       return true
     }, context))
   )
@@ -1238,7 +1314,7 @@ export async function lineageSection(
   const rooted = root === undefined ? '' : `\nRoot: #${root}.`
   const side = (await host.harness().snapshot(Side, id, ctx))?.side
   if (side)
-    return `You are #${id}, a side chat with #${side.root}, the root of your tree, as of its entry ${side.at}. Your context is its tally: the prompt each conversation was started with, the latest abstract of each, and every landing, with #<conversation>/<entry> breadcrumbs to read in full with codemode \`ultimate.entries(id)\`.\nTalk the line of work through with the user, from the tally, the history and the code. Nothing you say enters the tally until the user ends this side chat: as a note of what it settled, as a branch, or discarded.\nYou are read-only: edit and write are off. Use bash only to look (rg, git log, git show, running read-only checks); never change files, commit, or run anything that changes state. Changes become branches: once one is settled, draft its first prompt with \`propose_branch\`, and the user starts it.`
+    return `You are #${id}, a side chat with #${side.root}, the root of your tree, as of its entry ${side.at}. Your context is its tally: the prompt each conversation was started with, the latest abstract of each, and every landing, with #<conversation>/<entry> breadcrumbs to read in full with codemode \`ultimate.entries(id)\`.\nTalk the line of work through with the user, from the tally, the history and the code. Nothing you say enters the tally until the user ends this side chat: as a note of what it settled, as a branch, or discarded.\nYou are read-only: you read files, search the code with \`search\`, read history with \`git\` (${GIT_READS.join(', ')}), and use codemode and the web tools; nothing edits, runs commands or writes elsewhere. Changes become branches: once one is settled, draft its first prompt with \`propose_branch\`, and the user starts it.`
   const state = (await host.harness().snapshot(Branch, id, ctx))?.branch
   if (!state) return `You are #${id}.${rooted}\n${ZOOM}`
   return `You are #${id}, branched from #${state.from} at entry ${state.at} for: ${state.intent}${rooted}\nYour context starts with the tally of your tree, kept in its root: the prompt each conversation was started with, the latest abstract of each, and every landing, with #<conversation>/<entry> breadcrumbs to read in full with codemode \`ultimate.entries(id)\`.\n${ZOOM}`
@@ -1350,31 +1426,32 @@ export const actions = {
   /** Open a side chat with tally root `root`; returns it (`id`). */
   async side(args: JsonValue, { host }: ActionContext) {
     const input = rootInput(args) as Partial<SideInput>
-    return openSide(host, { ...input, root: rootArg(args) } as SideInput, context)
+    return openSide(host, { ...input, root: idArg(args, 'root') } as SideInput, context)
   },
   /**
-   * End the open side chat of `root`: `discard`, `note`, or `branch` with the branch's prompt (and its images,
-   * isolation, model and thinking). Returns the branch (`id`) a branch end started.
+   * End side chat `side`, the open one of `root`: `discard`, `note`, or `branch` with the branch's prompt (and its
+   * images, isolation, model and thinking). Returns the branch (`id`) a branch end started.
    */
   async endSide(args: JsonValue, { host }: ActionContext) {
-    const root = rootArg(args)
+    const root = idArg(args, 'root')
+    const side = idArg(args, 'side')
     const mode = (args as { mode?: unknown }).mode
     if (mode !== 'note' && mode !== 'branch' && mode !== 'discard')
       throw new Error('mode must be note, branch or discard')
     const input = mode === 'branch' ? rootInput(args) : {}
-    return endSide(host, { ...input, root, mode }, context)
+    return endSide(host, { ...input, root, side, mode }, context)
   },
-  /** The first prompt of the branch the open side chat of `root` would end in. */
+  /** The first prompt of the branch side chat `side`, the open one of `root`, would end in. */
   async sideDraft(args: JsonValue, { host }: ActionContext) {
-    return draftSide(host, rootArg(args), context)
+    return draftSide(host, idArg(args, 'root'), idArg(args, 'side'), context)
   },
 }
 
-function rootArg(args: JsonValue) {
-  const root = (args as { root?: unknown } | null)?.root
-  if (typeof root !== 'number' || !Number.isSafeInteger(root) || root < 1)
-    throw new Error('root must be a positive integer')
-  return root
+function idArg(args: JsonValue, key: 'root' | 'side') {
+  const id = (args as Record<string, unknown> | null)?.[key]
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1)
+    throw new Error(`${key} must be a positive integer`)
+  return id
 }
 
 /** The tally `id` catches up on: its tree root's, once that root is a tally. */
@@ -1558,6 +1635,63 @@ export default function lineageExtension(host: ExtensionHost) {
                 text: 'Proposed. The user starts the branch from the card, or ends the side chat another way.',
               },
             ],
+          }
+        },
+      }),
+      // Side chats read the code with these instead of bash.
+      defineTool({
+        name: 'search',
+        deferred: true,
+        // It only reads files; a rerun changes nothing.
+        replay: 'safe',
+        description:
+          'Search the project with ripgrep: matching lines as path:line:text. `pattern` is a regular expression, `path` a file or directory relative to the project (default: all of it), `glob` limits the files (e.g. "*.ts").',
+        parameters: Type.Object({
+          pattern: Type.String({ minLength: 1 }),
+          path: Type.Optional(Type.String({ minLength: 1 })),
+          glob: Type.Optional(Type.String({ minLength: 1 })),
+        }),
+        async execute({ pattern, path, glob }, _api, ctx) {
+          // The pattern and path cannot be read as options; without a config file, no --pre program runs.
+          const args = [
+            '--no-config',
+            '--line-number',
+            '--no-heading',
+            '--color=never',
+            '--max-columns=300',
+            '--max-columns-preview',
+            ...(glob ? [`--glob=${glob}`] : []),
+            `--regexp=${pattern}`,
+            '--',
+            path ?? '.',
+          ]
+          let text: string
+          try {
+            text = await readOut(host, 'rg', args, ctx.abortSignal)
+          } catch (error) {
+            // ripgrep exits 1 when nothing matched.
+            if ((error as { code?: unknown }).code !== 1)
+              throw new Error(`rg: ${failure(error)}`, { cause: error })
+            text = 'No matches.'
+          }
+          return { output: [{ type: 'text', text }] }
+        },
+      }),
+      defineTool({
+        name: 'git',
+        deferred: true,
+        // Only reading commands run (gitArgs); a rerun changes nothing.
+        replay: 'safe',
+        description: `Run a reading git command in the project: ${GIT_READS.join(', ')}. \`args\` starts with the command, e.g. ["log", "--oneline", "-20"]. Options that write files or run programs are refused.`,
+        parameters: Type.Object({ args: Type.Array(Type.String(), { minItems: 1 }) }),
+        async execute({ args }, _api, ctx) {
+          const argv = gitArgs(args)
+          try {
+            return {
+              output: [{ type: 'text', text: await readOut(host, 'git', argv, ctx.abortSignal) }],
+            }
+          } catch (error) {
+            throw new Error(`git ${args[0]}: ${failure(error)}`, { cause: error })
           }
         },
       }),

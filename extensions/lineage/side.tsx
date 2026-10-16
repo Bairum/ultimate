@@ -67,7 +67,7 @@ function SideBar({ id, side, dock }: { id: number; side: SideState; dock?: boole
     setError(undefined)
     ended.add(id)
     try {
-      await api.action('lineage', 'endSide', { root: side.root, mode })
+      await api.action('lineage', 'endSide', { root: side.root, side: id, mode })
       switchConversation(side.root)
     } catch (failure) {
       ended.delete(id)

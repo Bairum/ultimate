@@ -64,11 +64,14 @@ async function fixture(reopen?: string) {
   servers.push(server)
   const requests: Message[][] = []
   const condensed: string[] = []
-  const route: FauxResponseFactory = (transcript) => {
+  /** While `condense` is set, compaction summaries wait for it. */
+  const gate: { condense?: Promise<void> } = {}
+  const route: FauxResponseFactory = async (transcript) => {
     server.host.faux!.appendResponses([route])
     const [system, first] = transcript.messages
     if (textOf(system.content).startsWith('You condense')) {
       condensed.push(textOf(first.content))
+      await gate.condense
       return fauxAssistantMessage(`LINEAGE SUMMARY of ${textOf(first.content).slice(0, 40)}`)
     }
     requests.push([...transcript.messages])
@@ -83,7 +86,7 @@ async function fixture(reopen?: string) {
     return fauxAssistantMessage(`echo ${textOf(last?.content)}`)
   }
   server.host.faux!.setResponses([route])
-  return { server, home, requests, condensed }
+  return { server, home, requests, condensed, gate }
 }
 
 const branchFrom = async (server: Server, args: Record<string, unknown>) => {
@@ -458,6 +461,53 @@ it('updates an open abstract in place and freezes it into a landing', async () =
   ).toHaveLength(4)
 })
 
+it('places a landing in a tally in one transaction, so an abstract never opens before it', async () => {
+  const { server } = await fixture()
+  const first = await branchFrom(server, { from: 1, prompt: 'Land me' })
+  await settled(server, first)
+  // An abstract that arrives right after a landing checked for one, as if between a separate check and placement.
+  let raced = false
+  const race = async () => {
+    if (raced) return
+    raced = true
+    await server.harness.commit(
+      (tx) => abstract(tx, first, { text: 'State: raced.', at: 1 }),
+      context,
+    )
+  }
+  const harness = server.harness
+  const host = {
+    harness: () => ({
+      commit: harness.commit.bind(harness),
+      snapshot: harness.snapshot.bind(harness),
+      conversation: async (id: ConversationId, ctx: typeof context) => {
+        const conversation = (await harness.conversation(id, ctx))!
+        return {
+          submit: async (...args: Parameters<typeof conversation.submit>) => {
+            await race()
+            return conversation.submit(...args)
+          },
+        }
+      },
+    }),
+  } as unknown as Parameters<typeof leaveNote>[0]
+  const landing = {
+    from: first,
+    source: 'lander' as const,
+    requestId: 'lander-root:race',
+    data: { sha: 'def5678' },
+  }
+  for (let run = 0; run < 2; run++) await leaveNote(host, 'root', 'Landed def5678', landing)
+  await race()
+  const { entries } = await server.root.context(context)
+  const notes = entries.filter((entry) => entry.kind === 'lineage.note')
+  expect(notes).toHaveLength(1)
+  expect((notes[0].data as { abstract?: unknown }).abstract).toBeUndefined()
+  // The abstract is liquid after the landing, never left open above it.
+  const open = (await server.harness.snapshot(Tally, server.root.id, context))!.abstracts[first]
+  expect(open.anchor).toBeGreaterThan(notes[0].id)
+})
+
 it('turns a conversation with history into a tally with one genesis that branches start from', async () => {
   const { server, requests } = await fixture()
   await (
@@ -816,6 +866,43 @@ it('compacts a tally from its model view, then opens a new abstract after it', a
   expect(textOf(messages.at(-1)!.content)).toBe(
     `Abstract of #${first} as of #${first}/1:\nState: after.`,
   )
+})
+
+it('keeps an abstract written while the tally compacts: it opens a new anchor', async () => {
+  const { server, condensed, gate } = await fixture()
+  const first = await branchFrom(server, { from: 1, prompt: 'Abstract me' })
+  await settled(server, first)
+  await server.harness.commit(
+    (tx) => abstract(tx, first, { text: 'State: started.', at: 1 }),
+    context,
+  )
+  await server.harness.commit(async (tx) => {
+    for (let n = 0; n < 8; n++)
+      await tx.appendEntry(server.root.id, {
+        kind: 'pi.user',
+        model: [{ role: 'user', content: `Part ${n} ${'word '.repeat(4000)}`, timestamp: n }],
+      })
+  }, context)
+  let release!: () => void
+  gate.condense = new Promise((resolve) => (release = resolve))
+  const task = await server.root.compact(undefined, context)
+  // The compaction has chosen its range and waits for its summary when the update arrives.
+  await until(async () => condensed.length > 0)
+  await server.harness.commit(
+    (tx) => abstract(tx, first, { text: 'State: during.', at: 2 }),
+    context,
+  )
+  release()
+  await server.harness.waitForTask(task, context)
+  const { entries, messages } = await server.root.context(context)
+  expect(entries[0].kind).toBe('pi.compaction')
+  expect(
+    said(messages)
+      .map(([, text]) => text)
+      .filter((text) => text.startsWith(`Abstract of #${first}`)),
+  ).toEqual([`Abstract of #${first} as of #${first}/2:\nState: during.`])
+  const open = (await server.harness.snapshot(Tally, server.root.id, context))!.abstracts[first]
+  expect(entries.map((entry) => entry.id)).toContain(open.anchor)
 })
 
 /** A faux server where `NOTIFY {json}` calls the notify tool and `HOLD` answers only once released. */

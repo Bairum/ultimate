@@ -339,7 +339,7 @@ function SideBranch({
   const draft = useAction<{ prompt: string }>(
     'lineage',
     'sideDraft',
-    { root },
+    { root, side },
     { enabled: given === undefined, onError: () => {} },
   )
   const prompt = given ?? draft.data?.prompt
@@ -387,6 +387,7 @@ function SideBranch({
             api.action<{ id: number }>('lineage', 'endSide', {
               ...input,
               root,
+              side,
               mode: 'branch',
               isolated: await isolated(input),
             })

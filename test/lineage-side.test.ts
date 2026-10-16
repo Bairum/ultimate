@@ -150,20 +150,18 @@ it('opens a side chat from the tally’s tip, one at a time, without writing int
   expect(branch.error).toBe(`#${id} is no tally`)
 })
 
-it('keeps a side chat read-only: no edit, write or note, and propose_branch offered', async () => {
+const allowed = ['codemode', 'git', 'propose_branch', 'read', 'search', 'web_fetch', 'web_search']
+
+it('keeps a side chat read-only: it gets exactly the reading tools and propose_branch', async () => {
   const { server, requests } = await fixture()
   const id = await opened(server)
   const agent = await (await server.harness.conversation(id, context))!.agent(context)
-  const offered = agent.tools.map((tool) => tool.name)
-  expect(offered).toContain('propose_branch')
-  expect(offered).toContain('bash')
-  for (const name of ['edit', 'write', 'note', 'subagent']) {
-    expect(offered).not.toContain(name)
-    expect(agent.callable.map((tool) => tool.name)).not.toContain(name)
-  }
-  // Elsewhere propose_branch is not offered.
+  expect(agent.tools.map((tool) => tool.name).toSorted()).toEqual(allowed)
+  expect(agent.callable.map((tool) => tool.name).toSorted()).toEqual(allowed)
+  // Elsewhere the side chat's own tools are not offered.
   const root = await server.root.agent(context)
-  expect(root.tools.map((tool) => tool.name)).not.toContain('propose_branch')
+  for (const name of ['propose_branch', 'search', 'git'])
+    expect(root.tools.map((tool) => tool.name)).not.toContain(name)
 
   const conversation = (await server.harness.conversation(id, context))!
   await conversation.submit({ type: 'input', content: 'edit' }, context)
@@ -176,9 +174,76 @@ it('keeps a side chat read-only: no edit, write or note, and propose_branch offe
   await conversation.submit({ type: 'input', content: 'propose' }, context)
   await conversation.waitForIdle(context)
   expect(textOf(requests.at(-1)!.messages.at(-1)?.content)).toMatch(/^Proposed\./)
-  expect(await action(server, 'sideDraft', { root: 1 })).toMatchObject({
+  expect(await action(server, 'sideDraft', { root: 1, side: id })).toMatchObject({
     result: { prompt: 'Build the store' },
   })
+})
+
+it('reads git and searches the code, and refuses git commands that change anything', async () => {
+  const { server } = await fixture()
+  const tools = server.host.registry.snapshot().extension('lineage')!.tools!
+  const run = (name: string, args: Record<string, unknown>) =>
+    tools
+      .find((tool) => tool.name === name)!
+      .execute(args as never, {} as never, context)
+      .then((result) => textOf((result as { output: unknown }).output))
+  for (const args of [
+    ['commit', '-m', 'x'],
+    ['checkout', 'main'],
+    ['push'],
+    ['-c', 'core.pager=sh', 'log'],
+    ['diff', '--output=x.patch'],
+    ['log', '-o', 'x'],
+    ['grep', '-Ovim', 'x'],
+    ['grep', '--open-files-in-pager', 'x'],
+  ])
+    await expect(run('git', { args })).rejects.toThrow(/^git /)
+  const found = await run('search', {
+    pattern: 'name: PROPOSE',
+    path: 'extensions',
+    glob: '*.ts',
+  })
+  expect(found).toContain('extensions/lineage/server.ts:')
+  expect(await run('search', { pattern: 'no such text [a]nywhere' })).toBe('No matches.')
+})
+
+it('refuses to end or draft for a side chat that is no longer the open one', async () => {
+  const { server } = await fixture()
+  const stale = await opened(server, 'First chat')
+  expect(
+    (await action(server, 'endSide', { root: 1, side: stale, mode: 'discard' })).error,
+  ).toBeUndefined()
+  const open = await openSide(server, 'Second chat')
+  // A page still showing the first one ends nothing.
+  const error = `Side chat #${stale} is not the open side chat of #1`
+  expect((await action(server, 'endSide', { root: 1, side: stale, mode: 'note' })).error).toBe(
+    error,
+  )
+  expect((await action(server, 'sideDraft', { root: 1, side: stale })).error).toBe(error)
+  expect(await sides(server)).toEqual({ 1: open })
+  expect((await server.harness.snapshot(Side, open, context))?.side).toEqual({
+    root: 1,
+    at: expect.any(Number),
+  })
+})
+
+it('gives a branch started from a side chat’s message ordinary tools', async () => {
+  const { server } = await fixture()
+  const id = await opened(server)
+  const at = (await (await server.harness.conversation(id, context))!.context(context)).entries.at(
+    -1,
+  )!.id
+  const branch = await action(server, 'branch', {
+    from: id,
+    at,
+    prompt: 'Build it',
+    isolated: false,
+  })
+  expect(branch.error).toBeUndefined()
+  const agent = await (await settled(server, branch.result.id)).agent(context)
+  const offered = agent.tools.map((tool) => tool.name)
+  for (const name of ['bash', 'edit', 'write', 'note']) expect(offered).toContain(name)
+  for (const name of ['propose_branch', 'search', 'git']) expect(offered).not.toContain(name)
 })
 
 it('writes no abstract for a side chat’s exchange', async () => {
@@ -242,7 +307,7 @@ it('ends a side chat as a note: one model-visible note in the tally, then read-o
   const { server, requests } = await fixture()
   const id = await opened(server)
   const before = await rootEntries(server)
-  const ended = await action(server, 'endSide', { root: 1, mode: 'note' })
+  const ended = await action(server, 'endSide', { root: 1, side: id, mode: 'note' })
   expect(ended.error).toBeUndefined()
   expect(await rootEntries(server)).toEqual([...before, ['lineage.note', 'side']])
   const note = (await server.root.context(context)).entries.at(-1)!
@@ -258,7 +323,7 @@ it('ends a side chat as a note: one model-visible note in the tally, then read-o
   await expect(conversation.submit({ type: 'input', content: 'More' }, context)).rejects.toThrow(
     `Side chat #${id} has ended and takes no input`,
   )
-  expect((await action(server, 'endSide', { root: 1, mode: 'note' })).error).toBe(
+  expect((await action(server, 'endSide', { root: 1, side: id, mode: 'note' })).error).toBe(
     '#1 has no open side chat',
   )
   // The root can open the next one.
@@ -268,11 +333,12 @@ it('ends a side chat as a note: one model-visible note in the tally, then read-o
 it('ends a side chat in a branch that starts from the tally after its note', async () => {
   const { server, requests } = await fixture()
   const id = await opened(server)
-  expect((await action(server, 'endSide', { root: 1, mode: 'branch', prompt: ' ' })).error).toBe(
-    'A branch needs a prompt',
-  )
+  expect(
+    (await action(server, 'endSide', { root: 1, side: id, mode: 'branch', prompt: ' ' })).error,
+  ).toBe('A branch needs a prompt')
   const ended = await action(server, 'endSide', {
     root: 1,
+    side: id,
     mode: 'branch',
     prompt: 'Build the store',
     isolated: false,
@@ -307,7 +373,9 @@ it('discards a side chat without touching the tally', async () => {
   const { server } = await fixture()
   const id = await opened(server)
   const before = await rootEntries(server)
-  expect((await action(server, 'endSide', { root: 1, mode: 'discard' })).error).toBeUndefined()
+  expect(
+    (await action(server, 'endSide', { root: 1, side: id, mode: 'discard' })).error,
+  ).toBeUndefined()
   expect(await rootEntries(server)).toEqual(before)
   expect(await sides(server)).toEqual({})
   expect((await server.harness.snapshot(Side, id, context))?.side?.ended).toBe('discard')
@@ -330,7 +398,7 @@ it('refuses to end a side chat while it answers', async () => {
     },
   ])
   await conversation.submit({ type: 'input', content: 'Think' }, context)
-  expect((await action(server, 'endSide', { root: 1, mode: 'note' })).error).toBe(
+  expect((await action(server, 'endSide', { root: 1, side: id, mode: 'note' })).error).toBe(
     `Side chat #${id} is still answering`,
   )
   release()
@@ -361,6 +429,7 @@ it('writes a side chat’s note and branch once across a restart', async () => {
   )
   const ending = action(server, 'endSide', {
     root: 1,
+    side: id,
     mode: 'branch',
     prompt: 'Build the store',
     isolated: false,
