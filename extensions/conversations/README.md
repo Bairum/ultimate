@@ -111,8 +111,8 @@ For a top-level non-root conversation in a lineage tree, that same request produ
 exchange, independent of the title/summary cadence. It uses the original branch intent, previous abstract and transcript:
 Ask, Diverged (agreements, approach/library or scope changes, or none), State (including named commits), Areas and Open
 questions, capped at 1200 characters. Acceptance calls the lineage service's `abstract` in the same transaction as the
-reply assessment, with `at` pointing to the answer entry, and saves the text in summary state. A newer abstract omits
-the previous one from the root's model context; the root shows only the latest per conversation. Roots, owned
+reply assessment, with `at` pointing to the answer entry, and saves the text in summary state. A newer abstract updates
+the open one in place until a landing freezes it (see the lineage README); the root never reorders. Roots, owned
 conversations such as subagents, and conversations outside trees such as landers produce no abstract. Neither do
 stale answers, failed or interrupted exchanges, or missing lineage or summary models. Exchange and intent detection use own entries, so inherited inputs and answers
 do not count as the branch's work.

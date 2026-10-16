@@ -33,7 +33,7 @@ import { Open } from '../workspaces/landing.tsx'
 import { getRoots, useRoots } from './roots.tsx'
 import { entryText, openStart, StartPage } from './start.tsx'
 
-type Tally = { abstracts: Record<string, number>; tokens: number; since?: number }
+type Tally = { tokens: number; since?: number }
 const tallyKind = 'lineage.tally'
 
 function userText(entry: EntryRecord) {
@@ -134,19 +134,29 @@ function Started({ entry }: { entry: EntryRecord }) {
   )
 }
 
-/** A conversation's latest abstract in the tally; one a later abstract omits from the context is not shown. */
+type AbstractData = {
+  conversation: number
+  at: number
+  text: string
+  title?: string
+  anchor?: number
+}
+
+/**
+ * A conversation's abstract at its anchor, with the text of the newest carrier that replaced it; carriers show nothing.
+ * Once a landing froze it (or, in older tallies, a later abstract superseded it), it is not shown.
+ */
 function Abstract({ entry }: { entry: EntryRecord }) {
   const { switchConversation } = useUltimate()
-  const { conversation, at, text, title } = entry.data as {
-    conversation: number
-    at: number
-    text: string
-    title?: string
-  }
-  const superseded = useTranscript().some((other) =>
-    other.edits?.some((edit) => edit.target === entry.id && edit.action === 'omit'),
-  )
-  if (superseded) return null
+  const transcript = useTranscript()
+  if ((entry.data as AbstractData).anchor !== undefined) return null
+  let latest = entry
+  for (const other of transcript)
+    if (other.id > latest.id && other.edits?.some((edit) => edit.target === entry.id))
+      latest = other
+  const omitted = latest.edits?.some((edit) => edit.target === entry.id && edit.action === 'omit')
+  if (omitted) return null
+  const { conversation, at, text, title } = latest.data as AbstractData
   return (
     <section
       className="min-w-0 rounded-md border border-border bg-muted/20"

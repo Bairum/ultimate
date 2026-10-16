@@ -333,7 +333,7 @@ it('catches a resumed branch up on what its tree learned, then on commits, once 
       "Meanwhile in #1's tree:",
       `**#${fourth}** started: Fourth feature`,
       `**#${third} Third** · Tally — abstract as of #${third}/1:\n- Ask: third\n- State: in progress`,
-      `**#${second} Second** · Tally — abstract as of #${second}/1:\n- Ask: second\n- Diverged: none\n- State: landed\n- Landed \`abcdef1\` on main (#${second}/7). Diverged: Used SQLite instead of JSON files`,
+      `**#${second} Second** · Tally — state at landing, as of #${second}/1:\n- Ask: second\n- Diverged: none\n- State: landed\n- Landed \`abcdef1\` on main (#${second}/7). Diverged: Used SQLite instead of JSON files`,
       'Check whether any of this already covers or changes what you are about to do.',
     ].join('\n\n'),
   )
@@ -353,12 +353,17 @@ it('catches a resumed branch up on what its tree learned, then on commits, once 
   expect(commitOnly.text).not.toContain('Meanwhile')
   expect(commitOnly.text).toContain('1 commits landed on main')
   await writeAbstract(f.server, fourth, 'Ask: fourth\nState: blocked', 'Fourth')
+  // An abstract opened before the last catch-up and updated after it reads as it is now.
+  await writeAbstract(f.server, third, 'Ask: third\nState: done', 'Third')
   repoGit(f.projectRoot, 'commit', '--allow-empty', '-m', 'Another commit')
   await ask(f.server, own, 'after both')
   const both = ((await catchups(f.server, own)).at(-1)!.data as { text: string }).text
   expect(both.indexOf(`**#${fourth} Fourth**`)).toBeGreaterThan(0)
   expect(both.indexOf(`**#${fourth} Fourth**`)).toBeLessThan(both.indexOf('Another commit'))
-  expect(both).not.toContain('Third')
+  expect(both).toContain(
+    `**#${third} Third** · Tally — abstract as of #${third}/1:\n- Ask: third\n- State: done`,
+  )
+  expect(both).not.toContain('Second')
   expect(await catchups(f.server, own)).toHaveLength(3)
 })
 
@@ -395,7 +400,7 @@ it('collapses the oldest conversations to one line each when the tree outgrew th
   // The newest stay in full; the landing made the oldest newest.
   expect(kept.map((block) => block.split('\n')[0])).toEqual([
     `**#${others[5]} F5** · Tally — abstract as of #${others[5]}/1:`,
-    `**#${others[0]} F0** · Tally — abstract as of #${others[0]}/1:`,
+    `**#${others[0]} F0** · Tally — state at landing, as of #${others[0]}/1:`,
   ])
   expect(kept[1]).toContain('- Landed `abcdef1` on main')
 

@@ -323,7 +323,7 @@ it('refuses inputs in a tally and keeps notes as writes', async () => {
   )
 })
 
-it('keeps one model-visible abstract per conversation in its tree root', async () => {
+it('updates an open abstract in place and freezes it into a landing', async () => {
   const { server } = await fixture()
   server.host.registry.install(defineExtension({ name: 'lineage-test', tasks: [anchor] }))
   const lineage = {
@@ -342,39 +342,98 @@ it('keeps one model-visible abstract per conversation in its tree root', async (
       (tx) => lineage.abstract(tx, id, { text, at, title: 'Abstracts', feature: 'Tally' }),
       context,
     )
+  const other = await branchFrom(server, { from: 1, prompt: 'Other' })
+  await settled(server, other)
   await write(first, 'Ask: one. State: started.')
+  await write(other, 'Ask: two. State: started.')
   await write(first, 'Ask: one. State: done.')
   const view = await server.root.context(context)
   const abstracts = view.entries.filter((entry) => entry.kind === 'lineage.abstract')
-  expect(abstracts.map((entry) => entry.data)).toEqual([
+  const fields = { at, title: 'Abstracts', feature: 'Tally' }
+  expect(abstracts.map(({ data, model, edits }) => ({ data, model: !!model, edits }))).toEqual([
+    { data: { conversation: first, text: 'Ask: one. State: started.', ...fields }, model: true },
+    { data: { conversation: other, text: 'Ask: two. State: started.', ...fields }, model: true },
     {
-      conversation: first,
-      at,
-      text: 'Ask: one. State: started.',
-      title: 'Abstracts',
-      feature: 'Tally',
-    },
-    {
-      conversation: first,
-      at,
-      text: 'Ask: one. State: done.',
-      title: 'Abstracts',
-      feature: 'Tally',
+      data: {
+        conversation: first,
+        text: 'Ask: one. State: done.',
+        anchor: abstracts[0].id,
+        ...fields,
+      },
+      model: false,
+      edits: [{ target: abstracts[0].id, action: 'replace', messages: [expect.anything()] }],
     },
   ])
-  expect(abstracts[1].edits).toEqual([{ target: abstracts[0].id, action: 'omit' }])
-  // Only the newest abstract reaches the model.
+  // The update replaced the first abstract's text where it stands: the tally keeps its order.
+  const prompts = said(view.messages)
+    .map(([, text]) => text)
+    .slice(0, 2)
   expect(said(view.messages).map(([, text]) => text)).toEqual([
-    `#${first} was started from the tally (#1/${view.entries[0].id}) with the prompt:\nAbstract me`,
+    ...prompts,
     `Abstract of #${first} Abstracts as of #${first}/${at}:\nAsk: one. State: done.`,
+    `Abstract of #${other} Abstracts as of #${other}/${at}:\nAsk: two. State: started.`,
   ])
-  const tally = (await server.harness.snapshot(Tally, server.root.id, context))!
-  expect(tally.abstracts).toEqual({ [first]: abstracts[1].id })
+  expect(prompts.map((text) => text.split(' ')[0])).toEqual([`#${first}`, `#${other}`])
+  expect((await server.harness.snapshot(Tally, server.root.id, context))!.abstracts).toEqual({
+    [first]: { anchor: abstracts[0].id, text: 'Ask: one. State: done.', ...fields },
+    [other]: { anchor: abstracts[1].id, text: 'Ask: two. State: started.', ...fields },
+  })
   await until(
     async () =>
       (await server.harness.snapshot(Tally, server.root.id, context))?.tokens ===
       (await tallyTokens(server, server.root.id)),
   )
+
+  // A landing freezes the open abstract into its note; a rerun of the same request writes nothing more.
+  const host = { harness: () => server.harness }
+  const landing = {
+    from: first,
+    source: 'lander' as const,
+    requestId: 'lander-root:x',
+    data: { sha: 'abc1234' },
+  }
+  for (let run = 0; run < 2; run++) await leaveNote(host, 'root', 'Landed abc1234', landing)
+  const landed = await server.root.context(context)
+  const notes = landed.entries.filter((entry) => entry.kind === 'lineage.note')
+  expect(notes).toHaveLength(1)
+  expect(notes[0].data).toEqual({
+    sha: 'abc1234',
+    text: 'Landed abc1234',
+    from: first,
+    source: 'lander',
+    abstract: { text: 'Ask: one. State: done.', ...fields },
+  })
+  expect(notes[0].edits).toEqual([{ target: abstracts[0].id, action: 'omit' }])
+  const frozen = `Note from the lander: Landed abc1234\n\nState at landing (abstract as of #${first}/${at}):\nAsk: one. State: done.`
+  expect(said(landed.messages).map(([, text]) => text)).toEqual([
+    ...prompts,
+    `Abstract of #${other} Abstracts as of #${other}/${at}:\nAsk: two. State: started.`,
+    frozen,
+  ])
+  expect(
+    (await server.harness.snapshot(Tally, server.root.id, context))!.abstracts[first],
+  ).toBeUndefined()
+
+  // The next abstract starts a new anchor after the landing, which keeps its frozen state.
+  await write(first, 'Ask: one more. State: started.')
+  const after = await server.root.context(context)
+  const reopened = after.entries.at(-1)!
+  expect([reopened.kind, !!reopened.model, reopened.edits]).toEqual([
+    'lineage.abstract',
+    true,
+    undefined,
+  ])
+  expect(
+    said(after.messages)
+      .map(([, text]) => text)
+      .slice(-2),
+  ).toEqual([
+    frozen,
+    `Abstract of #${first} Abstracts as of #${first}/${at}:\nAsk: one more. State: started.`,
+  ])
+  expect(
+    (await server.harness.snapshot(Tally, server.root.id, context))!.abstracts[first].anchor,
+  ).toBe(reopened.id)
 
   // Roots, subagents and conversations outside any tree write no abstract.
   const subagent = await server.harness.commit(async (tx) => {
@@ -396,7 +455,7 @@ it('keeps one model-visible abstract per conversation in its tree root', async (
     (await server.root.context(context)).entries.filter(
       (entry) => entry.kind === 'lineage.abstract',
     ),
-  ).toHaveLength(2)
+  ).toHaveLength(4)
 })
 
 it('turns a conversation with history into a tally with one genesis that branches start from', async () => {
@@ -729,7 +788,7 @@ it('compacts a top-level conversation with its lineage focus', async () => {
   expect(textOf(marker.model?.[0]?.content)).toContain('LINEAGE SUMMARY of This is the tally')
 })
 
-it('compacts a tally from its model view, without the abstracts it omitted', async () => {
+it('compacts a tally from its model view, then opens a new abstract after it', async () => {
   const { server, condensed } = await fixture()
   const first = await branchFrom(server, { from: 1, prompt: 'Abstract me' })
   await settled(server, first)
@@ -747,6 +806,16 @@ it('compacts a tally from its model view, without the abstracts it omitted', asy
   const source = condensed.at(-1)!
   expect(source).toContain(`Abstract of #${first} as of #${first}/1:\nState: done.`)
   expect(source).not.toContain('State: started.')
+  // The compaction replaced the anchor, so an edit of it would change nothing: the next abstract is a new anchor.
+  await server.harness.commit(
+    (tx) => abstract(tx, first, { text: 'State: after.', at: 1 }),
+    context,
+  )
+  const { entries, messages } = await server.root.context(context)
+  expect([entries.at(-1)!.kind, entries.at(-1)!.edits]).toEqual(['lineage.abstract', undefined])
+  expect(textOf(messages.at(-1)!.content)).toBe(
+    `Abstract of #${first} as of #${first}/1:\nState: after.`,
+  )
 })
 
 /** A faux server where `NOTIFY {json}` calls the notify tool and `HOLD` answers only once released. */

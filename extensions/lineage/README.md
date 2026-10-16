@@ -25,14 +25,17 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
   tallies keep their ordinary composer and can run until converted. `info` returns `{ roots }`, and with `{ id }`
   also its `root` and `branch` when present.
 - **Tally**: conversation-scoped doc `lineage.tally` (latest history) holds
-  `{ abstracts: Record<string, number>, tokens: number, since?: number, converting?: true }`: each conversation's
-  latest abstract entry, estimated model-visible context tokens, the entry where the root became a tally, and whether
-  its genesis is being distilled. Forks start with an empty doc,
+  `{ abstracts: Record<string, { anchor, at, text, title?, feature? }>, tokens: number, since?: number,
+converting?: true }`: each conversation's open abstract, estimated model-visible context tokens, the entry where
+  the root became a tally, and whether its genesis is being distilled. Forks start with an empty doc,
   not the source's bookkeeping. Tokens are recounted from active context after commits that append root entries,
   including resets and compaction. The root composer status shows the estimate as "Tally · … tokens".
-  `lineage.abstract` entries hold `{ conversation, at, text, title?, feature? }`, with `at` pointing to the answer
-  summarized. Each new abstract omits the previous one from model context through an `edits` omit; storage stays
-  append-only. The transcript hides superseded abstracts and shows the latest as a card with a `#N/at` breadcrumb.
+  `lineage.abstract` entries hold `{ conversation, at, text, title?, feature?, anchor? }`, with `at` pointing to the
+  answer summarized. An abstract is liquid until its conversation lands, like an uncommitted working tree: the first
+  one is model-visible and becomes the anchor; later ones are carriers without model messages (`anchor` set) whose
+  `edits` replace the anchor's text in place, so the tally never reorders. An anchor a compaction or genesis replaced
+  takes no edits; the next abstract opens a new one. Storage stays append-only. The transcript shows each anchor as a
+  card with its newest carrier's text and `#N/at` breadcrumb; carriers render nothing, and a frozen anchor hides.
 - **Notes**: `note` `{ to: id | 'root', text }` writes a `lineage.note` without waking the target; `'root'` resolves
   the caller's tree root. Its model reads `Note from #N: …` with its next input, or a future branch inherits it from
   the tally. Note cards use the mellow yellow `--note` theme token. `ConversationRef` names conversations by feature,
@@ -40,7 +43,11 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
   `'root'` needs `source.from` and errors if it has no root. Successful landings leave a note in the submitter's root
   (unless it is that root or has none), with `source: 'lander'`, `sha`, `target`, `commits`, `paths`, `divergence` and
   `at`. Text includes the submitter's `#N/at` breadcrumb and `Diverged: …`, including "None"; the landing card shows
-  divergence too (up to 10 commits and 8 changed paths).
+  divergence too (up to 10 commits and 8 changed paths). A landing is the commit of a liquid abstract: in a tally, a
+  lander note for a submitter with an open abstract carries it as `abstract` `{ at, text, title?, feature? }` and a
+  `State at landing (abstract as of #N/at):` block, omits the anchor in the same write and closes it, so the frozen
+  state lives only in the landing; the card shows it as a collapsed "State at landing". The next abstract opens a new
+  anchor after the landing. The write is placed in its own transaction with the same request-id deduplication.
 - **Notify**: `notify` `{ id, wake? }` starts `lineage.notify` in the caller. It waits until the target and its
   subagents are idle, then delivers `#id finished · <title>` with its last own answer (≤1500 chars), not an inherited
   source answer. `wake` (default true) submits a follow-up placed as `lineage.finished`; `wake: false` leaves a note
@@ -51,8 +58,9 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
   the fork point, or the `data.tally` of the newest catch-up note there, which every catch-up records. Without either
   it starts from `lineage.tally.since`. Prompts of the conversations it was forked from are left out: it reads them as
   their inputs. On an idle resume, the transactional `GenerationTask.beforeInput` hook builds
-  "Meanwhile in #R's tree": latest model-visible abstracts (preferred over prompts), prompts without an abstract,
-  landings with divergence and breadcrumbs, notes, and any new tally distillation. It excludes the caller's own
+  "Meanwhile in #R's tree": open abstracts whose anchor or a carrier is new, as they read now (preferred over
+  prompts), prompts without an abstract, landings with divergence and breadcrumbs (a conversation without an open
+  abstract shows its newest landing's frozen state), notes, and any new tally distillation. It excludes the caller's own
   activity. Within about 6000 tokens it keeps the newest material in full, collapsing older conversations to one-line
   status with a pointer to `ultimate.entries(root)`; no model call runs in input placement.
   The same note then lists up to 30 new target commits, overlaps first (workspace diff against merge-base, or the
@@ -67,12 +75,12 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
 - **Compaction**: manual compaction reshapes a tally without deleting history. Its own model keeps the idea,
   principles, standing decisions and each conversation's id, prompt, outcome, divergence, commits and breadcrumbs,
   merging superseded detail. Every top-level conversation's summary source is its model view with edits applied, so
-  omitted abstracts stay out. Branch compaction focuses on intent and progress; subagents keep Pi's default.
+  abstracts read as last updated and frozen ones stay out. Branch compaction focuses on intent and progress; subagents keep Pi's default.
 
 Other extensions use `host.use<LineageService>('lineage')` (`server.ts`): `rootOf(id, ctx)` resolves tree membership,
 `leaveNote(to, text, source?)` writes without waking, and `branchOf(id, ctx)` returns `{ root, intent? }` for top-level
 non-root conversations in a tree (undefined for roots, owned conversations and outsiders).
-`abstract(tx, id, { text, at, title?, feature? })` appends to that root and updates its abstract map in the caller's
+`abstract(tx, id, { text, at, title?, feature? })` opens or updates `id`'s abstract in that root in the caller's
 transaction, before its first table write because it reads conversation records; it is a no-op wherever `branchOf`
 is undefined. The conversations summarizer uses this to publish an abstract after each completed exchange.
 

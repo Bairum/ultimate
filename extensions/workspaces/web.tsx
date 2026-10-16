@@ -29,7 +29,7 @@ import type { EntryRecord } from '@earendil-works/pi-durable'
 import { ConversationRef } from '../conversations/feature.tsx'
 import { Row, Rows } from '../info/rows.tsx'
 
-/** The lander's note in the root: the landing's card, from the note's own data. */
+/** The lander's note in the root: the landing's card, from the note's own data, with the state it froze. */
 function LandingNote({ entry }: { entry: EntryRecord }) {
   const {
     from,
@@ -44,6 +44,7 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
     paths,
     more,
     pushed,
+    abstract,
   } = entry.data as {
     from: number
     at?: number
@@ -57,6 +58,7 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
     paths: string[]
     more: number
     pushed?: string
+    abstract?: { at: number; text: string }
   }
   return (
     <div data-lineage-note="lander">
@@ -83,6 +85,20 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
         </ul>
         {paths.length > 0 && (
           <p className="break-words text-muted-foreground">Changed: {paths.join(', ')}</p>
+        )}
+        {abstract && (
+          <Collapsible className="group/state">
+            <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
+              <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/state:rotate-90" />
+              State at landing
+              <span className="text-muted-foreground/70">
+                · #{from}/{abstract.at}
+              </span>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="pt-1 pl-4 font-sans text-[12.5px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
+              {abstract.text}
+            </CollapsibleContent>
+          </Collapsible>
         )}
       </LandingCard>
     </div>

@@ -13,6 +13,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
+import type { OpenAbstract } from './server.ts'
 
 /**
  * What a conversation last saw: the target tip (`main`, at time `at`) and the last entry of its tree's tally it
@@ -212,7 +213,7 @@ async function firstInput(tx: Tx, id: ConversationId, forkedAt = 0) {
 }
 
 /** A tally a top-level conversation catches up on: its tree root, once that root is a tally. */
-export type Tree = { root: ConversationId; since: number; abstracts: Record<string, number> }
+export type Tree = { root: ConversationId; since: number; abstracts: Record<string, OpenAbstract> }
 
 /** Tokens the tally part of a catch-up may take. */
 export const TALLY_BUDGET = 6000
@@ -225,7 +226,13 @@ type Activity = {
   feature?: string
   prompt?: string
   abstract?: { at: number; text: string }
-  landings: { sha: string; target: string; at: number; divergence: string }[]
+  landings: {
+    sha: string
+    target: string
+    at: number
+    divergence: string
+    state?: { at: number; text: string }
+  }[]
   notes: string[]
 }
 
@@ -236,9 +243,12 @@ const oneLine = (text: string) => text.replace(/\s*\n\s*/g, ' ').trim()
 function full(activity: Activity) {
   const { id, title, feature, prompt, abstract, landings, notes } = activity
   if (!abstract && !landings.length && !notes.length) return `**#${id}** started: ${prompt}`
+  // Without a liquid abstract, the state its newest landing froze is its latest.
+  const frozen = abstract ? undefined : landings.findLast((landing) => landing.state)?.state
+  const state = abstract ?? frozen
   const items = [
-    ...(abstract
-      ? abstract.text
+    ...(state
+      ? state.text
           .split('\n')
           .map((line) => line.trim())
           .filter(Boolean)
@@ -253,7 +263,7 @@ function full(activity: Activity) {
     ...notes.map((note) => `- Note: ${oneLine(note)}`),
   ]
   return [
-    `**#${id}${title ? ` ${title}` : ''}**${feature ? ` · ${feature}` : ''}${abstract ? ` — abstract as of #${id}/${abstract.at}:` : ':'}`,
+    `**#${id}${title ? ` ${title}` : ''}**${feature ? ` · ${feature}` : ''}${abstract ? ` — abstract as of #${id}/${abstract.at}:` : frozen ? ` — state at landing, as of #${id}/${frozen.at}:` : ':'}`,
     ...items,
   ].join('\n')
 }
@@ -312,32 +322,38 @@ export async function tallyText(
   }
   // Entries a compaction or genesis replaced are no longer in the tally; its distillation stands for them.
   const visible = entries.filter(
-    (entry) => entry.model && (!marker || entry.id >= marker.head) && entry.id !== marker?.id,
+    (entry) => (!marker || entry.id >= marker.head) && entry.id !== marker?.id,
   )
   for (const entry of visible) {
     const data = (entry.data ?? {}) as Record<string, unknown>
     if (entry.kind === 'lineage.abstract') {
+      // An open abstract's anchor or a carrier updating it: the abstract as it reads now. A frozen one is the landing's.
       const conversation = data.conversation as number
-      if (conversation === id || tree.abstracts[String(conversation)] !== entry.id) continue
+      const open = tree.abstracts[String(conversation)] as OpenAbstract | undefined
+      if (conversation === id || open?.anchor !== ((data.anchor as number | undefined) ?? entry.id))
+        continue
       const activity = of(conversation, entry)
-      activity.abstract = { at: data.at as number, text: data.text as string }
-      if (data.title) activity.title = data.title as string
-      if (data.feature) activity.feature = data.feature as string
-    } else if (entry.kind === 'lineage.branched') {
+      activity.abstract = { at: open.at, text: open.text }
+      if (open.title) activity.title = open.title
+      if (open.feature) activity.feature = open.feature
+    } else if (!entry.model) continue
+    else if (entry.kind === 'lineage.branched') {
       const conversation = data.branch as number
       if (conversation === id || sources.has(conversation)) continue
       of(conversation, entry).prompt = oneLine((data.intent as string).split('\n')[0])
     } else if (entry.kind === 'lineage.note' && typeof data.from === 'number' && data.from !== id) {
       const activity = of(data.from, entry)
       if (data.source === 'lander') {
+        const state = data.abstract as Omit<OpenAbstract, 'anchor'> | undefined
         activity.landings.push({
           sha: data.sha as string,
           target: data.target as string,
           at: data.at as number,
           divergence: (data.divergence as string | undefined) ?? 'not stated',
+          ...(state ? { state: { at: state.at, text: state.text } } : {}),
         })
-        activity.title ??= data.title as string | undefined
-        activity.feature ??= data.feature as string | undefined
+        activity.title ??= state?.title ?? (data.title as string | undefined)
+        activity.feature ??= state?.feature ?? (data.feature as string | undefined)
       } else activity.notes.push(data.text as string)
     }
   }
