@@ -15,7 +15,6 @@ The Workspaces panel shows the lander queue, statistics over every checkout, and
 read-only: landing goes through agents, and removing a checkout only happens when someone asks an agent to clean up.
 `info {id}` reads the record and current tips; `create {cwd?, title?}` returns a new conversation ID.
 `workspace land` fast-forwards the saved source branch to the clean, verified workspace tip.
-The workspace must be clean; another running conversation or queued input prevents landing.
 Unrelated dirty files in the source checkout do not block; `git merge --ff-only` refuses only real overlap.
 If the target changed or diverged, update the workspace onto it and verify again; landing never rebases or pushes.
 `discard {id}` removes a clean checkout and keeps its branch and history; it is the cleanup path for top-level
@@ -36,7 +35,7 @@ labelled `lander`, its cwd the lander checkout. The project's checkout has one f
 (idempotently, the same record submit uses); another source gets its own on its first submit. It has no workspace and
 is no main, so `workspace submit` and `land` refuse it. The task is its conversation's foreground work, so the Agents
 tab shows it working while it lands. The sidebar pins every lander
-conversation above the others, never archived, with "idle · last <sha> <time>", a pulsing "landing", or "fixing" /
+conversation above the others, never concluded, with "idle · last <sha> <time>", a pulsing "landing", or "fixing" /
 "diagnosing" while its model works on a failure. It logs
 every submission as `ultimate.lander` entries, which carry no model message, so no model run in that conversation
 sees them: `queued`, `started`, each step, each check with `passed`, `failed` or `flaky`, and the outcome (`landed`
@@ -52,8 +51,8 @@ The submitter follows the lander in its own transcript, from that document. The 
 rows and ends in a quiet "full log in #<lander>" link. The lander's report message renders as an outcome card with
 a success, warning (landed, push failed) or error accent and the same collapsed steps. Nobody has to open the lander
 conversation; it keeps the full log, grouped by submission, and shows in the Agents tab.
-With lineage enabled, the report phase also leaves a replay-safe landing note in the project's root, unless the
-submitter is that root. Failed submissions leave no root note; notes never wake the root.
+With lineage enabled, the report phase also leaves a replay-safe landing note in the submitter's tree root, unless
+the submitter is that root or has none. Failed submissions leave no root note; notes never wake the root.
 
 What lands is named once, at submit: the queue entry keeps the submitter's `subject` (title, summary and feature)
 from the `conversations` service's `subject(id)`, so a later retitle does not rename it. The result, the lander log's
@@ -105,7 +104,7 @@ it to settle; a resume waits for the same run.
   model's commits (`fixed`). Anything else, or a fix that still fails, is reported as not landed. A submission gets
   one fix.
 
-Without a `lander` definition, failures are reported as before.
+Without a `lander` definition, failures are reported without a model.
 Each attempt starts from a reset checkout, and the integrated commit is memoized after the checks, so a crash resumes
 safely. Failed submissions are dropped from the queue after their report.
 
@@ -120,7 +119,5 @@ when the harness opens, on each reload of the extension, and at once when a task
 of the current code's own task waits for the next submit or open, so a deterministic fault does not loop.
 
 Top-level mains use `workspace status`, `workspace submit` and `workspace land` for their own checkout.
-Own tool landing skips the calling conversation's run and inbox checks; UI landing does not.
 Landing reports commits and changed paths, with a restart hint for core changes to the running clone.
-The shown conversation's checkout card has Submit, Land and Remove.
-Archive and clear context never remove a checkout. Landing never restarts Ultimate.
+Conclude and clear context never remove a checkout. Landing never restarts Ultimate.

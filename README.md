@@ -23,8 +23,9 @@ place.
 - **Everything on, switch off what you don't need.** A fresh Ultimate is Pi's coding agent with every built-in:
   subagents, plans, documents, automations, remote access and the rest ship in the clone and are on by default; turn any
   of them off per machine or per project (see "Building blocks" below).
-- **One long conversation per project.** Ultimate is a long-running conversation, not a fresh session per task.
-  Compaction keeps it going, so it accumulates what it learns about the project.
+- **A forest of conversation trees.** Each root holds one line of work's idea and keeps a tally of what landed;
+  branch a feature or fix from any conversation at any point, and it starts from a brief aimed at its intent.
+  Conversations run for a long time: compaction keeps them going, so they accumulate what they learn.
 - **You can build whole applications in it, too.** A surface is a full-screen app next to the docked agent.
   The point is an agent shaped for the project you work on.
 - **Lean and malleable.** Like Pi and Pi Durable, the core stays as small as possible and everything else is
@@ -121,9 +122,9 @@ and restarts land on the same view. The `surfaces` extension tells the agent whi
 - Change something in `server/` and ask it to `restart`: a new process boots and type-checks next to the old one, and the
   conversation carries on in the new generation. A failed boot rolls back.
 - Press `Ctrl+Alt+B` for the right panel: Info (machine, process, storage, build, extensions, skills), Agents, Tasks,
-  and Documents (the plan, the codemode store, and every other extension document), each a tab.
-
-The conversation is one long-running thread by design; compaction keeps it going.
+  Documents (the plan, the codemode store, and every other extension document), Workspaces, Extensions and more, each
+  a tab.
+- Hover a message and choose "Branch from here" to fork the conversation at that point.
 
 ## How it is put together
 

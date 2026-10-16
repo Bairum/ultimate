@@ -5,9 +5,10 @@ changing the main agent.
 
 ## Sidebar
 
-The sidebar pins the lander above the root (from lineage `info`), marked with a branch icon and `root`.
+The sidebar pins the lander above the roots (lineage's `useRoots()`), each marked with a branch icon and `root`;
+trees sort by their newest input anywhere in them.
 Branches nest under their source (`branchOf.conversationId`), with a hairline guide and one indent per depth;
-siblings sort by latest input. Older conversations that are neither the root nor branches live in the collapsed
+siblings sort by latest input. Older conversations that are neither roots nor branches live in the collapsed
 "Earlier · N" group, above "Concluded · N". Isolated rows carry a short `#<conversationId>` badge;
 Workspace details in their menu opens the Workspaces panel. The shown row is highlighted, also while one of its
 subagents is shown. Each row has its title (or `#id` for shared rows, `Untitled conversation` for isolated rows)
@@ -30,8 +31,10 @@ A row switches to its child, highlights selection and keeps the top-level summar
 invented delegation edges. Expansion is persisted in `ext.conversations.expanded`; buttons support keyboard access.
 
 New conversation (the button, `mod+alt+n`, or the palette) opens lineage's start page on the Agent surface.
-It creates nothing until sent; sending calls lineage `branch` from the root's latest entry with the prompt and
-chosen model/thinking level and any pasted images. The same composer serves lineage's "Branch from here". The dropdown's Isolated and Shared choices only select the type, remembered in
+It creates nothing until sent; sending calls lineage `branch` from the latest entry of the shown tree's root (else
+the most recently active root), or `newRoot` from its New root tab, with the prompt, chosen model/thinking level and
+any pasted images. The same page serves lineage's "Branch…" and "Branch from here". The dropdown's Isolated and
+Shared choices only select the type, remembered in
 `ext.conversations.creationType` across tabs, reloads and restarts. New isolated conversation explicitly branches
 in its own checkout without changing that preference. Errors preserve the prompt for retry.
 Conclude and clear context never remove checkouts or commits. The Workspaces panel shows checkouts read-only.
@@ -44,7 +47,7 @@ Concluding the shown subtree shows another live conversation when one exists.
 
 Commands, under Conversations: `conversations.new` ("New conversation", `mod+alt+n`), `conversations.reset`
 ("Clear the context" of the shown top-level conversation, when it is idle and has entries), and
-`conversations.summary-model` ("Summary model…", see [Summary model](#summary-model)). The UI state keeps archived
+`conversations.summary-model` ("Summary model…", see [Summary model](#summary-model)). The UI state keeps concluded
 ids in `ext.conversations.archived` and, in `ext.conversations.seen`, the latest answer time seen per top-level
 conversation; a conversation not recorded there counts as seen.
 
@@ -62,8 +65,8 @@ keeping existing history usable. Typed inputs count without an extension kind li
 such as lineage notes do not.
 
 The `conversations` prompt section goes to every top-level conversation (not a subagent). It names the
-conversation's own id and lists the other top-level conversations that have a message and are not archived (the web
-keeps archived ids in the UI state `ext.conversations.archived`): at most the 10 most recently active, listed by id,
+conversation's own id and lists the other top-level conversations that have a message and are not concluded (the web
+keeps concluded ids in the UI state `ext.conversations.archived`): at most the 10 most recently active, listed by id,
 each as `#<id> <title or "untitled">` with its cwd when that differs. It holds no busy state or times, so it changes
 only when that list, a title, or a cwd does, and prompt caches stay warm. It reminds the agent that the others share the
 checkout unless a cwd says otherwise, and how to look at them with codemode's `ultimate.entries(id)` and

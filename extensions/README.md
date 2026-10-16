@@ -184,8 +184,8 @@ No restart, no reload.
 `defineWebExtension({ slots, panels, surfaces, tools, entries, messageActions, messageDetails, start, documents, commands })`; every key is optional. Extensions load
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
 
-A `start(draft)` contribution starts a new conversation from the composer's prompt, images, branch point and
-configuration, returning `Promise<{ id: number }>`. The last starter in discovery order wins; without one, the
+A `start(draft)` contribution starts a new conversation from the start page composer's prompt, images, branch point
+(or `root: true`) and configuration, returning `Promise<{ id: number }>`. The last starter in discovery order wins; without one, the
 new composer is blocked. The extension owns creation policy; `getUiState(key)` reads pending local UI choices too.
 
 ### Slots
@@ -211,7 +211,7 @@ slots: { 'header.right': [Badge], sidebar: { component: Conversations, order: -1
 conversation a new branch starts from. The Agent and dock
 composers target the shown conversation; `<NewConversationComposer onStarted={(id) => …} />`
 (with an optional `inputId` for focus control)
-uses the same input, toolbar and status slots to branch from the lineage root. Toolbar contributions can edit pending
+uses the same input, toolbar and status slots to start a branch or a new root through the conversation starter. Toolbar contributions can edit pending
 choices for `new`; conversation-specific status items should return `null` there. Pending model and thinking
 choices live in `ultimate.newConversation`; isolation uses `ext.conversations.creationType` so it agrees with
 sidebar New. Without a choice a branch shows and keeps its source's model and thinking, a new root the project
