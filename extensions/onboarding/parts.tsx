@@ -32,6 +32,8 @@ interface Described {
 
 /** The dialog id of the project card; the Extensions panel opens it again. */
 export const projectDialog = 'onboarding.project'
+/** The dialog id of the Git card; the status line and the start page's Isolated switch open it. */
+export const gitDialog = 'onboarding.git'
 
 export const sources: Record<ExtensionInfo['source'], string> = {
   builtin: 'built-in',

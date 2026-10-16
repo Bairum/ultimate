@@ -18,7 +18,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- workspace discovery shares the core root watcher
 import { watchRoots } from '../../server/watch-roots.ts'
 import { agentRoots } from '../subagents/agents.ts'
-import { git, isolatable } from './git.ts'
+import { empty, git, isolatable, noCommit, noRepository } from './git.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
 export type WorkspaceService = ReturnType<typeof workspaces> & {
   git: typeof git
@@ -59,10 +59,34 @@ export const actions = {
     host.harness().resume()
     return { id }
   },
-  /** Why the project cannot start isolated conversations, if it cannot. */
+  /**
+   * Why the project cannot start isolated conversations, if it cannot, and whether its folder is still empty, so
+   * `setupGit` can make the first commit. Once it can, the project's lander is stood if it has none yet, so a first
+   * commit made in a conversation brings the lander without a restart.
+   */
   async isolation(_args: JsonValue, { host }: ActionContext) {
     const checkout = await isolatable(host.projectRoot)
-    return 'reason' in checkout ? { reason: checkout.reason } : {}
+    if ('reason' in checkout)
+      return { reason: checkout.reason, empty: await empty(host.projectRoot) }
+    const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+    if (index?.landerConversations[checkout.source] === undefined)
+      await workspaces(host).standLander(context)
+    return {}
+  },
+  /**
+   * Make an empty folder isolatable: `git init` where there is no repository, then an empty first commit. A folder
+   * with files needs judgement about what to commit, so it is left to an agent.
+   */
+  async setupGit(_args: JsonValue, { host }: ActionContext) {
+    const checkout = await isolatable(host.projectRoot)
+    if (!('reason' in checkout)) return {}
+    if (!(await empty(host.projectRoot)))
+      throw new Error('This folder has files; ask the agent to choose what the first commit holds')
+    if (checkout.reason === noRepository) await git(host.projectRoot, 'init')
+    else if (checkout.reason !== noCommit) throw new Error(checkout.reason)
+    await git(host.projectRoot, 'commit', '--allow-empty', '--message', 'Initial commit')
+    await workspaces(host).standLander(context)
+    return {}
   },
   info(args: JsonValue, { host }: ActionContext) {
     return workspaces(host).info(workspaceId(args), context)

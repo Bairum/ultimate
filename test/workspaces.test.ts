@@ -354,7 +354,7 @@ it.concurrent('failed setup keeps its output tail, removes its empty branch, and
   expect(f.writes).toBe(0)
   await expect(access(join(f.projectRoot, 'change.txt'))).rejects.toThrow('ENOENT')
 })
-it.concurrent('runs shared-only until a fresh repository has its first commit, then stands its lander', async () => {
+it.concurrent('runs shared-only until a fresh repository has its first commit, then stands its lander without a reopen', async () => {
   const directory = await temp('ultimate-workspaces-fresh-')
   const projectRoot = join(directory, 'project')
   await mkdir(projectRoot)
@@ -365,18 +365,38 @@ it.concurrent('runs shared-only until a fresh repository has its first commit, t
       (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
         .landerConversations,
     )
-  expect(await isolation()).toEqual({ reason: 'Isolation needs a Git repository' })
+  expect(await isolation()).toEqual({ reason: 'Isolation needs a Git repository', empty: true })
   await git(projectRoot, 'init', '-b', 'main')
   await f.reopen()
-  expect(await isolation()).toEqual({ reason: 'Isolation needs a first commit' })
+  expect(await isolation()).toEqual({ reason: 'Isolation needs a first commit', empty: true })
+  await writeFile(join(projectRoot, 'README.md'), 'app\n')
+  expect(await isolation()).toEqual({ reason: 'Isolation needs a first commit', empty: false })
+  await expect(actions.setupGit({}, { host: f.host } as ActionContext)).rejects.toThrow(
+    'This folder has files',
+  )
   await expect(f.create()).rejects.toThrow('Isolation needs a first commit')
   expect(await landers()).toEqual([])
   await git(projectRoot, 'config', 'user.email', 'test@example.com')
   await git(projectRoot, 'config', 'user.name', 'Test')
   await commit(projectRoot)
-  await f.reopen()
   expect(await isolation()).toEqual({})
   expect(await landers()).toEqual([await realpath(projectRoot)])
+  await f.service.ready(await f.create(), context)
+})
+it.concurrent('sets up Git in an empty folder with a first commit and its lander', async () => {
+  const directory = await temp('ultimate-workspaces-empty-')
+  const projectRoot = join(directory, 'project')
+  await mkdir(projectRoot)
+  const f = await fixture([], { directory, projectRoot, home: join(directory, 'state') })
+  await actions.setupGit({}, { host: f.host } as ActionContext)
+  expect(await git(projectRoot, 'log', '--format=%s')).toBe('Initial commit')
+  expect(await actions.isolation({}, { host: f.host } as ActionContext)).toEqual({})
+  expect(
+    Object.keys(
+      (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+        .landerConversations,
+    ),
+  ).toEqual([await realpath(projectRoot)])
   await f.service.ready(await f.create(), context)
 })
 it.concurrent('rejects a detached source and preserves existing paths and branches instead of adopting them', async () => {

@@ -6,8 +6,10 @@ An isolated conversation gets its own Git checkout. New is isolated unless the s
 
 Isolation needs a Git repository with a checked-out branch and a first commit. Until a project has them, `isolation`
 returns `{ reason }`, the Isolated switch is off and disabled with that reason, New starts shared conversations,
-an explicit isolated start fails with the reason, and the project has no lander; the next open after the first commit
-stands it.
+an explicit isolated start fails with the reason, and the project has no lander. `isolation` also reports whether the
+folder is `empty`; once the project can be isolated, it stands the lander if there is none, so a first commit brings it
+without a restart. `setupGit` makes an empty folder isolatable (`git init` where needed, then an empty first commit) and
+refuses a folder with files, whose first commit is a judgement for an agent; onboarding's Git card offers both.
 
 Each conversation has one record in the root `ultimate.workspaces` document.
 Its path is `<home>/worktrees/<conversationId>`; its branch includes the home hash and conversation ID.

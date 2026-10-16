@@ -7,6 +7,7 @@ import {
   CircleCheckIcon,
   CircleIcon,
   FolderCogIcon,
+  GitBranchIcon,
   LoaderCircleIcon,
   ReplaceIcon,
   SparklesIcon,
@@ -830,6 +831,117 @@ export function ProjectCard({
         <Button disabled={busy !== undefined} onClick={() => void decide(true)} size="sm">
           {choice(true)}
           Use it
+        </Button>
+      </Footer>
+    </Page>
+  )
+}
+
+/** What `workspaces` `isolation` reports for the project: why it cannot be isolated yet, and whether it is empty. */
+export interface Isolation {
+  reason?: string
+  empty?: boolean
+}
+
+const situation: Record<string, string> = {
+  'Isolation needs a Git repository': "This folder isn't a Git repository yet.",
+  'Isolation needs a first commit': 'This repository has no commits yet.',
+  'Isolation needs a checked-out branch': 'No branch is checked out here.',
+}
+
+/** The request the agent gets when the folder already holds files, so what the first commit holds is a judgement. */
+const request = (reason: string) =>
+  `Set up Git for this project so Ultimate can give each conversation its own checkout. Ultimate reports: "${reason}". Make it a Git repository with a checked-out branch if it is not one yet, and make the first commit of the files here: first write a .gitignore that fits the project, and leave out secrets (.env and the like), dependencies, build output and other generated or large files. Do not add a remote or push. Then tell me what the commit holds and what you left out.`
+
+/**
+ * The Git question: why conversations share this folder, and one step to change it. An empty folder gets `git init` and
+ * an empty first commit at once; a folder with files gets an agent that chooses what its first commit holds.
+ */
+export function GitCard({
+  open,
+  isolation,
+  onClose,
+  onClosed,
+}: {
+  open: boolean
+  isolation?: Isolation
+  onClose: () => void
+  onClosed: () => void
+}) {
+  const ui = useUltimate()
+  const shown = useConversation((conversation) => conversation.id)
+  const focus = useRef<HTMLDivElement>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const reason = isolation?.reason
+  const setUp = async () => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      if (isolation?.empty) await api.action('workspaces', 'setupGit')
+      else {
+        const id = shown ?? 1
+        await api.submit(request(reason ?? ''), 'followUp', id)
+        ui.switchConversation(id)
+      }
+      events.emit('onboarding:git', null)
+      onClose()
+    } catch (failure) {
+      setError(errorMessage(failure))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Page className="sm:max-w-md" focus={focus} onClose={onClose} onClosed={onClosed} open={open}>
+      <div
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 pt-4 pb-5 outline-none"
+        ref={focus}
+        tabIndex={-1}
+      >
+        <div className="flex items-center gap-3">
+          <FolderPath />
+          <span className="ml-auto">
+            <Close label="Not now" onClick={onClose} />
+          </span>
+        </div>
+        <DialogTitle className="text-[17px] font-semibold tracking-tight text-foreground">
+          Set up Git for this folder?
+        </DialogTitle>
+        <DialogDescription className="-mt-2 text-[12.5px] text-muted-foreground">
+          {(reason && situation[reason]) ?? reason}
+        </DialogDescription>
+        <p className="text-[13px] leading-relaxed text-foreground/90">
+          With Git, each conversation gets its own checkout, and finished work lands on your branch
+          through the lander, which runs your checks first. Until then, conversations share this
+          folder.
+        </p>
+        <p className="flex items-start gap-2 rounded-md border border-border/70 bg-sidebar px-3 py-2.5 text-[12.5px] leading-relaxed text-muted-foreground">
+          <GitBranchIcon className="mt-0.5 size-3.5 shrink-0 text-brand" />
+          {isolation?.empty
+            ? 'The folder is empty, so Ultimate runs git init and makes an empty first commit.'
+            : 'The folder has files, so the agent chooses what the first commit holds: a .gitignore for the project, without secrets, dependencies or build output. It adds no remote and pushes nothing.'}
+        </p>
+      </div>
+      <Footer>
+        {error && (
+          <span className="min-w-0 flex-1 truncate text-[12px] text-error" title={error}>
+            {error}
+          </span>
+        )}
+        <Button
+          className="ml-auto"
+          disabled={busy}
+          onClick={onClose}
+          size="sm"
+          title="Keep sharing this folder"
+          variant="outline"
+        >
+          Not now
+        </Button>
+        <Button disabled={busy || !reason} onClick={() => void setUp()} size="sm">
+          {busy && <LoaderCircleIcon className="animate-spin" />}
+          {isolation?.empty ? 'Set up Git' : 'Ask the agent'}
         </Button>
       </Footer>
     </Page>

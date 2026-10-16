@@ -23,6 +23,13 @@ The two-page first run, the project question, and the Extensions panel that turn
   decision is open, a quiet "project setup" entry on the right of the status line opens it, and so does the Extensions
   panel ("About this setup"). Escape and the close button ("Decide later") just close it; until a choice is made the
   global setup is in use.
+- **Git card** (a project that cannot have isolated conversations yet, per the `workspaces` `isolation` action): a quiet
+  "set up git" entry in the status line opens "Set up Git for this folder?", and so does the start page's disabled
+  Isolated switch. It says why (no repository, no first commit, no branch) and what Git brings. An empty folder gets
+  "Set up Git", the `workspaces` `setupGit` action (`git init` where needed and an empty first commit); a folder with
+  files gets "Ask the agent", a request to the shown conversation to write a `.gitignore` and make the first commit
+  without secrets, dependencies or build output, adding no remote. "Not now", Escape and the close button just close it.
+  The entry reads `isolation` again after the card acts and whenever the shown conversation finishes a run.
 - **Extensions panel** (right-panel tab, palette "Extensions…"): the project decision with a way to change it,
   "Use this project's setup everywhere", and every extension, on and available, with its source, the layer that
   decided it, its README line, and a switch. Switches save to this project (when its setup is in use) or everywhere.

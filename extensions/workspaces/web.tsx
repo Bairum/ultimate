@@ -12,6 +12,7 @@ import {
   formatBytes,
   useAction,
   useConversation,
+  useEvent,
   useUltimate,
 } from '@/sdk'
 import {
@@ -75,7 +76,10 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
 function IsolationToggle() {
   const { target, isolated: isolation } = useComposer()
   const [creation, setCreation] = useUiState<string>('ext.conversations.creationType', 'isolated')
-  const { reason } = useAction<{ reason?: string }>('workspaces', 'isolation', {}).data ?? {}
+  const ui = useUltimate()
+  const check = useAction<{ reason?: string }>('workspaces', 'isolation', {})
+  useEvent('onboarding:git', () => void check.refetch())
+  const { reason } = check.data ?? {}
   if (target !== 'new') return null
   const isolated = isolation ?? (!reason && creation !== 'shared')
   return (
@@ -87,9 +91,10 @@ function IsolationToggle() {
             isolated
               ? 'border-brand/60 bg-brand/15 text-foreground'
               : 'border-transparent text-muted-foreground hover:text-foreground',
-            reason && 'cursor-default hover:text-muted-foreground',
           )}
           data-isolated={isolated}
+          // Without Git the switch cannot turn on; the label opens onboarding's Git card instead.
+          onClick={reason ? () => ui.open('onboarding.git') : undefined}
         >
           <GitBranchIcon className={cn('size-3.5', isolated && 'text-brand')} />
           Isolated
@@ -106,7 +111,7 @@ function IsolationToggle() {
         {reason
           ? isolated
             ? reason
-            : `${reason}, so it shares this folder`
+            : `${reason}, so it shares this folder · click to set up`
           : isolated
             ? 'New isolated conversation: its own Git checkout'
             : 'New shared conversation, in this checkout'}
