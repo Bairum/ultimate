@@ -11,6 +11,7 @@ import {
 } from './registry.ts'
 import type { CommandItem } from './registry.ts'
 import type { CommandContribution, UltimateActions, UltimateContext } from './types.ts'
+import { overlays, viewport } from './viewport.ts'
 
 /** Shell state that survives reloads and follows across tabs (see ui-state.ts). */
 export const shellKeys = {
@@ -63,21 +64,56 @@ export const layout = {
   },
 }
 
-const flag = (key: string, fallback: boolean) => {
+export type Region = 'sidebar' | 'panels'
+/** The shared open state of each region, and its default. */
+export const regionKeys = {
+  sidebar: [shellKeys.sidebarOpen, true],
+  panels: [shellKeys.panelOpen, false],
+} as const
+
+/** Whether `region` is open: shared on a desktop, this tab's own (closed by default) below it. */
+export function regionOpen(region: Region) {
+  const on = viewport()
+  if (on !== 'desktop') return store.getState().ui.open?.[on]?.[region] ?? false
+  const [key, fallback] = regionKeys[region]
   const value = uiState.get(key)
   return typeof value === 'boolean' ? value : fallback
 }
 
+function setRegionOpen(region: Region, open: boolean) {
+  const on = viewport()
+  if (on === 'desktop') return uiState.set(regionKeys[region][0], open)
+  const other = region === 'sidebar' ? 'panels' : 'sidebar'
+  // Overlays never stack: opening one closes the other.
+  const close = open && overlays(region, on) && overlays(other, on)
+  const all = store.getState().ui.open
+  store.setUi({
+    open: { ...all, [on]: { ...all?.[on], [region]: open, ...(close && { [other]: false }) } },
+  })
+}
+
+/** Going somewhere else closes what overlays the conversation, so it shows. */
+function closeOverlays() {
+  for (const region of ['sidebar', 'panels'] as const)
+    if (overlays(region) && regionOpen(region)) setRegionOpen(region, false)
+}
+
 export const actions: UltimateActions = {
-  switchConversation: (id) => uiState.set(shellKeys.conversation, id),
-  showSurface: (id) => uiState.set(shellKeys.surface, id),
+  switchConversation: (id) => {
+    closeOverlays()
+    uiState.set(shellKeys.conversation, id)
+  },
+  showSurface: (id) => {
+    closeOverlays()
+    uiState.set(shellKeys.surface, id)
+  },
   openPanel: (id) => {
-    uiState.set(shellKeys.panelOpen, true)
+    setRegionOpen('panels', true)
     if (id) uiState.set(shellKeys.panel, id)
   },
-  closePanel: () => uiState.set(shellKeys.panelOpen, false),
-  togglePanel: () => uiState.set(shellKeys.panelOpen, !flag(shellKeys.panelOpen, false)),
-  toggleSidebar: () => uiState.set(shellKeys.sidebarOpen, !flag(shellKeys.sidebarOpen, true)),
+  closePanel: () => setRegionOpen('panels', false),
+  togglePanel: () => setRegionOpen('panels', !regionOpen('panels')),
+  toggleSidebar: () => setRegionOpen('sidebar', !regionOpen('sidebar')),
   runCommand: (id) => {
     const command = allCommands().find((candidate) => candidate.id === id)
     if (!command) return

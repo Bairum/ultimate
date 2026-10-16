@@ -590,7 +590,7 @@ function coreEntry(
   }
 }
 
-/** Hover actions on a stored message: extensions' details, its time, and copies of its text or of a reference another conversation can follow. */
+/** Hover actions on a stored message, always shown on touch screens: extensions' details, its time, and copies of its text or of a reference another conversation can follow. */
 function MessageActions({
   entry,
   text,
@@ -611,7 +611,7 @@ function MessageActions({
   return (
     <div
       className={cn(
-        'flex items-center gap-2 font-mono text-[11px] text-muted-foreground/60 opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100',
+        'flex items-center gap-2 font-mono text-[11px] text-muted-foreground/60 opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100',
         className,
       )}
     >

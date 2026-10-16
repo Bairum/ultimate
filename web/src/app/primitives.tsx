@@ -7,12 +7,13 @@ import {
   PanelRightOpenIcon,
 } from 'lucide-react'
 import { useLayoutEffect, useRef, useState } from 'react'
-import type { PointerEvent, ReactNode } from 'react'
+import type { PointerEvent, ReactNode, TouchEvent } from 'react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { actions, layout, shellKeys } from '../sdk/actions.ts'
-import { useConversation, useExtensions, useUiState } from '../sdk/hooks.ts'
+import { useConversation, useExtensions, useRegionOpen, useUiState } from '../sdk/hooks.ts'
 import { panelItems, slotItems } from '../sdk/registry.ts'
 import type { PanelItem } from '../sdk/registry.ts'
+import { overlays, useViewport } from '../sdk/viewport.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
 import { Composer } from './composer.tsx'
 import { IconButton } from './header.tsx'
@@ -52,14 +53,95 @@ function useMountRegion(region: 'sidebar' | 'panels') {
   useLayoutEffect(() => layout.mount(region), [region])
 }
 
-/** The `sidebar` slot as a left column (`mod+b`); it disappears while nothing is in it. */
+/**
+ * A region over the conversation, sliding in from `side` at most of the window's width; the strip of conversation
+ * beside it closes it on a tap, and so does a swipe towards its edge. Its content stays mounted once it has opened.
+ */
+function Overlay({
+  side,
+  open,
+  onClose,
+  className,
+  children,
+}: {
+  side: 'left' | 'right'
+  open: boolean
+  onClose: () => void
+  className?: string
+  children: ReactNode
+}) {
+  const [opened, setOpened] = useState(open)
+  if (open && !opened) setOpened(true)
+  const [drag, setDrag] = useState<number>()
+  const touch = useRef<{ x: number; y: number; swipe?: boolean }>(undefined)
+  const sign = side === 'left' ? -1 : 1
+
+  const start = (event: TouchEvent) => {
+    const { clientX: x, clientY: y } = event.touches[0]
+    touch.current = { x, y }
+  }
+  const move = (event: TouchEvent) => {
+    const from = touch.current
+    if (!from) return
+    const dx = event.touches[0].clientX - from.x
+    const dy = event.touches[0].clientY - from.y
+    // The first clear movement decides between a swipe and a scroll.
+    if (from.swipe === undefined && Math.hypot(dx, dy) > 8) from.swipe = Math.abs(dx) > Math.abs(dy)
+    if (from.swipe) setDrag(Math.max(0, dx * sign) * sign)
+  }
+  const end = () => {
+    if (drag !== undefined && Math.abs(drag) > 64) onClose()
+    touch.current = undefined
+    setDrag(undefined)
+  }
+
+  return (
+    <div className={cn('fixed inset-0 z-40', !open && 'pointer-events-none')} inert={!open}>
+      <div
+        aria-hidden
+        className={cn(
+          'absolute inset-0 bg-black/50 transition-opacity duration-300',
+          open ? 'opacity-100' : 'opacity-0',
+        )}
+        onClick={onClose}
+      />
+      <aside
+        className={cn(
+          'absolute inset-y-0 flex w-[85%] max-w-[26rem] flex-col shadow-2xl shadow-black/40 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+          side === 'left' ? 'left-0 border-r' : 'right-0 border-l',
+          !open && (side === 'left' ? '-translate-x-full' : 'translate-x-full'),
+          drag !== undefined && 'transition-none',
+          className,
+        )}
+        onTouchCancel={end}
+        onTouchEnd={end}
+        onTouchMove={move}
+        onTouchStart={start}
+        style={drag ? { transform: `translateX(${drag}px)` } : undefined}
+      >
+        {opened && children}
+      </aside>
+    </div>
+  )
+}
+
+/** The `sidebar` slot as a left column (`mod+b`), or over the conversation on a phone; gone while nothing is in it. */
 export function Sidebar() {
   useMountRegion('sidebar')
-  const [open] = useUiState(shellKeys.sidebarOpen, true)
+  const open = useRegionOpen('sidebar')
+  const viewport = useViewport()
   const empty = slotItems(useExtensions(), 'sidebar').length === 0
-  if (empty || !open) return null
+  if (empty) return null
+  const look = 'overflow-y-auto border-sidebar-border bg-sidebar text-sidebar-foreground'
+  if (overlays('sidebar', viewport))
+    return (
+      <Overlay className={look} onClose={actions.toggleSidebar} open={open} side="left">
+        <Slot name="sidebar" />
+      </Overlay>
+    )
+  if (!open) return null
   return (
-    <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+    <aside className={cn('flex w-72 shrink-0 flex-col border-r', look)}>
       <Slot name="sidebar" />
     </aside>
   )
@@ -131,17 +213,20 @@ function PanelTabs({ panels, active }: { panels: PanelItem[]; active: PanelItem 
   )
 }
 
-/** The right panel: a tab per extension panel (`mod+alt+b`). */
+/** The right panel: a tab per extension panel (`mod+alt+b`), over the conversation below desktop width. */
 export function Panels() {
   useMountRegion('panels')
   const panels = panelItems(useExtensions())
-  const [open] = useUiState(shellKeys.panelOpen, false)
+  const open = useRegionOpen('panels')
+  const viewport = useViewport()
   const [selected] = useUiState<string | null>(shellKeys.panel, null)
-  if (!open || panels.length === 0) return null
+  if (panels.length === 0) return null
+  const overlay = overlays('panels', viewport)
+  if (!open && !overlay) return null
   const active = panels.find((panel) => panel.id === selected) ?? panels[0]
   const Panel = active.component
-  return (
-    <aside className="flex w-[22rem] shrink-0 flex-col border-l border-border/70 bg-sidebar">
+  const content = (
+    <>
       <PanelTabs active={active} panels={panels} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <ExtensionBoundary
@@ -152,6 +237,22 @@ export function Panels() {
           <Panel />
         </ExtensionBoundary>
       </div>
+    </>
+  )
+  if (overlay)
+    return (
+      <Overlay
+        className="border-border/70 bg-sidebar"
+        onClose={actions.closePanel}
+        open={open}
+        side="right"
+      >
+        {content}
+      </Overlay>
+    )
+  return (
+    <aside className="flex w-[22rem] shrink-0 flex-col border-l border-border/70 bg-sidebar">
+      {content}
     </aside>
   )
 }

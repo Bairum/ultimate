@@ -18,7 +18,8 @@ import type {
   LiveState,
   UsageState,
 } from '@earendil-works/pi-durable'
-import { actions, allCommands, shellKeys, shownSurface } from './actions.ts'
+import { actions, allCommands, regionKeys, shellKeys, shownSurface } from './actions.ts'
+import type { Region } from './actions.ts'
 import { actionMessage } from './api.ts'
 import type { ActionError } from './api.ts'
 import { api, registry, store, uiState } from './client.ts'
@@ -26,6 +27,7 @@ import { HOME, documentItems } from './registry.ts'
 import type { State } from './store.ts'
 import { errorMessage, formatDuration } from './format.ts'
 import type { ToolCallView, UltimateContext } from './types.ts'
+import { useViewport } from './viewport.ts'
 
 /** Page readiness is sticky; failed facet names remain available even before ready. */
 export function useReady(): {
@@ -184,6 +186,16 @@ export function useUiState<T extends JsonValue>(
     [key],
   )
   return [(stored ?? initial) as Widen<T>, set]
+}
+/** Whether the sidebar or the panel is open: shared on a desktop, this tab's own below it (viewport.ts). */
+export function useRegionOpen(region: Region) {
+  const [key, fallback] = regionKeys[region]
+  const [shared] = useUiState<boolean>(key, fallback)
+  const on = useViewport()
+  const own = useStore((state) =>
+    on === 'desktop' ? false : (state.ui.open?.[on]?.[region] ?? false),
+  )
+  return on === 'desktop' ? shared : own
 }
 /** `true` → boolean, `'a'` → string: an initial value names its type, not the only value. */
 export type Widen<T> = T extends boolean
