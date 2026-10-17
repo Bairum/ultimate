@@ -8,10 +8,12 @@
   "scripts": {
     "dev": "node server/main.ts",
     "start": "node bin/ultimate.ts",
-    "check": "vp check",
+    "check": "vp check && tsc -p cloud/tsconfig.json",
     "test": "MIMALLOC_ALLOW_THP=0 MIMALLOC_PURGE_DELAY=0 vp test",
     "test:e2e": "MIMALLOC_ALLOW_THP=0 MIMALLOC_PURGE_DELAY=0 vitest run --config test/e2e/vitest.config.ts",
     "eval": "vitest run --config evals/vitest.config.ts",
+    "cloud:build": "node cloud/build.ts",
+    "cloud:dev": "wrangler dev --config cloud/wrangler.jsonc",
     "fmt": "vp fmt",
     "lint": "vp lint"
   },
@@ -46,11 +48,13 @@
     "vite-plus": "0.3.1"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "5.20261016.1",
     "@types/node": "26.0.0",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "typescript": "7.0.2",
-    "vitest": "4.1.11"
+    "vitest": "4.1.11",
+    "wrangler": "4.151.1"
   },
   "engines": {
     "node": ">=26"
