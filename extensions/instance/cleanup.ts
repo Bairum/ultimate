@@ -76,8 +76,28 @@ export async function cleanPreview(home: string) {
   }
 }
 
-/** Only real preview directories in the supplied directory; never follow a symlink into another home. */
+/**
+ * Only real preview directories in the supplied directory; never follow a symlink into another home.
+ * Every host sweeps the shared temporary directory on open, so one sweep at a time owns it: a home's own lock file is
+ * deleted with the home, and a racing sweep would recreate it, lock the new file and clean alongside.
+ */
 export async function sweepPreviews(directory: string, notice: (message: string) => void) {
+  const lock = new DatabaseSync(join(directory, 'ultimate-preview-sweep.lock.db'))
+  try {
+    lock.exec('PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE')
+  } catch (error) {
+    lock.close()
+    if ((error as { errcode?: number }).errcode === 5) return
+    throw error
+  }
+  try {
+    await sweep(directory, notice)
+  } finally {
+    lock.close()
+  }
+}
+
+async function sweep(directory: string, notice: (message: string) => void) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (!entry.isDirectory() || !entry.name.startsWith('ultimate-instance-')) continue
     const home = join(directory, entry.name)

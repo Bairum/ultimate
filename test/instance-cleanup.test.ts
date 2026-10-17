@@ -189,3 +189,18 @@ it.each(['feature-x', 'ultimate/foreign-1'])(
     expect(await git(source, 'rev-parse', '--verify', `refs/heads/${branch}`)).toBe(tip)
   },
 )
+
+it('lets one of several concurrent sweeps clean the homes without notices', async () => {
+  const { root, source, home } = await fixture()
+  const homes = [home]
+  for (const name of ['a', 'b', 'c']) {
+    const other = join(root, `ultimate-instance-${name}`)
+    await git(source, 'worktree', 'add', '--detach', join(other, 'lander', 'hash'))
+    homes.push(other)
+  }
+  await git(source, 'worktree', 'add', '--detach', join(home, 'lander', 'hash'))
+  const notices: string[] = []
+  await Promise.all([1, 2, 3].map(() => sweepPreviews(root, (message) => notices.push(message))))
+  expect(notices).toEqual([])
+  for (const each of homes) expect(await stat(each).catch(() => undefined)).toBeUndefined()
+})
