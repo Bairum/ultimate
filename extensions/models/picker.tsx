@@ -13,7 +13,6 @@ import { Kbd } from '@/components/ui/kbd'
 import { cn, errorMessage, useDialog, useUltimate } from '@/sdk'
 import {
   authLabel,
-  getPicker,
   dialogs,
   formatWindow,
   openLogin,
@@ -79,12 +78,11 @@ export function ModelRow({
   )
 }
 
-/** Searchable models of every provider, grouped; picking one configures the target that opened it. */
+/** Searchable models of every provider, grouped; picking one configures the shown conversation. */
 export function ModelPicker() {
   const [open, setOpen] = useDialog(dialogs.picker)
   const actions = useUltimate()
-  const { target, source } = getPicker()
-  const { ref, models, loading } = useCurrentModel(target, source)
+  const { ref, models, loading } = useCurrentModel()
   const [query, setQuery] = useState('')
   const [error, setError] = useState<string>()
   const providers = useMemo(
@@ -118,11 +116,11 @@ export function ModelPicker() {
         actions.openPanel('claude-code')
         return
       }
-      openLogin(actions, model.provider, target)
+      openLogin(actions, model.provider)
       return
     }
     setError(undefined)
-    selectModel(model, target).then(
+    selectModel(model).then(
       () => setOpen(false),
       (failure: unknown) => setError(errorMessage(failure)),
     )
@@ -182,7 +180,7 @@ export function ModelPicker() {
             <CommandGroup heading="Accounts">
               <CommandItem
                 className="gap-2 py-1 font-mono text-[12px]"
-                onSelect={() => openLogin(actions, undefined, target)}
+                onSelect={() => openLogin(actions)}
                 value="login"
               >
                 <LogInIcon className="size-3.5" />

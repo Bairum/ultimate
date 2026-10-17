@@ -9,7 +9,6 @@ import {
   formatTime,
   formatTokens,
   shortenPath,
-  useComposer,
   useConnection,
   useConversation,
   useConversations as useAllConversations,
@@ -48,8 +47,7 @@ function Cwd() {
   const system = useSystem()
   const { agent, id } = useConversation()
   const workspace = useConversations().find((conversation) => conversation.id === id)?.workspace
-  const { target } = useComposer()
-  if (!system || target === 'new') return null
+  if (!system) return null
   const cwd = agent.cwd ?? system.execution.defaultCwd
   const shown = workspace ? `#${id}` : shortenPath(cwd, { home: system.machine.home })
   const { branch, dirty, sha } = system.code
@@ -132,8 +130,6 @@ function useTokenRates() {
 function Tokens() {
   const { usage, entries, agent } = useConversation()
   const models = useModels()
-  const { target } = useComposer()
-  if (target === 'new') return null
   const total = usageTotals(usage)
   const latest = lastAssistant(entries).message?.usage
   const hit =
@@ -243,8 +239,6 @@ function Context() {
     (candidate) =>
       candidate.provider === agent.model?.provider && candidate.id === agent.model.modelId,
   )
-  const { target } = useComposer()
-  if (target === 'new') return null
   const window = model?.contextWindow
   if (!window) return null
   const { message, stale } = lastAssistant(entries)

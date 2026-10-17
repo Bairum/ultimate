@@ -1,6 +1,5 @@
 import { defineWebExtension, getConversation, getState } from '@/sdk'
 import { Conversations, Seen } from './sidebar.tsx'
-import { createConversation, newKeys } from './new.tsx'
 import { openReset, ResetDialog, SummaryModelDialog, summaryModelDialog } from './dialogs.tsx'
 import { SummaryAction } from './summary-entry.tsx'
 
@@ -14,19 +13,6 @@ export default defineWebExtension({
   },
   slots: { sidebar: Conversations, overlay: [ResetDialog, SummaryModelDialog, Seen] },
   commands: [
-    {
-      id: 'conversations.new',
-      title: 'New conversation',
-      keys: newKeys,
-      group: 'Conversations',
-      run: (context) => createConversation(context),
-    },
-    {
-      id: 'conversations.new-isolated',
-      title: 'New isolated conversation',
-      group: 'Conversations',
-      run: (actions) => createConversation(actions, true),
-    },
     {
       id: 'conversations.summary-model',
       title: 'Summary model…',
