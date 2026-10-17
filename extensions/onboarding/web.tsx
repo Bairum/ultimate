@@ -68,7 +68,10 @@ function Onboarding() {
     setProjectOpen(false)
     setGitOpen(false)
     void askUltimate(projectOpen ? 'project' : 'git')
-      .then((id) => ui.switchConversation(id))
+      .then((id) => {
+        ui.switchConversation(id)
+        ui.showSurface('agent')
+      })
       .catch((failure) => setError(errorMessage(failure)))
   }, [projectOpen, gitOpen, setProjectOpen, setGitOpen, ui])
   return (
@@ -80,6 +83,7 @@ function Onboarding() {
           if (!skipped) {
             const { id } = await api.action<{ id: number }>('onboarding', 'start', {})
             ui.switchConversation(id)
+            ui.showSurface('agent')
           }
           setFinished(true)
         }}
@@ -106,6 +110,7 @@ function SetupLink({ card, children }: { card: 'project' | 'git'; children: stri
     setBusy(true)
     try {
       ui.switchConversation(await askUltimate(card))
+      ui.showSurface('agent')
       setError(undefined)
     } catch (failure) {
       setError(errorMessage(failure))
@@ -149,31 +154,23 @@ function SetupCall({ call }: { call: ToolCallView }) {
   const conversationId = useConversation((conversation) => conversation.id)
   const status = useAction<Status>('onboarding', 'status')
   const isolation = useIsolation()
-  const project = useSystem()?.project
-  const [chosen, setChosen] = useState<string>()
   const card = typeof call.args.card === 'string' ? call.args.card : ''
   const entry = transcript.find(
     (candidate) =>
       candidate.kind === 'onboarding.choice' && (candidate.data as Choice).toolCallId === call.id,
   )
-  const settled =
-    chosen ??
-    (entry?.data as Choice | undefined)?.summary ??
-    (card === 'project' && project?.decision !== null && project?.decision !== undefined
-      ? project.decision
-        ? 'Using project setup'
-        : 'Keeping global setup'
-      : card === 'git' && isolation && !isolation.reason
-        ? 'Git is ready'
-        : undefined)
-  const done = async (summary: string) => {
+  const settled = (entry?.data as Choice | undefined)?.summary
+  const done = async (payload: {
+    extensions?: Record<string, boolean>
+    local?: boolean
+    initialize?: boolean
+  }) => {
     await api.action(
       'onboarding',
-      'choice',
-      { card, summary, toolCallId: call.id },
+      'choose',
+      { card, ...payload, toolCallId: call.id },
       { conversationId },
     )
-    setChosen(summary)
   }
   if (!['extensions', 'project', 'git'].includes(card)) return null
   const title =

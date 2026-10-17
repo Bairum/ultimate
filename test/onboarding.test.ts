@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
@@ -272,12 +272,12 @@ it('offers setup only to named definitions, refuses inapplicable cards, and dedu
     )
     const choice = {
       card: 'extensions',
-      summary: 'enabled board; disabled faux',
+      extensions: { board: true, faux: false },
       toolCallId: 'setup-1',
     }
     const receipts = await Promise.all(
       [0, 1].map(() =>
-        post(server, '/api/extensions/onboarding/actions/choice', {
+        post(server, '/api/extensions/onboarding/actions/choose', {
           args: choice,
           conversationId: conversation.id,
         }),
@@ -289,10 +289,66 @@ it('offers setup only to named definitions, refuses inapplicable cards, and dedu
       (entry) => entry.kind === 'onboarding.choice',
     )
     expect(entries).toHaveLength(1)
-    expect(entries[0].data).toEqual(choice)
+    expect(entries[0].data).toEqual({
+      card: choice.card,
+      toolCallId: choice.toolCallId,
+      summary: 'enabled board; disabled faux',
+    })
     expect(JSON.stringify(entries[0].model)).toContain(
       'Setup choice (extensions): enabled board; disabled faux',
     )
+    const otherTab = await post(server, '/api/extensions/onboarding/actions/choose', {
+      args: { ...choice, extensions: { board: false, faux: true } },
+      conversationId: conversation.id,
+    })
+    expect(otherTab.status).toBe(500)
+    expect(otherTab.data.error).toContain('already has a different choice')
+    expect(
+      JSON.parse(await readFile(join(home, '.ultimate/settings.json'), 'utf8')).extensions,
+    ).toMatchObject({ enable: ['board'], disable: ['faux'] })
+
+    // Fail after the setting is applied but before admission. Retrying must still notify the agent once.
+    const retry = { card: 'project', local: true, toolCallId: 'retry-project' }
+    const lookup = vi.spyOn(server.harness, 'conversation').mockResolvedValueOnce(conversation)
+    const submit = vi
+      .spyOn(conversation, 'submit')
+      .mockRejectedValueOnce(new Error('Interrupted before notification'))
+    try {
+      const interrupted = await post(server, '/api/extensions/onboarding/actions/choose', {
+        args: retry,
+        conversationId: conversation.id,
+      })
+      expect(interrupted.status).toBe(500)
+      expect(interrupted.data.error).toContain('Interrupted before notification')
+    } finally {
+      submit.mockRestore()
+      lookup.mockRestore()
+    }
+    expect(server.system.current().project.decision).toBe(true)
+    expect(
+      (await conversation.viewState(context)).value.entries.filter(
+        (entry) =>
+          entry.kind === 'onboarding.choice' &&
+          (entry.data as { toolCallId: string }).toolCallId === retry.toolCallId,
+      ),
+    ).toHaveLength(0)
+    for (let i = 0; i < 2; i++)
+      expect(
+        (
+          await post(server, '/api/extensions/onboarding/actions/choose', {
+            args: retry,
+            conversationId: conversation.id,
+          })
+        ).status,
+      ).toBe(200)
+    await server.harness.waitForIdle(context)
+    expect(
+      (await conversation.viewState(context)).value.entries.filter(
+        (entry) =>
+          entry.kind === 'onboarding.choice' &&
+          (entry.data as { toolCallId: string }).toolCallId === retry.toolCallId,
+      ),
+    ).toHaveLength(1)
     expect(
       (
         await post(server, '/api/extensions/onboarding/actions/applyFirstRun', {
@@ -302,14 +358,14 @@ it('offers setup only to named definitions, refuses inapplicable cards, and dedu
     ).toBe(200)
     expect(
       JSON.parse(await readFile(join(home, '.ultimate/settings.json'), 'utf8')).extensions,
-    ).toMatchObject({ enable: ['plan'], disable: ['info'] })
+    ).toMatchObject({ enable: ['board', 'plan'], disable: ['faux', 'info'] })
     expect(
       JSON.stringify(
         await run('codemode', {
-          code: `return await ultimate.action('onboarding', 'choice', ${JSON.stringify(choice)});`,
+          code: `return await ultimate.action('onboarding', 'choose', ${JSON.stringify(choice)});`,
         }),
       ),
-    ).toContain('onboarding/choice is a user-only action')
+    ).toContain('onboarding/choose is a user-only action')
     expect(
       JSON.stringify(
         await run('codemode', {
@@ -317,6 +373,11 @@ it('offers setup only to named definitions, refuses inapplicable cards, and dedu
         }),
       ),
     ).toContain('onboarding/start is a user-only action')
+    expect(
+      JSON.stringify(
+        await run('codemode', { code: "return await ultimate.action('workspaces', 'setupGit');" }),
+      ),
+    ).toContain('workspaces/setupGit is a user-only action')
     // Absence is checked independently of the remembered project decision.
     await rename(join(project, '.ultimate'), join(home, 'setup-backup'))
     expect(JSON.stringify(await run('setup', { card: 'project' }))).toContain('no .ultimate/ setup')

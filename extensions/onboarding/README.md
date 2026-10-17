@@ -47,16 +47,24 @@ The tool renderer shows a quiet, transcript-width card:
   contents without secrets, dependencies or generated output, adding no remote and pushing nothing. The tool refuses
   when the folder is already isolatable.
 
-After applying a choice, the browser calls the user-only `choice { card, summary, toolCallId }` action in the same
-conversation. It submits a typed input, kind `onboarding.choice`, with data `{ card, summary, toolCallId }` and model
-text `Setup choice (<card>): <summary>`. Its stable request id `onboarding-choice:<toolCallId>` deduplicates double
-clicks. A quiet input card displays the summary. The original tool card shows **Chosen: …**, with no buttons, derived
-from the matching choice entry (or the current project/git status), so it stays settled after reload.
+The browser sends one user-only `choose` operation in the same conversation: `{ card, toolCallId, extensions }`
+for extensions, `{ card, toolCallId, local }` for the project, or `{ card, toolCallId, initialize }` for Git (false
+hands setup to @ultimate). The server applies the setting and then submits a typed `onboarding.choice` input with data
+`{ card, summary, toolCallId }` and model text `Setup choice (<card>): <summary>`.
+
+A stable request id `onboarding-choice:<toolCallId>` deduplicates retries. The server retains the normalized payload
+before admission, so even a queued submission prevents a second tab from choosing differently. Calls are serialized
+across settings reloads. If applying succeeds but notification fails, the buttons stay available: retrying applies the
+same idempotent setting and admits exactly one input. Only the matching typed choice entry settles the original card
+as **Chosen: …**, never the current settings or a local success flag. A quiet input card displays the summary.
 
 The status line keeps **project setup** while the project decision is open and **set up git** while isolation is
 unavailable. Clicking posts "Help me decide whether to use this project's setup." or "Help me set up git for this
-folder." to @ultimate through the Board, then opens the standing conversation returned by `addresses`. The Extensions
-panel's About this setup and the start page's isolation shortcut route there too; they no longer open setup dialogs.
+folder." to @ultimate through the Board, then opens the standing conversation returned by `addresses` on the Agent
+surface. First-run Continue and Start here's start/open links also select the Agent surface. While onboarding is
+in progress, Start here shows the open link and the survey fallback, without the focus textarea or keyboard hint.
+The Extensions panel's About this setup and the start page's isolation shortcut route there too; they no longer
+open setup dialogs.
 The Git status is read again whenever the shown conversation finishes a run, including an agent's first Git commit.
 
 ## Extensions panel
@@ -80,7 +88,9 @@ cannot apply them through codemode `ultimate.action`.
   the project.
 - `decide { local }`: saves the project choice through Pi's `ProjectTrustStore` and reloads extensions/web facets.
   Linked worktrees share their main checkout's choice.
-- `choice { card, summary, toolCallId }`: the deduplicated typed input described above. Requires a conversation.
+- `choose { card, toolCallId, extensions? | local? | initialize? }`: applies the card's payload and notifies the
+  conversation as one retryable operation, as described above. Requires a conversation. Git initialization uses the
+  workspaces service behind the user-only `workspaces/setupGit` action.
 - `setExtension { name, enabled, scope }`: updates user or project settings, preserving other keys. Project writes
   require a local decision.
 - `adoptProjectSetup`: merges project enable/disable lists into user settings.

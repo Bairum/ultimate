@@ -176,7 +176,7 @@ export function Recommended({
   onDone,
 }: {
   status?: Status
-  onDone: (summary: string) => Promise<void>
+  onDone: (choice: { extensions: Record<string, boolean> }) => Promise<void>
 }) {
   const [changed, setChanged] = useState<Record<string, boolean>>({})
   const [busy, setBusy] = useState(false)
@@ -199,18 +199,7 @@ export function Recommended({
       const extensions = { ...changed, ...checked }
       for (const entry of recommended)
         if (entry.needs && checked[entry.name]) extensions[entry.needs] = true
-      await api.action('onboarding', 'applyFirstRun', { extensions })
-      await onDone(
-        `enabled ${
-          Object.keys(extensions)
-            .filter((n) => extensions[n])
-            .join(', ') || 'none'
-        }; disabled ${
-          Object.keys(extensions)
-            .filter((n) => !extensions[n])
-            .join(', ') || 'none'
-        }`,
-      )
+      await onDone({ extensions })
     } catch (failure) {
       setError(errorMessage(failure))
       setBusy(false)
@@ -334,7 +323,7 @@ export function ProjectCard({
   onDone,
 }: {
   adds?: Status['adds']
-  onDone: (summary: string) => Promise<void>
+  onDone: (choice: { local: boolean }) => Promise<void>
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
@@ -342,8 +331,7 @@ export function ProjectCard({
     if (busy) return
     setBusy(true)
     try {
-      await api.action('onboarding', 'decide', { local })
-      await onDone(local ? 'Using project setup' : 'Keeping global setup')
+      await onDone({ local })
     } catch (failure) {
       setError(errorMessage(failure))
       setBusy(false)
@@ -375,20 +363,20 @@ export function GitCard({
   onDone,
 }: {
   isolation?: Isolation
-  onDone: (summary: string) => Promise<void>
+  onDone: (choice: { initialize: boolean }) => Promise<void>
 }) {
+  const [initializing, setInitializing] = useState<boolean>()
+  // A reload after initialization must retry the same notification, not hand Git back to the agent.
+  const initialize =
+    initializing ?? (isolation?.empty === true || (isolation !== undefined && !isolation.reason))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   const apply = async () => {
     if (busy) return
     setBusy(true)
     try {
-      if (isolation?.empty) await api.action('workspaces', 'setupGit')
-      await onDone(
-        isolation?.empty
-          ? 'Git is ready'
-          : 'Let @ultimate set up Git: write a project-appropriate .gitignore and make the first commit without secrets, dependencies, build output or generated files. Do not add a remote or push.',
-      )
+      setInitializing(initialize)
+      await onDone({ initialize })
       events.emit('onboarding:git', null)
     } catch (failure) {
       setError(errorMessage(failure))
@@ -405,14 +393,18 @@ export function GitCard({
       </p>
       <p className="flex gap-2 rounded-md border border-border bg-sidebar p-3 text-xs leading-relaxed text-muted-foreground">
         <GitBranchIcon className="size-4 shrink-0 text-brand" />
-        {isolation?.empty
+        {initialize
           ? 'The folder is empty, so Ultimate runs git init and makes an empty first commit.'
           : 'The folder has files. @ultimate chooses what the first commit holds, without secrets, dependencies or build output. No remote, no push.'}
       </p>
       {error && <p className="text-xs text-error">{error}</p>}
       <div className="flex justify-end">
-        <Button disabled={busy || !isolation?.reason} size="sm" onClick={() => void apply()}>
-          {isolation?.empty ? 'Set up Git' : 'Let @ultimate do it'}
+        <Button
+          disabled={busy || (!isolation && initializing === undefined)}
+          size="sm"
+          onClick={() => void apply()}
+        >
+          {initialize ? 'Set up Git' : 'Let @ultimate do it'}
         </Button>
       </div>
     </div>

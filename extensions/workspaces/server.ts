@@ -24,9 +24,11 @@ import { Workspaces, workspaces } from './workspaces.ts'
 export type WorkspaceService = ReturnType<typeof workspaces> & {
   git: typeof git
   doc: typeof Workspaces
+  setupGit(): Promise<void>
 }
 export const order = -200
 export const docs = [Workspaces]
+export const userActions = ['setupGit']
 /** A project trust change moves the definition roots: reopening rewatches them and reconfigures the landers. */
 export const reloadOnSettings = true
 const finish = (value: unknown) => ({
@@ -38,6 +40,17 @@ function workspaceId(args: JsonValue) {
     throw new Error('Expected a workspace conversation id')
   return id as ConversationId
 }
+async function setupGit(host: ExtensionHost) {
+  const checkout = await isolatable(host.projectRoot)
+  if (!('reason' in checkout)) return
+  if (!(await empty(host.projectRoot)))
+    throw new Error('This folder has files; ask the agent to choose what the first commit holds')
+  if (checkout.reason === noRepository) await git(host.projectRoot, 'init')
+  else if (checkout.reason !== noCommit) throw new Error(checkout.reason)
+  await git(host.projectRoot, 'commit', '--allow-empty', '--message', 'Initial commit')
+  await workspaces(host).standLander(context)
+}
+
 export const actions = {
   pending(args: JsonValue, { host }: ActionContext) {
     const ids = args && typeof args === 'object' && !Array.isArray(args) ? args.ids : undefined
@@ -88,14 +101,7 @@ export const actions = {
    * with files needs judgement about what to commit, so it is left to an agent.
    */
   async setupGit(_args: JsonValue, { host }: ActionContext) {
-    const checkout = await isolatable(host.projectRoot)
-    if (!('reason' in checkout)) return {}
-    if (!(await empty(host.projectRoot)))
-      throw new Error('This folder has files; ask the agent to choose what the first commit holds')
-    if (checkout.reason === noRepository) await git(host.projectRoot, 'init')
-    else if (checkout.reason !== noCommit) throw new Error(checkout.reason)
-    await git(host.projectRoot, 'commit', '--allow-empty', '--message', 'Initial commit')
-    await workspaces(host).standLander(context)
+    await setupGit(host)
     return {}
   },
   info(args: JsonValue, { host }: ActionContext) {
@@ -139,7 +145,12 @@ function watchDefinitions(
 }
 export default function workspaceExtension(host: ExtensionHost) {
   const service = workspaces(host)
-  host.provide('workspaces', { ...service, git, doc: Workspaces } satisfies WorkspaceService)
+  host.provide('workspaces', {
+    ...service,
+    git,
+    doc: Workspaces,
+    setupGit: () => setupGit(host),
+  } satisfies WorkspaceService)
   const resume = () =>
     service.resume(context).catch((error: unknown) => {
       host.notice(`Lander resume failed: ${String(error)}`)

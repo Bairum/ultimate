@@ -34,6 +34,7 @@ export function Familiarize({ id, dock }: { id: number; dock?: boolean }) {
           ...(focus.trim() ? { instructions: focus } : {}),
         })
         ui.switchConversation(result.id)
+        ui.showSurface('agent')
       }
     } catch (failure) {
       setError(errorMessage(failure))
@@ -50,42 +51,49 @@ export function Familiarize({ id, dock }: { id: number; dock?: boolean }) {
           <CompassIcon className="size-3.5" />
           Start here
         </div>
-        <p className="mt-2 text-[15px] font-medium text-foreground">
-          Let Ultimate get familiar with {project ?? 'the project'}
-        </p>
-        <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
-          Talk to @ultimate to choose your setup and read the project. It writes what it learned as
-          this root's first tally. Every branch you start here begins from it.
-        </p>
-        <textarea
-          aria-label="Focus"
-          autoFocus={!touchKeyboard()}
-          className="mt-3 field-sizing-content max-h-40 min-h-16 w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-[13px] outline-none placeholder:text-muted-foreground/70 focus-visible:border-brand/50"
-          disabled={sending || started !== undefined}
-          onChange={(event) => setFocus(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
-            if (touchKeyboard()) return
-            event.preventDefault()
-            void begin()
-          }}
-          placeholder="Optional instructions: what this tree is for and how to read, e.g. focus on the API, also look through past conversations…"
-          value={focus}
-        />
+        {started === undefined && (
+          <>
+            <p className="mt-2 text-[15px] font-medium text-foreground">
+              Let Ultimate get familiar with {project ?? 'the project'}
+            </p>
+            <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
+              Talk to @ultimate to choose your setup and read the project. It writes what it learned
+              as this root's first tally. Every branch you start here begins from it.
+            </p>
+            <textarea
+              aria-label="Focus"
+              autoFocus={!touchKeyboard()}
+              className="mt-3 field-sizing-content max-h-40 min-h-16 w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-[13px] outline-none placeholder:text-muted-foreground/70 focus-visible:border-brand/50"
+              disabled={sending}
+              onChange={(event) => setFocus(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+                if (touchKeyboard()) return
+                event.preventDefault()
+                void begin()
+              }}
+              placeholder="Optional instructions: what this tree is for and how to read, e.g. focus on the API, also look through past conversations…"
+              value={focus}
+            />
+          </>
+        )}
         <div className="mt-2.5 flex items-center gap-3">
           {error ? (
             <span className="min-w-0 truncate font-mono text-[11px] text-error">{error}</span>
-          ) : (
+          ) : started === undefined ? (
             <span className="hidden font-mono text-[11px] whitespace-nowrap text-muted-foreground/70 sm:inline pointer-coarse:hidden">
               <Kbd>↵</Kbd> start · <Kbd>⇧↵</Kbd> new line
             </span>
-          )}
+          ) : null}
           {started !== undefined ? (
-            <p className="ml-auto text-xs text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               @ultimate is setting up this project ·{' '}
               <button
                 className="text-brand hover:underline"
-                onClick={() => ui.switchConversation(started)}
+                onClick={() => {
+                  ui.switchConversation(started)
+                  ui.showSurface('agent')
+                }}
                 type="button"
               >
                 open

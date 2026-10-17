@@ -56,8 +56,16 @@ it('onboards once per root with facts, choices, reading, a seeded tally and a co
     })
     for (const card of ['extensions', 'project', 'git']) {
       expect(JSON.stringify(await entries())).toContain(`"card":"${card}"`)
-      const choice = await post(server, '/api/extensions/onboarding/actions/choice', {
-        args: { card, summary: `Chose ${card}`, toolCallId: `onboarding-${card}` },
+      const choice = await post(server, '/api/extensions/onboarding/actions/choose', {
+        args: {
+          card,
+          toolCallId: `onboarding-${card}`,
+          ...(card === 'extensions'
+            ? { extensions: { plan: true } }
+            : card === 'project'
+              ? { local: false }
+              : { initialize: false }),
+        },
         conversationId: id,
       })
       expect(choice.status).toBe(200)

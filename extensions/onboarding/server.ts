@@ -19,6 +19,7 @@ import type { ExtensionAction } from '../../server/actions.ts'
 import { save, updateSettings } from './settings.ts'
 import type { SubagentsService } from '../subagents/server.ts'
 import type { LineageService } from '../lineage/server.ts'
+import type { WorkspaceService } from '../workspaces/server.ts'
 
 export const Starts = defineDoc<{ roots: Record<string, number> }>({
   kind: 'onboarding.starts',
@@ -27,6 +28,14 @@ export const Starts = defineDoc<{ roots: Record<string, number> }>({
   history: 'latest',
   fork: 'initial',
   initial: () => ({ roots: {} }),
+})
+const ChoiceRequests = defineDoc<{ payloads: Record<string, JsonObject> }>({
+  kind: 'onboarding.choice-requests',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({ payloads: {} }),
 })
 export const docs = [Starts]
 export const StartEntry = defineEntry<{
@@ -119,7 +128,7 @@ const marker = (userHome: string) => join(userHome, '.ultimate/onboarding.json')
 
 export const userActions = [
   'start',
-  'choice',
+  'choose',
   'decide',
   'setExtension',
   'adoptProjectSetup',
@@ -127,7 +136,7 @@ export const userActions = [
   'firstRunDone',
 ]
 
-export const actions = {
+export const actions: Record<string, ExtensionAction> = {
   start: async (args, { host, conversationId }) => {
     const input = args as { root?: number; instructions?: string } | null
     if (
@@ -196,36 +205,96 @@ export const actions = {
     }, context)
     return { id }
   },
-  choice: async (args, { host, conversationId }) => {
+  choose: async (args, actionContext) => {
+    const { host, conversationId } = actionContext
     if (conversationId === undefined) throw new Error('A conversation is required')
-    const data = args as { card?: string; summary?: string; toolCallId?: string }
     if (
-      !data ||
-      !['extensions', 'project', 'git'].includes(data.card ?? '') ||
-      typeof data.summary !== 'string' ||
-      !data.summary.trim() ||
-      typeof data.toolCallId !== 'string' ||
-      !data.toolCallId.trim()
+      !args ||
+      typeof args !== 'object' ||
+      Array.isArray(args) ||
+      typeof args.toolCallId !== 'string' ||
+      !args.toolCallId.trim()
     )
-      throw new Error('Expected card, summary and toolCallId')
-    const conversation = await host
-      .harness()
-      .conversation(conversationId as ConversationId, context)
-    if (!conversation) throw new Error('Conversation not found')
-    await conversation.submit(
-      {
-        type: 'input',
-        content: `Setup choice (${data.card}): ${data.summary}`,
-        entry: {
-          kind: ChoiceEntry.kind,
-          data: { card: data.card!, summary: data.summary, toolCallId: data.toolCallId },
+      throw new Error('Expected card and toolCallId')
+    const { card, toolCallId } = args
+    let payload: JsonObject
+    let summary: string
+    if (card === 'extensions') {
+      const choices = args.extensions
+      if (
+        !choices ||
+        typeof choices !== 'object' ||
+        Array.isArray(choices) ||
+        Object.entries(choices).some(
+          ([name, enabled]) => !name.trim() || typeof enabled !== 'boolean',
+        )
+      )
+        throw new Error('Expected extensions as names to booleans')
+      const extensions = Object.fromEntries(
+        Object.entries(choices).toSorted(([a], [b]) => a.localeCompare(b)),
+      )
+      payload = { card, extensions }
+      const namesFor = (enabled: boolean) =>
+        Object.keys(extensions)
+          .filter((name) => extensions[name] === enabled)
+          .join(', ') || 'none'
+      summary = `enabled ${namesFor(true)}; disabled ${namesFor(false)}`
+    } else if (card === 'project' && typeof args.local === 'boolean') {
+      payload = { card, local: args.local }
+      summary = args.local ? 'Using project setup' : 'Keeping global setup'
+    } else if (card === 'git' && typeof args.initialize === 'boolean') {
+      payload = { card, initialize: args.initialize }
+      summary = args.initialize
+        ? 'Git is ready'
+        : 'Let @ultimate set up Git: write a project-appropriate .gitignore and make the first commit without secrets, dependencies, build output or generated files. Do not add a remote or push.'
+    } else throw new Error('Expected extensions, project with local, or git with initialize')
+    // Keep competing tabs serialized through settings reloads, including the gap before submit.
+    const queue = host.resource('onboarding.choose', () => ({ tail: Promise.resolve() }))
+    const operation = queue.tail.then(async () => {
+      const harness = host.harness()
+      const id = conversationId as ConversationId
+      const requestId = `onboarding-choice:${toolCallId}`
+      const existing = await harness.commit((tx) => tx.submissionByRequest(id, requestId), context)
+      if (existing) {
+        const saved = (await harness.snapshot(ChoiceRequests, id, context))?.payloads[toolCallId]
+        if (JSON.stringify(saved) !== JSON.stringify(payload))
+          throw new Error('This setup card already has a different choice')
+      }
+      const conversation = await harness.conversation(id, context)
+      if (!conversation) throw new Error('Conversation not found')
+      if (!existing) {
+        if (card === 'extensions')
+          await actions.applyFirstRun({ extensions: payload.extensions! }, actionContext)
+        else if (card === 'project') await actions.decide({ local: payload.local! }, actionContext)
+        else if (payload.initialize) {
+          const workspaces = host.use<WorkspaceService>('workspaces')
+          if (!workspaces) throw new Error('Git setup requires workspaces')
+          await workspaces.setupGit()
+        }
+        // Persist the payload before admission: queued submissions have no transcript entry yet.
+        await harness.commit(async (tx) => {
+          ;(await tx.doc(ChoiceRequests, id)).payloads[toolCallId] = payload
+        }, context)
+      }
+      await conversation.submit(
+        {
+          type: 'input',
+          content: `Setup choice (${card}): ${summary}`,
+          entry: { kind: ChoiceEntry.kind, data: { card, summary, toolCallId } },
+          requestId,
+          whenBusy: 'followUp',
         },
-        requestId: `onboarding-choice:${data.toolCallId}`,
-        whenBusy: 'followUp',
+        context,
+      )
+      return { sent: true }
+    })
+    queue.tail = operation.then(
+      () => {},
+      () => {
+        // This caller receives its failure; the next choice must still be able to retry.
       },
-      context,
     )
-    return { sent: true }
+    return operation
   },
   status: async (_args, { host }) => {
     const folders = await host.projectExtensions()
@@ -357,7 +426,7 @@ export const actions = {
       }),
     )
   },
-} satisfies Record<string, ExtensionAction>
+}
 
 export const ChoiceEntry = defineEntry<{ card: string; summary: string; toolCallId: string }>(
   'onboarding.choice',
