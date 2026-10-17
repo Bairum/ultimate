@@ -81,4 +81,13 @@ record(tx: Tx, input: {
 It appends a delivered, one-way log item in the caller's transaction, without submitting an input or starting a run.
 Other extensions use this for events such as landings. Import the service type from `server.ts`.
 
-The board surface and transcript cards are separate browser work; this facet owns only delivery and storage.
+## UI
+
+The Board surface shows all traffic oldest first, or just your Inbox. Opening Inbox marks its messages read;
+a quiet `inbox N` status-line button appears on every surface while messages are unread. Cards show addresses,
+time, delivery state, reply quotes and an Open link when the transcript entry is known. Landing items use a merge icon.
+
+Start a post with `@agent` or `#conversation`; autocomplete lists resident agents, the lander and recent conversations.
+Without an address, posts go to `@ultimate` when it exists. Enter sends on desktop (Shift+Enter inserts a newline);
+on touch keyboards, return always inserts a newline and the arrow button sends. Reply retains a link to its original
+message. Typed board messages and replies render as compact transcript cards with Source / Return navigation.
