@@ -218,7 +218,7 @@ export default function questionsExtension(host: ExtensionHost) {
     tasks: [Extract],
     hooks: [
       hook(GenerationTask, {
-        // Pi upstream: @earendil-works/pi-durable@1.2.0 — patched transactional beforeInput hook. Drop when Pi ships input-placement hooks.
+        // Pi upstream: @earendil-works/pi-durable@1.3.0 — patched transactional beforeInput hook. Drop when Pi ships input-placement hooks.
         // Busy answers reject at admission. On an idle start this check runs before any submission or run is created,
         // so throwing rolls back only the answer's admission if another input landed since the action's check.
         beforeInput: async (input, api) => {

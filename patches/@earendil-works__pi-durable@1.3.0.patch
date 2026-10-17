@@ -134,27 +134,6 @@ index e8e07656188833bffa17af35cd2dbc4eb65b2a24..de36e7149439d9acf6c8f02ecfca62ad
  }
  /** The kind and data of an input's entry as strict JSON, without other fields an untyped caller might pass. */
  export function pickInputEntry({ kind, data }) {
-diff --git a/dist/harness/output.js b/dist/harness/output.js
-index 55f7754fadb83e326386bec10bddc28e1e576f43..3f0f6ccf7193ef9c7a72fa11d3b823c0f47884d9 100644
---- a/dist/harness/output.js
-+++ b/dist/harness/output.js
-@@ -1,12 +1,13 @@
- import { utf8ByteLength } from "../truncate.js";
- const NEWLINE = 0x0a;
--const INVALID_OUTPUT = /[\x00-\x08\x0b-\x1f\ufff9-\ufffb]/g;
-+// Consume whole CSI, OSC and control strings before individual controls; otherwise their payload leaks into text.
-+const OUTPUT_CONTROLS = /(?:\x1b\[|\x9b)[0-?]*[ -/]*(?:[@-~]|$)|(?:\x1b\]|\x9d)[\s\S]*?(?:\x07|\x1b\\|\x9c|$)|(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[\s\S]*?(?:\x1b\\|\x9c|$)|\x1b[ -/]*[0-~]|[\x00-\x08\x0b-\x1f\x7f-\x9f\ufff9-\ufffb]/g;
- const encoder = new TextEncoder();
- /** Slices decode exactly: a U+FEFF at a slice's start is text, not a byte-order mark. */
- const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
--/** Remove control characters that break display and transcripts; tabs and newlines stay. */
-+/** Keep numeric ANSI SGR, tabs and newlines; remove other terminal sequences and controls in full. */
- export function sanitizeOutput(text) {
--    return text.replace(INVALID_OUTPUT, "");
-+    return text.replace(OUTPUT_CONTROLS, (sequence) => /^\x1b\[[0-9;]*m$/.test(sequence) ? sequence : "");
- }
- /**
-  * Bound `text` to whole lines within the limits: the first lines for `head`, the last lines for `tail`. The result is an
 diff --git a/dist/harness/submissions.js b/dist/harness/submissions.js
 index ee076b5ea977ae39bca78a22e43827c26ba386a5..fd545203037c828570b3b5350eaabdbc977254c3 100644
 --- a/dist/harness/submissions.js

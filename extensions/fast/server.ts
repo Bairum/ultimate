@@ -84,7 +84,7 @@ export function fastStream(listed: () => Promise<Set<string>>, api = openAIRespo
       if (!(await listed()).has(`${model.provider}/${model.id}`))
         return api.streamSimple(model, context, options)
       // Sign in with ChatGPT rejects the documented "fast"; "priority" is the same tier.
-      // Pi upstream: @earendil-works/pi-ai@1.2.0 src/api/simple-options.ts — simple stream options drop serviceTier, so it goes into the payload. Drop when buildBaseOptions forwards serviceTier and Pi Durable stream settings accept it.
+      // Pi upstream: @earendil-works/pi-ai@1.3.0 src/api/simple-options.ts — simple stream options drop serviceTier, so it goes into the payload. Drop when buildBaseOptions forwards serviceTier and Pi Durable stream settings accept it.
       return api.streamSimple(model, context, {
         ...options,
         onPayload: async (payload, payloadModel) => ({

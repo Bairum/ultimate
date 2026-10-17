@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest'
-// Pi upstream: @earendil-works/pi-durable@1.2.0 dist/harness/output.js — internal import exercises the installed sanitizer patch. Drop when Pi exports the sanitizer and OutputBuffer or ships equivalent sanitizer tests.
-import {
-  OutputBuffer,
-  sanitizeOutput,
-} from '../node_modules/@earendil-works/pi-durable/dist/harness/output.js'
+import { OutputBuffer, sanitizeOutput } from '@earendil-works/chord/output'
 
-describe('pi-durable ANSI output sanitizer', () => {
+describe('chord ANSI output sanitizer', () => {
   it('preserves numeric SGR, tabs, newlines and ordinary brackets', () => {
     const output = '\x1b[1m\x1b[94mHeading\x1b[22;39m\n\t[brackets] \x1b[mreset'
     expect(sanitizeOutput(output)).toBe(output)
