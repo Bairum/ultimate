@@ -19,6 +19,7 @@ MACHINE_ORIGIN=http://127.0.0.1:4800
 ```
 
 Then run `pnpm cloud:dev` and open the URL Wrangler prints (normally http://localhost:8787). Local Durable Object data persists in `cloud/.wrangler/`. Stop with Ctrl+C.
+The replica is derived from the machine, and its schema is not migrated: after pulling a replica schema change, delete `cloud/.wrangler/` and let the machine sync again.
 
 The build includes the web facets discovered by Ultimate's extension loader. This is a production build, not the machine's Vite dev server. Rebuild after changing facets.
 
