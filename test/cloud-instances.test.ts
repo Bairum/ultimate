@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto'
 import { expect, it, vi } from 'vitest'
 import worker from '../cloud/worker.ts'
 import { createApi, projectBase } from '../web/src/sdk/api.ts'
@@ -6,15 +7,27 @@ import { createStore } from '../web/src/sdk/store.ts'
 it('routes sync by both machine and project', async () => {
   const fetch = vi.fn<(request: Request) => Promise<Response>>(async () => new Response('sync'))
   const idFromName = vi.fn<(name: string) => string>((name) => name)
-  const env = { REPLICA: { idFromName, get: () => ({ fetch }) } } as unknown as Parameters<
-    typeof worker.fetch
-  >[1]
-  for (const project of ['/one', '/two']) {
-    await worker.fetch(
-      new Request(`https://cloud.example/sync?machine=desk&project=${encodeURIComponent(project)}`),
-      env,
-    )
-    expect(idFromName).toHaveBeenLastCalledWith(JSON.stringify(['desk', project]))
+  const env = {
+    SYNC_TOKEN: 'dev',
+    REPLICA: { idFromName, get: () => ({ fetch }) },
+  } as unknown as Parameters<typeof worker.fetch>[1]
+  Object.defineProperty(crypto.subtle, 'timingSafeEqual', {
+    configurable: true,
+    value: timingSafeEqual,
+  })
+  try {
+    for (const project of ['/one', '/two']) {
+      await worker.fetch(
+        new Request(
+          `https://cloud.example/sync?machine=desk&project=${encodeURIComponent(project)}`,
+          { headers: { Authorization: 'Bearer dev' } },
+        ),
+        env,
+      )
+      expect(idFromName).toHaveBeenLastCalledWith(JSON.stringify(['desk', project]))
+    }
+  } finally {
+    Reflect.deleteProperty(crypto.subtle, 'timingSafeEqual')
   }
 })
 

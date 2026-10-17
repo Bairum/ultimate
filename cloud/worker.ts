@@ -64,6 +64,11 @@ export default {
       return new Response(frontPage, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
     if (url.pathname === '/api/directory') return directory(env).fetch('https://directory/list')
     if (path === '/sync' && !prefix) {
+      if (
+        !env.SYNC_TOKEN ||
+        !matchesSyncToken(request.headers.get('Authorization'), env.SYNC_TOKEN)
+      )
+        return Response.json({ error: 'Unauthorized' }, { status: 401 })
       const machine = url.searchParams.get('machine'),
         project = url.searchParams.get('project')
       if (!machine || !project?.startsWith('/'))
@@ -103,7 +108,8 @@ export class Directory {
   async fetch(request: Request) {
     const url = new URL(request.url)
     if (request.method === 'POST') {
-      this.store.update((await request.json()) as Presence)
+      const presence: Presence = await request.json()
+      this.store.update(presence)
       return new Response(null, { status: 204 })
     }
     if (url.pathname === '/list') return Response.json(this.store.list())

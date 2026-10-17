@@ -103,6 +103,7 @@ it('passes valid JWTs and sync requests to the replica, but not assets through a
   const forward = vi.fn<() => Response>(() => Response.json({ ok: true }))
   const env = {
     ...config,
+    SYNC_TOKEN: 'synthetic-test-value',
     REPLICA: { idFromName: vi.fn<() => void>(), get: () => ({ fetch: forward }) },
     DIRECTORY: { idFromName: vi.fn<() => void>(), get: () => ({ fetch: forward }) },
     ASSETS: { fetch: forward },
@@ -117,14 +118,67 @@ it('passes valid JWTs and sync requests to the replica, but not assets through a
       )
     ).status,
   ).toBe(200)
-  expect(
-    (await worker.fetch(new Request('https://cloud.example/sync?machine=test&project=/test'), env))
-      .status,
-  ).toBe(200)
+  Object.defineProperty(crypto.subtle, 'timingSafeEqual', {
+    configurable: true,
+    value: timingSafeEqual,
+  })
+  try {
+    expect(
+      (
+        await worker.fetch(
+          new Request('https://cloud.example/sync?machine=test&project=/test', {
+            headers: { Authorization: 'Bearer synthetic-test-value' },
+          }),
+          env,
+        )
+      ).status,
+    ).toBe(200)
+  } finally {
+    Reflect.deleteProperty(crypto.subtle, 'timingSafeEqual')
+  }
   expect(
     (await worker.fetch(new Request('https://cloud.example/assets/test.js'), env)).status,
   ).toBe(200)
   expect(forward).toHaveBeenCalledTimes(3)
+})
+
+it('authenticates sync before validating parameters or touching a replica namespace', async () => {
+  const idFromName = vi.fn<(name: string) => string>((name) => name)
+  const get = vi.fn<() => { fetch: () => Response }>(() => ({ fetch: () => new Response() }))
+  Object.defineProperty(crypto.subtle, 'timingSafeEqual', {
+    configurable: true,
+    value: timingSafeEqual,
+  })
+  try {
+    for (const token of [undefined, '', 'wrong-token']) {
+      for (const query of ['?machine=scanner&project=/arbitrary', '']) {
+        const response = await worker.fetch(
+          new Request(`https://cloud.example/sync${query}`, {
+            headers: token === undefined ? {} : { Authorization: `Bearer ${token}` },
+          }),
+          {
+            SYNC_TOKEN: 'synthetic-test-value',
+            REPLICA: { idFromName, get },
+          } as unknown as Parameters<typeof worker.fetch>[1],
+        )
+        expect(response.status).toBe(401)
+        expect(await response.json()).toEqual({ error: 'Unauthorized' })
+        expect(idFromName).not.toHaveBeenCalled()
+        expect(get).not.toHaveBeenCalled()
+      }
+    }
+    const response = await worker.fetch(
+      new Request('https://cloud.example/sync?machine=scanner&project=/arbitrary', {
+        headers: { Authorization: 'Bearer synthetic-test-value' },
+      }),
+      { REPLICA: { idFromName, get } } as unknown as Parameters<typeof worker.fetch>[1],
+    )
+    expect(response.status).toBe(401)
+    expect(idFromName).not.toHaveBeenCalled()
+    expect(get).not.toHaveBeenCalled()
+  } finally {
+    Reflect.deleteProperty(crypto.subtle, 'timingSafeEqual')
+  }
 })
 
 it('refuses wrong, prefix-matching, empty and missing sync credentials', async () => {
