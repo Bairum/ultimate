@@ -4,7 +4,8 @@ Send `questions demo` to preview the questions card: a yes/no question and a cho
 Send `messages demo` to send the user a one-way update and a question, or `message #<id>` (optionally `one-way`)
 to message another conversation, previewing the outgoing message cards.
 Under faux, summaries run on scripted neutral responses unless `summaryModel` is set. Their title and Ask line
-come from the latest user prompt, with generic demo summary, feature and activity text; only the questions demo
+come from the latest user prompt, with generic demo summary, feature and activity text (a prompt containing `no feature` leaves the feature unset, to
+preview a conversation shown by its title); only the questions demo
 reply is assessed as needing input. The default model is `faux/faux-1`, so assessment and extraction exercise the
 same durable flow as real replies without external model calls.
 
