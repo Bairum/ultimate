@@ -10,7 +10,7 @@ import { afterEach, beforeAll, expect, it } from 'vitest'
 import { abstract, leaveNote, Tally } from '../extensions/lineage/server.ts'
 import { Seen, tallyText } from '../extensions/lineage/catchup.ts'
 import { context } from '../server/harness.ts'
-import { fauxServer, post, sourceCopy, temp, until } from './helpers.ts'
+import { fauxServer, post, seedTally, sourceCopy, temp, until } from './helpers.ts'
 
 let ultimateRoot: string
 beforeAll(async () => {
@@ -278,6 +278,8 @@ it('warns an isolated workspace it is behind, prioritizes old overlaps, and caps
 })
 
 const branchFrom = async (server: Server, args: Record<string, unknown>) => {
+  // An empty first conversation is a root that read nothing yet; one with history stays an ordinary root.
+  if (args.from === 1) await seedTally(server.harness)
   const { status, data } = await post(server, '/api/extensions/lineage/actions/branch', { args })
   expect([status, data.error]).toEqual([200, undefined])
   const id = data.result.id as ConversationId

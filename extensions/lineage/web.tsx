@@ -34,8 +34,9 @@ import { Open } from '../workspaces/landing.tsx'
 import { getRoots, useRoots } from './roots.tsx'
 import { ProposeCall, SideComposer, sideLabel, SideNote, SideRedirect } from './side.tsx'
 import { entryText, isolated, openStart, StartPage } from './start.tsx'
+import { Distilling, Familiarize, Survey, SurveyStatus } from './survey.tsx'
 
-type Tally = { tokens: number; since?: number }
+type Tally = { tokens: number; since?: number; surveying?: true; converting?: true }
 const tallyKind = 'lineage.tally'
 
 function userText(entry: EntryRecord) {
@@ -394,19 +395,11 @@ const branchKeys = formatKeys('alt+enter')[0].join(' ')
 /** The root a composer starts branches of; set by `TallyComposer` for its status line. */
 const TallyContext = createContext<number | undefined>(undefined)
 
-/** Under the composer: a tally's size, or the start page's keys. */
+/** Under the composer: a tally's size, a root's reading, or the start page's keys. */
 function ComposerStatus() {
   const tally = use(TallyContext)
   const { target } = useComposer()
-  if (tally !== undefined)
-    return (
-      <>
-        <TallyTokens id={tally} />
-        <span className="text-muted-foreground/70 pointer-coarse:hidden">
-          <Kbd>↵</Kbd> side chat · <Kbd>{branchKeys}</Kbd> branch
-        </span>
-      </>
-    )
+  if (tally !== undefined) return <TallyStatus id={tally} />
   return target === 'new' ? (
     <span className="text-muted-foreground/70 pointer-coarse:hidden">
       <Kbd>↵</Kbd> start · <Kbd>esc</Kbd> close
@@ -414,12 +407,19 @@ function ComposerStatus() {
   ) : null
 }
 
-function TallyTokens({ id }: { id: number }) {
-  const tokens = useDocOf<Tally>(id, tallyKind)?.tokens
+function TallyStatus({ id }: { id: number }) {
+  const tally = useDocOf<Tally>(id, tallyKind)
+  if (tally?.surveying) return <SurveyStatus />
+  const tokens = tally?.tokens
   return (
-    <span className="text-muted-foreground/70" data-lineage-tokens={tokens}>
-      Tally{tokens === undefined ? '' : ` · ${formatTokens(tokens)} tokens`}
-    </span>
+    <>
+      <span className="text-muted-foreground/70" data-lineage-tokens={tokens}>
+        Tally{tokens === undefined ? '' : ` · ${formatTokens(tokens)} tokens`}
+      </span>
+      <span className="text-muted-foreground/70 pointer-coarse:hidden">
+        <Kbd>↵</Kbd> side chat · <Kbd>{branchKeys}</Kbd> branch
+      </span>
+    </>
   )
 }
 
@@ -439,16 +439,20 @@ function RootComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
 }
 
 /**
- * Only a root subscribes to its `lineage.tally` document. A root with history that is no tally yet (made a root before
- * tallies existed) keeps its own composer until "Make this a root" converts it.
+ * Only a root subscribes to its `lineage.tally` document. An empty root starts by getting familiar with the project; it
+ * takes steering while it reads, and no input while its genesis is distilled. A root with history that is no tally yet
+ * (made a root before tallies existed) keeps its own composer until "Make this a root" converts it.
  */
 function TallyComposer({ id, core, dock }: { id: number; core: ReactNode; dock?: boolean }) {
   const { switchConversation } = useUltimate()
   const tally = useDocOf<Tally>(id, tallyKind)
-  const history = useConversation(
-    (conversation) => !conversation.loading && conversation.entries.length > 0,
+  const history = useConversation((conversation) =>
+    conversation.loading ? undefined : conversation.entries.length > 0,
   )
-  if (tally !== undefined && tally?.since === undefined && history) return core
+  if (tally?.converting) return <Distilling dock={dock} id={id} />
+  if (tally?.surveying) return <TallyContext value={id}>{core}</TallyContext>
+  if (tally !== undefined && tally?.since === undefined)
+    return history === false ? <Familiarize dock={dock} id={id} /> : core
   return (
     <TallyContext value={id}>
       <NewConversationComposer
@@ -502,8 +506,8 @@ function topLevel() {
 }
 
 /**
- * Whether the shown conversation is a tally, or a root that becomes one with its first branch; undefined while unknown.
- * A root's composer keeps its `lineage.tally` document streaming.
+ * Whether the shown conversation is a tally, or a root on its way to one (empty, reading or distilling); undefined while
+ * unknown. A root's composer keeps its `lineage.tally` document streaming.
  */
 function shownIsTally() {
   const { id, entries, loading } = getConversation()
@@ -512,7 +516,7 @@ function shownIsTally() {
   if (!roots.includes(id)) return false
   const doc = getState().docsOf[id]?.[tallyKind] as Tally | null | undefined
   if (doc === undefined || loading) return undefined
-  return doc?.since !== undefined || entries.length === 0
+  return doc?.since !== undefined || !!doc?.surveying || !!doc?.converting || entries.length === 0
 }
 
 /** Where a branch starts by default: the shown tree's root, else the most recently active root. */
@@ -530,19 +534,23 @@ async function defaultRoot() {
   return info.roots.toSorted((a, b) => inputAt(b) - inputAt(a) || b - a)[0]
 }
 
-/** A new branch from `draft.from` (default: the shown tree's root), or a new root. */
+/**
+ * A new branch from `draft.from` (default: the shown tree's root), or a new root, which reads the project in the shared
+ * checkout toward the prompt.
+ */
 async function start({ root, alternate: _alternate, ...draft }: ConversationDraft) {
-  // The preference isolates only where the project can be isolated; an explicit choice is passed on as is.
-  const isolation = await isolated(draft)
   if (root) {
-    const { from: _from, at: _at, ...input } = draft
-    return api.action<{ id: number; root: number }>('lineage', 'newRoot', {
-      ...input,
-      isolated: isolation,
+    const { prompt, model, thinkingLevel } = draft
+    return api.action<{ id: number }>('lineage', 'newRoot', {
+      prompt,
+      ...(model ? { model } : {}),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
     })
   }
   const from = draft.from ?? (await defaultRoot())
   if (from === undefined) throw new Error('There is no root to branch from')
+  // The preference isolates only where the project can be isolated; an explicit choice is passed on as is.
+  const isolation = await isolated(draft)
   return api.action<{ id: number }>('lineage', 'branch', { ...draft, from, isolated: isolation })
 }
 
@@ -554,6 +562,7 @@ export default defineWebExtension({
     'lineage.note': Note,
     'lineage.finished': Finished,
     'lineage.abstract': Abstract,
+    'lineage.survey': ({ entry }) => <Survey entry={entry} text={userText(entry)} />,
     'pi.reset': Reset,
   },
   composer: RootComposer,

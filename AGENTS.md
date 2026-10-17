@@ -9,8 +9,10 @@ tells you which change reloads how, so the conversation you are in keeps running
 A project is a forest of conversation trees, each tree like a history of commits.
 
 - **Roots** keep non-agent tallies: prompts, each conversation's latest abstract, and landings with divergence and
-  `#conversation/entry` breadcrumbs. New → New root creates a tally and its first branch. ⌘K "Make this a root"
-  converts a conversation's history into a genesis distillation; older roots can still run until converted.
+  `#conversation/entry` breadcrumbs. An empty root starts its tree by getting familiar with the project ("Make
+  yourself familiar with the project", or New → New root with what the tree is for); that reading is distilled into
+  the tally's first entry, and nothing branches from a root before it. ⌘K "Make this a root" converts a
+  conversation's history into a genesis distillation; older roots can still run until converted.
   A tally runs no turns: typing in it opens a side chat with it (⌥↵ starts a branch instead), a full session that
   ends only when you end it: as a note in the tally, as a branch after that note, or discarded. Its composer shows
   estimated context tokens; manual compaction reshapes the tally, keeping the idea and standing decisions without

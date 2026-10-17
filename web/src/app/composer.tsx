@@ -333,7 +333,7 @@ function ConversationComposer({
   }
 
   return (
-    <ComposerContext value={{ target, isolated: isolation, source }}>
+    <ComposerContext value={{ target, isolated: isolation, source, root: isNew && point?.root }}>
       <div
         data-composer-source={source}
         data-composer-target={target}

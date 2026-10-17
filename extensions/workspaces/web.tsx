@@ -106,13 +106,13 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
 }
 
 function IsolationToggle() {
-  const { target, isolated: isolation } = useComposer()
+  const { target, isolated: isolation, root } = useComposer()
   const [creation, setCreation] = useUiState<string>('ext.conversations.creationType', 'isolated')
   const ui = useUltimate()
   const check = useAction<{ reason?: string }>('workspaces', 'isolation', {})
   useEvent('onboarding:git', () => void check.refetch())
   const { reason } = check.data ?? {}
-  if (target !== 'new') return null
+  if (target !== 'new' || root) return null
   const isolated = isolation ?? (!reason && creation !== 'shared')
   return (
     <Tooltip>

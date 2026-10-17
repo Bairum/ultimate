@@ -55,6 +55,8 @@ export const ComposerContext = createContext<{
   isolated?: boolean
   /** The conversation a new branch starts from; absent for a new root. */
   source?: number
+  /** Set when the composer starts a new root, which reads the project in the shared checkout. */
+  root?: boolean
 }>({
   target: 'conversation',
 })

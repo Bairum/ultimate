@@ -11,9 +11,15 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
   when the source is not the root; that source also gets a display-only marker.
 - **Roots**: doc `lineage.roots` on conversation 1 (`{ roots }`, initially `[1]`) lists the roots. Clients stream it
   (`useRoots()` in `roots.tsx`). Root lookup walks owners and fork sources to a listed root; conversations outside
-  those trees have none. Action `newRoot` `{ prompt, images?, isolated?, model?, thinkingLevel? }` → `{ id, root }`
-  creates an empty tally, then its first branch; `id` is the branch to open. The root uses the chosen model or
-  conversation 1's default. Creation emits `lineage:rooted` for the root and `lineage:branched` for the branch.
+  those trees have none. Action `newRoot` `{ prompt, model?, thinkingLevel? }` → `{ id }` creates a root, titled by
+  the prompt (what its tree is for), and starts its survey toward it; `id` is the root. The root uses the chosen model
+  or conversation 1's default, and emits `lineage:rooted`.
+  **Survey**: an empty root (a fresh project's conversation 1, a new root, an empty conversation made a root) has
+  nothing to branch from, and `branch` refuses it. Action `survey` `{ root, focus? }` → `{ id }` sets
+  `lineage.tally.surveying` and starts the background `lineage.survey` task: it submits the reading prompt (what the
+  project is, how to run, check and test it, its architecture, conventions and current state; read-only; weighted
+  toward the focus) as a `lineage.survey` input, waits until the root is idle (the user can steer the reading), then
+  converts the root as `root` does, distilling with a reading focus. Branching is refused while it reads or converts.
   Typing in a tally's composer opens a side chat with it (↵) or starts a branch from its tip (⌥↵); the server refuses
   inputs to tallies.
   Action `root` `{ id }` (⌘K "Make this a root") adopts a top-level non-branch conversation or converts an existing
@@ -22,13 +28,14 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
   `lineage.convert` task asks its own model for a genesis distillation. It writes a `pi.reset` with `head: 'self'`,
   `data.lineage = { tally: true }` and model text `<tally from="#R/at">…</tally>` only while `at` is still the tip;
   writes that arrived meanwhile (notes, landings) are distilled again with it. A failure clears `converting` and
-  leaves a notice. Empty roots begin with an empty reset; converting a tally again does nothing. Roots with history from before
+  leaves a notice. An empty conversation is only added to the roots and waits for its survey; converting a tally again
+  does nothing. Roots with history from before
   tallies keep their ordinary composer and can run until converted. `info` returns `{ roots }`, and with `{ id }`
   also its `root` and `branch` when present.
 - **Tally**: conversation-scoped doc `lineage.tally` (latest history) holds
   `{ abstracts: Record<string, { anchor, at, text, title?, feature? }>, tokens: number, since?: number,
-converting?: true }`: each conversation's open abstract, estimated model-visible context tokens, the entry where
-  the root became a tally, and whether its genesis is being distilled. Forks start with an empty doc,
+converting?: true, surveying?: true }`: each conversation's open abstract, estimated model-visible context tokens, the
+  entry where the root became a tally, whether its genesis is being distilled, and whether it is reading the project. Forks start with an empty doc,
   not the source's bookkeeping. Tokens are recounted from active context after commits that append root entries,
   including resets and compaction. The root composer status shows the estimate as "Tally · … tokens".
   `lineage.abstract` entries hold `{ conversation, at, text, title?, feature?, anchor? }`, with `at` pointing to the
@@ -120,7 +127,12 @@ fades into its first message. There is no briefing overlay or retry action. Old 
 a genesis reset instead shows a collapsible "Tally starts here" card.
 
 New in the sidebar branches from the shown tree's root, else the most recently active root; `root: true` starts a
-new root and its first branch. A tally replaces its conversation composer through the SDK's `composer` renderer:
+new root, which reads the project in the shared checkout (no Isolated switch). While that root has not read the project,
+New's Branch tab explains why and offers to open it instead of a composer. An empty root's composer is the "Start here"
+card (`survey.tsx`): an optional focus and "Make yourself familiar with the project". While it reads, the root keeps
+its composer for steering, with "Getting familiar with the project" in its status line; while its genesis is
+distilled, a quiet "Writing the tally…" line replaces it. The survey input renders as a collapsible "Getting familiar
+with the project" card. A tally replaces its conversation composer through the SDK's `composer` renderer:
 ↵ opens a side chat (`start` prop of `NewConversationComposer`), ⌥↵ (`alternate` in the draft) starts a branch with
 the same start path and remembered Isolated/Shared preference. Its status line shows "Tally · … tokens" and both
 keys. A root with an open side chat shows the side chat instead (a replacing redirect, so Back leaves): its view is

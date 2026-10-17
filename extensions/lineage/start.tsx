@@ -2,6 +2,7 @@ import { GitBranchIcon, LoaderCircleIcon, SproutIcon, XIcon } from 'lucide-react
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
+import { Button } from '@/components/ui/button'
 import {
   api,
   cn,
@@ -11,6 +12,7 @@ import {
   touchKeyboard,
   useAction,
   useConversation,
+  useDocOf,
   useStore,
   useUltimate,
 } from '@/sdk'
@@ -128,10 +130,13 @@ export function StartPage() {
   const point = decode(useSyncExternalStore(subscribe, current))
   const actions = useUltimate()
   const shown = actions.conversationId
-  // A branch inherits its source's entries; its prompt, placed just after it starts, is the first of its own.
+  // A branch inherits its source's entries; its prompt, placed just after it starts, is the first of its own. A new
+  // root's is its survey.
   const prompted = useConversation((conversation) =>
     conversation.entries.some(
-      (entry) => entry.conversationId === conversation.id && entry.kind === 'pi.user',
+      (entry) =>
+        entry.conversationId === conversation.id &&
+        (entry.kind === 'pi.user' || entry.kind === 'lineage.survey'),
     ),
   )
   const [leaving, setLeaving] = useState<{ id: number; point: StartPoint }>()
@@ -298,12 +303,16 @@ function Composer({
   branch: { from?: number; at?: number; root?: boolean }
   onStarted: (id: number) => void
 }) {
+  // A new root reads the project in the shared checkout; only branches can be isolated.
   return (
     <NewConversationComposer
       branch={branch}
       inputId="start-input"
-      isolated={isolation}
+      isolated={branch.root ? undefined : isolation}
       onStarted={onStarted}
+      {...(branch.root
+        ? { placeholder: 'What is this tree for? It reads the project toward it…' }
+        : {})}
     />
   )
 }
@@ -445,6 +454,24 @@ function Branch({
   )
 }
 
+/**
+ * Why the root `id` has nothing to branch from yet: it is `empty` until it gets familiar with the project, and `reading`
+ * while it does and while its tally is written. A root with history that is no tally yet (from before tallies) branches.
+ */
+function useUnread(id: number | undefined) {
+  const tally = useDocOf<{ since?: number; surveying?: true; converting?: true }>(
+    id,
+    'lineage.tally',
+  )
+  const summary = useStore((state) =>
+    state.conversations.find((conversation) => conversation.id === id),
+  )
+  if (id === undefined || tally === undefined) return undefined
+  if (tally?.surveying || tally?.converting) return 'reading'
+  if (tally?.since === undefined && !summary?.inputAt && !summary?.answerAt) return 'empty'
+  return undefined
+}
+
 const tab =
   'flex h-7 min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2.5 font-mono text-[12px] whitespace-nowrap text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring'
 
@@ -456,7 +483,8 @@ function New({
   intro: React.RefObject<HTMLDivElement | null>
   onStarted: (id: number) => void
 }) {
-  const shown = useUltimate().conversationId
+  const actions = useUltimate()
+  const shown = actions.conversationId
   const roots = useRoots()
   const info = useAction<{ root?: number }>(
     'lineage',
@@ -475,6 +503,7 @@ function New({
   const inputAt = (id: number) =>
     conversations.find((conversation) => conversation.id === id)?.inputAt ?? 0
   const from = info.data?.root ?? roots?.toSorted((a, b) => inputAt(b) - inputAt(a) || b - a)[0]
+  const waiting = useUnread(from)
   const [choice, setChoice] = useState<'branch' | 'root'>('branch')
   const ready = info.data !== undefined && roots !== undefined
   const root = choice === 'root' || from === undefined
@@ -525,9 +554,26 @@ function New({
             )}
             <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
               {root
-                ? 'An independent tree: a new tally, and a first branch started with what you write below.'
-                : 'Starts from the root’s tally of prompts, abstracts and landings; what you write below is its first message.'}
+                ? 'An independent tree. Its root first gets familiar with the project, toward what you write below, and what it learns becomes the tally you branch from.'
+                : waiting === 'empty'
+                  ? 'Its root has not read the project yet. Every branch starts from what its root learned, so let it get familiar with the project first.'
+                  : waiting === 'reading'
+                    ? 'Its root is still getting familiar with the project. Branch once what it learned is in its tally.'
+                    : 'Starts from the root’s tally of prompts, abstracts and landings; what you write below is its first message.'}
             </p>
+            {!root && waiting && (
+              <Button
+                className="mt-4"
+                onClick={() => {
+                  close()
+                  actions.switchConversation(from)
+                }}
+                size="sm"
+                variant="outline"
+              >
+                Open #{from}
+              </Button>
+            )}
           </>
         )}
       </Intro>
@@ -535,7 +581,7 @@ function New({
         (root ? (
           <Composer branch={{ root: true }} onStarted={onStarted} />
         ) : (
-          <Composer branch={{ from }} onStarted={onStarted} />
+          !waiting && <Composer branch={{ from }} onStarted={onStarted} />
         ))}
     </>
   )

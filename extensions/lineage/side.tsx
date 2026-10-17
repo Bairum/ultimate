@@ -21,7 +21,7 @@ const sideKind = 'lineage.side'
 export const sideLabel = 'side chat'
 
 /** The composer's reading column, as the core lays it out. */
-const column = (dock?: boolean) =>
+export const column = (dock?: boolean) =>
   dock ? 'w-full px-4' : 'mx-auto w-full max-w-[46rem] px-3 sm:px-6'
 
 /** Side chats this page ended: the roots' document can list them a moment longer, and must not reopen them. */
@@ -53,7 +53,8 @@ export function SideComposer({ id, core, dock }: { id: number; core: ReactNode; 
   )
 }
 
-const label =
+/** A quiet line in place of, or above, a composer. */
+export const label =
   'flex min-w-0 items-center gap-2 rounded-md border border-l-2 border-border border-l-brand/50 bg-muted/20 font-mono text-[11px] text-muted-foreground'
 
 function SideBar({ id, side, dock }: { id: number; side: SideState; dock?: boolean }) {

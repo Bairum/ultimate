@@ -10,7 +10,7 @@ import { abstract, branchOf, rootOf, Roots, Side, Tally } from '../extensions/li
 import type { LineageService } from '../extensions/lineage/server.ts'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
-import { fauxServer, post, sourceCopy, temp, until } from './helpers.ts'
+import { fauxServer, post, seedTally, sourceCopy, temp, until } from './helpers.ts'
 
 let ultimateRoot: string
 beforeAll(async () => {
@@ -38,6 +38,7 @@ async function fixture(reopen?: string) {
   const home = reopen ?? (await temp('ultimate-side-'))
   const server = await fauxServer({ ultimateRoot, home, userHome: home })
   servers.push(server)
+  await seedTally(server.harness)
   const requests: { system: string; messages: Message[] }[] = []
   const route: FauxResponseFactory = (transcript) => {
     server.host.faux!.appendResponses([route])

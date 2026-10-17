@@ -40,7 +40,7 @@ import lineage, {
   leaveNote,
   rootOf,
   Roots,
-  startRoot,
+  startBranch,
 } from '../extensions/lineage/server.ts'
 import { subject } from '../extensions/conversations/server.ts'
 import type { ConversationsService } from '../extensions/conversations/server.ts'
@@ -48,7 +48,7 @@ import { Summaries } from '../extensions/conversations/summary.ts'
 import self from '../extensions/self/server.ts'
 import promptExtension, { order as promptOrder } from '../extensions/prompt/server.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
-import { temp, until } from './helpers.ts'
+import { seedTally, temp, until } from './helpers.ts'
 
 // Every test has its own repository and harness, so they all run concurrently; fixtures close when the file ends.
 vi.setConfig({ maxConcurrency: 16 })
@@ -1511,19 +1511,19 @@ it.concurrent('fix: a fix that still fails the check is not landed and leaves th
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
   expect(await readFile(join(f.projectRoot, 'base.txt'), 'utf8')).toBe('target')
 })
-it.concurrent('starts a root whose isolated first branch’s first request sees its ready checkout', async () => {
+it.concurrent('starts an isolated branch of a tally whose first request sees its ready checkout', async () => {
   const f = await fixture()
-  // This fixture's host has no event bus, so no extension labels the root.
+  // This fixture's host has no event bus, so no extension labels the branch.
   f.host.events = { emit: () => {} } as unknown as ExtensionHost['events']
   // Its prompt task delivers the first input.
   f.prepared.registry.install(lineage(f.host))
-  const { id, root } = await startRoot(
+  await seedTally(f.opened.harness)
+  const { id } = await startBranch(
     f.host,
-    { prompt: 'ASK where am I?', isolated: true },
+    { from: ROOT_CONVERSATION_ID, prompt: 'ASK where am I?', isolated: true },
     context,
   )
   // The root is a tally that never runs, so it gets no checkout; its branch does.
-  expect(await f.service.get(root, context)).toBeUndefined()
   const conversation = (await f.opened.harness.conversation(id, context))!
   await until(async () => f.asked.length > 0)
   await conversation.waitForIdle(context)
@@ -1532,10 +1532,7 @@ it.concurrent('starts a root whose isolated first branch’s first request sees 
   expect((await conversation.agent(context)).cwd).toBe(workspace.path)
   const [request] = f.asked
   expect(JSON.stringify(request.messages)).toContain(`Workspace: ${workspace.path}`)
-  expect((await f.opened.harness.snapshot(Roots, ROOT_CONVERSATION_ID, context))?.roots).toEqual([
-    ROOT_CONVERSATION_ID,
-    root,
-  ])
+  expect(await f.service.get(ROOT_CONVERSATION_ID, context)).toBeUndefined()
 })
 it.concurrent('answers the user in the lander conversation with its definition, tools and the lander state', async () => {
   const f = await lander({})

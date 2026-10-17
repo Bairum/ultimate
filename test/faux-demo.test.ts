@@ -6,7 +6,7 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 import { context } from '../server/harness.ts'
-import { fauxServer, post, sourceCopy, temp, until } from './helpers.ts'
+import { fauxServer, post, seedTally, sourceCopy, temp, until } from './helpers.ts'
 
 type Server = Awaited<ReturnType<typeof fauxServer>>
 const servers: Server[] = []
@@ -29,6 +29,7 @@ it('submits the workspace from the faux demo with a divergence, so the lander qu
   const ultimateRoot = await sourceCopy(home)
   const server = await fauxServer({ ultimateRoot, home, userHome: home, projectRoot })
   servers.push(server)
+  await seedTally(server.harness)
   const { data } = await post(server, '/api/extensions/lineage/actions/branch', {
     args: { from: 1, prompt: 'submit workspace', isolated: true },
   })

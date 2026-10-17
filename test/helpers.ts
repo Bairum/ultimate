@@ -3,9 +3,11 @@ import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
-import type { ConversationView } from '@earendil-works/pi-durable'
+import type { ConversationId, ConversationView, Harness } from '@earendil-works/pi-durable'
 import { afterAll, vi } from 'vitest'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
+import { Tally } from '../extensions/lineage/server.ts'
+import { context } from '../server/harness.ts'
 import { createServer, prepareServer } from '../server/main.ts'
 import type { ServerOptions } from '../server/main.ts'
 import type { ServerEvents, SystemInfo } from '../shared/protocol.ts'
@@ -129,6 +131,18 @@ export async function fauxServer(options: FixtureOptions) {
 }
 export async function prepareFauxServer(options: FixtureOptions) {
   return prepareServer(await isolated(options))
+}
+/**
+ * Make the empty root `id` (default the project's first conversation) a tally from an empty head, as if it had read
+ * nothing yet, so tests branch from it without a survey. Does nothing when it already has entries.
+ */
+export async function seedTally(harness: Harness, id = 1) {
+  await harness.commit(async (tx) => {
+    const root = id as ConversationId
+    if ((await tx.scanEntries({ conversationId: root }, 1)).items.length) return
+    const entry = await tx.appendEntry(root, { kind: 'pi.reset', head: 'self' })
+    ;(await tx.doc(Tally, root)).since = entry.id
+  }, context)
 }
 export async function until(test: () => boolean | Promise<boolean>, timeout = 30000) {
   const deadline = Date.now() + timeout
