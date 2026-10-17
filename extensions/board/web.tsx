@@ -47,7 +47,7 @@ const useBoard = () => useDocOf<BoardData>(1, 'board') ?? emptyBoard
 function Count({ value, children }: { value: number; children: ReactNode }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 ${value ? 'text-amber-700 dark:text-amber-300' : ''}`}
+      className={`inline-flex max-w-full min-w-0 items-center gap-1 ${value ? 'text-amber-700 dark:text-amber-300' : ''}`}
     >
       {children} · {value}
     </span>
@@ -62,7 +62,7 @@ function BoardAnswerLabel({ entry }: { entry: EntryRecord }) {
   return messages.map((message) => (
     <span
       key={message.id}
-      className="inline-flex flex-wrap items-center gap-1 text-muted-foreground"
+      className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-1 text-muted-foreground"
     >
       {message.reply ? '↩ sent to' : 'not sent · one-way from'} <Address id={message.from} />
     </span>

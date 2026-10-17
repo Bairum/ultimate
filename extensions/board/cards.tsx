@@ -373,7 +373,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
           <SendIcon className="size-3.5 text-brand" />
         )}
         <span>Message to</span>
-        <span className="text-foreground">
+        <span className="flex min-w-0 text-foreground">
           {recipient === undefined ? (to ?? '…') : <Address id={recipient} />}
         </span>
         <span>

@@ -39,7 +39,8 @@ export function FeatureTag({ feature, className }: { feature: string; className?
 
 /**
  * A conversation as a person recognises it: its feature tag and `title`, else its live title, then `#id` in gray. Only
- * the name: the caller's button or link opens it.
+ * the name: the caller's button or link opens it. It never grows past its container: a long name truncates, with the
+ * full name on hover, as long as the caller's flex item may shrink (`min-w-0`).
  */
 export function ConversationRef({
   id,
@@ -55,11 +56,15 @@ export function ConversationRef({
   const name = title ?? (feature ? undefined : live)
   return (
     <span
-      className={cn('inline-flex min-w-0 items-center gap-1.5', className)}
+      className={cn('inline-flex max-w-full min-w-0 items-center gap-1.5', className)}
       data-conversation-ref={id}
     >
       {feature && <FeatureTag className="shrink-0" feature={feature} />}
-      {name && <span className="min-w-0 truncate">{name}</span>}
+      {name && (
+        <span className="min-w-0 truncate" title={name}>
+          {name}
+        </span>
+      )}
       <span className="shrink-0 text-muted-foreground/70">#{id}</span>
     </span>
   )

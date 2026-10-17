@@ -86,7 +86,8 @@ export default async function fauxExtension(host: ExtensionHost) {
                 activity: 'Replied in the demo.',
                 title: prompt,
                 summary: 'Scripted demo conversation.',
-                feature: 'Demo',
+                // 'no feature' keeps a conversation untagged, so previews can show it by its title.
+                ...(source.includes('no feature') ? {} : { feature: 'Demo' }),
                 abstract: `Ask: ${prompt}\nState: ${needsInput ? 'awaiting a decision' : 'scripted demo reply'}`,
               }),
             ),
