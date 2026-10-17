@@ -23,6 +23,7 @@ import {
   ModelField,
   Segmented,
   ToolsField,
+  StandingField,
   thinkingLevels,
 } from './fields.tsx'
 import type { ModelRef } from './fields.tsx'
@@ -39,6 +40,7 @@ interface Definition {
   thinking?: string
   tools?: string[]
   isolate?: 'none' | 'worktree'
+  resident?: boolean
   onFailure?: 'diagnose' | 'fix'
 }
 interface Invalid {
@@ -257,6 +259,7 @@ interface Draft {
   model: ModelRef | null
   thinking: string | null
   tools: string[] | null
+  resident: boolean
   isolate: 'none' | 'worktree'
   onFailure: 'diagnose' | 'fix' | null
   instructions: string
@@ -267,6 +270,7 @@ const draftOf = (definition?: Shown['definition'], name = ''): Draft => ({
   model: definition?.model ?? null,
   thinking: definition?.thinking ?? null,
   tools: definition?.tools ?? null,
+  resident: definition?.resident ?? false,
   isolate: definition?.isolate ?? 'none',
   onFailure: definition?.onFailure ?? null,
   instructions: definition?.instructions ?? '',
@@ -345,6 +349,7 @@ function Form({
           ...(draft.model ? { model: `${draft.model.provider}/${draft.model.modelId}` } : {}),
           ...(draft.thinking ? { thinking: draft.thinking } : {}),
           ...(draft.tools ? { tools: draft.tools } : {}),
+          resident: draft.resident,
           ...(draft.isolate === 'worktree' ? { isolate: 'worktree' } : {}),
           ...(draft.onFailure ? { onFailure: draft.onFailure } : {}),
         },
@@ -485,6 +490,7 @@ function Form({
               value={draft.thinking ?? 'inherit'}
             />
           </Field>
+          <StandingField value={draft.resident} onChange={(resident) => set({ resident })} />
           <Field
             hint={
               draft.isolate === 'worktree'

@@ -83,6 +83,7 @@ async function fixture(
     ...prepared,
     harness: () => opened!.harness,
     metadata: Metadata,
+    provide: () => {},
     use: () => undefined,
     resource: (_key, create) => create(),
     extensions: () => [],
@@ -1740,7 +1741,12 @@ describe('subagents', () => {
     const override = {
       name: 'scout',
       scope: 'project',
-      frontmatter: { description: 'Project scout: reads only', tools: ['read'], thinking: 'high' },
+      frontmatter: {
+        description: 'Project scout: reads only',
+        tools: ['read'],
+        thinking: 'high',
+        resident: true,
+      },
       instructions: '# Project\n\nRead the code.\n',
     }
     await expect(actions.saveDefinition(override, ctx)).rejects.toThrow(
@@ -1762,7 +1768,7 @@ describe('subagents', () => {
     await actions.saveDefinition(override, ctx)
     const raw = await readFile(join(project, 'scout.md'), 'utf8')
     expect(raw).toBe(
-      '---\nname: scout\ndescription: "Project scout: reads only"\nthinking: high\ntools: [read]\n---\n\n# Project\n\nRead the code.\n',
+      '---\nname: scout\ndescription: "Project scout: reads only"\nthinking: high\ntools: [read]\nresident: true\n---\n\n# Project\n\nRead the code.\n',
     )
     expect(await readFile(join(ultimateRoot, 'agents/scout.md'), 'utf8')).toBe(builtin)
     const found = await discoverAgents(
@@ -1774,6 +1780,7 @@ describe('subagents', () => {
     expect(found.definitions.find((agent) => agent.name === 'scout')).toMatchObject({
       source: 'project',
       description: 'Project scout: reads only',
+      resident: true,
       tools: ['read'],
       thinking: 'high',
       instructions: '# Project\n\nRead the code.',
@@ -1795,6 +1802,7 @@ describe('subagents', () => {
     for (const [change, error] of [
       [{ frontmatter: { ...override.frontmatter, description: ' ' } }, 'description is required'],
       [{ frontmatter: { ...override.frontmatter, thinking: 'loud' } }, 'thinking must be one of'],
+      [{ frontmatter: { ...override.frontmatter, resident: 'yes' } }, 'resident must be a boolean'],
       [{ frontmatter: { ...override.frontmatter, model: 'anthropic/nonexistent' } }, 'model:'],
       [{ instructions: ' ' }, 'Instructions are required'],
       [{ name: '../scout' }, 'name must be a nonempty identifier'],

@@ -77,6 +77,12 @@ function Shortcut({ keys }: { keys: string }) {
   )
 }
 
+const pinned = (conversation: ConversationSummary) =>
+  conversation.label === 'lander' ||
+  (conversation.label === 'agent' &&
+    conversation.parentConversationId === undefined &&
+    conversation.ownerTaskId === undefined)
+
 /** The project tree, with owned subagents under each row and earlier/concluded work at the bottom. */
 export function Conversations() {
   const overview = useOverview()
@@ -117,15 +123,13 @@ export function Conversations() {
   const topLevel = conversations.filter(
     (conversation) => conversation.parentConversationId === undefined,
   )
-  // Lander conversations are always there, pinned above the rest and never concluded.
-  const landers = topLevel
-    .filter((conversation) => conversation.label === 'lander')
-    .toSorted((a, b) => a.id - b.id)
+  // Standing agents and landers are pinned above the rest and never concluded.
+  const landers = topLevel.filter(pinned).toSorted((a, b) => a.id - b.id)
   const listed = topLevel
-    .filter((conversation) => conversation.label !== 'lander' && !hiddenIds.has(conversation.id))
+    .filter((conversation) => !pinned(conversation) && !hiddenIds.has(conversation.id))
     .toSorted(byInput)
   const hidden = topLevel
-    .filter((conversation) => conversation.label !== 'lander' && hiddenIds.has(conversation.id))
+    .filter((conversation) => !pinned(conversation) && hiddenIds.has(conversation.id))
     .toSorted(byInput)
   const earlier = listed.filter(
     (conversation) => !roots.has(conversation.id) && !conversation.branchOf,
@@ -194,7 +198,7 @@ export function Conversations() {
       <Row
         activity={overview[conversation.id]?.activity}
         assessment={tasks ? currentAssessment(overview[conversation.id]) : undefined}
-        concluded={hiddenIds.has(conversation.id)}
+        concluded={!pinned(conversation) && hiddenIds.has(conversation.id)}
         root={roots.has(conversation.id)}
         side={side}
         conversation={conversation}
