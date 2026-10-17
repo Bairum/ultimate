@@ -6,6 +6,10 @@
   },
   "lander": {
     "checks": ["pnpm check", ["pnpm test", "pnpm test:e2e", "pnpm eval"]],
-    "push": "origin"
+    "push": "origin",
+    "deploy": {
+      "agent": "cloudflare",
+      "paths": ["cloud/", "web/", "package.json", "pnpm-lock.yaml"]
+    }
   }
 }

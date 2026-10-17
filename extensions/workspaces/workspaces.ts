@@ -85,6 +85,7 @@ type Host = Pick<
   | 'resource'
   | 'extensions'
   | 'metadata'
+  | 'notice'
 >
 async function changes(
   id: ConversationId,
