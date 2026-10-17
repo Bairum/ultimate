@@ -15,6 +15,8 @@ import {
 import type { ConversationId, Cursor, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ConversationsService } from '../conversations/server.ts'
+import { Board } from '../board/server.ts'
+import type { BoardService } from '../board/server.ts'
 import { git, isolatable, setup } from './git.ts'
 import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
 import type {
@@ -627,6 +629,11 @@ export function workspaces(host: Host) {
     if ((await git(workspace.path, 'symbolic-ref', '--short', 'HEAD')) !== workspace.branch)
       throw new Error('Workspace branch changed')
     const tip = await git(workspace.path, 'rev-parse', 'HEAD')
+    const commits = (
+      await git(workspace.path, 'log', '--reverse', '--format=%s', `${workspace.target}..${tip}`)
+    )
+      .split('\n')
+      .filter(Boolean)
     const path = await landerPath(host.home, workspace.source)
     const { change } = await landerAgent(host, context)
     const subject = await host.use<ConversationsService>('conversations')?.subject(id, context)
@@ -641,6 +648,9 @@ export function workspaces(host: Host) {
       const { source, target } = index.items[String(id)]
       // Reads first: a transaction cannot read tables after its first write.
       const stopped = await landerIdle(tx, index, source)
+      const board = host.use<BoardService>('board')
+      // Cache the document before ensureLander can create a conversation (the first table write).
+      if (board) await tx.doc(Board, ROOT_CONVERSATION_ID)
       const lander = await ensureLander(tx, index, source, target, path)
       const queued = index.queue.find(
         (item) => item.conversationId === id && item.tip === tip && item.state === 'queued',
@@ -657,6 +667,13 @@ export function workspaces(host: Host) {
         ...(subject ? { subject } : {}),
         steps: [],
       }
+      if (!queued)
+        await board?.record(tx, {
+          from: id,
+          to: lander,
+          text: `Submitted ${tip.slice(0, 7)}${commits.length ? ` ${commits[0]}` : ''}${commits.length > 1 ? ` and ${commits.length - 1} more` : ''}`,
+          kind: 'landing',
+        })
       await configure(tx, lander, change)
       if (!queued) {
         await log(tx, lander, entry, { step: 'queued' })

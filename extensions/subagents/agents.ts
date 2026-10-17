@@ -18,6 +18,7 @@ export interface AgentDefinition {
   thinking?: ModelThinkingLevel
   tools?: string[]
   isolate?: 'none' | 'worktree'
+  resident?: boolean
   /** What the lander does when a submission fails: explain it, or fix it and land. Only the lander reads it. */
   onFailure?: 'diagnose' | 'fix'
 }
@@ -40,8 +41,14 @@ export function definitionAgent(
   const ref = overrideModel ?? definition?.model ?? parent.model
   const model = ref && modelRuntime.getModel(ref.provider, ref.modelId)
   const thinking = overrideThinking ?? definition?.thinking ?? parent.thinkingLevel
+  const tools = [
+    ...new Map([...parent.tools, ...parent.deferred].map((tool) => [tool.name, tool])).values(),
+  ]
   return {
-    tools: parent.tools.filter(
+    modelTools: {
+      add: tools.filter((tool) => tool.deferred && definition?.tools?.includes(tool.name)),
+    },
+    tools: tools.filter(
       (tool) =>
         !excludeTools.includes(tool.name) &&
         (!definition?.tools || definition.tools.includes(tool.name)),
@@ -76,6 +83,7 @@ const fields = new Set([
   'thinking',
   'tools',
   'isolate',
+  'resident',
   'onFailure',
 ])
 
@@ -92,7 +100,7 @@ export function parseDefinition(
     !Object.keys(frontmatter).length
   )
     throw new Error('Expected frontmatter fields between --- lines')
-  const { name, description, model, thinking, tools, isolate, onFailure } = frontmatter
+  const { name, description, model, thinking, tools, isolate, resident, onFailure } = frontmatter
   const unknown = Object.keys(frontmatter).find((key) => !fields.has(key))
   if (unknown) throw new Error(`Unknown field: ${unknown}`)
   if (typeof name !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(name))
@@ -112,6 +120,8 @@ export function parseDefinition(
     throw new Error('isolate must be none or worktree')
   if (onFailure !== undefined && onFailure !== 'diagnose' && onFailure !== 'fix')
     throw new Error('onFailure must be diagnose or fix')
+  if (resident !== undefined && typeof resident !== 'boolean')
+    throw new Error('resident must be a boolean')
   if (!body) throw new Error('Instructions are required')
   return {
     name,
@@ -122,6 +132,7 @@ export function parseDefinition(
     ...(thinking ? { thinking: thinking as ModelThinkingLevel } : {}),
     ...(tools ? { tools } : {}),
     ...(isolate ? { isolate } : {}),
+    ...(resident !== undefined ? { resident } : {}),
     ...(onFailure ? { onFailure } : {}),
   }
 }
@@ -195,6 +206,7 @@ export interface DefinitionFields {
   thinking?: string
   tools?: string[]
   isolate?: 'none' | 'worktree'
+  resident?: boolean
   onFailure?: 'diagnose' | 'fix'
 }
 
@@ -226,6 +238,7 @@ export function serializeDefinition(
         ]
       : []),
     ...(frontmatter.isolate === 'worktree' ? ['isolate: worktree'] : []),
+    ...(frontmatter.resident !== undefined ? [`resident: ${frontmatter.resident}`] : []),
     ...(frontmatter.onFailure ? [`onFailure: ${frontmatter.onFailure}`] : []),
   ]
   return `---\n${lines.join('\n')}\n---\n\n${instructions.trim()}\n`

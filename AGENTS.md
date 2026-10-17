@@ -19,6 +19,7 @@ A project is a forest of conversation trees, each tree like a history of commits
   deleting history.
 - **A branch** is a feature, a fix, an experiment. New forks the shown tree's root tip; "Branch from here" forks a
   chosen entry. No brief: the branch inherits that context, then gets your prompt. A branch is never a subagent.
+- **Talk to @ultimate on the board.** The user's standing agent starts and steers branches and relays their answers to the user's inbox.
 - **Coordinators carry the work.** A branch plans, decides and verifies; subagents are for bounded execution and
   reconnaissance, and the lander is the final gate on main.
 - **Zoom out when you need to.** Read any root or sibling with codemode `ultimate.entries(id)` and
@@ -72,7 +73,7 @@ Skills load from clone `skills/`, then the project's `.pi/skills/`, then `~/.ult
 `<project>/.ultimate/skills/`, with later names winning. Personal instructions load from `~/.ultimate/AGENTS.md`
 (or `CLAUDE.md`) ahead of the project's. Pi's own `~/.pi/agent/skills/` and `~/.pi/agent/AGENTS.md` are not read: they
 belong to Pi, so link a skill into `~/.ultimate/skills/` to use it here.
-Every built-in is on by default, including `questions` (answer cards for replies needing a decision), `faux` (inert unless `ULTIMATE_FAUX=1`), `lineage` (conversation trees: roots, branches, notes), `parallel` (web tools; reads `secrets`), `classify` (Jev typed judgments; reads `secrets`), `phase` (working phases; requires `classify`), and `tailscale` (remote access; inert on faux servers, and only user settings can turn it off for good). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
+Every built-in is on by default, including `board` (durable agent messages and the user's inbox), `questions` (answer cards for replies needing a decision), `faux` (inert unless `ULTIMATE_FAUX=1`), `lineage` (conversation trees: roots, branches, notes), `parallel` (web tools; reads `secrets`), `classify` (Jev typed judgments; reads `secrets`), `phase` (working phases; requires `classify`), and `tailscale` (remote access; inert on faux servers, and only user settings can turn it off for good). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
 restart. User/project extension folders are on by default too; `disable` turns off any extension. Unknown names
 produce a notice. `summaryModel` (`"provider/id[:thinking]"`, default `openai/gpt-6-luna:medium`; project over user)
@@ -192,6 +193,8 @@ shims or speculative fallbacks; move forward and update callers. Tests must exer
 cases, not inflate coverage or merely restate the implementation.
 
 ## Subagents
+
+Definitions with `resident: true` have one standing conversation per project, reached by the subagents service and pinned with the lander; deferred tools explicitly named in a definition are offered only to conversations configured from it.
 
 Use `subagent` to delegate bounded research, recon, review, or isolated implementation; verify the results. Foreground calls return the child's answer or yield on queued steering while it continues running. All new children survive the parent's stop; use explicit child stop. Undelivered answers steer the active run at its next tool-round boundary, or start a run when idle. Start, message/steer, wait, stop, and list all use child conversation IDs. Children cannot delegate by default. Only definitions explicitly listing `subagent` in `tools` retain the tool and
 extension, subject to the parent's tool subset; they follow their assigned role, not the generic coordinator flow.

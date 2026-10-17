@@ -117,6 +117,12 @@ non-root conversations in a tree (undefined for roots, owned conversations, side
 `abstract(tx, id, { text, at, title?, feature? })` opens or updates `id`'s abstract in that root in the caller's
 transaction, before its first table write because it reads conversation records; it is a no-op wherever `branchOf`
 is undefined. The conversations summarizer uses this to publish an abstract after each completed exchange.
+`branch({ from, prompt, at?, isolated?, model?, thinkingLevel?, deliver?, by?, receipt? }, ctx)` starts a normal lineage branch.
+An optional `receipt: { taskId, callId }` records the branch id atomically with the fork in the originating task's
+`lineage.branch-receipts` document. Repeating that task and call returns the same branch; Pi retires the receipt when
+the task completes. The method returns `{ id }`. With `deliver: false`, no `lineage.prompt` task is created: the caller
+must deliver its first input (the board uses a reply-enabled message). `by: conversationId` attributes the tally's prompt node to that caller,
+including its standing-agent name when available.
 
 New, "Branch…" and "Branch from here" open the start page (`start.tsx`) in `conversation.overlay`, with the
 conversation beneath inert. It shows New's Branch / New root tabs, source and quoted branch point above the
