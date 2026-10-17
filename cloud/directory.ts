@@ -5,6 +5,7 @@ export interface Instance {
   project: string
   slug: string
   port: number
+  uiBuild?: string
   connected: boolean
   lastSeen: number
   count: number

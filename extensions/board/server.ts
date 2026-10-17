@@ -57,6 +57,15 @@ const Sent = defineDoc<{ ids: Record<string, number> }>({
   scope: 'task',
   initial: () => ({ ids: {} }),
 })
+// Pipeline requests outlive their calling task, so their receipts belong to the sender conversation.
+const Requests = defineDoc<{ ids: Record<string, number> }>({
+  kind: 'board.requests',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({ ids: {} }),
+})
 /** A reply-enabled message to the user that the user has not answered yet. */
 const openQuestion = (m: BoardMessage) => m.to === 'user' && m.reply && m.state === 'delivered'
 /** Typing in a conversation answers the questions it asked the user before that input. */
@@ -77,6 +86,12 @@ async function append(tx: Tx, input: Omit<BoardMessage, 'id' | 'at'>) {
   return message
 }
 export type BoardService = {
+  send(
+    from: number,
+    input: { to: string; text: string; reply: false },
+    requestId: string,
+    ctx: Context,
+  ): Promise<number>
   record(
     tx: Tx,
     input: Pick<BoardMessage, 'from' | 'to' | 'text' | 'kind' | 'entry'>,
@@ -323,7 +338,12 @@ async function send(
   ctx: Context,
   taskId?: TaskId,
   callId?: string,
+  requestId?: string,
 ) {
+  if (requestId !== undefined && from !== 'user') {
+    const sent = await host.harness().snapshot(Requests, from as ConversationId, ctx)
+    if (sent?.ids[requestId] !== undefined) return sent.ids[requestId]
+  }
   if (taskId !== undefined) {
     const sent = await host.harness().snapshot(Sent, taskId, ctx)
     if (callId !== undefined && sent?.ids[callId] !== undefined) return sent.ids[callId]
@@ -340,6 +360,12 @@ async function send(
   const toLabel = await senderName(host, to, ctx)
   return host.harness().commit(async (tx) => {
     const receipt = taskId === undefined ? undefined : await tx.doc(Sent, taskId)
+    const requests =
+      requestId === undefined || from === 'user'
+        ? undefined
+        : await tx.doc(Requests, from as ConversationId)
+    if (requestId !== undefined && requests?.ids[requestId] !== undefined)
+      return requests.ids[requestId]
     if (callId !== undefined && receipt?.ids[callId] !== undefined) return receipt.ids[callId]
     // Writing to a conversation, as a Reply or a new post, answers the questions it asked the user.
     if (from === 'user' && to !== 'user')
@@ -384,6 +410,7 @@ async function send(
         },
       )
     if (receipt && callId !== undefined) receipt.ids[callId] = message.id
+    if (requests && requestId !== undefined) requests.ids[requestId] = message.id
     return message.id
   }, ctx)
 }
@@ -422,6 +449,8 @@ export const actions = {
 }
 export default function board(host: ExtensionHost) {
   host.provide('board', {
+    send: (from, input, requestId, ctx) =>
+      send(host, from, input, ctx, undefined, undefined, requestId),
     record: async (tx, input) =>
       (await append(tx, { ...input, reply: false, state: 'delivered' })).id,
   } satisfies BoardService)

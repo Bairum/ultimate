@@ -12,6 +12,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { docHash, PROJECT_MISMATCH } from '../../cloud/protocol.ts'
 import type { CloudMessage, MachineMessage, ReplicaDoc } from '../../cloud/protocol.ts'
+import { projectBuilds } from '../../cloud/ui-build.ts'
 import { cloudConfig } from './config.ts'
 
 export const secrets = [
@@ -39,6 +40,7 @@ export function startSync(
   token: string,
   machine: string,
   dial = connect,
+  builds?: ReturnType<typeof projectBuilds>,
 ) {
   let stopped = false
   let retry = 1000
@@ -185,7 +187,13 @@ export function startSync(
         pendingBytes += delta
       }
     }
+    let lastUiBuild: string | undefined
     const metadata = () => {
+      const uiBuild = builds?.current()
+      if (uiBuild && uiBuild !== lastUiBuild) {
+        send({ type: 'uiBuild', value: uiBuild })
+        lastUiBuild = uiBuild
+      }
       const oldest = unacked.values().next().value
       if (oldest !== undefined && Date.now() - oldest > 60_000) {
         host.notice('Cloud sync stalled: no acknowledgement for 60 s; reconnecting')
@@ -395,10 +403,12 @@ export function startSync(
     }
     dispose = close
     socket.addEventListener('open', () => {
+      builds?.connect()
       send({
         type: 'hello',
         machine,
         build: host.build().id,
+        uiBuild: builds?.current(),
         project: host.projectRoot,
         port: Number(new URL(host.system().process.url).port),
       })
@@ -474,12 +484,17 @@ export function startSync(
 
 export default function cloud(host: ExtensionHost) {
   let stop: ReturnType<typeof startSync> | undefined
+  let builds: ReturnType<typeof projectBuilds> | undefined
   host.onOpen(async () => {
     const config = await cloudConfig(host)
-    if (config) stop = startSync(host, config.url, config.token, config.machine)
+    if (config) {
+      builds = projectBuilds(host, config.url, config.token)
+      stop = startSync(host, config.url, config.token, config.machine, connect, builds)
+    }
   })
   host.onClose(async () => {
     stop?.()
+    await builds?.stop()
     await stop?.idle()
   })
   return defineExtension({ name: 'cloud' })

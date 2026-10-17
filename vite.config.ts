@@ -82,6 +82,7 @@ export default defineConfig({
                 automations: ['subagents'],
                 board: ['workspaces', 'subagents', 'lineage', 'conversations'],
                 classify: ['secrets'],
+                cloudflare: ['secrets'],
                 phase: ['classify', 'conversations'],
                 codemode: ['subagents'],
                 cloud: ['onboarding', 'secrets'],

@@ -241,7 +241,9 @@ function StepLine({
     <Line
       at={row.at}
       icon={
-        failed ? (
+        row.step.startsWith('deploy warning: ') ? (
+          <TriangleAlertIcon className="size-3 shrink-0 text-warning" />
+        ) : failed ? (
           <XIcon className="size-3 shrink-0 text-error" />
         ) : done ? (
           <CheckIcon className="size-3 shrink-0 text-success/70" />
@@ -339,8 +341,10 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
   // right before a failed outcome is where it stopped.
   const next = after[0]?.data as LanderEntry | undefined
   const failed = next?.outcome === 'failed'
-  const done = next !== undefined && !failed
+  const deploy = data.step?.startsWith('deploy')
+  const done = deploy || (next !== undefined && !failed)
   const landing =
+    !deploy &&
     busy &&
     inProgress(
       data as LanderStep,

@@ -52,7 +52,7 @@ export class ReplicaStore {
   metadata(id: number): unknown {
     return this.get('metadata', id)
   }
-  identity(): { machine: string; project: string; port: number } | undefined {
+  identity(): { machine: string; project: string; port: number; uiBuild?: string } | undefined {
     return this.metadata(5) as ReturnType<ReplicaStore['identity']>
   }
   key(): string | undefined {
@@ -153,8 +153,13 @@ export class ReplicaStore {
           machine: message.machine,
           project: message.project,
           port: message.port,
+          uiBuild: message.uiBuild ?? this.identity()?.uiBuild,
         })
         return [this.cursor(), { type: 'outbox', items: this.outbox() }]
+      case 'uiBuild':
+        if (/^[a-f0-9]{12}$/.test(message.value) && this.identity())
+          this.put('metadata', 5, { ...this.identity(), uiBuild: message.value })
+        return []
       case 'batch':
         this.sql.transaction(() => {
           for (const record of message.conversations) this.put('conversations', record.id, record)

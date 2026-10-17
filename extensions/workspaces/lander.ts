@@ -87,7 +87,10 @@ export async function landerCheckout(home: string, source: string, tip = 'HEAD')
 export const log = (
   tx: Tx,
   id: ConversationId,
-  entry: QueueEntry,
+  entry: Pick<
+    QueueEntry,
+    'id' | 'conversationId' | 'tip' | 'target' | 'at' | 'divergence' | 'subject' | 'steps'
+  >,
   data: Omit<LanderEntry, 'submission' | 'conversationId' | 'tip' | 'target' | 'at'>,
 ) => {
   const at = Date.now()
@@ -122,6 +125,7 @@ type Host = Pick<
   | 'resource'
   | 'extensions'
   | 'metadata'
+  | 'notice'
 >
 /**
  * The lander conversation's agent from the effective `lander` definition (model, thinking, tools, instructions) over
@@ -149,7 +153,11 @@ export async function landerAgent(
   }
 }
 /** Checks run in order; an array is a group whose commands run concurrently. */
-type Settings = { checks: (string | string[])[]; push?: string }
+type Settings = {
+  checks: (string | string[])[]
+  push?: string
+  deploy?: { agent: string; paths: string[] }
+}
 /** Bounded retries when the target moves while a submission is integrated. */
 const attempts = 3
 /** Seconds without output and total seconds allowed for one check. */
@@ -206,9 +214,11 @@ export async function runLanderCheck(
   }
 }
 
-export const landerSettings = async (host: Pick<Host, 'projectSettings'>): Promise<Settings> => {
+export const landerSettings = async (
+  host: Pick<Host, 'projectSettings' | 'notice'>,
+): Promise<Settings> => {
   const lander = (await host.projectSettings()).lander as
-    | { checks?: unknown; push?: unknown }
+    | { checks?: unknown; push?: unknown; deploy?: unknown }
     | undefined
   const checks = lander?.checks ?? []
   if (
@@ -224,7 +234,27 @@ export const landerSettings = async (host: Pick<Host, 'projectSettings'>): Promi
     throw new Error('lander.checks must be an array of commands or command groups')
   if (lander?.push !== undefined && typeof lander.push !== 'string')
     throw new Error('lander.push must be a remote name')
-  return { checks, ...(lander?.push ? { push: lander.push } : {}) }
+  let deploy: Settings['deploy']
+  if (lander?.deploy !== undefined) {
+    const value = lander.deploy
+    if (
+      value &&
+      typeof value === 'object' &&
+      'agent' in value &&
+      'paths' in value &&
+      typeof value.agent === 'string' &&
+      value.agent.trim() &&
+      Array.isArray(value.paths) &&
+      value.paths.length > 0 &&
+      value.paths.every((path) => typeof path === 'string' && path.length > 0)
+    )
+      deploy = { agent: value.agent, paths: value.paths }
+    else
+      host.notice(
+        'lander.deploy must name an agent and a non-empty array of path prefixes; deploy hook disabled',
+      )
+  }
+  return { checks, ...(lander?.push ? { push: lander.push } : {}), ...(deploy ? { deploy } : {}) }
 }
 const contains = (cwd: string, ancestor: string, descendant: string) =>
   git(cwd, 'merge-base', '--is-ancestor', ancestor, descendant).then(
@@ -890,7 +920,74 @@ export function createLander(
         }, context)
       },
       report: async (task, runtime, context) => {
-        const { id, conversationId, text, outcome } = task.state.checkpoint
+        const { id, conversationId, text } = task.state.checkpoint
+        let { outcome } = task.state.checkpoint
+        let deployText = ''
+        if (outcome?.outcome === 'landed') {
+          const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+          const result = index?.results[id]
+          const saved = result?.steps.find(
+            (row) => row.step.startsWith('deploy → ') || row.step.startsWith('deploy warning: '),
+          )
+          if (saved) deployText = saved.step
+          else {
+            const { deploy } = await landerSettings(host)
+            const paths = (result?.paths ?? []).filter((path) =>
+              deploy?.paths.some((prefix) => path.startsWith(prefix)),
+            )
+            if (deploy && result && paths.length) {
+              const board = host.use<BoardService>('board')
+              const definitions = await discoverAgents(
+                host.ultimateRoot,
+                host.projectRoot,
+                host.userHome,
+                host.modelRuntime,
+              )
+              if (
+                !board ||
+                !definitions.definitions.some(
+                  (definition) => definition.name === deploy.agent && definition.resident,
+                )
+              ) {
+                deployText = `deploy warning: @${deploy.agent} is not a standing agent${board ? '' : ' (board unavailable)'}`
+                host.notice(deployText)
+              } else {
+                await board.send(
+                  runtime.conversationId,
+                  {
+                    to: `@${deploy.agent}`,
+                    reply: false,
+                    text: [
+                      `Please deploy landed commit ${result.sha}.`,
+                      `Commits:\n${(result.commits ?? []).join('\n')}`,
+                      `Matching paths:\n${paths.join('\n')}`,
+                      `Pushed: ${result.pushed ?? 'no'}.`,
+                      `Submitter: #${conversationId}. Report the deployment outcome to #${conversationId} with a one-way message.`,
+                    ].join('\n'),
+                  },
+                  `lander-deploy:${id}`,
+                  context,
+                )
+                deployText = `deploy → @${deploy.agent}`
+              }
+              await runtime.commit(async (tx) => {
+                const current = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).results[id]
+                await log(
+                  tx,
+                  runtime.conversationId,
+                  { ...current, id, conversationId },
+                  {
+                    step: deployText,
+                  },
+                )
+                return { status: 'running', checkpoint: task.state.checkpoint }
+              }, context)
+            }
+          }
+        }
+        if (deployText)
+          outcome = (await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context))
+            ?.results[id]
         const lineage = host.use<LineageService>('lineage')
         if (lineage && !(await runtime.memo<boolean>(`root-note:${id}`, context))) {
           const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
@@ -946,7 +1043,7 @@ export function createLander(
         )?.submit(
           {
             type: 'input',
-            content: text,
+            content: [text, deployText].filter(Boolean).join('\n'),
             ...(outcome
               ? { entry: { kind: 'workspaces.lander-report', data: { id, outcome } } }
               : {}),
