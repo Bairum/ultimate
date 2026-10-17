@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Replica } from '../cloud/worker.ts'
+import { ProjectReplica } from '../cloud/worker.ts'
 import type { ConversationRecord, EntryRecord } from '@earendil-works/pi-durable'
 import { ReplicaStore, proxyRequest } from '../cloud/replica.ts'
 import type { Sql } from '../cloud/replica.ts'
@@ -46,7 +46,7 @@ function replica(rowsRead?: (count: number) => void) {
   return new ReplicaStore(sql)
 }
 function worker(online = false) {
-  const instance = Object.assign(Object.create(Replica.prototype) as Replica, {
+  const instance = Object.assign(Object.create(ProjectReplica.prototype) as ProjectReplica, {
     store: replica(),
     streams: new Set(),
     env: { MACHINE_ORIGIN: 'http://127.0.0.1:4800' },
@@ -54,7 +54,7 @@ function worker(online = false) {
   instance.store.receive(hello('/test'))
   vi.spyOn(instance, 'sockets').mockReturnValue(
     online
-      ? [{ send: vi.fn<() => void>() } as unknown as ReturnType<Replica['sockets']>[number]]
+      ? [{ send: vi.fn<() => void>() } as unknown as ReturnType<ProjectReplica['sockets']>[number]]
       : [],
   )
   return instance
@@ -101,7 +101,7 @@ it.each([
   const socket = {
     readyState: WebSocket.OPEN,
     deserializeAttachment: () => true,
-  } as unknown as Parameters<Replica['webSocketMessage']>[0]
+  } as unknown as Parameters<ProjectReplica['webSocketMessage']>[0]
   Object.assign(instance, { ctx: { getWebSockets: () => [socket] } })
   const error = new Error('private exception detail')
   const receive = vi.spyOn(instance.store, 'receive').mockImplementation(() => {
@@ -264,7 +264,7 @@ describe('cloud replica', () => {
     instance.store.receive({ ...hello('/test'), uiBuild: '0123456789ab' } as MachineMessage)
     expect(instance.store.identity()?.uiBuild).toBe('0123456789ab')
     instance.webSocketMessage(
-      socket as unknown as Parameters<Replica['webSocketMessage']>[0],
+      socket as unknown as Parameters<ProjectReplica['webSocketMessage']>[0],
       JSON.stringify({ type: 'uiBuild', value: '1123456789ab' }),
     )
     await Promise.all(pending)
@@ -324,14 +324,14 @@ describe('cloud replica', () => {
     })
     expect(instance.store.hasEntries()).toBe(false)
     instance.webSocketMessage(
-      socket as unknown as ReturnType<Replica['sockets']>[number],
+      socket as unknown as ReturnType<ProjectReplica['sockets']>[number],
       JSON.stringify({ type: 'batch', batch: 1, conversations: [], entries: [entry(1)], docs: [] }),
     )
     expect(JSON.parse(update.mock.calls.at(-1)![1].body as string)).toMatchObject({
       hasEntries: true,
       connected: true,
     })
-    instance.webSocketClose(socket as unknown as ReturnType<Replica['sockets']>[number])
+    instance.webSocketClose(socket as unknown as ReturnType<ProjectReplica['sockets']>[number])
     expect(JSON.parse(update.mock.calls.at(-1)![1].body as string)).toMatchObject({
       hasEntries: true,
       connected: false,
@@ -375,7 +375,7 @@ describe('cloud replica', () => {
     }
     Object.assign(instance, { ctx: { getWebSockets: () => [socket] } })
     instance.webSocketMessage(
-      socket as unknown as ReturnType<Replica['sockets']>[number],
+      socket as unknown as ReturnType<ProjectReplica['sockets']>[number],
       JSON.stringify({ ...hello('/test'), port }),
     )
     expect(socket.close).toHaveBeenCalledWith(PROJECT_MISMATCH, 'Machine or project mismatch')
@@ -393,8 +393,8 @@ describe('cloud replica', () => {
   })
 
   it('rejects a second project without changing data or sending a cursor, and accepts the same project again', () => {
-    const sockets: ReturnType<Replica['sockets']> = []
-    const instance = Object.assign(Object.create(Replica.prototype) as Replica, {
+    const sockets: ReturnType<ProjectReplica['sockets']> = []
+    const instance = Object.assign(Object.create(ProjectReplica.prototype) as ProjectReplica, {
       store: replica(),
       streams: new Set(),
       ctx: { getWebSockets: () => sockets, waitUntil: vi.fn<() => void>() },
@@ -519,13 +519,13 @@ describe('cloud replica', () => {
 
   it('restores socket admission from attachments after hibernation', () => {
     const sql = replica().sql
-    const sockets: ReturnType<Replica['sockets']> = []
+    const sockets: ReturnType<ProjectReplica['sockets']> = []
     const ctx = {
       id: { toString: () => '0123456789abcdef' },
       storage: { sql, transactionSync: <T>(run: () => T) => sql.transaction(run) },
       getWebSockets: () => sockets,
       waitUntil: vi.fn<() => void>(),
-    } as unknown as ConstructorParameters<typeof Replica>[0]
+    } as unknown as ConstructorParameters<typeof ProjectReplica>[0]
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const env = {
       DIRECTORY: {
@@ -533,8 +533,8 @@ describe('cloud replica', () => {
         get: () => ({ fetch: async () => new Response() }),
       },
       MACHINE_ORIGIN: 'http://127.0.0.1:4800',
-    } as unknown as ConstructorParameters<typeof Replica>[1]
-    let instance = new Replica(ctx, env)
+    } as unknown as ConstructorParameters<typeof ProjectReplica>[1]
+    let instance = new ProjectReplica(ctx, env)
     instance.store.claimKey('test', '/ultimate')
     const connect = () => {
       let attachment: unknown
@@ -570,7 +570,7 @@ describe('cloud replica', () => {
     // A fresh object has no sockets and logs nothing; a woken one reports what it still holds.
     expect(log).not.toHaveBeenCalled()
     const previous = instance
-    instance = new Replica(ctx, env)
+    instance = new ProjectReplica(ctx, env)
     expect(log.mock.calls).toEqual([['Replica woke: object=01234567 sockets=2 admitted=1']])
     log.mockRestore()
     expect(instance).not.toBe(previous)
@@ -627,7 +627,7 @@ describe('cloud replica', () => {
     }
     Object.assign(instance, { ctx: { getWebSockets: () => [socket] } })
     instance.webSocketMessage(
-      socket as unknown as ReturnType<Replica['sockets']>[number],
+      socket as unknown as ReturnType<ProjectReplica['sockets']>[number],
       JSON.stringify({
         type: 'hello',
         machine: 'test',

@@ -17,13 +17,14 @@
   "version_metadata": { "binding": "VERSION" },
   "durable_objects": {
     "bindings": [
-      { "name": "REPLICA", "class_name": "Replica" },
+      { "name": "REPLICA", "class_name": "ProjectReplica" },
       { "name": "DIRECTORY", "class_name": "Directory" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Replica"] },
-    { "tag": "v2", "new_sqlite_classes": ["Directory"] }
+    { "tag": "v2", "new_sqlite_classes": ["Directory"] },
+    { "tag": "v3", "new_sqlite_classes": ["ProjectReplica"] }
   ],
   "assets": {
     "directory": "./dist",

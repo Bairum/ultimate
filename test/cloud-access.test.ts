@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { afterEach, beforeAll, expect, it, vi } from 'vitest'
 import { admitsAccess } from '../cloud/access.ts'
-import worker, { Replica } from '../cloud/worker.ts'
+import worker, { ProjectReplica } from '../cloud/worker.ts'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -182,7 +182,7 @@ it('authenticates sync before validating parameters or touching a replica namesp
 })
 
 it('refuses wrong, prefix-matching, empty and missing sync credentials', async () => {
-  const replica = Object.assign(Object.create(Replica.prototype) as Replica, {
+  const replica = Object.assign(Object.create(ProjectReplica.prototype) as ProjectReplica, {
     env: { SYNC_TOKEN: 'synthetic-test-value' },
   })
   // Node WebCrypto lacks the Workers extension; use Node's equivalent constant-time primitive.
