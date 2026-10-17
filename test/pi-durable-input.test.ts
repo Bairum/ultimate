@@ -96,6 +96,53 @@ it('places hook entries transactionally before initial and queued run inputs, no
   }
 })
 
+it('starts one run with every follow-up queued while busy, and steers join the current run', async () => {
+  const home = await temp()
+  const prepared = await prepareHarness({ ultimateRoot: home, userHome: home, home, faux: true })
+  const gate = Promise.withResolvers<void>()
+  let held = false
+  prepared.faux!.setResponses([
+    async () => {
+      held = true
+      await gate.promise
+      return fauxAssistantMessage([fauxToolCall('unknown', {})], { stopReason: 'toolUse' })
+    },
+    fauxAssistantMessage('first answer'),
+    fauxAssistantMessage('follow-ups answer'),
+    // Spare answers let one-at-a-time delivery finish and fail on the transcript instead of hanging.
+    fauxAssistantMessage('extra'),
+    fauxAssistantMessage('extra'),
+  ])
+  const f = await prepared.open()
+  try {
+    const first = await f.root.submit({ type: 'input', content: 'first' }, context)
+    await until(() => held)
+    const queued = []
+    for (const content of ['one', 'two', 'three'])
+      queued.push(await f.root.submit({ type: 'input', content, whenBusy: 'followUp' }, context))
+    const steer = await f.root.submit(
+      { type: 'input', content: 'steer', whenBusy: 'steer' },
+      context,
+    )
+    gate.resolve()
+    await Promise.all([first, steer, ...queued].map((submission) => submission.wait(context)))
+    const messages = (await f.root.context(context)).messages
+    expect(
+      messages.flatMap((message) =>
+        message.role === 'user'
+          ? [message.content]
+          : message.role === 'assistant'
+            ? message.content.flatMap((part) => (part.type === 'text' ? [`> ${part.text}`] : []))
+            : [],
+      ),
+    ).toEqual(['first', 'steer', '> first answer', 'one', 'two', 'three', '> follow-ups answer'])
+    expect((await f.root.viewState(context)).value.docs['pi.inbox']).toEqual({ items: [] })
+  } finally {
+    gate.resolve()
+    await f.close()
+  }
+})
+
 it('records the thinking level each request asked for on its response', async () => {
   const home = await temp()
   const prepared = await prepareHarness({ ultimateRoot: home, userHome: home, home, faux: true })
