@@ -24,7 +24,8 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Replica"] },
     { "tag": "v2", "new_sqlite_classes": ["Directory"] },
-    { "tag": "v3", "new_sqlite_classes": ["ProjectReplica"] }
+    { "tag": "v3", "new_sqlite_classes": ["ProjectReplica"] },
+    { "tag": "v4", "deleted_classes": ["Replica"] }
   ],
   "assets": {
     "directory": "./dist",

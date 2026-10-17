@@ -76,6 +76,8 @@ Workers observability is enabled for persistent invocation logs and traces at fu
 
 Deploys belong to the standing `@cloudflare` agent (`.ultimate/agents/cloudflare.md`): the lander hands it every landing that touches `cloud/`, `web/` or the dependencies (`lander.deploy` in `.ultimate/settings.json`), and it deploys that commit, verifies routes and telemetry, and rolls back on errors. Ask it for previews and experiments too. The one-time setup below stays with the user.
 
+Durable Object data that no code reaches any more can only be removed with its whole class. Cloudflare refuses to delete a class that the deployed version still binds, so a reset takes two deploys: one moves the binding to a new class while the old one stays exported, the next deletes the old class. Migrations v3 and v4 did this to replace `Replica` with `ProjectReplica`, deleting the replicas left from testing.
+
 The committed config is generic. Domains and tunnel IDs live in user settings, not the repository. `pnpm cloud:deploy` builds the UI and front page and writes the gitignored `cloud/wrangler.deploy.json`. No credentials belong in the repository or command arguments. Open tabs keep working across a deploy: they offer a reload once they see the new version.
 
 The R2 binding `BUILDS` uses bucket `ultimate-builds`. In a new account, create it once before deploying:

@@ -465,7 +465,3 @@ export class ProjectReplica {
     })
   }
 }
-
-// The retired class keeps its export until the migration that deletes it: Cloudflare only deletes a class
-// no deployed version binds, and its unbound namespace still needs a class until then.
-export { ProjectReplica as Replica }
