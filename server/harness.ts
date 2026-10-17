@@ -62,9 +62,8 @@ export function createHarnessSettings(
     get steeringMode() {
       return settings.getSteeringMode()
     },
-    get followUpMode() {
-      return settings.getFollowUpMode()
-    },
+    // Every follow-up queued while a run works starts the next run together, whatever Pi's one-at-a-time default.
+    followUpMode: 'all',
   }
 }
 export interface HostOptions {
