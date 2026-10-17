@@ -34,9 +34,10 @@ function FastToggle() {
     <Tooltip>
       <TooltipTrigger asChild>
         <button
+          aria-label="Fast"
           aria-pressed={on}
           className={cn(
-            'flex h-7 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none',
+            'flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none',
             on ? 'text-foreground/85' : 'text-muted-foreground',
           )}
           data-fast={on}
@@ -45,7 +46,7 @@ function FastToggle() {
           type="button"
         >
           <ZapIcon className={cn('size-3.5 shrink-0', on && 'fill-brand/30 text-brand')} />
-          fast
+          <span className="@max-md:hidden">fast</span>
         </button>
       </TooltipTrigger>
       <TooltipContent>

@@ -53,6 +53,7 @@ export function Familiarize({ id, dock }: { id: number; dock?: boolean }) {
           onChange={(event) => setFocus(event.target.value)}
           onKeyDown={(event) => {
             if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+            if (touchKeyboard()) return
             event.preventDefault()
             void begin()
           }}

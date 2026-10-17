@@ -328,6 +328,8 @@ function ConversationComposer({
   }
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+    // A touch keyboard's return key writes a new line; the send button sends.
+    if (touchKeyboard()) return
     event.preventDefault()
     void send(event.altKey ? 'followUp' : 'steer', event.altKey)
   }
@@ -373,8 +375,8 @@ function ConversationComposer({
             }
             value={text}
           />
-          <PromptInputFooter>
-            <PromptInputTools className="shrink-0">
+          <PromptInputFooter className="@container">
+            <PromptInputTools>
               <Slot name="composer.toolbar" variant="inline" />
             </PromptInputTools>
             <div className="flex min-w-0 items-center gap-2">
@@ -387,9 +389,9 @@ function ConversationComposer({
                 {error ??
                   blocked ??
                   (busy ? (
-                    <>
+                    <span className="pointer-coarse:hidden">
                       <Kbd>↵</Kbd> steer · <Kbd>{alt} ↵</Kbd> follow-up · <Kbd>esc</Kbd> stop
-                    </>
+                    </span>
                   ) : null)}
               </span>
               {busy && (

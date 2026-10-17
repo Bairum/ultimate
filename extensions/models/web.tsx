@@ -30,7 +30,7 @@ import type { ThinkingLevel } from './state.tsx'
 import { switchAt } from './switches.ts'
 
 const toolbarButton =
-  'flex h-7 max-w-56 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground'
+  'flex h-7 max-w-56 shrink-0 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground'
 
 function ModelButton() {
   const { target, source } = useComposer()
@@ -38,7 +38,7 @@ function ModelButton() {
   const actions = useUltimate()
   return (
     <button
-      className={toolbarButton}
+      className={cn(toolbarButton, 'min-w-0 shrink')}
       disabled={loading}
       aria-label={loading ? 'Loading model' : undefined}
       onClick={() => openPicker(actions, target, source)}
@@ -62,7 +62,7 @@ function ModelButton() {
       >
         {loading ? 'model…' : (ref?.modelId ?? (target === 'new' ? 'default model' : 'no model'))}
       </span>
-      <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
+      <ChevronDownIcon className="size-3 shrink-0 opacity-60 @max-md:hidden" />
     </button>
   )
 }
@@ -83,7 +83,7 @@ function ThinkingButton() {
       >
         <BrainIcon className="size-3.5 shrink-0" />
         <span>thinking…</span>
-        <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
+        <ChevronDownIcon className="size-3 shrink-0 opacity-60 @max-md:hidden" />
       </button>
     )
   if (!model?.reasoning) return null
@@ -102,7 +102,7 @@ function ThinkingButton() {
         <button className={toolbarButton} title="Thinking level (Shift+Tab cycles)" type="button">
           <BrainIcon className={cn('size-3.5 shrink-0', current !== 'off' && 'text-brand')} />
           <span className={current !== 'off' ? 'text-foreground/85' : undefined}>{current}</span>
-          <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
+          <ChevronDownIcon className="size-3 shrink-0 opacity-60 @max-md:hidden" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-48 p-1 font-mono" side="top">

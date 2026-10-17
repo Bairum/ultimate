@@ -119,7 +119,7 @@ function IsolationToggle() {
       <TooltipTrigger asChild>
         <label
           className={cn(
-            'flex h-7 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-[12px] transition-colors',
+            'flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-[12px] transition-colors',
             isolated
               ? 'border-brand/60 bg-brand/15 text-foreground'
               : 'border-transparent text-muted-foreground hover:text-foreground',
@@ -129,7 +129,7 @@ function IsolationToggle() {
           onClick={reason ? () => ui.open('onboarding.git') : undefined}
         >
           <GitBranchIcon className={cn('size-3.5', isolated && 'text-brand')} />
-          Isolated
+          <span className="@max-md:hidden">Isolated</span>
           <Switch
             aria-label="Isolated"
             checked={isolated}
