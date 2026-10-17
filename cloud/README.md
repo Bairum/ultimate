@@ -56,7 +56,7 @@ During open, conversation switching, scrolling and opening the Info panel, the u
 
 ## Routing and data
 
-Every `/api/*` request first requires a Cloudflare Access JWT verified by the Worker (RS256, issuer, audience, expiry and not-before); missing configuration or verification failure returns a generic 401 before touching the replica. `/sync` uses only its bearer token. Both routes then go to `Replica`, named `default`; static assets carry no data and remain asset-first. Other routes serve static assets with SPA fallback. `/sync` requires `Authorization: Bearer <SYNC_TOKEN>` and accepts one machine WebSocket after its project hello passes, replacing any previous accepted connection. It stores batches atomically and returns cursor hashes and acknowledgements. Retired documents are deleted.
+Every `/api/*` request first requires a Cloudflare Access JWT verified by the Worker (RS256, issuer, audience, expiry and not-before); missing configuration or verification failure returns a generic 401 before touching the replica. `/sync` uses only its bearer token. Both routes then go to `Replica`, named `replica`; static assets carry no data and remain asset-first. Other routes serve static assets with SPA fallback. `/sync` requires `Authorization: Bearer <SYNC_TOKEN>` and accepts one machine WebSocket after its project hello passes, replacing any previous accepted connection. It stores batches atomically and returns cursor hashes and acknowledgements. Retired documents are deleted.
 
 The first `hello.project` durably binds the replica to one project, including existing trial data; a different project is closed with `PROJECT_MISMATCH` (`4009`) without receiving a cursor or changing data, and its host stops retrying.
 

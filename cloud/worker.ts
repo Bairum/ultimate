@@ -54,7 +54,7 @@ export default {
     if (path.startsWith('/api/') && !(await admitsAccess(request, env)))
       return Response.json({ error: 'Unauthorized' }, { status: 401 })
     if (path.startsWith('/api/') || path === '/sync')
-      return env.REPLICA.get(env.REPLICA.idFromName('default')).fetch(request)
+      return env.REPLICA.get(env.REPLICA.idFromName('replica')).fetch(request)
     return env.ASSETS.fetch(request)
   },
 }
