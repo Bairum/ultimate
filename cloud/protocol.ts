@@ -4,9 +4,10 @@
 // cloud, except outbox items, which the machine submits with `requestId: item.id` so Pi admits each exactly once.
 //
 // Order of a connection:
-// 1. The machine connects to `/sync` with `Authorization: Bearer <token>` and sends `hello`.
-//    A replica holds one project: it records the first `hello.project` it sees and closes any connection naming
-//    another project with code `PROJECT_MISMATCH`; the machine then stops reconnecting and tells the user,
+// 1. The machine connects to `/sync?machine=<name>&project=<absolute root>` with
+//    `Authorization: Bearer <token>` and sends `hello` with the same identity and its local HTTP port.
+//    Each machine/project has its own replica; a mismatched hello closes with `PROJECT_MISMATCH`.
+//    The machine then stops reconnecting and tells the user,
 //    since retrying cannot succeed.
 // 2. The cloud answers `cursor`: per conversation, the newest of its own entries it holds, and the hash of every
 //    document it holds.
@@ -59,6 +60,7 @@ export type MachineMessage =
       type: 'hello'
       machine: string
       build: string
+      port: number
       /** Absolute project root. Pi IDs are per project, so one replica must never mix two. */
       project: string
     }
@@ -69,7 +71,8 @@ export type MachineMessage =
       entries: EntryRecord[]
       docs: ReplicaDoc[]
     }
-  | { type: 'summaries'; value: ConversationSummary[] }
+  /** Full replacement once per connection, then upserts and removed IDs only. */
+  | { type: 'summaries'; value: ConversationSummary[]; removed: number[]; full: boolean }
   | { type: 'system'; value: SystemInfo }
   | { type: 'models'; value: unknown }
   | { type: 'delivered'; id: string; submissionId: number }

@@ -1,6 +1,6 @@
-# Cloud replica spike
+# Cloud replicas
 
-The Worker serves a static Ultimate UI and a SQLite-backed Durable Object replica for one machine. The agent loop and credentials stay on the machine. `protocol.ts` is the sync contract; `extensions/cloud/` is the machine-side sender.
+The Worker serves Ultimate's static UI, a directory, and one SQLite-backed Durable Object replica per machine and project. The agent loop and credentials stay on the machine. `protocol.ts` is the sync contract; `extensions/cloud/` is the sender.
 
 ## Run locally
 
@@ -15,72 +15,66 @@ Create `cloud/.dev.vars` (gitignored):
 
 ```dotenv
 SYNC_TOKEN=dev
-MACHINE_ORIGIN=http://127.0.0.1:4800
+MACHINE_ORIGIN=http://127.0.0.1
 ACCESS_DEV_BYPASS=1
 ```
 
-`ACCESS_DEV_BYPASS=1` explicitly skips JWT verification only for local development. Keep it in `.dev.vars`, which Wrangler does not deploy; never set it on the deployed Worker. The committed `wrangler.json` has no VPC binding, so `cloud:dev` reaches the local host through `MACHINE_ORIGIN` without contacting a private production service.
+`ACCESS_DEV_BYPASS=1` explicitly skips JWT verification for local development. Keep it in `.dev.vars`, which Wrangler does not deploy; never set it on the deployed Worker. `MACHINE_ORIGIN` supplies the local hostname; the accepted hello supplies each instance's port. No production tunnel is contacted.
 
-Then run `pnpm cloud:dev` and open the URL Wrangler prints (normally http://localhost:8787). Local Durable Object data persists in `cloud/.wrangler/`. Stop with Ctrl+C.
-The replica is derived from the machine, and its schema is not migrated: after pulling a replica schema change, delete `cloud/.wrangler/` and let the machine sync again.
+Run `pnpm cloud:dev` and open the printed URL (normally http://localhost:8787). Local Durable Object data persists in `cloud/.wrangler/`. Replicas are derived, disposable data: after a schema change delete `cloud/.wrangler/` and sync again; there are no replica schema migrations.
 
-The build includes the web facets discovered by Ultimate's extension loader. This is a production build, not the machine's Vite dev server. Rebuild after changing facets.
+The build includes web facets discovered by Ultimate's extension loader. This is a production build, not the machine's Vite dev server. Rebuild after changing facets. Per-project builds are not supported yet.
 
-## Try it locally
+### Two-instance check
 
-Build and start Wrangler as above, using port 4800 for `MACHINE_ORIGIN`. In another terminal, start a token-free machine with a temporary state home (keep the printed path for the restart):
+Start two faux hosts in different project directories, using separate temporary state homes and free ports. For each host, from this checkout:
 
 ```sh
 DEMO_HOME=$(mktemp -d)
-echo "$DEMO_HOME"
-ULTIMATE_PROJECT="$PWD" ULTIMATE_SUPERVISED=0 ULTIMATE_GENERATION=1 \
-  ULTIMATE_FAUX=1 ULTIMATE_HOME="$DEMO_HOME" ULTIMATE_PORT=4800 \
-  ULTIMATE_CLOUD_URL=ws://127.0.0.1:8787/sync ULTIMATE_CLOUD_TOKEN=dev pnpm dev
+ULTIMATE_PROJECT=/absolute/path/to/project ULTIMATE_SUPERVISED=0 ULTIMATE_GENERATION=1 \
+  ULTIMATE_FAUX=1 ULTIMATE_HOME="$DEMO_HOME" ULTIMATE_PORT=4801 \
+  ULTIMATE_CLOUD_URL=ws://127.0.0.1:8787/sync ULTIMATE_CLOUD_TOKEN=dev \
+  ULTIMATE_CLOUD_MACHINE=demo-desk pnpm dev
 ```
 
-The explicit `ULTIMATE_CLOUD_URL` overrides user settings and opts this faux host into sync; faux and preview hosts otherwise stay silent. The environment token overrides the `ULTIMATE_CLOUD_TOKEN` secret. Real hosts can instead use user settings `cloud.url` and the Secrets panel; see `extensions/cloud/README.md`.
+Use port 4802 and a different `DEMO_HOME` and project for the second host. Explicit `ULTIMATE_PROJECT` and supervised mode avoid inheriting the agent terminal's host environment. Never reuse the running host's port or state home.
 
-Explicitly setting `ULTIMATE_PROJECT` and clearing supervised mode avoids inheriting the running Ultimate host's project and supervisor environment when launched from an agent terminal. Use a free machine port, not the running host's port or state home.
+Create conversations through each local UI (or `POST /api/conversations`, JSON `{}`); submit different prompts. The faux provider answers without model tokens. The cloud front page lists both projects under `demo-desk`. Follow their links and verify each shows only its own conversations. Stop one host: its row becomes offline and its history remains readable. Restart with the same project and state home: its URL stays the same and queued prompts deliver exactly once. Stop all three terminals after testing.
 
-1. Create two conversations with `POST /api/conversations` (JSON `{}`); note each returned `id`. Send text with `POST /api/conversations/<id>/submit` (JSON `{"text":"Replica check"}`). The faux provider answers without model tokens. Repeat about 18 turns on one conversation to build more than 64 entries.
-2. Open `http://127.0.0.1:4800/?conversation=<id>` and `http://127.0.0.1:8787/?conversation=<id>`. Expand **Earlier** in the sidebar; the lists and transcripts should match. To exercise history paging, compact the long conversation with `POST /api/conversations/<id>/compact` (JSON `{}`) and wait for completion.
-3. Stop only the faux machine with Ctrl+C. Reload the cloud URL: the list and transcript remain readable and an amber notice explains that this is the last synced state. Switch conversations, open the side panel, and use **Load earlier messages** at the top of the compacted transcript. Its history request should return 64 entries and a `before` cursor while more remain.
-4. Send a distinctive prompt at the cloud URL. It appears above the composer as a queued follow-up. Restart the machine with the **same** `DEMO_HOME` and environment. The queue clears and a faux answer appears. In `GET /api/events?conversation=<id>`, count the `view.entries` whose `kind` is `pi.user` and whose user-model content equals the distinctive text: exactly one should exist. Count before compacting again, since `view` contains the active transcript, not all stored history.
-5. Stop both terminals with Ctrl+C. Local replica data remains in `cloud/.wrangler/`; machine state remains only in the temporary home. Neither is needed after the experiment.
+## URLs, presence and sync
 
-### Quiet offline reads
+- `/` is a quiet directory shell; it contains no embedded project data. It reads `/api/directory` behind Access.
+- `/p/<machine>/<project>/` serves the SPA. Selecting conversations changes only `?conversation=N`, preserving the project path.
+- `/p/<machine>/<project>/api/*` goes to that replica with the prefix removed. Assets stay absolute.
+- `/sync?machine=<name>&project=<URL-encoded absolute root>` routes to `REPLICA.idFromName(JSON.stringify([machine, project]))`.
 
-The replica's `system` snapshot is marked `offline: true`; the web store shows the offline notice once per transition into offline, not again when facets reopen the event stream. Unsupported replica requests return 503 with the same `offline: true` marker. The web SDK distinguishes this expected unavailability from real HTTP failures: `useAction` status queries settle without data or an error toast; durable UI writes retain their tab-local overlay instead of rolling back the selected conversation or panel. Those offline UI choices are not persisted or replayed to the machine; reload discards them. Deliberate unavailable actions still reject, and an unhandled one shows a warning. Unmarked 503s and other failures retain normal error handling.
+Every `/api` request, including `/api/directory` and project-prefixed APIs, requires a verified Cloudflare Access JWT before any Durable Object is touched (RS256, issuer, audience, expiry and not-before). Missing config or verification failure returns a generic 401. Unprefixed project APIs return 404 after authentication. `/sync` uses only `Authorization: Bearer <SYNC_TOKEN>` with constant-time comparison.
 
-During open, conversation switching, scrolling and opening the Info panel, the unavailable requests are `POST /api/ui` and extension actions `instance/list`, `onboarding/status`, `workspaces/isolation`, `tailscale/status`, `fast/status`, `status-line/rates`, and `secrets/list`. These all use the same SDK handling, not per-facet substitutes. DevTools still records their expected 503s. Events, models and history are served successfully from the replica. Unsupported request bodies are drained before replying so Wrangler does not fail its forwarding stream with a 500. Models are synced in the same `{ providers, models }` shape as the machine's API.
+The sync route binds its replica key before accepting a socket. Hello must match both key fields and the stored project; mismatches close with `PROJECT_MISMATCH` (`4009`), and the sender stops retrying. Hello also carries the local HTTP port (integer 1–65535). The replica records identity and port durably, so hibernated sockets keep working. Accepted hello, socket close, conversation-count changes and the first synced entries update the Directory. Slugs are lowercased URL-safe machine/project basenames, with `-2`, `-3`… for collisions. Running instances always appear. An offline instance with zero synced entries is forgotten; summaries are not the forgetting signal. Slug assignments stay reserved, so a returning project keeps its URL. Presence means a connected sync socket, not tunnel health. Last seen records the last presence update.
 
-## Routing and data
+On each connection the machine sends a full summary list once, followed by changed summaries and removed IDs. The replica stores them per conversation. Batches are applied atomically and acknowledged; reconnects use entry cursors and document hashes. Retired documents are deleted.
 
-Every `/api/*` request first requires a Cloudflare Access JWT verified by the Worker (RS256, issuer, audience, expiry and not-before); missing configuration or verification failure returns a generic 401 before touching the replica. `/sync` uses only its bearer token. Both routes then go to `Replica`, named `replica`; static assets carry no data and remain asset-first. Other routes serve static assets with SPA fallback. `/sync` requires `Authorization: Bearer <SYNC_TOKEN>` and accepts one machine WebSocket after its project hello passes, replacing any previous accepted connection. It stores batches atomically and returns cursor hashes and acknowledgements. Retired documents are deleted.
+## Live and offline API
 
-The first `hello.project` durably binds the replica to one project, including existing trial data; a different project is closed with `PROJECT_MISMATCH` (`4009`) without receiving a cursor or changing data, and its host stops retrying.
+With an accepted socket, the replica uses its machine's VPC network binding to reach `http://127.0.0.1:<hello port>`. No binding for that machine means offline-only access. Local development uses `MACHINE_ORIGIN` instead. Requests have loopback Host/Origin and no forwarded/browser admission headers; SSE streams unchanged. Browser Origin and fetch-site checks run before rewriting headers or queuing prompts.
 
-With a machine socket open, API requests stream through the `MACHINE` VPC service binding (or `MACHINE_ORIGIN` only in local development), with loopback Host/Origin and without forwarding/browser admission headers. A failed GET falls back to the last synced data. A failed write returns 502 instead: its response may have been lost after the machine committed it, so check before retrying. Browser requests must have no fetch-site header or use `same-origin`/`none`, and any Origin must match the cloud URL, before headers are rewritten or prompts are queued. Without a machine, events, history, and models come from the replica. Live task state is omitted. Text submissions queue in an outbox and are resent until the machine acknowledges delivery. Queue IDs are negative local integers; the delivery identity is a UUID, used by the machine for exactly-once admission. Offline cancellation is not supported: the existing cancel button returns the offline error and leaves the item queued. All other offline API operations return 503. An offline SSE connection closes when the machine connects so the browser reconnects to the live proxy.
+Failed GETs fall back to the synced copy. Failed proxied writes return 502: the machine may have committed them, so check before retrying. Offline events, models and history come from the replica. Text submissions queue in an outbox; UUID request IDs ensure exactly-once admission after reconnect. Negative queue IDs distinguish cloud items. Other offline operations return 503 with `offline: true`; offline cancellation, images, actions, configure, abort and compact are unavailable. Offline UI choices stay tab-local, are not replayed, and disappear on reload. The offline notice appears once per transition. Live task state is omitted. Offline SSE closes when a machine connects, so the browser reconnects through the proxy.
 
-Several machines, matching the UI build to the machine, and offline images/actions/configure/abort/compact remain out of scope.
+Workers observability is enabled for persistent logs; `wrangler tail` can miss Durable Object WebSocket events. Sync exceptions log only protocol message type and UTF-8 byte size, never content or exception text. Successful messages are not logged. Volatile system info refreshes once a minute, and the sender reconnects after an unacknowledged batch exceeds 60 seconds.
 
-Workers observability is enabled in `wrangler.json` for persistent logs; `wrangler tail` can miss Durable Object WebSocket events. A `webSocketMessage` exception emits one line with only the protocol message type (or `unknown`) and UTF-8 byte size, then rethrows. Message bodies and exception text are never included in that line, and successful messages emit nothing. The machine's sender refreshes volatile system info at most once a minute and reconnects with a notice when a batch remains unacknowledged for more than 60 seconds (see `extensions/cloud/README.md`).
+## Deploy (user/coordinator only)
 
-## Deploy
+The committed config is generic. Domains and tunnel IDs live in user settings, not the repository. `pnpm cloud:deploy` builds the UI and writes the gitignored `cloud/wrangler.deploy.json`. No credentials belong in the repository or command arguments.
 
-The committed `wrangler.json` is generic. Your domain and machine binding are personal and stay out of this repository: they live in your user settings, and `pnpm cloud:deploy` writes them into the gitignored `cloud/wrangler.deploy.json` before deploying. No credentials belong in the repository or in command arguments. Run commands from the repository with Wrangler logged in to the account that holds your domain's zone.
-
-1. Create a remotely managed tunnel for the machine and an HTTP VPC service through it to Ultimate's port:
+1. With Wrangler logged in, create one remotely managed tunnel per machine:
 
    ```sh
    pnpm exec wrangler tunnel create ultimate-<machine>
-   pnpm exec wrangler vpc service create ultimate-<machine>-4747 --type http \
-     --tunnel-id <tunnel-id> --ipv4 127.0.0.1 --http-port 4747
    ```
 
-   The service ID it prints is bound as `MACHINE` at deploy (step 6). The [VPC API](https://developers.cloudflare.com/workers-vpc/api/) fixes the destination to this service; the request URL supplies Host (and SNI for HTTPS), not routing. We use `http://127.0.0.1:4747` so Ultimate's existing loopback Host/Origin checks admit it. SSE bodies pass through unchanged.
+   No per-port VPC service is needed. A VPC **network** binding routes through this tunnel to each instance's loopback port. See [Workers VPC](https://developers.cloudflare.com/workers-vpc/).
 
-2. Run the tunnel in the logged-in user's session. Install cloudflared and ensure Wrangler's OAuth login exists for that user. Create `~/.config/systemd/user/ultimate-tunnel.service`, substituting absolute paths for your checkout and `pnpm` executable (`command -v pnpm`):
+2. Run the tunnel in the user's session. Install cloudflared and create `~/.config/systemd/user/ultimate-tunnel.service`, using absolute paths:
 
    ```ini
    [Unit]
@@ -104,39 +98,34 @@ The committed `wrangler.json` is generic. Your domain and machine binding are pe
    systemctl --user enable --now ultimate-tunnel.service
    ```
 
-   Wrangler fetches the remotely managed tunnel credential through its authenticated API; do not extract or paste a tunnel token. This user unit stops with the user session unless linger is enabled; no system unit or root credentials are needed.
+   Wrangler fetches the tunnel credential through its authenticated API; do not extract or paste a token. The unit stops with the user session unless linger is enabled.
 
-3. In Zero Trust → Access → Applications, create a self-hosted application for your hostname, using your login method (for example one-time PIN) and an allow policy for yourself. Add a separate, more-specific application for `<hostname>/sync` with a **Bypass** policy (Everyone). Only `/sync` bypasses Access, and it still requires the Worker bearer token. Keep the main application's session duration appropriate for browser use.
+3. In Zero Trust → Access → Applications, protect your hostname with a self-hosted app and your allow policy (for example one-time PIN). Add a more-specific app for `<hostname>/sync` with a **Bypass** policy (Everyone). Only sync bypasses Access, and it still requires the bearer token.
 
-4. Read the team domain (`<team>.cloudflareaccess.com`) in Zero Trust settings, and the application's **Application Audience (AUD) Tag** in its configuration; it is also the `kid` parameter of the login redirect. Store both as Worker secrets, so they stay out of this repository and survive every deploy:
+4. Read the team domain (`<team>.cloudflareaccess.com`) and the app's **Application Audience (AUD) Tag**. The user sets Worker secrets interactively:
 
    ```sh
-   pnpm exec wrangler secret put ACCESS_TEAM_DOMAIN --config cloud/wrangler.json   # hostname only, no scheme
+   pnpm exec wrangler secret put ACCESS_TEAM_DOMAIN --config cloud/wrangler.json
    pnpm exec wrangler secret put ACCESS_AUD --config cloud/wrangler.json
-   ```
-
-   Missing values intentionally refuse all API requests. Never set `ACCESS_DEV_BYPASS` on the deployed Worker. The Worker independently verifies JWTs even if Access is accidentally bypassed. `workers.dev` and preview URLs are disabled; the only route is the custom domain.
-
-5. The user sets the sync secret interactively, using the same value as `ULTIMATE_CLOUD_TOKEN` in Ultimate's Secrets panel (⌘K → Secrets):
-
-   ```sh
    pnpm exec wrangler secret put SYNC_TOKEN --config cloud/wrangler.json
    ```
 
-   Do not put the value in arguments, files, logs or chat.
+   Team domain is a hostname, without scheme. `SYNC_TOKEN` must match `ULTIMATE_CLOUD_TOKEN` in Ultimate's Secrets panel (⌘K → Secrets). Never print or save secret values. Never set `ACCESS_DEV_BYPASS` in production. Workers.dev and preview URLs remain disabled.
 
-6. In `~/.ultimate/settings.json`, set the sync URL on your hostname and the VPC service ID from step 1:
+5. Configure `~/.ultimate/settings.json`:
 
    ```json
-   { "cloud": { "url": "wss://<hostname>/sync", "vpcService": "<service-id>" } }
+   {
+     "cloud": {
+       "url": "wss://<hostname>/sync",
+       "machine": "my-machine",
+       "tunnels": { "my-machine": "<tunnel-id>" }
+     }
+   }
    ```
 
-   `cloud.url` is what Ultimate syncs to; `pnpm cloud:deploy` also takes the custom domain from its hostname and binds `vpcService` as `MACHINE`. Deploy once the Access configuration is ready:
+   `machine` defaults to the OS hostname; tunnel map keys must exactly match the sender's machine name. `cloud.tunnels` replaces `cloud.vpcService`. Deploy generates `TUNNEL_0…n` network bindings and a JSON `TUNNELS` machine-to-binding variable. Restart hosts after configuring sync. Verify login, separate project URLs, live requests, then offline history.
 
-   ```sh
-   pnpm cloud:deploy
-   ```
+6. To add another machine, create and run its tunnel, add its name and tunnel ID to `cloud.tunnels` on the deploying machine, and deploy again. On the new machine configure the same cloud URL and sync secret, then start Ultimate in any project. No extra binding is needed for additional ports or projects on an existing machine.
 
-   Restart Ultimate, with the sync secret already in its Secrets panel. Verify the hostname asks for the PIN; without a valid JWT `/api/*` returns no data. Verify live requests with Ultimate on, and offline history with it off.
-
-7. Adding another machine later requires its own tunnel, VPC service and Worker binding, followed by a deploy. This first deployment supports only one project/replica and one bound machine; directory and per-machine routing must land before multiple machines can use it simultaneously.
+For local config validation without touching personal settings, set `ULTIMATE_CLOUD_SETTINGS=/tmp/test-settings.json` and run `pnpm exec node cloud/deploy.ts --dry-run`. Use a dummy tunnel UUID and placeholder hostname in that file. The override applies only to the deploy script; generated configs remain gitignored.

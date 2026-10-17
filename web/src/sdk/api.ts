@@ -15,6 +15,11 @@ import type {
 import { errorMessage } from './format.ts'
 import type { Store } from './store.ts'
 
+/** Cloud project URLs keep all API traffic within the selected replica. */
+export function projectBase(path = typeof location === 'undefined' ? '/' : location.pathname) {
+  return /^\/p\/[^/]+\/[^/]+(?=\/|$)/.exec(path)?.[0] ?? ''
+}
+
 /** The root conversation's id (`ROOT_CONVERSATION_ID` in Pi Durable): Ultimate's one ongoing conversation. */
 export const ROOT = 1
 
@@ -50,7 +55,7 @@ class HttpError extends Error {
 
 /** Commands as `fetch` POSTs. Conversation commands default to the shown conversation. */
 export function createApi(store: Store, options: { base?: string; fetch?: typeof fetch } = {}) {
-  const base = options.base ?? ''
+  const base = options.base ?? projectBase()
   const request = options.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args))
   async function post<T>(
     path: string,

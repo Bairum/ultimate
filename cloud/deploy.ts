@@ -6,13 +6,18 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const settings = JSON.parse(readFileSync(join(homedir(), '.ultimate/settings.json'), 'utf8')) as {
-  cloud?: { url?: string; vpcService?: string }
+const settings = JSON.parse(
+  readFileSync(
+    process.env.ULTIMATE_CLOUD_SETTINGS ?? join(homedir(), '.ultimate/settings.json'),
+    'utf8',
+  ),
+) as {
+  cloud?: { url?: string; tunnels?: Record<string, string> }
 }
-const { url, vpcService } = settings.cloud ?? {}
-if (!url || !vpcService) {
+const { url, tunnels } = settings.cloud ?? {}
+if (!url || !tunnels || !Object.keys(tunnels).length) {
   console.error(
-    'Set cloud.url and cloud.vpcService in ~/.ultimate/settings.json first; see cloud/README.md.',
+    'Set cloud.url and cloud.tunnels in ~/.ultimate/settings.json first; see cloud/README.md.',
   )
   process.exit(1)
 }
@@ -24,9 +29,21 @@ writeFileSync(
   JSON.stringify({
     ...base,
     routes: [{ pattern: new URL(url).hostname, custom_domain: true }],
-    vpc_services: [{ binding: 'MACHINE', service_id: vpcService }],
+    vpc_networks: Object.entries(tunnels).map(([, tunnel_id], index) => ({
+      binding: `TUNNEL_${index}`,
+      tunnel_id,
+    })),
+    vars: {
+      TUNNELS: JSON.stringify(
+        Object.fromEntries(
+          Object.keys(tunnels).map((machine, index) => [machine, `TUNNEL_${index}`]),
+        ),
+      ),
+    },
   }),
 )
 process.exit(
-  spawnSync('wrangler', ['deploy', '--config', config], { stdio: 'inherit' }).status ?? 1,
+  spawnSync('wrangler', ['deploy', '--config', config, ...process.argv.slice(2)], {
+    stdio: 'inherit',
+  }).status ?? 1,
 )

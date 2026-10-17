@@ -94,7 +94,7 @@ async function fixture() {
     projectRoot: home,
     harness: () => opened.harness,
     conversations: () => [],
-    system: () => ({ online: true }),
+    system: () => ({ online: true, process: { url: 'http://127.0.0.1:4800' } }),
     build: () => ({ id: 'test-build' }),
     notice: (message: string) => notices.push(message),
   } as unknown as ExtensionHost
@@ -130,6 +130,7 @@ it('ignores volatile system changes, refreshes them after a minute, and sends me
   try {
     const system = {
       build: { id: 'first' },
+      process: { url: 'http://127.0.0.1:4800' },
       machine: { hostname: 'test', freeMemory: 100 },
       persistence: { path: '/test/state.sqlite', sizeBytes: 100, walBytes: 10 },
       extensions: [{ name: 'cloud' }],
@@ -230,6 +231,7 @@ it('sends every conversation, only its own entries in ID order, and conversation
     expect(socket.messages[0]).toEqual({
       type: 'hello',
       machine: 'test-machine',
+      port: 4800,
       build: 'test-build',
       project: f.host.projectRoot,
     })
@@ -732,7 +734,35 @@ it('keeps the last non-empty summaries when the host conversation list empties d
     await vi.advanceTimersByTimeAsync(1000)
     expect(conversations).toHaveLastReturnedWith([])
     expect(socket.messages.filter((message) => message.type === 'summaries')).toEqual([
-      { type: 'summaries', value: summaries },
+      { type: 'summaries', value: summaries, removed: [], full: true },
+    ])
+  } finally {
+    await f.close()
+  }
+})
+
+it('sends a full summary list once per connection and only changed/removed summaries thereafter', async () => {
+  const f = await fixture()
+  try {
+    const first = { id: 1, title: 'one', busy: false },
+      second = { id: 2, title: 'two', busy: false }
+    const conversations = vi.spyOn(f.host, 'conversations').mockReturnValue([first, second])
+    const socket = f.sockets[0]
+    socket.open()
+    await f.drain()
+    conversations.mockReturnValue([{ ...second, busy: true }])
+    await vi.advanceTimersByTimeAsync(1000)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(socket.messages.filter((message) => message.type === 'summaries')).toEqual([
+      { type: 'summaries', value: [first, second], removed: [], full: true },
+      { type: 'summaries', value: [{ ...second, busy: true }], removed: [1], full: false },
+    ])
+    socket.dispatchEvent(new Event('close'))
+    await vi.advanceTimersByTimeAsync(1000)
+    f.sockets[1].open()
+    await f.drain()
+    expect(f.sockets[1].messages.filter((message) => message.type === 'summaries')).toEqual([
+      { type: 'summaries', value: [{ ...second, busy: true }], removed: [], full: true },
     ])
   } finally {
     await f.close()

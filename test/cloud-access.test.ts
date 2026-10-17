@@ -89,7 +89,7 @@ it('refuses empty config and only bypasses when explicitly set to 1', async () =
 })
 
 it('fails closed when certificate retrieval fails', async () => {
-  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Unavailable')))
+  vi.stubGlobal('fetch', vi.fn<() => void>().mockRejectedValue(new Error('Unavailable')))
   expect(
     await admitsAccess(request(await signed()), {
       ...config,
@@ -104,11 +104,26 @@ it('passes valid JWTs and sync requests to the replica, but not assets through a
   const env = {
     ...config,
     REPLICA: { idFromName: vi.fn<() => void>(), get: () => ({ fetch: forward }) },
+    DIRECTORY: { idFromName: vi.fn<() => void>(), get: () => ({ fetch: forward }) },
     ASSETS: { fetch: forward },
   } as unknown as Parameters<typeof worker.fetch>[1]
-  expect((await worker.fetch(request(await signed()), env)).status).toBe(200)
-  expect((await worker.fetch(new Request('https://cloud.example/sync'), env)).status).toBe(200)
-  expect((await worker.fetch(new Request('https://cloud.example/'), env)).status).toBe(200)
+  expect(
+    (
+      await worker.fetch(
+        new Request('https://cloud.example/api/directory', {
+          headers: { 'Cf-Access-Jwt-Assertion': await signed() },
+        }),
+        env,
+      )
+    ).status,
+  ).toBe(200)
+  expect(
+    (await worker.fetch(new Request('https://cloud.example/sync?machine=test&project=/test'), env))
+      .status,
+  ).toBe(200)
+  expect(
+    (await worker.fetch(new Request('https://cloud.example/assets/test.js'), env)).status,
+  ).toBe(200)
   expect(forward).toHaveBeenCalledTimes(3)
 })
 

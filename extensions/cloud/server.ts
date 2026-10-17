@@ -50,7 +50,10 @@ export function startSync(
     if (stopped) return
     let socket: SyncSocket
     try {
-      socket = dial(url, token)
+      const endpoint = new URL(url)
+      endpoint.searchParams.set('machine', machine)
+      endpoint.searchParams.set('project', host.projectRoot)
+      socket = dial(endpoint.href, token)
     } catch (error) {
       host.notice(`Cloud connection failed: ${String(error)}`)
       schedule()
@@ -96,7 +99,7 @@ export function startSync(
     let changesQueued = false
     let chain = Promise.resolve()
     idle = () => chain
-    let lastSummaries = ''
+    let lastSummaries: Map<number, string> | undefined
     let lastSystem = ''
     let lastSystemAt = 0
     const send = (message: MachineMessage) => {
@@ -200,11 +203,16 @@ export function startSync(
       if (summariesDirty) {
         summariesDirty = false
         const summaries = host.conversations()
-        const summaryJson = JSON.stringify(summaries)
         // An open host always has a root; an empty list means it is opening or closing.
-        if (summaries.length && summaryJson !== lastSummaries) {
-          lastSummaries = summaryJson
-          send({ type: 'summaries', value: summaries })
+        if (summaries.length) {
+          const current = new Map(summaries.map((summary) => [summary.id, JSON.stringify(summary)]))
+          const value = summaries.filter(
+            (summary) => current.get(summary.id) !== lastSummaries?.get(summary.id),
+          )
+          const removed = [...(lastSummaries?.keys() ?? [])].filter((id) => !current.has(id))
+          if (!lastSummaries || value.length || removed.length)
+            send({ type: 'summaries', value, removed, full: lastSummaries === undefined })
+          lastSummaries = current
         }
       }
       if (systemJson !== lastSystem || Date.now() - lastSystemAt >= 60_000) {
@@ -387,7 +395,13 @@ export function startSync(
     }
     dispose = close
     socket.addEventListener('open', () => {
-      send({ type: 'hello', machine, build: host.build().id, project: host.projectRoot })
+      send({
+        type: 'hello',
+        machine,
+        build: host.build().id,
+        project: host.projectRoot,
+        port: Number(new URL(host.system().process.url).port),
+      })
       metadata()
       metadataTimer = setInterval(metadata, 1000)
       enqueue(async () => send({ type: 'models', value: await host.modelsResponse() }))

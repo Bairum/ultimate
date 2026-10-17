@@ -1,5 +1,6 @@
 import type { ConversationRecord, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
 import type { CloudMessage, MachineMessage, OutboxItem } from './protocol.ts'
+import type { ConversationSummary } from '../shared/protocol.ts'
 
 /** The common subset of Durable Object SQL and a node:sqlite adapter. */
 export interface Sql {
@@ -14,7 +15,7 @@ export class ReplicaStore {
   readonly sql: Sql
   constructor(sql: Sql) {
     this.sql = sql
-    for (const table of ['conversations', 'metadata'])
+    for (const table of ['conversations', 'metadata', 'summaries'])
       sql.exec(`CREATE TABLE IF NOT EXISTS ${table} (id INTEGER PRIMARY KEY, value TEXT NOT NULL)`)
     sql.exec(
       'CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL, head INTEGER, value TEXT NOT NULL)',
@@ -50,6 +51,29 @@ export class ReplicaStore {
   }
   metadata(id: number): unknown {
     return this.get('metadata', id)
+  }
+  identity(): { machine: string; project: string; port: number } | undefined {
+    return this.metadata(5) as ReturnType<ReplicaStore['identity']>
+  }
+  key(): string | undefined {
+    return this.metadata(6) as string | undefined
+  }
+  claimKey(machine: string, project: string): boolean {
+    const key = JSON.stringify([machine, project])
+    if (this.key() && this.key() !== key) return false
+    this.put('metadata', 6, key)
+    return true
+  }
+  hasEntries(): boolean {
+    return [...this.sql.exec('SELECT id FROM entries LIMIT 1')].length > 0
+  }
+  summaryCount(): number {
+    return [...this.sql.exec<{ count: number }>('SELECT COUNT(*) AS count FROM summaries')][0].count
+  }
+  summaries(): ConversationSummary[] {
+    return [...this.sql.exec<{ value: string }>('SELECT value FROM summaries ORDER BY id')].map(
+      (row) => JSON.parse(row.value) as ConversationSummary,
+    )
   }
   /** Adopt existing trial data on first hello; later hosts must name the same project. */
   claimProject(project: string): string {
@@ -125,6 +149,11 @@ export class ReplicaStore {
   receive(message: MachineMessage): CloudMessage[] {
     switch (message.type) {
       case 'hello':
+        this.put('metadata', 5, {
+          machine: message.machine,
+          project: message.project,
+          port: message.port,
+        })
         return [this.cursor(), { type: 'outbox', items: this.outbox() }]
       case 'batch':
         this.sql.transaction(() => {
@@ -152,7 +181,11 @@ export class ReplicaStore {
         })
         return [{ type: 'ack', batch: message.batch }]
       case 'summaries':
-        this.put('metadata', 1, message.value)
+        this.sql.transaction(() => {
+          if (message.full) this.sql.exec('DELETE FROM summaries')
+          for (const id of message.removed) this.sql.exec('DELETE FROM summaries WHERE id=?', id)
+          for (const summary of message.value) this.put('summaries', summary.id, summary)
+        })
         break
       case 'system':
         this.put('metadata', 2, message.value)

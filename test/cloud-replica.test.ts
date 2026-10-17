@@ -4,6 +4,7 @@ import { Replica } from '../cloud/worker.ts'
 import type { ConversationRecord, EntryRecord } from '@earendil-works/pi-durable'
 import { ReplicaStore, proxyRequest } from '../cloud/replica.ts'
 import type { Sql } from '../cloud/replica.ts'
+import { DirectoryStore } from '../cloud/directory.ts'
 import { PROJECT_MISMATCH } from '../cloud/protocol.ts'
 import type { MachineMessage, ReplicaDoc } from '../cloud/protocol.ts'
 
@@ -50,6 +51,7 @@ function worker(online = false) {
     streams: new Set(),
     env: { MACHINE_ORIGIN: 'http://127.0.0.1:4800' },
   })
+  instance.store.receive(hello('/test'))
   vi.spyOn(instance, 'sockets').mockReturnValue(
     online
       ? [{ send: vi.fn<() => void>() } as unknown as ReturnType<Replica['sockets']>[number]]
@@ -165,14 +167,17 @@ describe('cloud request admission and fallback', () => {
     })
     const response = new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
     const forward = vi.fn<(request: Request) => Promise<Response>>(async (request) => {
-      expect(request.url).toBe('http://127.0.0.1:4747/api/events?conversation=1')
+      expect(request.url).toBe('http://127.0.0.1:4800/api/events?conversation=1')
       expect([...request.headers.entries()]).toEqual([
-        ['host', '127.0.0.1:4747'],
-        ['origin', 'http://127.0.0.1:4747'],
+        ['host', '127.0.0.1:4800'],
+        ['origin', 'http://127.0.0.1:4800'],
       ])
       return response
     })
-    Object.assign(instance.env, { MACHINE: { fetch: forward } })
+    Object.assign(instance.env, {
+      TUNNELS: JSON.stringify({ test: 'TUNNEL_0' }),
+      TUNNEL_0: { fetch: forward },
+    })
     const direct = vi.fn<typeof fetch>()
     vi.stubGlobal('fetch', direct)
     const result = await instance.fetch(
@@ -193,7 +198,10 @@ describe('cloud request admission and fallback', () => {
   })
   it('never enqueues an ambiguous proxied write, while failed GETs fall back', async () => {
     const instance = worker(true)
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Response lost after commit')))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<() => void>().mockRejectedValue(new Error('Response lost after commit')),
+    )
     const response = await instance.fetch(submitRequest())
     expect(response.status).toBe(502)
     expect(await response.json()).toEqual({
@@ -225,18 +233,145 @@ describe('cloud request admission and fallback', () => {
 const hello = (project: string): MachineMessage => ({
   type: 'hello',
   machine: 'test',
+  port: 4800,
   build: 'test',
   project,
 })
 
 describe('cloud replica', () => {
+  it('assigns stable safe slugs, resolves collisions, and forgets only offline projects without entries', () => {
+    const directory = new DirectoryStore(replica().sql)
+    const value = {
+      machine: 'Desk PC',
+      project: '/work/My App',
+      port: 4801,
+      connected: true,
+      lastSeen: 100,
+      count: 2,
+      hasEntries: true,
+    }
+    directory.update(value)
+    directory.update({ ...value, project: '/other/My App' })
+    expect(directory.list().map((row) => row.slug)).toEqual(['desk-pc/my-app', 'desk-pc/my-app-2'])
+    directory.update({ ...value, connected: false, lastSeen: 200 })
+    expect(directory.resolve('desk-pc/my-app')).toMatchObject({
+      connected: false,
+      lastSeen: 200,
+      count: 2,
+    })
+    directory.update({ ...value, count: 0, hasEntries: false })
+    expect(directory.resolve('desk-pc/my-app')).toMatchObject({ connected: true, count: 0 })
+    directory.update({ ...value, count: 0, connected: false, hasEntries: false })
+    expect(directory.resolve('desk-pc/my-app')).toBeUndefined()
+    expect(directory.list()).toHaveLength(1)
+    directory.update(value)
+    expect(directory.resolve('desk-pc/my-app')).toMatchObject(value)
+  })
+
+  it('reports the first synced entries to the Directory and retains that fact on disconnect', () => {
+    const instance = worker()
+    const update = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(
+      async () => new Response(),
+    )
+    Object.assign(instance, {
+      env: { DIRECTORY: { idFromName: () => 'directory', get: () => ({ fetch: update }) } },
+    })
+    const socket = {
+      readyState: WebSocket.OPEN,
+      deserializeAttachment: () => true,
+      send: vi.fn<(value: string) => void>(),
+      close: vi.fn<() => void>(),
+    }
+    Object.assign(instance, {
+      ctx: {
+        getWebSockets: () => [socket],
+        waitUntil: vi.fn<(promise: Promise<unknown>) => void>(),
+      },
+    })
+    expect(instance.store.hasEntries()).toBe(false)
+    instance.webSocketMessage(
+      socket as unknown as ReturnType<Replica['sockets']>[number],
+      JSON.stringify({ type: 'batch', batch: 1, conversations: [], entries: [entry(1)], docs: [] }),
+    )
+    expect(JSON.parse(update.mock.calls.at(-1)![1].body as string)).toMatchObject({
+      hasEntries: true,
+      connected: true,
+    })
+    instance.webSocketClose(socket as unknown as ReturnType<Replica['sockets']>[number])
+    expect(JSON.parse(update.mock.calls.at(-1)![1].body as string)).toMatchObject({
+      hasEntries: true,
+      connected: false,
+    })
+  })
+
+  it('applies full summaries and changed/removed deltas idempotently', () => {
+    const store = replica()
+    const first = { id: 1, title: 'first', busy: false },
+      second = { id: 2, title: 'second', busy: false }
+    store.receive({ type: 'summaries', value: [first, second], removed: [], full: true })
+    const delta: MachineMessage = {
+      type: 'summaries',
+      value: [{ ...second, busy: true }],
+      removed: [1],
+      full: false,
+    }
+    store.receive(delta)
+    store.receive(delta)
+    expect(store.summaries()).toEqual([{ ...second, busy: true }])
+    store.receive({ type: 'summaries', value: [], removed: [], full: true })
+    expect(store.summaries()).toEqual([])
+  })
+
+  it.each([0, -1, 65536, 4800.5])('never proxies an invalid port %s', async (port) => {
+    const instance = worker(true)
+    instance.store.receive({ ...hello('/test'), port } as MachineMessage)
+    const forward = vi.fn<() => void>()
+    vi.stubGlobal('fetch', forward)
+    expect((await instance.fetch(new Request('https://cloud.example/api/models'))).status).toBe(200)
+    expect(forward).not.toHaveBeenCalled()
+  })
+
+  it.each([0, 65536, 4800.5])('refuses hello port %s before admitting a socket', (port) => {
+    const instance = worker()
+    instance.store.claimKey('test', '/test')
+    const socket = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn<(value: string) => void>(),
+      close: vi.fn<(code: number, reason: string) => void>(),
+    }
+    Object.assign(instance, { ctx: { getWebSockets: () => [socket] } })
+    instance.webSocketMessage(
+      socket as unknown as ReturnType<Replica['sockets']>[number],
+      JSON.stringify({ ...hello('/test'), port }),
+    )
+    expect(socket.close).toHaveBeenCalledWith(PROJECT_MISMATCH, 'Machine or project mismatch')
+    expect(socket.send).not.toHaveBeenCalled()
+  })
+
+  it('stays offline without a binding for its machine', async () => {
+    const instance = worker(true)
+    const forward = vi.fn<() => void>()
+    Object.assign(instance, {
+      env: { TUNNELS: JSON.stringify({ other: 'TUNNEL_0' }), TUNNEL_0: { fetch: forward } },
+    })
+    expect((await instance.fetch(new Request('https://cloud.example/api/models'))).status).toBe(200)
+    expect(forward).not.toHaveBeenCalled()
+  })
+
   it('rejects a second project without changing data or sending a cursor, and accepts the same project again', () => {
     const sockets: ReturnType<Replica['sockets']> = []
     const instance = Object.assign(Object.create(Replica.prototype) as Replica, {
       store: replica(),
       streams: new Set(),
-      ctx: { getWebSockets: () => sockets },
+      ctx: { getWebSockets: () => sockets, waitUntil: vi.fn<() => void>() },
+      env: {
+        DIRECTORY: {
+          idFromName: () => 'directory',
+          get: () => ({ fetch: async () => new Response() }),
+        },
+      },
     })
+    instance.store.claimKey('test', '/ultimate')
     const connect = () => {
       let attachment: unknown
       const socket = {
@@ -258,6 +393,17 @@ describe('cloud replica', () => {
         )
       return { socket, receive }
     }
+    const update = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(
+      async () => new Response(),
+    )
+    instance.env.DIRECTORY.get = vi.fn<() => { fetch: typeof update }>(() => ({
+      fetch: update,
+    })) as unknown as typeof instance.env.DIRECTORY.get
+    // The sync route binds this object before hello; wrong machine must not adopt it.
+    const wrong = connect()
+    wrong.receive({ ...hello('/ultimate'), machine: 'other' } as MachineMessage)
+    expect(wrong.socket.close).toHaveBeenCalledWith(PROJECT_MISMATCH, 'Machine or project mismatch')
+    expect(instance.store.metadata(4)).toBeUndefined()
     // Existing dry-run data has no project yet; the first hello adopts it without changing it.
     batch(instance.store, [entry(1)], [doc(1)])
     instance.store.enqueue(1, 'queued')
@@ -278,8 +424,32 @@ describe('cloud replica', () => {
       'outbox',
     ])
     expect(instance.store.metadata(4)).toBe('/ultimate')
+    expect(JSON.parse(update.mock.calls[0][1].body as string)).toMatchObject({
+      machine: 'test',
+      project: '/ultimate',
+      port: 4800,
+      connected: true,
+    })
+    first.receive({
+      type: 'summaries',
+      value: [{ id: 1, title: 'root', busy: false }],
+      removed: [],
+      full: true,
+    })
+    expect(JSON.parse(update.mock.calls.at(-1)![1].body as string)).toMatchObject({
+      count: 1,
+      connected: true,
+    })
+    const calls = update.mock.calls.length
+    first.receive({
+      type: 'summaries',
+      value: [{ id: 1, title: 'changed', busy: false }],
+      removed: [],
+      full: false,
+    })
+    expect(update).toHaveBeenCalledTimes(calls)
     const snapshot = () =>
-      ['metadata', 'conversations', 'entries', 'docs', 'outbox'].map((table) => [
+      ['metadata', 'conversations', 'entries', 'docs', 'outbox', 'summaries'].map((table) => [
         ...instance.store.sql.exec(`SELECT * FROM ${table} ORDER BY 1`),
       ])
     const before = snapshot()
@@ -306,6 +476,11 @@ describe('cloud replica', () => {
       'outbox',
     ])
     expect(first.socket.close).toHaveBeenCalledWith(1000, 'Replaced by new machine connection')
+    instance.webSocketClose(reconnect.socket as unknown as (typeof sockets)[number])
+    expect(JSON.parse(update.mock.calls.at(-1)![1].body as string)).toMatchObject({
+      connected: false,
+      project: '/ultimate',
+    })
   })
 
   it('restores socket admission from attachments after hibernation', () => {
@@ -314,11 +489,17 @@ describe('cloud replica', () => {
     const ctx = {
       storage: { sql, transactionSync: <T>(run: () => T) => sql.transaction(run) },
       getWebSockets: () => sockets,
+      waitUntil: vi.fn<() => void>(),
     } as unknown as ConstructorParameters<typeof Replica>[0]
-    const env = { MACHINE_ORIGIN: 'http://127.0.0.1:4800' } as ConstructorParameters<
-      typeof Replica
-    >[1]
+    const env = {
+      DIRECTORY: {
+        idFromName: () => 'directory',
+        get: () => ({ fetch: async () => new Response() }),
+      },
+      MACHINE_ORIGIN: 'http://127.0.0.1:4800',
+    } as unknown as ConstructorParameters<typeof Replica>[1]
     let instance = new Replica(ctx, env)
+    instance.store.claimKey('test', '/ultimate')
     const connect = () => {
       let attachment: unknown
       const socket = {
@@ -374,7 +555,7 @@ describe('cloud replica', () => {
       ])
     const before = snapshot()
     refused.receive({ ...write, entries: [entry(99)] })
-    refused.receive({ type: 'summaries', value: [] })
+    refused.receive({ type: 'summaries', value: [], removed: [], full: true })
     refused.receive({ type: 'delivered', id: item.id, submissionId: 1 })
     expect(snapshot()).toEqual(before)
     expect(refused.socket.send).not.toHaveBeenCalled()
@@ -407,7 +588,13 @@ describe('cloud replica', () => {
     Object.assign(instance, { ctx: { getWebSockets: () => [socket] } })
     instance.webSocketMessage(
       socket as unknown as ReturnType<Replica['sockets']>[number],
-      JSON.stringify({ type: 'hello', machine: 'test', build: 'test', project: '/other' }),
+      JSON.stringify({
+        type: 'hello',
+        machine: 'test',
+        build: 'test',
+        port: 4800,
+        project: '/other',
+      }),
     )
     const [code, reason] = socket.close.mock.calls[0]
     expect(code).toBe(PROJECT_MISMATCH)
@@ -422,7 +609,13 @@ describe('cloud replica', () => {
     expect(batch(store, [entry(1), entry(2)], [doc(3)])).toEqual([{ type: 'ack', batch: 1 }])
     expect(store.view(1)?.entries.map((record) => record.id)).toEqual([1, 2])
     expect(
-      store.receive({ type: 'hello', machine: 'test', build: 'test', project: '/test' }),
+      store.receive({
+        type: 'hello',
+        machine: 'test',
+        build: 'test',
+        port: 4800,
+        project: '/test',
+      }),
     ).toEqual([
       { type: 'cursor', entries: { 1: 2 }, docs: { 3: 'hash-3' } },
       { type: 'outbox', items: [] },
@@ -533,7 +726,13 @@ describe('cloud replica', () => {
       ],
     })
     expect(
-      store.receive({ type: 'hello', machine: 'test', build: 'test', project: '/test' })[1],
+      store.receive({
+        type: 'hello',
+        machine: 'test',
+        build: 'test',
+        port: 4800,
+        project: '/test',
+      })[1],
     ).toEqual({
       type: 'outbox',
       items: [item],

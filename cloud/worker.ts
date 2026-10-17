@@ -12,7 +12,9 @@ import type { AccessConfig } from './access.ts'
 import type { Sql } from './replica.ts'
 import { PROJECT_MISMATCH } from './protocol.ts'
 import type { MachineMessage } from './protocol.ts'
-import type { ConversationSummary } from '../shared/protocol.ts'
+import { DirectoryStore } from './directory.ts'
+import type { Instance, Presence } from './directory.ts'
+import { frontPage } from './front.ts'
 
 // Workers provides this constructor; Node-side request tests do not use WebSocket upgrades.
 declare const WebSocketPair: typeof MachineSocketPair
@@ -20,7 +22,9 @@ declare const WebSocketPair: typeof MachineSocketPair
 interface Env extends AccessConfig {
   REPLICA: DurableObjectNamespace
   ASSETS: Fetcher
-  MACHINE?: Fetcher
+  DIRECTORY: DurableObjectNamespace
+  TUNNELS?: string
+  [binding: `TUNNEL_${number}`]: Fetcher | undefined
   MACHINE_ORIGIN?: string
   SYNC_TOKEN: string
 }
@@ -50,13 +54,64 @@ function matchesSyncToken(authorization: string | null, token: string): boolean 
 
 export default {
   async fetch(request: Request, env: Env) {
-    const path = new URL(request.url).pathname
-    if (path.startsWith('/api/') && !(await admitsAccess(request, env)))
+    const url = new URL(request.url)
+    const prefix = /^\/p\/([^/]+\/[^/]+)(?=\/|$)/.exec(url.pathname)
+    const path = prefix ? url.pathname.slice(prefix[0].length) : url.pathname
+    const api = path === '/api' || path.startsWith('/api/')
+    if (api && !(await admitsAccess(request, env)))
       return Response.json({ error: 'Unauthorized' }, { status: 401 })
-    if (path.startsWith('/api/') || path === '/sync')
-      return env.REPLICA.get(env.REPLICA.idFromName('replica')).fetch(request)
+    if (url.pathname === '/')
+      return new Response(frontPage, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
+    if (url.pathname === '/api/directory') return directory(env).fetch('https://directory/list')
+    if (path === '/sync' && !prefix) {
+      const machine = url.searchParams.get('machine'),
+        project = url.searchParams.get('project')
+      if (!machine || !project?.startsWith('/'))
+        return Response.json({ error: 'Expected machine and absolute project' }, { status: 400 })
+      return env.REPLICA.get(env.REPLICA.idFromName(JSON.stringify([machine, project]))).fetch(
+        request,
+      )
+    }
+    if (api) {
+      if (!prefix) return Response.json({ error: 'Unknown project' }, { status: 404 })
+      const resolved = await directory(env).fetch(
+        `https://directory/resolve?slug=${encodeURIComponent(prefix[1])}`,
+      )
+      if (!resolved.ok) return resolved
+      const instance: Instance = await resolved.json()
+      url.pathname = path
+      return env.REPLICA.get(
+        env.REPLICA.idFromName(JSON.stringify([instance.machine, instance.project])),
+      ).fetch(new Request(url, request))
+    }
     return env.ASSETS.fetch(request)
   },
+}
+
+function directory(env: Env) {
+  return env.DIRECTORY.get(env.DIRECTORY.idFromName('directory'))
+}
+
+export class Directory {
+  readonly store: DirectoryStore
+  constructor(ctx: DurableObjectState) {
+    this.store = new DirectoryStore({
+      exec: (query, ...bindings) => ctx.storage.sql.exec(query, ...bindings),
+      transaction: (run) => ctx.storage.transactionSync(run),
+    } as Sql)
+  }
+  async fetch(request: Request) {
+    const url = new URL(request.url)
+    if (request.method === 'POST') {
+      this.store.update((await request.json()) as Presence)
+      return new Response(null, { status: 204 })
+    }
+    if (url.pathname === '/list') return Response.json(this.store.list())
+    const value = this.store.resolve(url.searchParams.get('slug') ?? '')
+    return value
+      ? Response.json(value)
+      : Response.json({ error: 'Unknown project' }, { status: 404 })
+  }
 }
 
 export class Replica {
@@ -83,6 +138,24 @@ export class Replica {
         (socket) => socket.readyState === WebSocket.OPEN && socket.deserializeAttachment() === true,
       )
   }
+  presence(connected: boolean) {
+    const identity = this.store.identity()
+    if (!identity) return
+    this.ctx.waitUntil(
+      directory(this.env)
+        .fetch('https://directory/update', {
+          method: 'POST',
+          body: JSON.stringify({
+            ...identity,
+            connected,
+            lastSeen: Date.now(),
+            count: this.store.summaryCount(),
+            hasEntries: this.store.hasEntries(),
+          }),
+        })
+        .then(() => {}),
+    )
+  }
   refresh() {
     for (const stream of this.streams) stream.send('view', this.store.view(stream.id))
   }
@@ -97,23 +170,38 @@ export class Replica {
       if (['hello', 'batch', 'summaries', 'system', 'models', 'delivered'].includes(message?.type))
         type = message.type
       if (message.type === 'hello') {
-        const held = this.store.claimProject(message.project)
-        if (held !== message.project) {
+        const held = this.store.metadata(4) as string | undefined
+        if (
+          (held !== undefined && held !== message.project) ||
+          this.store.key() !== JSON.stringify([message.machine, message.project]) ||
+          !Number.isInteger(message.port) ||
+          message.port < 1 ||
+          message.port > 65535
+        ) {
           let reason = ''
           const encoder = new TextEncoder()
-          for (const character of held) {
+          for (const character of held ?? 'Machine or project mismatch') {
             if (encoder.encode(reason + character).byteLength > 123) break
             reason += character
           }
           socket.close(PROJECT_MISMATCH, reason)
           return
         }
+        this.store.claimProject(message.project)
         for (const previous of this.sockets())
           if (previous !== socket) previous.close(1000, 'Replaced by new machine connection')
         socket.serializeAttachment(true)
         for (const stream of this.streams) stream.close()
       } else if (socket.deserializeAttachment() !== true) return
+      const hasEntries = this.store.hasEntries()
+      const count = message.type === 'summaries' ? this.store.summaryCount() : undefined
       for (const reply of this.store.receive(message)) socket.send(JSON.stringify(reply))
+      if (
+        message.type === 'hello' ||
+        (count !== undefined && count !== this.store.summaryCount()) ||
+        (message.type === 'batch' && hasEntries !== this.store.hasEntries())
+      )
+        this.presence(true)
       if (message.type === 'delivered') this.refresh()
     } catch (error) {
       const bytes =
@@ -124,9 +212,15 @@ export class Replica {
   }
   webSocketClose(socket: MachineSocket) {
     socket.close()
+    if (
+      socket.deserializeAttachment() === true &&
+      !this.sockets().some((other) => other !== socket)
+    )
+      this.presence(false)
   }
   webSocketError(socket: MachineSocket) {
     socket.close(1011, 'Sync failed')
+    this.webSocketClose(socket)
   }
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
@@ -138,6 +232,10 @@ export class Replica {
         return Response.json({ error: 'Unauthorized' }, { status: 401 })
       if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket')
         return new Response('Expected WebSocket', { status: 426 })
+      const machine = url.searchParams.get('machine'),
+        project = url.searchParams.get('project')
+      if (!machine || !project?.startsWith('/') || !this.store.claimKey(machine, project))
+        return Response.json({ error: 'Project mismatch' }, { status: 409 })
       const [client, server] = Object.values(new WebSocketPair())
       this.ctx.acceptWebSocket(server)
       const upgrade = { status: 101, webSocket: client }
@@ -147,16 +245,23 @@ export class Replica {
       await discardBody(request)
       return Response.json({ error: 'Forbidden' }, { status: 403 })
     }
-    if (this.sockets().length) {
+    const identity = this.store.identity()
+    const bindings = JSON.parse(this.env.TUNNELS ?? '{}') as Record<string, `TUNNEL_${number}`>
+    const binding = identity && this.env[bindings[identity.machine]]
+    if (
+      this.sockets().length &&
+      identity &&
+      Number.isInteger(identity.port) &&
+      identity.port >= 1 &&
+      identity.port <= 65535 &&
+      (binding || this.env.MACHINE_ORIGIN)
+    ) {
       try {
-        // VPC fixes the connection target; the URL supplies the loopback Host the machine admits.
-        if (this.env.MACHINE)
-          return await this.env.MACHINE.fetch(
-            proxyRequest(request.clone(), 'http://127.0.0.1:4747'),
-          )
-        // Local wrangler dev has no VPC binding and uses an explicitly configured loopback host.
-        if (!this.env.MACHINE_ORIGIN) throw new Error('No machine binding')
-        return await fetch(proxyRequest(request.clone(), this.env.MACHINE_ORIGIN))
+        const origin = new URL(binding ? 'http://127.0.0.1' : this.env.MACHINE_ORIGIN!)
+        origin.port = String(identity.port)
+        const forwarded = proxyRequest(request.clone(), origin.origin)
+        if (binding) return await binding.fetch(forwarded)
+        return await fetch(forwarded)
       } catch {
         // A lost response may follow a committed write. Only reads can safely fall back to the replica.
         if (request.method !== 'GET') {
@@ -233,12 +338,10 @@ export class Replica {
           send('system', { ...system, offline: true })
           send(
             'conversations',
-            ((this.store.metadata(1) as ConversationSummary[] | undefined) ?? []).map(
-              (summary) => ({
-                ...summary,
-                busy: false,
-              }),
-            ),
+            this.store.summaries().map((summary) => ({
+              ...summary,
+              busy: false,
+            })),
           )
           send('view', this.store.view(id))
           send('ui', { value: this.store.doc(this.store.root(), 'ultimate.ui') ?? {} })

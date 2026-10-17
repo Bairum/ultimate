@@ -1,3 +1,4 @@
+import { projectBase } from './api.ts'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { JsonValue } from '@earendil-works/chord'
 import type { ConversationView, JsonObject, TaskGraph } from '@earendil-works/pi-durable'
@@ -100,7 +101,7 @@ function applyDoc(docs: Docs, event: ServerEvents['doc'] | ServerEvents['docOps'
 }
 
 export function createStore(options: StoreOptions = {}) {
-  const base = options.base ?? ''
+  const base = options.base ?? projectBase()
   const open = options.eventSource ?? ((url: string) => new EventSource(url))
   const request = options.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args))
   let state: State = {
