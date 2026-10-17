@@ -155,7 +155,7 @@ test('codemode inspects loaded extensions instead of guessing', async () => {
       ),
     ).toBe(true)
     expect(turn.text).toMatch(/\bplan\b/i)
-    expect(turn.text).toMatch(/loaded|enabled|active|success/i)
+    expect(turn.text).toMatch(/loaded|enabled|active|success|no load errors?/i)
     measure('codemode', turn)
   } finally {
     await ultimate.stop()

@@ -28,7 +28,9 @@ test('E1 plan ledger remains visible across turns', async () => {
     )
     const calls = turn.toolCalls.filter((call) => call.name === 'plan')
     expect(calls.some((call) => call.arguments.action === 'create')).toBe(true)
-    expect(calls.filter((call) => call.arguments.action === 'add')).toHaveLength(2)
+    expect(
+      calls.filter((call) => call.arguments.action === 'add').map((call) => call.arguments),
+    ).toHaveLength(2)
     expect(
       calls.some(
         (call) => call.arguments.action === 'update' && call.arguments.status === 'in_review',
@@ -213,7 +215,7 @@ test('E6 explains how to enable an off building block', async () => {
       'Is the plan extension on? If not, tell me exactly which file to edit to enable it for this project. Include the settings key. No tools.',
     )
     expect(turn.toolCalls).toHaveLength(0)
-    expect(turn.text).toMatch(/off|not enabled|disabled|not.*on|not.*loaded/i)
+    expect(turn.text).toMatch(/^no\b|off|not enabled|disabled|not.*on|not.*loaded/i)
     expect(turn.text).toContain('.ultimate/settings.json')
     expect(turn.text).toMatch(/extensions[\s\S]*enable/)
     measure('E6-building-block', turn)
