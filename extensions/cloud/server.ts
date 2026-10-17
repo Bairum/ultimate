@@ -295,7 +295,11 @@ export function startSync(
               entryCursor,
               context,
             )
-            for (const value of page.items) if (value.conversationId === record.id) entry(value)
+            for (const value of page.items) {
+              if (pendingBytes >= 1_000_000) await waitForCapacity()
+              if (closed) return
+              if (value.conversationId === record.id) entry(value)
+            }
             entryCursor = page.next
           } while (entryCursor)
           let docCursor: Cursor | undefined

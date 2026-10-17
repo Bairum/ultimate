@@ -506,6 +506,43 @@ it('resumes each conversation exactly after its own partial cursor', async () =>
   }
 })
 
+it('streams an entry page larger than the retained-data cap without reconnecting', async () => {
+  const f = await fixture()
+  try {
+    const payload = 'x'.repeat(100 * 1024)
+    const expected = await f.opened.harness.commit(async (tx) => {
+      const ids = []
+      for (let index = 0; index < 256; index++) {
+        const entry = await tx.appendEntry(f.opened.root.id, {
+          kind: 'cloud-test.large-page',
+          data: { index, payload },
+        })
+        ids.push(entry.id)
+      }
+      return ids
+    }, context)
+    const page = await f.opened.root.entries({ order: 'ascending' }, 256, undefined, context)
+    expect(Buffer.byteLength(JSON.stringify(page.items))).toBeGreaterThan(MAX_RETAINED_BYTES)
+    const socket = f.sockets[0]
+    socket.open()
+    await f.drain()
+    expect(socket.closed).toBe(false)
+    expect(f.sockets).toHaveLength(1)
+    expect(
+      socket
+        .entries()
+        .filter((entry) => entry.kind === 'cloud-test.large-page')
+        .map((entry) => entry.id),
+    ).toEqual(expected)
+    const ids = socket.entries().map((entry) => entry.id)
+    expect(ids).toEqual(ids.toSorted((a, b) => a - b))
+    expect(f.stop.retainedBytes()).toBe(0)
+    expect(f.notices).toEqual([])
+  } finally {
+    await f.close()
+  }
+})
+
 it('reconnects on retained-data overflow and converges from the replica cursor', async () => {
   const f = await fixture()
   try {
