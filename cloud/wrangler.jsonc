@@ -1,0 +1,15 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "ultimate-cloud",
+  "main": "worker.ts",
+  "compatibility_date": "2026-06-01",
+  "durable_objects": { "bindings": [{ "name": "REPLICA", "class_name": "Replica" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Replica"] }],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/sync"],
+  },
+  "vars": { "MACHINE_ORIGIN": "http://127.0.0.1:4800" },
+}

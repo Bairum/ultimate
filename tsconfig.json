@@ -19,6 +19,7 @@
     "server",
     "shared",
     "cloud/protocol.ts",
+    "cloud/build.ts",
     "extensions/**/*.ts",
     ".ultimate/extensions/**/*.ts",
     "test",

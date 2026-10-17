@@ -4,3 +4,5 @@ dist/
 *.sqlite-*
 .DS_Store
 *.tsbuildinfo
+.dev.vars
+.wrangler/
