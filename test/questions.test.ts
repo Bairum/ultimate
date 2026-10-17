@@ -7,7 +7,11 @@ import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { defineTask, InboxDoc, LiveDoc } from '@earendil-works/pi-durable'
 import { context } from '../server/harness.ts'
 import { Summaries, currentAnswer } from '../extensions/conversations/summary.ts'
-import questionsExtension, { actions, parseQuestions } from '../extensions/questions/server.ts'
+import questionsExtension, {
+  actions,
+  parseQuestions,
+  QUESTIONS_SYSTEM,
+} from '../extensions/questions/server.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { Submission } from '@earendil-works/pi-durable'
 import type { Tx, ConversationId } from '@earendil-works/pi-durable'
@@ -55,7 +59,7 @@ async function launch() {
     requests.push(transcript)
     const system = transcript.messages[0]
     const prompt = system?.role === 'system' ? system.content : ''
-    if (typeof prompt === 'string' && prompt.startsWith('Extract questions addressed')) {
+    if (prompt === QUESTIONS_SYSTEM) {
       extract()
       if (gate) await gate
       return fauxAssistantMessage([fauxText(JSON.stringify(extraction))])
