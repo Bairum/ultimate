@@ -129,6 +129,43 @@ it('keeps one ownerless standing conversation, refreshes its definition and recr
   expect(await service.standing('x', ctx)).not.toBe(id)
 })
 
+it('keeps a model chosen in the standing conversation across refreshes unless the definition pins one', async () => {
+  const { service, host, file } = await fixture()
+  await host.harness.commit(async (tx) => {
+    await configure(tx, ROOT_CONVERSATION_ID, {
+      model: { provider: 'faux', modelId: 'faux-1' },
+      thinkingLevel: 'low',
+    })
+  }, ctx)
+  const id = await service.standing('x', ctx)
+  const conversation = (await host.harness.conversation(id, ctx))!
+  expect(await conversation.agent(ctx)).toMatchObject({
+    model: { provider: 'faux', modelId: 'faux-1' },
+    thinkingLevel: 'low',
+  })
+  const chosen = { provider: 'openai', modelId: 'gpt-6-astra' }
+  await host.harness.commit(async (tx) => {
+    await configure(tx, id, { model: chosen, thinkingLevel: 'high' })
+  }, ctx)
+  await writeFile(file, definition('Edited'))
+  await service.standing('x', ctx)
+  expect(await conversation.agent(ctx)).toMatchObject({
+    instructions: 'Edited',
+    model: chosen,
+    thinkingLevel: 'high',
+  })
+  await writeFile(
+    file,
+    definition('Pinned', 'model: anthropic/claude-opus-4-8\nthinking: minimal\n'),
+  )
+  await service.standing('x', ctx)
+  expect(await conversation.agent(ctx)).toMatchObject({
+    instructions: 'Pinned',
+    model: { provider: 'anthropic', modelId: 'claude-opus-4-8' },
+    thinkingLevel: 'minimal',
+  })
+})
+
 it('offers deferred tools only when named by the definition, and removes them on refresh', async () => {
   const { service, host, file } = await fixture()
   expect((await host.root.agent(ctx)).tools.map((tool) => tool.name)).not.toContain('t')
