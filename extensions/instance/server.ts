@@ -149,7 +149,7 @@ async function stop(instances: Map<string, Instance>, id: string) {
 }
 
 /**
- * Where the tailnet reaches each preview, by pid. A non-faux preview's own `tailscale` extension records its HTTPS port in
+ * Where the tailnet reaches each preview, by pid. A preview's own `tailscale` extension records its HTTPS port in
  * the user's registry under an owner token that starts with its pid; the host's tailscale status knows the DNS name.
  */
 async function tailnet(host: Pick<ExtensionHost, 'use' | 'userHome'>) {

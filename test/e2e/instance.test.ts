@@ -67,6 +67,11 @@ async function fixture({ foreign = false } = {}) {
     await git(project, 'commit', '-m', 'Start app')
   }
   new ProjectTrustStore(join(root, '.ultimate')).set(project, true)
+  // Faux previews publish on Tailscale; keep them off the machine's real tailnet.
+  await writeFile(
+    join(root, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { disable: ['tailscale'] } }),
+  )
   const prepared = await prepareHarness({
     ultimateRoot: source,
     projectRoot: project,

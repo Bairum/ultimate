@@ -312,8 +312,9 @@ export default function tailscale(host: ExtensionHost) {
     running ??= start().finally(() => (running = undefined))
     return (opening = running)
   }
-  // Faux servers are token-free demos and tests; they never change the machine's Serve mappings.
-  if (host.faux) return defineExtension({ name: 'tailscale' })
+  // Faux servers are token-free demos and tests and never change the machine's Serve mappings, except a faux preview
+  // started by another Ultimate's `instance` tool: the user opens it on their tailnet, and it frees its port on close.
+  if (host.faux && !preview) return defineExtension({ name: 'tailscale' })
   host.onOpen(begin)
   retries.set(host, begin)
   host.provide('tailscale', { status: () => status } satisfies TailscaleService)

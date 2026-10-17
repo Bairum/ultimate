@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { sourceCopy, cleanEnv, until, temp, removeTemp } from '../helpers.ts'
@@ -9,6 +9,12 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
   const home = await temp('ultimate-owner-test-')
   const ultimateRoot = await sourceCopy(home)
   const resultPath = join(home, 'instance.json')
+  // Faux previews publish on Tailscale; keep this one off the machine's real tailnet.
+  await mkdir(join(home, '.ultimate'), { recursive: true })
+  await writeFile(
+    join(home, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { disable: ['tailscale'] } }),
+  )
   const code = `
     import {createServer} from './server/main.ts';
     import {context} from './server/harness.ts';
