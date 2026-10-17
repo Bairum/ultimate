@@ -88,7 +88,8 @@ export default function cloudflare(host: ExtensionHost) {
             // anything token-shaped is redacted and the rest of the body is never shown.
             const errors = (data?.errors ?? [])
               .slice(0, 5)
-              .map((error) => `${error.code ?? '?'}: ${(error.message ?? '').slice(0, 200)}`)
+              // Redact before truncating, so a token cut at the boundary cannot leave a prefix behind.
+              .map((error) => `${error.code ?? '?'}: ${redact(error.message ?? '').slice(0, 200)}`)
               .join('; ')
             throw new Error(
               redact(

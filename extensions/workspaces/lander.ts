@@ -952,23 +952,31 @@ export function createLander(
                 deployText = `deploy warning: @${deploy.agent} is not a standing agent${board ? '' : ' (board unavailable)'}`
                 host.notice(deployText)
               } else {
-                await board.send(
-                  runtime.conversationId,
-                  {
-                    to: `@${deploy.agent}`,
-                    reply: false,
-                    text: [
-                      `Please deploy landed commit ${result.sha}.`,
-                      `Commits:\n${(result.commits ?? []).join('\n')}`,
-                      `Matching paths:\n${paths.join('\n')}`,
-                      `Pushed: ${result.pushed ?? 'no'}.`,
-                      `Submitter: #${conversationId}. Report the deployment outcome to #${conversationId} with a one-way message.`,
-                    ].join('\n'),
-                  },
-                  `lander-deploy:${id}`,
-                  context,
-                )
-                deployText = `deploy → @${deploy.agent}`
+                try {
+                  await board.send(
+                    runtime.conversationId,
+                    {
+                      to: `@${deploy.agent}`,
+                      reply: false,
+                      text: [
+                        `Please deploy landed commit ${result.sha}.`,
+                        `Commits:\n${(result.commits ?? []).join('\n')}`,
+                        `Matching paths:\n${paths.join('\n')}`,
+                        `Pushed: ${result.pushed ?? 'no'}.`,
+                        `Submitter: #${conversationId}. Report the deployment outcome to #${conversationId} with a one-way message.`,
+                      ].join('\n'),
+                    },
+                    `lander-deploy:${id}`,
+                    context,
+                  )
+                  deployText = `deploy → @${deploy.agent}`
+                } catch (error) {
+                  // The submission has landed; a failed handoff (no subagents service, a broken standing
+                  // conversation) is a warning on the report, never a stop. Cancellation still stops the phase.
+                  context.abortSignal?.throwIfAborted()
+                  deployText = `deploy warning: handoff to @${deploy.agent} failed: ${error instanceof Error ? error.message : String(error)}`
+                  host.notice(deployText)
+                }
               }
               await runtime.commit(async (tx) => {
                 const current = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).results[id]

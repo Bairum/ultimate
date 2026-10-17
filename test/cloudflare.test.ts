@@ -185,6 +185,20 @@ it('never echoes credentials from API failures, parse failures or fetch exceptio
     expect(error).not.toContain(token)
   }
 })
+it('redacts a token that a truncated Cloudflare error message would cut through', async () => {
+  const f = await fixture()
+  // The token straddles the 200-character cut: truncating first would leave its first half behind.
+  const message = `${'x'.repeat(190)}${token}`
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () =>
+      Response.json({ success: false, errors: [{ code: 1, message }] }, { status: 400 }),
+    ),
+  )
+  const error = await f.run().catch((caught: unknown) => String(caught))
+  expect(error).toContain('Cloudflare account lookup failed with HTTP 400')
+  expect(error).not.toContain(token.slice(0, 10))
+})
 it('names the failing step, HTTP status and Cloudflare error codes', async () => {
   const f = await fixture()
   vi.stubGlobal(

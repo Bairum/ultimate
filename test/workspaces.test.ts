@@ -47,6 +47,7 @@ import type { ConversationsService } from '../extensions/conversations/server.ts
 import { Summaries } from '../extensions/conversations/summary.ts'
 import self from '../extensions/self/server.ts'
 import board, { Board } from '../extensions/board/server.ts'
+import type { BoardService } from '../extensions/board/server.ts'
 import promptExtension, { order as promptOrder } from '../extensions/prompt/server.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
 import { seedTally, temp, until } from './helpers.ts'
@@ -1136,6 +1137,31 @@ it.concurrent('hands matching landings to the deploy agent exactly once', async 
   expect(recipient?.title).toBe('@deploy-test')
   expect(report).toContain('deploy → @deploy-test')
   expect((await landerLog(f)).log.some((line) => line.step === 'deploy → @deploy-test')).toBe(true)
+})
+it.concurrent('reports a landing with a deploy warning when the handoff itself fails', async () => {
+  const f = await lander({ deploy: { agent: 'deploy-test', paths: ['cloud/'] } }, undefined, true)
+  await mkdir(join(f.directory, '.ultimate/agents'), { recursive: true })
+  await writeFile(
+    join(f.directory, '.ultimate/agents/deploy-test.md'),
+    '---\nname: deploy-test\ndescription: Deploys\nresident: true\n---\nDeploy.\n',
+  )
+  // The board is there and the agent is resident, but delivery fails, as without a subagents service.
+  const service = f.host.use<BoardService>('board')!
+  service.send = async () => {
+    throw new Error('subagents service unavailable')
+  }
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  await mkdir(join(workspace.path, 'cloud'), { recursive: true })
+  await commit(workspace.path, 'cloud/change.txt')
+  await f.service.submit(id, 'None', context)
+  const [report] = await submitted(f, id)
+  const warning = 'deploy warning: handoff to @deploy-test failed: subagents service unavailable'
+  expect(report).toContain('landed as')
+  expect(report).toContain(warning)
+  expect((await landerLog(f)).log.map((line) => line.step)).toContain(warning)
+  expect(f.notice.mock.calls.flat().join('\n')).toContain(warning)
 })
 it.concurrent.each([
   { settings: {}, file: 'other.txt', step: undefined },
