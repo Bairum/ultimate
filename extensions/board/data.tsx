@@ -13,6 +13,11 @@ export type BoardMessage = {
   error?: string
 }
 
+/** Only incoming requests belong to an answer, never the outgoing reply log item. */
+export function answeredMessages(messages: BoardMessage[], conversation: number, entry: number) {
+  return messages.filter((message) => message.to === conversation && message.answer === entry)
+}
+
 export type Addresses = {
   agents: { name: string; description: string; id?: number }[]
   lander?: number

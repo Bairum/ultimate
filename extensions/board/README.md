@@ -123,3 +123,6 @@ Start a post with `@agent` or `#conversation`; autocomplete lists resident agent
 Without an address, posts go to `@ultimate` when it exists. Enter sends on desktop (Shift+Enter inserts a newline);
 on touch keyboards, return always inserts a newline and the arrow button sends. Reply retains a link to its original
 message. Typed board messages and replies render as compact transcript cards with Source / Return navigation.
+Incoming messages show whether they expect a reply or are one-way, plus their delivery mode (steered, follow-up or
+note) when recorded. Final answers name their reply destination, or say “not sent” for a one-way message. Answers
+that cover several board messages list each destination; unrelated answers show no board label.

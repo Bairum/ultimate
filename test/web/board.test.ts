@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  answeredMessages,
   parseAddress,
   participants,
   participantStatus,
@@ -8,6 +9,46 @@ import {
   suggestions,
   unreadCount,
 } from '../../extensions/board/data.tsx'
+
+describe('board answer labels', () => {
+  const request = {
+    id: 1,
+    from: 'user' as const,
+    to: 2,
+    text: 'Question',
+    at: 0,
+    reply: true,
+    state: 'answered' as const,
+    answer: 10,
+  }
+  it('selects a reply-enabled request for the answering entry', () => {
+    expect(answeredMessages([request], 2, 10)).toEqual([request])
+  })
+  it('includes one-way deliveries without requiring the answered state', () => {
+    const oneWay = { ...request, from: 4, reply: false, state: 'delivered' as const }
+    expect(answeredMessages([oneWay], 2, 10)).toEqual([oneWay])
+  })
+  it('ignores other answers, conversations and requests with no answer', () => {
+    expect(
+      answeredMessages(
+        [
+          { ...request, answer: 11 },
+          { ...request, to: 3 },
+          { ...request, answer: undefined },
+        ],
+        2,
+        10,
+      ),
+    ).toEqual([])
+  })
+  it('keeps every matching request in log order, excluding outgoing replies', () => {
+    const second = { ...request, id: 2, from: 4, reply: false }
+    expect(answeredMessages([request, second, { ...request, id: 3, to: 'user' }], 2, 10)).toEqual([
+      request,
+      second,
+    ])
+  })
+})
 
 describe('board roster', () => {
   const messages = [
