@@ -346,7 +346,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
           <SendIcon className="size-3.5 text-brand" />
         )}
         <span>Message to</span>
-        <span className="text-foreground">
+        <span className="flex min-w-0 text-foreground">
           {recipient === undefined ? (to ?? '…') : <Address id={recipient} />}
         </span>
         <span>
@@ -478,7 +478,7 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
     <section className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20">
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <MailIcon className="size-3.5 text-brand" />
-        <span className="text-foreground">
+        <span className="flex min-w-0 text-foreground">
           <Address id={origin.from} />
         </span>
         <span>{reply ? 'Reply' : 'Message'}</span>
