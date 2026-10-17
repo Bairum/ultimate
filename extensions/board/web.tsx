@@ -20,8 +20,6 @@ import {
 } from '@/sdk'
 import { Address, BoardCard, BoardInput, BoardRoster, BranchCall, MessageCall } from './cards.tsx'
 import { useOverview } from '../conversations/feature.tsx'
-import { newestAsked } from '../questions/open.tsx'
-import type { QuestionsBoard } from '../questions/open.tsx'
 import {
   emptyBoard,
   answeredMessages,
@@ -160,7 +158,6 @@ function BoardSurface() {
     active?.id === undefined ? board.messages : participantMessages(board.messages, active.id)
   ).filter((message) => tab === 'all' || message.to === 'user')
   const latest = messages.at(-1)?.id
-  const answering = newestAsked(useDocOf<QuestionsBoard>(1, 'questions.board'), messages)
   const hasUltimate = addresses.data?.agents.some((agent) => agent.name === 'ultimate') ?? false
   const choices = addresses.data ? suggestions(draft, caret, addresses.data) : []
   const choice = choices[Math.min(selected, choices.length - 1)]
@@ -312,7 +309,6 @@ function BoardSurface() {
                   key={message.id}
                   message={message}
                   perspective={perspective}
-                  answerKeys={message.id === answering}
                   quote={
                     board.messages.find((parent) => parent.id === message.re)?.text.split('\n')[0]
                   }

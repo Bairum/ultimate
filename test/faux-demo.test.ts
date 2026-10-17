@@ -107,6 +107,47 @@ it('sends the questions demo to the Board and extracts the two decisions', async
   await server.root.waitForIdle(context)
 })
 
+it("asks the two decisions in @ultimate's final answer and takes the card's answers as typed input", async () => {
+  const home = await temp('ultimate-faux-ask-demo-')
+  const ultimateRoot = await sourceCopy(home)
+  const server = await fauxServer({ ultimateRoot, home, userHome: home })
+  servers.push(server)
+  const id = (
+    await post(server, '/api/extensions/subagents/actions/standing', { args: { name: 'ultimate' } })
+  ).data.result as ConversationId
+  const ultimate = (await server.harness.conversation(id, context))!
+  const asked = await (
+    await ultimate.submit({ type: 'input', content: 'ask demo' }, context)
+  ).wait(context)
+  await until(
+    async () =>
+      (await server.harness.snapshot(BoardQuestions, ROOT_CONVERSATION_ID, context))?.reply
+        ?.entry === asked.answer,
+  )
+  const { questions } = (await server.harness.snapshot(
+    BoardQuestions,
+    ROOT_CONVERSATION_ID,
+    context,
+  ))!.reply!
+  expect(questions.map((question) => question.text)).toEqual([
+    'Should we keep the preview running?',
+    'Which layout should we use?',
+  ])
+  const reply = await post(server, '/api/extensions/questions/actions/reply', {
+    args: { entryId: asked.answer, answers: [{ question: questions[1].text, answer: 'Compact' }] },
+  })
+  expect(reply.status).toBe(200)
+  await server.root.waitForIdle(context)
+  const view = await ultimate.viewState(context)
+  expect(
+    view.value.entries.filter((entry) => entry.kind === 'pi.user').map((e) => e.model?.[0]),
+  ).toMatchObject([
+    { content: 'ask demo' },
+    { content: 'Q: Which layout should we use?\nA: Compact' },
+  ])
+  view.dispose()
+})
+
 it('submits the workspace from the faux demo with a divergence, so the lander queues it', async () => {
   const home = await temp('ultimate-faux-demo-')
   const projectRoot = join(home, 'project')

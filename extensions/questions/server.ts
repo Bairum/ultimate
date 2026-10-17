@@ -1,32 +1,52 @@
 import {
+  AssistantEntry,
+  ConversationBusy,
   defineDoc,
   defineExtension,
   defineTask,
+  GenerationTask,
+  hook,
+  LiveDoc,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { Tx } from '@earendil-works/pi-durable'
+import type {
+  ConversationId,
+  EntryId,
+  GenerationResult,
+  SubmissionId,
+  TaskId,
+  TaskRuntime,
+  Tx,
+} from '@earendil-works/pi-durable'
+import type { Context } from '@earendil-works/chord'
 import type { JsonValue } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import { BACKGROUND_CONTEXT as context, withAbortSignal } from '@earendil-works/chord/context'
-import { accountResponse, askSummaryModel } from '../conversations/summary.ts'
+import { accountResponse, askSummaryModel, currentAnswer } from '../conversations/summary.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import { summaryModel } from '../conversations/summary-model.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
 import type { BoardMessage, BoardService } from '../board/server.ts'
 import { Board } from '../board/server.ts'
+import { Standing } from '../subagents/server.ts'
 
 import type { Question } from './types.ts'
-export const BoardQuestions = defineDoc<{ requested: number[]; asked: Record<string, Question[]> }>(
-  {
-    kind: 'questions.board',
-    version: 1,
-    history: 'latest',
-    fork: 'initial',
-    scope: 'conversation',
-    initial: () => ({ requested: [], asked: {} }),
-  },
-)
+export const BoardQuestions = defineDoc<{
+  requested: number[]
+  asked: Record<string, Question[]>
+  /** The newest @ultimate generation whose final answer was handed to extraction. */
+  yielded?: number
+  /** Questions in @ultimate's latest final answer to a typed input; a newer answer replaces or clears them. */
+  reply?: { conversation: number; entry: number; questions: Question[] }
+}>({
+  kind: 'questions.board',
+  version: 1,
+  history: 'latest',
+  fork: 'initial',
+  scope: 'conversation',
+  initial: () => ({ requested: [], asked: {} }),
+})
 export const docs = [BoardQuestions]
 export type QuestionsService = {
   request(tx: Tx, message: BoardMessage): Promise<void>
@@ -42,6 +62,71 @@ async function stateFor(tx: Tx) {
   return { log, state }
 }
 const terminal = { status: 'terminal', outcome: { status: 'completed', result: null } } as const
+const NOT_OPEN = 'These questions are no longer open'
+
+function validAnswers(value: unknown): value is { question: string; answer: string }[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (a: { question?: unknown; answer?: unknown } | null) =>
+        a && typeof a.question === 'string' && typeof a.answer === 'string' && a.answer.trim(),
+    )
+  )
+}
+function checkAnswers(answers: { question: string }[], questions: Question[]) {
+  if (
+    new Set(answers.map((a) => a.question)).size !== answers.length ||
+    answers.some((a) => !questions.some((q) => q.text === a.question))
+  )
+    throw new Error('Unknown question')
+}
+const answerText = (answers: { question: string; answer: string }[]) =>
+  answers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join('\n\n')
+
+/** Ask the summary model for the questions in `text`, memoizing model and response; any failure asks nothing. */
+async function extract(
+  host: ExtensionHost,
+  text: string,
+  runtime: Pick<TaskRuntime<unknown, unknown, unknown, object>, 'memo' | 'models' | 'signal'>,
+  ctx: Context,
+) {
+  let response = await runtime.memo<ResponseReceipt>('response', ctx)
+  let model = await runtime.memo<SummaryModel>('model', ctx)
+  let questions: Question[] = []
+  try {
+    if (!model) {
+      const chosen = await summaryModel(host)
+      if (chosen) model = await runtime.memo('model', chosen, ctx)
+    }
+    if (model) {
+      response = await askSummaryModel(
+        runtime.models,
+        QUESTIONS_SYSTEM,
+        text,
+        AbortSignal.any([runtime.signal, AbortSignal.timeout(60_000)]),
+        { model, response, save: (received) => runtime.memo('response', received, ctx) },
+      )
+      if (response.stopReason === 'stop') questions = parseQuestions(response.text)
+    }
+  } catch (error) {
+    if (runtime.signal.aborted) throw error
+    // Extraction is optional UI: an unavailable model or invalid response produces no card.
+  }
+  return { questions, response }
+}
+/** An aborted extraction still accounts the response it received. */
+async function abort<I, S, R, H extends object>(
+  _task: unknown,
+  runtime: TaskRuntime<I, S, R, H>,
+  ctx: Context,
+) {
+  const response = await runtime.memo<ResponseReceipt>('response', ctx)
+  await runtime.commit(async (tx) => {
+    await accountResponse(tx, runtime.conversationId, response)
+    return { status: 'terminal', outcome: { status: 'aborted' } } as const
+  }, ctx)
+}
 export const QUESTIONS_SYSTEM = `List the decisions a coding agent's final reply leaves open for the user, so they can be answered with buttons. Return only JSON {"questions":[{"text":"...","kind":"confirm"|"choice","options":[{"label":"...","detail":"...","recommended":true}]}]}.
 Include a question only when the reply waits for the user to answer it before going on; these usually close the reply. Leave out:
 - questions the reply answers itself, including question-shaped headings followed by their answer ("Is it running on X? Yes, ...") and the user's own questions restated;
@@ -88,37 +173,66 @@ export function parseQuestions(text: string): Question[] {
   })
 }
 
-export const userActions = ['answer']
+export const userActions = ['answer', 'reply']
 export const actions = {
+  /** Answer the questions of an open Board message: a user Board reply to its sender. */
   async answer(args: JsonValue, { host, signal }: ActionContext) {
     const data = args as { messageId: number; answers: { question: string; answer: string }[] }
-    if (
-      !data ||
-      !Number.isSafeInteger(data.messageId) ||
-      !Array.isArray(data.answers) ||
-      !data.answers.length ||
-      data.answers.some(
-        (a) =>
-          !a || typeof a.question !== 'string' || typeof a.answer !== 'string' || !a.answer.trim(),
-      )
-    )
+    if (!data || !Number.isSafeInteger(data.messageId) || !validAnswers(data.answers))
       throw new Error('Invalid answers')
     await host.harness().commit(async (tx) => {
       const { log, state } = await stateFor(tx)
       const message = log.messages.find((m) => m.id === data.messageId)
       const questions = state.asked[String(data.messageId)]
-      if (!message || !open(message) || !questions?.length)
-        throw new Error('These questions are no longer open')
-      if (
-        new Set(data.answers.map((a) => a.question)).size !== data.answers.length ||
-        data.answers.some((a) => !questions.some((q) => q.text === a.question))
-      )
-        throw new Error('Unknown question')
+      if (!message || !open(message) || !questions?.length) throw new Error(NOT_OPEN)
+      checkAnswers(data.answers, questions)
     }, context)
-    const content = data.answers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join('\n\n')
     const board = host.use<BoardService>('board')
     if (!board) throw new Error('Board is unavailable')
-    return { id: await board.answer(data.messageId, content, withAbortSignal(signal, context)) }
+    return {
+      id: await board.answer(
+        data.messageId,
+        answerText(data.answers),
+        withAbortSignal(signal, context),
+      ),
+    }
+  },
+  /**
+   * Answer the questions of @ultimate's current final answer: a typed input in its conversation. The request id makes a
+   * double click one input; `reject` refuses a conversation that became busy after the check.
+   */
+  async reply(args: JsonValue, { host, signal }: ActionContext) {
+    const data = args as { entryId: number; answers: { question: string; answer: string }[] }
+    if (!data || !Number.isSafeInteger(data.entryId) || !validAnswers(data.answers))
+      throw new Error('Invalid answers')
+    const ctx = withAbortSignal(signal, context)
+    const id = await host.harness().commit(async (tx) => {
+      const reply = (await tx.doc(BoardQuestions, ROOT_CONVERSATION_ID)).reply
+      if (
+        reply?.entry !== data.entryId ||
+        !(await currentAnswer(tx, reply.conversation as ConversationId, reply.entry as EntryId))
+      )
+        throw new Error(NOT_OPEN)
+      checkAnswers(data.answers, reply.questions)
+      return reply.conversation as ConversationId
+    }, ctx)
+    const conversation = await host.harness().conversation(id, ctx)
+    if (!conversation) throw new Error(NOT_OPEN)
+    try {
+      await conversation.submit(
+        {
+          type: 'input',
+          requestId: `questions:${data.entryId}`,
+          whenBusy: 'reject',
+          content: answerText(data.answers),
+        },
+        ctx,
+      )
+    } catch (error) {
+      if (error instanceof ConversationBusy) throw new Error(NOT_OPEN, { cause: error })
+      throw error
+    }
+    return {}
   },
 }
 
@@ -129,28 +243,7 @@ export default function questionsExtension(host: ExtensionHost) {
     initial: () => ({ phase: 'extract' }),
     phases: {
       extract: async (task, runtime, ctx) => {
-        let response = await runtime.memo<ResponseReceipt>('response', ctx)
-        let model = await runtime.memo<SummaryModel>('model', ctx)
-        let questions: Question[] = []
-        try {
-          if (!model) {
-            const chosen = await summaryModel(host)
-            if (chosen) model = await runtime.memo('model', chosen, ctx)
-          }
-          if (model) {
-            response = await askSummaryModel(
-              runtime.models,
-              QUESTIONS_SYSTEM,
-              task.input.text,
-              AbortSignal.any([runtime.signal, AbortSignal.timeout(60_000)]),
-              { model, response, save: (received) => runtime.memo('response', received, ctx) },
-            )
-            if (response.stopReason === 'stop') questions = parseQuestions(response.text)
-          }
-        } catch (error) {
-          if (runtime.signal.aborted) throw error
-          // Extraction is optional UI: an unavailable model or invalid response produces no card.
-        }
+        const { questions, response } = await extract(host, task.input.text, runtime, ctx)
         await runtime.commit(async (tx) => {
           await accountResponse(tx, runtime.conversationId, response)
           const { log, state } = await stateFor(tx)
@@ -161,13 +254,60 @@ export default function questionsExtension(host: ExtensionHost) {
         }, ctx)
       },
     },
-    abort: async (_task, runtime, ctx) => {
-      const response = await runtime.memo<ResponseReceipt>('response', ctx)
-      await runtime.commit(async (tx) => {
-        await accountResponse(tx, runtime.conversationId, response)
-        return { status: 'terminal', outcome: { status: 'aborted' } }
-      }, ctx)
+    abort,
+  })
+  const Reply = defineTask<
+    { generation: TaskId<GenerationResult>; inputs: SubmissionId[] },
+    { phase: 'observe' } | { phase: 'extract'; answer: EntryId; text: string },
+    null
+  >({
+    name: 'questions.reply-extract',
+    version: 1,
+    initial: () => ({ phase: 'observe' }),
+    phases: {
+      observe: async (task, runtime, ctx) => {
+        const settled = await runtime.waitForTask(task.input.generation, ctx)
+        if (settled.state.outcome.status !== 'completed') {
+          await runtime.commit(() => terminal, ctx)
+          return
+        }
+        const answer = settled.state.outcome.result.entryId
+        const inputs = await Promise.all(
+          task.input.inputs.map(async (id) =>
+            (await host.harness().submission(id, ctx))?.status(ctx),
+          ),
+        )
+        await runtime.commit(async (tx) => {
+          // Only an answer to text the user typed here asks the user: Board messages and replies come from agents.
+          let typed = false
+          for (const input of inputs)
+            if (input?.type === 'input' && input.status === 'done' && input.answer === answer)
+              typed ||= (await tx.entry(input.entry))?.kind === 'pi.user'
+          const model = typed ? (await tx.entry(AssistantEntry, answer))?.model?.[0] : undefined
+          const text =
+            model?.role === 'assistant'
+              ? model.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
+              : ''
+          if (!text.trim()) return terminal
+          return { status: 'running', checkpoint: { phase: 'extract', answer, text } }
+        }, ctx)
+      },
+      extract: async (task, runtime, ctx) => {
+        const { answer, text } = task.state.checkpoint
+        const { questions, response } = await extract(host, text, runtime, ctx)
+        await runtime.commit(async (tx) => {
+          await accountResponse(tx, runtime.conversationId, response)
+          // A newer input supersedes this answer; its own extraction decides the card.
+          if (!(await currentAnswer(tx, runtime.conversationId, answer))) return terminal
+          const state = await tx.doc(BoardQuestions, ROOT_CONVERSATION_ID)
+          if (questions.length)
+            state.reply = { conversation: runtime.conversationId, entry: answer, questions }
+          else delete state.reply
+          return terminal
+        }, ctx)
+      },
     },
+    abort,
   })
   host.provide('questions', {
     async request(tx, message) {
@@ -187,6 +327,33 @@ export default function questionsExtension(host: ExtensionHost) {
   } satisfies QuestionsService)
   return defineExtension({
     name: 'questions',
-    tasks: [Extract],
+    tasks: [Extract, Reply],
+    hooks: [
+      hook(GenerationTask, {
+        onYield: async (_answer, api, ctx) => {
+          const standing = await api.snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
+          if (standing?.ultimate !== api.conversationId) return undefined
+          await host.harness().commit(async (tx) => {
+            // One extraction per generation, decided in the commit that creates it.
+            const state = await tx.doc(BoardQuestions, ROOT_CONVERSATION_ID)
+            if (state.yielded !== undefined && state.yielded >= api.taskId) return
+            state.yielded = api.taskId
+            await tx.createTask(
+              Reply,
+              {
+                generation: api.taskId as TaskId<GenerationResult>,
+                inputs: [...((await tx.doc(LiveDoc, api.conversationId)).run?.inputs ?? [])],
+              },
+              {
+                ownership: { kind: 'conversation' },
+                conversationId: api.conversationId,
+                background: true,
+              },
+            )
+          }, ctx)
+          return undefined
+        },
+      }),
+    ],
   })
 }

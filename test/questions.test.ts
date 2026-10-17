@@ -3,8 +3,8 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { Task } from '@earendil-works/pi-durable'
+import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import type { ConversationId, Task } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
@@ -18,6 +18,7 @@ import questionsExtension, {
   QUESTIONS_SYSTEM,
   userActions,
 } from '../extensions/questions/server.ts'
+import { Standing } from '../extensions/subagents/server.ts'
 
 const hosts: OpenHost[] = []
 afterEach(async () => {
@@ -60,6 +61,7 @@ async function fixture() {
         definition: {
           ...task.definition,
           phases: {
+            ...task.definition.phases,
             extract: (
               ...[record, runtime, ctx]: Parameters<typeof task.definition.phases.extract>
             ) =>
@@ -97,6 +99,8 @@ async function fixture() {
     const last = transcript.messages.at(-1)!
     const text = typeof last.content === 'string' ? last.content : ''
     observed.push(text)
+    if (last.role === 'user' && text.startsWith('ASK '))
+      return fauxAssistantMessage([fauxText(text.slice(4))])
     if (last.role === 'user' && text.startsWith('SEND '))
       return fauxAssistantMessage([fauxToolCall('message', JSON.parse(text.slice(5)))], {
         stopReason: 'toolUse',
@@ -140,7 +144,36 @@ async function fixture() {
   const action = () => ({ host, signal: new AbortController().signal }) as ActionContext
   const answer = (messageId: number, answers = [{ question: 'Keep it running?', answer: 'Yes' }]) =>
     actions.answer({ messageId, answers }, action())
+  /** A new conversation registered as the standing @ultimate. */
+  const ultimate = async () => {
+    const conversation = await opened.harness.createConversation(
+      { ownership: { kind: 'ownerless' } },
+      context,
+    )
+    const agent = await opened.root.agent(context)
+    await opened.harness.commit(async (tx) => {
+      await configure(tx, conversation.id, { model: agent.model, tools: agent.tools })
+      ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = conversation.id
+    }, context)
+    return conversation.id
+  }
+  const type = async (id: ConversationId, content: string) => {
+    const conversation = (await opened.harness.conversation(id, context))!
+    return (await conversation.submit({ type: 'input', content }, context)).wait(context)
+  }
+  const reply = (entryId: number, answers = [{ question: 'Keep it running?', answer: 'Yes' }]) =>
+    actions.reply({ entryId, answers }, action())
+  const inputs = async (id: ConversationId) =>
+    (
+      await opened.harness.commit((tx) => tx.scanEntries({ conversationId: id }, 1000), context)
+    ).items
+      .filter((entry) => entry.kind === 'pi.user')
+      .toSorted((a, b) => a.id - b.id)
   return {
+    ultimate,
+    type,
+    reply,
+    inputs,
     get opened() {
       return opened
     },
@@ -206,7 +239,7 @@ it('posts exactly one Board reply atomically, wakes the sender, and rejects unkn
   const f = await fixture()
   const id = await f.send()
   await f.settled()
-  expect(userActions).toEqual(['answer'])
+  expect(userActions).toEqual(['answer', 'reply'])
   await expect(f.answer(id, [{ question: 'Unknown', answer: 'Yes' }])).rejects.toThrow(
     'Unknown question',
   )
@@ -296,6 +329,118 @@ it('prunes extraction state to messages still in the Board log', async () => {
   await f.settled()
   expect((await f.state())!.requested).toEqual([next])
   expect((await f.state())!.asked[String(id)]).toBeUndefined()
+})
+
+it("extracts @ultimate's final answers to typed input only, once per answer", async () => {
+  const f = await fixture()
+  const id = await f.ultimate()
+  // Another conversation's answer, a Board message and a Board reply to @ultimate ask nothing.
+  await f.type(f.opened.root.id, 'ASK Keep it running?')
+  await boardActions.post({ to: `#${id}`, text: 'ASK Keep it running?' }, f.action())
+  await f.settled()
+  await (
+    await (await f.opened.harness.conversation(id, context))!.submit(
+      {
+        type: 'input',
+        entry: { kind: 'board.reply', data: { id: 9, re: 8, from: 2, text: 'Done' } },
+        content: 'ASK Keep it running?',
+      },
+      context,
+    )
+  ).wait(context)
+  await f.settled()
+  expect(f.extract).not.toHaveBeenCalled()
+  expect((await f.state())!.reply).toBeUndefined()
+  const settled = await f.type(id, 'ASK Keep it running?')
+  await f.settled()
+  expect(f.extract).toHaveBeenCalledTimes(1)
+  expect((await f.state())!.reply).toEqual({
+    conversation: id,
+    entry: settled.answer,
+    questions: [{ text: 'Keep it running?', kind: 'confirm' }],
+  })
+  // An answer that asks nothing clears the card.
+  f.result({ questions: [] })
+  await f.type(id, 'ASK All done.')
+  await f.settled()
+  expect(f.extract).toHaveBeenCalledTimes(2)
+  expect((await f.state())!.reply).toBeUndefined()
+})
+
+it("resumes an @ultimate answer's extraction on reopen without asking again", async () => {
+  const f = await fixture()
+  const id = await f.ultimate()
+  f.pauseCommit(gate())
+  const settled = await f.type(id, 'ASK Keep it running?')
+  await until(f.committing)
+  await f.close()
+  f.pauseCommit(undefined)
+  await f.open()
+  await f.settled()
+  expect((await f.state())!.reply?.entry).toBe(settled.answer)
+  await f.close()
+  await f.open()
+  await f.settled()
+  expect(f.extract).toHaveBeenCalledTimes(1)
+})
+
+it('stores nothing for an answer that newer input superseded', async () => {
+  const f = await fixture()
+  const id = await f.ultimate()
+  const hold = gate()
+  f.hold(hold)
+  await f.type(id, 'ASK Keep it running?')
+  await until(() => f.extract.mock.calls.length === 1)
+  const { id: posted } = await boardActions.post(
+    { to: `#${id}`, text: 'Something else' },
+    f.action(),
+  )
+  await until(
+    async () => (await f.log())!.messages.find((m) => m.id === posted)?.state === 'answered',
+  )
+  hold.release()
+  await f.settled()
+  expect((await f.state())!.reply).toBeUndefined()
+})
+
+it("answers @ultimate's current answer with one typed input and refuses stale or repeated answers", async () => {
+  const f = await fixture()
+  const id = await f.ultimate()
+  const first = await f.type(id, 'ASK Keep it running?')
+  await f.settled()
+  await expect(f.reply(first.answer! + 1)).rejects.toThrow('These questions are no longer open')
+  await expect(f.reply(first.answer!, [{ question: 'Unknown', answer: 'Yes' }])).rejects.toThrow(
+    'Unknown question',
+  )
+  await expect(f.reply(first.answer!, [])).rejects.toThrow('Invalid answers')
+  await Promise.allSettled([f.reply(first.answer!), f.reply(first.answer!)])
+  await f.settled()
+  expect((await f.inputs(id)).map((entry) => entry.model?.[0]?.content)).toEqual([
+    'ASK Keep it running?',
+    'Q: Keep it running?\nA: Yes',
+  ])
+  await expect(f.reply(first.answer!)).rejects.toThrow('These questions are no longer open')
+  // A later typed input makes an earlier answer's card stale.
+  const second = await f.type(id, 'ASK Keep it running?')
+  await f.settled()
+  await f.type(id, 'Typed instead')
+  await f.settled()
+  await expect(f.reply(second.answer!)).rejects.toThrow('These questions are no longer open')
+})
+
+it("closes @ultimate's open message to the user when the user types in its conversation", async () => {
+  const f = await fixture()
+  const id = await f.ultimate()
+  await f.type(id, `SEND ${JSON.stringify({ to: 'user', text: 'Keep it running?' })}`)
+  await f.settled()
+  const message = (await f.log())!.messages.at(-1)!
+  expect(message).toMatchObject({ from: id, state: 'delivered' })
+  expect((await f.state())!.asked[String(message.id)]).toHaveLength(1)
+  await f.type(id, 'Yes, keep it')
+  await until(
+    async () => (await f.log())!.messages.find((m) => m.id === message.id)?.state === 'answered',
+  )
+  await expect(f.answer(message.id)).rejects.toThrow('These questions are no longer open')
 })
 
 it('validates extracted choices and ignores fields outside the schema', () => {

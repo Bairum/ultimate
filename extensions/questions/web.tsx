@@ -1,6 +1,7 @@
 import { CheckIcon } from 'lucide-react'
 import { defineWebExtension } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
+import { ReplyQuestions } from './card.tsx'
 import type { Answers } from './types.ts'
 
 function AnswerCard({ entry }: { entry: EntryRecord }) {
@@ -33,6 +34,10 @@ function AnswerCard({ entry }: { entry: EntryRecord }) {
 }
 
 export default defineWebExtension({
-  // Questions are answered on the Board now; stored transcript cards stay hidden and never answerable.
-  entries: { 'questions.asked': () => null, 'questions.answers': AnswerCard },
+  // Stored transcript cards from before stay hidden and never answerable; @ultimate's current answer gets the card.
+  entries: {
+    'pi.assistant': ReplyQuestions,
+    'questions.asked': () => null,
+    'questions.answers': AnswerCard,
+  },
 })

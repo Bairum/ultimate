@@ -14,7 +14,6 @@ import {
   waits,
 } from '../../extensions/board/data.tsx'
 import type { BoardMessage } from '../../extensions/board/data.tsx'
-import { newestAsked, openQuestions } from '../../extensions/questions/open.tsx'
 
 describe('board answer labels', () => {
   const request = {
@@ -251,32 +250,5 @@ describe('board addressing', () => {
         readUpTo: 1,
       }),
     ).toBe(1)
-  })
-})
-
-describe('board answer cards', () => {
-  const question = { text: 'Keep the preview?', kind: 'confirm' as const }
-  const open = {
-    id: 5,
-    from: 2,
-    to: 'user' as const,
-    reply: true,
-    state: 'delivered' as const,
-  }
-  const board = { requested: [5, 6, 7], asked: { '5': [question], '6': [question] } }
-  it('shows questions only while the message waits on the user', () => {
-    expect(openQuestions(board, open)).toEqual([question])
-    expect(openQuestions(board, { ...open, state: 'answered' })).toEqual([])
-    expect(openQuestions(board, { ...open, state: 'sent' })).toEqual([])
-    expect(openQuestions(board, { ...open, reply: false })).toEqual([])
-    expect(openQuestions(board, { ...open, to: 3 })).toEqual([])
-    expect(openQuestions(board, { ...open, id: 7 })).toEqual([])
-    expect(openQuestions(undefined, open)).toEqual([])
-  })
-  it('gives the keys to the newest message with an open card', () => {
-    const later = { ...open, id: 6 }
-    expect(newestAsked(board, [open, later, { ...open, id: 7 }])).toBe(6)
-    expect(newestAsked(board, [open, { ...later, state: 'answered' }])).toBe(5)
-    expect(newestAsked(board, [{ ...open, state: 'answered' }])).toBeUndefined()
   })
 })

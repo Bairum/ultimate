@@ -29,10 +29,12 @@ marks it answered. Posts commit the change with the message; typed inputs close 
 subscription, only for questions asked before that input.
 
 Reply-expected agent messages to `user` also request question extraction in the append transaction through the
-optional questions service. The Board shows extracted decisions inside the open message bubble: Yes/No or
-choice buttons with a recommended marker, plus Something else. The user-only questions `answer` action posts
+optional questions service. The sender's outgoing `message` card in its transcript shows extracted decisions
+under the message body while it is open: Yes/No or choice buttons with a recommended marker, plus Something
+else. The Board feed shows no card. The user-only questions `answer` action posts
 a normal user Board reply with `re` and Q/A text, waking the sender. Its admission atomically checks that the
-original message is still open, preventing duplicate replies. A Reply or new post closes the card too.
+original message is still open, preventing duplicate replies. A Reply, a new post or typing in the sender's
+conversation closes the card too.
 One-way messages and user posts never request extraction; see [Questions](../questions/README.md).
 
 In the sender's transcript a `message` call renders as an outgoing card: recipient, one-way or expects reply, and

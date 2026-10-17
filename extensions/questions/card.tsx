@@ -1,10 +1,14 @@
 import { CheckIcon, MessageCircleQuestionIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { api, cn, errorMessage, useDocOf, useViewport } from '@/sdk'
-import { openQuestions } from './open.tsx'
+import { api, cn, errorMessage, useConversation, useDocOf, useTranscript, useViewport } from '@/sdk'
+import type { EntryRecord } from '@/sdk'
+import { keyCard, openQuestions, replyQuestions } from './open.tsx'
 import type { Message, QuestionsBoard } from './open.tsx'
 import type { Question } from './types.ts'
+
+type Answer = { question: string; answer: string }
 
 function options(question: Question) {
   return [
@@ -15,21 +19,70 @@ function options(question: Question) {
   ]
 }
 
-/** The answer card inside an open Board message to the user; renders nothing without extracted questions. */
-export function BoardQuestions({ message, keys }: { message: Message; keys: boolean }) {
+/** Whether `card` is the one on the shown conversation's page that takes the desktop 1–9 and Enter keys. */
+function useKeys(card: string) {
+  const board = useDocOf<QuestionsBoard>(1, 'questions.board')
+  const messages = useDocOf<{ messages: Message[] }>(1, 'board')?.messages ?? []
+  const conversation = useConversation((value) => value.id)
+  return keyCard(board, conversation, messages, useTranscript()) === card
+}
+
+/** The answer card under an open message to the user; renders nothing without extracted questions. */
+export function MessageQuestions({ message }: { message: Message }) {
   const questions = openQuestions(useDocOf<QuestionsBoard>(1, 'questions.board'), message)
+  const card = `message:${message.id}`
+  const keys = useKeys(card)
   if (!questions.length) return null
-  return <Card messageId={message.id} questions={questions} keys={keys} />
+  return (
+    <Card
+      card={card}
+      questions={questions}
+      keys={keys}
+      submit={(answers) => api.action('questions', 'answer', { messageId: message.id, answers })}
+    />
+  )
+}
+
+/** A final answer, followed by the answer card for its questions while it is @ultimate's current answer. */
+export function ReplyQuestions({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
+  const conversation = useConversation((value) => value.id)
+  const questions = replyQuestions(
+    useDocOf<QuestionsBoard>(1, 'questions.board'),
+    conversation,
+    entry.id,
+    useTranscript(),
+  )
+  const card = `reply:${entry.id}`
+  const keys = useKeys(card)
+  if (!questions.length) return core
+  return (
+    <div className="flex flex-col gap-3">
+      {core}
+      <section className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20">
+        <Card
+          card={card}
+          questions={questions}
+          keys={keys}
+          className=""
+          submit={(answers) => api.action('questions', 'reply', { entryId: entry.id, answers })}
+        />
+      </section>
+    </div>
+  )
 }
 
 function Card({
-  messageId,
+  card,
   questions,
   keys,
+  submit,
+  className = 'border-t border-border/60',
 }: {
-  messageId: number
+  card: string
   questions: Question[]
   keys: boolean
+  submit: (answers: Answer[]) => Promise<unknown>
+  className?: string
 }) {
   const [answers, setAnswers] = useState<Record<number, string>>({})
   const [custom, setCustom] = useState<Record<number, boolean>>({})
@@ -53,7 +106,7 @@ function Card({
     setSending(true)
     setError(undefined)
     try {
-      await api.action('questions', 'answer', { messageId, answers: answered })
+      await submit(answered)
     } catch (failure) {
       setError(errorMessage(failure))
     } finally {
@@ -85,7 +138,7 @@ function Card({
     return () => window.removeEventListener('keydown', key)
   })
   return (
-    <div className="border-t border-border/60" data-questions-card={messageId}>
+    <div className={className} data-questions-card={card}>
       <div className="flex items-center gap-2 px-3 pt-2 font-mono text-[11px] text-muted-foreground">
         <MessageCircleQuestionIcon className="size-3.5 text-brand" />
         <span className="text-foreground">
