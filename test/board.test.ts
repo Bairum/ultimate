@@ -413,7 +413,7 @@ it('queues a busy recipient as follow-up, or steers its current run', async () =
     expect(steer ? released === -1 : released < delivered).toBe(true)
   }
 })
-it('rejects post and read through codemode at the installed action boundary', async () => {
+async function codemodeFixture() {
   const home = await temp('ultimate-board-actions-')
   homes.push(home)
   await mkdir(join(home, 'extensions/board'), { recursive: true })
@@ -433,7 +433,7 @@ it('rejects post and read through codemode at the installed action boundary', as
     "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', optimizeDeps: { noDiscovery: true } })",
   )
   await writeFile(join(home, 'web/index.html'), '<html>Board actions</html>')
-  const server = await fauxServer({
+  return fauxServer({
     home: join(home, 'state'),
     ultimateRoot: home,
     projectRoot: home,
@@ -441,6 +441,9 @@ it('rejects post and read through codemode at the installed action boundary', as
     faux: true,
     port: 0,
   })
+}
+it('rejects post and read through codemode at the installed action boundary', async () => {
+  const server = await codemodeFixture()
   try {
     for (const action of ['post', 'read']) {
       server.host.faux!.setResponses([
@@ -465,6 +468,43 @@ it('rejects post and read through codemode at the installed action boundary', as
         view.dispose()
       }
     }
+  } finally {
+    await server.vite.watcher.close()
+    await server.close()
+  }
+})
+it('keeps sequential and parallel message calls distinct within one codemode script', async () => {
+  const server = await codemodeFixture()
+  try {
+    server.host.faux!.setResponses([
+      fauxAssistantMessage(
+        [
+          fauxToolCall('codemode', {
+            code: `
+          await tools.message({to: 'user', text: 'Sequential 1'});
+          await tools.message({to: 'user', text: 'Sequential 2'});
+          await Promise.all([
+            tools.message({to: 'user', text: 'Parallel 1'}),
+            tools.message({to: 'user', text: 'Parallel 2'})
+          ]);
+        `,
+          }),
+        ],
+        { stopReason: 'toolUse' },
+      ),
+      fauxAssistantMessage('Complete'),
+    ])
+    await (
+      await server.root.submit({ type: 'input', content: 'Send four messages' }, context)
+    ).wait(context)
+    const log = await server.harness.snapshot(Board, ROOT_CONVERSATION_ID, context)
+    expect(log?.messages.map((m) => m.text).toSorted()).toEqual([
+      'Parallel 1',
+      'Parallel 2',
+      'Sequential 1',
+      'Sequential 2',
+    ])
+    expect(new Set(log?.messages.map((m) => m.id)).size).toBe(4)
   } finally {
     await server.vite.watcher.close()
     await server.close()

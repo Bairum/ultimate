@@ -49,11 +49,11 @@ export const Board = defineDoc<{ messages: BoardMessage[]; next: number; readUpT
 })
 export const docs = [Board]
 // The receipt commits with the message, closing the gap before api.memo records its id.
-const Sent = defineDoc<{ id?: number }>({
-  kind: 'board.sent',
+const Sent = defineDoc<{ ids: Record<string, number> }>({
+  kind: 'board.sent-calls',
   version: 1,
   scope: 'task',
-  initial: () => ({}),
+  initial: () => ({ ids: {} }),
 })
 async function append(tx: Tx, input: Omit<BoardMessage, 'id' | 'at'>) {
   const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
@@ -263,10 +263,11 @@ async function send(
   input: { to: string; text: string; reply?: boolean; steer?: boolean; re?: number },
   ctx: Context,
   taskId?: TaskId,
+  callId?: string,
 ) {
   if (taskId !== undefined) {
     const sent = await host.harness().snapshot(Sent, taskId, ctx)
-    if (sent?.id !== undefined) return sent.id
+    if (callId !== undefined && sent?.ids[callId] !== undefined) return sent.ids[callId]
   }
   if (!input.text.trim()) throw new Error('Message text must not be empty')
   const to = await resolve(host, input.to, from, ctx)
@@ -274,7 +275,7 @@ async function send(
   const toLabel = await senderName(host, to, ctx)
   return host.harness().commit(async (tx) => {
     const receipt = taskId === undefined ? undefined : await tx.doc(Sent, taskId)
-    if (receipt?.id !== undefined) return receipt.id
+    if (callId !== undefined && receipt?.ids[callId] !== undefined) return receipt.ids[callId]
     if (from !== 'user' && input.reply !== false) {
       const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
       const pending = log.messages.find(
@@ -307,7 +308,7 @@ async function send(
           background: true,
         },
       )
-    if (receipt) receipt.id = message.id
+    if (receipt && callId !== undefined) receipt.ids[callId] = message.id
     return message.id
   }, ctx)
 }
@@ -393,7 +394,7 @@ export default function board(host: ExtensionHost) {
                 isolated: input.isolated ?? true,
                 deliver: false,
                 by: api.conversationId,
-                key: String(api.taskId),
+                key: `${api.taskId}/${api.callId}`,
               },
               ctx,
             )
@@ -405,6 +406,7 @@ export default function board(host: ExtensionHost) {
             { to: `#${id}`, text: input.prompt, reply: true },
             ctx,
             api.taskId,
+            api.callId,
           )
           return {
             output: [{ type: 'text', text: `Branch #${id} started; message ${message} sent.` }],
@@ -428,7 +430,7 @@ export default function board(host: ExtensionHost) {
             (await api.memo<number>('message-id', ctx)) ??
             (await api.memo(
               'message-id',
-              await send(host, api.conversationId, input, ctx, api.taskId),
+              await send(host, api.conversationId, input, ctx, api.taskId, api.callId),
               ctx,
             ))
           return { output: [{ type: 'text', text: `Message ${id} sent.` }] }
