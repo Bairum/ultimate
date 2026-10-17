@@ -27,7 +27,8 @@ placed input awaiting an answer and a recorded answer awaiting delivery survive 
 
 Talk to `@ultimate` on the board to start and steer work. It is the built-in standing orchestrator, not a coding worker.
 Model-facing messages identify standing senders as `#12 (@ultimate)` and the lander as `#40 (@lander)`; ordinary
-conversations stay `#id`, and user posts say `user`.
+conversations stay `#id`, and user posts say `user`. Before delivery, standing recipients are refreshed from their
+current definitions, including numeric-address messages and automatic replies.
 
 The deferred `branch { prompt, root?, isolated?: true }` tool is offered only to definitions that name it.
 It chooses the explicit root, otherwise the caller's tree root, otherwise the only root. Ambiguous or missing roots

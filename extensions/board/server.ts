@@ -68,142 +68,151 @@ export type BoardService = {
     input: Pick<BoardMessage, 'from' | 'to' | 'text' | 'kind' | 'entry'>,
   ): Promise<number>
 }
-const Delivery = defineTask<
-  { message: BoardMessage; steer: boolean; fromLabel: string; toLabel: string },
-  { phase: 'deliver' } | { phase: 'reply'; message: BoardMessage; failed: boolean },
-  null
->({
-  name: 'board.delivery',
-  version: 1,
-  initial: () => ({ phase: 'deliver' }),
-  phases: {
-    deliver: async (task, runtime, ctx) => {
-      const m = task.input.message
-      if (m.to === 'user') throw new Error('Inbox items need no delivery task')
-      const recipient = await runtime.conversation(m.to as ConversationId, ctx)
-      if (!recipient) throw new Error(`Unknown conversation #${m.to}`)
-      const receipt = await recipient.submit(
-        {
-          type: 'input',
-          requestId: `board:${m.id}`,
-          whenBusy: task.input.steer ? 'steer' : 'followUp',
-          entry: {
-            kind: 'board.message',
-            data: { id: m.id, from: m.from, text: m.text, reply: m.reply },
+function delivery(host: ExtensionHost) {
+  const refresh = async (id: number, ctx: Context) => {
+    const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
+    const name = Object.keys(index ?? {}).find((candidate) => index![candidate] === id)
+    if (name !== undefined) await host.use<SubagentsService>('subagents')?.standing(name, ctx)
+  }
+  return defineTask<
+    { message: BoardMessage; steer: boolean; fromLabel: string; toLabel: string },
+    { phase: 'deliver' } | { phase: 'reply'; message: BoardMessage; failed: boolean },
+    null
+  >({
+    name: 'board.delivery',
+    version: 1,
+    initial: () => ({ phase: 'deliver' }),
+    phases: {
+      deliver: async (task, runtime, ctx) => {
+        const m = task.input.message
+        if (m.to === 'user') throw new Error('Inbox items need no delivery task')
+        await refresh(m.to, ctx)
+        const recipient = await runtime.conversation(m.to as ConversationId, ctx)
+        if (!recipient) throw new Error(`Unknown conversation #${m.to}`)
+        const receipt = await recipient.submit(
+          {
+            type: 'input',
+            requestId: `board:${m.id}`,
+            whenBusy: task.input.steer ? 'steer' : 'followUp',
+            entry: {
+              kind: 'board.message',
+              data: { id: m.id, from: m.from, text: m.text, reply: m.reply },
+            },
+            content: `Message from ${task.input.fromLabel}:\n${m.text}${m.reply ? `\nAnswer here; your answer is sent to ${task.input.fromLabel} automatically. Do not use message to reply.` : ''}`,
           },
-          content: `Message from ${task.input.fromLabel}:\n${m.text}${m.reply ? `\nAnswer here; your answer is sent to ${task.input.fromLabel} automatically. Do not use message to reply.` : ''}`,
-        },
-        ctx,
-      )
-      {
-        // Admission can precede placement while a recipient is busy. Watch its durable queue,
-        // not a timer, so messages become delivered only after leaving the queue.
-        const inbox = await runtime.watchDoc(InboxDoc, recipient.id, ctx)
-        if (inbox) {
-          let wake!: () => void
-          const placed = new Promise<void>((done) => {
-            wake = done
-          })
-          const inspect = (value: typeof inbox.value) => {
-            if (!value?.items.some((item) => item.id === receipt.id)) wake()
+          ctx,
+        )
+        {
+          // Admission can precede placement while a recipient is busy. Watch its durable queue,
+          // not a timer, so messages become delivered only after leaving the queue.
+          const inbox = await runtime.watchDoc(InboxDoc, recipient.id, ctx)
+          if (inbox) {
+            let wake!: () => void
+            const placed = new Promise<void>((done) => {
+              wake = done
+            })
+            const inspect = (value: typeof inbox.value) => {
+              if (!value?.items.some((item) => item.id === receipt.id)) wake()
+            }
+            inbox.start(async (value) => {
+              inspect(value)
+            })
+            try {
+              inspect(inbox.value)
+              await awaitWithContext(placed, ctx)
+            } finally {
+              await inbox.stop()
+            }
           }
-          inbox.start(async (value) => {
-            inspect(value)
-          })
-          try {
-            inspect(inbox.value)
-            await awaitWithContext(placed, ctx)
-          } finally {
-            await inbox.stop()
-          }
+          const placement = await receipt.status(ctx)
+          await runtime.commit(async (tx) => {
+            const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+              (item) => item.id === m.id,
+            )
+            if (stored) {
+              stored.state = placement.status === 'unanswered' ? 'failed' : 'delivered'
+              if ('entry' in placement && placement.entry !== undefined)
+                stored.entry = placement.entry
+            }
+            if (!m.reply)
+              return { status: 'terminal', outcome: { status: 'completed', result: null } }
+            return undefined
+          }, ctx)
+          if (!m.reply) return
         }
-        const placement = await receipt.status(ctx)
+        const settled = await receipt.wait(ctx)
+        await runtime.commit(async (tx) => {
+          const answer =
+            settled.status === 'done' && settled.type === 'input' ? settled.answer : undefined
+          const model =
+            answer === undefined ? undefined : (await tx.entry(AssistantEntry, answer))?.model?.[0]
+          const text =
+            model?.role === 'assistant'
+              ? model.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
+              : ''
+          const failed =
+            !text.trim() ||
+            model?.role !== 'assistant' ||
+            model.stopReason === 'error' ||
+            model.stopReason === 'aborted'
+          const error = failed
+            ? `ended its turn without an answer (${settled.status === 'unanswered' ? settled.reason : settled.status})`
+            : undefined
+          const original = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+            (item) => item.id === m.id,
+          )
+          if (original) {
+            original.state = failed ? 'failed' : 'answered'
+            if (answer !== undefined) original.answer = answer
+            if (error !== undefined) original.error = error
+            if ('entry' in settled && settled.entry !== undefined) original.entry = settled.entry
+          }
+          const response = await append(tx, {
+            from: m.to,
+            to: m.from,
+            text: error ?? text,
+            reply: false,
+            re: m.id,
+            state: failed ? 'failed' : 'sent',
+            ...(answer ? { answer } : {}),
+            ...(error ? { error } : {}),
+          })
+          return { status: 'running', checkpoint: { phase: 'reply', message: response, failed } }
+        }, ctx)
+      },
+      reply: async (task, runtime, ctx) => {
+        const { message: m, failed } = task.state.checkpoint
+        if (m.to !== 'user') {
+          await refresh(m.to, ctx)
+          const sender = await runtime.conversation(m.to as ConversationId, ctx)
+          if (sender)
+            await sender.submit(
+              {
+                type: 'input',
+                requestId: `board-reply:${m.id}`,
+                whenBusy: 'steer',
+                entry: {
+                  kind: 'board.reply',
+                  data: { id: m.id, re: m.re!, from: m.from, text: m.text, failed },
+                },
+                content: `Reply from ${task.input.toLabel} to your message ${m.re}${failed ? ' (failed)' : ''}:\n${m.text}`,
+              },
+              ctx,
+            )
+        }
         await runtime.commit(async (tx) => {
           const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
             (item) => item.id === m.id,
           )
-          if (stored) {
-            stored.state = placement.status === 'unanswered' ? 'failed' : 'delivered'
-            if ('entry' in placement && placement.entry !== undefined)
-              stored.entry = placement.entry
-          }
-          if (!m.reply)
-            return { status: 'terminal', outcome: { status: 'completed', result: null } }
-          return undefined
+          if (stored && !failed) stored.state = 'delivered'
+          return { status: 'terminal', outcome: { status: 'completed', result: null } }
         }, ctx)
-        if (!m.reply) return
-      }
-      const settled = await receipt.wait(ctx)
-      await runtime.commit(async (tx) => {
-        const answer =
-          settled.status === 'done' && settled.type === 'input' ? settled.answer : undefined
-        const model =
-          answer === undefined ? undefined : (await tx.entry(AssistantEntry, answer))?.model?.[0]
-        const text =
-          model?.role === 'assistant'
-            ? model.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
-            : ''
-        const failed =
-          !text.trim() ||
-          model?.role !== 'assistant' ||
-          model.stopReason === 'error' ||
-          model.stopReason === 'aborted'
-        const error = failed
-          ? `ended its turn without an answer (${settled.status === 'unanswered' ? settled.reason : settled.status})`
-          : undefined
-        const original = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
-          (item) => item.id === m.id,
-        )
-        if (original) {
-          original.state = failed ? 'failed' : 'answered'
-          if (answer !== undefined) original.answer = answer
-          if (error !== undefined) original.error = error
-          if ('entry' in settled && settled.entry !== undefined) original.entry = settled.entry
-        }
-        const response = await append(tx, {
-          from: m.to,
-          to: m.from,
-          text: error ?? text,
-          reply: false,
-          re: m.id,
-          state: failed ? 'failed' : 'sent',
-          ...(answer ? { answer } : {}),
-          ...(error ? { error } : {}),
-        })
-        return { status: 'running', checkpoint: { phase: 'reply', message: response, failed } }
-      }, ctx)
+      },
     },
-    reply: async (task, runtime, ctx) => {
-      const { message: m, failed } = task.state.checkpoint
-      if (m.to !== 'user') {
-        const sender = await runtime.conversation(m.to as ConversationId, ctx)
-        if (sender)
-          await sender.submit(
-            {
-              type: 'input',
-              requestId: `board-reply:${m.id}`,
-              whenBusy: 'steer',
-              entry: {
-                kind: 'board.reply',
-                data: { id: m.id, re: m.re!, from: m.from, text: m.text, failed },
-              },
-              content: `Reply from ${task.input.toLabel} to your message ${m.re}${failed ? ' (failed)' : ''}:\n${m.text}`,
-            },
-            ctx,
-          )
-      }
-      await runtime.commit(async (tx) => {
-        const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
-          (item) => item.id === m.id,
-        )
-        if (stored && !failed) stored.state = 'delivered'
-        return { status: 'terminal', outcome: { status: 'completed', result: null } }
-      }, ctx)
-    },
-  },
-  abort: (_task, runtime, ctx) =>
-    runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
-})
+    abort: (_task, runtime, ctx) =>
+      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+  })
+}
 async function lander(host: ExtensionHost, ctx: Context) {
   const service = host.use<WorkspaceService>('workspaces')
   if (!service) return undefined
@@ -300,7 +309,7 @@ async function send(
     })
     if (to !== 'user')
       await tx.createTask(
-        Delivery,
+        delivery(host),
         { message, steer: input.steer ?? false, fromLabel, toLabel },
         {
           conversationId: ROOT_CONVERSATION_ID,
@@ -352,7 +361,7 @@ export default function board(host: ExtensionHost) {
   } satisfies BoardService)
   return defineExtension({
     name: 'board',
-    tasks: [Delivery],
+    tasks: [delivery(host)],
     sections: [
       section('board', async (input, ctx) => {
         if (!input.agent.tools.some((tool) => tool.name === 'message')) return undefined

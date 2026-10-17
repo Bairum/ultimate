@@ -27,7 +27,7 @@ function textOf(content: unknown): string {
         .flatMap((p) => (p.type === 'text' ? [p.text!] : []))
         .join('')
 }
-async function fixture() {
+async function fixture(onRequest?: (text: string, home: string) => Promise<void>) {
   const home = await temp('ultimate-agent-')
   homes.push(home)
   const root = await sourceCopy(home)
@@ -48,11 +48,12 @@ async function fixture() {
       userHome: home,
     })
     servers.push(server)
-    const route: FauxResponseFactory = (transcript) => {
+    const route: FauxResponseFactory = async (transcript) => {
       server.host.faux!.appendResponses([route])
       const last = transcript.messages.findLast((message) => message.role !== 'system')!
       const text = textOf(last.content)
       requests.push(text)
+      await onRequest?.(text, home)
       if (last.role === 'user' && text.startsWith('BRANCH '))
         return fauxAssistantMessage([fauxToolCall('branch', JSON.parse(text.slice(7)))], {
           stopReason: 'toolUse',
@@ -212,6 +213,46 @@ it('starts a lineage branch with a board input and caller attribution, returns i
   }, context)
   await ask(f.server, ultimate, 'BRANCH ' + JSON.stringify({ prompt: 'No roots', isolated: false }))
   expect(f.requests.some((text) => text.includes('Choose a root. Roots: (none)'))).toBe(true)
+})
+
+it('refreshes standing definitions for numeric-address deliveries', async () => {
+  const f = await fixture()
+  const dice = await f.subagents.standing('dice', context)
+  await until(async () => (await log(f.server)).some((m) => m.from === dice && m.re !== undefined))
+  await writeFile(
+    join(f.home, '.ultimate/agents/dice.md'),
+    '---\nname: dice\ndescription: Dice\nresident: true\ntools: [message]\n---\nEdited numeric recipient.',
+  )
+  await ask(
+    f.server,
+    f.server.root.id,
+    'SEND ' + JSON.stringify({ to: `#${dice}`, text: 'Fresh delivery' }),
+  )
+  await until(async () =>
+    (await log(f.server)).some((m) => m.from === dice && m.text.includes('Fresh delivery')),
+  )
+  expect(await (await f.server.harness.conversation(dice, context))!.agent(context)).toMatchObject({
+    instructions: 'Edited numeric recipient.',
+  })
+  await f.server.harness.waitForIdle(context)
+})
+
+it('refreshes standing definitions before delivering automatic replies', async () => {
+  const f = await fixture(async (text, home) => {
+    if (text.startsWith('Message from') && text.includes('\nRoll after edit\n'))
+      await writeFile(
+        join(home, '.ultimate/agents/ultimate.md'),
+        (await readFile(resolve('agents/ultimate.md'), 'utf8')) + '\nEdited reply recipient.',
+      )
+  })
+  const ultimate = await f.subagents.standing('ultimate', context)
+  await ask(f.server, ultimate, 'SEND ' + JSON.stringify({ to: '@dice', text: 'Roll after edit' }))
+  await until(() =>
+    f.requests.some((text) => text.startsWith('Reply from') && text.includes('Roll after edit')),
+  )
+  const agent = await (await f.server.harness.conversation(ultimate, context))!.agent(context)
+  expect(agent.instructions).toContain('Edited reply recipient.')
+  await f.server.harness.waitForIdle(context)
 })
 
 it('keeps Ultimate answers to board replies out of the log, including after reopen', async () => {
