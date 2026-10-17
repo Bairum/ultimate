@@ -10,13 +10,18 @@ Self-messages, unknown conversations and tallies are refused; use `note` for a t
 the valid ones. Standing agents are resolved and configured through the `subagents` service at delivery admission.
 
 An idle recipient wakes. A busy one receives a follow-up after its current run, or steering during that run with
-`steer: true`. The typed `board.message` input identifies its sender and explains where its answer goes.
+`steer: true`. The typed `board.message` input identifies its sender and explains where its answer goes. Its `delivery`
+field records `steer` or `followUp`.
 The answer returns as `board.reply`, steering the sender. An unanswered input produces a failure reply instead.
 Answer directly rather than messaging the sender: the tool refuses reply-enabled messages back to a sender whose reply-enabled message is still unanswered, while `reply: false` updates and other recipients remain allowed.
 A subagent (a conversation its parent lists in `ultimate.subagents`) may message only that parent, so its work reaches
 the user through its coordinator and @ultimate; its prompt says so. Automation runs and top-level conversations may
 message anyone.
-`reply: false` is one-way: it wakes the recipient without returning an answer. Sending to `user` only writes an
+`reply: false` is one-way: it wakes the recipient without returning an answer, and its model text says the
+answer is not sent. The log records its answering assistant entry in `answer` while keeping state `delivered`;
+no reply is appended. A subagent's one-way update to its parent is instead a `board.message` write with
+`delivery: 'note'` and no `input` flag. It starts no run; the parent reads it with its next model request.
+The note's delivery decision is saved in the task input for replay. Sending to `user` only writes an
 unread inbox item; it starts no run. Replies to a user post also stay in the inbox without starting a run.
 A reply-enabled message to `user` stays open, and its sender shows as awaiting reply, until the user answers it:
 a Reply, any new post to the sender, or an input typed in the sender's conversation (a plain input or an answer
@@ -29,6 +34,8 @@ Delivery is a background durable task owned by the root conversation. Stable req
 `board-reply:<reply-id>`) deduplicate submissions across reopen. Recording the answer, appending its reply and
 advancing the task checkpoint happen in one transaction. A reopened task resumes that checkpoint, so both a
 placed input awaiting an answer and a recorded answer awaiting delivery survive without duplicate replies.
+One-way input deliveries also wait for the answer; recording it and completing the task commit together.
+Note deliveries complete after placement, without waiting for an answer.
 
 ## Ultimate and branches
 
@@ -80,7 +87,7 @@ type BoardMessage = {
 }
 ```
 
-`board.message` data: `{ id, from, text, reply }`.
+`board.message` data: `{ id, from, text, reply, delivery: 'steer' | 'followUp' | 'note' }`.
 `board.reply` data: `{ id, re, from, text, failed }`. A reply has its own id and `re` points to the original message.
 The reply's `answer` links to the recipient's assistant entry; the original also stores its input `entry`.
 
