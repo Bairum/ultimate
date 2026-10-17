@@ -120,7 +120,8 @@ Other extensions use this for events such as landings. Import the service type f
 
 ## UI
 
-The participants rail above the feed lists you (with unread count), standing agents, the existing lander, and unconcluded coordinators. Other top-level conversations with board messages appear too. It scrolls horizontally on phones. Status dots show working (busy), needs input (a current overview assessment), awaiting reply (an open reply-enabled outgoing message), or idle, alongside the latest conversation or board activity time. Click a participant to filter both directions; click again or Clear to restore the feed. Open / #id opens its conversation, and Mention addresses the composer.
+The participants rail above the feed lists you (with unread count), standing agents, the existing lander, and unconcluded coordinators. Other top-level conversations with board messages appear too. It scrolls horizontally on phones. Status dots show working (busy), subagents working (idle while a subagent below it, at any depth, works; the
+same walk as the phase chip's Waiting), needs input (a current overview assessment), awaiting reply (an open reply-enabled outgoing message), or idle, alongside the latest conversation or board activity time. Click a participant to filter both directions; click again or Clear to restore the feed. Open / #id opens its conversation, and Mention addresses the composer.
 
 The Board surface shows all traffic oldest first, or just your Inbox. Opening Inbox marks its messages read;
 a quiet `inbox N` status-line button appears on every surface while messages are unread. Cards show addresses,

@@ -50,6 +50,13 @@ describe('board answer labels', () => {
   })
 })
 
+/** The status of idle coordinator #4 next to `conversations`. */
+const coordinatorStatus = (conversations: Parameters<typeof participants>[3]) =>
+  participants({ messages: [], next: 1, readUpTo: 0 }, { agents: [], conversations: [] }, {}, [
+    { id: 4, label: 'coordinator', busy: false },
+    ...conversations,
+  ]).find((item) => item.id === 4)?.status
+
 describe('board roster', () => {
   const messages = [
     { id: 1, from: 4, to: 2, text: 'Decision?', at: 100, reply: true, state: 'delivered' as const },
@@ -110,6 +117,22 @@ describe('board roster', () => {
     expect(participantStatus(4, false, [{ ...messages[0], state: 'failed' }])).toBe('idle')
     expect(participantStatus(undefined, false, messages)).toBe('idle')
     expect(participantStatus(2, false, messages)).toBe('idle')
+    expect(participantStatus(4, false, messages, true, true)).toBe('delegating')
+    expect(participantStatus(4, true, messages, false, true)).toBe('working')
+  })
+  it('shows an idle coordinator as delegating while a subagent below it works, not a branch', () => {
+    // A worker's own reviewer, two levels down, still counts.
+    expect(
+      coordinatorStatus([
+        { id: 10, parentConversationId: 4, ownerTaskId: 1, busy: false },
+        { id: 11, parentConversationId: 10, ownerTaskId: 2, busy: true },
+      ]),
+    ).toBe('delegating')
+    expect(
+      coordinatorStatus([{ id: 10, parentConversationId: 4, ownerTaskId: 1, busy: false }]),
+    ).toBe('idle')
+    // A fork of the coordinator is not one of its subagents.
+    expect(coordinatorStatus([{ id: 12, parentConversationId: 4, busy: true }])).toBe('idle')
   })
   it('filters both directions without including unrelated messages', () => {
     expect(participantMessages(messages, 2)).toEqual(messages)

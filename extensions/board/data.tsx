@@ -1,3 +1,5 @@
+import { subagentsBusy } from '../conversations/subtree.tsx'
+
 export type BoardMessage = {
   id: number
   from: number | 'user'
@@ -34,7 +36,7 @@ export type Participant = {
   id?: number | 'user'
   name: string
   address?: string
-  status: 'working' | 'waiting' | 'needs input' | 'idle'
+  status: 'working' | 'delegating' | 'waiting' | 'needs input' | 'idle'
   at?: number
 }
 type Conversation = {
@@ -42,6 +44,7 @@ type Conversation = {
   title?: string
   label?: string
   parentConversationId?: number
+  ownerTaskId?: number
   busy: boolean
   inputAt?: number
   answerAt?: number
@@ -54,8 +57,10 @@ export function participantStatus(
   busy: boolean,
   messages: BoardMessage[],
   needsInput = false,
+  delegating = false,
 ): Participant['status'] {
   if (busy) return 'working'
+  if (delegating) return 'delegating'
   if (needsInput) return 'needs input'
   return id !== undefined &&
     messages.some(
@@ -97,6 +102,7 @@ export function participants(
         conversation?.busy ?? false,
         board.messages,
         typeof id === 'number' && needsInput.has(id),
+        typeof id === 'number' && subagentsBusy(conversations, id),
       ),
       at: times.length ? Math.max(...times) : undefined,
     })
