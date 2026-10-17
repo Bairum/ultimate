@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Ultimate</title>
+    <style>
+      html {
+        background: oklch(0.985 0.002 270);
+      }
+      html.dark {
+        background: oklch(0.178 0.003 270);
+      }
+    </style>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script>
+      // The same origin as the app, so its theme choice applies here too (web/index.html).
+      if (localStorage.getItem('ultimate.theme') === 'light')
+        document.documentElement.classList.remove('dark')
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

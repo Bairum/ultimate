@@ -25,6 +25,8 @@ Run `pnpm cloud:dev` and open the printed URL (normally http://localhost:8787). 
 
 The build includes web facets discovered by Ultimate's extension loader. This is a production build, not the machine's Vite dev server. Rebuild after changing facets. Per-project builds are not supported yet.
 
+Its second entry is the front page (`front/`): a small React page with the app's Tailwind theme, styles and UI primitives (`web/src/components/ui`), built to `dist/front/`. Rebuild after changing it; `wrangler dev` picks up the new files.
+
 ### Two-instance check
 
 Start two faux hosts in different project directories, using separate temporary state homes and free ports. For each host, from this checkout:
@@ -43,7 +45,7 @@ Create conversations through each local UI (or `POST /api/conversations`, JSON `
 
 ## URLs, presence and sync
 
-- `/` is a quiet directory shell; it contains no embedded project data. It reads `/api/directory` behind Access.
+- `/` is the front page: machines as sections, each project a row (status, root path, conversation count) linking to its URL. The Worker serves the static `dist/front/` shell, which contains no project data, and the page reads `/api/directory` behind Access every 10 seconds. Rows are links; arrow keys move between them.
 - `/p/<machine>/<project>/` serves the SPA. Selecting conversations changes only `?conversation=N`, preserving the project path.
 - `/p/<machine>/<project>/api/*` goes to that replica with the prefix removed. Assets stay absolute.
 - `/sync?machine=<name>&project=<URL-encoded absolute root>` routes to `REPLICA.idFromName(JSON.stringify([machine, project]))`.
@@ -64,7 +66,7 @@ Workers observability is enabled for persistent logs; `wrangler tail` can miss D
 
 ## Deploy (user/coordinator only)
 
-The committed config is generic. Domains and tunnel IDs live in user settings, not the repository. `pnpm cloud:deploy` builds the UI and writes the gitignored `cloud/wrangler.deploy.json`. No credentials belong in the repository or command arguments.
+The committed config is generic. Domains and tunnel IDs live in user settings, not the repository. `pnpm cloud:deploy` builds the UI and front page and writes the gitignored `cloud/wrangler.deploy.json`. No credentials belong in the repository or command arguments.
 
 1. With Wrangler logged in, create one remotely managed tunnel per machine:
 

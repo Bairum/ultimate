@@ -1,0 +1,4 @@
+@import '../../web/src/index.css';
+
+/* The app's primitives this page shares; the page itself is found from the build root. */
+@source '../../web/src/components/ui';

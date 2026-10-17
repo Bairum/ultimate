@@ -18,6 +18,7 @@
   },
   "include": [
     "web/src",
+    "cloud/front",
     "extensions/**/*.tsx",
     ".ultimate/extensions/**/*.tsx",
     "shared/protocol.ts",

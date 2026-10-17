@@ -94,6 +94,24 @@ it.each(['/', '/p/desk/one/'])(
   },
 )
 
+it('serves the front page shell from assets without touching the directory', async () => {
+  const assets = vi.fn<(request: Request) => Promise<Response>>(
+    async () => new Response('<div id="app"></div>'),
+  )
+  const get = vi.fn<() => never>(() => {
+    throw new Error('must not touch object')
+  })
+  const env = {
+    ASSETS: { fetch: assets },
+    REPLICA: { get, idFromName: get },
+    DIRECTORY: { get, idFromName: get },
+  } as unknown as Parameters<typeof worker.fetch>[1]
+  const response = await worker.fetch(new Request('https://cloud.example/'), env)
+  expect(await response.text()).toBe('<div id="app"></div>')
+  expect(new URL(assets.mock.calls[0][0].url).pathname).toBe('/front/')
+  expect(get).not.toHaveBeenCalled()
+})
+
 it('derives the SDK base without changing local URLs', () => {
   expect(projectBase('/')).toBe('')
   expect(projectBase('/p/desk/one/')).toBe('/p/desk/one')

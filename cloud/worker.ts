@@ -14,7 +14,6 @@ import { PROJECT_MISMATCH } from './protocol.ts'
 import type { MachineMessage } from './protocol.ts'
 import { DirectoryStore } from './directory.ts'
 import type { Instance, Presence } from './directory.ts'
-import { frontPage } from './front.ts'
 
 // Workers provides this constructor; Node-side request tests do not use WebSocket upgrades.
 declare const WebSocketPair: typeof MachineSocketPair
@@ -60,8 +59,8 @@ export default {
     const api = path === '/api' || path.startsWith('/api/')
     if (api && !(await admitsAccess(request, env)))
       return Response.json({ error: 'Unauthorized' }, { status: 401 })
-    if (url.pathname === '/')
-      return new Response(frontPage, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
+    // The front page is a static shell built by cloud/build.ts; its data comes from /api/directory behind Access.
+    if (url.pathname === '/') return env.ASSETS.fetch(new Request(new URL('/front/', url), request))
     if (url.pathname === '/api/directory') return directory(env).fetch('https://directory/list')
     if (path === '/sync' && !prefix) {
       if (
