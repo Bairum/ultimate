@@ -10,6 +10,7 @@ import {
   getConversation,
 } from '@/sdk'
 import type { CommandContribution } from '@/sdk'
+import { getRoots } from '../lineage/roots.tsx'
 
 /** The conversation in a centred column, with the sidebar and the right panel beside it. */
 function Agent() {
@@ -41,11 +42,16 @@ const commands: CommandContribution[] = [
   {
     id: 'agent.compact',
     title: 'Compact the context',
+    // @ultimate compacts a root's tally with `compact_tally`.
+    when: (context) =>
+      context.conversationId === undefined || !getRoots()?.includes(context.conversationId),
     run: () => api.compact(),
   },
   {
     id: 'agent.composer',
     title: 'Focus the composer',
+    when: (context) =>
+      context.conversationId === undefined || !getRoots()?.includes(context.conversationId),
     run: (context) => context.focusComposer(),
   },
   {

@@ -1,4 +1,4 @@
-The project's conversations in the Agent surface's sidebar: branch, switch, rename, clear, and conclude them.
+The project's conversations in the Agent surface's sidebar: talk to @ultimate, switch, rename, clear, and conclude them.
 Several branches run at once as separate agents; lineage roots keep their shared tally without running turns.
 A summary model (GPT-6 Luna by default) automatically gives top-level conversations concise titles and sidebar summaries, and assesses each final reply without
 changing the main agent.
@@ -34,13 +34,9 @@ A child linked to a plan task leads with the plan's `TaskChip` and shows the tas
 A row switches to its child, highlights selection and keeps the top-level summary visible. History forks are not
 invented delegation edges. Expansion is persisted in `ext.conversations.expanded`; buttons support keyboard access.
 
-New conversation (the button, `mod+alt+n`, or the palette) opens lineage's start page on the Agent surface.
-It creates nothing until sent; sending calls lineage `branch` from the latest entry of the shown tree's root (else
-the most recently active root), or `newRoot` from its New root tab, with the prompt, chosen model/thinking level and
-any pasted images. The same page serves lineage's "Branch…" and "Branch from here". The dropdown's Isolated and
-Shared choices only select the type, remembered in
-`ext.conversations.creationType` across tabs, reloads and restarts. New isolated conversation explicitly branches
-in its own checkout without changing that preference. Errors preserve the prompt for retry.
+The sidebar's **Talk to @ultimate** button opens the standing agent on the Agent surface through
+`subagents.standing {name: 'ultimate'}`. @ultimate starts coordinator branches; there are no manual creation commands
+or isolation preferences. A separate Workspaces button opens the read-only checkout panel.
 Conclude releases clean, fully landed checkouts, including owned subagent checkouts. Uncommitted files,
 unlanded commits, and busy checkouts are kept; Clear context never removes checkouts or commits.
 The Workspaces panel shows checkouts read-only.
@@ -54,8 +50,8 @@ Concluded rows and their branches/subagents sit in a collapsed "Concluded · N" 
 Resume brings them back; sending to a concluded branch resumes it and any concluded ancestors automatically.
 Concluding the shown subtree shows another live conversation when one exists.
 
-Commands, under Conversations: `conversations.new` ("New conversation", `mod+alt+n`), `conversations.reset`
-("Clear the context" of the shown top-level conversation, when it is idle and has entries), and
+Commands, under Conversations: `conversations.reset`
+("Clear the context" of the shown top-level conversation, when it is idle, has entries and is not a listed root), and
 `conversations.summary-model` ("Summary model…", see [Summary model](#summary-model)). The UI state keeps concluded
 ids in `ext.conversations.concluded` and, in `ext.conversations.seen`, the latest answer time seen per top-level
 conversation; a conversation not recorded there counts as seen.

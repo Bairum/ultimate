@@ -4,28 +4,20 @@ import type { ReactNode } from 'react'
 import { Kbd } from '@/components/ui/kbd'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
+  api,
   cn,
   defineWebExtension,
   errorMessage,
   getConversation,
   getState,
-  getNewConversationConfiguration,
   useDialog,
-  useComposer,
   useTranscript,
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import { LoginDialog } from './login.tsx'
 import { ModelPicker } from './picker.tsx'
-import {
-  configureTarget,
-  dialogs,
-  nextThinking,
-  openLogin,
-  openPicker,
-  useCurrentModel,
-} from './state.tsx'
+import { dialogs, nextThinking, openLogin, openPicker, useCurrentModel } from './state.tsx'
 import type { ThinkingLevel } from './state.tsx'
 import { switchAt } from './switches.ts'
 
@@ -33,7 +25,6 @@ const toolbarButton =
   'flex h-7 max-w-56 shrink-0 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground'
 
 function ModelButton() {
-  const { target, source } = useComposer()
   const { ref, loading } = useCurrentModel()
   const actions = useUltimate()
   return (
@@ -41,15 +32,13 @@ function ModelButton() {
       className={cn(toolbarButton, 'min-w-0 shrink')}
       disabled={loading}
       aria-label={loading ? 'Loading model' : undefined}
-      onClick={() => openPicker(actions, target, source)}
+      onClick={() => openPicker(actions)}
       title={
         loading
           ? 'Loading model'
           : ref
             ? `${ref.modelId} · ${ref.provider} — pick a model`
-            : target === 'new'
-              ? 'Use the default model — pick a model'
-              : 'Pick a model'
+            : 'Pick a model'
       }
       type="button"
     >
@@ -60,7 +49,7 @@ function ModelButton() {
           loading ? undefined : ref ? 'text-foreground/85' : 'text-warning',
         )}
       >
-        {loading ? 'model…' : (ref?.modelId ?? (target === 'new' ? 'default model' : 'no model'))}
+        {loading ? 'model…' : (ref?.modelId ?? 'no model')}
       </span>
       <ChevronDownIcon className="size-3 shrink-0 opacity-60 @max-md:hidden" />
     </button>
@@ -68,9 +57,8 @@ function ModelButton() {
 }
 
 function ThinkingButton() {
-  const { target } = useComposer()
   const { model, thinking, loading } = useCurrentModel()
-  const [open, setOpen] = useDialog(target === 'new' ? 'models.newThinking' : dialogs.thinking)
+  const [open, setOpen] = useDialog(dialogs.thinking)
   const [error, setError] = useState<string>()
   if (loading)
     return (
@@ -91,7 +79,7 @@ function ThinkingButton() {
   const current = thinking ?? 'off'
   const choose = (level: ThinkingLevel) => {
     setError(undefined)
-    configureTarget({ thinkingLevel: level }, target).then(
+    api.configure({ thinkingLevel: level }).then(
       () => setOpen(false),
       (failure: unknown) => setError(errorMessage(failure)),
     )
@@ -180,12 +168,7 @@ export default defineWebExtension({
     {
       id: 'model.thinking',
       title: 'Set the thinking level',
-      run: (context) =>
-        context.open(
-          document.activeElement?.closest('[data-composer-target="new"]')
-            ? 'models.newThinking'
-            : dialogs.thinking,
-        ),
+      run: (context) => context.open(dialogs.thinking),
     },
     {
       id: 'model.thinking.cycle',
@@ -194,22 +177,14 @@ export default defineWebExtension({
       whileTyping: true,
       run: async () => {
         const { agent, loading } = getConversation()
-        const composer = document.activeElement?.closest<HTMLElement>(
-          '[data-composer-target="new"]',
-        )
-        const target = composer ? 'new' : 'conversation'
         if (loading) return undefined
-        const source = composer?.dataset.composerSource
-        const configuration = composer
-          ? await getNewConversationConfiguration(source ? Number(source) : undefined)
-          : agent
-        const ref = configuration.model
-        const thinking = configuration.thinkingLevel
+        const ref = agent.model
+        const thinking = agent.thinkingLevel
         const model = getState().models?.models.find(
           (candidate) => candidate.provider === ref?.provider && candidate.id === ref.modelId,
         )
         if (!model?.reasoning) return undefined
-        return configureTarget({ thinkingLevel: nextThinking(thinking, model) }, target)
+        return api.configure({ thinkingLevel: nextThinking(thinking, model) })
       },
     },
     {

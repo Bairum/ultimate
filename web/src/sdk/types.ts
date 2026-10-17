@@ -1,7 +1,6 @@
 import type { ComponentType, ReactNode } from 'react'
 import type { ImageContent, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai'
 import type { EntryRecord, InboxItem, JsonObject, ToolDiagnostic } from '@earendil-works/pi-durable'
-import type { ConfigureRequest } from '../../../shared/protocol.ts'
 
 /** Named places in the shell that extensions fill with components. */
 export type SlotName =
@@ -150,21 +149,6 @@ export interface CommandContribution {
   run(context: UltimateContext): void | Promise<unknown>
 }
 
-/** A composer submission for a new conversation; extensions own how it starts. */
-export interface ConversationDraft {
-  prompt: string
-  images?: { data: string; mimeType: string }[]
-  from?: number
-  at?: number
-  /** Start a new root instead of a branch. */
-  root?: boolean
-  /** Sent with ⌥↵ (Alt+Enter) rather than ↵: the starter's second way to start. */
-  alternate?: boolean
-  isolated?: boolean
-  model?: { provider: string; modelId: string }
-  thinkingLevel?: ConfigureRequest['thinkingLevel']
-}
-
 /** The browser facet of an extension: `extensions/<name>/web.tsx` default-exports one. */
 export interface WebExtension {
   slots?: Partial<Record<SlotName, Contribution | readonly Contribution[]>>
@@ -179,8 +163,6 @@ export interface WebExtension {
   composer?: ComposerRenderer
   /** Renders links in Markdown; renderers compose in discovery order, each wrapping the one before it. */
   link?: LinkRenderer
-  /** Starts a new conversation; the last contribution in discovery order wins. */
-  start?: (draft: ConversationDraft) => Promise<{ id: number }>
   /** Contributions to the hover action row on stored messages, in discovery order. */
   messageActions?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Readouts on the hover action row on stored messages, before its time, in discovery order. */

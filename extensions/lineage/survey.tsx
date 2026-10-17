@@ -6,11 +6,14 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Kbd } from '@/components/ui/kbd'
 import { api, cn, errorMessage, touchKeyboard, useDocOf, useSystem, useUltimate } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
-import { column, label } from './side.tsx'
+
+/** The composer's reading column, as the core lays it out. */
+export const column = (dock?: boolean) =>
+  dock ? 'w-full px-4' : 'mx-auto w-full max-w-[46rem] px-3 sm:px-6'
 
 /**
- * An empty root starts with @ultimate's setup and reading, toward optional instructions.
- * The in-place survey remains available; either reading seeds the tally every branch starts from.
+ * An empty root starts with @ultimate's setup and reading, toward optional instructions; what it learns seeds the tally
+ * every branch starts from.
  */
 export function Familiarize({ id, dock }: { id: number; dock?: boolean }) {
   const project = useSystem()?.project.name
@@ -21,21 +24,17 @@ export function Familiarize({ id, dock }: { id: number; dock?: boolean }) {
   const [focus, setFocus] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string>()
-  const begin = async (survey = false) => {
+  const begin = async () => {
     if (sending) return
     setSending(true)
     setError(undefined)
     try {
-      if (survey) {
-        await api.action('lineage', 'survey', { root: id, ...(focus.trim() ? { focus } : {}) })
-      } else {
-        const result = await api.action<{ id: number }>('onboarding', 'start', {
-          root: id,
-          ...(focus.trim() ? { instructions: focus } : {}),
-        })
-        ui.switchConversation(result.id)
-        ui.showSurface('agent')
-      }
+      const result = await api.action<{ id: number }>('onboarding', 'start', {
+        root: id,
+        ...(focus.trim() ? { instructions: focus } : {}),
+      })
+      ui.switchConversation(result.id)
+      ui.showSurface('agent')
     } catch (failure) {
       setError(errorMessage(failure))
       setSending(false)
@@ -110,42 +109,12 @@ export function Familiarize({ id, dock }: { id: number; dock?: boolean }) {
             </Button>
           )}
         </div>
-        <button
-          className="mt-3 text-xs text-muted-foreground hover:text-foreground hover:underline"
-          disabled={sending}
-          onClick={() => void begin(true)}
-          type="button"
-        >
-          Read it here instead
-        </button>
       </div>
     </div>
   )
 }
 
-/** While a root's genesis is distilled it takes no input: a quiet line instead of its composer. */
-export function Distilling({ id, dock }: { id: number; dock?: boolean }) {
-  return (
-    <div className={cn(column(dock), 'pb-3')}>
-      <div className={cn(label, 'px-3 py-2')} data-lineage-distilling={id} role="status">
-        <LoaderCircleIcon className="size-3.5 shrink-0 text-brand motion-safe:animate-spin" />
-        Writing the tally from what it read…
-      </div>
-    </div>
-  )
-}
-
-/** Under a surveying root's composer: what happens when the reading ends. */
-export function SurveyStatus() {
-  return (
-    <span className="flex items-center gap-1.5 text-muted-foreground/70" role="status">
-      <LoaderCircleIcon className="size-3 text-brand motion-safe:animate-spin" />
-      Getting familiar with the project · it becomes the tally when done
-    </span>
-  )
-}
-
-/** A root's survey input: what it was asked to read, collapsed under its focus. */
+/** A root's survey input, from before @ultimate read projects: what it was asked to read, collapsed under its focus. */
 export function Survey({ entry, text }: { entry: EntryRecord; text: string }) {
   const focus = (entry.data as { focus?: string } | undefined)?.focus
   return (

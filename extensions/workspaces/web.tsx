@@ -1,20 +1,8 @@
 import { ChevronRightIcon, CopyIcon, GitBranchIcon, RefreshCwIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Switch } from '@/components/ui/switch'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import {
-  cn,
-  useComposer,
-  useUiState,
-  defineWebExtension,
-  formatBytes,
-  useAction,
-  useConversation,
-  useEvent,
-  useUltimate,
-} from '@/sdk'
+import { defineWebExtension, formatBytes, useAction, useConversation, useUltimate } from '@/sdk'
 import {
   stateLabel,
   useLanderQueue,
@@ -102,60 +90,6 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
         )}
       </LandingCard>
     </div>
-  )
-}
-
-function IsolationToggle() {
-  const { target, isolated: isolation, root } = useComposer()
-  const [creation, setCreation] = useUiState<string>('ext.conversations.creationType', 'isolated')
-  const ui = useUltimate()
-  const check = useAction<{ reason?: string }>('workspaces', 'isolation', {})
-  useEvent('onboarding:git', () => void check.refetch())
-  const { reason } = check.data ?? {}
-  if (target !== 'new' || root) return null
-  const isolated = isolation ?? (!reason && creation !== 'shared')
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <label
-          className={cn(
-            'flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-[12px] transition-colors',
-            isolated
-              ? 'border-brand/60 bg-brand/15 text-foreground'
-              : 'border-transparent text-muted-foreground hover:text-foreground',
-          )}
-          data-isolated={isolated}
-          // Without Git the switch cannot turn on; the label opens onboarding's Git card instead.
-          onClick={
-            reason
-              ? (event) => {
-                  // Radix's hidden input also bubbles a synthetic click when checked changes on mount.
-                  if (event.isTrusted) ui.open('onboarding.git')
-                }
-              : undefined
-          }
-        >
-          <GitBranchIcon className={cn('size-3.5', isolated && 'text-brand')} />
-          <span className="@max-md:hidden">Isolated</span>
-          <Switch
-            aria-label="Isolated"
-            checked={isolated}
-            disabled={isolation !== undefined || !!reason}
-            className="ml-0.5"
-            onCheckedChange={(on) => setCreation(on ? 'isolated' : 'shared')}
-          />
-        </label>
-      </TooltipTrigger>
-      <TooltipContent>
-        {reason
-          ? isolated
-            ? reason
-            : `${reason}, so it shares this folder · click to set up`
-          : isolated
-            ? 'New isolated conversation: its own Git checkout'
-            : 'New shared conversation, in this checkout'}
-      </TooltipContent>
-    </Tooltip>
   )
 }
 
@@ -401,7 +335,6 @@ function WorkspacesPanel() {
 }
 
 export default defineWebExtension({
-  slots: { 'composer.toolbar': [IsolationToggle] },
   tools: { workspace: WorkspaceCall },
   entries: {
     'lineage.note': ({ entry, core }) =>

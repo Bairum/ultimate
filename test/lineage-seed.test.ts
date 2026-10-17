@@ -17,9 +17,10 @@ it('seeds a listed root from a definition, branches with its reading, and refuse
       context,
     )
     const parent = await server.root.agent(context)
-    expect(parent.tools.map((tool) => tool.name)).not.toContain('seed_tally')
+    for (const name of ['new_root', 'seed_tally', 'compact_tally'])
+      expect(parent.tools.map((tool) => tool.name)).not.toContain(name)
     const definition = parseDefinition(
-      '---\nname: reader\ndescription: Read\ntools: [seed_tally]\n---\nRead the project.',
+      '---\nname: reader\ndescription: Read\ntools: [new_root, seed_tally, compact_tally]\n---\nRead the project.',
       'reader.md',
     )
     await server.harness.commit(
@@ -31,7 +32,8 @@ it('seeds a listed root from a definition, branches with its reading, and refuse
         ),
       context,
     )
-    expect((await reader.agent(context)).tools.map((tool) => tool.name)).toContain('seed_tally')
+    for (const name of ['new_root', 'seed_tally', 'compact_tally'])
+      expect((await reader.agent(context)).tools.map((tool) => tool.name)).toContain(name)
     const route: FauxResponseFactory = async (transcript) => {
       server.host.faux!.appendResponses([route])
       const last = transcript.messages.at(-1)!
@@ -128,21 +130,6 @@ it('seeds a listed root from a definition, branches with its reading, and refuse
     await server.harness.commit(async (tx) => {
       ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.push(target.id)
     }, context)
-    for (const [flag, message] of [
-      ['surveying', 'surveying'],
-      ['converting', 'becoming'],
-    ] as const) {
-      await server.harness.commit(async (tx) => {
-        const tally = await tx.doc(Tally, target.id)
-        tally[flag] = true
-      }, context)
-      await expect(tool.execute({ root: target.id, text: 'x' }, api, context)).rejects.toThrow(
-        message,
-      )
-      await server.harness.commit(async (tx) => {
-        delete (await tx.doc(Tally, target.id))[flag]
-      }, context)
-    }
     await server.harness.commit(async (tx) => {
       await tx.appendEntry(target.id, { kind: 'test.history' })
     }, context)

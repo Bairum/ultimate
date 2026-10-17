@@ -79,6 +79,7 @@ export default defineConfig({
             'error',
             {
               allow: {
+                agent: ['lineage'],
                 automations: ['subagents'],
                 board: ['workspaces', 'subagents', 'lineage', 'conversations', 'questions'],
                 classify: ['secrets'],

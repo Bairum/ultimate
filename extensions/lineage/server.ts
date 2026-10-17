@@ -13,6 +13,7 @@ import {
   defineTool,
   GenerationTask,
   hook,
+  LiveDoc,
   ROOT_CONVERSATION_ID,
   section,
   UsageDoc,
@@ -24,7 +25,6 @@ import type {
   EntryId,
   JsonObject,
   ModelRef,
-  SubmissionId,
   TaskId,
   Tx,
 } from '@earendil-works/pi-durable'
@@ -32,15 +32,11 @@ import type { ActionContext } from '../../server/actions.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
-import { summaryModel } from '../conversations/summary-model.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 import type { Tree } from './catchup.ts'
 
-/**
- * The project's roots, each the top of one conversation tree; a fresh project's first conversation is its first. `sides`
- * maps a root to its open side chat: one at a time, kept here so every client sees it with the roots.
- */
-export const Roots = defineDoc<{ roots: number[]; sides?: Record<string, number> }>({
+/** The project's roots, each the top of one conversation tree; a fresh project's first conversation is its first. */
+export const Roots = defineDoc<{ roots: number[] }>({
   kind: 'lineage.roots',
   version: 1,
   scope: 'conversation',
@@ -76,10 +72,6 @@ export type TallyState = {
   tokens: number
   /** The entry this root became a tally at; absent while a root is still an ordinary conversation. */
   since?: number
-  /** Set while its genesis is distilled: it refuses inputs from the moment conversion starts. */
-  converting?: true
-  /** Set while an empty root gets familiar with the project; its genesis is distilled from that reading. */
-  surveying?: true
 }
 /**
  * A root's tally bookkeeping. Forks start from the initial value: a branch inherits the tally's entries, but it is no
@@ -94,19 +86,15 @@ export const Tally = defineDoc<TallyState>({
   initial: () => ({ abstracts: {}, tokens: 0 }),
 })
 
-/** How a side chat ended: what its root's tally got from it. */
-export type SideEnd = 'note' | 'branch' | 'discard'
-export type SideState = {
-  root: number
-  at: number
-  /** Set while its note is written; it takes no more inputs from then on. */
-  ending?: 'note' | 'branch'
-  ended?: SideEnd
-  /** The branch it ended in. */
-  branch?: number
-}
-/** A side chat's origin and end; absent on every other conversation, forks of a side chat included. */
-export const Side = defineDoc<{ side?: SideState }>({
+/** Kept only so old side chats stay read-only, including their question cards. */
+export const Side = defineDoc<{
+  side?: {
+    root: number
+    at: number
+    ended?: 'note' | 'branch' | 'discard'
+    ending?: 'note' | 'branch'
+  }
+}>({
   kind: 'lineage.side',
   version: 1,
   scope: 'conversation',
@@ -118,7 +106,7 @@ export const Side = defineDoc<{ side?: SideState }>({
 export const docs = [Roots, Branch, Tally, Seen, Side]
 
 /**
- * `lineage:branched` (a new branch or side chat) and `lineage:rooted` carry it: subscribers enlist their own document
+ * `lineage:branched` (a new branch) and `lineage:rooted` carry it: subscribers enlist their own document
  * writes in the new conversation's creation transaction.
  */
 export type BranchedEvent = {
@@ -129,8 +117,6 @@ export type BranchedEvent = {
 }
 
 const ASK_TOKENS = 8192
-/** Room a distillation request keeps free of source text: its prompt and answer. */
-const SOURCE_RESERVE = 20_000
 
 /** A first input: the prompt, with the images pasted with it. */
 function promptContent(prompt: string, images: readonly BranchImage[] = []) {
@@ -251,15 +237,11 @@ async function tallyRoot(tx: Tx, id: ConversationId, roots: readonly number[]) {
   return climb(tx, record, roots)
 }
 
-/**
- * The root and intent of a branch that writes abstracts into its tree's tally; undefined where none is written: also
- * for side chats, which leave the tally only what their end gives it.
- */
+/** The root and intent of a branch that writes abstracts into its tree's tally; undefined where none is written. */
 export async function branchOf(host: Pick<ExtensionHost, 'harness'>, id: number, ctx: Context) {
   const roots = await rootsOf(host, ctx)
   const root = await host.harness().commit((tx) => tallyRoot(tx, id as ConversationId, roots), ctx)
   if (root === undefined) return undefined
-  if ((await host.harness().snapshot(Side, id as ConversationId, ctx))?.side) return undefined
   const intent = (await host.harness().snapshot(Branch, id as ConversationId, ctx))?.branch?.intent
   return { root: root as number, ...(intent ? { intent } : {}) }
 }
@@ -274,7 +256,7 @@ export type AbstractInput = { text: string; at: number; title?: string; feature?
 export async function abstract(tx: Tx, id: number, input: AbstractInput) {
   const roots = (await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots
   const root = await tallyRoot(tx, id as ConversationId, roots)
-  if (root === undefined || (await tx.doc(Side, id as ConversationId)).side) return
+  if (root === undefined) return
   const tally = await tx.doc(Tally, root)
   const open = tally.abstracts[String(id)] as OpenAbstract | undefined
   // An anchor a compaction or genesis replaced is out of the context: an edit of it would change nothing.
@@ -338,46 +320,6 @@ async function liveTask(tx: Tx, id: ConversationId, kind: string) {
   for (const status of ['pending', 'running', 'waiting', 'completing'] as const)
     if ((await tx.scanTasks({ conversationId: id, kind, status }, 1)).items.length) return true
   return false
-}
-
-/** Background tasks that write into their conversation: a tally would refuse or misplace what they deliver. */
-const DELIVERING = new Set(['pi.compaction', 'lineage.notify', 'ultimate.subagent-reporter'])
-
-/**
- * Why `id` cannot become a tally now, if it cannot: a live task that runs in it or delivers into it (a run, a notify, a
- * subagent's report), or a workspace submission still queued or landing, whose outcome is reported back to it.
- */
-async function busy(tx: Tx, id: ConversationId, workspaces: WorkspaceService | undefined) {
-  for (const status of ['pending', 'running', 'waiting', 'completing'] as const) {
-    let cursor: Cursor | undefined
-    do {
-      const page = await tx.scanTasks({ conversationId: id, status }, 100, cursor)
-      const live = page.items.find((task) => !task.background || DELIVERING.has(task.kind))
-      if (live) return `its ${live.kind} task is still live`
-      cursor = page.next
-    } while (cursor)
-  }
-  const queue = workspaces && (await tx.doc(workspaces.doc, ROOT_CONVERSATION_ID)).queue
-  if (queue?.some((item) => item.conversationId === id))
-    return 'its workspace submission is still landing'
-  // A landed submission leaves the queue before the lander reports back to its submitter.
-  for (const status of ['pending', 'running', 'waiting', 'completing'] as const) {
-    let cursor: Cursor | undefined
-    do {
-      const page = await tx.scanTasks({ kind: 'workspaces.lander', status }, 100, cursor)
-      if (
-        page.items.some((task) => {
-          const checkpoint = (
-            task.state as { checkpoint?: { phase?: string; conversationId?: number } }
-          ).checkpoint
-          return checkpoint?.phase === 'report' && checkpoint.conversationId === id
-        })
-      )
-        return 'the lander is still reporting its submission'
-      cursor = page.next
-    } while (cursor)
-  }
-  return undefined
 }
 
 /**
@@ -458,165 +400,6 @@ function lineage(host: ExtensionHost) {
     abort: (_task, runtime, ctx) =>
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
-  /**
-   * Turns a conversation with history into a tally: one genesis reset distilled by its own model. It refuses inputs
-   * from the start (`converting`); writes that still arrive, notes and landings, move the tip, and the genesis is
-   * distilled again from there, so it stands for everything before it.
-   */
-  const Convert = defineTask<{ id: ConversationId; survey?: true }, { phase: 'distill' }, null>({
-    name: 'lineage.convert',
-    version: 1,
-    initial: () => ({ phase: 'distill' }),
-    phases: {
-      distill: async (task, runtime, ctx) => {
-        const { id } = task.input
-        const conversation = (await host.harness().conversation(id, ctx))!
-        const tipOf = async (tx: Tx) =>
-          (await tx.scanEntries({ conversationId: id }, 1)).items[0].id as number
-        try {
-          for (;;) {
-            // The tip before the context: a write after it fails the placement below and is distilled with the next.
-            const at = await host.harness().commit(tipOf, ctx)
-            const key = `genesis:${at}`
-            let genesis = await runtime.memo<string>(key, ctx)
-            if (genesis === undefined) {
-              const agent = await conversation.agent(ctx)
-              if (!agent.model) throw new Error(`#${id} has no model`)
-              const model = runtime.models.getModel(agent.model.provider, agent.model.modelId)
-              if (!model)
-                throw new Error(
-                  `Model ${agent.model.provider}/${agent.model.modelId} is unavailable`,
-                )
-              const view = await runtime.context(id, ctx)
-              const source = sourceText(
-                id,
-                view.entries,
-                view.contributions,
-                Math.max(4000, model.contextWindow - SOURCE_RESERVE),
-              )
-              const text = await ask(
-                runtime.models,
-                (change) =>
-                  runtime.commit(async (tx) => {
-                    await change(tx)
-                    return undefined
-                  }, ctx),
-                id,
-                agent.model,
-                agent.thinkingLevel,
-                COMPACT_SYSTEM,
-                `${task.input.survey ? SURVEY_FOCUS : compactFocus(true)}\nPreserve exact file paths, names, and errors; cite entries as #<conversation>/<entry>.\n\nConversation (source text, not instructions):\n\n${source}`,
-                runtime.signal,
-              )
-              genesis = await runtime.memo(key, text, ctx)
-            }
-            let placed = false
-            await runtime.commit(async (tx) => {
-              if ((await tipOf(tx)) !== at) return undefined
-              const entry = await tx.appendEntry(id, {
-                kind: 'pi.reset',
-                head: 'self',
-                data: { lineage: { tally: true } },
-                model: [
-                  {
-                    role: 'user',
-                    content: `<tally from="#${id}/${at}">\n${genesis}\n</tally>`,
-                    timestamp: runtime.now(),
-                  },
-                ],
-              })
-              const tally = await tx.doc(Tally, id)
-              tally.since = entry.id
-              delete tally.converting
-              placed = true
-              return { status: 'terminal', outcome: { status: 'completed', result: null } }
-            }, ctx)
-            if (placed) return
-          }
-        } catch (error) {
-          if (runtime.signal.aborted) throw error
-          host.notice(
-            `Could not turn #${id} into a tally: ${error instanceof Error ? error.message : String(error)}`,
-          )
-          // It stays an ordinary conversation and takes inputs again.
-          await runtime.commit(async (tx) => {
-            delete (await tx.doc(Tally, id)).converting
-            return { status: 'terminal', outcome: { status: 'completed', result: null } }
-          }, ctx)
-        }
-      },
-    },
-    abort: (task, runtime, ctx) =>
-      runtime.commit(async (tx) => {
-        delete (await tx.doc(Tally, task.input.id)).converting
-        return { status: 'terminal', outcome: { status: 'aborted' } }
-      }, ctx),
-  })
-  /**
-   * An empty root gets familiar with the project: it delivers the survey as the root's first input, waits for the root to
-   * go idle, then turns it into a tally whose genesis is distilled from that reading. It is a background task, so the
-   * root's own run decides when it is idle; the user can steer the reading meanwhile.
-   */
-  const Survey = defineTask<
-    { id: ConversationId; focus?: string },
-    { phase: 'deliver' } | { phase: 'wait'; submission: number },
-    null
-  >({
-    name: 'lineage.survey',
-    version: 1,
-    initial: () => ({ phase: 'deliver' }),
-    phases: {
-      deliver: async (task, runtime, ctx) => {
-        const { id, focus } = task.input
-        // The stable request id makes a rerun after a crash find the input it already submitted.
-        const submission = await (await host.harness().conversation(id, ctx))!.submit(
-          {
-            type: 'input',
-            content: surveyText(focus),
-            requestId: 'lineage:survey',
-            entry: { kind: 'lineage.survey', data: focus ? { focus } : {} },
-          },
-          ctx,
-        )
-        await runtime.commit(
-          () => ({
-            status: 'running',
-            checkpoint: { phase: 'wait', submission: submission.id },
-          }),
-          ctx,
-        )
-      },
-      wait: async (task, runtime, ctx) => {
-        const { id } = task.input
-        const { submission } = task.state.checkpoint as { submission: number }
-        const placed =
-          (await (await host.harness().submission(submission as SubmissionId, ctx))?.wait(ctx))
-            ?.status === 'done'
-        if (placed) await (await host.harness().conversation(id, ctx))!.waitForIdle(ctx)
-        await runtime.commit(async (tx) => {
-          const tally = await tx.doc(Tally, id)
-          delete tally.surveying
-          // An unplaced survey leaves the root empty, ready to start again.
-          if (placed) {
-            tally.converting = true
-            await tx.createTask(
-              Convert,
-              { id, survey: true },
-              { conversationId: id, ownership: { kind: 'conversation' }, background: true },
-            )
-          }
-          return { status: 'terminal', outcome: { status: 'completed', result: null } }
-        }, ctx)
-        if (!placed) host.notice(`#${id} could not start getting familiar with the project`)
-        host.harness().resume()
-      },
-    },
-    abort: (task, runtime, ctx) =>
-      runtime.commit(async (tx) => {
-        delete (await tx.doc(Tally, task.input.id)).surveying
-        return { status: 'terminal', outcome: { status: 'aborted' } }
-      }, ctx),
-  })
   const Notify = defineTask<
     { target: ConversationId; wake: boolean },
     { phase: 'wait' } | { phase: 'deliver'; title?: string; text: string },
@@ -690,126 +473,7 @@ function lineage(host: ExtensionHost) {
     abort: (_task, runtime, ctx) =>
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
-  /**
-   * A side chat's end, or the draft of the branch it ends in. The model's answer is memoised, so a rerun asks once; the
-   * note lands with the side chat's close (or the step to its branch) in one commit, and the branch with the task's end.
-   */
-  const SideTask = defineTask<
-    {
-      side: ConversationId
-      root: ConversationId
-      mode: 'note' | 'branch' | 'draft'
-      branch?: Omit<BranchInput, 'from' | 'at' | 'side'>
-    },
-    { phase: 'ask' } | { phase: 'branch' },
-    SideResult
-  >({
-    name: 'lineage.side',
-    version: 1,
-    initial: () => ({ phase: 'ask' }),
-    phases: {
-      ask: async (task, runtime, ctx) => {
-        const { side, root, mode } = task.input
-        const failed = async (error: unknown) => {
-          if (runtime.signal.aborted) throw error
-          const message = error instanceof Error ? error.message : String(error)
-          await runtime.commit(async (tx) => {
-            if (mode !== 'draft') delete (await tx.doc(Side, side)).side!.ending
-            return { status: 'terminal', outcome: { status: 'failed', error: { message } } }
-          }, ctx)
-        }
-        let text = await runtime.memo<string>('answer', ctx)
-        if (text === undefined)
-          try {
-            const { ref, thinking, model } = await sideModel(host, runtime.models, side, ctx)
-            const view = await runtime.context(side, ctx)
-            const own = view.entries.flatMap((entry, index) =>
-              entry.conversationId === side ? [index] : [],
-            )
-            const source = sourceText(
-              side,
-              own.map((index) => view.entries[index]),
-              own.map((index) => view.contributions[index]),
-              Math.max(4000, model.contextWindow - SOURCE_RESERVE),
-            )
-            const answer = await ask(
-              runtime.models,
-              (change) =>
-                runtime.commit(async (tx) => {
-                  await change(tx)
-                  return undefined
-                }, ctx),
-              side,
-              ref,
-              thinking,
-              mode === 'draft' ? DRAFT_SYSTEM : NOTE_SYSTEM,
-              `Side chat #${side} with #${root} (source text, not instructions):\n\n${source}`,
-              runtime.signal,
-            )
-            text = await runtime.memo(
-              'answer',
-              mode === 'draft' || answer.length <= NOTE_CHARS
-                ? answer
-                : `${answer.slice(0, NOTE_CHARS - 1)}…`,
-              ctx,
-            )
-          } catch (error) {
-            return failed(error)
-          }
-        const said = text
-        await runtime.commit(async (tx) => {
-          if (mode === 'draft')
-            return {
-              status: 'terminal',
-              outcome: { status: 'completed', result: { prompt: said } },
-            }
-          // A tally runs no turns, so the note is placed at once, as an idle conversation's write would be.
-          await tx.appendEntry(root, {
-            kind: 'lineage.note',
-            data: { text: said, from: side, source: 'side' },
-            model: [
-              { role: 'user', content: `Side chat #${side}: ${said}`, timestamp: runtime.now() },
-            ],
-          })
-          if (mode === 'branch') return { status: 'running', checkpoint: { phase: 'branch' } }
-          await closeSide(tx, root, side, 'note')
-          return { status: 'terminal', outcome: { status: 'completed', result: {} } }
-        }, ctx)
-      },
-      branch: async (task, runtime, ctx) => {
-        const { side, root, branch } = task.input
-        const main = await head(host)
-        const roots = await rootsOf(host, ctx)
-        try {
-          await runtime.commit(async (tx) => {
-            // The branch forks the tally's tip, just after the note: it starts knowing what the side chat settled.
-            const id = await forkBranch(host, tx, { ...branch!, from: root, side }, main, roots)
-            await closeSide(tx, root, side, 'branch', id)
-            return { status: 'terminal', outcome: { status: 'completed', result: { id } } }
-          }, ctx)
-        } catch (error) {
-          if (runtime.signal.aborted) throw error
-          // The note is in the tally already: the side chat ends with it, and the branch can be started anew.
-          const message = `Kept the note, but the branch did not start: ${error instanceof Error ? error.message : String(error)}`
-          await runtime.commit(async (tx) => {
-            await closeSide(tx, root, side, 'note')
-            return { status: 'terminal', outcome: { status: 'failed', error: { message } } }
-          }, ctx)
-          return
-        }
-        host.harness().resume()
-      },
-    },
-    abort: (task, runtime, ctx) =>
-      runtime.commit(async (tx) => {
-        const { side, root, mode } = task.input
-        // Past its note, the side chat ends with the note; before it, it stays open.
-        if (task.state.checkpoint?.phase === 'branch') await closeSide(tx, root, side, 'note')
-        else if (mode !== 'draft') delete (await tx.doc(Side, side)).side!.ending
-        return { status: 'terminal', outcome: { status: 'aborted' } }
-      }, ctx),
-  })
-  return { Convert, Notify, Prompt, SideTask, Survey }
+  return { Notify, Prompt }
 }
 
 /** How much of the finished conversation's last answer a notify delivers. */
@@ -817,22 +481,28 @@ const FINISHED_CHARS = 1500
 const finishedText = (id: number, title: string | undefined, text: string) =>
   `#${id} finished${title ? ` · ${title}` : ''}\n\nIts last answer:\n${text}`
 
-export type RootInput = {
+type PromptInput = {
   prompt: string
   images?: BranchImage[]
   isolated?: boolean
   model?: ModelRef
   thinkingLevel?: ModelThinkingLevel
 }
-/** `side`: the side chat whose end starts this branch from the tally, right after its note. */
-export type BranchInput = RootInput & {
+export type BranchInput = PromptInput & {
   from: number
   at?: number
-  side?: number
   deliver?: false
   by?: number
   receipt?: { taskId: TaskId; callId: string }
 }
+
+// Commits with creation, closing the gap before the tool records its memo.
+const RootReceipts = defineDoc<{ roots: Record<string, number> }>({
+  kind: 'lineage.root-receipts',
+  version: 1,
+  scope: 'task',
+  initial: () => ({ roots: {} }),
+})
 
 export const BranchReceipts = defineDoc<{ branches: Record<string, number> }>({
   kind: 'lineage.branch-receipts',
@@ -863,7 +533,7 @@ function branchedText(
 ) {
   const images = input.images?.length ?? 0
   return [
-    `#${branch} was started from ${from === root ? `the tally (#${root}/${at})` : `#${from}/${at}`}${input.side === undefined ? '' : `, ending side chat #${input.side},`}${caller ? `, started by ${caller},` : ''} with the prompt:`,
+    `#${branch} was started from ${from === root ? `the tally (#${root}/${at})` : `#${from}/${at}`}${caller ? `, started by ${caller},` : ''} with the prompt:`,
     input.prompt.trim(),
     ...(images ? [`(${images} image${images === 1 ? '' : 's'}, in #${branch})`] : []),
   ].join('\n')
@@ -909,13 +579,6 @@ async function forkBranch(
   const from = input.from as ConversationId
   const { Prompt } = lineage(host)
   if (!(await tx.conversation(from))) throw new Error(`No conversation #${from}`)
-  if (roots.includes(from)) {
-    const tally = await tx.doc(Tally, from)
-    if (tally.surveying || tally.converting)
-      throw new Error(
-        `#${from} is still ${tally.surveying ? 'getting familiar with the project' : 'writing its tally'}; branch from it once it is done`,
-      )
-  }
   let at = input.at as EntryId | undefined
   if (at === undefined) {
     at = (await tx.scanEntries({ conversationId: from }, 1)).items[0]?.id
@@ -943,7 +606,7 @@ async function forkBranch(
     ...(input.model ? { model: input.model } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
   })
-  // A branch gets ordinary tools whatever its source ran with: a side chat's reading tools stay with the side chat.
+  // A branch gets ordinary tools whatever its source ran with.
   const agent = await tx.doc(AgentDoc, fork.id)
   delete agent.tools
   delete agent.modelTools
@@ -978,7 +641,6 @@ async function forkBranch(
       data: {
         ...marker,
         ...(root === from ? {} : { from }),
-        ...(input.side === undefined ? {} : { side: input.side }),
       },
       model: [
         {
@@ -998,324 +660,6 @@ async function forkBranch(
     )
   if (receipts && input.receipt) receipts.branches[input.receipt.callId] = fork.id
   return fork.id
-}
-
-/**
- * Start a new root with the chosen or project default configuration: it gets familiar with the project, focused on what
- * the tree is for (the prompt), and becomes a tally once it is done. Returns the root.
- */
-export async function startRoot(host: ExtensionHost, input: RootInput, ctx: Context) {
-  const prompt = input.prompt.trim()
-  if (!prompt) throw new Error('A root needs to know what its tree is for')
-  // Without a choice, a root starts with the project default: conversation 1's configuration.
-  const agent = await (await host.harness().conversation(ROOT_CONVERSATION_ID, ctx))!.agent(ctx)
-  const model = input.model ?? agent.model
-  const thinkingLevel = input.thinkingLevel ?? agent.thinkingLevel
-  const root = await host.harness().commit(async (tx) => {
-    const roots = await tx.doc(Roots, ROOT_CONVERSATION_ID)
-    const { id: created } = await tx.createConversation({ ownership: { kind: 'ownerless' } })
-    await configure(tx, created, {
-      cwd: host.projectRoot,
-      ...(model ? { model } : {}),
-      ...(thinkingLevel ? { thinkingLevel } : {}),
-    })
-    roots.roots.push(created)
-    ;(await tx.doc(host.metadata, created)).title = prompt.replace(/\s+/g, ' ').slice(0, 80)
-    const writes: Promise<void>[] = []
-    host.events.emit('lineage:rooted', {
-      tx,
-      id: created,
-      intent: prompt,
-      waitUntil: (write) => writes.push(write),
-    } satisfies BranchedEvent)
-    await Promise.all(writes)
-    await beginSurvey(host, tx, created, prompt)
-    return created
-  }, ctx)
-  host.harness().resume()
-  return { id: root }
-}
-
-/** Let the empty root `root` get familiar with the project, weighted toward `focus` when given. */
-export async function survey(
-  host: ExtensionHost,
-  input: { root: number; focus?: string },
-  ctx: Context,
-) {
-  const root = input.root as ConversationId
-  await host.harness().commit(async (tx) => {
-    if (!(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.includes(root))
-      throw new Error(`#${root} is no root`)
-    // Reads first: a transaction cannot read tables after its first write.
-    if ((await tx.scanEntries({ conversationId: root }, 1)).items.length)
-      throw new Error(`#${root} is no empty root`)
-    const focus = input.focus?.trim() || undefined
-    // Until its summary names it, a root is called by what its tree is for.
-    if (focus) (await tx.doc(host.metadata, root)).title = focus.replace(/\s+/g, ' ').slice(0, 80)
-    await beginSurvey(host, tx, root, focus)
-  }, ctx)
-  host.harness().resume()
-  return { id: root }
-}
-
-async function beginSurvey(
-  host: ExtensionHost,
-  tx: Tx,
-  root: ConversationId,
-  focus: string | undefined,
-) {
-  const tally = await tx.doc(Tally, root)
-  if (tally.surveying) throw new Error(`#${root} is already getting familiar with the project`)
-  tally.surveying = true
-  await tx.createTask(
-    lineage(host).Survey,
-    { id: root, ...(focus ? { focus } : {}) },
-    { conversationId: root, ownership: { kind: 'conversation' }, background: true },
-  )
-}
-
-/** What an empty root reads up on before it becomes a tally. */
-const SURVEY = `Make yourself familiar with this project. You are the root of a new conversation tree: when you finish, this reading is distilled into the first entry of its tally, which every branch of the tree starts from. Someone who has never seen the project should be able to start work from it.
-
-Only read: change no files, make no commits, start no workers.
-
-Find out, from the files rather than by guessing:
-- What the project is and who it is for: README, docs, and agent instruction files (AGENTS.md, CLAUDE.md, .cursor/rules and the like).
-- How to install, run, check and test it: the actual scripts, tools and config.
-- Its architecture: the main directories, entry points and modules, and what lives where.
-- Its conventions: language and style, lint and format rules, tests, commit habits, CI.
-- Its current state: recent Git history, open branches, TODOs, anything half-done.
-
-Skim broadly and open only what explains the structure. End with the orientation itself: those findings with exact paths and commands, and anything surprising.`
-
-function surveyText(focus: string | undefined) {
-  return focus
-    ? `${SURVEY}\n\nThe user's instructions for this reading come first, before the list above:\n${focus}`
-    : SURVEY
-}
-
-const SURVEY_FOCUS =
-  'This is a reading of the project that starts the tally every branch of this tree begins from. Keep what someone starting work here needs: what the project is, how to run, check and test it, its architecture with exact paths, its conventions and its current state. When the user gave instructions for the reading, they come first: keep what they asked for in full and lead with it. Drop how the reading went.'
-
-const PROPOSE = 'propose_branch'
-/** At most this long, a side chat's note. */
-const NOTE_CHARS = 800
-
-const NOTE_SYSTEM = `You write the note a side chat leaves in its tree's tally when the user ends it. The side chat was a conversation with the root of a line of work, as of its tally. Write what it settled: decisions and agreements, options ruled out and why, open questions. Plain text in short lines, at most ${NOTE_CHARS} characters, no preamble. Do not continue the conversation.`
-const DRAFT_SYSTEM =
-  'You draft the first prompt of a branch that carries out what a side chat settled. Write it as the user would: what to build or change, the decisions it follows, and how to verify it. Plain text, no preamble. Do not continue the conversation.'
-
-export type SideInput = RootInput & { root: number }
-
-/**
- * Open a side chat with a tally root: a fork of its tip in the shared checkout that reads and talks but edits nothing,
- * with the prompt as its first input. A root has one open at a time, and the tally gets nothing from it (no prompt node,
- * no abstracts) until its end decides what.
- */
-export async function openSide(host: ExtensionHost, input: SideInput, ctx: Context) {
-  const prompt = input.prompt.trim()
-  if (!prompt) throw new Error('A side chat needs a prompt')
-  const root = input.root as ConversationId
-  const { Prompt } = lineage(host)
-  const main = await head(host)
-  const id = await host.harness().commit(async (tx) => {
-    const roots = await tx.doc(Roots, ROOT_CONVERSATION_ID)
-    if (!roots.roots.includes(root) || (await tx.doc(Tally, root)).since === undefined)
-      throw new Error(`#${root} is no tally`)
-    const open = roots.sides?.[String(root)]
-    if (open !== undefined) throw new Error(`#${root} already has an open side chat, #${open}`)
-    // The table read precedes the transaction's first table write, the fork.
-    const at = (await tx.scanEntries({ conversationId: root }, 1)).items[0].id
-    const fork = await tx.forkConversation(root, at, { ownership: { kind: 'ownerless' } })
-    await configure(tx, fork.id, {
-      cwd: host.projectRoot,
-      ...(input.model ? { model: input.model } : {}),
-      ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
-    })
-    // A side chat has every tool a coordinator has, and propose_branch on top (deferred, so loaded here by name).
-    ;(await tx.doc(AgentDoc, fork.id)).modelTools = { add: [PROPOSE] }
-    if (main) await seedSeen(tx, fork.id, main, Date.now())
-    // It starts with the whole tally.
-    ;(await tx.doc(Seen, fork.id)).tally = at
-    ;(await tx.doc(Side, fork.id)).side = { root, at }
-    roots.sides = { ...roots.sides, [String(root)]: fork.id }
-    const metadata = await tx.doc(host.metadata, fork.id)
-    metadata.title = prompt.replace(/\s+/g, ' ').slice(0, 80)
-    metadata.label = 'side chat'
-    metadata.inputAt = Date.now()
-    const writes: Promise<void>[] = []
-    host.events.emit('lineage:branched', {
-      tx,
-      id: fork.id,
-      intent: prompt,
-      waitUntil: (write) => writes.push(write),
-    } satisfies BranchedEvent)
-    await Promise.all(writes)
-    await tx.createTask(
-      Prompt,
-      { id: fork.id, prompt, ...(input.images?.length ? { images: input.images } : {}) },
-      { conversationId: fork.id, ownership: { kind: 'conversation' }, background: false },
-    )
-    return fork.id
-  }, ctx)
-  host.harness().resume()
-  return { id }
-}
-
-/** Whether anything still runs in `id` or is about to: its prompt's delivery, a run. */
-async function answering(tx: Tx, id: ConversationId) {
-  for (const status of ['pending', 'running', 'waiting', 'completing'] as const) {
-    let cursor: Cursor | undefined
-    do {
-      const page = await tx.scanTasks({ conversationId: id, status }, 100, cursor)
-      if (page.items.some((task) => !task.background)) return true
-      cursor = page.next
-    } while (cursor)
-  }
-  return false
-}
-
-/** The root's open side chat leaves `roots.sides`, recorded as ended how. */
-async function closeSide(
-  tx: Tx,
-  root: ConversationId,
-  id: ConversationId,
-  ended: SideEnd,
-  branch?: number,
-) {
-  const roots = await tx.doc(Roots, ROOT_CONVERSATION_ID)
-  const { [String(root)]: _closed, ...open } = roots.sides ?? {}
-  roots.sides = open
-  const side = (await tx.doc(Side, id)).side!
-  delete side.ending
-  side.ended = ended
-  if (branch !== undefined) side.branch = branch
-}
-
-/** The prompt the side chat's last `propose_branch` call drafted, if it made one. */
-async function proposal(tx: Tx, id: ConversationId) {
-  let cursor: Cursor | undefined
-  do {
-    const page = await tx.scanEntries({ conversationId: id }, 100, cursor)
-    for (const entry of page.items) {
-      if (entry.conversationId !== id) return undefined
-      for (const message of (entry.model ?? []).toReversed())
-        if (message.role === 'assistant')
-          for (const part of message.content.toReversed())
-            if (part.type === 'toolCall' && part.name === PROPOSE) {
-              const prompt = part.arguments.prompt
-              if (typeof prompt === 'string' && prompt.trim()) return prompt.trim()
-            }
-    }
-    cursor = page.next
-  } while (cursor)
-  return undefined
-}
-
-/**
- * The open side chat of `root`, which must be `side`: a page still showing an older one must not end, or draft for, the
- * one opened since.
- */
-async function openSideOf(tx: Tx, root: number, side: number) {
-  const id = (await tx.doc(Roots, ROOT_CONVERSATION_ID)).sides?.[String(root)] as
-    | ConversationId
-    | undefined
-  if (id === undefined) throw new Error(`#${root} has no open side chat`)
-  if (id !== side) throw new Error(`Side chat #${side} is not the open side chat of #${root}`)
-  return id
-}
-
-/** `side`: the side chat the user ends, which must still be the root's open one. */
-export type EndInput = { root: number; side: number; mode: SideEnd } & Partial<RootInput>
-
-/**
- * End the root's open side chat: `discard` leaves the tally as it is; `note` appends a note of what it settled, written
- * by the summary model; `branch` appends that note and starts a branch from the tally right after it. Returns the branch.
- */
-export async function endSide(host: ExtensionHost, input: EndInput, ctx: Context) {
-  const root = input.root as ConversationId
-  const prompt = input.prompt?.trim()
-  if (input.mode === 'branch' && !prompt) throw new Error('A branch needs a prompt')
-  const { SideTask } = lineage(host)
-  const task = await host.harness().commit(async (tx) => {
-    const id = await openSideOf(tx, root, input.side)
-    const side = (await tx.doc(Side, id)).side!
-    if (side.ending) throw new Error(`Side chat #${id} is already ending`)
-    if (await answering(tx, id)) throw new Error(`Side chat #${id} is still answering`)
-    if (input.mode === 'discard') {
-      await closeSide(tx, root, id, 'discard')
-      return undefined
-    }
-    side.ending = input.mode
-    const { images, isolated, model, thinkingLevel } = input
-    return tx.createTask(
-      SideTask,
-      {
-        side: id,
-        root,
-        mode: input.mode,
-        ...(input.mode === 'branch'
-          ? {
-              branch: {
-                prompt: prompt!,
-                ...(images?.length ? { images } : {}),
-                ...(isolated === undefined ? {} : { isolated }),
-                ...(model ? { model } : {}),
-                ...(thinkingLevel ? { thinkingLevel } : {}),
-              },
-            }
-          : {}),
-      },
-      { conversationId: id, ownership: { kind: 'conversation' }, background: true },
-    )
-  }, ctx)
-  if (task === undefined) return {}
-  return settle(host, task, ctx)
-}
-
-/** A first prompt for the branch a side chat ends in: its last proposal, else one the summary model drafts. */
-export async function draftSide(host: ExtensionHost, root: number, side: number, ctx: Context) {
-  const { SideTask } = lineage(host)
-  const drafted = await host.harness().commit(async (tx) => {
-    const id = await openSideOf(tx, root, side)
-    const proposed = await proposal(tx, id)
-    if (proposed) return { prompt: proposed }
-    return {
-      task: await tx.createTask(
-        SideTask,
-        { side: id, root: root as ConversationId, mode: 'draft' },
-        { conversationId: id, ownership: { kind: 'conversation' }, background: true },
-      ),
-    }
-  }, ctx)
-  return drafted.task === undefined ? drafted : settle(host, drafted.task, ctx)
-}
-
-/** Wait for a side chat's task and return its result, or throw its failure. */
-async function settle(host: ExtensionHost, task: TaskId<SideResult>, ctx: Context) {
-  host.harness().resume()
-  const { outcome } = (await host.harness().waitForTask(task, ctx)).state
-  if (outcome.status === 'completed') return outcome.result
-  throw new Error(outcome.status === 'failed' ? outcome.error.message : `It was ${outcome.status}`)
-}
-
-type SideResult = { id?: number; prompt?: string }
-
-/** The model a side chat's note and draft ask: the summary model, else the side chat's own. */
-async function sideModel(host: ExtensionHost, models: Models, id: ConversationId, ctx: Context) {
-  const summary = await summaryModel(host)
-  const preferred = summary && models.getModel(summary.provider, summary.id)
-  if (summary && preferred)
-    return {
-      ref: { provider: summary.provider, modelId: summary.id },
-      thinking: summary.thinking,
-      model: preferred,
-    }
-  const agent = await (await host.harness().conversation(id, ctx))!.agent(ctx)
-  if (!agent.model) throw new Error(`#${id} has no model`)
-  const model = models.getModel(agent.model.provider, agent.model.modelId)
-  if (!model) throw new Error(`Model ${agent.model.provider}/${agent.model.modelId} is unavailable`)
-  return { ref: agent.model, thinking: agent.thinkingLevel, model }
 }
 
 /**
@@ -1431,9 +775,6 @@ export async function lineageSection(
   const root = await rootOf(host, id, ctx)
   if (id === root) return undefined
   const rooted = root === undefined ? '' : `\nRoot: #${root}.`
-  const side = (await host.harness().snapshot(Side, id, ctx))?.side
-  if (side)
-    return `You are #${id}, a side chat with #${side.root}, the root of your tree, as of its entry ${side.at}. Your context is its tally: the prompt each conversation was started with, the latest abstract of each, and every landing, with #<conversation>/<entry> breadcrumbs to read in full with codemode \`ultimate.entries(id)\`.\nTalk the line of work through with the user, from the tally, the history and the code. Nothing you say enters the tally until the user ends this side chat: as a note of what it settled, as a branch, or discarded.\nYou have every tool. When a change is settled and worth its own branch, draft that branch's first prompt with \`propose_branch\`, and the user starts it.`
   const state = (await host.harness().snapshot(Branch, id, ctx))?.branch
   if (!state) return `You are #${id}.${rooted}\n${ZOOM}`
   return `You are #${id}, branched from #${state.from} at entry ${state.at} for: ${state.intent}${rooted}\nYour context starts with the tally of your tree, kept in its root: the prompt each conversation was started with, the latest abstract of each, and every landing, with #<conversation>/<entry> breadcrumbs to read in full with codemode \`ultimate.entries(id)\`.\n${ZOOM}`
@@ -1455,7 +796,7 @@ function conversationArg(args: JsonValue) {
   return value as ConversationId
 }
 
-/** Validates the shared fields of a new branch or root. */
+/** Validates a new branch's prompt and configuration. */
 function rootInput(args: JsonValue) {
   const input = (args ?? {}) as Partial<BranchInput>
   if (typeof input.prompt !== 'string') throw new Error('prompt must be a string')
@@ -1489,94 +830,14 @@ export const actions = {
     const branch = (await host.harness().snapshot(Branch, id, context))?.branch
     return { roots, ...(root === undefined ? {} : { root }), ...(branch ? { branch } : {}) }
   },
-  /**
-   * Make a top-level conversation that is not a branch a tally root: one with history by a genesis its model distills,
-   * an empty one once it got familiar with the project (`survey`). Calling it on a root that is no tally yet converts that root; on a tally, or one being
-   * converted, it does nothing. Conversion waits for nothing: it is refused while anything still runs in or delivers
-   * into the conversation, since from its start the conversation refuses inputs.
-   */
-  async root(args: JsonValue, { host }: ActionContext) {
-    const target = conversationArg(args)
-    const { Convert } = lineage(host)
-    const workspaces = host.use<WorkspaceService>('workspaces')
-    const roots = await host.harness().commit(async (tx) => {
-      const record = await tx.conversation(target)
-      if (!record) throw new Error(`No conversation #${target}`)
-      if (record.owner) throw new Error('A subagent cannot be a root')
-      const doc = await tx.doc(Roots, ROOT_CONVERSATION_ID)
-      if (record.parent && !doc.roots.includes(target))
-        throw new Error('A branch already has a root')
-      const tally = await tx.doc(Tally, target)
-      if (tally.since === undefined && !tally.converting && !tally.surveying) {
-        // Reads first: a transaction cannot read tables after its first write.
-        const empty = !(await tx.scanEntries({ conversationId: target }, 1)).items.length
-        const reason = empty ? undefined : await busy(tx, target, workspaces)
-        if (reason) throw new Error(`#${target} cannot become a tally while ${reason}`)
-        // An empty root waits until it gets familiar with the project.
-        if (!empty) {
-          tally.converting = true
-          await tx.createTask(
-            Convert,
-            { id: target },
-            { conversationId: target, ownership: { kind: 'conversation' }, background: true },
-          )
-        }
-      }
-      if (!doc.roots.includes(target)) doc.roots.push(target)
-      return [...doc.roots]
-    }, context)
-    host.harness().resume()
-    return { roots }
-  },
   async branch(args: JsonValue, { host }: ActionContext) {
     const input = rootInput(args)
     for (const key of ['from', 'at'] as const)
       if (input[key] !== undefined && (!Number.isSafeInteger(input[key]) || input[key] < 1))
         throw new Error(`${key} must be a positive integer`)
     if (input.from === undefined) throw new Error('from must be a positive integer')
-    // Only a side chat's end starts a branch for it.
-    const { side: _side, ...branch } = input
-    return startBranch(host, branch as BranchInput, context)
+    return startBranch(host, input as BranchInput, context)
   },
-  /** Start a new root and its first branch; returns the branch to open (`id`) and the root. */
-  async newRoot(args: JsonValue, { host }: ActionContext) {
-    return startRoot(host, rootInput(args) as RootInput, context)
-  },
-  /** Let the empty root `root` get familiar with the project, toward the optional `focus`; returns it (`id`). */
-  async survey(args: JsonValue, { host }: ActionContext) {
-    const focus = (args as { focus?: unknown } | null)?.focus
-    if (focus !== undefined && typeof focus !== 'string') throw new Error('focus must be a string')
-    return survey(host, { root: idArg(args, 'root'), ...(focus ? { focus } : {}) }, context)
-  },
-  /** Open a side chat with tally root `root`; returns it (`id`). */
-  async side(args: JsonValue, { host }: ActionContext) {
-    const input = rootInput(args) as Partial<SideInput>
-    return openSide(host, { ...input, root: idArg(args, 'root') } as SideInput, context)
-  },
-  /**
-   * End side chat `side`, the open one of `root`: `discard`, `note`, or `branch` with the branch's prompt (and its
-   * images, isolation, model and thinking). Returns the branch (`id`) a branch end started.
-   */
-  async endSide(args: JsonValue, { host }: ActionContext) {
-    const root = idArg(args, 'root')
-    const side = idArg(args, 'side')
-    const mode = (args as { mode?: unknown }).mode
-    if (mode !== 'note' && mode !== 'branch' && mode !== 'discard')
-      throw new Error('mode must be note, branch or discard')
-    const input = mode === 'branch' ? rootInput(args) : {}
-    return endSide(host, { ...input, root, side, mode }, context)
-  },
-  /** The first prompt of the branch side chat `side`, the open one of `root`, would end in. */
-  async sideDraft(args: JsonValue, { host }: ActionContext) {
-    return draftSide(host, idArg(args, 'root'), idArg(args, 'side'), context)
-  },
-}
-
-function idArg(args: JsonValue, key: 'root' | 'side') {
-  const id = (args as Record<string, unknown> | null)?.[key]
-  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1)
-    throw new Error(`${key} must be a positive integer`)
-  return id
 }
 
 /** The tally `id` catches up on: its tree root's, once that root is a tally. */
@@ -1587,17 +848,15 @@ async function treeOf(tx: Tx, id: ConversationId): Promise<Tree | undefined> {
   return since === undefined ? undefined : { root, since, abstracts }
 }
 
-/** A tally runs no turns: typing in it starts a branch, so an input placed in one is refused with its transaction. */
+/** A tally runs no turns: an input placed in one is refused with its transaction. */
 async function refuseTally(tx: Tx, id: ConversationId) {
   if (!(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.includes(id)) return
   const tally = await tx.doc(Tally, id)
-  if (tally.since !== undefined || tally.converting)
-    throw new Error(
-      `#${id} ${tally.converting ? 'is becoming' : 'is'} a tally and runs no turns; start a branch from it instead`,
-    )
+  if (tally.since !== undefined)
+    throw new Error(`#${id} is a tally and runs no turns; ask @ultimate to start a branch`)
 }
 
-/** A side chat takes inputs until the user ends it; then it is read-only, kept for its history. */
+/** Stored side chats are read-only once ended or ending. */
 async function refuseEndedSide(tx: Tx, id: ConversationId) {
   const side = (await tx.doc(Side, id)).side
   if (side?.ending || side?.ended)
@@ -1623,12 +882,12 @@ export default function lineageExtension(host: ExtensionHost) {
     branchOf: (id, ctx) => branchOf(host, id, ctx),
     abstract,
   } satisfies LineageService)
-  const { Convert, Notify, Prompt, SideTask, Survey } = lineage(host)
+  const { Notify, Prompt } = lineage(host)
   watchSeen(host, context)
   watchTally(host, context)
   return defineExtension({
     name: 'lineage',
-    tasks: [Convert, Notify, Prompt, SideTask, Survey],
+    tasks: [Notify, Prompt],
     sections: [section('lineage', (input, ctx) => lineageSection(host, input.conversationId, ctx))],
     hooks: [
       hook(GenerationTask, {
@@ -1746,10 +1005,89 @@ export default function lineageExtension(host: ExtensionHost) {
         },
       }),
       defineTool({
+        name: 'new_root',
+        deferred: true,
+        description:
+          'Create an empty project root with a title. Read the project, then write its first tally with seed_tally.',
+        parameters: Type.Object({ title: Type.String({ minLength: 1 }) }),
+        // The receipt commits with creation; the memo and receipt both reuse the root on replay.
+        replay: 'safe',
+        async execute({ title }, api, ctx) {
+          if (!title.trim()) throw new Error('A root needs a title')
+          let id = await api.memo<number>('root-id', ctx)
+          if (id === undefined) {
+            const agent = await (await host
+              .harness()
+              .conversation(ROOT_CONVERSATION_ID, ctx))!.agent(ctx)
+            const created = await api.commit(async (tx) => {
+              const receipt = await tx.doc(RootReceipts, api.taskId)
+              if (receipt.roots[api.callId] !== undefined) return receipt.roots[api.callId]
+              const roots = await tx.doc(Roots, ROOT_CONVERSATION_ID)
+              const root = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+              await configure(tx, root.id, {
+                cwd: host.projectRoot,
+                ...(agent.model ? { model: agent.model } : {}),
+                ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}),
+              })
+              roots.roots.push(root.id)
+              ;(await tx.doc(host.metadata, root.id)).title = title
+              const writes: Promise<void>[] = []
+              host.events.emit('lineage:rooted', {
+                tx,
+                id: root.id,
+                intent: title,
+                waitUntil: (write) => writes.push(write),
+              } satisfies BranchedEvent)
+              await Promise.all(writes)
+              receipt.roots[api.callId] = root.id
+              return root.id
+            }, ctx)
+            id = await api.memo('root-id', created, ctx)
+          }
+          return { output: [{ type: 'text', text: JSON.stringify({ id }) }] }
+        },
+      }),
+      defineTool({
+        name: 'compact_tally',
+        deferred: true,
+        description:
+          'Summarize older content in a listed tally root, keeping recent entries verbatim; short tallies may stay unchanged. Use instructions to guide the summary. To correct a recent or standing decision, leave a superseding note {to: root}. Full history stays in storage. Returns the compaction task id.',
+        parameters: Type.Object({
+          root: Type.Integer({ minimum: 1 }),
+          instructions: Type.Optional(Type.String()),
+        }),
+        async execute({ root, instructions }, api, ctx) {
+          const taskId = await api.commit(async (tx) => {
+            if (!(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.includes(root))
+              throw new Error(`#${root} is not a listed root`)
+            const id = root as ConversationId
+            if ((await tx.doc(Tally, id)).since === undefined)
+              throw new Error(`#${root} is not a tally`)
+            if (await liveTask(tx, id, CompactionTask.definition.name))
+              throw new Error(`#${root} is already compacting`)
+            // Pi upstream: @earendil-works/pi-durable@1.3.0 src/harness/compaction.ts — inline unexported createCompaction for atomic admission.
+            const created = await tx.createTask(
+              CompactionTask,
+              { reason: 'manual', instructions },
+              { ownership: { kind: 'conversation' }, conversationId: id, background: false },
+            )
+            ;((await tx.doc(LiveDoc, id)).compactions ??= []).push({
+              taskId: created,
+              reason: 'manual',
+              blocking: false,
+              attempt: 1,
+            })
+            return created
+          }, ctx)
+          host.harness().resume()
+          return { output: [{ type: 'text', text: JSON.stringify({ taskId }) }] }
+        },
+      }),
+      defineTool({
         name: 'seed_tally',
         deferred: true,
         description:
-          "Write an empty root's first tally from your reading of the project, with a breadcrumb to this conversation. Refuses roots with history or a survey or conversion in progress.",
+          "Write an empty root's first tally from your reading of the project, with a breadcrumb to this conversation. Refuses roots with history.",
         parameters: Type.Object({
           root: Type.Integer({ minimum: 1 }),
           text: Type.String({ minLength: 1 }),
@@ -1779,8 +1117,6 @@ export default function lineageExtension(host: ExtensionHost) {
               tally.since === undefined ? undefined : await tx.entry(tally.since as EntryId)
             if (genesis?.kind === 'pi.reset' && genesis.model?.[0]?.content === content) return
             if (tally.since !== undefined) throw new Error(`#${root} is already a tally`)
-            if (tally.surveying) throw new Error(`#${root} is surveying the project`)
-            if (tally.converting) throw new Error(`#${root} is becoming a tally`)
             if (latest) throw new Error(`#${root} has entries; seed_tally needs an empty root`)
             const entry = await tx.appendEntry(id, {
               kind: 'pi.reset',
@@ -1791,26 +1127,6 @@ export default function lineageExtension(host: ExtensionHost) {
             tally.since = entry.id
           }, ctx)
           return { output: [{ type: 'text', text: `Seeded the tally in #${root}.` }] }
-        },
-      }),
-      // Offered only to side chats, which load it when they open.
-      defineTool({
-        name: PROPOSE,
-        deferred: true,
-        description:
-          'Propose a branch to the user: draft the first prompt of a branch that carries out what this side chat settled (what to change, the decisions it follows, how to verify it). The user sees it as a card and starts the branch from it; nothing starts until then.',
-        parameters: Type.Object({ prompt: Type.String({ minLength: 1 }) }),
-        async execute(_args, api, ctx) {
-          const side = (await host.harness().snapshot(Side, api.conversationId, ctx))?.side
-          if (!side || side.ended) throw new Error('Only an open side chat proposes branches')
-          return {
-            output: [
-              {
-                type: 'text',
-                text: 'Proposed. The user starts the branch from the card, or ends the side chat another way.',
-              },
-            ],
-          }
         },
       }),
     ],

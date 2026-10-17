@@ -18,11 +18,10 @@ import { TranscriptContext, useConversation, useExtensions, useModels } from '..
 import { isMac } from '../sdk/keys.ts'
 import { touchKeyboard } from '../sdk/viewport.ts'
 import type { ModelsResponse } from '../../../shared/protocol.ts'
-import type { WebExtension } from '../sdk/types.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
-import { composerRenderers, conversationStarter, inboxRenderer } from '../sdk/registry.ts'
+import { composerRenderers, inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
-import { ComposerContext, useNewConversationConfiguration } from '../sdk/composer.tsx'
+import { ComposerContext } from '../sdk/composer.tsx'
 
 const alt = isMac ? '⌥' : 'Alt'
 
@@ -131,55 +130,10 @@ export function Composer({ dock }: { dock?: boolean }) {
   )
   return (
     <TranscriptContext value={entries}>
-      <ComposerContext value={{ target: 'conversation', draft: draftAccess(getDraft(id)) }}>
-        {core}
-      </ComposerContext>
+      <ComposerContext value={{ draft: draftAccess(getDraft(id)) }}>{core}</ComposerContext>
     </TranscriptContext>
   )
 }
-
-/**
- * Where a new conversation branches from: a conversation and, optionally, one of its entries; default the root of the
- * shown tree. `root` starts a new root instead.
- */
-export type BranchPoint = { from?: number; at?: number; root?: boolean }
-
-export function NewConversationComposer({
-  inputId,
-  onStarted,
-  isolated,
-  branch,
-  dock,
-  placeholder,
-  start,
-  prompt,
-}: {
-  isolated?: boolean
-  inputId?: string
-  onStarted: (id: number) => void
-  branch?: BranchPoint
-  dock?: boolean
-  placeholder?: string
-  /** Starts the conversation instead of the extensions' starter. */
-  start?: ConversationStarter
-  /** What the composer holds while its draft is empty, such as a drafted prompt. */
-  prompt?: string
-}) {
-  return (
-    <ConversationComposer
-      target="new"
-      isolated={isolated}
-      inputId={inputId}
-      onStarted={onStarted}
-      branch={branch}
-      dock={dock}
-      placeholder={placeholder}
-      start={start}
-      prompt={prompt}
-    />
-  )
-}
-type ConversationStarter = NonNullable<WebExtension['start']>
 
 type Draft = {
   text: string
@@ -238,47 +192,9 @@ function draftAccess(draft: ReturnType<typeof createDraft>) {
   }
 }
 
-function ConversationComposer({
-  dock,
-  target = 'conversation',
-  inputId,
-  onStarted,
-  isolated: isolation,
-  branch: point,
-  placeholder,
-  start: starter,
-  prompt,
-}: {
-  isolated?: boolean
-  branch?: BranchPoint
-  placeholder?: string
-  start?: ConversationStarter
-  prompt?: string
-  dock?: boolean
-  target?: 'conversation' | 'new'
-  inputId?: string
-  onStarted?: (id: number) => void
-}) {
-  const conversation = useConversation()
-  const isNew = target === 'new'
-  const { id, agent } = conversation
-  const busy = !isNew && conversation.busy
-  // A branch starts with its source's current configuration, a new root with the project default; what shows is sent.
-  const source = isNew && !point?.root ? point?.from : undefined
-  const defaults = useNewConversationConfiguration(isNew, source)
-  const loading = isNew ? defaults.loading : conversation.loading
-  const inbox = isNew ? [] : conversation.inbox
-  const extensionStarter = conversationStarter(useExtensions())
-  const start = starter ?? extensionStarter
-  // New and each branch point keep their own draft.
-  const draftId = isNew
-    ? point?.root
-      ? 'root'
-      : point?.from === undefined
-        ? 'new'
-        : `branch-${point.from}${point.at === undefined ? '' : `-${point.at}`}`
-    : id
-  const draft = getDraft(draftId)
+function ConversationComposer({ dock }: { dock?: boolean }) {
+  const { id, agent, busy, loading, inbox } = useConversation()
+  const draft = getDraft(id)
   const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
   const setError = (message: string | undefined) => draft.set({ error: message })
   const setImages = (change: (images: Draft['images']) => Draft['images']) =>
@@ -292,61 +208,27 @@ function ConversationComposer({
   const models = useModels()
   const key = draft.key
   useEffect(() => {
-    const stored = (key ? localStorage.getItem(key) : null) || (prompt ?? '')
+    const stored = (key ? localStorage.getItem(key) : null) ?? ''
     if (stored !== draft.get().text) draft.set({ text: stored, revision: draft.get().revision + 1 })
-  }, [draft, key, prompt])
+  }, [draft, key])
   const update = (value: string) => {
     draft.set({ text: value, revision: draft.get().revision + 1 })
     if (!key) return
     if (value) localStorage.setItem(key, value)
     else localStorage.removeItem(key)
   }
-  const blocked =
-    isNew && !start
-      ? 'No extension provides a conversation starter.'
-      : loading || (isNew && !defaults.available)
-        ? undefined
-        : isNew && defaults.error
-          ? errorMessage(defaults.error)
-          : blockedBy(isNew ? defaults.configuration : agent, models)
+  const blocked = loading ? undefined : blockedBy(agent, models)
   const empty = !text.trim() && images.length === 0
 
-  async function send(whenBusy?: 'steer' | 'followUp', alternate = false) {
-    if (
-      loading ||
-      empty ||
-      blocked ||
-      draft.get().sending ||
-      pending.current ||
-      (!isNew && id === undefined)
-    )
+  async function send(whenBusy?: 'steer' | 'followUp') {
+    if (loading || empty || blocked || draft.get().sending || pending.current || id === undefined)
       return
     const submitted = draft.get()
     draft.set({ sending: true, error: undefined })
     try {
-      let startedId: number | undefined
-      if (isNew) {
-        startedId = (
-          await start!({
-            prompt: text.trim(),
-            ...(images.length ? { images } : {}),
-            ...(point?.from === undefined ? {} : { from: point.from }),
-            ...(point?.at === undefined ? {} : { at: point.at }),
-            ...(point?.root ? { root: true } : {}),
-            ...(alternate ? { alternate } : {}),
-            ...(isolation === undefined ? {} : { isolated: isolation }),
-            ...(defaults.configuration.model ? { model: defaults.configuration.model } : {}),
-            ...(defaults.configuration.thinkingLevel
-              ? { thinkingLevel: defaults.configuration.thinkingLevel }
-              : {}),
-          })
-        ).id
-      } else {
-        await api.submit(text.trim(), busy ? (whenBusy ?? 'steer') : undefined, id, images)
-      }
+      await api.submit(text.trim(), busy ? (whenBusy ?? 'steer') : undefined, id, images)
       clearDraft(draft, submitted)
       if (draft.get().images === submitted.images) draft.set({ images: [] })
-      if (startedId !== undefined) onStarted?.(startedId)
     } catch (failure) {
       if (key && draft.get().revision === submitted.revision)
         draft.set({ text: localStorage.getItem(key) ?? '' })
@@ -360,24 +242,12 @@ function ConversationComposer({
     // A touch keyboard's return key writes a new line; the send button sends.
     if (touchKeyboard()) return
     event.preventDefault()
-    void send(event.altKey ? 'followUp' : 'steer', event.altKey)
+    void send(event.altKey ? 'followUp' : 'steer')
   }
 
   return (
-    <ComposerContext
-      value={{
-        target,
-        isolated: isolation,
-        source,
-        root: isNew && point?.root,
-        draft: draftAccess(draft),
-      }}
-    >
-      <div
-        data-composer-source={source}
-        data-composer-target={target}
-        className={cn(column(dock), 'pb-2')}
-      >
+    <ComposerContext value={{ draft: draftAccess(draft) }}>
+      <div data-composer-target="conversation" className={cn(column(dock), 'pb-2')}>
         <Inbox items={inbox} />
         <PromptInput
           onSubmit={(event) => {
@@ -394,21 +264,11 @@ function ConversationComposer({
             autoFocus={!touchKeyboard()}
             readOnly={loading || sending}
             onPaste={(event) => void paste(event)}
-            id={inputId ?? 'composer-input'}
-            aria-label={isNew ? 'Start a conversation' : undefined}
+            id="composer-input"
             onChange={(event) => update(event.target.value)}
             onKeyDown={onKeyDown}
             placeholder={
-              placeholder ??
-              (isNew
-                ? point?.root
-                  ? 'Start a new root: what is it about?'
-                  : point?.from === undefined
-                    ? 'Branch from the root: what do you want to do?'
-                    : 'What should the branch do?'
-                : busy
-                  ? 'Steer the run, or queue a follow-up…'
-                  : 'Ask Ultimate to change something…')
+              busy ? 'Steer the run, or queue a follow-up…' : 'Ask Ultimate to change something…'
             }
             value={text}
           />
@@ -443,18 +303,8 @@ function ConversationComposer({
               {(!busy || !empty) && (
                 <PromptInputSubmit
                   disabled={loading || empty || !!blocked || sending || reading}
-                  aria-label={
-                    loading ? 'Loading conversation' : isNew ? 'Start the conversation' : 'Send'
-                  }
-                  title={
-                    loading
-                      ? 'Loading conversation'
-                      : isNew
-                        ? 'Start (Enter)'
-                        : busy
-                          ? 'Steer (Enter)'
-                          : 'Send (Enter)'
-                  }
+                  aria-label={loading ? 'Loading conversation' : 'Send'}
+                  title={loading ? 'Loading conversation' : busy ? 'Steer (Enter)' : 'Send (Enter)'}
                   className={loading ? 'bg-muted text-muted-foreground' : undefined}
                 >
                   {loading ? (

@@ -15,6 +15,8 @@ tools:
     web_fetch,
     setup,
     seed_tally,
+    new_root,
+    compact_tally,
     edit,
     write,
   ]
@@ -40,6 +42,15 @@ On an onboarding.start input, the user is watching this conversation: greet, ask
 4. Write a concise first tally with seed_tally {root, text}: what the project is, how to run, check and test it, architecture, conventions and current state. Include the user's instructions verbatim. Only seed an empty root.
 5. Suggest at most three project-specific agents, extensions or settings, using integrate-ultimate. Build only the ones the user picks.
 6. Ask what to do first, and start that as a coordinator with branch.
+
+## Tallies are yours
+
+A root's tally is what every branch starts from. Pick the root for `branch` by reading tallies with codemode `ultimate.entries(root)`.
+Keep standing decisions accurate with `note {to: root}`. Use `compact_tally {root, instructions}` when a tally grows large
+(the footer shows tokens; around 60k is a reasonable trigger). Compaction summarizes older tally content and keeps recent
+entries verbatim, so short tallies may stay unchanged. Instructions guide the summary; history stays in storage.
+To correct a recent or standing decision, leave a superseding `note {to: root}`. Only when the user asks for an independent line of work, use `new_root {title}` and then
+`seed_tally` from your own reading.
 
 ## Coordinators and messages
 

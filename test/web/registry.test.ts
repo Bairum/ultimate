@@ -13,7 +13,6 @@ import {
   toolRenderers,
   linkRenderers,
   messageItems,
-  conversationStarter,
   composerRenderers,
 } from '../../web/src/sdk/registry.ts'
 import type { ExtensionLoader, SurfaceItem } from '../../web/src/sdk/registry.ts'
@@ -296,24 +295,6 @@ describe('web extension registry', () => {
     expect(renderers.reduce((core, r) => `${r.extension}(${core})`, 'core')).toBe(
       'beta(alpha(core))',
     )
-  })
-
-  it('selects the last conversation starter and keeps it after an invalid reload', async () => {
-    const ids = [1, 2]
-    const first = async () => ({ id: ids[0] })
-    const last = async () => ({ id: ids[1] })
-    const registry = createRegistry()
-    expect(conversationStarter(registry.getSnapshot())).toBeUndefined()
-    await registry.setLoaders({
-      [path('builtin-z')]: async () => module({ start: first }),
-      [path('project-a')]: async () => module({ start: last }),
-    })
-    expect(await conversationStarter(registry.getSnapshot())!({ prompt: 'hello' })).toEqual({
-      id: 2,
-    })
-    registry.replace('project-a', { default: { start: 42 } })
-    expect(registry.getSnapshot()[1]?.error).toBe('start must be a conversation starter function')
-    expect(conversationStarter(registry.getSnapshot())).toBe(last)
   })
 
   it('lists answer labels independently in discovery order and rejects malformed labels', async () => {
