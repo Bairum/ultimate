@@ -22,6 +22,23 @@ Delivery is a background durable task owned by the root conversation. Stable req
 advancing the task checkpoint happen in one transaction. A reopened task resumes that checkpoint, so both a
 placed input awaiting an answer and a recorded answer awaiting delivery survive without duplicate replies.
 
+## Ultimate and branches
+
+Talk to `@ultimate` on the board to start and steer work. It is the built-in standing orchestrator, not a coding worker.
+Model-facing messages identify standing senders as `#12 (@ultimate)` and the lander as `#40 (@lander)`; ordinary
+conversations stay `#id`, and user posts say `user`.
+
+The deferred `branch { prompt, root?, isolated?: true }` tool is offered only to definitions that name it.
+It chooses the explicit root, otherwise the caller's tree root, otherwise the only root. Ambiguous or missing roots
+produce an error listing the available ids. It forks the root's tally tip through lineage, attributes the tally prompt
+to the caller, and sends the first input as a board message with replies enabled. It returns the branch id and message id.
+The branch's answer therefore wakes its caller as a normal `board.reply`.
+
+Ultimate's answers to inputs other than `board:` deliveries also go to the user's inbox. This includes answers to
+branch replies and direct questions in its pinned conversation. Committed answers are deduplicated by assistant entry id
+in `board.ultimate-answers`; a committed-submission subscription and reopen scan recover missing inbox items.
+Answers to board deliveries use the ordinary reply path only, so user posts do not produce duplicate inbox items.
+
 ## Document and typed inputs
 
 `Board` (kind `board`, version 1) is exported on `ROOT_CONVERSATION_ID`:

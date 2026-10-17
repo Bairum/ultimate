@@ -825,7 +825,13 @@ export type RootInput = {
   thinkingLevel?: ModelThinkingLevel
 }
 /** `side`: the side chat whose end starts this branch from the tally, right after its note. */
-export type BranchInput = RootInput & { from: number; at?: number; side?: number }
+export type BranchInput = RootInput & {
+  from: number
+  at?: number
+  side?: number
+  deliver?: false
+  by?: number
+}
 
 /** The project checkout's tip, where new branches start, shared or isolated. */
 function head(host: ExtensionHost) {
@@ -839,10 +845,17 @@ function head(host: ExtensionHost) {
 }
 
 /** What the tree root's model reads about a new branch: where it started and the prompt it started with. */
-function branchedText(branch: number, from: number, root: number, at: number, input: BranchInput) {
+function branchedText(
+  branch: number,
+  from: number,
+  root: number,
+  at: number,
+  input: BranchInput,
+  caller?: string,
+) {
   const images = input.images?.length ?? 0
   return [
-    `#${branch} was started from ${from === root ? `the tally (#${root}/${at})` : `#${from}/${at}`}${input.side === undefined ? '' : `, ending side chat #${input.side},`} with the prompt:`,
+    `#${branch} was started from ${from === root ? `the tally (#${root}/${at})` : `#${from}/${at}`}${input.side === undefined ? '' : `, ending side chat #${input.side},`}${caller ? `, started by ${caller},` : ''} with the prompt:`,
     input.prompt.trim(),
     ...(images ? [`(${images} image${images === 1 ? '' : 's'}, in #${branch})`] : []),
   ].join('\n')
@@ -904,6 +917,15 @@ async function forkBranch(
   // Table reads precede the transaction's first table write, the fork.
   const root = await climb(tx, await tx.conversation(from), roots)
   const tally = root === undefined ? undefined : await inheritedTally(tx, from, at, root)
+  let caller: string | undefined
+  if (input.by !== undefined) {
+    const standing = host.doc('ultimate.standing-agents')
+    const index = standing
+      ? ((await tx.doc(standing, ROOT_CONVERSATION_ID)) as Record<string, number>)
+      : {}
+    const name = Object.keys(index).find((candidate) => index[candidate] === input.by)
+    caller = `#${input.by}${name ? ` (@${name})` : ''}`
+  }
   const fork = await tx.forkConversation(from, at, { ownership: { kind: 'ownerless' } })
   await configure(tx, fork.id, {
     cwd: host.projectRoot,
@@ -950,18 +972,19 @@ async function forkBranch(
       model: [
         {
           role: 'user',
-          content: branchedText(fork.id, from, root, at, input),
+          content: branchedText(fork.id, from, root, at, input, caller),
           timestamp: Date.now(),
         },
       ],
     })
   // A source inside the tree keeps a display-only marker; its model never sees it.
   if (root !== from) await tx.appendEntry(from, { kind: 'lineage.branched', data: marker })
-  await tx.createTask(
-    Prompt,
-    { id: fork.id, prompt, ...(images ? { images: input.images } : {}) },
-    { conversationId: fork.id, ownership: { kind: 'conversation' }, background: false },
-  )
+  if (input.deliver !== false)
+    await tx.createTask(
+      Prompt,
+      { id: fork.id, prompt, ...(images ? { images: input.images } : {}) },
+      { conversationId: fork.id, ownership: { kind: 'conversation' }, background: false },
+    )
   return fork.id
 }
 
@@ -1570,6 +1593,7 @@ async function refuseEndedSide(tx: Tx, id: ConversationId) {
 }
 
 export type LineageService = {
+  branch: (input: BranchInput, ctx: Context) => ReturnType<typeof startBranch>
   rootOf: (id: number, ctx: Context) => ReturnType<typeof rootOf>
   leaveNote: (
     to: number | 'root',
@@ -1581,6 +1605,7 @@ export type LineageService = {
 }
 export default function lineageExtension(host: ExtensionHost) {
   host.provide('lineage', {
+    branch: (input, ctx) => startBranch(host, input, ctx),
     rootOf: (id, ctx) => rootOf(host, id, ctx),
     leaveNote: (to, text, source) => leaveNote(host, to, text, source),
     branchOf: (id, ctx) => branchOf(host, id, ctx),

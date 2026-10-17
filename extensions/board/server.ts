@@ -15,7 +15,14 @@ import {
   ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, EntryId, TaskId, Tx } from '@earendil-works/pi-durable'
+import type {
+  ConversationId,
+  Cursor,
+  EntryId,
+  SubmissionRecord,
+  TaskId,
+  Tx,
+} from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
@@ -23,6 +30,8 @@ import { isolatable } from '../workspaces/git.ts'
 
 import type { SubagentsService } from '../subagents/server.ts'
 import { Standing } from '../subagents/server.ts'
+import { Roots } from '../lineage/server.ts'
+import type { LineageService } from '../lineage/server.ts'
 export type BoardMessage = {
   id: number
   from: number | 'user'
@@ -66,8 +75,16 @@ export type BoardService = {
     input: Pick<BoardMessage, 'from' | 'to' | 'text' | 'kind' | 'entry'>,
   ): Promise<number>
 }
+const Routed = defineDoc<{ answers: number[] }>({
+  kind: 'board.ultimate-answers',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({ answers: [] }),
+})
 const Delivery = defineTask<
-  { message: BoardMessage; steer: boolean },
+  { message: BoardMessage; steer: boolean; fromLabel: string; toLabel: string },
   { phase: 'deliver' } | { phase: 'reply'; message: BoardMessage; failed: boolean },
   null
 >({
@@ -89,7 +106,7 @@ const Delivery = defineTask<
             kind: 'board.message',
             data: { id: m.id, from: m.from, text: m.text, reply: m.reply },
           },
-          content: `Message from ${m.from === 'user' ? 'user' : `#${m.from}`}:\n${m.text}${m.reply ? '\nYour answer to this message goes back to its sender.' : ''}`,
+          content: `Message from ${task.input.fromLabel}:\n${m.text}${m.reply ? '\nYour answer to this message goes back to its sender.' : ''}`,
         },
         ctx,
       )
@@ -185,7 +202,7 @@ const Delivery = defineTask<
                 kind: 'board.reply',
                 data: { id: m.id, re: m.re!, from: m.from, text: m.text, failed },
               },
-              content: `Reply from #${m.from} to message ${m.re}${failed ? ' (failed)' : ''}:\n${m.text}`,
+              content: `Reply from ${task.input.toLabel} to your message ${m.re}${failed ? ' (failed)' : ''}:\n${m.text}`,
             },
             ctx,
           )
@@ -209,6 +226,19 @@ async function lander(host: ExtensionHost, ctx: Context) {
   if ('reason' in checkout) return undefined
   return (await host.harness().snapshot(service.doc, ROOT_CONVERSATION_ID, ctx))
     ?.landerConversations[checkout.source]
+}
+async function senderName(host: ExtensionHost, id: number | 'user', ctx: Context) {
+  if (id === 'user') return 'user'
+  const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
+  const name = Object.keys(index ?? {}).find((candidate) => index?.[candidate] === id)
+  const workspaces = host.use<WorkspaceService>('workspaces')
+  const workspace = workspaces
+    ? await host.harness().snapshot(workspaces.doc, ROOT_CONVERSATION_ID, ctx)
+    : undefined
+  const label =
+    name ??
+    (Object.values(workspace?.landerConversations ?? {}).includes(id) ? 'lander' : undefined)
+  return `#${id}${label ? ` (@${label})` : ''}`
 }
 async function resolve(host: ExtensionHost, to: string, from: number | 'user', ctx: Context) {
   if (to === 'user') return to
@@ -255,6 +285,8 @@ async function send(
   }
   if (!input.text.trim()) throw new Error('Message text must not be empty')
   const to = await resolve(host, input.to, from, ctx)
+  const fromLabel = await senderName(host, from, ctx)
+  const toLabel = await senderName(host, to, ctx)
   return host.harness().commit(async (tx) => {
     const receipt = taskId === undefined ? undefined : await tx.doc(Sent, taskId)
     if (receipt?.id !== undefined) return receipt.id
@@ -269,7 +301,7 @@ async function send(
     if (to !== 'user')
       await tx.createTask(
         Delivery,
-        { message, steer: input.steer ?? false },
+        { message, steer: input.steer ?? false, fromLabel, toLabel },
         {
           conversationId: ROOT_CONVERSATION_ID,
           ownership: { kind: 'conversation' },
@@ -318,6 +350,60 @@ export default function board(host: ExtensionHost) {
     record: async (tx, input) =>
       (await append(tx, { ...input, reply: false, state: 'delivered' })).id,
   } satisfies BoardService)
+  let unsubscribe: (() => void) | undefined
+  let recovery = Promise.resolve()
+  const recover = async (submission: SubmissionRecord) => {
+    if (
+      submission.type !== 'input' ||
+      submission.status !== 'done' ||
+      submission.requestId?.startsWith('board:')
+    )
+      return
+    await host.harness().commit(async (tx) => {
+      const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
+      if (index.ultimate !== submission.conversationId) return
+      const routed = await tx.doc(Routed, ROOT_CONVERSATION_ID)
+      if (routed.answers.includes(submission.answer)) return
+      const model = (await tx.entry(AssistantEntry, submission.answer))?.model?.[0]
+      const text =
+        model?.role === 'assistant'
+          ? model.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
+          : ''
+      if (!text.trim()) return
+      await append(tx, {
+        from: submission.conversationId,
+        to: 'user',
+        text,
+        reply: false,
+        state: 'delivered',
+        answer: submission.answer,
+      })
+      routed.answers.push(submission.answer)
+    }, BACKGROUND_CONTEXT)
+  }
+  host.onClose(async () => {
+    unsubscribe?.()
+    unsubscribe = undefined
+    await recovery
+  })
+  host.onOpen(async () => {
+    unsubscribe = host.harness().subscribeCommits((publication) => {
+      for (const change of publication.changes) {
+        if (change.type !== 'submission') continue
+        recovery = recovery
+          .then(() => recover(change.value))
+          .catch((error: unknown) => {
+            host.notice(`Ultimate answer routing failed: ${String(error)}`)
+          })
+      }
+    })
+    let cursor: Cursor | undefined
+    do {
+      const page = await host.scanSubmissions({ status: 'done' }, 500, cursor, BACKGROUND_CONTEXT)
+      for (const submission of page.items) await recover(submission)
+      cursor = page.next
+    } while (cursor)
+  })
   return defineExtension({
     name: 'board',
     tasks: [Delivery],
@@ -329,6 +415,51 @@ export default function board(host: ExtensionHost) {
       }),
     ],
     tools: [
+      defineTool({
+        name: 'branch',
+        deferred: true,
+        description: 'Start a lineage branch. Its answer returns to you as a board reply.',
+        parameters: Type.Object({
+          prompt: Type.String({ minLength: 1 }),
+          root: Type.Optional(Type.Number()),
+          isolated: Type.Optional(Type.Boolean()),
+        }),
+        async execute(input, api, ctx) {
+          const lineage = host.use<LineageService>('lineage')
+          if (!lineage) throw new Error('Branches require lineage')
+          const roots =
+            (await host.harness().snapshot(Roots, ROOT_CONVERSATION_ID, ctx))?.roots ?? []
+          const root =
+            input.root ??
+            (await lineage.rootOf(api.conversationId, ctx)) ??
+            (roots.length === 1 ? roots[0] : undefined)
+          if (root === undefined || !roots.includes(root))
+            throw new Error(
+              `Choose a root. Roots: ${roots.map((id) => `#${id}`).join(', ') || '(none)'}`,
+            )
+          const branch = await lineage.branch(
+            {
+              from: root,
+              prompt: input.prompt,
+              isolated: input.isolated ?? true,
+              deliver: false,
+              by: api.conversationId,
+            },
+            ctx,
+          )
+          const message = await send(
+            host,
+            api.conversationId,
+            { to: `#${branch.id}`, text: input.prompt, reply: true },
+            ctx,
+          )
+          return {
+            output: [
+              { type: 'text', text: `Branch #${branch.id} started; message ${message} sent.` },
+            ],
+          }
+        },
+      }),
       defineTool({
         name: 'message',
         description:

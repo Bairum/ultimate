@@ -19,6 +19,7 @@ A project is a forest of conversation trees, each tree like a history of commits
   deleting history.
 - **A branch** is a feature, a fix, an experiment. New forks the shown tree's root tip; "Branch from here" forks a
   chosen entry. No brief: the branch inherits that context, then gets your prompt. A branch is never a subagent.
+- **Talk to @ultimate on the board.** The user's standing agent starts and steers branches and relays their answers to the user's inbox.
 - **Coordinators carry the work.** A branch plans, decides and verifies; subagents are for bounded execution and
   reconnaissance, and the lander is the final gate on main.
 - **Zoom out when you need to.** Read any root or sibling with codemode `ultimate.entries(id)` and

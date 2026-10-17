@@ -23,6 +23,7 @@ import board, { Board, actions, userActions } from '../extensions/board/server.t
 import type { BoardService } from '../extensions/board/server.ts'
 import { Roots, Tally } from '../extensions/lineage/server.ts'
 import { Standing } from '../extensions/subagents/server.ts'
+import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 
 const homes: string[] = []
 const hosts: OpenHost[] = []
@@ -63,7 +64,11 @@ async function fixture(
             residents: async () => [{ name: 'scout', description: 'Search' }],
             standing: async () => recipient.id,
           }
-        : undefined,
+        : name === 'workspaces'
+          ? { doc: Workspaces }
+          : undefined,
+    onOpen: () => {},
+    onClose: () => {},
     conversations: () => [],
     doc: (kind: string) =>
       kind === 'lineage.roots' ? Roots : kind === 'lineage.tally' ? Tally : undefined,
@@ -224,6 +229,34 @@ it('wakes an idle recipient and returns one typed reply; one-way messages return
   await f.recipient.waitForIdle(context)
   expect(await replies(f)).toHaveLength(1)
   expect(f.observed.some((t) => t.includes('One way'))).toBe(true)
+})
+it('names the lander in both message and reply model text', async () => {
+  const f = await fixture()
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).landerConversations.test = f.recipient.id
+  }, context)
+  await f.send(`#${f.recipient.id}`)
+  await until(() =>
+    f.observed.some((text) => text.startsWith(`Reply from #${f.recipient.id} (@lander)`)),
+  )
+  await (
+    await f.recipient.submit(
+      {
+        type: 'input',
+        content: 'SEND ' + JSON.stringify({ to: '#1', text: 'Lander update', reply: false }),
+      },
+      context,
+    )
+  ).wait(context)
+  await until(() =>
+    f.observed.some((text) => text.startsWith(`Message from #${f.recipient.id} (@lander)`)),
+  )
+  expect(f.observed).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining(`Reply from #${f.recipient.id} (@lander) to your message`),
+      expect.stringContaining(`Message from #${f.recipient.id} (@lander):`),
+    ]),
+  )
 })
 it('resolves a standing address and returns unanswered inputs as failure replies', async () => {
   const f = await fixture()
