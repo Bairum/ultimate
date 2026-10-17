@@ -15,7 +15,7 @@ import {
   useUiState,
   useUltimate,
 } from '@/sdk'
-import { Address, BoardCard, BoardInput, BoardRoster } from './cards.tsx'
+import { Address, BoardCard, BoardInput, BoardRoster, MessageCall } from './cards.tsx'
 import { useOverview } from '../conversations/feature.tsx'
 import {
   emptyBoard,
@@ -375,5 +375,6 @@ export default defineWebExtension({
   ],
   slots: { 'statusline.right': [InboxBadge], overlay: [BoardNavigation] },
   entries: { 'board.message': BoardInput, 'board.reply': BoardInput },
+  tools: { message: MessageCall },
   answerLabels: [BoardAnswerLabel],
 })

@@ -28,6 +28,10 @@ a Reply, any new post to the sender, or an input typed in the sender's conversat
 card) marks it answered. Posts commit the change with the message; typed inputs close it through a commit
 subscription, only for questions asked before that input.
 
+In the sender's transcript a `message` call renders as an outgoing card: recipient, one-way or expects reply, and
+the message's live state from the board log (sending, delivered, in your inbox, awaiting reply, answered, failed),
+with a link to the Board or the recipient's entry. A failed call keeps the generic tool card with its error.
+
 The message tool is replay-safe: it memoizes the sent id. A task-scoped `board.sent` receipt commits with the
 message and delivery task, preventing a duplicate even if interrupted before the memo is saved.
 Delivery is a background durable task owned by the root conversation. Stable request ids (`board:<id>` and

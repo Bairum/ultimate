@@ -314,6 +314,43 @@ export default async function fauxExtension(host: ExtensionHost) {
           { stopReason: 'toolUse' },
         )
       }
+      if (transcript.messages[asked]?.content === 'messages demo') {
+        const steps = [
+          fauxToolCall('message', {
+            to: 'user',
+            text: 'The question-card fix landed as `d9b7b46` and is pushed to `main`.\n\nDivergence: none.',
+            reply: false,
+          }),
+          fauxToolCall('message', {
+            to: 'user',
+            text: 'Should the preview keep running?\n1. Yes\n2. No',
+          }),
+        ]
+        const step = transcript.messages
+          .slice(asked)
+          .filter((message) => message.role === 'toolResult').length
+        return step < steps.length
+          ? fauxAssistantMessage([steps[step]], { stopReason: 'toolUse' })
+          : fauxAssistantMessage([fauxText('Messages demo complete.')])
+      }
+      const target =
+        last?.role === 'user' && typeof last.content === 'string'
+          ? /^message (#\d+)( one-way)?$/.exec(last.content)
+          : null
+      if (target) {
+        return fauxAssistantMessage(
+          [
+            fauxToolCall('message', {
+              to: target[1],
+              text: 'Can you check whether the board card renders on narrow screens?',
+              reply: !target[2],
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        )
+      }
+      if (last?.role === 'toolResult' && last.toolName === 'message')
+        return fauxAssistantMessage([fauxText('Sent.')])
       const notify =
         last?.role === 'user' && typeof last.content === 'string'
           ? /^notify (\d+)( quietly)?$/.exec(last.content)

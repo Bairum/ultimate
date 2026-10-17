@@ -1,13 +1,22 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
-import { ArrowRightIcon, GitMergeIcon, MailIcon, SquareArrowOutUpRightIcon } from 'lucide-react'
+import {
+  ArrowRightIcon,
+  GitMergeIcon,
+  InboxIcon,
+  MailIcon,
+  SendIcon,
+  SquareArrowOutUpRightIcon,
+} from 'lucide-react'
 import { useState } from 'react'
+import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { events, useConversation, useDocOf, useNow, useUltimate } from '@/sdk'
+import type { ToolCallView } from '@/sdk'
 import { ConversationRef } from '../conversations/feature.tsx'
 import { openAgentSource } from '../subagents/messages.tsx'
 import { useWorkspaceIndex } from '../workspaces/data.tsx'
 import { relativeTime } from './data.tsx'
-import type { BoardMessage, Participant } from './data.tsx'
+import type { BoardData, BoardMessage, Participant } from './data.tsx'
 
 export function BoardRoster({
   participants,
@@ -204,6 +213,85 @@ export function BoardCard({
           </button>
         )}
       </footer>
+    </section>
+  )
+}
+
+/** Where an outgoing message stands, in the sender's words. */
+function outgoingState(message: BoardMessage | undefined, toUser: boolean, sending: boolean) {
+  if (!message) return sending ? 'sending' : undefined
+  if (message.state === 'failed') return 'failed'
+  if (message.state === 'answered') return 'answered'
+  if (message.state === 'sent') return 'sending'
+  if (toUser) return message.reply ? 'awaiting your reply' : 'in your inbox'
+  return message.reply ? 'awaiting reply' : 'delivered'
+}
+
+/** The `message` tool as the message it sent; a failed call keeps the generic card with its error. */
+export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
+  const board = useDocOf<BoardData>(1, 'board')
+  const { switchConversation, showSurface } = useUltimate()
+  if (call.status === 'error' || call.status === 'interrupted') return core
+  const sent = /^Message (\d+) sent\.$/.exec(call.output)
+  const message = sent ? board?.messages.find((m) => m.id === Number(sent[1])) : undefined
+  const { to, text, reply, steer } = call.args as {
+    to?: string
+    text?: string
+    reply?: boolean
+    steer?: boolean
+  }
+  const recipient = message?.to ?? (to === 'user' ? 'user' : undefined)
+  const toUser = recipient === 'user'
+  const state = outgoingState(message, toUser, call.status !== 'done')
+  return (
+    <section
+      data-board-outgoing={message?.id}
+      className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
+    >
+      <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+        {toUser ? (
+          <InboxIcon className="size-3.5 text-brand" />
+        ) : (
+          <SendIcon className="size-3.5 text-brand" />
+        )}
+        <span>Message to</span>
+        <span className="text-foreground">
+          {recipient === undefined ? (to ?? '…') : <Address id={recipient} />}
+        </span>
+        <span>
+          {(message?.reply ?? reply ?? true) ? 'expects reply' : 'one-way'}
+          {steer && ' · steer'}
+        </span>
+        {state && <span className={state === 'failed' ? 'text-destructive' : ''}>· {state}</span>}
+        {message && toUser && (
+          <button
+            className="ml-auto flex cursor-pointer items-center gap-1 hover:text-foreground"
+            onClick={() => showSurface('board')}
+          >
+            <SquareArrowOutUpRightIcon className="size-3" />
+            Board
+          </button>
+        )}
+        {message && typeof message.to === 'number' && message.entry !== undefined && (
+          <button
+            className="ml-auto flex cursor-pointer items-center gap-1 hover:text-foreground"
+            onClick={() => {
+              events.emit('board:open', { conversation: message.to, entry: message.entry })
+              showSurface('agent')
+              switchConversation(message.to as number)
+            }}
+          >
+            <SquareArrowOutUpRightIcon className="size-3" />
+            Open
+          </button>
+        )}
+      </header>
+      {message?.error && (
+        <p className="border-b border-border/60 px-3 py-1.5 font-mono text-[11px] break-words text-destructive">
+          {message.error}
+        </p>
+      )}
+      <Body text={text ?? ''} />
     </section>
   )
 }
