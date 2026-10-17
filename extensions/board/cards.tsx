@@ -1,6 +1,7 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import {
   ArrowRightIcon,
+  GitBranchIcon,
   GitMergeIcon,
   InboxIcon,
   MailIcon,
@@ -10,7 +11,7 @@ import {
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
-import { events, useConversation, useDocOf, useNow, useUltimate } from '@/sdk'
+import { events, useConversation, useConversations, useDocOf, useNow, useUltimate } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import { ConversationRef } from '../conversations/feature.tsx'
 import { openAgentSource } from '../subagents/messages.tsx'
@@ -292,6 +293,80 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
         </p>
       )}
       <Body text={text ?? ''} />
+    </section>
+  )
+}
+
+/** The `branch` tool as the branch it started and the prompt it was given; a failed call keeps the generic card. */
+export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
+  const board = useDocOf<BoardData>(1, 'board')
+  const conversations = useConversations()
+  const { switchConversation, showSurface } = useUltimate()
+  if (call.status === 'error' || call.status === 'interrupted') return core
+  const started = /^Branch #(\d+) started; message (\d+) sent\.$/.exec(call.output)
+  const id = started ? Number(started[1]) : undefined
+  const message = started ? board?.messages.find((m) => m.id === Number(started[2])) : undefined
+  const { prompt, root, isolated } = call.args as {
+    prompt?: string
+    root?: number
+    isolated?: boolean
+  }
+  const state =
+    id === undefined
+      ? 'starting'
+      : message?.state === 'failed'
+        ? 'failed'
+        : message?.state === 'answered'
+          ? 'reported back'
+          : 'working'
+  return (
+    <section
+      data-board-branch={id}
+      className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
+    >
+      <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] whitespace-nowrap text-muted-foreground">
+        <GitBranchIcon className="size-3.5 shrink-0 text-brand" />
+        <span className="shrink-0">
+          <span className="max-sm:hidden">Started branch</span>
+          <span className="sm:hidden">Branch</span>
+        </span>
+        {id !== undefined && (
+          <span className="flex min-w-0 overflow-hidden text-foreground">
+            <ConversationRef
+              className="w-full"
+              id={id}
+              title={conversations.find((conversation) => conversation.id === id)?.title}
+            />
+          </span>
+        )}
+        <span className="shrink-0 max-sm:hidden">
+          {root !== undefined && `from #${root} · `}
+          {(isolated ?? true) ? 'isolated' : 'shared'}
+        </span>
+        <span className={`shrink-0 ${state === 'failed' ? 'text-destructive' : ''}`}>
+          · {state}
+        </span>
+        {id !== undefined && (
+          <button
+            className="ml-auto flex shrink-0 cursor-pointer items-center gap-1 hover:text-foreground"
+            onClick={() => {
+              if (message?.entry !== undefined)
+                events.emit('board:open', { conversation: id, entry: message.entry })
+              showSurface('agent')
+              switchConversation(id)
+            }}
+          >
+            <SquareArrowOutUpRightIcon className="size-3" />
+            Open
+          </button>
+        )}
+      </header>
+      {message?.error && (
+        <p className="border-b border-border/60 px-3 py-1.5 font-mono text-[11px] break-words text-destructive">
+          {message.error}
+        </p>
+      )}
+      <Body text={prompt ?? ''} />
     </section>
   )
 }
