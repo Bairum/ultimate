@@ -7,7 +7,7 @@ import {
   fauxText,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
-import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
+import type { FauxContentBlock, FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 
@@ -333,9 +333,63 @@ export default async function fauxExtension(host: ExtensionHost) {
           ? fauxAssistantMessage([steps[step]], { stopReason: 'toolUse' })
           : fauxAssistantMessage([fauxText('Messages demo complete.')])
       }
+      // A request as its first line, also when it arrived as a message: the chat demos run in @ultimate and its branch.
+      const request = messageText(transcript.messages[asked]?.content)
+        .replace(/^Message from [^\n]*:\n/, '')
+        .split('\n')[0]
+      const chatSteps: Record<string, FauxContentBlock[][]> = {
+        'chat demo': [
+          [
+            fauxThinking('The user wants the board work checked and landed.'),
+            fauxToolCall('bash', { command: 'echo checking the board; sleep 0.3; echo clean' }),
+          ],
+          [fauxToolCall('read', { path: join(host.projectRoot, 'README.md') })],
+          [fauxToolCall('branch', { prompt: 'landing demo', isolated: false })],
+          [
+            fauxToolCall('message', {
+              to: 'user',
+              text: 'The Board chat restyle landed as `081dc9b` and is pushed to `main`.\n\nDivergence: none.',
+              reply: false,
+            }),
+          ],
+          [
+            fauxToolCall('message', {
+              to: 'user',
+              text: 'Should the preview keep running?\n1. Yes\n2. No',
+            }),
+          ],
+        ],
+        'ask demo': [
+          [
+            fauxToolCall('message', {
+              to: 'user',
+              text: 'Which layout should the bubbles use?\n1. **Compact**: fits the existing cards (recommended)\n2. **Spacious**: more room around the text',
+            }),
+          ],
+        ],
+        'landing demo': [
+          [fauxToolCall('bash', { command: 'echo pnpm check; sleep 0.3; echo passed' })],
+        ],
+      }
+      const chatAnswers: Record<string, string> = {
+        'chat demo': 'Started a branch to land the work and asked you whether the preview stays.',
+        'ask demo': 'Waiting for your answer on the layout.',
+        'landing demo':
+          'Landed `1a2b3c4` on `main` and pushed it to `origin`.\n\nDivergence: none.',
+      }
+      if (Object.hasOwn(chatSteps, request)) {
+        const step = transcript.messages
+          .slice(asked)
+          .filter((message) => message.role === 'toolResult').length
+        return step < chatSteps[request].length
+          ? fauxAssistantMessage(chatSteps[request][step], { stopReason: 'toolUse' })
+          : fauxAssistantMessage([fauxText(chatAnswers[request])])
+      }
+      if (last?.role === 'user' && messageText(last.content).startsWith('Reply from #'))
+        return fauxAssistantMessage([fauxText('Noted; nothing else is needed from it.')])
       const target =
         last?.role === 'user' && typeof last.content === 'string'
-          ? /^message (#\d+)( one-way)?$/.exec(last.content)
+          ? /^message (#\d+|@[\w-]+)( one-way)?$/.exec(last.content)
           : null
       if (target) {
         return fauxAssistantMessage(

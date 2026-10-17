@@ -2,6 +2,7 @@ import type { EntryRecord } from '@earendil-works/pi-durable'
 import {
   ArrowRightIcon,
   CheckIcon,
+  ChevronRightIcon,
   GitBranchIcon,
   GitMergeIcon,
   InboxIcon,
@@ -12,12 +13,23 @@ import {
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
-import { cn, events, useConversation, useConversations, useDocOf, useNow, useUltimate } from '@/sdk'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import {
+  cn,
+  events,
+  useChat,
+  useConversation,
+  useConversations,
+  useDocOf,
+  useNow,
+  useUltimate,
+} from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import { ConversationRef } from '../conversations/feature.tsx'
 import { openAgentSource } from '../subagents/messages.tsx'
 import { useWorkspaceIndex } from '../workspaces/data.tsx'
-import { accentIndex, messageStatus, relativeTime, side } from './data.tsx'
+import { accentOf } from './accent.tsx'
+import { answeredMessages, emptyBoard, messageStatus, relativeTime, side } from './data.tsx'
 import type { BoardData, BoardMessage, Participant } from './data.tsx'
 
 export function BoardRoster({
@@ -138,54 +150,6 @@ function Body({ text, compact = false }: { text: string; compact?: boolean }) {
     </>
   )
 }
-
-/** Quiet sender accents: stripe, a faint fill and the name colour. The user always has the brand colour. */
-const accents = [
-  {
-    left: 'border-l-sky-500/60',
-    right: 'border-r-sky-500/60',
-    fill: 'bg-sky-500/5',
-    name: 'text-sky-700 dark:text-sky-300',
-  },
-  {
-    left: 'border-l-emerald-500/60',
-    right: 'border-r-emerald-500/60',
-    fill: 'bg-emerald-500/5',
-    name: 'text-emerald-700 dark:text-emerald-300',
-  },
-  {
-    left: 'border-l-teal-500/60',
-    right: 'border-r-teal-500/60',
-    fill: 'bg-teal-500/5',
-    name: 'text-teal-700 dark:text-teal-300',
-  },
-  {
-    left: 'border-l-rose-500/60',
-    right: 'border-r-rose-500/60',
-    fill: 'bg-rose-500/5',
-    name: 'text-rose-700 dark:text-rose-300',
-  },
-  {
-    left: 'border-l-orange-500/60',
-    right: 'border-r-orange-500/60',
-    fill: 'bg-orange-500/5',
-    name: 'text-orange-700 dark:text-orange-300',
-  },
-  {
-    left: 'border-l-lime-500/60',
-    right: 'border-r-lime-500/60',
-    fill: 'bg-lime-500/5',
-    name: 'text-lime-700 dark:text-lime-300',
-  },
-]
-const userAccent = {
-  left: 'border-l-brand/60',
-  right: 'border-r-brand/60',
-  fill: 'bg-brand/5',
-  name: 'text-brand',
-}
-const accentOf = (id: number | 'user') =>
-  id === 'user' ? userAccent : accents[accentIndex(id, accents.length)]
 
 /** Who waits on whom, in words: an open question to the user stands out, other open requests stay amber-muted. */
 function Status({ message, perspective }: { message: BoardMessage; perspective: number | 'user' }) {
@@ -317,10 +281,68 @@ function outgoingState(message: BoardMessage | undefined, toUser: boolean, sendi
   return message.reply ? 'awaiting reply' : 'delivered'
 }
 
-/** The `message` tool as the message it sent; a failed call keeps the generic card with its error. */
+/**
+ * A message to you in a chat: a bubble on the left in the sender's accent, its text, and whether it waits on you.
+ * `children` mount beneath the text; that is where the answer card of a question goes.
+ */
+export function ChatBubble({
+  from,
+  message,
+  text,
+  children,
+}: {
+  from: number
+  message: BoardMessage | undefined
+  text: string
+  children?: ReactNode
+}) {
+  const now = useNow(60000)
+  const accent = accentOf(from)
+  return (
+    <section
+      data-board-outgoing={message?.id}
+      data-chat-bubble
+      className={cn(
+        'min-w-0 rounded-md border border-l-2 border-border max-sm:w-full sm:w-fit sm:max-w-[85%] sm:min-w-[20rem]',
+        accent.left,
+        accent.fill,
+      )}
+    >
+      <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+        <span className={cn('flex min-w-0 font-semibold', accent.name)}>
+          <Address id={from} />
+        </span>
+        {message && (
+          <time
+            className="ml-auto"
+            dateTime={new Date(message.at).toISOString()}
+            title={new Date(message.at).toLocaleString()}
+          >
+            {relativeTime(message.at, now)}
+          </time>
+        )}
+      </header>
+      <Body text={text} />
+      {children}
+      <footer className="flex flex-wrap items-center gap-3 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+        {message ? <Status message={message} perspective="user" /> : <span>sending</span>}
+        {message?.error && (
+          <span className="min-w-0 break-words text-destructive">{message.error}</span>
+        )}
+      </footer>
+    </section>
+  )
+}
+
+/**
+ * The `message` tool as the message it sent; a failed call keeps the generic card with its error. In a chat, a message
+ * to you is a bubble.
+ */
 export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
   const board = useDocOf<BoardData>(1, 'board')
   const { switchConversation, showSurface } = useUltimate()
+  const chat = useChat()
+  const sender = useConversation((conversation) => conversation.id)
   if (call.status === 'error' || call.status === 'interrupted') return core
   const sent = /^Message (\d+) sent\.$/.exec(call.output)
   const message = sent ? board?.messages.find((m) => m.id === Number(sent[1])) : undefined
@@ -332,6 +354,12 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
   }
   const recipient = message?.to ?? (to === 'user' ? 'user' : undefined)
   const toUser = recipient === 'user'
+  if (chat && toUser && sender !== undefined)
+    return (
+      <ChatBubble from={sender} message={message} text={text ?? ''}>
+        {/* The answer card of a question to you mounts here, beneath the text. */}
+      </ChatBubble>
+    )
   const state = outgoingState(message, toUser, call.status !== 'done')
   return (
     <section
@@ -472,11 +500,15 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
   const receiver = useConversation((conversation) => conversation.id)
   const { switchConversation } = useUltimate()
   const reply = entry.kind === 'board.reply'
+  const accent = accentOf(origin.from)
   return (
-    <section className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20">
+    <section
+      data-board-input={origin.id}
+      className={cn('min-w-0 rounded-md border border-l-2 border-border', accent.left, accent.fill)}
+    >
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-        <MailIcon className="size-3.5 text-brand" />
-        <span className="text-foreground">
+        <MailIcon className={cn('size-3.5 shrink-0', accent.name)} />
+        <span className={cn('flex min-w-0 font-semibold', accent.name)}>
           <Address id={origin.from} />
         </span>
         <span>{reply ? 'Reply' : 'Message'}</span>
@@ -508,5 +540,33 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
       </header>
       <Body text={origin.text} />
     </section>
+  )
+}
+
+/** In a chat, an answer that went back to the conversations that asked, not to you, folds to one line. */
+export function ChatAnswer({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
+  const chat = useChat()
+  const message = entry.model?.[0]
+  if (!chat || message?.role !== 'assistant' || message.stopReason !== 'stop') return core
+  return <ReplyFold entry={entry} core={core} />
+}
+
+function ReplyFold({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
+  const board = useDocOf<BoardData>(1, 'board') ?? emptyBoard
+  const answered = answeredMessages(board.messages, entry.conversationId, entry.id)
+  if (!answered.length || answered.some((m) => !m.reply || m.from === 'user')) return core
+  return (
+    <Collapsible className="group/reply">
+      <CollapsibleTrigger className="flex cursor-pointer flex-wrap items-center gap-1.5 font-mono text-[11px] text-muted-foreground/70 hover:text-muted-foreground">
+        replied to
+        {answered.map((m) => (
+          <span className="flex min-w-0" key={m.id}>
+            <Address id={m.from} />
+          </span>
+        ))}
+        <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/reply:rotate-90" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-3">{core}</CollapsibleContent>
+    </Collapsible>
   )
 }

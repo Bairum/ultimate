@@ -49,6 +49,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { elidePath, formatDuration, formatTime, shortenPath } from '../sdk/format.ts'
 import {
   TranscriptContext,
+  useChat,
   useConversation,
   useExtensions,
   useModels,
@@ -59,6 +60,8 @@ import {
 import { entryRenderers, messageItems } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary } from './boundary.tsx'
+import { chatRows } from './chat.ts'
+import type { ChatPart, WorkRun } from './chat.ts'
 import { column } from './layout.ts'
 import { indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
 import type { ToolResult } from './model.ts'
@@ -335,6 +338,10 @@ function TranscriptEntries() {
     if (!loading) startTransition(() => setWhole(true))
   }, [loading])
   const shown = whole ? visible : visible.slice(-firstRows)
+  const chat = useChat()
+  const rows: (ChatPart | WorkRun)[] = chat
+    ? chatRows(shown, chat)
+    : shown.map((entry) => ({ entry }))
   // Reveal a stored row without the auto-follow animation overriding the jump; an older row needs every row first.
   useEvent('ultimate:reveal-entry', (value) => {
     const target = value as { conversationId?: number; entryId?: number } | undefined
@@ -371,16 +378,39 @@ function TranscriptEntries() {
         </div>
       )}
       {!loading && visible.length === 0 && !partial && <EmptyState />}
-      {shown.map((entry) => (
-        <div
-          className="empty:hidden"
-          data-conversation-id={id}
-          data-entry-id={entry.id}
-          key={entry.id}
-        >
-          <EntryView busy={busy} entry={entry} results={results} slots={slots} />
-        </div>
-      ))}
+      {rows.map((row, index) =>
+        'work' in row ? (
+          <div
+            className="empty:hidden"
+            data-conversation-id={id}
+            data-entry-id={row.work[0].entry.id}
+            key={partKey(row.work[0])}
+          >
+            <WorkRow
+              busy={busy}
+              results={results}
+              run={row}
+              slots={slots}
+              working={busy && index === rows.length - 1}
+            />
+          </div>
+        ) : (
+          <div
+            className="empty:hidden"
+            data-conversation-id={id}
+            data-entry-id={row.entry.id}
+            key={partKey(row)}
+          >
+            <EntryView
+              blocks={row.blocks}
+              busy={busy}
+              entry={row.entry}
+              results={results}
+              slots={slots}
+            />
+          </div>
+        ),
+      )}
       {partial && (
         <AssistantView busy message={partial} results={results} slots={slots} streaming />
       )}
@@ -389,6 +419,46 @@ function TranscriptEntries() {
         <div aria-hidden="true" data-history-anchor-space style={{ height: tailSpace }} />
       )}
     </TranscriptContext>
+  )
+}
+
+const partKey = (part: ChatPart) =>
+  part.blocks ? `${part.entry.id}:${part.blocks[0]}` : String(part.entry.id)
+
+/** A run of work in a chat as one quiet row that expands to the usual rendering. */
+function WorkRow({
+  run,
+  working,
+  results,
+  slots,
+  busy,
+}: {
+  run: WorkRun
+  working: boolean
+  results: Map<string, ToolResult>
+  slots: Map<string, ToolSlot>
+  busy: boolean
+}) {
+  return (
+    <Collapsible className="group/work">
+      <CollapsibleTrigger className="flex cursor-pointer items-center gap-1.5 font-mono text-[11px] text-muted-foreground/70 hover:text-muted-foreground">
+        {working ? 'working' : 'worked'} · {run.steps} step{run.steps === 1 ? '' : 's'}
+        <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/work:rotate-90" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-3 flex flex-col gap-3 border-l border-border/70 pl-3">
+        {run.work.map((part) => (
+          <div className="empty:hidden" key={partKey(part)}>
+            <EntryView
+              blocks={part.blocks}
+              busy={busy}
+              entry={part.entry}
+              results={results}
+              slots={slots}
+            />
+          </div>
+        ))}
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 
@@ -468,12 +538,14 @@ function textOf(content: string | readonly (TextContent | ImageContent)[]) {
 
 interface RowProps {
   entry: EntryRecord
+  /** The content blocks of an assistant message shown in this row; all when absent. */
+  blocks?: readonly number[]
   results: Map<string, ToolResult>
   slots: Map<string, ToolSlot>
   busy: boolean
 }
 
-const EntryView = memo(function EntryView({ entry, results, slots, busy }: RowProps) {
+const EntryView = memo(function EntryView({ entry, blocks, results, slots, busy }: RowProps) {
   // Renderers compose in discovery order: each receives the one before it as `core`, and falls back to it.
   return entryRenderers(useExtensions(), entry.kind).reduce<ReactNode>(
     (inner, { extension, version, component: Renderer }) => (
@@ -481,7 +553,7 @@ const EntryView = memo(function EntryView({ entry, results, slots, busy }: RowPr
         <Renderer core={inner} entry={entry} />
       </ExtensionBoundary>
     ),
-    coreEntry(entry, results, slots, busy),
+    coreEntry(entry, results, slots, busy, blocks),
   )
 }, sameRow)
 
@@ -495,7 +567,7 @@ function rowCalls(entry: EntryRecord): string[] {
 
 /** A row changes only with its entry and its own calls, so a new entry or run re-renders just the rows it touches. */
 function sameRow(a: RowProps, b: RowProps) {
-  if (a.entry !== b.entry) return false
+  if (a.entry !== b.entry || a.blocks?.join() !== b.blocks?.join()) return false
   return rowCalls(b.entry).every((id) => {
     const result = b.results.get(id)?.message
     return (
@@ -511,6 +583,7 @@ function coreEntry(
   results: Map<string, ToolResult>,
   slots: Map<string, ToolSlot>,
   busy: boolean,
+  blocks?: readonly number[],
 ): ReactNode {
   const message = entry.model?.[0]
   switch (entry.kind) {
@@ -519,6 +592,7 @@ function coreEntry(
     case 'pi.assistant':
       return message?.role === 'assistant' ? (
         <AssistantView
+          blocks={blocks}
           busy={busy}
           entry={entry}
           message={message}
@@ -663,6 +737,7 @@ function UserView({ entry, message }: { entry: EntryRecord; message: UserMessage
 function AssistantView({
   entry,
   message,
+  blocks,
   results,
   slots,
   busy,
@@ -670,6 +745,8 @@ function AssistantView({
 }: {
   entry?: EntryRecord
   message: AssistantMessage
+  /** Show only these content blocks; the notice and actions go with the last block. */
+  blocks?: readonly number[]
   results: Map<string, ToolResult>
   slots: Map<string, ToolSlot>
   busy: boolean
@@ -684,6 +761,7 @@ function AssistantView({
     !message.content.some((block) => block.type === 'toolCall') &&
     message.content.some((block) => block.type === 'text' && block.text.trim())
   const ended = !streaming && message.stopReason !== 'toolUse'
+  const tail = !blocks || blocks.includes(last)
   const text = message.content
     .flatMap((block) => (block.type === 'text' && block.text.trim() ? [block.text] : []))
     .join('\n\n')
@@ -709,6 +787,7 @@ function AssistantView({
         </div>
       )}
       {message.content.map((block, index) => {
+        if (blocks && !blocks.includes(index)) return null
         switch (block.type) {
           case 'thinking':
             if (!block.thinking && !block.redacted) return null
@@ -741,10 +820,10 @@ function AssistantView({
         }
         return null
       })}
-      {!streaming && (message.stopReason !== 'toolUse' || message.errorMessage) && (
+      {tail && !streaming && (message.stopReason !== 'toolUse' || message.errorMessage) && (
         <AssistantNotice message={message} />
       )}
-      {entry && (text || ended) && (
+      {tail && entry && (text || ended) && (
         <MessageActions entry={entry} text={text} timestamp={message.timestamp} />
       )}
     </Message>

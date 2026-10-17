@@ -18,13 +18,22 @@ import {
   useUiState,
   useUltimate,
 } from '@/sdk'
-import { Address, BoardCard, BoardInput, BoardRoster, BranchCall, MessageCall } from './cards.tsx'
+import {
+  Address,
+  BoardCard,
+  BoardInput,
+  BoardRoster,
+  BranchCall,
+  ChatAnswer,
+  MessageCall,
+} from './cards.tsx'
 import { useOverview } from '../conversations/feature.tsx'
 import {
   emptyBoard,
   answeredMessages,
   parseAddress,
   suggestions,
+  ultimateChat,
   unreadCount,
   participants,
   participantMessages,
@@ -438,7 +447,8 @@ export default defineWebExtension({
     { id: 'board', title: 'Board', icon: MessagesSquareIcon, order: -100, component: BoardSurface },
   ],
   slots: { 'statusline.right': [InboxBadge], overlay: [BoardNavigation] },
-  entries: { 'board.message': BoardInput, 'board.reply': BoardInput },
+  entries: { 'board.message': BoardInput, 'board.reply': BoardInput, 'pi.assistant': ChatAnswer },
   tools: { message: MessageCall, branch: BranchCall },
+  chat: { when: ultimateChat, tools: ['message', 'branch', 'workspace'] },
   answerLabels: [BoardAnswerLabel],
 })

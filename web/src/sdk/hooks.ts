@@ -23,7 +23,7 @@ import type { Region } from './actions.ts'
 import { actionMessage, MachineOfflineError } from './api.ts'
 import type { ActionError } from './api.ts'
 import { api, registry, store, uiState } from './client.ts'
-import { HOME, documentItems } from './registry.ts'
+import { HOME, chatTools, documentItems } from './registry.ts'
 import type { State } from './store.ts'
 import { errorMessage, formatDuration } from './format.ts'
 import type { ToolCallView, UltimateContext } from './types.ts'
@@ -239,6 +239,23 @@ export function useDialog(id: string): [boolean, (open: boolean) => void] {
 /** Installed web facets, in folder order. */
 export function useExtensions() {
   return useSyncExternalStore(registry.subscribe, registry.getSnapshot)
+}
+const chatFailures = new Set<string>()
+/** Reports a `chat.when` that threw once per message, as a notice naming its extension. */
+function reportChat(extension: string, error: unknown) {
+  const message = `extension ${extension}: chat is off, its when() threw: ${errorMessage(error)}`
+  if (chatFailures.has(message)) return
+  chatFailures.add(message)
+  // Predicates run while React renders the transcript; notify after that render.
+  queueMicrotask(() => store.notify({ level: 'error', message }))
+}
+/** The tools that stay visible when the shown conversation reads as a chat (`chat` contributions), else `undefined`. */
+export function useChat() {
+  const records = useExtensions()
+  const conversation = useStore((state) =>
+    state.conversations.find((summary) => summary.id === state.view?.conversation.id),
+  )
+  return useMemo(() => chatTools(records, conversation, reportChat), [records, conversation])
 }
 /** Document renderers by kind (`documents` contributions); the Documents tab shows the rest as JSON. */
 export function useDocumentRenderers() {

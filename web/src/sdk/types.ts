@@ -1,7 +1,7 @@
 import type { ComponentType, ReactNode } from 'react'
 import type { ImageContent, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai'
 import type { EntryRecord, InboxItem, JsonObject, ToolDiagnostic } from '@earendil-works/pi-durable'
-import type { ConfigureRequest } from '../../../shared/protocol.ts'
+import type { ConfigureRequest, ConversationSummary } from '../../../shared/protocol.ts'
 
 /** Named places in the shell that extensions fill with components. */
 export type SlotName =
@@ -165,6 +165,17 @@ export interface ConversationDraft {
   thinkingLevel?: ConfigureRequest['thinkingLevel']
 }
 
+/**
+ * A conversation that reads as a chat: each run of tool calls and thinking between its inputs, messages and answers folds
+ * into one "worked · N steps" row that expands to the usual rendering.
+ */
+export interface ChatContribution {
+  /** Whether a conversation reads as a chat. */
+  when: (conversation: ConversationSummary) => boolean
+  /** Tools whose calls stay visible between folded runs, such as the messages it sends. */
+  tools?: readonly string[]
+}
+
 /** The browser facet of an extension: `extensions/<name>/web.tsx` default-exports one. */
 export interface WebExtension {
   slots?: Partial<Record<SlotName, Contribution | readonly Contribution[]>>
@@ -187,6 +198,8 @@ export interface WebExtension {
   messageDetails?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Inline labels after the Final answer heading on stored assistant messages. */
   answerLabels?: readonly ComponentType<{ entry: EntryRecord }>[]
+  /** Shows matching conversations as a chat; the visible tools of every matching facet combine. */
+  chat?: ChatContribution
   /** Document renderers; a later facet wins a kind. */
   documents?: readonly DocumentContribution[]
   commands?: readonly CommandContribution[]

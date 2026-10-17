@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { accentIndex, accentOf } from '../../extensions/board/accent.tsx'
 import {
-  accentIndex,
   answeredMessages,
   messageStatus,
   parseAddress,
@@ -10,6 +10,7 @@ import {
   relativeTime,
   side,
   suggestions,
+  ultimateChat,
   unreadCount,
   waits,
 } from '../../extensions/board/data.tsx'
@@ -193,9 +194,37 @@ describe('board chat', () => {
     expect(waits(messages, 4)).toEqual({ waiting: 0, owes: 2, onUser: 0, onIt: 1 })
     expect(waits(messages, 9)).toEqual({ waiting: 0, owes: 0, onUser: 0, onIt: 0 })
   })
+})
+
+describe('sender accents', () => {
   it('gives each sender a stable palette slot', () => {
     expect(accentIndex(2, 6)).toBe(accentIndex(2, 6))
     expect(new Set([2, 3, 4, 5, 6, 7].map((id) => accentIndex(id, 6))).size).toBe(6)
+  })
+  it('gives the user the brand colour and conversations a palette colour, the same one every time', () => {
+    expect(accentOf('user')).toEqual({
+      left: 'border-l-brand/60',
+      right: 'border-r-brand/60',
+      fill: 'bg-brand/5',
+      name: 'text-brand',
+    })
+    expect(accentOf(97078)).toBe(accentOf(97078))
+    const conversations = [2, 3, 4, 5, 6, 7].map(accentOf)
+    expect(new Set(conversations).size).toBe(6)
+    expect(conversations.map((accent) => accent.name)).not.toContain('text-brand')
+  })
+})
+
+describe('the @ultimate chat', () => {
+  const ultimate = { label: 'agent', title: '@ultimate' }
+  it("is @ultimate's own top-level standing conversation", () => {
+    expect(ultimateChat(ultimate)).toBe(true)
+  })
+  it('excludes other standing agents, subagents and coordinators', () => {
+    expect(ultimateChat({ ...ultimate, title: '@cloudflare' })).toBe(false)
+    expect(ultimateChat({ ...ultimate, parentConversationId: 4 })).toBe(false)
+    expect(ultimateChat({ ...ultimate, ownerTaskId: 9 })).toBe(false)
+    expect(ultimateChat({ ...ultimate, label: 'coordinator' })).toBe(false)
   })
 })
 
