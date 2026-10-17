@@ -126,7 +126,14 @@ function IsolationToggle() {
           )}
           data-isolated={isolated}
           // Without Git the switch cannot turn on; the label opens onboarding's Git card instead.
-          onClick={reason ? () => ui.open('onboarding.git') : undefined}
+          onClick={
+            reason
+              ? (event) => {
+                  // Radix's hidden input also bubbles a synthetic click when checked changes on mount.
+                  if (event.isTrusted) ui.open('onboarding.git')
+                }
+              : undefined
+          }
         >
           <GitBranchIcon className={cn('size-3.5', isolated && 'text-brand')} />
           <span className="@max-md:hidden">Isolated</span>

@@ -76,7 +76,13 @@ function Onboarding() {
       <FirstRun
         open={!navigator.webdriver && status.data?.firstRun === true && !finished}
         onClosed={() => ui.focusComposer()}
-        onDone={() => setFinished(true)}
+        onDone={async (skipped) => {
+          if (!skipped) {
+            const { id } = await api.action<{ id: number }>('onboarding', 'start', {})
+            ui.switchConversation(id)
+          }
+          setFinished(true)
+        }}
       />
       {error && (
         <div
@@ -221,7 +227,20 @@ function ChoiceCard({ entry }: { entry: EntryRecord }) {
 
 export default defineWebExtension({
   tools: { setup: SetupCall },
-  entries: { 'onboarding.choice': ChoiceCard },
+  entries: {
+    'onboarding.choice': ChoiceCard,
+    'onboarding.start': ({ entry }) => {
+      const data = entry.data as { root: number; instructions?: string }
+      return (
+        <section className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          <span className="font-mono">Onboarding started · root #{data.root}</span>
+          {data.instructions && (
+            <p className="mt-1 whitespace-pre-wrap text-foreground/85">{data.instructions}</p>
+          )}
+        </section>
+      )
+    },
+  },
   slots: { overlay: [Onboarding], 'statusline.right': [NoGit, Undecided] },
   panels: [{ id: 'extensions', title: 'Extensions', icon: BlocksIcon, component: ExtensionsPanel }],
   commands: [

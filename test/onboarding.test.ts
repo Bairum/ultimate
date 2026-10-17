@@ -310,6 +310,13 @@ it('offers setup only to named definitions, refuses inapplicable cards, and dedu
         }),
       ),
     ).toContain('onboarding/choice is a user-only action')
+    expect(
+      JSON.stringify(
+        await run('codemode', {
+          code: "return await ultimate.action('onboarding', 'start', {root: 1});",
+        }),
+      ),
+    ).toContain('onboarding/start is a user-only action')
     // Absence is checked independently of the remembered project decision.
     await rename(join(project, '.ultimate'), join(home, 'setup-backup'))
     expect(JSON.stringify(await run('setup', { card: 'project' }))).toContain('no .ultimate/ setup')

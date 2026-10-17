@@ -57,10 +57,10 @@ cd ~/Projects/app && ultimate
 
 - No `pi` login yet? Open the command palette (`Ctrl+K`, `⌘K` on macOS) → "Log in to a provider". Logins are shared
   with `pi`, and so is logging out.
-- **First start** on a machine shows two short pages: a live checklist (log in to a provider, choose a model), then
-  the recommended extensions as checkboxes.
+- **First start** on a machine shows Get ready: log in to a provider and choose a model. Continue opens @ultimate,
+  which offers inline setup cards, reads the project and writes its first tally.
 - **A folder with its own `.ultimate/`** asks once: its setup or your global one. Its extensions, agents, and skills
-  stay off until you choose it; on the first start the question is part of the second page.
+  stay off until you choose it; @ultimate asks with an inline setup card during onboarding.
 - **The Extensions panel** (right panel, or `Ctrl+K` → "Extensions…") lists every extension and turns it on or off
   live, for this project or everywhere, and can change the project choice.
 - On another machine: `ssh -L 4747:127.0.0.1:4747 <host>`, then open `http://127.0.0.1:4747`. Ultimate only listens on
@@ -121,6 +121,8 @@ and restarts land on the same view. The `surfaces` extension tells the agent whi
 
 ## What to try
 
+- Start a new project with **Set up with @ultimate** on Start here (or Continue on the first-run Get ready page).
+  Choose setup on the inline cards, steer its reading, then start your first coordinator branch from the project's tally.
 - Ask it anything about this repository; watch tool calls, diffs, and thinking stream in.
 - "Build a surface for …" — a whole app with its UI, server actions, and the agent docked beside it; switch to it while
   it is being built.

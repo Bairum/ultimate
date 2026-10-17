@@ -143,7 +143,10 @@ a genesis reset instead shows a collapsible "Tally starts here" card.
 New in the sidebar branches from the shown tree's root, else the most recently active root; `root: true` starts a
 new root, which reads the project in the shared checkout (no Isolated switch). While that root has not read the project,
 New's Branch tab explains why and offers to open it instead of a composer. An empty root's composer is the "Start here"
-card (`survey.tsx`): an optional focus and "Make yourself familiar with the project". While it reads, the root keeps
+card (`survey.tsx`): an optional focus and **Set up with @ultimate**. This calls user action `onboarding.start` with
+that root and the focus verbatim as instructions, then opens @ultimate. Once started, it shows a quiet
+**@ultimate is setting up this project · open** link from `onboarding.starts`. **Read it here instead** starts the
+in-place survey as a fallback; New → New root keeps its survey too. While a survey reads, the root keeps
 its composer for steering, with "Getting familiar with the project" in its status line; while its genesis is
 distilled, a quiet "Writing the tally…" line replaces it. The survey input renders as a collapsible "Getting familiar
 with the project" card. A tally replaces its conversation composer through the SDK's `composer` renderer:

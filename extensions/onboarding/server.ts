@@ -2,7 +2,13 @@ import { existsSync } from 'node:fs'
 import { readFile, readdir } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { loadSkillsFromDir, parseFrontmatter } from '@earendil-works/pi-coding-agent'
-import { defineEntry, defineExtension, defineTool } from '@earendil-works/pi-durable'
+import {
+  defineDoc,
+  defineEntry,
+  defineExtension,
+  defineTool,
+  ROOT_CONVERSATION_ID,
+} from '@earendil-works/pi-durable'
 import { Type } from '@earendil-works/pi-ai'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { ConversationId } from '@earendil-works/pi-durable'
@@ -11,6 +17,30 @@ import { isolatable } from '../workspaces/git.ts'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
 import { save, updateSettings } from './settings.ts'
+import type { SubagentsService } from '../subagents/server.ts'
+import type { LineageService } from '../lineage/server.ts'
+
+export const Starts = defineDoc<{ roots: Record<string, number> }>({
+  kind: 'onboarding.starts',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({ roots: {} }),
+})
+export const docs = [Starts]
+export const StartEntry = defineEntry<{
+  root: number
+  instructions?: string
+  facts: {
+    project: { name: string; path: string }
+    firstRun: boolean
+    projectUndecided: boolean
+    gitReason?: string
+    root: number
+    rootEmpty: boolean
+  }
+}>('onboarding.start')
 
 function lists(value: JsonObject) {
   const extensions = value.extensions ?? {}
@@ -88,6 +118,7 @@ async function declared(path: string) {
 const marker = (userHome: string) => join(userHome, '.ultimate/onboarding.json')
 
 export const userActions = [
+  'start',
   'choice',
   'decide',
   'setExtension',
@@ -97,6 +128,74 @@ export const userActions = [
 ]
 
 export const actions = {
+  start: async (args, { host, conversationId }) => {
+    const input = args as { root?: number; instructions?: string } | null
+    if (
+      input !== null &&
+      (typeof input !== 'object' ||
+        Array.isArray(input) ||
+        (input.root !== undefined && (!Number.isSafeInteger(input.root) || input.root < 1)) ||
+        (input.instructions !== undefined && typeof input.instructions !== 'string'))
+    )
+      throw new Error('Expected root id and optional instructions')
+    const lineage = host.use<LineageService>('lineage')
+    const root =
+      input?.root ??
+      (conversationId === undefined ? undefined : await lineage?.rootOf(conversationId, context)) ??
+      1
+    const harness = host.harness()
+    const existing = (await harness.snapshot(Starts, ROOT_CONVERSATION_ID, context))?.roots[
+      String(root)
+    ]
+    if (existing !== undefined) return { id: existing }
+    if (!lineage || (await lineage.rootOf(root, context)) !== root)
+      throw new Error('Expected a project root')
+    const service = host.use<SubagentsService>('subagents')
+    if (!service) throw new Error('Subagents are required for onboarding')
+    const id = await service.standing('ultimate', context)
+    const project = await host.projectSetup()
+    const checkout = await isolatable(host.projectRoot)
+    const facts = {
+      project: { name: basename(host.projectRoot), path: host.projectRoot },
+      firstRun: !existsSync(marker(host.userHome)),
+      projectUndecided: project.config && project.decision === null,
+      ...('reason' in checkout ? { gitReason: checkout.reason } : {}),
+      root,
+      rootEmpty: await harness.commit(
+        async (tx) =>
+          !(await tx.scanEntries({ conversationId: root as ConversationId }, 1)).items.length,
+        context,
+      ),
+    }
+    const instructions = input?.instructions
+    const conversation = (await harness.conversation(id, context))!
+    await conversation.submit(
+      {
+        type: 'input',
+        content: [
+          'Onboarding started.',
+          `Project: ${facts.project.name}`,
+          `Path: ${facts.project.path}`,
+          `First run: ${facts.firstRun}`,
+          `Project setup undecided: ${facts.projectUndecided}`,
+          `Git isolation: ${facts.gitReason ?? 'ready'}`,
+          `Root: ${root}; empty: ${facts.rootEmpty}`,
+          ...(instructions === undefined ? [] : [`User instructions:\n${instructions}`]),
+        ].join('\n'),
+        entry: {
+          kind: StartEntry.kind,
+          data: { root, ...(instructions === undefined ? {} : { instructions }), facts },
+        },
+        requestId: `onboarding:${root}`,
+        whenBusy: 'followUp',
+      },
+      context,
+    )
+    await harness.commit(async (tx) => {
+      ;(await tx.doc(Starts, ROOT_CONVERSATION_ID)).roots[String(root)] = id
+    }, context)
+    return { id }
+  },
   choice: async (args, { host, conversationId }) => {
     if (conversationId === undefined) throw new Error('A conversation is required')
     const data = args as { card?: string; summary?: string; toolCallId?: string }

@@ -38,7 +38,7 @@ export function FirstRun({
   onClosed,
 }: {
   open: boolean
-  onDone: (skipped: boolean) => void
+  onDone: (skipped: boolean) => void | Promise<void>
   onClosed: () => void
 }) {
   const models = useModels()
@@ -71,8 +71,8 @@ export function FirstRun({
     if (busy) return
     setBusy(true)
     try {
+      await onDone(skipped)
       await api.action('onboarding', 'firstRunDone')
-      onDone(skipped)
     } catch (failure) {
       setError(errorMessage(failure))
     } finally {

@@ -3,9 +3,26 @@ Inline setup choices, the first-run prerequisites, and the Extensions panel that
 ## First run
 
 The first run has only **Get ready**: connect a provider and choose an available model. The faux demo model also
-counts as ready. Continue waits for both, records `firstRunDone` and calls the `FirstRun` component's `onDone` hook;
+counts as ready. Continue waits for both, starts onboarding with @ultimate through `onDone`, then records `firstRunDone`;
 there is no second page. Escape or the close button records completion without changing settings. Closing returns
 focus to the composer. An automated browser (`navigator.webdriver`) does not get this dialog.
+
+## Onboarding with @ultimate
+
+Continue on Get ready, or **Set up with @ultimate** on an empty root's Start here card, calls the user-only action
+`start { root?, instructions? }` and opens @ultimate's standing conversation. An omitted root resolves to the shown
+conversation's tree, or conversation 1. The optional focus is passed verbatim as instructions. The action submits a
+quiet `onboarding.start` input with `{ root, instructions?, facts }`: project name/path, first-run state, undecided
+project setup, Git isolation reason (if any), root id and emptiness. Model text names the event, lists those facts
+and preserves the instructions. Request id `onboarding:<root>` ensures one input per root; repeated calls return
+`{ id }` without sending again. The root conversation's `onboarding.starts` document maps roots to that standing id
+so Start here can show **@ultimate is setting up this project · open** across reloads.
+
+@ultimate greets, shows only applicable setup cards one at a time and waits for each choice, then reads the project
+with the user able to steer. It writes the root's first tally through `seed_tally`, suggests at most three useful
+project-specific agents, extensions or settings, and builds only what the user chooses. The first feature becomes a
+coordinator through `branch`. **Read it here instead** keeps the old survey fallback; New root still surveys in place.
+Under faux the same flow is scripted without model tokens (see `faux/README.md`).
 
 ## Setup cards
 
@@ -54,6 +71,7 @@ them. Failures show on the row; the list follows system info.
 This default-on built-in exports browser actions. Settings choices and completion actions are user-only: agents
 cannot apply them through codemode `ultimate.action`.
 
+- `start { root?, instructions? }`: starts the flow above once per root, returning `{ id }`; user-only.
 - `status`: first-run state; project configuration, decision and README; the user's enable/disable lists; and `adds`,
   the project's agents, skills, extension folders, replacements and declared settings, inspected even while undecided.
 - `firstRunDone`: records completion in the injected user home's `.ultimate/onboarding.json`.
