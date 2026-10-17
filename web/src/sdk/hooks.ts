@@ -20,7 +20,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import { actions, allCommands, regionKeys, shellKeys, shownSurface } from './actions.ts'
 import type { Region } from './actions.ts'
-import { actionMessage } from './api.ts'
+import { actionMessage, MachineOfflineError } from './api.ts'
 import type { ActionError } from './api.ts'
 import { api, registry, store, uiState } from './client.ts'
 import { HOME, documentItems } from './registry.ts'
@@ -379,6 +379,11 @@ export function useAction<T = JsonValue>(
         // Disabled or unmounted rather than replaced by a newer call: nothing is in flight anymore.
         if (latest.current.controller === controller)
           setState((previous) => ({ ...previous, loading: false }))
+        return undefined
+      }
+      if (error instanceof MachineOfflineError) {
+        // Status queries have no current answer in a read-only replica.
+        setState({ key, loading: false })
         return undefined
       }
       const failure = error as ActionError

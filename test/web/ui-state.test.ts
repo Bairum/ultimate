@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { JsonValue } from '@earendil-works/chord'
 import { createUiState, WRITE_MARKER } from '../../web/src/sdk/ui-state.ts'
 import type { UiUpdateRequest } from '../../shared/protocol.ts'
+import { MachineOfflineError } from '../../web/src/sdk/api.ts'
 
 /**
  * A tab against a fake server. A request is committed (`commit(i)`, returning the snapshot the stream would deliver)
@@ -45,6 +46,22 @@ const wait = (ms = 20) => vi.advanceTimersByTimeAsync(ms)
 const marker = (batch: number) => ({ [WRITE_MARKER]: `me:${batch}` })
 
 describe('durable UI state', () => {
+  it('keeps offline browsing choices across replica snapshots and the write settle timeout', async () => {
+    const { state, requests, errors, start } = setup()
+    start({ 'shell.conversation': 1 })
+    state.set('shell.conversation', 26)
+    await wait()
+    requests[0].fail(new MachineOfflineError('The machine is offline'))
+    await wait(3000)
+    start({ 'shell.conversation': 1 })
+    expect(state.get('shell.conversation')).toBe(26)
+    expect(errors).toEqual([])
+    expect(requests).toHaveLength(1)
+    state.set('shell.conversation', 32)
+    await wait()
+    expect(requests[1].change.set?.['shell.conversation']).toBe(32)
+  })
+
   it('applies writes at once, sends them coalesced, and keeps them until the stream shows them', async () => {
     const { state, requests, commit, ack, other, start } = setup()
     const listener = vi.fn<() => void>()

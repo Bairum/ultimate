@@ -37,6 +37,9 @@ export class ActionError extends Error {
 export const actionMessage = (error: ActionError) =>
   `${error.extension}/${error.action}: ${error.message}`
 
+/** The replica cannot run this operation until the machine reconnects. Not a server failure. */
+export class MachineOfflineError extends Error {}
+
 class HttpError extends Error {
   readonly status: number
   constructor(status: number, message: string) {
@@ -64,6 +67,14 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
     })
     const data: unknown = await response.json().catch(() => ({}))
     if (!response.ok) {
+      if (
+        response.status === 503 &&
+        data &&
+        typeof data === 'object' &&
+        'offline' in data &&
+        data.offline === true
+      )
+        throw new MachineOfflineError('The machine is offline')
       const error =
         data && typeof data === 'object' && 'error' in data && typeof data.error === 'string'
           ? data.error
@@ -111,8 +122,9 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
     restart: () => post<unknown>('/api/restart'),
     /**
      * Call action `name` of `extension`'s server facet (`export const actions` in its `server.ts`) with JSON `args`,
-     * on behalf of the shown conversation, and resolve with its result. Rejects with an `ActionError`; one you do not
-     * catch shows as a notice. Aborting `signal` aborts the action's processes too; `keepalive` lets the call outlive
+     * on behalf of the shown conversation, and resolve with its result. Rejects with `MachineOfflineError` for an
+     * offline replica, otherwise `ActionError`; an uncaught rejection shows as a notice. Aborting `signal` aborts
+     * the action's processes too; `keepalive` lets the call outlive
      * the page, such as one sent on `pagehide`.
      */
     action: async <T = JsonValue>(
@@ -131,7 +143,7 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
         const { result } = await post<ExtensionActionResponse>(path, body, { signal, keepalive })
         return result as T
       } catch (error) {
-        if (signal?.aborted) throw error
+        if (signal?.aborted || error instanceof MachineOfflineError) throw error
         throw new ActionError(
           extension,
           name,

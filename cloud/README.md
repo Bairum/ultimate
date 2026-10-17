@@ -22,6 +22,32 @@ Then run `pnpm cloud:dev` and open the URL Wrangler prints (normally http://loca
 
 The build includes the web facets discovered by Ultimate's extension loader. This is a production build, not the machine's Vite dev server. Rebuild after changing facets.
 
+## Try it locally
+
+Build and start Wrangler as above, using port 4800 for `MACHINE_ORIGIN`. In another terminal, start a token-free machine with a temporary state home (keep the printed path for the restart):
+
+```sh
+DEMO_HOME=$(mktemp -d)
+echo "$DEMO_HOME"
+ULTIMATE_PROJECT="$PWD" ULTIMATE_SUPERVISED=0 ULTIMATE_GENERATION=1 \
+  ULTIMATE_FAUX=1 ULTIMATE_HOME="$DEMO_HOME" ULTIMATE_PORT=4800 \
+  ULTIMATE_CLOUD_URL=ws://127.0.0.1:8787/sync ULTIMATE_CLOUD_TOKEN=dev pnpm dev
+```
+
+Explicitly setting `ULTIMATE_PROJECT` and clearing supervised mode avoids inheriting the running Ultimate host's project and supervisor environment when launched from an agent terminal. Use a free machine port, not the running host's port or state home.
+
+1. Create two conversations with `POST /api/conversations` (JSON `{}`); note each returned `id`. Send text with `POST /api/conversations/<id>/submit` (JSON `{"text":"Replica check"}`). The faux provider answers without model tokens. Repeat about 18 turns on one conversation to build more than 64 entries.
+2. Open `http://127.0.0.1:4800/?conversation=<id>` and `http://127.0.0.1:8787/?conversation=<id>`. Expand **Earlier** in the sidebar; the lists and transcripts should match. To exercise history paging, compact the long conversation with `POST /api/conversations/<id>/compact` (JSON `{}`) and wait for completion.
+3. Stop only the faux machine with Ctrl+C. Reload the cloud URL: the list and transcript remain readable and an amber notice explains that this is the last synced state. Switch conversations, open the side panel, and use **Load earlier messages** at the top of the compacted transcript. Its history request should return 64 entries and a `before` cursor while more remain.
+4. Send a distinctive prompt at the cloud URL. It appears above the composer as a queued follow-up. Restart the machine with the **same** `DEMO_HOME` and environment. The queue clears and a faux answer appears. In `GET /api/events?conversation=<id>`, count the `view.entries` whose `kind` is `pi.user` and whose user-model content equals the distinctive text: exactly one should exist. Count before compacting again, since `view` contains the active transcript, not all stored history.
+5. Stop both terminals with Ctrl+C. Local replica data remains in `cloud/.wrangler/`; machine state remains only in the temporary home. Neither is needed after the experiment.
+
+### Quiet offline reads
+
+The replica's `system` snapshot is marked `offline: true`; the web store shows the offline notice once per transition into offline, not again when facets reopen the event stream. Unsupported replica requests return 503 with the same `offline: true` marker. The web SDK distinguishes this expected unavailability from real HTTP failures: `useAction` status queries settle without data or an error toast; durable UI writes retain their tab-local overlay instead of rolling back the selected conversation or panel. Those offline UI choices are not persisted or replayed to the machine; reload discards them. Deliberate unavailable actions still reject, and an unhandled one shows a warning. Unmarked 503s and other failures retain normal error handling.
+
+During open, conversation switching, scrolling and opening the Info panel, the unavailable requests are `POST /api/ui` and extension actions `instance/list`, `onboarding/status`, `workspaces/isolation`, `tailscale/status`, `fast/status`, `status-line/rates`, and `secrets/list`. These all use the same SDK handling, not per-facet substitutes. DevTools still records their expected 503s. Events, models and history are served successfully from the replica. Unsupported request bodies are drained before replying so Wrangler does not fail its forwarding stream with a 500. Models are synced in the same `{ providers, models }` shape as the machine's API.
+
 ## Routing and data
 
 Every `/api/*` and `/sync` request goes to `Replica`, named `default`; other routes serve static assets with SPA fallback. `/sync` requires `Authorization: Bearer <SYNC_TOKEN>` and accepts one machine WebSocket, replacing any previous connection. It stores batches atomically and returns cursor hashes and acknowledgements. Retired documents are deleted.

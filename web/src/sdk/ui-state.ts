@@ -1,5 +1,6 @@
 import type { JsonValue } from '@earendil-works/chord'
 import type { UiUpdateRequest } from '../../../shared/protocol.ts'
+import { MachineOfflineError } from './api.ts'
 
 /**
  * Durable UI state: the flat JSON map of the root conversation's `ultimate.ui` document, shared by every tab and
@@ -100,6 +101,12 @@ export function createUiState(
         }, options.settleMs ?? 2000)
       },
       (error: unknown) => {
+        if (error instanceof MachineOfflineError) {
+          // Keep replica browsing choices in this tab. They were not persisted, so neither an acknowledgement
+          // nor the normal successful-write timeout should roll them back to the last synced selection.
+          settled()
+          return
+        }
         for (const [key, entry] of local) if (entry.batch === batch) local.delete(key)
         settled()
         update()

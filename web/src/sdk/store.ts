@@ -41,7 +41,7 @@ export interface State {
   docsOf: Readonly<Record<number, Docs>>
   /** The root conversation's `ultimate.ui` document, once streamed; read it through `uiState`. */
   shared?: Readonly<Record<string, JsonValue>>
-  system?: SystemInfo
+  system?: SystemInfo & { offline?: boolean }
   conversations: readonly ConversationSummary[]
   tasks?: TaskGraph
   models?: ModelsResponse
@@ -128,6 +128,7 @@ export function createStore(options: StoreOptions = {}) {
   let reconnect: ReturnType<typeof setTimeout> | undefined
   let sync: ReturnType<typeof setTimeout> | undefined
   let noticeId = 0
+  let offlineNoticeShown = false
   let stopped = true
 
   function set(change: Partial<State>) {
@@ -141,7 +142,8 @@ export function createStore(options: StoreOptions = {}) {
   function handle(name: keyof ServerEvents, data: unknown) {
     switch (name) {
       case 'system': {
-        const system = data as SystemInfo
+        const system = data as NonNullable<State['system']>
+        if (!system.offline) offlineNoticeShown = false
         const restarted =
           state.system &&
           (state.system.process.pid !== system.process.pid ||
@@ -179,6 +181,12 @@ export function createStore(options: StoreOptions = {}) {
         set({ tasks: data as TaskGraph })
         break
       case 'notice':
+        // The replica sends its offline notice with every SSE snapshot. Facet subscriptions reopen the stream;
+        // show that notice once per offline transition, not again for each subscription or conversation switch.
+        if (state.system?.offline) {
+          if (offlineNoticeShown) break
+          offlineNoticeShown = true
+        }
         set({
           notices: [
             ...state.notices.slice(-49),

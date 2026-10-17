@@ -171,7 +171,16 @@ it('sends every conversation, only its own entries in ID order, and conversation
     expect(notes.every((doc) => doc.value?.text === 'initial')).toBe(true)
     expect(socket.docs().some((doc) => doc.kind === Session.definition.kind)).toBe(false)
     expect(socket.messages.some((message) => message.type === 'system')).toBe(true)
-    expect(socket.messages.some((message) => message.type === 'models')).toBe(true)
+    const models = socket.messages.find((message) => message.type === 'models')
+    expect(models).toMatchObject({
+      type: 'models',
+      value: {
+        providers: expect.arrayContaining([expect.objectContaining({ id: 'faux' })]),
+        models: expect.arrayContaining([
+          expect.objectContaining({ provider: 'faux', id: 'faux-1', available: true }),
+        ]),
+      },
+    })
     expect(f.notices).toEqual([])
   } finally {
     await f.close()

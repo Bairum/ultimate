@@ -288,7 +288,7 @@ export function startSync(
       send({ type: 'hello', machine, build: host.build().id })
       metadata()
       metadataTimer = setInterval(metadata, 1000)
-      enqueue(async () => send({ type: 'models', value: await host.models() }))
+      enqueue(async () => send({ type: 'models', value: await host.modelsResponse() }))
     })
     socket.addEventListener('message', (event) => {
       try {

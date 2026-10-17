@@ -152,6 +152,7 @@ export async function prepareHarness(options: HostOptions) {
       return active.storage.document(id, at, caller)
     },
     models: async () => (await listModels(modelRuntime, fauxHandle)).models,
+    modelsResponse: () => listModels(modelRuntime, fauxHandle),
     model: (ref: ModelRef) => models.getModel(ref.provider, ref.modelId),
     skills: (cwd: string) => projectSkills({ ultimateRoot, projectRoot, userHome }, cwd),
     restart: (approved: (generation: number) => Promise<void>) =>

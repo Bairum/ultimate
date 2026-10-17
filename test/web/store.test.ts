@@ -228,6 +228,32 @@ describe('web replica store', () => {
     store.stop()
   })
 
+  it('shows the replica notice once per offline transition, not per SSE snapshot', async () => {
+    const { store, latest } = setup()
+    const system = {
+      process: { pid: 1, generation: 1, node: 'v26', startedAt: '', url: '' },
+    } as ServerEvents['system']
+    const notice = { level: 'warning' as const, message: 'The machine is offline' }
+    const offlineSystem = { ...system, offline: true }
+    latest().send('system', offlineSystem)
+    latest().send('notice', notice)
+    store.show(7)
+    await tick()
+    latest().send('system', offlineSystem)
+    latest().send('notice', notice)
+    expect(store.getState().notices).toHaveLength(1)
+    latest().send('system', system)
+    latest().send('notice', { level: 'info', message: 'Online again' })
+    latest().send('system', offlineSystem)
+    latest().send('notice', notice)
+    expect(store.getState().notices.map((item) => item.message)).toEqual([
+      notice.message,
+      'Online again',
+      notice.message,
+    ])
+    store.stop()
+  })
+
   it('refreshes models after (re)starts and keeps notices', async () => {
     const { store, latest, fetch } = setup()
     const source = latest()

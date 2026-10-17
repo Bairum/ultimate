@@ -122,9 +122,10 @@ export class Replica {
       this.refresh()
       return Response.json({ submissionId }, { status: 202 })
     }
-    // Release an unused POST body before returning across the Worker/DO boundary.
-    await request.body?.cancel()
-    return Response.json({ error: 'The machine is offline' }, { status: 503 })
+    // Drain unsupported request bodies before replying across the Worker/DO boundary. Cancelling leaves
+    // Wrangler's forwarding stream reading after the response, which can turn an expected 503 into a 500.
+    if (request.body) await request.arrayBuffer()
+    return Response.json({ error: 'The machine is offline', offline: true }, { status: 503 })
   }
   events(request: Request, url: URL) {
     const id = Number(url.searchParams.get('conversation') ?? this.store.root())
@@ -136,7 +137,7 @@ export class Replica {
         const send = (name: string, value: unknown) =>
           controller.enqueue(encoder.encode(`event: ${name}\ndata: ${JSON.stringify(value)}\n\n`))
         controller.enqueue(encoder.encode('retry: 500\n\n'))
-        send('system', this.store.metadata(2) ?? null)
+        send('system', { ...(this.store.metadata(2) as object | undefined), offline: true })
         send(
           'conversations',
           ((this.store.metadata(1) as ConversationSummary[] | undefined) ?? []).map((summary) => ({
