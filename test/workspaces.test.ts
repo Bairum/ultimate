@@ -46,6 +46,7 @@ import { subject } from '../extensions/conversations/server.ts'
 import type { ConversationsService } from '../extensions/conversations/server.ts'
 import { Summaries } from '../extensions/conversations/summary.ts'
 import self from '../extensions/self/server.ts'
+import board, { Board } from '../extensions/board/server.ts'
 import promptExtension, { order as promptOrder } from '../extensions/prompt/server.ts'
 import subagents, { Subagents } from '../extensions/subagents/server.ts'
 import { seedTally, temp, until } from './helpers.ts'
@@ -81,7 +82,11 @@ async function repository() {
 }
 type Answer = (text: string) => ReturnType<typeof fauxAssistantMessage>
 const noIdea: Answer = () => fauxAssistantMessage('no idea')
-async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<typeof repository>>) {
+async function fixture(
+  commands: string[] = [],
+  existing?: Awaited<ReturnType<typeof repository>>,
+  boardEnabled = false,
+) {
   const paths = existing ?? (await repository())
   const prepared = await prepareHarness({
     ...paths,
@@ -129,6 +134,7 @@ async function fixture(commands: string[] = [], existing?: Awaited<ReturnType<ty
     system: () => ({ process: {} }),
   } as unknown as ExtensionHost
   const service = workspaces(host)
+  if (boardEnabled) prepared.registry.install(board(host))
   prepared.registry.install(workspaceExtension(host))
   prepared.registry.install(self(host))
   prepared.registry.install(subagents(host))
@@ -960,8 +966,12 @@ it.concurrent('notes the root of the submitter’s tree and skips a conversation
   expect(await rootNotes(f)).toHaveLength(0)
 })
 
-async function lander(settings: JsonObject, existing?: Awaited<ReturnType<typeof repository>>) {
-  const f = await fixture([], existing)
+async function lander(
+  settings: JsonObject,
+  existing?: Awaited<ReturnType<typeof repository>>,
+  boardEnabled = false,
+) {
+  const f = await fixture([], existing, boardEnabled)
   f.host.projectSettings = async () => ({ lander: settings })
   return f
 }
@@ -984,6 +994,7 @@ it.concurrent('lets an ownerless history fork submit its own workspace', async (
 it.concurrent('lands and reports a submission without a lineage provider', async () => {
   const f = await lander({ checks: ['test -f base.txt'] })
   expect(f.host.use('lineage')).toBeUndefined()
+  expect(f.host.use('board')).toBeUndefined()
   const id = await f.create()
   await f.service.ready(id, context)
   const workspace = (await f.service.get(id, context))!
@@ -993,6 +1004,51 @@ it.concurrent('lands and reports a submission without a lineage provider', async
   expect(report).toContain('landed as')
   expect(await readFile(join(f.projectRoot, 'no-lineage.txt'), 'utf8')).toBe('no-lineage.txt')
   expect(await rootNotes(f)).toHaveLength(0)
+})
+it.concurrent('records a submission and its report on the board exactly once', async () => {
+  const f = await lander({}, undefined, true)
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  await commit(workspace.path, 'first.txt')
+  const tip = await commit(workspace.path, 'second.txt')
+  const result = await f.service.submit(id, 'None', context)
+  await submitted(f, id)
+  const messages = (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!.messages
+  expect(messages).toHaveLength(2)
+  expect(messages[0]).toMatchObject({
+    from: id,
+    to: result.lander,
+    kind: 'landing',
+    text: `Submitted ${tip.slice(0, 7)} first.txt and 1 more`,
+  })
+  expect(messages[1]).toMatchObject({
+    from: result.lander,
+    to: id,
+    kind: 'landing',
+    text: `Landed ${tip.slice(0, 7)} on main`,
+  })
+  const report = await f.opened.harness.commit(
+    (tx) => tx.submissionByRequest(id, `lander:${result.id}`),
+    context,
+  )
+  expect(messages[1].entry).toBe(report!.entry)
+})
+it.concurrent('records a failed landing on the board', async () => {
+  const f = await lander({ checks: ['echo REJECTED; false'] }, undefined, true)
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path)
+  const result = await f.service.submit(id, 'None', context)
+  await submitted(f, id)
+  const messages = (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!.messages
+  expect(messages).toHaveLength(2)
+  expect(messages[1]).toMatchObject({
+    from: result.lander,
+    to: id,
+    kind: 'landing',
+    text: 'Not landed: check failed twice: echo REJECTED; false',
+  })
 })
 it.concurrent('lands two submissions in order onto a moved target and reports both', async () => {
   const f = await lander({ checks: ['test -f base.txt'] })
@@ -1299,7 +1355,7 @@ async function holdPush(f: Awaited<ReturnType<typeof fixture>>) {
 }
 it.concurrent('resumes a landing interrupted before its push: pushes and reports what it landed, not the moved target', async () => {
   const { paths, bare } = await withRemote()
-  const f = await lander({ push: 'origin' }, paths)
+  const f = await lander({ push: 'origin' }, paths, true)
   const id = await f.create()
   const other = await f.create()
   await f.service.ready(id, context)
@@ -1342,6 +1398,12 @@ it.concurrent('resumes a landing interrupted before its push: pushes and reports
   // The resumed task merged and checked nothing again: it pushed what had landed.
   const steps = result.steps.map((row) => row.step)
   expect(steps.slice(steps.lastIndexOf('started'))).toEqual(['started', 'pushing to origin'])
+  const messages = (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!.messages
+  expect(messages).toHaveLength(2)
+  expect(messages.map((message) => message.text)).toEqual([
+    `Submitted ${landed.slice(0, 7)} landed.txt`,
+    `Landed ${landed.slice(0, 7)} on main`,
+  ])
 })
 it.concurrent('reports a local landing whose push retry conflicts as landed locally', async () => {
   const { paths, bare } = await withRemote()
