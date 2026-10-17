@@ -11,7 +11,7 @@ import {
   defineTool,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { Task } from '@earendil-works/pi-durable'
+import type { Task, TaskId } from '@earendil-works/pi-durable'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { afterEach, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
@@ -21,7 +21,14 @@ import type { ActionContext } from '../server/actions.ts'
 import { Metadata } from '../server/metadata.ts'
 import board, { Board, actions, userActions } from '../extensions/board/server.ts'
 import type { BoardService } from '../extensions/board/server.ts'
-import { Branch, Roots, Tally, rootOf, startBranch } from '../extensions/lineage/server.ts'
+import {
+  Branch,
+  BranchReceipts,
+  Roots,
+  Tally,
+  rootOf,
+  startBranch,
+} from '../extensions/lineage/server.ts'
 import type { BranchInput } from '../extensions/lineage/server.ts'
 import { Standing } from '../extensions/subagents/server.ts'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
@@ -43,7 +50,12 @@ function gate() {
 }
 async function fixture(
   replyGate?: ReturnType<typeof gate>,
-  sendGate?: { gate: ReturnType<typeof gate>; afterMemo: boolean; entered: boolean },
+  sendGate?: {
+    gate: ReturnType<typeof gate>
+    afterMemo: boolean
+    entered: boolean
+    taskId?: TaskId
+  },
 ) {
   const home = await temp('ultimate-board-')
   homes.push(home)
@@ -93,6 +105,7 @@ async function fixture(
               ...api,
               memo: async (name: string, value: JsonValue | Context, memoContext?: Context) => {
                 if (memoContext === undefined) return api.memo(name, value as Context)
+                sendGate.taskId = api.taskId
                 if (!sendGate.afterMemo) {
                   sendGate.entered = true
                   await awaitWithContext(sendGate.gate.promise, memoContext)
@@ -538,7 +551,12 @@ it('replays interrupted sends once, both before and after memoizing the message 
 it.each([false, true])(
   'replays a branch interrupted around memoization (afterMemo: %s)',
   async (afterMemo) => {
-    const pause = { gate: gate(), afterMemo, entered: false }
+    const pause = {
+      gate: gate(),
+      afterMemo,
+      entered: false,
+      taskId: undefined as TaskId | undefined,
+    }
     const f = await fixture(undefined, pause)
     const tool = (await f.opened.root.agent(context)).deferred.find(
       (candidate) => candidate.name === 'branch',
@@ -574,12 +592,17 @@ it.each([false, true])(
     }
     const created = await branches()
     expect(created).toHaveLength(1)
+    expect(pause.taskId).toBeDefined()
+    const receipt = await f.opened.harness.snapshot(BranchReceipts, pause.taskId!, context)
+    expect(Object.values(receipt!.branches)).toEqual(created)
     expect((await f.log())?.messages ?? []).toHaveLength(0)
     await f.opened.close()
     await f.open()
     pause.gate.release()
     await until(async () => (await replies(f)).length === 1)
     expect(await branches()).toEqual(created)
+    await f.opened.root.waitForIdle(context)
+    expect(await f.opened.harness.snapshot(BranchReceipts, pause.taskId!, context)).toBeUndefined()
     expect((await f.log())!.messages.filter((message) => message.to === created[0])).toMatchObject([
       { from: 1, text: 'Explore durably' },
     ])

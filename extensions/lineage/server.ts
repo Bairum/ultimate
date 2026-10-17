@@ -831,15 +831,13 @@ export type BranchInput = RootInput & {
   side?: number
   deliver?: false
   by?: number
-  key?: string
+  receipt?: { taskId: TaskId; callId: string }
 }
 
-const BranchKeys = defineDoc<{ branches: Record<string, number> }>({
-  kind: 'lineage.branch-keys',
+export const BranchReceipts = defineDoc<{ branches: Record<string, number> }>({
+  kind: 'lineage.branch-receipts',
   version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
+  scope: 'task',
   initial: () => ({ branches: {} }),
 })
 
@@ -904,9 +902,9 @@ async function forkBranch(
   main: string | undefined,
   roots: readonly number[],
 ) {
-  const keys = input.key === undefined ? undefined : await tx.doc(BranchKeys, ROOT_CONVERSATION_ID)
-  if (input.key !== undefined && keys?.branches[input.key] !== undefined)
-    return keys.branches[input.key] as ConversationId
+  const receipts = input.receipt ? await tx.doc(BranchReceipts, input.receipt.taskId) : undefined
+  if (input.receipt && receipts?.branches[input.receipt.callId] !== undefined)
+    return receipts.branches[input.receipt.callId] as ConversationId
   const prompt = input.prompt.trim()
   const from = input.from as ConversationId
   const { Prompt } = lineage(host)
@@ -998,7 +996,7 @@ async function forkBranch(
       { id: fork.id, prompt, ...(images ? { images: input.images } : {}) },
       { conversationId: fork.id, ownership: { kind: 'conversation' }, background: false },
     )
-  if (keys && input.key !== undefined) keys.branches[input.key] = fork.id
+  if (receipts && input.receipt) receipts.branches[input.receipt.callId] = fork.id
   return fork.id
 }
 

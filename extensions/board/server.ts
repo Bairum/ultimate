@@ -403,7 +403,7 @@ export default function board(host: ExtensionHost) {
                 isolated: input.isolated ?? true,
                 deliver: false,
                 by: api.conversationId,
-                key: `${api.taskId}/${api.callId}`,
+                receipt: { taskId: api.taskId, callId: api.callId },
               },
               ctx,
             )

@@ -35,9 +35,10 @@ It chooses the explicit root, otherwise the caller's tree root, otherwise the on
 produce an error listing the available ids. It forks the root's tally tip through lineage, attributes the tally prompt
 to the caller, and sends the first input as a board message with replies enabled. It returns the branch id and message id.
 The branch's answer therefore wakes its caller as a normal `board.reply`.
-The tool gives lineage its task and call ids as an idempotency key, recorded atomically with the fork, so replay cannot create
-another branch even before the branch-id memo is saved. It deduplicates message admission with the same task-scoped
-`board.sent-calls` receipt as `message`, indexed by call id so nested codemode calls stay distinct.
+The tool gives lineage its task and call ids for a task-scoped receipt, recorded atomically with the fork, so replay cannot
+create another branch even before the branch-id memo is saved. Pi retires that receipt when the originating task completes.
+It deduplicates message admission with the same task-scoped `board.sent-calls` receipt as `message`, indexed by call id
+so nested codemode calls stay distinct.
 
 Ultimate's answers to the user's board posts reach the inbox through the ordinary reply path. Other answers stay
 in its conversation. To relay a branch result, decision or landing to the user, Ultimate sends one consolidated
