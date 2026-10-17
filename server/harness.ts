@@ -18,6 +18,9 @@ import { requestSwap } from './supervisor-protocol.ts'
 import type {
   ConversationId,
   Cursor,
+  DocumentId,
+  DocumentPoint,
+  DocumentQuery,
   EnvTarget,
   Extension,
   HarnessSettings,
@@ -132,6 +135,21 @@ export async function prepareHarness(options: HostOptions) {
     ): Promise<Page<SubmissionRecord, Cursor>> {
       if (!active) throw new Error('Harness is not open')
       return active.storage.scanSubmissions(query, limit, cursor, caller)
+    },
+    /** Committed documents; exists until Pi Durable exposes document scans publicly. */
+    scanDocuments(
+      query: DocumentQuery,
+      limit: number,
+      cursor: Cursor | undefined,
+      caller: Context,
+    ) {
+      if (!active) throw new Error('Harness is not open')
+      return active.storage.scanDocuments(query, limit, cursor, caller)
+    },
+    /** Materialized documents; exists until Pi Durable exposes document reads publicly. */
+    document(id: DocumentId, at: DocumentPoint, caller: Context) {
+      if (!active) throw new Error('Harness is not open')
+      return active.storage.document(id, at, caller)
     },
     models: async () => (await listModels(modelRuntime, fauxHandle)).models,
     model: (ref: ModelRef) => models.getModel(ref.provider, ref.modelId),
