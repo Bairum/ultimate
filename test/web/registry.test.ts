@@ -14,6 +14,7 @@ import {
   linkRenderers,
   messageItems,
   conversationStarter,
+  composerRenderers,
 } from '../../web/src/sdk/registry.ts'
 import type { ExtensionLoader, SurfaceItem } from '../../web/src/sdk/registry.ts'
 import type { WebExtension } from '../../web/src/sdk/types.ts'
@@ -279,6 +280,22 @@ describe('web extension registry', () => {
     expect(documents.get('ultimate.plan')?.component).toBe(Second)
     expect(documents.get('a.notes')?.extension).toBe('a')
     expect(documents.has('codemode.store')).toBe(false)
+  })
+
+  it('composes all composer renderers in discovery order, preserving lineage before questions', async () => {
+    const Lineage = component('lineage')
+    const Questions = component('questions')
+    const registry = createRegistry()
+    await registry.setLoaders({
+      [path('lineage')]: async () => module({ composer: Lineage }),
+      [path('questions')]: async () => module({ composer: Questions }),
+    })
+    const renderers = composerRenderers(registry.getSnapshot())
+    expect(renderers.map((r) => r.extension)).toEqual(['lineage', 'questions'])
+    expect(renderers.map((r) => r.component)).toEqual([Lineage, Questions])
+    expect(renderers.reduce((core, r) => `${r.extension}(${core})`, 'core')).toBe(
+      'questions(lineage(core))',
+    )
   })
 
   it('selects the last conversation starter and keeps it after an invalid reload', async () => {

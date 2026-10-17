@@ -395,17 +395,14 @@ export function documentItems(records: readonly ExtensionRecord[]): Map<string, 
   return byKind
 }
 
-export function composerRenderer(
+export function composerRenderers(
   records: readonly ExtensionRecord[],
-): { extension: string; version: number; component: ComposerRenderer } | undefined {
-  for (const record of records.toReversed())
-    if (record.extension?.composer)
-      return {
-        extension: record.name,
-        version: record.version,
-        component: record.extension.composer,
-      }
-  return undefined
+): { extension: string; version: number; component: ComposerRenderer }[] {
+  return records.flatMap((record) =>
+    record.extension?.composer
+      ? [{ extension: record.name, version: record.version, component: record.extension.composer }]
+      : [],
+  )
 }
 
 export function inboxRenderer(

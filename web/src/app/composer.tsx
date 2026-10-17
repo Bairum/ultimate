@@ -3,7 +3,7 @@ import { cn } from 'cn'
 import { CornerDownRightIcon, ListPlusIcon, LoaderCircleIcon, XIcon } from 'lucide-react'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { ImagePreviews, useImagePaste } from '@/components/image-paste'
-import type { KeyboardEvent } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import {
   PromptInput,
   PromptInputFooter,
@@ -14,13 +14,13 @@ import {
 import { Kbd } from '@/components/ui/kbd'
 import { api } from '../sdk/client.ts'
 import { errorMessage } from '../sdk/format.ts'
-import { useConversation, useExtensions, useModels } from '../sdk/hooks.ts'
+import { TranscriptContext, useConversation, useExtensions, useModels } from '../sdk/hooks.ts'
 import { isMac } from '../sdk/keys.ts'
 import { touchKeyboard } from '../sdk/viewport.ts'
 import type { ModelsResponse } from '../../../shared/protocol.ts'
 import type { WebExtension } from '../sdk/types.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
-import { composerRenderer, conversationStarter, inboxRenderer } from '../sdk/registry.ts'
+import { composerRenderers, conversationStarter, inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
 import { ComposerContext, useNewConversationConfiguration } from '../sdk/composer.tsx'
 
@@ -111,15 +111,30 @@ function Inbox({ items }: { items: readonly InboxItem[] }) {
 }
 
 export function Composer({ dock }: { dock?: boolean }) {
-  const { id } = useConversation()
-  const renderer = composerRenderer(useExtensions())
-  const core = <ConversationComposer dock={dock} key={id} />
-  if (!renderer) return core
-  const Renderer = renderer.component
+  const { id, entries } = useConversation()
+  const renderers = composerRenderers(useExtensions())
+  const core = renderers.reduce<ReactNode>(
+    (previous, renderer) => {
+      const Renderer = renderer.component
+      return (
+        <ExtensionBoundary
+          key={renderer.extension}
+          extension={renderer.extension}
+          fallback={previous}
+          version={renderer.version}
+        >
+          <Renderer core={previous} dock={dock} />
+        </ExtensionBoundary>
+      )
+    },
+    <ConversationComposer dock={dock} key={id} />,
+  )
   return (
-    <ExtensionBoundary extension={renderer.extension} fallback={core} version={renderer.version}>
-      <Renderer core={core} dock={dock} />
-    </ExtensionBoundary>
+    <TranscriptContext value={entries}>
+      <ComposerContext value={{ target: 'conversation', draft: draftAccess(getDraft(id)) }}>
+        {core}
+      </ComposerContext>
+    </TranscriptContext>
   )
 }
 
@@ -201,6 +216,28 @@ function createDraft(id: number | string | undefined) {
   }
 }
 
+function getDraft(id: number | string | undefined) {
+  if (!drafts.has(id)) drafts.set(id, createDraft(id))
+  return drafts.get(id)!
+}
+
+function clearDraft(
+  draft: ReturnType<typeof createDraft>,
+  snapshot: { text: string; revision: number },
+) {
+  const stored = draft.key ? (localStorage.getItem(draft.key) ?? '') : ''
+  if (draft.get().revision !== snapshot.revision) return
+  if (draft.key && stored === snapshot.text) localStorage.removeItem(draft.key)
+  draft.set({ text: stored === snapshot.text ? '' : stored })
+}
+
+function draftAccess(draft: ReturnType<typeof createDraft>) {
+  return {
+    read: () => ({ text: draft.get().text, revision: draft.get().revision }),
+    clear: (snapshot: { text: string; revision: number }) => clearDraft(draft, snapshot),
+  }
+}
+
 function ConversationComposer({
   dock,
   target = 'conversation',
@@ -241,8 +278,7 @@ function ConversationComposer({
         ? 'new'
         : `branch-${point.from}${point.at === undefined ? '' : `-${point.at}`}`
     : id
-  if (!drafts.has(draftId)) drafts.set(draftId, createDraft(draftId))
-  const draft = drafts.get(draftId)!
+  const draft = getDraft(draftId)
   const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
   const setError = (message: string | undefined) => draft.set({ error: message })
   const setImages = (change: (images: Draft['images']) => Draft['images']) =>
@@ -308,15 +344,8 @@ function ConversationComposer({
       } else {
         await api.submit(text.trim(), busy ? (whenBusy ?? 'steer') : undefined, id, images)
       }
-      const stored = key ? (localStorage.getItem(key) ?? '') : ''
-      if (key && stored === submitted.text && draft.get().revision === submitted.revision)
-        localStorage.removeItem(key)
-      draft.set({
-        ...(draft.get().revision === submitted.revision
-          ? { text: stored === submitted.text ? '' : stored }
-          : {}),
-        ...(draft.get().images === submitted.images ? { images: [] } : {}),
-      })
+      clearDraft(draft, submitted)
+      if (draft.get().images === submitted.images) draft.set({ images: [] })
       if (startedId !== undefined) onStarted?.(startedId)
     } catch (failure) {
       if (key && draft.get().revision === submitted.revision)
@@ -335,7 +364,15 @@ function ConversationComposer({
   }
 
   return (
-    <ComposerContext value={{ target, isolated: isolation, source, root: isNew && point?.root }}>
+    <ComposerContext
+      value={{
+        target,
+        isolated: isolation,
+        source,
+        root: isNew && point?.root,
+        draft: draftAccess(draft),
+      }}
+    >
       <div
         data-composer-source={source}
         data-composer-target={target}
