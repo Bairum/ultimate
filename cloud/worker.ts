@@ -91,7 +91,7 @@ export class Replica {
           { error: 'Invalid history cursor or conversation id' },
           { status: 400 },
         )
-      if (!this.store.view(id))
+      if (!this.store.conversation(id))
         return Response.json({ error: 'Unknown conversation' }, { status: 404 })
       return Response.json(this.store.history(id, before))
     }

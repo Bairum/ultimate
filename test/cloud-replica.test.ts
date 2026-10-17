@@ -9,7 +9,7 @@ const databases: DatabaseSync[] = []
 afterEach(() => {
   for (const db of databases.splice(0)) db.close()
 })
-function replica() {
+function replica(rowsRead?: (count: number) => void) {
   const db = new DatabaseSync(':memory:')
   databases.push(db)
   const sql: Sql = {
@@ -18,7 +18,11 @@ function replica() {
       ...bindings: (string | number | null)[]
     ) => {
       const statement = db.prepare(query)
-      if (statement.columns().length) return statement.all(...bindings) as T[]
+      if (statement.columns().length) {
+        const rows = statement.all(...bindings) as T[]
+        rowsRead?.(rows.length)
+        return rows
+      }
       statement.run(...bindings)
       return []
     },
@@ -70,19 +74,32 @@ describe('cloud replica', () => {
     expect(batch(store, [entry(1), entry(2)], [doc(3)])).toEqual([{ type: 'ack', batch: 1 }])
     expect(store.view(1)?.entries.map((record) => record.id)).toEqual([1, 2])
     expect(store.receive({ type: 'hello', machine: 'test', build: 'test' })).toEqual([
-      { type: 'cursor', maxEntryId: 2, docs: { 3: 'hash-3' } },
+      { type: 'cursor', entries: { 1: 2 }, docs: { 3: 'hash-3' } },
       { type: 'outbox', items: [] },
     ])
     batch(store, [], [{ ...doc(3), value: null }])
     expect(store.cursor().docs).toEqual({})
     expect(store.view(1)?.docs['pi.agent']).toBeUndefined()
   })
+  it('resumes each conversation from its own newest entry, without inheriting a parent cursor', () => {
+    const store = replica()
+    expect(store.cursor().entries).toEqual({})
+    batch(
+      store,
+      [entry(1), entry(3), entry(2, 2)],
+      [],
+      [conversation(1), conversation(2), conversation(3, { conversationId: 1, at: 3 })],
+    )
+    expect(store.cursor().entries).toEqual({ 1: 3, 2: 2 })
+    batch(store, [entry(4, 2)], [], [conversation(2)])
+    expect(store.cursor().entries).toEqual({ 1: 3, 2: 4 })
+  })
   it('rolls a failing batch back atomically', () => {
     const store = replica()
     batch(store, [entry(1)])
     const bad = { ...entry(3), data: 1n } as unknown as EntryRecord
     expect(() => batch(store, [entry(2), bad])).toThrow(/BigInt/)
-    expect(store.cursor().maxEntryId).toBe(1)
+    expect(store.cursor().entries).toEqual({ 1: 1 })
   })
   it('reconstructs plain views, drops live docs and keeps extension docs outside the view', () => {
     const store = replica()
@@ -114,6 +131,21 @@ describe('cloud replica', () => {
     )
     expect(store.view(2)?.entries.map((record) => record.id)).toEqual([1, 2, 3, 5])
     expect(store.view(3)?.entries.map((record) => record.id)).toEqual([1, 2, 3, 6])
+  })
+  it('caps every ancestor by the descendant bound and excludes later head markers', () => {
+    const store = replica()
+    batch(
+      store,
+      [entry(1), entry(2), entry(3, 1, 3), entry(4, 2), entry(5, 2, 5), entry(6, 3)],
+      [],
+      [
+        conversation(1),
+        conversation(2, { conversationId: 1, at: 3 }),
+        conversation(3, { conversationId: 2, at: 2 }),
+      ],
+    )
+    expect(store.view(3)?.entries).toEqual([entry(1), entry(2), entry(6, 3)])
+    expect(store.history(3, 7).entries).toEqual([entry(6, 3), entry(2), entry(1)])
   })
   it('pages history newest first across the 64 boundary', () => {
     const store = replica()
@@ -158,6 +190,48 @@ describe('cloud replica', () => {
     store.receive({ type: 'delivered', id: item.id, submissionId: 12 })
     expect(store.outbox()).toEqual([])
     expect(store.view(1)?.docs['pi.inbox'].items).toHaveLength(1)
+  })
+  it('bounds reads to the requested conversation, active range and history page', () => {
+    let rows = 0
+    const store = replica((count) => {
+      rows += count
+    })
+    batch(
+      store,
+      [entry(1), entry(2), ...Array.from({ length: 5000 }, (_, index) => entry(index + 3, 2))],
+      [
+        doc(1),
+        ...Array.from({ length: 5000 }, (_, index) => ({ ...doc(index + 2), conversationId: 2 })),
+      ],
+      [conversation(1), conversation(2)],
+    )
+    rows = 0
+    expect(store.view(1)?.entries).toEqual([entry(1), entry(2)])
+    expect(rows).toBeLessThan(12)
+    rows = 0
+    expect(store.history(1, 5003)).toEqual({ entries: [entry(2), entry(1)] })
+    expect(rows).toBeLessThan(8)
+    rows = 0
+    expect(store.doc(1, 'pi.agent')).toEqual({ test: true })
+    expect(rows).toBe(1)
+
+    // A large related conversation must not load its cut history to build an active view.
+    batch(
+      store,
+      [
+        ...Array.from({ length: 5000 }, (_, index) => entry(index + 5003, 3)),
+        entry(10003, 3, 10003),
+        entry(10004, 3),
+      ],
+      [],
+      [conversation(3)],
+    )
+    rows = 0
+    expect(store.view(3)?.entries.map((record) => record.id)).toEqual([10003, 10004])
+    expect(rows).toBeLessThan(8)
+    rows = 0
+    expect(store.history(3, 10005).entries).toHaveLength(64)
+    expect(rows).toBeLessThan(70)
   })
   it('stores the latest metadata', () => {
     const store = replica()
