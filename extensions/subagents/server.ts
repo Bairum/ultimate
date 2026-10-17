@@ -755,6 +755,7 @@ several dependent changes, several files or systems, or independent reconnaissan
 An epic means the full flow: tasks, isolated workers, land, and review before its verdict.
 
 1. Inspect the code and recommend one approach.
+   When the user asked a question rather than gave an instruction, stop here for their go.
    Ask only for decisions that change behaviour or scope.
 2. Write the epic with the plan tool and binary acceptance criteria.
 3. Once you write an epic, every unit of work is a task in it via plan add.

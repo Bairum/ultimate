@@ -40,7 +40,7 @@ Click a definition in the Agents tab, or New, for its config view: description, 
 
 ## Coordinator flow
 
-The extension's prompt section makes the parent the coordinator; without this extension, that steering is absent. Do quick fixes and simple questions directly. For substantive work, inspect the code, recommend one approach, and ask only for decisions affecting behaviour or scope. Use the `plan` tool to write an epic with binary acceptance criteria and one self-contained task per unit of work; link children and record dependencies and status.
+The extension's prompt section makes the parent the coordinator; without this extension, that steering is absent. Do quick fixes and simple questions directly. For substantive work, inspect the code, recommend one approach (and wait for the user's go when they asked a question rather than gave an instruction), and ask only for decisions affecting behaviour or scope. Use the `plan` tool to write an epic with binary acceptance criteria and one self-contained task per unit of work; link children and record dependencies and status.
 
 Delegate implementation to `worker` in worktree isolates. Use background children for independent work; children touching the same files run sequentially. Read reports and inspect diffs; rerun checks only for missing or thin evidence, reported failures, changes crossing workers, `server/` or `shared/` changes, or surprises. Land workers into the coordinator's checkout, then `workspace submit`: the lander runs every configured check on the merged result and reports back. Restart required Ultimate core changes only when authorized. Discard clean isolates only when requested. Record evidence yourself; a child's report is not your verification.
 
