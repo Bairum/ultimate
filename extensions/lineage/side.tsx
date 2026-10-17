@@ -40,9 +40,14 @@ export function SideRedirect() {
   return null
 }
 
+/** Shared source for a side chat's composer and contributions that must stop accepting input when it ends. */
+export function useSideState(id: number | undefined) {
+  return useDocOf<SideDoc>(id, sideKind)?.side
+}
+
 /** A side chat's composer: the bar that ends it above it while open, a quiet line instead once it ended. */
 export function SideComposer({ id, core, dock }: { id: number; core: ReactNode; dock?: boolean }) {
-  const side = useDocOf<SideDoc>(id, sideKind)?.side
+  const side = useSideState(id)
   if (!side) return core
   if (side.ended) return <SideEnded dock={dock} id={id} side={side} />
   return (

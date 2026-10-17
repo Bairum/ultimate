@@ -1,4 +1,5 @@
 import {
+  ConversationBusy,
   defineDoc,
   defineEntry,
   defineExtension,
@@ -124,15 +125,22 @@ export const actions = {
     ].join('\n\n')
     const conversation = await host.harness().conversation(id, context)
     if (!conversation) throw new Error('Conversation not found')
-    await conversation.submit(
-      {
-        type: 'input',
-        content,
-        entry: { kind: 'questions.answers', data },
-        requestId: `questions:${data.askedId}`,
-      },
-      context,
-    )
+    try {
+      await conversation.submit(
+        {
+          type: 'input',
+          content,
+          entry: { kind: 'questions.answers', data },
+          requestId: `questions:${data.askedId}`,
+          whenBusy: 'reject',
+        },
+        context,
+      )
+    } catch (error) {
+      if (error instanceof ConversationBusy)
+        throw new Error('These questions are no longer open', { cause: error })
+      throw error
+    }
     return { sent: true }
   },
 }
@@ -211,7 +219,8 @@ export default function questionsExtension(host: ExtensionHost) {
     hooks: [
       hook(GenerationTask, {
         // Pi upstream: @earendil-works/pi-durable@1.2.0 — patched transactional beforeInput hook. Drop when Pi ships input-placement hooks.
-        // Check again in the placement transaction: another tab may send between the action's check and submit.
+        // Busy answers reject at admission. On an idle start this check runs before any submission or run is created,
+        // so throwing rolls back only the answer's admission if another input landed since the action's check.
         beforeInput: async (input, api) => {
           if (
             input.kind === 'questions.answers' &&

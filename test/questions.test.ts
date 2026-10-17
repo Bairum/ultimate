@@ -4,11 +4,12 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import { fauxAssistantMessage, fauxText } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { defineTask } from '@earendil-works/pi-durable'
+import { defineTask, InboxDoc, LiveDoc } from '@earendil-works/pi-durable'
 import { context } from '../server/harness.ts'
 import { Summaries, currentAnswer } from '../extensions/conversations/summary.ts'
-import questionsExtension, { parseQuestions } from '../extensions/questions/server.ts'
+import questionsExtension, { actions, parseQuestions } from '../extensions/questions/server.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
+import type { Submission } from '@earendil-works/pi-durable'
 import type { Tx, ConversationId } from '@earendil-works/pi-durable'
 import type { QuestionsService } from '../extensions/questions/server.ts'
 import type { EntryId } from '@earendil-works/pi-durable'
@@ -46,6 +47,7 @@ async function launch() {
   let assessment = 'needs_input'
   let extraction: unknown = { questions: [{ text: 'Keep it running?', kind: 'confirm' }] }
   let gate: Promise<void> | undefined
+  let runGate: Promise<void> | undefined
   const extract = vi.fn<() => void>()
   const requests: unknown[] = []
   const demo: FauxResponseFactory = async (transcript) => {
@@ -73,6 +75,7 @@ async function launch() {
           }),
         ),
       ])
+    if (runGate) await runGate
     return fauxAssistantMessage([fauxText('Keep it running? 1. Yes 2. No')])
   }
   server.host.faux!.setResponses([demo])
@@ -107,6 +110,9 @@ async function launch() {
     exchange,
     extract,
     requests,
+    holdRun: (value: Promise<void>) => {
+      runGate = value
+    },
     setAssessment: (value: string) => {
       assessment = value
     },
@@ -226,6 +232,55 @@ it('submits a typed Q/A input with its note and refuses a stale answer action', 
   ).not.toBe(200)
 })
 
+it('rejects the answer when a newer run starts between validation and admission, without queueing or faulting it', async () => {
+  const f = await launch()
+  await f.exchange()
+  await f.settled()
+  const asked = (await f.entries()).find((e) => e.kind === 'questions.asked')!
+  const data = { askedId: asked.id, answers: [{ question: 'Keep it running?', answer: 'Yes' }] }
+  let release!: () => void
+  f.holdRun(
+    new Promise<void>((done) => {
+      release = done
+    }),
+  )
+  f.setAssessment('done')
+  let newer!: Submission
+  const host = {
+    harness: () => ({
+      commit: f.server.harness.commit.bind(f.server.harness),
+      // The action has finished its freshness transaction before it gets this handle.
+      conversation: async () => {
+        newer = await f.server.root.submit({ type: 'input', content: 'A newer prompt' }, context)
+        return f.server.root
+      },
+    }),
+  } as unknown as ExtensionHost
+  try {
+    await expect(
+      actions.answer(data, {
+        host,
+        conversationId: f.server.root.id,
+        signal: new AbortController().signal,
+        exec: async () => {
+          throw new Error('Unexpected exec')
+        },
+      }),
+    ).rejects.toThrow('These questions are no longer open')
+    expect((await f.server.harness.snapshot(LiveDoc, f.server.root.id, context))?.run).toBeDefined()
+    expect((await f.server.harness.snapshot(InboxDoc, f.server.root.id, context))?.items).toEqual(
+      [],
+    )
+    expect((await f.entries()).filter((e) => e.kind === 'questions.answers')).toHaveLength(0)
+  } finally {
+    release()
+  }
+  expect((await newer.wait(context)).status).toBe('done')
+  await f.settled()
+  expect((await f.server.harness.snapshot(InboxDoc, f.server.root.id, context))?.items).toEqual([])
+  expect((await f.server.harness.snapshot(LiveDoc, f.server.root.id, context))?.run).toBeUndefined()
+})
+
 it('refuses an answer superseded before typed input placement', async () => {
   const f = await launch()
   await f.exchange()
@@ -241,10 +296,12 @@ it('refuses an answer superseded before typed input placement', async () => {
       }),
     context,
   )
+  const before = await f.server.harness.commit((tx) => tx.scanTasks({}, 1000), context)
   await expect(
     f.server.root.submit(
       {
         type: 'input',
+        whenBusy: 'reject',
         content: 'Q: Keep it running?\nA: Yes',
         entry: { kind: 'questions.answers', data },
       },
@@ -252,6 +309,13 @@ it('refuses an answer superseded before typed input placement', async () => {
     ),
   ).rejects.toThrow('These questions are no longer open')
   expect((await f.entries()).filter((e) => e.kind === 'questions.answers')).toHaveLength(0)
+  expect((await f.server.harness.snapshot(InboxDoc, f.server.root.id, context))?.items).toEqual([])
+  expect((await f.server.harness.snapshot(LiveDoc, f.server.root.id, context))?.run).toBeUndefined()
+  const after = await f.server.harness.commit((tx) => tx.scanTasks({}, 1000), context)
+  expect(after).toEqual(before)
+  f.setAssessment('done')
+  await f.exchange()
+  await f.settled()
 })
 
 it('does not request extraction for an owned subagent', async () => {

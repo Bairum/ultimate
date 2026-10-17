@@ -20,6 +20,7 @@ import {
 } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import type { Asked, Answers, Question } from './types.ts'
+import { useSideState } from '../lineage/side.tsx'
 
 const input = (entry: EntryRecord) => entry.kind === 'pi.user' || entry.input === true
 const column = (dock?: boolean) =>
@@ -28,12 +29,14 @@ const column = (dock?: boolean) =>
 function QuestionsComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
   const transcript = useTranscript()
   const { busy, id } = useConversation()
+  const side = useSideState(id)
+  const writable = !side?.ended && !side?.ending
   const latest = transcript.findLast(
     (entry) => input(entry) || entry.kind === 'questions.asked' || entry.kind === 'pi.reset',
   )
   return (
     <>
-      {!busy && latest?.kind === 'questions.asked' && (
+      {writable && !busy && latest?.kind === 'questions.asked' && (
         <QuestionCard key={latest.id} entry={latest} conversationId={id!} dock={dock} />
       )}
       {core}

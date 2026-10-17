@@ -96,7 +96,7 @@ export default defineConfig({
                 instance: ['subagents', 'tailscale', 'workspaces'],
                 lineage: ['conversations', 'workspaces'],
                 parallel: ['secrets'],
-                questions: ['conversations'],
+                questions: ['conversations', 'lineage'],
                 plan: ['lineage', 'workspaces'],
                 self: ['workspaces'],
                 sounds: ['conversations'],
