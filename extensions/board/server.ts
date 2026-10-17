@@ -19,6 +19,7 @@ import {
 import type { ConversationId, EntryId, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import type { QuestionsService } from '../questions/server.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
 import { isolatable } from '../workspaces/git.ts'
 
@@ -86,6 +87,7 @@ async function append(tx: Tx, input: Omit<BoardMessage, 'id' | 'at'>) {
   return message
 }
 export type BoardService = {
+  answer(messageId: number, text: string, ctx: Context): Promise<number>
   send(
     from: number,
     input: { to: string; text: string; reply: false },
@@ -339,6 +341,7 @@ async function send(
   taskId?: TaskId,
   callId?: string,
   requestId?: string,
+  answerId?: number,
 ) {
   if (requestId !== undefined && from !== 'user') {
     const sent = await host.harness().snapshot(Requests, from as ConversationId, ctx)
@@ -367,6 +370,13 @@ async function send(
     if (requestId !== undefined && requests?.ids[requestId] !== undefined)
       return requests.ids[requestId]
     if (callId !== undefined && receipt?.ids[callId] !== undefined) return receipt.ids[callId]
+    if (answerId !== undefined) {
+      const original = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+        (m) => m.id === answerId,
+      )
+      if (!original || !openQuestion(original))
+        throw new Error('These questions are no longer open')
+    }
     // Writing to a conversation, as a Reply or a new post, answers the questions it asked the user.
     if (from === 'user' && to !== 'user')
       for (const m of (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages)
@@ -393,6 +403,8 @@ async function send(
       state: to === 'user' ? 'delivered' : 'sent',
       ...(input.re === undefined ? {} : { re: input.re }),
     })
+    if (to === 'user' && message.reply && from !== 'user')
+      await host.use<QuestionsService>('questions')?.request(tx, message)
     if (to !== 'user')
       await tx.createTask(
         delivery(host),
@@ -449,6 +461,21 @@ export const actions = {
 }
 export default function board(host: ExtensionHost) {
   host.provide('board', {
+    answer: async (messageId, text, ctx) => {
+      const log = await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, ctx)
+      const message = log?.messages.find((m) => m.id === messageId)
+      if (!message || !openQuestion(message)) throw new Error('These questions are no longer open')
+      return send(
+        host,
+        'user',
+        { to: `#${message.from}`, text, re: messageId },
+        ctx,
+        undefined,
+        undefined,
+        undefined,
+        messageId,
+      )
+    },
     send: (from, input, requestId, ctx) =>
       send(host, from, input, ctx, undefined, undefined, requestId),
     record: async (tx, input) =>
@@ -459,10 +486,7 @@ export default function board(host: ExtensionHost) {
   host.onOpen(async () => {
     stop = host.harness().subscribeCommits((publication) => {
       for (const change of publication.changes)
-        if (
-          change.type === 'entry' &&
-          (change.value.kind === 'pi.user' || change.value.kind === 'questions.answers')
-        ) {
+        if (change.type === 'entry' && change.value.kind === 'pi.user') {
           const done: Promise<void> = answerByInput(
             host,
             change.value.conversationId,

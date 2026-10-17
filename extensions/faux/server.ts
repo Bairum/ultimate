@@ -157,15 +157,14 @@ export default async function fauxExtension(host: ExtensionHost) {
           ])
       }
       if (last?.role === 'user' && last.content === 'questions demo')
-        return fauxAssistantMessage([
-          fauxText(
-            'The preview is ready. Two decisions before continuing:\n\nShould we keep the preview running?\n1. Yes\n2. No\n\nWhich layout should we use?\n1. Compact — fits the existing cards (recommended)\n2. Spacious — more room between options',
-          ),
-        ])
+        return tool('message', {
+          to: 'user',
+          text: 'The preview is ready. Two decisions before continuing:\n\nShould we keep the preview running?\n1. Yes\n2. No\n\nWhich layout should we use?\n1. Compact — fits the existing cards (recommended)\n2. Spacious — more room between options',
+        })
       if (
         last?.role === 'user' &&
         typeof last.content === 'string' &&
-        last.content.startsWith('Q: ')
+        (last.content.startsWith('Q: ') || last.content.includes('\nQ: '))
       )
         return fauxAssistantMessage([fauxText('Understood. I’ll continue with your reply.')])
       if (transcript.messages[asked]?.content === 'phases demo') {

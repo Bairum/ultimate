@@ -1,35 +1,45 @@
 import {
-  ConversationBusy,
   defineDoc,
-  defineEntry,
   defineExtension,
   defineTask,
-  GenerationTask,
-  hook,
+  ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, EntryId, Tx } from '@earendil-works/pi-durable'
+import type { Tx } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ActionContext } from '../../server/actions.ts'
-import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { accountResponse, askSummaryModel, currentAnswer } from '../conversations/summary.ts'
+import { BACKGROUND_CONTEXT as context, withAbortSignal } from '@earendil-works/chord/context'
+import { accountResponse, askSummaryModel } from '../conversations/summary.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import { summaryModel } from '../conversations/summary-model.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
-import { isInput } from '../conversations/activity.ts'
+import type { BoardMessage, BoardService } from '../board/server.ts'
+import { Board } from '../board/server.ts'
 
-import type { Question, Asked, Answers } from './types.ts'
-export const AskedEntry = defineEntry<Asked>('questions.asked')
-const Requests = defineDoc<{ answers: number[] }>({
-  kind: 'questions.requests',
-  version: 1,
-  history: 'latest',
-  fork: 'initial',
-  scope: 'conversation',
-  initial: (): { answers: number[] } => ({ answers: [] }),
-})
+import type { Question } from './types.ts'
+export const BoardQuestions = defineDoc<{ requested: number[]; asked: Record<string, Question[]> }>(
+  {
+    kind: 'questions.board',
+    version: 1,
+    history: 'latest',
+    fork: 'initial',
+    scope: 'conversation',
+    initial: () => ({ requested: [], asked: {} }),
+  },
+)
+export const docs = [BoardQuestions]
 export type QuestionsService = {
-  request(tx: Tx, conversationId: ConversationId, answerId: EntryId): Promise<void>
+  request(tx: Tx, message: BoardMessage): Promise<void>
+}
+const open = (message: BoardMessage) =>
+  message.to === 'user' && message.reply && message.state === 'delivered'
+async function stateFor(tx: Tx) {
+  const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
+  const state = await tx.doc(BoardQuestions, ROOT_CONVERSATION_ID)
+  const ids = new Set(log.messages.map((message) => message.id))
+  state.requested = state.requested.filter((id) => ids.has(id))
+  for (const id of Object.keys(state.asked)) if (!ids.has(Number(id))) delete state.asked[id]
+  return { log, state }
 }
 const terminal = { status: 'terminal', outcome: { status: 'completed', result: null } } as const
 export const QUESTIONS_SYSTEM = `List the decisions a coding agent's final reply leaves open for the user, so they can be answered with buttons. Return only JSON {"questions":[{"text":"...","kind":"confirm"|"choice","options":[{"label":"...","detail":"...","recommended":true}]}]}.
@@ -78,81 +88,43 @@ export function parseQuestions(text: string): Question[] {
   })
 }
 
-export async function latestAsked(tx: Tx, id: ConversationId) {
-  let cursor
-  do {
-    const page = await tx.scanEntries({ conversationId: id }, 64, cursor)
-    for (const entry of page.items) {
-      if (entry.conversationId !== id) continue
-      if (isInput(entry) || entry.kind === 'pi.reset') return undefined
-      if (entry.kind === 'questions.asked') return entry
-    }
-    cursor = page.next
-  } while (cursor !== undefined)
-  return undefined
-}
-
+export const userActions = ['answer']
 export const actions = {
-  async answer(args: JsonValue, { host, conversationId }: ActionContext) {
-    if (conversationId === undefined) throw new Error('A conversation is required')
-    const id = conversationId as ConversationId
-    const data = args as Answers
+  async answer(args: JsonValue, { host, signal }: ActionContext) {
+    const data = args as { messageId: number; answers: { question: string; answer: string }[] }
     if (
       !data ||
-      !Number.isSafeInteger(data.askedId) ||
+      !Number.isSafeInteger(data.messageId) ||
       !Array.isArray(data.answers) ||
       !data.answers.length ||
       data.answers.some(
         (a) =>
           !a || typeof a.question !== 'string' || typeof a.answer !== 'string' || !a.answer.trim(),
-      ) ||
-      (data.note !== undefined && typeof data.note !== 'string')
+      )
     )
       throw new Error('Invalid answers')
     await host.harness().commit(async (tx) => {
-      const asked = await latestAsked(tx, id)
-      if (
-        !asked ||
-        asked.id !== data.askedId ||
-        !(await currentAnswer(tx, id, (asked.data as Asked).answerId as EntryId))
-      )
+      const { log, state } = await stateFor(tx)
+      const message = log.messages.find((m) => m.id === data.messageId)
+      const questions = state.asked[String(data.messageId)]
+      if (!message || !open(message) || !questions?.length)
         throw new Error('These questions are no longer open')
-      const questions = (asked.data as Asked).questions
       if (
         new Set(data.answers.map((a) => a.question)).size !== data.answers.length ||
         data.answers.some((a) => !questions.some((q) => q.text === a.question))
       )
         throw new Error('Unknown question')
     }, context)
-    const content = [
-      ...data.answers.map((a) => `Q: ${a.question}\nA: ${a.answer}`),
-      ...(data.note?.trim() ? [data.note.trim()] : []),
-    ].join('\n\n')
-    const conversation = await host.harness().conversation(id, context)
-    if (!conversation) throw new Error('Conversation not found')
-    try {
-      await conversation.submit(
-        {
-          type: 'input',
-          content,
-          entry: { kind: 'questions.answers', data },
-          requestId: `questions:${data.askedId}`,
-          whenBusy: 'reject',
-        },
-        context,
-      )
-    } catch (error) {
-      if (error instanceof ConversationBusy)
-        throw new Error('These questions are no longer open', { cause: error })
-      throw error
-    }
-    return { sent: true }
+    const content = data.answers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join('\n\n')
+    const board = host.use<BoardService>('board')
+    if (!board) throw new Error('Board is unavailable')
+    return { id: await board.answer(data.messageId, content, withAbortSignal(signal, context)) }
   },
 }
 
 export default function questionsExtension(host: ExtensionHost) {
-  const Extract = defineTask<{ answerId: EntryId }, { phase: 'extract' }, null>({
-    name: 'questions.extract',
+  const Extract = defineTask<{ messageId: number; text: string }, { phase: 'extract' }, null>({
+    name: 'questions.board-extract',
     version: 1,
     initial: () => ({ phase: 'extract' }),
     phases: {
@@ -166,16 +138,10 @@ export default function questionsExtension(host: ExtensionHost) {
             if (chosen) model = await runtime.memo('model', chosen, ctx)
           }
           if (model) {
-            const entry = await host.harness().commit((tx) => tx.entry(task.input.answerId), ctx)
-            const answer = entry?.model?.[0]
-            const text =
-              answer?.role === 'assistant'
-                ? answer.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('\n')
-                : ''
             response = await askSummaryModel(
               runtime.models,
               QUESTIONS_SYSTEM,
-              text,
+              task.input.text,
               AbortSignal.any([runtime.signal, AbortSignal.timeout(60_000)]),
               { model, response, save: (received) => runtime.memo('response', received, ctx) },
             )
@@ -187,13 +153,10 @@ export default function questionsExtension(host: ExtensionHost) {
         }
         await runtime.commit(async (tx) => {
           await accountResponse(tx, runtime.conversationId, response)
-          if (
-            questions.length &&
-            (await currentAnswer(tx, runtime.conversationId, task.input.answerId))
-          )
-            await tx.appendEntry(AskedEntry, runtime.conversationId, {
-              data: { answerId: task.input.answerId, questions },
-            })
+          const { log, state } = await stateFor(tx)
+          const message = log.messages.find((m) => m.id === task.input.messageId)
+          if (questions.length && message && open(message))
+            state.asked[String(message.id)] = questions
           return terminal
         }, ctx)
       },
@@ -207,34 +170,23 @@ export default function questionsExtension(host: ExtensionHost) {
     },
   })
   host.provide('questions', {
-    async request(tx, conversationId, answerId) {
-      const state = await tx.doc(Requests, conversationId)
-      if (state.answers.includes(answerId)) return
-      state.answers.push(answerId)
+    async request(tx, message) {
+      const { state } = await stateFor(tx)
+      if (state.requested.includes(message.id)) return
+      state.requested.push(message.id)
       await tx.createTask(
         Extract,
-        { answerId },
-        { ownership: { kind: 'conversation' }, conversationId, background: true },
+        { messageId: message.id, text: message.text },
+        {
+          ownership: { kind: 'conversation' },
+          conversationId: ROOT_CONVERSATION_ID,
+          background: true,
+        },
       )
     },
   } satisfies QuestionsService)
   return defineExtension({
     name: 'questions',
     tasks: [Extract],
-    hooks: [
-      hook(GenerationTask, {
-        // Pi upstream: @earendil-works/pi-durable@1.3.0 — patched transactional beforeInput hook. Drop when Pi ships input-placement hooks.
-        // Busy answers reject at admission. On an idle start this check runs before any submission or run is created,
-        // so throwing rolls back only the answer's admission if another input landed since the action's check.
-        beforeInput: async (input, api) => {
-          if (
-            input.kind === 'questions.answers' &&
-            (await latestAsked(api.tx, api.conversationId))?.id !== (input.data as Answers).askedId
-          )
-            throw new Error('These questions are no longer open')
-          return undefined
-        },
-      }),
-    ],
   })
 }
