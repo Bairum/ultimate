@@ -70,6 +70,7 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
       keepalive,
       signal,
     })
+    store.received(response)
     const data: unknown = await response.json().catch(() => ({}))
     if (!response.ok) {
       if (
@@ -111,6 +112,7 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
       const response = await request(base + conversation(id, `history?before=${before}`), {
         signal,
       })
+      store.received(response)
       const data = await response.json()
       if (!response.ok) throw new HttpError(response.status, data.error ?? 'Could not load history')
       return data as HistoryResponse

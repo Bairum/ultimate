@@ -19,6 +19,7 @@ import type { Instance, Presence } from './directory.ts'
 declare const WebSocketPair: typeof MachineSocketPair
 
 interface Env extends AccessConfig {
+  VERSION?: WorkerVersionMetadata
   REPLICA: DurableObjectNamespace
   ASSETS: Fetcher
   DIRECTORY: DurableObjectNamespace
@@ -53,43 +54,50 @@ function matchesSyncToken(authorization: string | null, token: string): boolean 
 
 export default {
   async fetch(request: Request, env: Env) {
-    const url = new URL(request.url)
-    const prefix = /^\/p\/([^/]+\/[^/]+)(?=\/|$)/.exec(url.pathname)
-    const path = prefix ? url.pathname.slice(prefix[0].length) : url.pathname
-    const api = path === '/api' || path.startsWith('/api/')
-    if (api && !(await admitsAccess(request, env)))
-      return Response.json({ error: 'Unauthorized' }, { status: 401 })
-    // The front page is a static shell built by cloud/build.ts; its data comes from /api/directory behind Access.
-    if (url.pathname === '/') return env.ASSETS.fetch(new Request(new URL('/front/', url), request))
-    if (url.pathname === '/api/directory') return directory(env).fetch('https://directory/list')
-    if (path === '/sync' && !prefix) {
-      if (
-        !env.SYNC_TOKEN ||
-        !matchesSyncToken(request.headers.get('Authorization'), env.SYNC_TOKEN)
-      )
-        return Response.json({ error: 'Unauthorized' }, { status: 401 })
-      const machine = url.searchParams.get('machine'),
-        project = url.searchParams.get('project')
-      if (!machine || !project?.startsWith('/'))
-        return Response.json({ error: 'Expected machine and absolute project' }, { status: 400 })
-      return env.REPLICA.get(env.REPLICA.idFromName(JSON.stringify([machine, project]))).fetch(
-        request,
-      )
-    }
-    if (api) {
-      if (!prefix) return Response.json({ error: 'Unknown project' }, { status: 404 })
-      const resolved = await directory(env).fetch(
-        `https://directory/resolve?slug=${encodeURIComponent(prefix[1])}`,
-      )
-      if (!resolved.ok) return resolved
-      const instance: Instance = await resolved.json()
-      url.pathname = path
-      return env.REPLICA.get(
-        env.REPLICA.idFromName(JSON.stringify([instance.machine, instance.project])),
-      ).fetch(new Request(url, request))
-    }
-    return env.ASSETS.fetch(request)
+    const response = await route(request, env)
+    // Open tabs compare this with the version they loaded to offer a reload after a deploy (web/src/sdk/store.ts).
+    // A WebSocket upgrade keeps its own response.
+    if (!env.VERSION || response.webSocket) return response
+    const versioned = new Response(response.body, response)
+    versioned.headers.set('x-ultimate-cloud-version', env.VERSION.id)
+    return versioned
   },
+}
+
+async function route(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url)
+  const prefix = /^\/p\/([^/]+\/[^/]+)(?=\/|$)/.exec(url.pathname)
+  const path = prefix ? url.pathname.slice(prefix[0].length) : url.pathname
+  const api = path === '/api' || path.startsWith('/api/')
+  if (api && !(await admitsAccess(request, env)))
+    return Response.json({ error: 'Unauthorized' }, { status: 401 })
+  // The front page is a static shell built by cloud/build.ts; its data comes from /api/directory behind Access.
+  if (url.pathname === '/') return env.ASSETS.fetch(new Request(new URL('/front/', url), request))
+  if (url.pathname === '/api/directory') return directory(env).fetch('https://directory/list')
+  if (path === '/sync' && !prefix) {
+    if (!env.SYNC_TOKEN || !matchesSyncToken(request.headers.get('Authorization'), env.SYNC_TOKEN))
+      return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    const machine = url.searchParams.get('machine'),
+      project = url.searchParams.get('project')
+    if (!machine || !project?.startsWith('/'))
+      return Response.json({ error: 'Expected machine and absolute project' }, { status: 400 })
+    return env.REPLICA.get(env.REPLICA.idFromName(JSON.stringify([machine, project]))).fetch(
+      request,
+    )
+  }
+  if (api) {
+    if (!prefix) return Response.json({ error: 'Unknown project' }, { status: 404 })
+    const resolved = await directory(env).fetch(
+      `https://directory/resolve?slug=${encodeURIComponent(prefix[1])}`,
+    )
+    if (!resolved.ok) return resolved
+    const instance: Instance = await resolved.json()
+    url.pathname = path
+    return env.REPLICA.get(
+      env.REPLICA.idFromName(JSON.stringify([instance.machine, instance.project])),
+    ).fetch(new Request(url, request))
+  }
+  return env.ASSETS.fetch(request)
 }
 
 function directory(env: Env) {

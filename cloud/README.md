@@ -50,6 +50,8 @@ Create conversations through each local UI (or `POST /api/conversations`, JSON `
 - `/p/<machine>/<project>/api/*` goes to that replica with the prefix removed. Assets stay absolute.
 - `/sync?machine=<name>&project=<URL-encoded absolute root>` routes to `REPLICA.idFromName(JSON.stringify([machine, project]))`.
 
+Every Worker response carries `x-ultimate-cloud-version`, the deploy's version ID from the `VERSION` (`version_metadata`) binding; WebSocket upgrades are left untouched. The web SDK remembers the first version it sees, and once a later response names another (a deploy happened while the tab was open) it shows one lasting notice, "Ultimate was updated", with **Reload**. A dropped event stream refetches models on reconnect, so even an idle tab notices. An old tab still calling unprefixed `/api/*` gets a 404 with the header too. A local machine sends no header, so nothing changes there. Locally, every `pnpm cloud:dev` start has a new version, so restarting it shows the notice in open tabs.
+
 Every `/api` request, including `/api/directory` and project-prefixed APIs, requires a verified Cloudflare Access JWT before any Durable Object is touched (RS256, issuer, audience, expiry and not-before). Missing config or verification failure returns a generic 401. Unprefixed project APIs return 404 after authentication. `/sync` uses only `Authorization: Bearer <SYNC_TOKEN>` with constant-time comparison.
 
 The sync route binds its replica key before accepting a socket. Hello must match both key fields and the stored project; mismatches close with `PROJECT_MISMATCH` (`4009`), and the sender stops retrying. Hello also carries the local HTTP port (integer 1–65535). The replica records identity and port durably, so hibernated sockets keep working. Accepted hello, socket close, conversation-count changes and the first synced entries update the Directory. Slugs are lowercased URL-safe machine/project basenames, with `-2`, `-3`… for collisions. Running instances always appear. An offline instance with zero synced entries is forgotten; summaries are not the forgetting signal. Slug assignments stay reserved, so a returning project keeps its URL. Presence means a connected sync socket, not tunnel health. Last seen records the last presence update.
@@ -66,7 +68,7 @@ Workers observability is enabled for persistent logs; `wrangler tail` can miss D
 
 ## Deploy (user/coordinator only)
 
-The committed config is generic. Domains and tunnel IDs live in user settings, not the repository. `pnpm cloud:deploy` builds the UI and front page and writes the gitignored `cloud/wrangler.deploy.json`. No credentials belong in the repository or command arguments.
+The committed config is generic. Domains and tunnel IDs live in user settings, not the repository. `pnpm cloud:deploy` builds the UI and front page and writes the gitignored `cloud/wrangler.deploy.json`. No credentials belong in the repository or command arguments. Open tabs keep working across a deploy: they offer a reload once they see the new version.
 
 1. With Wrangler logged in, create one remotely managed tunnel per machine:
 

@@ -3,8 +3,10 @@ import { useState } from 'react'
 import { cn, defineWebExtension, useNotices, useNow } from '@/sdk'
 import type { Notice } from '@/sdk'
 
-/** How long a notice stays, by level; hovering keeps them. */
+/** How long a notice stays, by level; hovering keeps them, and one with an action stays until taken or dismissed. */
 const lifetime: Record<Notice['level'], number> = { info: 5000, warning: 9000, error: 15000 }
+const lasting = (notice: Notice & { at: number; action?: unknown }, now: number) =>
+  notice.action !== undefined || now - notice.at < lifetime[notice.level]
 const icons = {
   info: [InfoIcon, 'text-muted-foreground'],
   warning: [TriangleAlertIcon, 'text-warning'],
@@ -16,14 +18,14 @@ function Toasts() {
   const notices = useNotices()
   const [dismissed, setDismissed] = useState<ReadonlySet<number>>(new Set())
   const [hovered, setHovered] = useState(false)
-  const live = notices.some((notice) => Date.now() - notice.at < lifetime[notice.level])
+  const live = notices.some(
+    (notice) => !notice.action && Date.now() - notice.at < lifetime[notice.level],
+  )
   const now = useNow(500, live && !hovered)
   const shown = notices
-    .filter(
-      (notice) =>
-        !dismissed.has(notice.id) && (hovered || now - notice.at < lifetime[notice.level]),
-    )
+    .filter((notice) => !dismissed.has(notice.id) && (hovered || lasting(notice, now)))
     .slice(-4)
+  const dismiss = (id: number) => setDismissed((previous) => new Set([...previous, id]))
   if (shown.length === 0) return null
   return (
     <div
@@ -45,10 +47,25 @@ function Toasts() {
           >
             <Icon className={cn('mt-px size-3.5 shrink-0', tone)} />
             <span className="min-w-0 flex-1 break-words text-foreground/90">{notice.message}</span>
+            {notice.action && (
+              <button
+                className="-my-0.5 shrink-0 rounded-sm px-1 text-brand outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring"
+                onClick={() => {
+                  dismiss(notice.id)
+                  notice.action?.run()
+                }}
+                type="button"
+              >
+                {notice.action.label}
+              </button>
+            )}
             <button
               aria-label="Dismiss"
-              className="shrink-0 text-muted-foreground/60 opacity-0 transition-opacity group-hover/notice:opacity-100 pointer-coarse:opacity-100 hover:text-foreground"
-              onClick={() => setDismissed((previous) => new Set([...previous, notice.id]))}
+              className={cn(
+                'shrink-0 text-muted-foreground/60 transition-opacity pointer-coarse:opacity-100 hover:text-foreground',
+                !notice.action && 'opacity-0 group-hover/notice:opacity-100',
+              )}
+              onClick={() => dismiss(notice.id)}
               type="button"
             >
               <XIcon className="size-3.5" />

@@ -94,6 +94,8 @@ it.each(['/', '/p/desk/one/'])(
   },
 )
 
+const ok = async () => new Response('ok')
+
 it('serves the front page shell from assets without touching the directory', async () => {
   const assets = vi.fn<(request: Request) => Promise<Response>>(
     async () => new Response('<div id="app"></div>'),
@@ -110,6 +112,37 @@ it('serves the front page shell from assets without touching the directory', asy
   expect(await response.text()).toBe('<div id="app"></div>')
   expect(new URL(assets.mock.calls[0][0].url).pathname).toBe('/front/')
   expect(get).not.toHaveBeenCalled()
+})
+
+it.each([
+  ['the front page', '/', 200],
+  ['the directory', '/api/directory', 200],
+  ['a project API', '/p/desk/one/api/events', 200],
+  ['the project SPA', '/p/desk/one/', 200],
+  ['an old tab calling an unprefixed API', '/api/events', 404],
+  ['a refused sync', '/sync?machine=desk&project=/one', 401],
+])('names the deploy on %s', async (_, path, status) => {
+  const env = {
+    VERSION: { id: 'deploy-2', tag: '', timestamp: '' },
+    ACCESS_DEV_BYPASS: '1',
+    SYNC_TOKEN: 'dev',
+    ASSETS: { fetch: ok },
+    DIRECTORY: {
+      idFromName: () => 'directory',
+      get: () => ({
+        fetch: async (url: string) =>
+          url.includes('resolve') ? Response.json({ machine: 'desk', project: '/one' }) : ok(),
+      }),
+    },
+    REPLICA: { idFromName: (name: string) => name, get: () => ({ fetch: ok }) },
+  } as unknown as Parameters<typeof worker.fetch>[1]
+  const response = await worker.fetch(new Request(`https://cloud.example${path}`), env)
+  expect(response.status).toBe(status)
+  expect(response.headers.get('x-ultimate-cloud-version')).toBe('deploy-2')
+  // Without the binding, as in tests of other routes, responses pass through untouched.
+  const { VERSION: _version, ...unversioned } = env
+  const plain = await worker.fetch(new Request(`https://cloud.example${path}`), unversioned)
+  expect(plain.headers.has('x-ultimate-cloud-version')).toBe(false)
 })
 
 it('derives the SDK base without changing local URLs', () => {

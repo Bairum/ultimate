@@ -29,6 +29,10 @@ export interface UiState {
    */
   open?: Partial<Record<'phone' | 'tablet', { sidebar?: boolean; panels?: boolean }>>
 }
+/** A notice; one the browser raises can carry an action, and then stays until it is taken or dismissed. */
+export interface BrowserNotice extends Notice {
+  action?: { label: string; run: () => void }
+}
 type Docs = Readonly<Record<string, JsonObject | null>>
 export interface State {
   connection: Connection
@@ -46,7 +50,7 @@ export interface State {
   conversations: readonly ConversationSummary[]
   tasks?: TaskGraph
   models?: ModelsResponse
-  notices: readonly (Notice & { id: number; at: number })[]
+  notices: readonly (BrowserNotice & { id: number; at: number })[]
   ui: UiState
 }
 
@@ -130,6 +134,11 @@ export function createStore(options: StoreOptions = {}) {
   let sync: ReturnType<typeof setTimeout> | undefined
   let noticeId = 0
   let offlineNoticeShown = false
+  /** The cloud deploy this page was loaded from; a local server names none. */
+  let version: string | undefined
+  let updateNoticeShown = false
+  /** The stream dropped since the last `system` event, so the next one belongs to a reopened stream. */
+  let reconnected = false
   let stopped = true
 
   function set(change: Partial<State>) {
@@ -150,7 +159,9 @@ export function createStore(options: StoreOptions = {}) {
           (state.system.process.pid !== system.process.pid ||
             state.system.process.generation !== system.process.generation)
         set({ system })
-        if (!state.models || restarted) void refreshModels()
+        // A reopened stream may follow a cloud deploy: the models response carries its version (`received`).
+        if (!state.models || restarted || reconnected) void refreshModels()
+        reconnected = false
         break
       }
       case 'conversations':
@@ -188,14 +199,12 @@ export function createStore(options: StoreOptions = {}) {
           if (offlineNoticeShown) break
           offlineNoticeShown = true
         }
-        set({
-          notices: [
-            ...state.notices.slice(-49),
-            { ...(data as Notice), id: ++noticeId, at: Date.now() },
-          ],
-        })
+        addNotice(data as BrowserNotice)
         break
     }
+  }
+  function addNotice(notice: BrowserNotice) {
+    set({ notices: [...state.notices.slice(-49), { ...notice, id: ++noticeId, at: Date.now() }] })
   }
 
   function connect() {
@@ -216,6 +225,7 @@ export function createStore(options: StoreOptions = {}) {
     })
     current.addEventListener('error', () => {
       if (source !== current) return
+      reconnected = true
       setConnection(opened || state.view ? 'reconnecting' : 'connecting')
       // EventSource retries by itself unless the server answered with an error status.
       if (current.readyState === CLOSED) {
@@ -286,14 +296,33 @@ export function createStore(options: StoreOptions = {}) {
   async function refreshModels() {
     try {
       const response = await request(`${base}/api/models`)
+      received(response)
       if (response.ok) set({ models: (await response.json()) as ModelsResponse })
     } catch {
       // The next system event retries.
     }
   }
 
+  /**
+   * Note the cloud deploy that answered: the Worker names it in `x-ultimate-cloud-version`. Once it differs from the
+   * first one seen, this page runs an old UI against a new Worker, so offer one reload. Drafts stay in the browser.
+   */
+  function received(response: Response) {
+    const next = response.headers.get('x-ultimate-cloud-version')
+    if (!next) return
+    version ??= next
+    if (next === version || updateNoticeShown) return
+    updateNoticeShown = true
+    addNotice({
+      level: 'info',
+      message: 'Ultimate was updated',
+      action: { label: 'Reload', run: () => location.reload() },
+    })
+  }
+
   return {
     getState: () => state,
+    received,
     subscribe: (listener: () => void) => {
       listeners.add(listener)
       return () => {
@@ -358,7 +387,7 @@ export function createStore(options: StoreOptions = {}) {
       set({ ui: { ...state.ui, ...change } })
     },
     /** Add a notice from the browser, such as a failed command. */
-    notify(notice: Notice) {
+    notify(notice: BrowserNotice) {
       handle('notice', notice)
     },
     dismissNotice(id: number) {

@@ -63,6 +63,25 @@ describe('extension actions', () => {
     await expect(failed.api.updateUi({ set: {} })).rejects.toMatchObject({ status: 500 })
   })
 
+  it('notices a new cloud deploy on any response, failures included', async () => {
+    const store = createStore()
+    const versions = ['deploy-1', 'deploy-2']
+    const api = createApi(store, {
+      fetch: async () =>
+        Response.json(
+          { error: 'Unknown project' },
+          { status: 404, headers: { 'x-ultimate-cloud-version': versions.shift() ?? 'deploy-2' } },
+        ),
+    })
+    await expect(api.updateUi({ set: {} })).rejects.toMatchObject({ status: 404 })
+    expect(store.getState().notices).toEqual([])
+    await expect(api.history(1, 10)).rejects.toMatchObject({ status: 404 })
+    await expect(api.updateUi({ set: {} })).rejects.toMatchObject({ status: 404 })
+    expect(store.getState().notices.map((notice) => notice.message)).toEqual([
+      'Ultimate was updated',
+    ])
+  })
+
   it('passes an abort through as an abort, not an action failure', async () => {
     const controller = new AbortController()
     const { api } = setup(

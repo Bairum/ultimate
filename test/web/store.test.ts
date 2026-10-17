@@ -254,6 +254,46 @@ describe('web replica store', () => {
     store.stop()
   })
 
+  it('offers one reload once the cloud deploy changes, and none locally or while unchanged', async () => {
+    const { store, latest, fetch } = setup()
+    const respond = (version?: string) =>
+      fetch.mockImplementation(async () =>
+        Response.json(
+          { providers: [], models: [] },
+          { headers: version ? { 'x-ultimate-cloud-version': version } : {} },
+        ),
+      )
+    const source = latest()
+    source.open()
+    const system = {
+      process: { pid: 1, generation: 1, node: 'v26', startedAt: '', url: '' },
+    } as ServerEvents['system']
+    const reconnect = async () => {
+      source.drop()
+      source.open()
+      source.send('system', system)
+      await tick()
+    }
+    respond(undefined)
+    source.send('system', system)
+    await reconnect()
+    respond('deploy-1')
+    await reconnect()
+    await reconnect()
+    expect(fetch).toHaveBeenCalledTimes(4)
+    expect(store.getState().notices).toEqual([])
+
+    respond('deploy-2')
+    await reconnect()
+    respond('deploy-3')
+    await reconnect()
+    await store.refreshModels()
+    expect(store.getState().notices).toMatchObject([
+      { level: 'info', message: 'Ultimate was updated', action: { label: 'Reload' } },
+    ])
+    store.stop()
+  })
+
   it('refreshes models after (re)starts and keeps notices', async () => {
     const { store, latest, fetch } = setup()
     const source = latest()
