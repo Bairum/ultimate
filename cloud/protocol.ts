@@ -60,6 +60,7 @@ export type MachineMessage =
       type: 'hello'
       machine: string
       build: string
+      uiBuild?: string
       port: number
       /** Absolute project root. Pi IDs are per project, so one replica must never mix two. */
       project: string
@@ -73,6 +74,7 @@ export type MachineMessage =
     }
   /** Full replacement once per connection, then upserts and removed IDs only. */
   | { type: 'summaries'; value: ConversationSummary[]; removed: number[]; full: boolean }
+  | { type: 'uiBuild'; value: string }
   | { type: 'system'; value: SystemInfo }
   | { type: 'models'; value: unknown }
   | { type: 'delivered'; id: string; submissionId: number }

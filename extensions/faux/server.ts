@@ -36,7 +36,7 @@ export default async function fauxExtension(host: ExtensionHost) {
       const system = transcript.messages[0]
       const asked = transcript.messages.findLastIndex((message) => message.role === 'user')
       if (system?.role === 'system' && typeof system.content === 'string') {
-        if (system.content.startsWith('Extract questions addressed'))
+        if (system.content.startsWith("List the decisions a coding agent's final reply"))
           return fauxAssistantMessage([
             fauxText(
               JSON.stringify({
