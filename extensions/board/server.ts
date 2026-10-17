@@ -369,7 +369,7 @@ export default function board(host: ExtensionHost) {
           root: Type.Optional(Type.Number()),
           isolated: Type.Optional(Type.Boolean()),
         }),
-        // The memo reuses the created branch; the task-scoped Sent receipt deduplicates its first message.
+        // Lineage atomically deduplicates the fork; Sent deduplicates its first message.
         replay: 'safe',
         async execute(input, api, ctx) {
           let id = await api.memo<number>('branch-id', ctx)
@@ -393,6 +393,7 @@ export default function board(host: ExtensionHost) {
                 isolated: input.isolated ?? true,
                 deliver: false,
                 by: api.conversationId,
+                key: String(api.taskId),
               },
               ctx,
             )

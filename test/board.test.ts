@@ -495,58 +495,61 @@ it('replays interrupted sends once, both before and after memoizing the message 
     }
   }
 })
-it('replays a branch interrupted after creation and memoization, before sending its first input', async () => {
-  const pause = { gate: gate(), afterMemo: true, entered: false }
-  const f = await fixture(undefined, pause)
-  const tool = (await f.opened.root.agent(context)).deferred.find(
-    (candidate) => candidate.name === 'branch',
-  )!
-  await f.opened.harness.commit(async (tx) => {
-    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1]
-    await configure(tx, f.opened.root.id, { modelTools: { add: [tool] } })
-  }, context)
-  await f.opened.root.submit(
-    {
-      type: 'input',
-      content: 'BRANCH ' + JSON.stringify({ prompt: 'Explore durably', isolated: false }),
-    },
-    context,
-  )
-  await until(() => pause.entered || f.observed.length > 1)
-  expect(f.observed).toEqual([expect.stringContaining('BRANCH ')])
-  expect(pause.entered).toBe(true)
-  const branches = async () => {
-    const conversations = await f.opened.harness.commit(
-      (tx) => tx.scanConversations({}, 100),
+it.each([false, true])(
+  'replays a branch interrupted around memoization (afterMemo: %s)',
+  async (afterMemo) => {
+    const pause = { gate: gate(), afterMemo, entered: false }
+    const f = await fixture(undefined, pause)
+    const tool = (await f.opened.root.agent(context)).deferred.find(
+      (candidate) => candidate.name === 'branch',
+    )!
+    await f.opened.harness.commit(async (tx) => {
+      ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1]
+      await configure(tx, f.opened.root.id, { modelTools: { add: [tool] } })
+    }, context)
+    await f.opened.root.submit(
+      {
+        type: 'input',
+        content: 'BRANCH ' + JSON.stringify({ prompt: 'Explore durably', isolated: false }),
+      },
       context,
     )
-    const ids = []
-    for (const conversation of conversations.items) {
-      if (
-        (await f.opened.harness.snapshot(Branch, conversation.id, context))?.branch?.intent ===
-        'Explore durably'
+    await until(() => pause.entered || f.observed.length > 1)
+    expect(f.observed).toEqual([expect.stringContaining('BRANCH ')])
+    expect(pause.entered).toBe(true)
+    const branches = async () => {
+      const conversations = await f.opened.harness.commit(
+        (tx) => tx.scanConversations({}, 100),
+        context,
       )
-        ids.push(conversation.id)
+      const ids = []
+      for (const conversation of conversations.items) {
+        if (
+          (await f.opened.harness.snapshot(Branch, conversation.id, context))?.branch?.intent ===
+          'Explore durably'
+        )
+          ids.push(conversation.id)
+      }
+      return ids
     }
-    return ids
-  }
-  const created = await branches()
-  expect(created).toHaveLength(1)
-  expect((await f.log())?.messages ?? []).toHaveLength(0)
-  await f.opened.close()
-  await f.open()
-  pause.gate.release()
-  await until(async () => (await replies(f)).length === 1)
-  expect(await branches()).toEqual(created)
-  expect((await f.log())!.messages.filter((message) => message.to === created[0])).toMatchObject([
-    { from: 1, text: 'Explore durably' },
-  ])
-  expect(
-    (await f.log())!.messages.filter(
-      (message) => message.from === created[0] && message.re !== undefined,
-    ),
-  ).toHaveLength(1)
-})
+    const created = await branches()
+    expect(created).toHaveLength(1)
+    expect((await f.log())?.messages ?? []).toHaveLength(0)
+    await f.opened.close()
+    await f.open()
+    pause.gate.release()
+    await until(async () => (await replies(f)).length === 1)
+    expect(await branches()).toEqual(created)
+    expect((await f.log())!.messages.filter((message) => message.to === created[0])).toMatchObject([
+      { from: 1, text: 'Explore durably' },
+    ])
+    expect(
+      (await f.log())!.messages.filter(
+        (message) => message.from === created[0] && message.re !== undefined,
+      ),
+    ).toHaveLength(1)
+  },
+)
 it('recovers once after input placement, before the recipient settles', async () => {
   const f = await fixture()
   await f.send(String(f.recipient.id), 'HOLD')
