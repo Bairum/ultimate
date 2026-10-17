@@ -128,7 +128,7 @@ function QuestionCard({
   })
   return (
     <div className={cn(column(dock), 'pb-2')} data-questions-card={entry.id}>
-      <section className="overflow-hidden rounded-md border border-border bg-muted/20">
+      <section className="overflow-hidden rounded-md border border-border bg-muted/20 max-md:max-h-[40dvh] max-md:overflow-y-auto">
         <button
           className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 font-mono text-[11px] text-muted-foreground hover:bg-muted/40"
           onClick={() => setCollapsed(!collapsed)}

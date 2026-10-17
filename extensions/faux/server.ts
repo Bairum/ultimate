@@ -54,26 +54,32 @@ export default async function fauxExtension(host: ExtensionHost) {
           system.content.startsWith('Assess the latest') ||
           system.content.startsWith('Summarize the initial') ||
           system.content.startsWith('Refresh a coding')
-        )
+        ) {
+          const source = typeof last?.content === 'string' ? last.content : ''
+          const prompt = source
+            .split(/(?:^|\n\n)user: /)
+            .at(-1)!
+            .split('\n\nassistant: ')[0]
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 60)
+          const needsInput = source
+            .split('\n\nassistant: ')
+            .at(-1)
+            ?.includes('Should we keep the preview running?')
           return fauxAssistantMessage([
             fauxText(
               JSON.stringify({
-                assessment:
-                  typeof last?.content === 'string' &&
-                  last.content
-                    .split('\n\nassistant: ')
-                    .at(-1)
-                    ?.includes('Should we keep the preview running?')
-                    ? 'needs_input'
-                    : 'done',
-                activity: 'Reviewed the preview.',
-                title: 'Questions preview',
-                summary: 'Try the questions card in the composer.',
-                feature: 'Questions',
-                abstract: 'Ask: preview questions\nDiverged: none\nState: awaiting a decision',
+                assessment: needsInput ? 'needs_input' : 'done',
+                activity: 'Replied in the demo.',
+                title: prompt,
+                summary: 'Scripted demo conversation.',
+                feature: 'Demo',
+                abstract: `Ask: ${prompt}\nState: ${needsInput ? 'awaiting a decision' : 'scripted demo reply'}`,
               }),
             ),
           ])
+        }
       }
       if (last?.role === 'user' && last.content === 'questions demo')
         return fauxAssistantMessage([
@@ -84,7 +90,7 @@ export default async function fauxExtension(host: ExtensionHost) {
       if (
         last?.role === 'user' &&
         typeof last.content === 'string' &&
-        (last.content.startsWith('Q: ') || last.content === 'Continue directly.')
+        last.content.startsWith('Q: ')
       )
         return fauxAssistantMessage([fauxText('Understood. I’ll continue with your reply.')])
       if (transcript.messages[asked]?.content === 'phases demo') {
