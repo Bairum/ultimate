@@ -8,10 +8,11 @@ import { Type } from '@earendil-works/pi-ai'
 import {
   configure,
   defineExtension,
+  defineTask,
   defineTool,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { Task, TaskId } from '@earendil-works/pi-durable'
+import type { ConversationId, Task, TaskId } from '@earendil-works/pi-durable'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { afterEach, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
@@ -30,7 +31,7 @@ import {
   startBranch,
 } from '../extensions/lineage/server.ts'
 import type { BranchInput } from '../extensions/lineage/server.ts'
-import { Standing } from '../extensions/subagents/server.ts'
+import { Standing, Subagents } from '../extensions/subagents/server.ts'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 
 const homes: string[] = []
@@ -38,6 +39,20 @@ const hosts: OpenHost[] = []
 afterEach(async () => {
   for (const host of hosts.splice(0)) await host.close()
   for (const home of homes.splice(0)) await removeTemp(home)
+})
+const anchor = defineTask<null, { phase: 'done' }, null>({
+  name: 'board-test.anchor',
+  version: 1,
+  initial: () => ({ phase: 'done' }),
+  phases: {
+    done: (_task, runtime, caller) =>
+      runtime.commit(
+        () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
+        caller,
+      ),
+  },
+  abort: (_task, runtime, caller) =>
+    runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), caller),
 })
 function gate() {
   let release!: () => void
@@ -157,6 +172,7 @@ async function fixture(
   prepared.registry.install(
     defineExtension({
       name: 'test-hold',
+      tasks: [anchor],
       tools: [
         defineTool({
           name: 'hold',
@@ -414,6 +430,55 @@ it('answers questions to the user when the user replies, posts anew, or types in
   await actions.post({ to: `#${f.recipient.id}`, text: 'Elsewhere' }, f.action())
   await (await f.recipient.submit({ type: 'input', content: 'More' }, context)).wait(context)
   expect(await state(root.id)).toBe('delivered')
+})
+it('lets a subagent message only the conversation that started it', async () => {
+  const f = await fixture()
+  const agent = await f.opened.root.agent(context)
+  const child = (subagent: boolean) =>
+    f.opened.harness.commit(async (tx) => {
+      const owner = await tx.createTask(anchor, null, {
+        ownership: { kind: 'conversation' },
+        conversationId: ROOT_CONVERSATION_ID,
+        background: true,
+      })
+      const { id } = await tx.createConversation({ ownership: { kind: 'task', taskId: owner } })
+      await configure(tx, id, { model: agent.model, tools: agent.tools })
+      if (subagent)
+        (await tx.doc(Subagents, ROOT_CONVERSATION_ID)).agents[String(id)] = {
+          conversationId: id,
+          agent: 'worker',
+          background: true,
+          reported: [],
+        }
+      return id
+    }, context)
+  const send = async (from: ConversationId, to: string) => {
+    const conversation = await f.opened.harness.conversation(from, context)
+    await (
+      await conversation!.submit(
+        {
+          type: 'input',
+          content: 'SEND ' + JSON.stringify({ to, text: `To ${to}`, reply: false }),
+        },
+        context,
+      )
+    ).wait(context)
+  }
+
+  const worker = await child(true)
+  await send(worker, 'user')
+  await send(worker, `#${f.recipient.id}`)
+  await send(worker, '#1')
+  expect(f.observed.filter((text) => text.includes('message only #1'))).toHaveLength(2)
+  expect((await f.log())!.messages.map((m) => [m.from, m.to])).toEqual([[worker, 1]])
+  const view = await (await f.opened.harness.conversation(worker, context))!.viewState(context)
+  expect(JSON.stringify(view.value.entries)).toContain('Use message only to update #1')
+  view.dispose()
+
+  // An owned conversation that is no subagent, such as an automation run, still reaches the user.
+  const run = await child(false)
+  await send(run, 'user')
+  expect((await f.log())!.messages.at(-1)).toMatchObject({ from: run, to: 'user' })
 })
 it('refuses self, unknown ids, tally roots and unknown names with valid names', async () => {
   const f = await fixture()

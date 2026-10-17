@@ -13,6 +13,9 @@ An idle recipient wakes. A busy one receives a follow-up after its current run, 
 `steer: true`. The typed `board.message` input identifies its sender and explains where its answer goes.
 The answer returns as `board.reply`, steering the sender. An unanswered input produces a failure reply instead.
 Answer directly rather than messaging the sender: the tool refuses reply-enabled messages back to a sender whose reply-enabled message is still unanswered, while `reply: false` updates and other recipients remain allowed.
+A subagent (a conversation its parent lists in `ultimate.subagents`) may message only that parent, so its work reaches
+the user through its coordinator and @ultimate; its prompt says so. Automation runs and top-level conversations may
+message anyone.
 `reply: false` is one-way: it wakes the recipient without returning an answer. Sending to `user` only writes an
 unread inbox item; it starts no run. Replies to a user post also stay in the inbox without starting a run.
 A reply-enabled message to `user` stays open, and its sender shows as awaiting reply, until the user answers it:

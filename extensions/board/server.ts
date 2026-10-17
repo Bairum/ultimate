@@ -23,7 +23,7 @@ import type { WorkspaceService } from '../workspaces/server.ts'
 import { isolatable } from '../workspaces/git.ts'
 
 import type { SubagentsService } from '../subagents/server.ts'
-import { Standing } from '../subagents/server.ts'
+import { Standing, Subagents } from '../subagents/server.ts'
 import { discoverAgents } from '../subagents/agents.ts'
 import { Roots } from '../lineage/server.ts'
 import type { LineageService } from '../lineage/server.ts'
@@ -227,6 +227,15 @@ function delivery(host: ExtensionHost) {
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
 }
+/** The conversation that started `id` as a subagent, which is the only one it may message. */
+async function parentOf(host: ExtensionHost, id: number, ctx: Context) {
+  const owner = (await host.harness().commit((tx) => tx.conversation(id as ConversationId), ctx))
+    ?.owner?.conversationId
+  if (owner === undefined) return undefined
+  return (await host.harness().snapshot(Subagents, owner, ctx))?.agents[String(id)]
+    ? owner
+    : undefined
+}
 async function lander(host: ExtensionHost, ctx: Context) {
   const service = host.use<WorkspaceService>('workspaces')
   if (!service) return undefined
@@ -293,6 +302,12 @@ async function send(
     if (callId !== undefined && sent?.ids[callId] !== undefined) return sent.ids[callId]
   }
   if (!input.text.trim()) throw new Error('Message text must not be empty')
+  // Checked before resolving, which may create a standing agent's conversation.
+  const parent = from === 'user' ? undefined : await parentOf(host, from, ctx)
+  if (parent !== undefined && input.to.replace(/^#/, '') !== String(parent))
+    throw new Error(
+      `Subagents report to the conversation that started them: message only #${parent}. Your final answer reaches it anyway.`,
+    )
   const to = await resolve(host, input.to, from, ctx)
   const fromLabel = await senderName(host, from, ctx)
   const toLabel = await senderName(host, to, ctx)
@@ -408,6 +423,9 @@ export default function board(host: ExtensionHost) {
     sections: [
       section('board', async (input, ctx) => {
         if (!input.agent.tools.some((tool) => tool.name === 'message')) return undefined
+        const parent = await parentOf(host, input.conversationId, ctx)
+        if (parent !== undefined)
+          return `Use message only to update #${parent}, the conversation that started you, while you work; your final answer reaches it anyway. Use reply: false for one-way updates.`
         const agents = (await host.use<SubagentsService>('subagents')?.residents(ctx)) ?? []
         return `Use message to contact #id, @name or user. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. Use reply: false for one-way updates. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
       }),
