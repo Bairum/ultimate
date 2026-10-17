@@ -49,22 +49,36 @@ export async function landerPath(home: string, source: string) {
     createHash('sha256').update(source).digest('hex').slice(0, 12),
   )
 }
+const checkouts = new Map<string, Promise<string>>()
 /**
  * The lander's checkout of `source`, created detached at `tip` when it is not a registered worktree yet; an existing one
- * stays as it is.
+ * stays as it is. Serialize creation per path so another caller cannot remove a checkout being created.
  */
 export async function landerCheckout(home: string, source: string, tip = 'HEAD') {
   const path = await landerPath(home, source)
-  const registered = (await git(source, 'worktree', 'list', '--porcelain'))
-    .split('\n\n')
-    .some((entry) => entry.split('\n').includes(`worktree ${path}`))
-  if (!registered) {
-    // The directory is the lander's own; a crash may have left it half created.
-    await rm(path, { recursive: true, force: true })
-    await git(source, 'worktree', 'prune')
-    await git(source, 'worktree', 'add', '--detach', path, tip)
+  const queued = (checkouts.get(path) ?? Promise.resolve())
+    .catch(
+      // The previous caller receives its failure; a later call must still be able to recover.
+      () => undefined,
+    )
+    .then(async () => {
+      const registered = (await git(source, 'worktree', 'list', '--porcelain'))
+        .split('\n\n')
+        .some((entry) => entry.split('\n').includes(`worktree ${path}`))
+      if (!registered) {
+        // The directory is the lander's own; a crash may have left it half created.
+        await rm(path, { recursive: true, force: true })
+        await git(source, 'worktree', 'prune')
+        await git(source, 'worktree', 'add', '--detach', path, tip)
+      }
+      return path
+    })
+  checkouts.set(path, queued)
+  try {
+    return await queued
+  } finally {
+    if (checkouts.get(path) === queued) checkouts.delete(path)
   }
-  return path
 }
 /**
  * Append a log line about `entry`, a draft of its queue entry, to the lander conversation `id`; a step also joins the

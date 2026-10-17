@@ -1,10 +1,82 @@
 import { describe, expect, it } from 'vitest'
 import {
   parseAddress,
+  participants,
+  participantStatus,
+  participantMessages,
   relativeTime,
   suggestions,
   unreadCount,
 } from '../../extensions/board/data.tsx'
+
+describe('board roster', () => {
+  const messages = [
+    { id: 1, from: 4, to: 2, text: 'Decision?', at: 100, reply: true, state: 'delivered' as const },
+    {
+      id: 2,
+      from: 2,
+      to: 'user' as const,
+      text: 'Hello',
+      at: 200,
+      reply: false,
+      state: 'delivered' as const,
+    },
+  ]
+  it('lists standing agents, the lander and active coordinators without duplicates or concluded branches', () => {
+    const roster = participants(
+      { messages, next: 3, readUpTo: 0 },
+      {
+        agents: [{ name: 'ultimate' }, { name: 'dice', id: 3 }].map((agent) => ({
+          ...agent,
+          description: '',
+        })),
+        lander: 7,
+        conversations: [],
+        concluded: [6],
+      },
+      { ultimate: 2 },
+      [
+        { id: 2, busy: false },
+        { id: 4, label: 'coordinator', title: 'Build board', busy: false, answerAt: 150 },
+        { id: 5, label: 'coordinator', busy: true },
+        { id: 6, label: 'coordinator', busy: false },
+        { id: 8, label: 'coordinator', parentConversationId: 5, busy: true },
+        { id: 9, busy: false },
+      ],
+    )
+    expect(roster.map((item) => item.key)).toEqual([
+      'user',
+      '@ultimate',
+      '@dice',
+      '@lander',
+      '#4',
+      '#5',
+    ])
+    expect(roster.find((item) => item.id === 4)).toMatchObject({
+      name: 'Build board',
+      status: 'waiting',
+      at: 150,
+    })
+    expect(roster.find((item) => item.id === 5)?.status).toBe('working')
+    expect(roster[0]).toMatchObject({ at: 200, status: 'idle' })
+  })
+  it('derives status from busy state and open reply requests, not closed or one-way messages', () => {
+    expect(participantStatus(4, true, messages)).toBe('working')
+    expect(participantStatus(4, true, messages, true)).toBe('working')
+    expect(participantStatus(4, false, messages, true)).toBe('needs input')
+    expect(participantStatus(4, false, messages)).toBe('waiting')
+    expect(participantStatus(4, false, [{ ...messages[0], state: 'answered' }])).toBe('idle')
+    expect(participantStatus(4, false, [{ ...messages[0], state: 'failed' }])).toBe('idle')
+    expect(participantStatus(undefined, false, messages)).toBe('idle')
+    expect(participantStatus(2, false, messages)).toBe('idle')
+  })
+  it('filters both directions without including unrelated messages', () => {
+    expect(participantMessages(messages, 2)).toEqual(messages)
+    expect(participantMessages(messages, 4)).toEqual([messages[0]])
+    expect(participantMessages(messages, 'user')).toEqual([messages[1]])
+    expect(participantMessages(messages, 9)).toEqual([])
+  })
+})
 
 describe('board addressing', () => {
   it('shows elapsed minutes, hours and days without future negative times', () => {

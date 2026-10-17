@@ -8,7 +8,19 @@ import {
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
+import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
+
+const messageText = (content: unknown) =>
+  typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? content.map((part) => (part.type === 'text' ? part.text : '')).join('')
+      : ''
+const tool = (name: string, args: JsonObject, greeting?: string) =>
+  fauxAssistantMessage([...(greeting ? [fauxText(greeting)] : []), fauxToolCall(name, args)], {
+    stopReason: 'toolUse',
+  })
 
 export default async function fauxExtension(host: ExtensionHost) {
   const faux = host.faux
@@ -80,6 +92,69 @@ export default async function fauxExtension(host: ExtensionHost) {
             ),
           ])
         }
+      }
+      const onboardingAt = transcript.messages.findLastIndex(
+        (message) =>
+          message.role === 'user' && messageText(message.content).startsWith('Onboarding started.'),
+      )
+      if (onboardingAt >= 0) {
+        const start = messageText(transcript.messages[onboardingAt].content)
+        const root = Number(start.match(/Root: (\d+)/u)?.[1])
+        const since = transcript.messages.slice(onboardingAt)
+        const text = messageText(last?.content)
+        const choices = since
+          .filter((message) => message.role === 'user')
+          .map((message) => messageText(message.content))
+        const cards = [
+          ...(start.includes('First run: true') ? ['extensions'] : []),
+          ...(start.includes('Project setup undecided: true') ? ['project'] : []),
+          ...(!start.includes('Git isolation: ready') ? ['git'] : []),
+        ]
+        if (
+          last?.role === 'user' &&
+          (text.startsWith('Onboarding started.') || text.startsWith('Setup choice ('))
+        ) {
+          const next = cards.find(
+            (card) => !choices.some((choice) => choice.startsWith(`Setup choice (${card}):`)),
+          )
+          const greeting = text.startsWith('Onboarding started.')
+            ? 'Hello! I’m @ultimate, your project’s standing agent.\nWe’ll choose your setup, then I’ll read the project and write its first tally.'
+            : undefined
+          return next
+            ? tool('setup', { card: next }, greeting)
+            : tool('read', { path: join(host.projectRoot, 'README.md') }, greeting)
+        }
+        if (last?.role === 'toolResult' && last.toolName === 'setup')
+          return fauxAssistantMessage([
+            fauxText('Choose on the card above; I’ll continue when you’re ready.'),
+          ])
+        if (last?.role === 'toolResult' && last.toolName === 'read')
+          return tool('seed_tally', {
+            root,
+            text: `This project lives at ${host.projectRoot}. Its README is the starting point; check its scripts and tests before changing it. Keep setup in .ultimate/ and feature work in coordinator branches. Current state: initial onboarding reading complete.\n\n${start.includes('User instructions:\n') ? start.split('User instructions:\n')[1] : ''}`,
+          })
+        if (last?.role === 'toolResult' && last.toolName === 'seed_tally')
+          return fauxAssistantMessage([
+            fauxText('The first tally is ready. What should we do first?'),
+          ])
+        if (
+          last?.role === 'user' &&
+          text.startsWith('Message from user:') &&
+          since.some(
+            (message) => message.role === 'toolResult' && message.toolName === 'seed_tally',
+          )
+        )
+          return tool('branch', {
+            root,
+            prompt: text.split('\n').slice(1).join('\n').split('\nAnswer here;')[0],
+            isolated: false,
+          })
+        if (last?.role === 'toolResult' && last.toolName === 'branch')
+          return fauxAssistantMessage([
+            fauxText(
+              'Started a coordinator branch for your first task. I’m waiting for its report.',
+            ),
+          ])
       }
       if (last?.role === 'user' && last.content === 'questions demo')
         return fauxAssistantMessage([

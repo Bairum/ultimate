@@ -8,13 +8,22 @@ import {
   touchKeyboard,
   useAction,
   useConversation,
+  useConversations,
   useDocOf,
   useEvent,
   useUiState,
   useUltimate,
 } from '@/sdk'
-import { BoardCard, BoardInput } from './cards.tsx'
-import { emptyBoard, parseAddress, suggestions, unreadCount } from './data.tsx'
+import { BoardCard, BoardInput, BoardRoster } from './cards.tsx'
+import { useOverview } from '../conversations/feature.tsx'
+import {
+  emptyBoard,
+  parseAddress,
+  suggestions,
+  unreadCount,
+  participants,
+  participantMessages,
+} from './data.tsx'
 import type { Addresses, BoardData } from './data.tsx'
 
 const useBoard = () => useDocOf<BoardData>(1, 'board') ?? emptyBoard
@@ -60,6 +69,24 @@ function BoardSurface() {
   const [tab, setTab] = useUiState<'inbox' | 'all'>('board.tab', 'all')
   const addresses = useAction<Addresses>('board', 'addresses')
   const standing = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')
+  const conversations = useConversations()
+  const overview = useOverview()
+  const [concluded] = useUiState<number[]>('ext.conversations.concluded', [])
+  const [participant, setParticipant] = useState<string>()
+  const roster = participants(
+    board,
+    { ...(addresses.data ?? { agents: [], conversations: [] }), concluded },
+    standing ?? {},
+    conversations,
+    new Set(
+      Object.entries(overview)
+        .filter(
+          ([, row]) => row.assessmentStatus === 'ready' && row.assessment?.value === 'needs_input',
+        )
+        .map(([id]) => Number(id)),
+    ),
+  )
+  const active = roster.find((item) => item.key === participant)
   const [draft, setDraft] = useUiState<string>('board.draft', '')
   const [re, setRe] = useState<number>()
   const [caret, setCaret] = useState(0)
@@ -70,7 +97,9 @@ function BoardSurface() {
   const input = useRef<HTMLTextAreaElement>(null)
   const following = useRef(true)
   const count = unreadCount(board)
-  const messages = board.messages.filter((message) => tab === 'all' || message.to === 'user')
+  const messages = (
+    active?.id === undefined ? board.messages : participantMessages(board.messages, active.id)
+  ).filter((message) => tab === 'all' || message.to === 'user')
   const latest = messages.at(-1)?.id
   const hasUltimate = addresses.data?.agents.some((agent) => agent.name === 'ultimate') ?? false
   const choices = addresses.data ? suggestions(draft, caret, addresses.data) : []
@@ -79,7 +108,7 @@ function BoardSurface() {
   useEffect(() => {
     following.current = true
     feed.current?.scrollTo({ top: feed.current.scrollHeight })
-  }, [tab])
+  }, [tab, participant])
   useEffect(() => {
     if (following.current) feed.current?.scrollTo({ top: feed.current.scrollHeight })
   }, [latest, tab])
@@ -147,6 +176,33 @@ function BoardSurface() {
             </button>
           </div>
         </header>
+        <BoardRoster
+          participants={roster}
+          selected={participant}
+          unread={count}
+          onSelect={(item) => {
+            setParticipant(participant === item.key ? undefined : item.key)
+            setTab('all')
+          }}
+          onMention={(address) => {
+            setDraft(`${address} `)
+            setCaret(address.length + 1)
+            setRe(undefined)
+            input.current?.focus()
+          }}
+        />
+        {active && (
+          <div className="mx-auto flex w-full max-w-[46rem] items-center gap-2 px-3 pt-3 font-mono text-[11px] text-muted-foreground sm:px-6">
+            <span>Messages with {active.name}</span>
+            <button
+              aria-label="Clear participant filter"
+              className="ml-auto cursor-pointer hover:text-foreground"
+              onClick={() => setParticipant(undefined)}
+            >
+              Clear ×
+            </button>
+          </div>
+        )}
         <div
           ref={feed}
           className="min-h-0 flex-1 overflow-y-auto"

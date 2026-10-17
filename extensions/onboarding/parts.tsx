@@ -30,9 +30,9 @@ interface Described {
   replaces?: 'builtin'
 }
 
-/** The dialog id of the project card; the Extensions panel opens it again. */
+/** The Extensions panel's setup entry point; the overlay routes it to @ultimate, not a dialog. */
 export const projectDialog = 'onboarding.project'
-/** The dialog id of the Git card; the status line and the start page's Isolated switch open it. */
+/** The start page's Isolated switch entry point; the overlay routes it to @ultimate. */
 export const gitDialog = 'onboarding.git'
 
 export const sources: Record<ExtensionInfo['source'], string> = {

@@ -349,7 +349,8 @@ function Brief({ entry, lineage }: { entry: EntryRecord; lineage: { from: number
 /** A conversation's history distilled into the start of its tally: collapsible like a brief. */
 function Genesis({ entry }: { entry: EntryRecord }) {
   const text = userText(entry)
-  const from = /^<tally from="([^"]*)">/.exec(text)?.[1]
+  const from = /^<tally from="#(\d+)\/(\d+)">/.exec(text)
+  const source = from ? Number(from[1]) : undefined
   const genesis = text.replace(/^<tally[^>]*>\n/, '').replace(/\n<\/tally>$/, '')
   return (
     <Collapsible
@@ -359,14 +360,16 @@ function Genesis({ entry }: { entry: EntryRecord }) {
       <CollapsibleTrigger className="flex w-full cursor-pointer flex-col gap-1 px-3.5 py-2.5 text-left">
         <span className="flex items-center gap-1.5 font-mono text-[11px] text-brand">
           <ChevronRightIcon className="size-3.5 transition-transform group-data-[state=open]/genesis:rotate-90" />
-          Tally starts here{from ? ` · distilled from ${from}` : ''}
+          Tally starts here{from ? ` · distilled from #${from[1]}/${from[2]}` : ''}
         </span>
         <span className="text-xs text-muted-foreground">
-          The conversation before this point is distilled into the start of the tally. Earlier
-          messages remain available above.
+          {source !== undefined && source !== entry.conversationId
+            ? 'The project reading is distilled into the start of this tally.'
+            : 'The conversation before this point is distilled into the start of the tally. Earlier messages remain available above.'}
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent className="border-t border-brand/20 px-3.5 py-2.5 text-[13px]">
+        {from && <Open id={Number(from[1])} entry={Number(from[2])} />}
         <MessageResponse>{genesis}</MessageResponse>
       </CollapsibleContent>
     </Collapsible>

@@ -7,7 +7,91 @@ import { ConversationRef } from '../conversations/feature.tsx'
 import { openAgentSource } from '../subagents/messages.tsx'
 import { useWorkspaceIndex } from '../workspaces/data.tsx'
 import { relativeTime } from './data.tsx'
-import type { BoardMessage } from './data.tsx'
+import type { BoardMessage, Participant } from './data.tsx'
+
+export function BoardRoster({
+  participants,
+  selected,
+  unread,
+  onSelect,
+  onMention,
+}: {
+  participants: Participant[]
+  selected?: string
+  unread: number
+  onSelect: (participant: Participant) => void
+  onMention: (address: string) => void
+}) {
+  const { switchConversation, showSurface } = useUltimate()
+  const now = useNow(60000)
+  return (
+    <nav aria-label="Board participants" className="border-b border-border bg-muted/10">
+      <div className="mx-auto flex max-w-[70rem] gap-2 overflow-x-auto px-3 py-3 sm:px-6">
+        {participants.map((participant) => (
+          <div
+            key={participant.key}
+            className={`w-40 shrink-0 rounded-md border font-mono text-[11px] ${selected === participant.key ? 'border-brand/60 bg-brand/5' : 'border-border bg-muted/20'}`}
+          >
+            <button
+              aria-pressed={selected === participant.key}
+              onClick={() => onSelect(participant)}
+              className="flex w-full cursor-pointer items-center gap-2 px-2.5 pt-2.5 text-left"
+            >
+              <span
+                className={`size-1.5 shrink-0 rounded-full ${participant.status === 'working' ? 'animate-pulse bg-brand' : participant.status === 'waiting' || participant.status === 'needs input' ? 'bg-amber-400' : 'bg-muted-foreground/50'}`}
+              />
+              <span className="min-w-0 flex-1 truncate text-foreground" title={participant.name}>
+                {typeof participant.id === 'number' && participant.address?.startsWith('#') ? (
+                  <ConversationRef
+                    id={participant.id}
+                    title={participant.name}
+                    className="flex w-full"
+                  />
+                ) : (
+                  participant.name
+                )}
+              </span>
+              {participant.id === 'user' && unread > 0 && (
+                <span className="ml-auto text-brand">{unread}</span>
+              )}
+            </button>
+            <div className="flex items-center gap-2 px-2.5 pt-1 pb-2 text-[10px] text-muted-foreground">
+              <span>
+                {participant.status === 'waiting' ? 'awaiting reply' : participant.status}
+              </span>
+              {participant.at !== undefined && (
+                <time className="ml-auto" title={new Date(participant.at).toLocaleString()}>
+                  {relativeTime(participant.at, now)}
+                </time>
+              )}
+            </div>
+            {participant.address && (
+              <div className="flex items-center gap-3 border-t border-border/60 px-2.5 py-1.5 text-muted-foreground">
+                {typeof participant.id === 'number' && (
+                  <button
+                    className="cursor-pointer hover:text-foreground"
+                    onClick={() => {
+                      switchConversation(participant.id as number)
+                      showSurface('agent')
+                    }}
+                  >
+                    Open
+                  </button>
+                )}
+                <button
+                  className="ml-auto cursor-pointer hover:text-foreground"
+                  onClick={() => onMention(participant.address!)}
+                >
+                  Mention
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </nav>
+  )
+}
 
 export function Address({ id }: { id: number | 'user' }) {
   const standing = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')

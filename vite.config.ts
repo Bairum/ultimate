@@ -99,6 +99,7 @@ export default defineConfig({
                 lineage: ['conversations', 'workspaces'],
                 parallel: ['secrets'],
                 questions: ['conversations', 'lineage'],
+                onboarding: ['workspaces', 'subagents', 'lineage'],
                 plan: ['lineage', 'workspaces'],
                 self: ['workspaces'],
                 sounds: ['conversations'],
