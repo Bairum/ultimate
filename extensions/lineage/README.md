@@ -122,8 +122,10 @@ New, "Branch…" and "Branch from here" open the start page (`start.tsx`) in `co
 conversation beneath inert. It shows New's Branch / New root tabs, source and quoted branch point above the
 new-conversation composer. Its URL (`?new`, `?new=<from>`, `?new=<from>.<at>`, or `?new=<root>&side=<side>` for the
 branch a side chat ends in, prefilled with its draft) survives reload; Back or Esc closes it,
-switching conversations closes it, and each start point keeps its draft. Sending opens the new branch and the page
-fades into its first message. There is no briefing overlay or retry action. Old stored brief resets still render;
+switching conversations closes it, and each start point keeps its draft. Sending replaces the composer with the sent
+prompt and its steps (forking the source, or creating the root, then starting the run); the page holds over the new
+conversation until its first message shows, then fades into it. A tally's ⌥↵ branch shows the same page. A failed start
+returns to the composer with the draft and the error. There is no briefing overlay or retry action. Old stored brief resets still render;
 a genesis reset instead shows a collapsible "Tally starts here" card.
 
 New in the sidebar branches from the shown tree's root, else the most recently active root; `root: true` starts a

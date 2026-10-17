@@ -28,12 +28,12 @@ import {
   useTranscript,
   useUltimate,
 } from '@/sdk'
-import type { ConversationDraft, EntryRecord, ToolCallView } from '@/sdk'
+import type { EntryRecord, ToolCallView } from '@/sdk'
 import { ConversationRef } from '../conversations/feature.tsx'
 import { Open } from '../workspaces/landing.tsx'
 import { getRoots, useRoots } from './roots.tsx'
 import { ProposeCall, SideComposer, sideLabel, SideNote, SideRedirect } from './side.tsx'
-import { entryText, isolated, openStart, StartPage } from './start.tsx'
+import { entryText, launching, openStart, start, StartPage } from './start.tsx'
 import { Distilling, Familiarize, Survey, SurveyStatus } from './survey.tsx'
 
 type Tally = { tokens: number; since?: number; surveying?: true; converting?: true }
@@ -462,7 +462,7 @@ function TallyComposer({ id, core, dock }: { id: number; core: ReactNode; dock?:
         placeholder={`Talk it through in a side chat, or ${branchKeys} to start a branch…`}
         start={(draft) =>
           draft.alternate
-            ? start(draft)
+            ? launching({ from: id }, start)(draft)
             : api.action<{ id: number }>('lineage', 'side', {
                 root: id,
                 prompt: draft.prompt,
@@ -517,41 +517,6 @@ function shownIsTally() {
   const doc = getState().docsOf[id]?.[tallyKind] as Tally | null | undefined
   if (doc === undefined || loading) return undefined
   return doc?.since !== undefined || !!doc?.surveying || !!doc?.converting || entries.length === 0
-}
-
-/** Where a branch starts by default: the shown tree's root, else the most recently active root. */
-async function defaultRoot() {
-  const { id } = getConversation()
-  const info = await api.action<{ roots: number[]; root?: number }>(
-    'lineage',
-    'info',
-    id === undefined ? null : { id },
-  )
-  if (info.root !== undefined) return info.root
-  const { conversations } = getState()
-  const inputAt = (root: number) =>
-    conversations.find((conversation) => conversation.id === root)?.inputAt ?? 0
-  return info.roots.toSorted((a, b) => inputAt(b) - inputAt(a) || b - a)[0]
-}
-
-/**
- * A new branch from `draft.from` (default: the shown tree's root), or a new root, which reads the project in the shared
- * checkout toward the prompt.
- */
-async function start({ root, alternate: _alternate, ...draft }: ConversationDraft) {
-  if (root) {
-    const { prompt, model, thinkingLevel } = draft
-    return api.action<{ id: number }>('lineage', 'newRoot', {
-      prompt,
-      ...(model ? { model } : {}),
-      ...(thinkingLevel ? { thinkingLevel } : {}),
-    })
-  }
-  const from = draft.from ?? (await defaultRoot())
-  if (from === undefined) throw new Error('There is no root to branch from')
-  // The preference isolates only where the project can be isolated; an explicit choice is passed on as is.
-  const isolation = await isolated(draft)
-  return api.action<{ id: number }>('lineage', 'branch', { ...draft, from, isolated: isolation })
 }
 
 export default defineWebExtension({

@@ -1,11 +1,27 @@
-import { GitBranchIcon, LoaderCircleIcon, SproutIcon, XIcon } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import {
+  CheckIcon,
+  CircleIcon,
+  GitBranchIcon,
+  LoaderCircleIcon,
+  SproutIcon,
+  XIcon,
+} from 'lucide-react'
+import {
+  createContext,
+  use,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
-import { MessageResponse } from '@/components/ai/message'
+import { Message, MessageContent, MessageResponse } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
 import {
   api,
   cn,
+  getConversation,
   getState,
   getUiState,
   NewConversationComposer,
@@ -112,6 +128,35 @@ function close() {
   else drop()
 }
 
+/** A start in flight: what was sent from where, then the conversation it started (`id`). */
+type Launch = { point: StartPoint; draft: ConversationDraft; id?: number }
+let launch: Launch | undefined
+function land(next: Launch | undefined) {
+  launch = next
+  notify()
+}
+
+/**
+ * `starter`, shown over the conversation while it runs: what was sent and from where, until the conversation it starts
+ * shows its first message. A failure leaves it to the composer, which shows the error with the draft.
+ */
+export function launching(
+  point: StartPoint,
+  starter: (draft: ConversationDraft) => Promise<{ id: number }>,
+) {
+  return async (draft: ConversationDraft) => {
+    land({ point, draft })
+    try {
+      const started = await starter(draft)
+      land({ point, draft, id: started.id })
+      return started
+    } catch (failure) {
+      land(undefined)
+      throw failure
+    }
+  }
+}
+
 export function entryText(entry: EntryRecord) {
   const message = entry.model?.[0]
   if (message?.role !== 'user' && message?.role !== 'assistant') return ''
@@ -123,11 +168,12 @@ export function entryText(entry: EntryRecord) {
 const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 
 /**
- * Over the conversation while a new one is written: an empty conversation page with room to think. Once it starts, the
- * page holds until the new conversation shows beneath it with its first message, then fades into it.
+ * Over the conversation while a new one is written: an empty conversation page with room to think. Once sent, it shows
+ * the start in flight and holds until the new conversation shows beneath it with its first message, then fades into it.
  */
 export function StartPage() {
   const point = decode(useSyncExternalStore(subscribe, current))
+  const started = useSyncExternalStore(subscribe, () => launch)
   const actions = useUltimate()
   const shown = actions.conversationId
   // A branch inherits its source's entries; its prompt, placed just after it starts, is the first of its own. A new
@@ -139,42 +185,43 @@ export function StartPage() {
         (entry.kind === 'pi.user' || entry.kind === 'lineage.survey'),
     ),
   )
-  const [leaving, setLeaving] = useState<{ id: number; point: StartPoint }>()
   // Showing another conversation closes the page; its draft stays for next time. While one loads, none shows.
   const last = useRef(shown)
   useEffect(() => {
     if (shown === undefined) return
     const previous = last.current
     last.current = shown
-    if (previous !== undefined && previous !== shown && shown !== leaving?.id) {
-      setLeaving(undefined)
+    if (previous !== undefined && previous !== shown && shown !== started?.id) {
+      land(undefined)
       drop()
     }
-  }, [shown, leaving])
-  const showing = leaving?.point ?? point
-  if (!showing || (shown === undefined && !leaving)) return null
+  }, [shown, started])
+  const showing = started?.point ?? point
+  if (!showing || (shown === undefined && !started)) return null
   return (
     <Page
       key={`${showing.from ?? ''}.${showing.at ?? ''}~${showing.side ?? ''}`}
-      leaving={leaving !== undefined && shown === leaving.id && prompted}
-      onGone={() => setLeaving(undefined)}
+      leaving={started?.id !== undefined && shown === started.id && prompted}
+      onGone={() => land(undefined)}
       onStarted={(id) => {
-        setLeaving({ id, point: showing })
         drop(id)
         actions.switchConversation(id)
       }}
       point={showing}
+      started={started}
     />
   )
 }
 
 function Page({
   point,
+  started,
   leaving,
   onStarted,
   onGone,
 }: {
   point: StartPoint
+  started?: Launch
   leaving: boolean
   onStarted: (id: number) => void
   onGone: () => void
@@ -238,7 +285,7 @@ function Page({
     }
   }, [leaving])
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== 'Escape' || event.defaultPrevented || leaving) return
+    if (event.key !== 'Escape' || event.defaultPrevented || started) return
     event.preventDefault()
     close()
   }
@@ -251,22 +298,28 @@ function Page({
       ref={root}
       role="dialog"
     >
-      <button
-        aria-label="Close"
-        className="absolute top-3 right-3 z-10 flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        onClick={close}
-        title="Close (Esc)"
-        type="button"
-      >
-        <XIcon className="size-4" />
-      </button>
-      {point.from === undefined ? (
-        <New intro={intro} onStarted={onStarted} />
-      ) : point.side !== undefined ? (
-        <SideBranch intro={intro} onStarted={onStarted} root={point.from} side={point.side} />
-      ) : (
-        <Branch from={point.from} at={point.at} intro={intro} onStarted={onStarted} />
+      {!started && (
+        <button
+          aria-label="Close"
+          className="absolute top-3 right-3 z-10 flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          onClick={close}
+          title="Close (Esc)"
+          type="button"
+        >
+          <XIcon className="size-4" />
+        </button>
       )}
+      <Shown value={point}>
+        {started ? (
+          <Starting intro={intro} launch={started} />
+        ) : point.from === undefined ? (
+          <New intro={intro} onStarted={onStarted} />
+        ) : point.side !== undefined ? (
+          <SideBranch intro={intro} onStarted={onStarted} root={point.from} side={point.side} />
+        ) : (
+          <Branch from={point.from} at={point.at} intro={intro} onStarted={onStarted} />
+        )}
+      </Shown>
     </div>
   )
 }
@@ -293,6 +346,9 @@ function Intro({
   )
 }
 
+/** The start point the page shows, which its starts are shown under. */
+const Shown = createContext<StartPoint>({})
+
 const eyebrow =
   'flex items-center gap-1.5 font-mono text-[11px] font-semibold tracking-[0.25em] text-brand uppercase'
 
@@ -310,10 +366,116 @@ function Composer({
       inputId="start-input"
       isolated={branch.root ? undefined : isolation}
       onStarted={onStarted}
+      start={launching(use(Shown), start)}
       {...(branch.root
         ? { placeholder: 'What is this tree for? It reads the project toward it…' }
         : {})}
     />
+  )
+}
+
+/** A start in flight: what was sent, then how far it is, the fork first and the run after it. */
+function Starting({
+  launch: { draft, point, id },
+  intro,
+}: {
+  launch: Launch
+  intro: React.RefObject<HTMLDivElement | null>
+}) {
+  const { prompt, images = [], from, root } = draft
+  const sent = useRef<HTMLDivElement>(null)
+  // The prompt leaves the composer and settles where the conversation will show it.
+  useLayoutEffect(() => {
+    if (still()) return undefined
+    const animation = sent.current!.animate(
+      [
+        { opacity: 0, transform: 'translateY(12px)' },
+        { opacity: 1, transform: 'none' },
+      ],
+      { duration: 280, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+    )
+    return () => animation.cancel()
+  }, [])
+  const source = from === undefined ? 'the root' : `#${from}`
+  return (
+    <Intro
+      head={
+        <div className={eyebrow}>
+          {root ? <SproutIcon className="size-3.5" /> : <GitBranchIcon className="size-3.5" />}
+          {root ? 'New root' : 'New branch'}
+        </div>
+      }
+      intro={intro}
+    >
+      {root ? (
+        <div className="mt-3 text-[15px] font-medium">A new line of work</div>
+      ) : (
+        from !== undefined && (
+          <div className="mt-3 flex min-w-0 items-baseline gap-2 text-[15px] font-medium">
+            <span className="shrink-0 text-muted-foreground">from</span>
+            <ConversationRef className="min-w-0" id={from} />
+          </div>
+        )
+      )}
+      <div ref={sent}>
+        <Message className="mt-5" from="user">
+          <MessageContent className="max-h-60 overflow-y-auto">
+            <p className="break-words whitespace-pre-wrap">{prompt}</p>
+            {images.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {images.map((image, index) => (
+                  <img
+                    alt={`Attached image ${index + 1}`}
+                    className="size-12 rounded-md border border-border/70 object-cover"
+                    key={index}
+                    src={`data:${image.mimeType};base64,${image.data}`}
+                  />
+                ))}
+              </div>
+            )}
+          </MessageContent>
+        </Message>
+        <ol aria-live="polite" className="mt-4 space-y-1.5 font-mono text-[11px]" role="status">
+          <Step state={id === undefined ? 'active' : 'done'}>
+            {root
+              ? id === undefined
+                ? 'Creating the root'
+                : `Created #${id}`
+              : id === undefined
+                ? point.side === undefined
+                  ? `Forking ${source}`
+                  : `Noting side chat #${point.side} in the tally, forking ${source}`
+                : `Forked ${source} as #${id}`}
+          </Step>
+          <Step state={id === undefined ? 'waiting' : 'active'}>
+            {root ? 'Getting familiar with the project' : 'Starting the run'}
+          </Step>
+        </ol>
+      </div>
+    </Intro>
+  )
+}
+
+function Step({ state, children }: { state: 'waiting' | 'active' | 'done'; children: ReactNode }) {
+  return (
+    <li
+      className={cn(
+        'flex min-w-0 items-center gap-2',
+        state === 'waiting' ? 'text-muted-foreground/50' : 'text-muted-foreground',
+      )}
+    >
+      {state === 'done' ? (
+        <CheckIcon className="size-3 shrink-0 text-success" />
+      ) : state === 'active' ? (
+        <LoaderCircleIcon className="size-3 shrink-0 text-brand motion-safe:animate-spin" />
+      ) : (
+        <CircleIcon className="size-3 shrink-0" />
+      )}
+      <span className="truncate">
+        {children}
+        {state === 'active' && '…'}
+      </span>
+    </li>
   )
 }
 
@@ -328,6 +490,44 @@ export async function isolated(draft: Pick<ConversationDraft, 'isolated'>) {
       getState().system?.extensions.some((extension) => extension.name === 'workspaces') === true &&
       !(await api.action<{ reason?: string }>('workspaces', 'isolation', {})).reason)
   )
+}
+
+/** Where a branch starts by default: the shown tree's root, else the most recently active root. */
+async function defaultRoot() {
+  const { id } = getConversation()
+  const info = await api.action<{ roots: number[]; root?: number }>(
+    'lineage',
+    'info',
+    id === undefined ? null : { id },
+  )
+  if (info.root !== undefined) return info.root
+  const { conversations } = getState()
+  const inputAt = (root: number) =>
+    conversations.find((conversation) => conversation.id === root)?.inputAt ?? 0
+  return info.roots.toSorted((a, b) => inputAt(b) - inputAt(a) || b - a)[0]
+}
+
+/**
+ * A new branch from `draft.from` (default: the shown tree's root), or a new root, which reads the project in the shared
+ * checkout toward the prompt.
+ */
+export async function start({ root, alternate: _alternate, ...draft }: ConversationDraft) {
+  if (root) {
+    const { prompt, model, thinkingLevel } = draft
+    return api.action<{ id: number }>('lineage', 'newRoot', {
+      prompt,
+      ...(model ? { model } : {}),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
+    })
+  }
+  const from = draft.from ?? (await defaultRoot())
+  if (from === undefined) throw new Error('There is no root to branch from')
+  // The preference isolates only where the project can be isolated; an explicit choice is passed on as is.
+  return api.action<{ id: number }>('lineage', 'branch', {
+    ...draft,
+    from,
+    isolated: await isolated(draft),
+  })
 }
 
 /**
@@ -353,6 +553,7 @@ function SideBranch({
     { enabled: given === undefined, onError: () => {} },
   )
   const prompt = given ?? draft.data?.prompt
+  const point = use(Shown)
   const ready = prompt !== undefined || draft.error !== undefined
   return (
     <>
@@ -393,15 +594,17 @@ function SideBranch({
           isolated={isolation}
           onStarted={onStarted}
           prompt={prompt}
-          start={async ({ root: _root, from: _from, at: _at, alternate: _alternate, ...input }) =>
-            api.action<{ id: number }>('lineage', 'endSide', {
-              ...input,
-              root,
-              side,
-              mode: 'branch',
-              isolated: await isolated(input),
-            })
-          }
+          start={launching(
+            point,
+            async ({ root: _root, from: _from, at: _at, alternate: _alternate, ...input }) =>
+              api.action<{ id: number }>('lineage', 'endSide', {
+                ...input,
+                root,
+                side,
+                mode: 'branch',
+                isolated: await isolated(input),
+              }),
+          )}
         />
       )}
     </>
