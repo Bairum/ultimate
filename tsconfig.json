@@ -18,6 +18,7 @@
     "lint",
     "server",
     "shared",
+    "cloud/protocol.ts",
     "extensions/**/*.ts",
     ".ultimate/extensions/**/*.ts",
     "test",
