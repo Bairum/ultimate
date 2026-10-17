@@ -5,6 +5,8 @@ changing the main agent.
 
 ## Sidebar
 
+Ownerless top-level standing agents (label `agent`) are pinned with the lander, sorted by ID, and cannot be concluded or hidden.
+
 The sidebar pins the lander above the roots (lineage's `useRoots()`), each marked with a branch icon and `root`;
 trees sort by their newest input anywhere in them.
 Branches nest under their source (`branchOf.conversationId`), with a hairline guide and one indent per depth;

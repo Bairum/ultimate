@@ -33,7 +33,13 @@ import type {
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { Source } from '../../server/project.ts'
-import { agentRoots, deleteDefinition, discoverAgents, saveDefinition } from './agents.ts'
+import {
+  agentRoots,
+  definitionAgent,
+  deleteDefinition,
+  discoverAgents,
+  saveDefinition,
+} from './agents.ts'
 import { createChild } from './children.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
 import { requestSummary } from '../conversations/summary.ts'
@@ -67,7 +73,19 @@ export const Subagents = defineDoc<{
   fork: 'initial',
   initial: () => ({ agents: {}, actions: {} }),
 })
-export const docs = [Subagents]
+export const Standing = defineDoc<Record<string, ConversationId>>({
+  kind: 'ultimate.standing-agents',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({}),
+})
+export type SubagentsService = {
+  residents(ctx: Context): Promise<{ name: string; description: string }[]>
+  standing(name: string, ctx: Context): Promise<ConversationId>
+}
+export const docs = [Subagents, Standing]
 const Anchor = defineTask<null, { phase: 'done' }, null>({
   name: 'ultimate.subagent-anchor',
   version: 1,
@@ -430,6 +448,14 @@ async function waitInterruptibly(
 
 /** Browser actions for the Agents tab. */
 export const actions = {
+  /** `{name}`: open the current definition's standing conversation. */
+  async standing(args: JsonValue, { host }: ActionContext) {
+    const { name } = (args ?? {}) as Record<string, JsonValue>
+    if (typeof name !== 'string') throw new Error('name is required')
+    const service = host.use<SubagentsService>('subagents')
+    if (!service) throw new Error('Subagents service is unavailable')
+    return service.standing(name, BACKGROUND_CONTEXT)
+  },
   /**
    * The definitions without their instructions and the files that failed to parse, and for the config view the main
    * conversation's model and tools (a definition may list a subset), where each scope saves, and whether the
@@ -454,7 +480,9 @@ export const actions = {
       main: {
         ...(main.model ? { model: main.model } : {}),
         ...(main.thinkingLevel ? { thinking: main.thinkingLevel } : {}),
-        tools: main.tools.map((tool) => ({ name: tool.name, description: tool.description })),
+        tools: [
+          ...new Map([...main.tools, ...main.deferred].map((tool) => [tool.name, tool])).values(),
+        ].map((tool) => ({ name: tool.name, description: tool.description })),
       },
       scopes: {
         user: join(host.userHome, '.ultimate/agents'),
@@ -501,7 +529,7 @@ export const actions = {
     if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter))
       throw new Error('frontmatter must be an object')
     if (typeof instructions !== 'string') throw new Error('instructions must be a string')
-    const { description, model, thinking, tools, isolate, onFailure } = frontmatter
+    const { description, model, thinking, tools, isolate, resident, onFailure } = frontmatter
     if (typeof description !== 'string') throw new Error('description is required')
     if (model !== undefined && typeof model !== 'string') throw new Error('model must be a string')
     if (thinking !== undefined && typeof thinking !== 'string')
@@ -515,6 +543,8 @@ export const actions = {
       throw new Error('isolate must be none or worktree')
     if (onFailure !== undefined && onFailure !== 'diagnose' && onFailure !== 'fix')
       throw new Error('onFailure must be diagnose or fix')
+    if (resident !== undefined && typeof resident !== 'boolean')
+      throw new Error('resident must be a boolean')
     if (create === true) {
       const { definitions } = await discoverAgents(
         host.ultimateRoot,
@@ -536,6 +566,7 @@ export const actions = {
         ...(thinking ? { thinking } : {}),
         ...(tools ? { tools } : {}),
         ...(isolate ? { isolate } : {}),
+        ...(resident !== undefined ? { resident } : {}),
         ...(onFailure ? { onFailure } : {}),
       },
       instructions,
@@ -562,6 +593,7 @@ export default function subagents(
     | 'home'
     | 'projectSettings'
     | 'use'
+    | 'provide'
     | 'resource'
     | 'extensions'
     | 'notice'
@@ -570,6 +602,36 @@ export default function subagents(
     | 'scanSubmissions'
   >,
 ) {
+  const residentDefinitions = async () =>
+    (
+      await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
+    ).definitions.filter((definition) => definition.resident)
+  host.provide('subagents', {
+    async residents(_ctx) {
+      return (await residentDefinitions()).map(({ name, description }) => ({ name, description }))
+    },
+    async standing(name, ctx) {
+      const definitions = await residentDefinitions()
+      const definition = definitions.find((item) => item.name === name)
+      if (!definition)
+        throw new Error(
+          `Unknown standing agent @${name}. Standing agents: ${definitions.map((item) => `@${item.name}`).join(', ') || 'none'}`,
+        )
+      const root = (await host.harness().conversation(ROOT_CONVERSATION_ID, ctx))!
+      const change = definitionAgent(definition, await root.agent(ctx), host.modelRuntime)
+      return host.harness().commit(async (tx) => {
+        const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
+        let id = Object.hasOwn(index, name) ? index[name] : undefined
+        if (id === undefined || !(await tx.conversation(id))) {
+          id = (await tx.createConversation({ ownership: { kind: 'ownerless' } })).id
+          index[name] = id
+        }
+        await configure(tx, id, { ...change, cwd: host.projectRoot })
+        Object.assign(await tx.doc(host.metadata, id), { label: 'agent', title: `@${name}` })
+        return id
+      }, ctx)
+    },
+  } satisfies SubagentsService)
   const service = () => host.use<WorkspaceService>('workspaces')
   const Reporter = createReporter()
   let unsubscribe: (() => void) | undefined

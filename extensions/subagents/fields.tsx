@@ -42,6 +42,26 @@ export function Field({
   )
 }
 
+export function StandingField({
+  value,
+  onChange,
+}: {
+  value: boolean
+  onChange: (value: boolean) => void
+}) {
+  return (
+    <Field
+      label="Standing agent"
+      hint="One conversation per project, addressed by @name. Its isolate setting is ignored."
+    >
+      <label className="flex items-center justify-between rounded-md border border-border/80 bg-background px-2 py-1.5 text-[13px]">
+        Available by name
+        <Switch aria-label="Standing agent" checked={value} onCheckedChange={onChange} />
+      </label>
+    </Field>
+  )
+}
+
 export const inputClass =
   'w-full rounded-md border border-border/80 bg-background px-2 py-1.5 text-[13px] outline-none placeholder:text-muted-foreground/50 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 aria-invalid:border-error/70'
 
