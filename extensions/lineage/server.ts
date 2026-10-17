@@ -13,6 +13,7 @@ import {
   defineTool,
   GenerationTask,
   hook,
+  LiveDoc,
   ROOT_CONVERSATION_ID,
   section,
   UsageDoc,
@@ -85,7 +86,24 @@ export const Tally = defineDoc<TallyState>({
   initial: () => ({ abstracts: {}, tokens: 0 }),
 })
 
-export const docs = [Roots, Branch, Tally, Seen]
+/** Kept only so old side chats stay read-only, including their question cards. */
+export const Side = defineDoc<{
+  side?: {
+    root: number
+    at: number
+    ended?: 'note' | 'branch' | 'discard'
+    ending?: 'note' | 'branch'
+  }
+}>({
+  kind: 'lineage.side',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({}),
+})
+
+export const docs = [Roots, Branch, Tally, Seen, Side]
 
 /**
  * `lineage:branched` (a new branch) and `lineage:rooted` carry it: subscribers enlist their own document
@@ -838,6 +856,13 @@ async function refuseTally(tx: Tx, id: ConversationId) {
     throw new Error(`#${id} is a tally and runs no turns; ask @ultimate to start a branch`)
 }
 
+/** Stored side chats are read-only once ended or ending. */
+async function refuseEndedSide(tx: Tx, id: ConversationId) {
+  const side = (await tx.doc(Side, id)).side
+  if (side?.ending || side?.ended)
+    throw new Error(`Side chat #${id} ${side.ended ? 'has ended' : 'is ending'} and takes no input`)
+}
+
 export type LineageService = {
   branch: (input: BranchInput, ctx: Context) => ReturnType<typeof startBranch>
   rootOf: (id: number, ctx: Context) => ReturnType<typeof rootOf>
@@ -868,6 +893,7 @@ export default function lineageExtension(host: ExtensionHost) {
       hook(GenerationTask, {
         beforeInput: async (input, api, ctx) => {
           await refuseTally(api.tx, api.conversationId)
+          await refuseEndedSide(api.tx, api.conversationId)
           return catchup(host, input, api, ctx, treeOf)
         },
       }),
@@ -1025,13 +1051,13 @@ export default function lineageExtension(host: ExtensionHost) {
         name: 'compact_tally',
         deferred: true,
         description:
-          'Compact a listed tally root. Use instructions to rewrite or drop stale tally content; full history stays in storage. Returns the compaction task id.',
+          'Summarize older content in a listed tally root, keeping recent entries verbatim; short tallies may stay unchanged. Use instructions to guide the summary. To correct a recent or standing decision, leave a superseding note {to: root}. Full history stays in storage. Returns the compaction task id.',
         parameters: Type.Object({
           root: Type.Integer({ minimum: 1 }),
           instructions: Type.Optional(Type.String()),
         }),
         async execute({ root, instructions }, api, ctx) {
-          await api.commit(async (tx) => {
+          const taskId = await api.commit(async (tx) => {
             if (!(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.includes(root))
               throw new Error(`#${root} is not a listed root`)
             const id = root as ConversationId
@@ -1039,9 +1065,21 @@ export default function lineageExtension(host: ExtensionHost) {
               throw new Error(`#${root} is not a tally`)
             if (await liveTask(tx, id, CompactionTask.definition.name))
               throw new Error(`#${root} is already compacting`)
+            // Pi upstream: @earendil-works/pi-durable@1.3.0 src/harness/compaction.ts — inline unexported createCompaction for atomic admission.
+            const created = await tx.createTask(
+              CompactionTask,
+              { reason: 'manual', instructions },
+              { ownership: { kind: 'conversation' }, conversationId: id, background: false },
+            )
+            ;((await tx.doc(LiveDoc, id)).compactions ??= []).push({
+              taskId: created,
+              reason: 'manual',
+              blocking: false,
+              attempt: 1,
+            })
+            return created
           }, ctx)
-          const conversation = (await host.harness().conversation(root as ConversationId, ctx))!
-          const taskId = await conversation.compact(instructions, ctx)
+          host.harness().resume()
           return { output: [{ type: 'text', text: JSON.stringify({ taskId }) }] }
         },
       }),

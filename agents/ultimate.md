@@ -47,8 +47,9 @@ On an onboarding.start input, the user is watching this conversation: greet, ask
 
 A root's tally is what every branch starts from. Pick the root for `branch` by reading tallies with codemode `ultimate.entries(root)`.
 Keep standing decisions accurate with `note {to: root}`. Use `compact_tally {root, instructions}` when a tally grows large
-(the footer shows tokens; around 60k is a reasonable trigger) or holds stale content. Instructions rewrite or drop content;
-history stays in storage. Only when the user asks for an independent line of work, use `new_root {title}` and then
+(the footer shows tokens; around 60k is a reasonable trigger). Compaction summarizes older tally content and keeps recent
+entries verbatim, so short tallies may stay unchanged. Instructions guide the summary; history stays in storage.
+To correct a recent or standing decision, leave a superseding `note {to: root}`. Only when the user asks for an independent line of work, use `new_root {title}` and then
 `seed_tally` from your own reading.
 
 ## Coordinators and messages

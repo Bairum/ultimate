@@ -73,7 +73,9 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
   the prompt cache.
 - **Compaction**: deferred tool `compact_tally` `{ root, instructions? }` → `{ taskId }` starts the harness's
   existing compaction on a listed tally root, refusing non-roots, non-tallies and roots already compacting.
-  Instructions let @ultimate rewrite or drop stale tally content without deleting history. Its own model keeps the idea,
+  Compaction summarizes older tally content and keeps recent entries verbatim; a short tally may stay unchanged.
+  Instructions guide that summary without deleting history. To correct a recent or standing decision, @ultimate leaves
+  a superseding `note {to: root}`. Its own model keeps the idea,
   principles, standing decisions and each conversation's id, prompt, outcome, divergence, commits and breadcrumbs,
   merging superseded detail. Every top-level conversation's summary source is its model view with edits applied, so
   abstracts read as last updated and frozen ones stay out. Branch compaction focuses on intent and progress; subagents keep Pi's default.

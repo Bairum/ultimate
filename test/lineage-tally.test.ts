@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest'
 import {
+  CompactionTask,
   configure,
   defineExtension,
   defineDoc,
@@ -11,7 +12,7 @@ import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { Roots, Tally } from '../extensions/lineage/server.ts'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
-import { fauxServer, post, sourceCopy, temp } from './helpers.ts'
+import { attach, fauxServer, post, sourceCopy, temp, until } from './helpers.ts'
 
 it('creates roots once, seeds them, and compacts only available tallies with the root focus', async () => {
   const home = await temp()
@@ -126,12 +127,26 @@ it('creates roots once, seeds them, and compacts only available tallies with the
         )
       },
     ])
-    const result = await compact.execute(
-      { root: id, instructions: 'Drop the obsolete deployment plan.' },
-      api,
+    const results = await Promise.allSettled(
+      Array.from({ length: 2 }, () =>
+        compact.execute(
+          { root: id, instructions: 'Drop the obsolete deployment plan.' },
+          api,
+          context,
+        ),
+      ),
+    )
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+      reason: expect.objectContaining({ message: `#${id} is already compacting` }),
+    })
+    const tasks = await server.harness.commit(
+      (tx) => tx.scanTasks({ conversationId: id, kind: CompactionTask.definition.name }, 10),
       context,
     )
-    const compaction = JSON.parse(result.output!.filter((part) => part.type === 'text')[0].text)
+    expect(tasks.items).toHaveLength(1)
+    const accepted = results.find((result) => result.status === 'fulfilled')!.value
+    const compaction = JSON.parse(accepted.output!.filter((part) => part.type === 'text')[0].text)
       .taskId as TaskId
     await compacting.promise
     await expect(compact.execute({ root: id }, api, context)).rejects.toThrow('already compacting')
@@ -180,8 +195,22 @@ it('reopens and branches from stored survey inputs, side notes and retired side 
         model: [{ role: 'user', content: 'Side chat #2: An old decision', timestamp: 0 }],
       })
     }, context)
+    const storedSide = await server.harness.snapshot(legacySide, ROOT_CONVERSATION_ID, context)
     await server.close()
     server = await fauxServer(options)
+    await expect(
+      server.root.submit({ type: 'input', content: 'Reopen the side chat' }, context),
+    ).rejects.toThrow('has ended and takes no input')
+    const stream = await attach(server, '?conversation=1&docs=lineage.side')
+    try {
+      await until(() => stream.events.some((event) => event.name === 'doc'))
+      expect(stream.events.find((event) => event.name === 'doc')!.data).toEqual({
+        kind: 'lineage.side',
+        value: storedSide,
+      })
+    } finally {
+      await stream.close()
+    }
     const branch = await post(server, '/api/extensions/lineage/actions/branch', {
       args: { from: 1, prompt: 'Continue the work', isolated: false },
     })
