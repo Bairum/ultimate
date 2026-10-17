@@ -640,6 +640,25 @@ it('buffers only changed document IDs during catch-up and sends one current valu
   }
 })
 
+it('keeps the last non-empty summaries when the host conversation list empties during shutdown', async () => {
+  const f = await fixture()
+  try {
+    const summaries = [{ id: f.opened.root.id, title: 'Root conversation', busy: false }]
+    const conversations = vi.spyOn(f.host, 'conversations').mockReturnValue(summaries)
+    const socket = f.sockets[0]
+    socket.open()
+    await f.drain()
+    conversations.mockReturnValue([])
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(conversations).toHaveLastReturnedWith([])
+    expect(socket.messages.filter((message) => message.type === 'summaries')).toEqual([
+      { type: 'summaries', value: summaries },
+    ])
+  } finally {
+    await f.close()
+  }
+})
+
 it('stops reconnecting after a project mismatch and reports it only once', async () => {
   const f = await fixture()
   try {

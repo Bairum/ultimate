@@ -188,7 +188,8 @@ export function startSync(
         summariesDirty = false
         const summaries = host.conversations()
         const summaryJson = JSON.stringify(summaries)
-        if (summaryJson !== lastSummaries) {
+        // An open host always has a root; an empty list means it is opening or closing.
+        if (summaries.length && summaryJson !== lastSummaries) {
           lastSummaries = summaryJson
           send({ type: 'summaries', value: summaries })
         }
