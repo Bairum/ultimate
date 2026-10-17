@@ -125,6 +125,42 @@ describe('cloud request admission and fallback', () => {
       proxyRequest(submitRequest({ Origin: 'https://evil.example' }), 'http://127.0.0.1:4800'),
     ).toThrow('Forbidden')
   })
+  it('uses the VPC binding with loopback admission headers and streams SSE unchanged', async () => {
+    const instance = worker(true)
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('event: test\ndata: {}\n\n'))
+        controller.close()
+      },
+    })
+    const response = new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
+    const forward = vi.fn<(request: Request) => Promise<Response>>(async (request) => {
+      expect(request.url).toBe('http://127.0.0.1:4747/api/events?conversation=1')
+      expect([...request.headers.entries()]).toEqual([
+        ['host', '127.0.0.1:4747'],
+        ['origin', 'http://127.0.0.1:4747'],
+      ])
+      return response
+    })
+    Object.assign(instance.env, { MACHINE: { fetch: forward } })
+    const direct = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', direct)
+    const result = await instance.fetch(
+      new Request('https://cloud.example/api/events?conversation=1', {
+        headers: {
+          Origin: 'https://cloud.example',
+          'Cf-Access-Jwt-Assertion': 'removed',
+          'Sec-Fetch-Site': 'same-origin',
+          'X-Forwarded-Host': 'cloud.example',
+        },
+      }),
+    )
+    expect(result).toBe(response)
+    expect(result.body).toBe(body)
+    expect(await result.text()).toBe('event: test\ndata: {}\n\n')
+    expect(forward).toHaveBeenCalledTimes(1)
+    expect(direct).not.toHaveBeenCalled()
+  })
   it('never enqueues an ambiguous proxied write, while failed GETs fall back', async () => {
     const instance = worker(true)
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Response lost after commit')))

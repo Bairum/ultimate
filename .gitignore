@@ -6,3 +6,4 @@ dist/
 *.tsbuildinfo
 .dev.vars
 .wrangler/
+cloud/wrangler.deploy.json

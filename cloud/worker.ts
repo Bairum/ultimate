@@ -6,6 +6,8 @@ import type {
   WebSocketPair as MachineSocketPair,
 } from '@cloudflare/workers-types'
 import { ReplicaStore, proxyRequest, admitsRequest } from './replica.ts'
+import { admitsAccess } from './access.ts'
+import type { AccessConfig } from './access.ts'
 
 import type { Sql } from './replica.ts'
 import { PROJECT_MISMATCH } from './protocol.ts'
@@ -15,10 +17,11 @@ import type { ConversationSummary } from '../shared/protocol.ts'
 // Workers provides this constructor; Node-side request tests do not use WebSocket upgrades.
 declare const WebSocketPair: typeof MachineSocketPair
 
-interface Env {
+interface Env extends AccessConfig {
   REPLICA: DurableObjectNamespace
   ASSETS: Fetcher
-  MACHINE_ORIGIN: string
+  MACHINE?: Fetcher
+  MACHINE_ORIGIN?: string
   SYNC_TOKEN: string
 }
 
@@ -35,9 +38,21 @@ async function discardBody(request: Request) {
   }
 }
 
+function matchesSyncToken(authorization: string | null, token: string): boolean {
+  if (!authorization) return false
+  const encoder = new TextEncoder()
+  const actual = encoder.encode(authorization)
+  const expected = encoder.encode(`Bearer ${token}`)
+  return (
+    actual.byteLength === expected.byteLength && crypto.subtle.timingSafeEqual(actual, expected)
+  )
+}
+
 export default {
-  fetch(request: Request, env: Env) {
+  async fetch(request: Request, env: Env) {
     const path = new URL(request.url).pathname
+    if (path.startsWith('/api/') && !(await admitsAccess(request, env)))
+      return Response.json({ error: 'Unauthorized' }, { status: 401 })
     if (path.startsWith('/api/') || path === '/sync')
       return env.REPLICA.get(env.REPLICA.idFromName('default')).fetch(request)
     return env.ASSETS.fetch(request)
@@ -107,7 +122,7 @@ export class Replica {
     if (url.pathname === '/sync') {
       if (
         !this.env.SYNC_TOKEN ||
-        request.headers.get('Authorization') !== `Bearer ${this.env.SYNC_TOKEN}`
+        !matchesSyncToken(request.headers.get('Authorization'), this.env.SYNC_TOKEN)
       )
         return Response.json({ error: 'Unauthorized' }, { status: 401 })
       if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket')
@@ -123,6 +138,13 @@ export class Replica {
     }
     if (this.sockets().length) {
       try {
+        // VPC fixes the connection target; the URL supplies the loopback Host the machine admits.
+        if (this.env.MACHINE)
+          return await this.env.MACHINE.fetch(
+            proxyRequest(request.clone(), 'http://127.0.0.1:4747'),
+          )
+        // Local wrangler dev has no VPC binding and uses an explicitly configured loopback host.
+        if (!this.env.MACHINE_ORIGIN) throw new Error('No machine binding')
         return await fetch(proxyRequest(request.clone(), this.env.MACHINE_ORIGIN))
       } catch {
         // A lost response may follow a committed write. Only reads can safely fall back to the replica.

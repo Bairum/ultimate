@@ -13,7 +13,8 @@
     "test:e2e": "MIMALLOC_ALLOW_THP=0 MIMALLOC_PURGE_DELAY=0 vitest run --config test/e2e/vitest.config.ts",
     "eval": "vitest run --config evals/vitest.config.ts",
     "cloud:build": "node cloud/build.ts",
-    "cloud:dev": "wrangler dev --config cloud/wrangler.jsonc",
+    "cloud:dev": "wrangler dev --config cloud/wrangler.json",
+    "cloud:deploy": "pnpm cloud:build && node cloud/deploy.ts",
     "fmt": "vp fmt",
     "lint": "vp lint"
   },
