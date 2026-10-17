@@ -149,7 +149,14 @@ sending or failed. Landing items use a merge icon.
 Start a post with `@agent` or `#conversation`; autocomplete lists resident agents, the lander and recent conversations.
 Without an address, posts go to `@ultimate` when it exists. Enter sends on desktop (Shift+Enter inserts a newline);
 on touch keyboards, return always inserts a newline and the arrow button sends. Reply retains a link to its original
-message. Typed board messages and replies render as compact transcript cards with Source / Return navigation.
-Incoming messages show whether they expect a reply or are one-way, plus their delivery mode (steered, follow-up or
-note) when recorded. Final answers name their reply destination, or say “not sent” for a one-way message. Answers
-that cover several board messages list each destination; unrelated answers show no board label.
+message. Typed board messages and replies render as compact transcript cards with Source / Return navigation, in
+the sender's accent (`accent.tsx`) like its bubble. Incoming messages show whether they expect a reply or are
+one-way, plus their delivery mode (steered, follow-up or note) when recorded. Final answers name their reply
+destination, or say “not sent” for a one-way message. Answers that cover several board messages list each
+destination; unrelated answers show no board label.
+
+@ultimate's own conversation reads as a chat (the `chat` contribution): each run of tool calls and thinking folds into
+one “worked · N steps” row, while messages, branch starts, workspace outcomes and answers stay. Its messages to you
+are bubbles on the left in its accent, their footer saying awaiting your reply, answered or one-way; an answer card
+mounts beneath the text (`ChatBubble` children). An answer that went back to the branches that asked folds to
+“replied to #id”.

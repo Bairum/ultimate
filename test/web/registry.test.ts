@@ -15,6 +15,7 @@ import {
   messageItems,
   conversationStarter,
   composerRenderers,
+  chatTools,
 } from '../../web/src/sdk/registry.ts'
 import type { ExtensionLoader, SurfaceItem } from '../../web/src/sdk/registry.ts'
 import type { WebExtension } from '../../web/src/sdk/types.ts'
@@ -337,6 +338,36 @@ describe('web extension registry', () => {
       )
       expect(messageItems(registry.getSnapshot(), 'answerLabels')).toHaveLength(3)
     }
+  })
+
+  it('makes a conversation a chat when a facet says so, combining their visible tools', async () => {
+    const registry = createRegistry()
+    await registry.setLoaders({
+      [path('a')]: async () =>
+        module({ chat: { when: (c) => c.label === 'agent', tools: ['message', 'branch'] } }),
+      [path('b')]: async () => module({ chat: { when: (c) => c.id === 7, tools: ['workspace'] } }),
+      [path('c')]: async () =>
+        module({
+          chat: {
+            when: () => {
+              throw new Error('broken')
+            },
+          },
+        }),
+    })
+    const report = vi.fn<(extension: string, error: unknown) => void>()
+    const records = registry.getSnapshot()
+    expect(chatTools(records, { id: 7, label: 'agent', busy: false }, report)).toEqual(
+      new Set(['message', 'branch', 'workspace']),
+    )
+    expect(chatTools(records, { id: 3, label: 'agent', busy: false }, report)).toEqual(
+      new Set(['message', 'branch']),
+    )
+    expect(chatTools(records, { id: 3, busy: false }, report)).toBeUndefined()
+    expect(chatTools(records, undefined, report)).toBeUndefined()
+    expect(report).toHaveBeenCalledWith('c', new Error('broken'))
+    registry.replace('b', { default: { chat: { tools: ['workspace'] } } })
+    expect(registry.getSnapshot()[1]?.error).toBe('chat must be a { when, tools? } object')
   })
 
   it('lists message actions in discovery and contribution order, validating their shape', async () => {

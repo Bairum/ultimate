@@ -1,8 +1,11 @@
 # Faux demo
 
 Send `questions demo` to preview the questions card: a yes/no question and a choice with a recommendation.
-Send `messages demo` to send the user a one-way update and a question, or `message #<id>` (optionally `one-way`)
-to message another conversation, previewing the outgoing message cards.
+Send `messages demo` to send the user a one-way update and a question, or `message #<id>` or `message @<name>`
+(optionally `one-way`) to message another conversation, previewing the outgoing message cards.
+In @ultimate's conversation, `chat demo` (typed, or posted to @ultimate) runs tools, starts a `landing demo` branch
+that reports a landing back, and sends you a one-way update and a question; `ask demo` asks another question. A reply
+from another conversation gets a short acknowledgement.
 Under faux, summaries run on scripted neutral responses unless `summaryModel` is set. Their title and Ask line
 come from the latest user prompt, with generic demo summary, feature and activity text; only the questions demo
 reply is assessed as needing input. The default model is `faux/faux-1`, so assessment and extraction exercise the

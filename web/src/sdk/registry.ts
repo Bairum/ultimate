@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react'
+import type { ConversationSummary } from '../../../shared/protocol.ts'
 import { events } from './events.ts'
 import { errorMessage } from './format.ts'
 import type {
@@ -124,6 +125,10 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   messageActions: [arrayOf(isComponent), 'an array of message action components'],
   messageDetails: [arrayOf(isComponent), 'an array of message detail components'],
   answerLabels: [arrayOf(isComponent), 'an array of answer label components'],
+  chat: [
+    fields({ when: isFunction, tools: optional(arrayOf(isString)) }),
+    'a { when, tools? } object',
+  ],
   documents: [
     arrayOf(
       fields({
@@ -460,6 +465,28 @@ export function messageItems(
       component,
     })),
   )
+}
+
+/**
+ * The tools that stay visible when `conversation` reads as a chat, or `undefined` when no facet makes it one. A `when`
+ * that throws counts as no and goes to `report`, so one broken extension cannot take down the transcript.
+ */
+export function chatTools(
+  records: readonly ExtensionRecord[],
+  conversation: ConversationSummary | undefined,
+  report: (extension: string, error: unknown) => void,
+): ReadonlySet<string> | undefined {
+  if (!conversation) return undefined
+  const matching = records.flatMap(({ name, extension }) => {
+    if (!extension?.chat) return []
+    try {
+      return extension.chat.when(conversation) ? [extension.chat] : []
+    } catch (error) {
+      report(name, error)
+      return []
+    }
+  })
+  return matching.length ? new Set(matching.flatMap((chat) => chat.tools ?? [])) : undefined
 }
 
 /** The last new-conversation starter in discovery order. */

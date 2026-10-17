@@ -6,6 +6,7 @@ export { defineWebExtension } from './types.ts'
 export { events, useEvent } from './events.ts'
 export { resumed } from './resume.ts'
 export type {
+  ChatContribution,
   CommandContribution,
   ComposerRenderer,
   Contribution,
@@ -45,6 +46,7 @@ export {
   getUiState,
   refreshModels,
   useAction,
+  useChat,
   useCommands,
   useConnection,
   useConversation,

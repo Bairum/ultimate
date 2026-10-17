@@ -49,6 +49,13 @@ type Conversation = {
   inputAt?: number
   answerAt?: number
 }
+/** @ultimate's standing conversation, which reads as a chat with the user. */
+export const ultimateChat = (conversation: Omit<Conversation, 'id' | 'busy'>) =>
+  conversation.label === 'agent' &&
+  conversation.title === '@ultimate' &&
+  conversation.parentConversationId === undefined &&
+  conversation.ownerTaskId === undefined
+
 export function participantMessages(messages: BoardMessage[], id: number | 'user') {
   return messages.filter((message) => message.from === id || message.to === id)
 }
@@ -81,13 +88,6 @@ export function waits(messages: BoardMessage[], id: number | 'user') {
     onUser: open.filter((message) => message.from === id && message.to === 'user').length,
     onIt: open.filter((message) => message.from === 'user' && message.to === id).length,
   }
-}
-
-/** A stable palette slot for a sender other than the user. */
-export function accentIndex(id: number, size: number) {
-  let hash = 0
-  for (const char of `#${id}`) hash = (Math.imul(hash, 31) + char.codePointAt(0)!) | 0
-  return (hash >>> 0) % size
 }
 
 export function participantStatus(

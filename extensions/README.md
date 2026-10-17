@@ -191,7 +191,7 @@ No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, entries, link, messageActions, messageDetails, answerLabels, start, documents, commands })`; every key is optional. Extensions load
+`defineWebExtension({ slots, panels, surfaces, tools, entries, link, messageActions, messageDetails, answerLabels, chat, start, documents, commands })`; every key is optional. Extensions load
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
 
 A `start(draft)` contribution starts a new conversation from the start page composer's prompt, images, branch point
@@ -337,6 +337,13 @@ shows each message's context and cost there.
 rendered in discovery and contribution order, each behind an extension boundary. Return `null` when the entry has
 no relevant label. Keep labels brief and muted; the header wraps at narrow widths. Board uses it to show where an
 answer was sent, or that a one-way message's answer was not sent.
+
+`chat` makes conversations read as a chat: `{ when(conversation), tools? }` decides from a conversation's summary
+(label, title, owner), and in a matching transcript each run of tool calls and thinking between inputs, messages and
+answers folds into one quiet "worked · N steps" row that expands to the usual rendering. Calls of the listed `tools`
+stay visible and split the run; the tools of every matching facet combine. Renderers check `useChat()`, the shown
+conversation's visible tools or `undefined`, to adapt to it. Board turns it on for @ultimate's conversation, keeping
+messages, branch starts and workspace outcomes, and shows its messages to you as bubbles.
 
 ### Entry renderers
 
