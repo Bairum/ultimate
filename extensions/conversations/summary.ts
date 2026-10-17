@@ -28,7 +28,6 @@ import type {
 } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { LineageService } from '../lineage/server.ts'
-import type { QuestionsService } from '../questions/server.ts'
 import { summaryModel } from './summary-model.ts'
 import { isInput } from './activity.ts'
 import type { SummaryModel, SummaryModelHost } from './summary-model.ts'
@@ -702,7 +701,6 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
               ...modelOf(response, model),
               at: now,
             })
-          const owned = !!(await tx.conversation(runtime.conversationId))?.owner
           // Lineage reads conversation records, so the abstract goes before this transaction's first entry.
           if (checkpoint.abstract && result.abstract && completed !== undefined) {
             await host.use?.<LineageService>('lineage')?.abstract(tx, runtime.conversationId, {
@@ -720,10 +718,6 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
               value: result.assessment,
             }
             state.activity = result.activity
-            if (result.assessment === 'needs_input' && !owned)
-              await host
-                .use?.<QuestionsService>('questions')
-                ?.request(tx, runtime.conversationId, checkpoint.answer)
             await tx.appendEntry(AssessmentAccepted, runtime.conversationId, {
               data: {
                 ...state.assessment,

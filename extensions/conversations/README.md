@@ -23,7 +23,8 @@ A solid purple dot means an unread reply, not ongoing work; only the pulsing dot
 Idle, currently assessed replies may show a circular question (needs input) or green circular check (Done). These are
 **summary model assessments, not verified completion**; the tooltips say so. For a child, a question means it may need its
 coordinator, not necessarily a human. Unknown, neutral, stale or failed assessments never show a success mark.
-There is no third red blocked/unfinished assessment.
+There is no third red blocked/unfinished assessment. Assessments never trigger question extraction or answer
+cards: those belong to reply-expected [Board messages to the user](../questions/README.md), not final transcript replies.
 
 A conversation with genuinely owned children has an expandable Sub-agents group. Rows show the recorded agent role/name,
 actual Working/Queued/Idle/Replied/Run failed state, and a brief what-it-did description from its latest assessed reply.

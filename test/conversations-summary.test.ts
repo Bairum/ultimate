@@ -109,6 +109,7 @@ async function launch(subagents = false, initialIntent = false, root = false, br
     summary: 'Added concise summaries to the sidebar.',
     ...(branch ? { abstract: 'Ask: improve sidebar\nDiverged: none\nState: done' } : {}),
   }))
+  const questionsRequested = vi.fn<() => Promise<void>>(async () => {})
   const install = (registry = server.host.registry) => {
     vi.spyOn(server.host.modelRuntime, 'getAvailableSnapshot').mockImplementation(() =>
       server.host.modelRuntime
@@ -133,22 +134,20 @@ async function launch(subagents = false, initialIntent = false, root = false, br
                   .filter((model) => model.provider === 'openai' && model.id === 'gpt-6-luna'),
             },
             // Lineage stays off here; a rooted fixture stands in for it with every conversation its own root.
-            ...(root || branch
-              ? {
-                  use: ((name: string) =>
-                    name === 'lineage'
-                      ? ({
-                          rootOf: async (id: number) => (root ? (id as ConversationId) : undefined),
-                          branchOf: async () =>
-                            branch ? { root: 1, intent: 'Improve the sidebar' } : undefined,
-                          abstract,
-                        } satisfies Pick<LineageService, 'rootOf'> & {
-                          branchOf: unknown
-                          abstract: unknown
-                        })
-                      : undefined) as NonNullable<SummaryHost['use']>,
-                }
-              : {}),
+            use: ((name: string) =>
+              name === 'questions'
+                ? { request: questionsRequested }
+                : name === 'lineage' && (root || branch)
+                  ? ({
+                      rootOf: async (id: number) => (root ? (id as ConversationId) : undefined),
+                      branchOf: async () =>
+                        branch ? { root: 1, intent: 'Improve the sidebar' } : undefined,
+                      abstract,
+                    } satisfies Pick<LineageService, 'rootOf'> & {
+                      branchOf: unknown
+                      abstract: unknown
+                    })
+                  : undefined) as NonNullable<SummaryHost['use']>,
           },
           generated,
         ),
@@ -172,6 +171,7 @@ async function launch(subagents = false, initialIntent = false, root = false, br
       return server
     },
     generated,
+    questionsRequested,
     abstract,
     spawn: (answer: EntryId) =>
       server.harness.commit(
@@ -221,6 +221,14 @@ async function launch(subagents = false, initialIntent = false, root = false, br
     },
   }
 }
+
+it('does not request question extraction after an accepted needs_input assessment', async () => {
+  const f = await launch()
+  f.generated.mockResolvedValue({ assessment: 'needs_input', activity: 'Waiting for a decision.' })
+  await f.exchange()
+  expect((await f.read())?.assessment?.value).toBe('needs_input')
+  expect(f.questionsRequested).not.toHaveBeenCalled()
+})
 
 it.concurrent.each([false, true])(
   'refreshes during an actual subagent start, background=%s, while parent and child are busy',
