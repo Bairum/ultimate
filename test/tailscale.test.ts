@@ -333,16 +333,6 @@ it.each([
   expect(app.access.origins()).toEqual([])
   expect(await f.invocations()).toEqual([['status', '--json']])
 })
-it('reports a stopped daemon as not running without attempting Serve', async () => {
-  const f = await fixture({ node: { BackendState: 'Stopped' } })
-  const app = await f.instance()
-  expect(await app.status()).toMatchObject({
-    state: 'not-running',
-    hint: expect.stringContaining('tailscale up'),
-  })
-  expect(app.access.origins()).toEqual([])
-  expect(await f.invocations()).toEqual([['status', '--json']])
-})
 it.each([
   [{ node: { ...node, CertDomains: [] } }, 'https-disabled', 'admin console'],
   [

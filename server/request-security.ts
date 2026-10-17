@@ -50,6 +50,7 @@ export async function admit(
     request.headers['sec-fetch-dest'] === 'document' &&
     request.headers.upgrade === undefined
   // Root navigation relaxes only fetch metadata, not origin or identity verification.
+  // Any site can now open the UI with any query, so query parameters must only select views, never act.
   if (site !== undefined && site !== 'same-origin' && site !== 'none' && !navigation) return false
   for (const rule of rules) {
     if (host !== new URL(rule.origin).host || (origin && origin !== rule.origin)) continue
