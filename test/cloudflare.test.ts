@@ -173,7 +173,7 @@ it('never echoes credentials from API failures, parse failures or fetch exceptio
   const f = await fixture()
   for (const response of [
     () => new Response(token, { status: 403 }),
-    () => Response.json({ success: false, errors: [{ message: token }] }),
+    () => Response.json({ success: false, errors: [{ code: 1, message: `bad ${token}` }] }),
     () => new Response(token),
     () => {
       throw new Error(token)
@@ -181,9 +181,27 @@ it('never echoes credentials from API failures, parse failures or fetch exceptio
   ]) {
     vi.stubGlobal('fetch', vi.fn(response))
     const error = await f.run().catch((caught: unknown) => String(caught))
-    expect(error).toContain('Cloudflare request failed')
+    expect(error).toContain('Cloudflare account lookup failed')
     expect(error).not.toContain(token)
   }
+})
+it('names the failing step, HTTP status and Cloudflare error codes', async () => {
+  const f = await fixture()
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) =>
+      url.includes('/accounts?')
+        ? Response.json({ success: true, result: [{ id: 'account-one' }] })
+        : Response.json(
+            { success: false, errors: [{ code: 10000, message: 'Authentication error' }] },
+            { status: 403 },
+          ),
+    ),
+  )
+  const error = await f.run().catch((caught: unknown) => String(caught))
+  expect(error).toContain(
+    'Cloudflare telemetry query failed with HTTP 403 (10000: Authentication error)',
+  )
 })
 it('parses the resident definition and enables its deferred tool', async () => {
   const path = '.ultimate/agents/cloudflare.md'

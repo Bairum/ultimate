@@ -62,10 +62,11 @@ export default function cloudflare(host: ExtensionHost) {
             throw new Error(missing)
           const token = await readSecret(host.userHome, 'CLOUDFLARE_API_TOKEN')
           if (!token) throw new Error(missing)
-          async function request<T>(endpoint: string, body?: unknown): Promise<T> {
-            // Never propagate fetch exceptions or API bodies: either may echo credentials.
+          const redact = (value: string) => value.split(token).join('[redacted]')
+          async function request<T>(step: string, endpoint: string, body?: unknown): Promise<T> {
+            let response: Response
             try {
-              const response = await fetch(`${base}${endpoint}`, {
+              response = await fetch(`${base}${endpoint}`, {
                 method: body ? 'POST' : 'GET',
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
                 ...(body ? { body: JSON.stringify(body) } : {}),
@@ -74,17 +75,31 @@ export default function cloudflare(host: ExtensionHost) {
                   : AbortSignal.timeout(30000),
                 redirect: 'error',
               })
-              if (!response.ok) throw new Error('HTTP failure')
-              const data = (await response.json()) as { success: boolean; result: T }
-              if (!data.success || !data.result) throw new Error('API failure')
-              return data.result
             } catch {
-              throw new Error(
-                'Cloudflare request failed. Check token permissions, account access and the time window; response details withheld for privacy.',
-              )
+              // Fetch exceptions can echo the request; name only the step.
+              throw new Error(`Cloudflare ${step} failed: network error or timeout.`)
             }
+            // A non-JSON body (an HTML error page) still reports its HTTP status below.
+            const data = (await response.json().catch(() => undefined)) as
+              | { success?: boolean; result?: T; errors?: { code?: number; message?: string }[] }
+              | undefined
+            if (response.ok && data?.success && data.result !== undefined) return data.result
+            // Cloudflare's error codes and messages say what to fix (permission, account, request shape);
+            // anything token-shaped is redacted and the rest of the body is never shown.
+            const errors = (data?.errors ?? [])
+              .slice(0, 5)
+              .map((error) => `${error.code ?? '?'}: ${(error.message ?? '').slice(0, 200)}`)
+              .join('; ')
+            throw new Error(
+              redact(
+                `Cloudflare ${step} failed with HTTP ${response.status}${errors ? ` (${errors})` : ''}. Check token permissions (Workers Observability Write, Account Settings Read), account access and the time window.`,
+              ),
+            )
           }
-          const accounts = await request<{ id: string }[]>('/accounts?per_page=50')
+          const accounts = await request<{ id: string }[]>(
+            'account lookup',
+            '/accounts?per_page=50',
+          )
           let account = accounts.length === 1 ? accounts[0]?.id : undefined
           if (!account) {
             let settings: { cloud?: { accountId?: string } } = {}
@@ -115,6 +130,7 @@ export default function cloudflare(host: ExtensionHost) {
           ]
           const limit = args.limit ?? 20
           const result = await request<Result>(
+            'telemetry query',
             `/accounts/${encodeURIComponent(account)}/workers/observability/telemetry/query`,
             {
               queryId: 'ultimate-observability',
