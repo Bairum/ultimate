@@ -35,6 +35,8 @@ ULTIMATE_PROJECT="$PWD" ULTIMATE_SUPERVISED=0 ULTIMATE_GENERATION=1 \
   ULTIMATE_CLOUD_URL=ws://127.0.0.1:8787/sync ULTIMATE_CLOUD_TOKEN=dev pnpm dev
 ```
 
+The explicit `ULTIMATE_CLOUD_URL` overrides user settings and opts this faux host into sync; faux and preview hosts otherwise stay silent. The environment token overrides the `ULTIMATE_CLOUD_TOKEN` secret. Real hosts can instead use user settings `cloud.url` and the Secrets panel; see `extensions/cloud/README.md`.
+
 Explicitly setting `ULTIMATE_PROJECT` and clearing supervised mode avoids inheriting the running Ultimate host's project and supervisor environment when launched from an agent terminal. Use a free machine port, not the running host's port or state home.
 
 1. Create two conversations with `POST /api/conversations` (JSON `{}`); note each returned `id`. Send text with `POST /api/conversations/<id>/submit` (JSON `{"text":"Replica check"}`). The faux provider answers without model tokens. Repeat about 18 turns on one conversation to build more than 64 entries.

@@ -638,11 +638,17 @@ it('buffers only changed document IDs during catch-up and sends one current valu
   }
 })
 
-it('registers no running lifecycle work without ULTIMATE_CLOUD_URL', () => {
+it('opens and closes a faux host without cloud work when no URL is explicit', async () => {
+  vi.useFakeTimers()
   vi.stubEnv('ULTIMATE_CLOUD_URL', '')
   const onOpen = vi.fn<ExtensionHost['onOpen']>()
   const onClose = vi.fn<ExtensionHost['onClose']>()
-  expect(cloud({ onOpen, onClose } as unknown as ExtensionHost).name).toBe('cloud')
-  expect(onOpen).not.toHaveBeenCalled()
-  expect(onClose).not.toHaveBeenCalled()
+  const notice = vi.fn<ExtensionHost['notice']>()
+  expect(cloud({ onOpen, onClose, faux: true, notice } as unknown as ExtensionHost).name).toBe(
+    'cloud',
+  )
+  await onOpen.mock.calls[0][0]()
+  await onClose.mock.calls[0][0]()
+  expect(notice).not.toHaveBeenCalled()
+  expect(vi.getTimerCount()).toBe(0)
 })

@@ -84,6 +84,7 @@ export default defineConfig({
                 classify: ['secrets'],
                 phase: ['classify', 'conversations'],
                 codemode: ['subagents'],
+                cloud: ['onboarding', 'secrets'],
                 fast: ['onboarding'],
                 conversations: [
                   'lineage',

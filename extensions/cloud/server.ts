@@ -1,4 +1,3 @@
-import { hostname } from 'node:os'
 import { defineExtension } from '@earendil-works/pi-durable'
 import type {
   CommitPublication,
@@ -13,6 +12,11 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { docHash } from '../../cloud/protocol.ts'
 import type { CloudMessage, MachineMessage, ReplicaDoc } from '../../cloud/protocol.ts'
+import { cloudConfig } from './config.ts'
+
+export const secrets = [
+  { name: 'ULTIMATE_CLOUD_TOKEN', description: 'Bearer token for the cloud sync endpoint' },
+]
 
 type Batch = Extract<MachineMessage, { type: 'batch' }>
 export const MAX_RETAINED_BYTES = 16 * 1024 * 1024
@@ -431,21 +435,14 @@ export function startSync(
 }
 
 export default function cloud(host: ExtensionHost) {
-  const url = process.env.ULTIMATE_CLOUD_URL
-  if (url) {
-    let stop: ReturnType<typeof startSync> | undefined
-    host.onOpen(async () => {
-      stop = startSync(
-        host,
-        url,
-        process.env.ULTIMATE_CLOUD_TOKEN ?? '',
-        process.env.ULTIMATE_CLOUD_MACHINE ?? hostname(),
-      )
-    })
-    host.onClose(async () => {
-      stop?.()
-      await stop?.idle()
-    })
-  }
+  let stop: ReturnType<typeof startSync> | undefined
+  host.onOpen(async () => {
+    const config = await cloudConfig(host)
+    if (config) stop = startSync(host, config.url, config.token, config.machine)
+  })
+  host.onClose(async () => {
+    stop?.()
+    await stop?.idle()
+  })
   return defineExtension({ name: 'cloud' })
 }
