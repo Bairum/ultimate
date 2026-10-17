@@ -15,7 +15,7 @@ existing extension and change it:
 | Tool renderers (diffs, terminals, images)         | `coding-tools`, `browser`, `instance`               |
 | A right-panel tab                                 | `info` (key/value sections), `tasks`, `subagents`   |
 | Toolbar buttons, dialogs, commands, a popover     | `models`                                            |
-| A header badge, an entry renderer that wraps core | `self`                                              |
+| A status-line action, an entry renderer over core | `self`                                              |
 | An extension document in the UI (`useDoc`)        | `plan`, `codemode` (renderers), `models` (`useDoc`) |
 | A renderer for your document (Documents tab)      | `plan` (see [Documents](#documents))                |
 | A prompt section from durable UI state            | `surfaces`                                          |

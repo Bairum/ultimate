@@ -95,7 +95,7 @@ function RestartCall({ call }: { call: ToolCallView }) {
   )
 }
 
-/** Header badge while `server/` or `shared/` changed since this core booted. */
+/** A status-line item next to the generation while `server/` or `shared/` changed since this core booted. */
 function CoreStale() {
   const system = useSystem()
   const restart = useRestart()
@@ -104,14 +104,14 @@ function CoreStale() {
       <Popover onOpenChange={(open) => !open && restart.clear()}>
         <PopoverTrigger asChild>
           <button
-            className="flex h-6 cursor-pointer items-center gap-1.5 rounded-md border border-error/40 bg-error/10 px-2 font-mono text-[11px] text-error"
+            className="-mx-1 flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-error transition-colors hover:bg-accent"
             type="button"
           >
             <TriangleAlertIcon className="size-3" />
-            host restart failed
+            restart failed
           </button>
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-[32rem] p-0 font-mono">
+        <PopoverContent align="end" className="w-[32rem] p-0 font-mono" side="top">
           <div className="border-b border-border/70 px-3 py-2 text-[11.5px] text-muted-foreground">
             The shared Ultimate host restart did not take.
           </div>
@@ -138,15 +138,19 @@ function CoreStale() {
       </Popover>
     )
   if (!system?.code.coreStale && !restart.busy) return null
+  // A phone's status line has room for the action only.
+  const stale = (
+    <span>
+      <span className="max-md:hidden">core changed · </span>restart
+    </span>
+  )
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <button
           className={cn(
-            'flex h-6 cursor-pointer items-center gap-1.5 rounded-md border px-2 font-mono text-[11px] transition-colors',
-            restart.busy
-              ? 'border-brand/40 bg-brand/10 text-brand'
-              : 'border-warning/40 bg-warning/10 text-warning hover:bg-warning/20',
+            '-mx-1 flex cursor-pointer items-center gap-1.5 rounded-sm px-1 transition-colors',
+            restart.busy ? 'text-brand' : 'text-warning hover:bg-accent',
           )}
           disabled={restart.busy}
           onClick={restart.run}
@@ -157,10 +161,10 @@ function CoreStale() {
             ? `swapping to gen ${restart.pending}…`
             : restart.busy
               ? 'checking…'
-              : 'core changed — restart host'}
+              : stale}
         </button>
       </TooltipTrigger>
-      <TooltipContent className="max-w-80 font-mono text-[11px]" side="bottom">
+      <TooltipContent className="max-w-80 font-mono text-[11px]" side="top">
         server/ or shared/ changed since generation {system?.process.generation} booted. Restart
         type-checks and boots a new core next to this one; if it fails, this one keeps serving.
       </TooltipContent>
@@ -405,8 +409,8 @@ export default defineWebExtension({
   tools: { restart: RestartCall },
   entries: { 'pi.system': SystemEntry },
   slots: {
-    'header.right': CoreStale,
-    'statusline.right': { component: Build, order: 1 },
+    // Discovery order puts `self` before `status-line`: the item sits just left of `live · gen N`.
+    'statusline.right': [CoreStale, { component: Build, order: 1 }],
     overlay: HotReloaded,
   },
 })
