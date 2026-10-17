@@ -242,6 +242,93 @@ describe('cloud replica', () => {
     expect(first.socket.close).toHaveBeenCalledWith(1000, 'Replaced by new machine connection')
   })
 
+  it('restores socket admission from attachments after hibernation', () => {
+    const sql = replica().sql
+    const sockets: ReturnType<Replica['sockets']> = []
+    const ctx = {
+      storage: { sql, transactionSync: <T>(run: () => T) => sql.transaction(run) },
+      getWebSockets: () => sockets,
+    } as unknown as ConstructorParameters<typeof Replica>[0]
+    const env = { MACHINE_ORIGIN: 'http://127.0.0.1:4800' } as ConstructorParameters<
+      typeof Replica
+    >[1]
+    let instance = new Replica(ctx, env)
+    const connect = () => {
+      let attachment: unknown
+      const socket = {
+        readyState: WebSocket.OPEN,
+        send: vi.fn<(data: string) => void>(),
+        // A close has been requested, but its callback has not arrived yet.
+        close: vi.fn<(code: number, reason: string) => void>(),
+        serializeAttachment: (value: unknown) => {
+          attachment = value
+        },
+        deserializeAttachment: () => attachment,
+      }
+      const machine = socket as unknown as (typeof sockets)[number]
+      sockets.push(machine)
+      return {
+        socket,
+        machine,
+        receive: (message: MachineMessage) =>
+          instance.webSocketMessage(machine, JSON.stringify(message)),
+      }
+    }
+    const accepted = connect()
+    accepted.receive(hello('/ultimate'))
+    const refused = connect()
+    refused.receive(hello('/poe2-rust'))
+    expect(refused.socket.close).toHaveBeenCalledWith(PROJECT_MISMATCH, '/ultimate')
+    expect(accepted.socket.deserializeAttachment()).toBe(true)
+    expect(refused.socket.deserializeAttachment()).not.toBe(true)
+    const { item } = instance.store.enqueue(1, 'queued before hibernation')
+    accepted.socket.send.mockClear()
+
+    const previous = instance
+    instance = new Replica(ctx, env)
+    expect(instance).not.toBe(previous)
+    expect(instance.store).not.toBe(previous.store)
+    expect(instance.sockets()).toEqual([accepted.machine])
+    const write: MachineMessage = {
+      type: 'batch',
+      batch: 2,
+      conversations: [conversation(1)],
+      entries: [entry(1)],
+      docs: [doc(1)],
+    }
+    // No new hello: the restored accepted socket must still be able to write.
+    accepted.receive(write)
+    expect(instance.store.view(1)?.entries).toEqual([entry(1)])
+    expect(accepted.socket.send.mock.calls.map(([data]) => JSON.parse(data))).toEqual([
+      { type: 'ack', batch: 2 },
+    ])
+    const snapshot = () =>
+      ['metadata', 'conversations', 'entries', 'docs', 'outbox'].map((table) => [
+        ...sql.exec(`SELECT * FROM ${table} ORDER BY 1`),
+      ])
+    const before = snapshot()
+    refused.receive({ ...write, entries: [entry(99)] })
+    refused.receive({ type: 'summaries', value: [] })
+    refused.receive({ type: 'delivered', id: item.id, submissionId: 1 })
+    expect(snapshot()).toEqual(before)
+    expect(refused.socket.send).not.toHaveBeenCalled()
+    expect(accepted.socket.close).not.toHaveBeenCalled()
+    accepted.receive({ type: 'delivered', id: item.id, submissionId: 1 })
+    expect(instance.store.outbox()).toEqual([])
+    const next = instance.store.enqueue(1, 'queued after hibernation').item
+    accepted.receive(hello('/ultimate'))
+    expect(accepted.socket.send.mock.calls.map(([data]) => JSON.parse(data))).toContainEqual({
+      type: 'outbox',
+      items: [next],
+    })
+    const other = connect()
+    other.receive(hello('/another-project'))
+    expect(other.socket.close).toHaveBeenCalledWith(PROJECT_MISMATCH, '/ultimate')
+    expect(other.socket.send).not.toHaveBeenCalled()
+    expect(instance.sockets()).toEqual([accepted.machine])
+    expect(accepted.socket.close).not.toHaveBeenCalled()
+  })
+
   it('truncates a mismatched project reason on a UTF-8 boundary within 123 bytes', () => {
     const instance = worker()
     const held = '/projects/' + '🦀'.repeat(40)

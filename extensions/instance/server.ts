@@ -24,6 +24,40 @@ import type { TailscaleService } from '../tailscale/server.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
 import { cleanPreview, sweepPreviews } from './cleanup.ts'
 
+/** A preview keeps ordinary parent variables, but gets its own host identity and no inherited cloud sync. */
+export function previewEnv(
+  parent: NodeJS.ProcessEnv,
+  options: { home: string; project: string; userHome: string; faux?: boolean; ownerPid: number },
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...Object.fromEntries(
+      Object.entries(parent).filter(
+        ([key]) =>
+          ![
+            'ULTIMATE_SUPERVISED',
+            'ULTIMATE_PUBLIC_URL',
+            'ULTIMATE_GENERATION',
+            'ULTIMATE_PREVIOUS_BUILD',
+            'ULTIMATE_HOME',
+            'ULTIMATE_PORT',
+            'ULTIMATE_FAUX',
+            'ULTIMATE_CLOUD_URL',
+            'ULTIMATE_CLOUD_TOKEN',
+            'ULTIMATE_CLOUD_MACHINE',
+          ].includes(key),
+      ),
+    ),
+    ULTIMATE_HOME: options.home,
+    ULTIMATE_PROJECT: options.project,
+    HOME: options.userHome,
+    ULTIMATE_PORT: '0',
+    ULTIMATE_NO_OPEN: '1',
+    ULTIMATE_INSTANCE_OWNER: String(options.ownerPid),
+  }
+  if (options.faux) env.ULTIMATE_FAUX = '1'
+  return env
+}
+
 interface Instance {
   id: string
   url: string
@@ -292,32 +326,13 @@ export default function instanceExtension(
               context.abortSignal?.throwIfAborted()
               // Explicit homes are retained even when their name matches the automatic sweep's prefix.
               if (args.home) await writeFile(join(home, 'instance-preserve'), '')
-              const env: NodeJS.ProcessEnv = {
-                ...Object.fromEntries(
-                  Object.entries(process.env).filter(
-                    ([key]) =>
-                      ![
-                        'ULTIMATE_SUPERVISED',
-                        'ULTIMATE_PUBLIC_URL',
-                        'ULTIMATE_GENERATION',
-                        'ULTIMATE_PREVIOUS_BUILD',
-                        'ULTIMATE_HOME',
-                        'ULTIMATE_PORT',
-                        'ULTIMATE_FAUX',
-                        'ULTIMATE_CLOUD_URL',
-                        'ULTIMATE_CLOUD_TOKEN',
-                        'ULTIMATE_CLOUD_MACHINE',
-                      ].includes(key),
-                  ),
-                ),
-                ULTIMATE_HOME: home,
-                ULTIMATE_PROJECT: project,
-                HOME: host.userHome,
-                ULTIMATE_PORT: '0',
-                ULTIMATE_NO_OPEN: '1',
-                ULTIMATE_INSTANCE_OWNER: String(process.pid),
-              }
-              if (args.faux) env.ULTIMATE_FAUX = '1'
+              const env = previewEnv(process.env, {
+                home,
+                project,
+                userHome: host.userHome,
+                faux: args.faux,
+                ownerPid: process.pid,
+              })
               const child = spawn(process.execPath, ['server/main.ts'], {
                 cwd,
                 env,

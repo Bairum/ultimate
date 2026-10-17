@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { remember, stopped } from '../extensions/instance/server.ts'
+import { previewEnv, remember, stopped } from '../extensions/instance/server.ts'
 import { at } from '../extensions/instance/links.ts'
 
 const homes: string[] = []
@@ -26,6 +26,51 @@ const preview = (port: number, conversationId = 1) => ({
   conversationId,
   faux: true,
 })
+
+it.each([false, true])(
+  'isolates preview cloud environment and host identity (faux: %s)',
+  (faux) => {
+    const parent = {
+      PATH: '/bin',
+      ULTIMATE_SUPERVISED: '1',
+      ULTIMATE_PUBLIC_URL: 'https://parent.example',
+      ULTIMATE_GENERATION: '7',
+      ULTIMATE_PREVIOUS_BUILD: 'parent-build',
+      ULTIMATE_HOME: '/parent/state',
+      ULTIMATE_PROJECT: '/parent/project',
+      HOME: '/parent/user',
+      ULTIMATE_PORT: '4747',
+      ULTIMATE_FAUX: '1',
+      ULTIMATE_NO_OPEN: '0',
+      ULTIMATE_INSTANCE_OWNER: '111',
+      ULTIMATE_CLOUD_URL: 'wss://parent.example/sync',
+      ULTIMATE_CLOUD_TOKEN: 'parent-token',
+      ULTIMATE_CLOUD_MACHINE: 'parent-machine',
+    }
+    const before = { ...parent }
+    const child = previewEnv(parent, {
+      home: '/preview/state',
+      project: '/preview/project',
+      userHome: '/preview/user',
+      ownerPid: 222,
+      faux,
+    })
+    expect(child).not.toHaveProperty('ULTIMATE_CLOUD_URL')
+    expect(child).not.toHaveProperty('ULTIMATE_CLOUD_TOKEN')
+    expect(child).not.toHaveProperty('ULTIMATE_CLOUD_MACHINE')
+    expect(child).toEqual({
+      PATH: '/bin',
+      ULTIMATE_HOME: '/preview/state',
+      ULTIMATE_PROJECT: '/preview/project',
+      HOME: '/preview/user',
+      ULTIMATE_PORT: '0',
+      ULTIMATE_NO_OPEN: '1',
+      ULTIMATE_INSTANCE_OWNER: '222',
+      ...(faux ? { ULTIMATE_FAUX: '1' } : {}),
+    })
+    expect(parent).toEqual(before)
+  },
+)
 
 it('remembers stopped previews across restarts, one per port, the last 50', async () => {
   const home = await mkdtemp(join(tmpdir(), 'ultimate-previews-'))
