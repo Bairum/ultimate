@@ -33,9 +33,19 @@ class FakeCloud extends EventTarget implements SyncSocket {
   messages: MachineMessage[] = []
   closed = false
   autoAck = true
+  private batchWaiters: { count: number; resolve: () => void }[] = []
+  waitForBatches(count: number) {
+    if (this.batches().length >= count) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      this.batchWaiters.push({ count, resolve })
+    })
+  }
   send(data: string) {
     const message = JSON.parse(data) as MachineMessage
     this.messages.push(message)
+    for (const waiter of this.batchWaiters)
+      if (this.batches().length >= waiter.count) waiter.resolve()
+    this.batchWaiters = this.batchWaiters.filter((waiter) => this.batches().length < waiter.count)
     if (message.type === 'batch' && this.autoAck)
       queueMicrotask(() => this.receive({ type: 'ack', batch: message.batch }))
   }
@@ -46,7 +56,7 @@ class FakeCloud extends EventTarget implements SyncSocket {
     this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(message) }))
   }
   open(
-    cursor: Extract<CloudMessage, { type: 'cursor' }> = { type: 'cursor', maxEntryId: 0, docs: {} },
+    cursor: Extract<CloudMessage, { type: 'cursor' }> = { type: 'cursor', entries: {}, docs: {} },
   ) {
     this.dispatchEvent(new Event('open'))
     this.receive(cursor)
@@ -59,6 +69,17 @@ class FakeCloud extends EventTarget implements SyncSocket {
   }
   docs() {
     return this.batches().flatMap((message) => message.docs)
+  }
+  cursor(): Extract<CloudMessage, { type: 'cursor' }> {
+    const entries: Record<string, number> = {}
+    for (const entry of this.entries())
+      entries[entry.conversationId] = Math.max(entries[entry.conversationId] ?? 0, entry.id)
+    const docs: Record<string, string> = {}
+    for (const doc of this.docs()) {
+      if (doc.value === null) delete docs[doc.id]
+      else docs[doc.id] = doc.hash
+    }
+    return { type: 'cursor', entries, docs }
   }
 }
 
@@ -138,12 +159,13 @@ it('sends every conversation, only its own entries in ID order, and conversation
     ).toEqual([root.id, fork.child.id])
     expect(socket.entries().filter((entry) => entry.id === first.id)).toHaveLength(1)
     expect(socket.entries().map((entry) => entry.id)).toContain(fork.second.id)
-    expect(socket.entries().map((entry) => entry.id)).toEqual(
-      socket
+    for (const id of [root.id, fork.child.id]) {
+      const ids = socket
         .entries()
+        .filter((entry) => entry.conversationId === id)
         .map((entry) => entry.id)
-        .toSorted((a, b) => a - b),
-    )
+      expect(ids).toEqual(ids.toSorted((a, b) => a - b))
+    }
     const notes = socket.docs().filter((doc) => doc.kind === Note.definition.kind)
     expect(notes.map((doc) => doc.conversationId)).toEqual([root.id, fork.child.id])
     expect(notes.every((doc) => doc.value?.text === 'initial')).toBe(true)
@@ -165,11 +187,7 @@ it('reconnects with no entries or unchanged docs and retires a missing cursor do
     f.sockets[0].open()
     await f.drain()
     const socket = f.sockets[0]
-    const cursor = {
-      type: 'cursor' as const,
-      maxEntryId: Math.max(0, ...socket.entries().map((entry) => entry.id)),
-      docs: Object.fromEntries(socket.docs().map((doc) => [String(doc.id), doc.hash])),
-    }
+    const cursor = socket.cursor()
     socket.dispatchEvent(new CloseEvent('close'))
     await vi.advanceTimersByTimeAsync(1000)
     expect(f.sockets).toHaveLength(2)
@@ -205,11 +223,7 @@ it('resends a document changed while disconnected', async () => {
     const socket = f.sockets[0]
     socket.open()
     await f.drain()
-    const cursor = {
-      type: 'cursor' as const,
-      maxEntryId: Math.max(0, ...socket.entries().map((entry) => entry.id)),
-      docs: Object.fromEntries(socket.docs().map((doc) => [String(doc.id), doc.hash])),
-    }
+    const cursor = socket.cursor()
     socket.dispatchEvent(new CloseEvent('close'))
     await f.opened.harness.commit(async (tx) => {
       ;(await tx.doc(Note, f.opened.root.id)).text = 'offline change'
@@ -337,9 +351,11 @@ it('limits outstanding batches to four and resumes on acknowledgements', async (
   const f = await fixture()
   try {
     const socket = f.sockets[0]
-    socket.autoAck = false
     socket.open()
     await f.drain()
+    const firstBatch = socket.batches().at(-1)!.batch + 1
+    socket.messages = []
+    socket.autoAck = false
     for (let n = 0; n < 6; n++) {
       await f.opened.harness.commit(
         (tx) => tx.appendEntry(f.opened.root.id, { kind: 'cloud-test.live', data: { n } }),
@@ -348,14 +364,134 @@ it('limits outstanding batches to four and resumes on acknowledgements', async (
       await f.drain()
     }
     expect(socket.batches()).toHaveLength(4)
-    socket.receive({ type: 'ack', batch: 1 })
+    socket.receive({ type: 'ack', batch: firstBatch })
     expect(socket.batches()).toHaveLength(5)
-    expect(socket.batches().map((batch) => batch.batch)).toEqual([1, 2, 3, 4, 5])
+    expect(socket.batches().map((batch) => batch.batch)).toEqual(
+      Array.from({ length: 5 }, (_, index) => firstBatch + index),
+    )
     expect(socket.entries().filter((entry) => entry.kind === 'cloud-test.live')).toHaveLength(6)
     f.stop()
     expect(socket.closed).toBe(true)
     await vi.advanceTimersByTimeAsync(60_000)
     expect(f.sockets).toHaveLength(1)
+  } finally {
+    await f.close()
+  }
+})
+
+async function seedBacklog(f: Awaited<ReturnType<typeof fixture>>) {
+  return f.opened.harness.commit(async (tx) => {
+    const other = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+    const expected: Record<string, number[]> = { [f.opened.root.id]: [], [other.id]: [] }
+    for (let index = 0; index < 1500; index++) {
+      for (const id of [f.opened.root.id, other.id]) {
+        const entry = await tx.appendEntry(id, { kind: 'cloud-test.backlog', data: { index } })
+        expected[id].push(entry.id)
+      }
+    }
+    return expected
+  }, context)
+}
+
+it('streams catch-up within four unacked batches and reads no next page until capacity returns', async () => {
+  const f = await fixture()
+  try {
+    const expected = await seedBacklog(f)
+    let pagesRead = 0
+    const lookup = f.opened.harness.conversation.bind(f.opened.harness)
+    vi.spyOn(f.opened.harness, 'conversation').mockImplementation(async (...args) => {
+      const conversation = await lookup(...args)
+      if (conversation) {
+        const read = conversation.entries.bind(conversation)
+        vi.spyOn(conversation, 'entries').mockImplementation(async (...query) => {
+          pagesRead++
+          return read(...query)
+        })
+      }
+      return conversation
+    })
+    const socket = f.sockets[0]
+    socket.autoAck = false
+    socket.open()
+    await socket.waitForBatches(4)
+    await vi.advanceTimersByTimeAsync(250)
+    expect(socket.batches()).toHaveLength(4)
+    // One conversation-record batch and three 256-entry pages fill the window.
+    expect(pagesRead).toBe(3)
+    expect(socket.entries().length).toBeLessThan(3000)
+    socket.autoAck = true
+    for (const batch of socket.batches()) socket.receive({ type: 'ack', batch: batch.batch })
+    await f.drain()
+    for (const [id, ids] of Object.entries(expected)) {
+      const received = socket.entries().filter((entry) => String(entry.conversationId) === id)
+      expect(received.map((entry) => entry.id)).toEqual(
+        received.map((entry) => entry.id).toSorted((a, b) => a - b),
+      )
+      expect(
+        received.filter((entry) => entry.kind === 'cloud-test.backlog').map((entry) => entry.id),
+      ).toEqual(ids)
+    }
+    expect(f.notices).toEqual([])
+  } finally {
+    vi.restoreAllMocks()
+    await f.close()
+  }
+})
+
+it('leaves the commit line free while catch-up is stalled on withheld acknowledgements', async () => {
+  const f = await fixture()
+  try {
+    await seedBacklog(f)
+    const socket = f.sockets[0]
+    socket.autoAck = false
+    socket.open()
+    await socket.waitForBatches(4)
+    let committed = false
+    const write = f.opened.harness
+      .commit(
+        (tx) => tx.appendEntry(f.opened.root.id, { kind: 'cloud-test.unblocked', data: {} }),
+        context,
+      )
+      .then(() => {
+        committed = true
+      })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(committed).toBe(true)
+    await write
+    expect(socket.batches()).toHaveLength(4)
+    f.stop()
+    await f.stop.idle()
+    expect(socket.closed).toBe(true)
+    expect(f.notices).toEqual([])
+  } finally {
+    await f.close()
+  }
+})
+
+it('resumes each conversation exactly after its own partial cursor', async () => {
+  const f = await fixture()
+  try {
+    const expected = await seedBacklog(f)
+    const socket = f.sockets[0]
+    socket.open()
+    await f.drain()
+    const cursor = socket.cursor()
+    const ids = Object.keys(expected)
+    cursor.entries[ids[0]] = expected[ids[0]][749]
+    cursor.entries[ids[1]] = expected[ids[1]][999]
+    socket.dispatchEvent(new CloseEvent('close'))
+    await vi.advanceTimersByTimeAsync(1000)
+    f.sockets[1].open(cursor)
+    await f.drain()
+    const resumed = f.sockets[1].entries()
+    expect(
+      resumed.filter((entry) => String(entry.conversationId) === ids[0]).map((entry) => entry.id),
+    ).toEqual(expected[ids[0]].slice(750))
+    expect(
+      resumed.filter((entry) => String(entry.conversationId) === ids[1]).map((entry) => entry.id),
+    ).toEqual(expected[ids[1]].slice(1000))
+    expect(f.sockets[1].docs()).toEqual([])
+    expect(f.notices).toEqual([])
   } finally {
     await f.close()
   }

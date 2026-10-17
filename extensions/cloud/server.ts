@@ -56,6 +56,18 @@ export function startSync(
     let batch = 0
     const unacked = new Set<number>()
     const pending: Batch = { type: 'batch', batch: 0, conversations: [], entries: [], docs: [] }
+    let pendingBytes = 0
+    let capacity: (() => void) | undefined
+    const entryHeads: Record<string, number> = {}
+    const append = (values: unknown[], value: unknown) => {
+      values.push(value)
+      pendingBytes += Buffer.byteLength(JSON.stringify(value))
+    }
+    const entry = (value: Batch['entries'][number]) => {
+      if (value.id <= (entryHeads[value.conversationId] ?? 0)) return
+      entryHeads[value.conversationId] = value.id
+      append(pending.entries, value)
+    }
     let buffered: CommitPublication[] = []
     let chain = Promise.resolve()
     idle = () => chain
@@ -95,7 +107,9 @@ export function startSync(
           let count = 0
           while (count < pending[key].length && bytes < 1_000_000) {
             const value = pending[key][count++]
-            bytes += JSON.stringify(value).length
+            const size = Buffer.byteLength(JSON.stringify(value))
+            bytes += size
+            pendingBytes -= size
             // Each array is homogeneous; the key selects the corresponding destination.
             ;(next[key] as unknown[]).push(value)
           }
@@ -107,8 +121,18 @@ export function startSync(
     }
     const queue = () => {
       if (closed) return
-      if (JSON.stringify(pending).length >= 1_000_000) flush()
+      if (pendingBytes >= 1_000_000) flush()
       else timer ??= setTimeout(flush, 250)
+    }
+    const waitForCapacity = async () => {
+      flush()
+      while (true) {
+        if (closed || (unacked.size < 4 && pendingBytes === 0)) return
+        await new Promise<void>((resolve) => {
+          capacity = resolve
+        })
+        flush()
+      }
     }
     const document = async (record: DocumentRecord, value: JsonObject | null) => {
       if (record.scope.kind !== 'conversation') return
@@ -121,8 +145,12 @@ export function startSync(
         hash: await docHash(value),
       }
       const index = pending.docs.findIndex((item) => item.id === doc.id)
-      if (index < 0) pending.docs.push(doc)
-      else pending.docs[index] = doc
+      if (index < 0) append(pending.docs, doc)
+      else {
+        pendingBytes -= Buffer.byteLength(JSON.stringify(pending.docs[index]))
+        pending.docs[index] = doc
+        pendingBytes += Buffer.byteLength(JSON.stringify(doc))
+      }
     }
     const metadata = () => {
       const system = host.system()
@@ -143,8 +171,7 @@ export function startSync(
     }
     const live = async (publication: CommitPublication) => {
       for (const change of publication.changes) {
-        if (change.type === 'conversation') pending.conversations.push(change.value)
-        else if (change.type === 'entry') pending.entries.push(change.value)
+        if (change.type === 'conversation') append(pending.conversations, change.value)
         else if (
           (change.type === 'document' || change.type === 'document.copy') &&
           change.record.scope.kind === 'conversation'
@@ -156,7 +183,12 @@ export function startSync(
           if (value !== undefined) await document(change.record, value)
         }
       }
-      pending.entries.sort((a, b) => a.id - b.id)
+      // A publication's change order is unspecified; entry IDs order its entries.
+      for (const value of publication.changes
+        .filter((change) => change.type === 'entry')
+        .map((change) => change.value)
+        .toSorted((a, b) => a.id - b.id))
+        entry(value)
       queue()
       summariesDirty = true
     }
@@ -166,68 +198,75 @@ export function startSync(
         if (!ready) buffered.push(publication)
         else enqueue(() => live(publication))
       })
-      const records = await host.harness().commit(async (tx) => {
-        const scanned = []
-        let pageCursor: Cursor | undefined
-        do {
-          const page = await tx.scanConversations({}, 256, pageCursor)
-          scanned.push(...page.items)
-          pageCursor = page.next
-        } while (pageCursor)
-        for (const record of scanned) {
+      Object.assign(entryHeads, cursor.entries)
+      const harness = host.harness()
+      const seen = new Set<number>()
+      let conversationCursor: Cursor | undefined
+      do {
+        await waitForCapacity()
+        if (closed) return
+        // Only the small conversation-record page needs the commit line. History reads do not.
+        const conversations = await harness.commit(
+          (tx) => tx.scanConversations({}, 256, conversationCursor),
+          context,
+        )
+        for (const record of conversations.items) append(pending.conversations, record)
+        for (const record of conversations.items) {
+          const conversation = await harness.conversation(record.id, context)
+          if (!conversation) continue
           let entryCursor: Cursor | undefined
           do {
-            const page = await tx.scanEntries(
-              {
-                conversationId: record.id,
-                minEntryId: (cursor.maxEntryId + 1) as EntryId,
-                order: 'ascending',
-              },
+            await waitForCapacity()
+            if (closed) return
+            const page = await conversation.entries(
+              { minEntryId: ((cursor.entries[record.id] ?? 0) + 1) as EntryId, order: 'ascending' },
               256,
               entryCursor,
+              context,
             )
-            pending.entries.push(
-              ...page.items.filter((entry) => entry.conversationId === record.id),
-            )
+            for (const value of page.items) if (value.conversationId === record.id) entry(value)
             entryCursor = page.next
           } while (entryCursor)
+          let docCursor: Cursor | undefined
+          do {
+            await waitForCapacity()
+            if (closed) return
+            const page = await host.scanDocuments(
+              { scope: { kind: 'conversation', conversationId: record.id }, at: 'current' },
+              256,
+              docCursor,
+              context,
+            )
+            for (const doc of page.items) {
+              if (pendingBytes >= 1_000_000) await waitForCapacity()
+              if (closed) return
+              const stored = await host.document(doc.id, 'current', context)
+              if (!stored) continue
+              seen.add(doc.id)
+              if ((await docHash(stored.value)) !== cursor.docs[String(doc.id)])
+                await document(doc, stored.value)
+            }
+            docCursor = page.next
+          } while (docCursor)
         }
-        return scanned
-      }, context)
-      pending.conversations.push(...records)
-      pending.entries.sort((a, b) => a.id - b.id)
-      const seen = new Set<number>()
-      for (const record of records) {
-        let docCursor: Cursor | undefined
-        do {
-          const page = await host.scanDocuments(
-            { scope: { kind: 'conversation', conversationId: record.id }, at: 'current' },
-            256,
-            docCursor,
-            context,
-          )
-          for (const doc of page.items) {
-            const stored = await host.document(doc.id, 'current', context)
-            if (!stored) continue
-            seen.add(doc.id)
-            if ((await docHash(stored.value)) !== cursor.docs[String(doc.id)])
-              await document(doc, stored.value)
-          }
-          docCursor = page.next
-        } while (docCursor)
-      }
+        conversationCursor = conversations.next
+      } while (conversationCursor)
       // A retired incarnation is absent locally. Only its ID matters for deletion at the replica.
       for (const id of Object.keys(cursor.docs)) {
-        if (!seen.has(Number(id)))
-          pending.docs.push({
+        if (!seen.has(Number(id))) {
+          await waitForCapacity()
+          if (closed) return
+          append(pending.docs, {
             id: Number(id),
             kind: '',
             conversationId: 0,
             value: null,
             hash: await docHash(null),
           })
+        }
       }
-      flush()
+      await waitForCapacity()
+      if (closed) return
       for (const publication of buffered) await live(publication)
       buffered = []
       ready = true
@@ -237,6 +276,8 @@ export function startSync(
       if (closed) return
       closed = true
       unsubscribe?.()
+      capacity?.()
+      capacity = undefined
       clearTimeout(timer)
       clearInterval(metadataTimer)
       socket.close()
@@ -255,6 +296,8 @@ export function startSync(
         if (message.type === 'ack') {
           unacked.delete(message.batch)
           flush()
+          capacity?.()
+          capacity = undefined
         } else if (message.type === 'cursor')
           enqueue(async () => {
             await catchUp(message)

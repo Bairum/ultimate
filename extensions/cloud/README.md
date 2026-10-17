@@ -1,6 +1,6 @@
 # Cloud sync
 
-An optional machine-side replica sender. With `ULTIMATE_CLOUD_URL` unset it does nothing. With a URL it opens one outbound WebSocket, sends conversation records, own entries and conversation documents, then streams committed changes. Reconnects compare entry IDs and document hashes; acknowledgements limit outstanding batches to four. Session and task documents stay local.
+An optional machine-side replica sender. With `ULTIMATE_CLOUD_URL` unset it does nothing. With a URL it opens one outbound WebSocket, sends conversation records, own entries and conversation documents, then streams committed changes. Reconnects compare each conversation's newest own entry ID and document hashes. Catch-up streams entries and documents page by page, waiting for room in the four-batch acknowledgement window before reading more; history reads do not hold Pi's commit line. Session and task documents stay local.
 
 Environment only (no settings or Secrets integration for this spike):
 
