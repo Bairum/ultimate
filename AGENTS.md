@@ -68,8 +68,10 @@ others load; see [Events](extensions/README.md#events).
 ## Discovery and settings
 
 Discovery is clone built-ins, then `~/.ultimate/`, then `<project>/.ultimate/`; later names replace earlier ones.
-Skills load from clone `skills/`, then Pi's defaults, then `~/.ultimate/skills/`, then
-`<project>/.ultimate/skills/`, with later names winning.
+Skills load from clone `skills/`, then the project's `.pi/skills/`, then `~/.ultimate/skills/`, then
+`<project>/.ultimate/skills/`, with later names winning. Personal instructions load from `~/.ultimate/AGENTS.md`
+(or `CLAUDE.md`) ahead of the project's. Pi's own `~/.pi/agent/skills/` and `~/.pi/agent/AGENTS.md` are not read: they
+belong to Pi, so link a skill into `~/.ultimate/skills/` to use it here.
 Every built-in is on by default, including `questions` (answer cards for replies needing a decision), `faux` (inert unless `ULTIMATE_FAUX=1`), `lineage` (conversation trees: roots, branches, notes), `parallel` (web tools; reads `secrets`), `classify` (Jev typed judgments; reads `secrets`), `phase` (working phases; requires `classify`), and `tailscale` (remote access; inert on faux servers, and only user settings can turn it off for good). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
 restart. User/project extension folders are on by default too; `disable` turns off any extension. Unknown names
@@ -117,7 +119,7 @@ The host owns `ultimate.ui` on the root conversation, persisted in SQLite and co
 - `ULTIMATE_HOME` overrides state storage; the default is `~/.ultimate/projects/<basename>-<sha256(projectRoot) first 8 hex>/`. Different projects can run concurrently. Never run two storage owners on the same home.
 - `ULTIMATE_GENERATION` defaults to `1` and labels the process in system info.
 - `ULTIMATE_FAUX=1` uses a looping demo provider without tokens; its tools edit only a scratch file in the home.
-- Pi's models, settings, auth, skills, and context loaders are shared with `~/.pi/agent`; the `models` extension logs in to providers.
+- Pi's models, settings, and auth are shared with `~/.pi/agent`; the `models` extension logs in to providers.
 - `pnpm check` checks format/lint/types; `pnpm test` runs the fast in-process faux tests with temporary homes (target under 10 s); `pnpm test:e2e` runs `test/e2e`, the tests that spawn real supervisors and instances; `pnpm eval` runs the real-model agent evals in `evals/` and ends with their cost. There are no browser tests: UI is verified on a faux instance with screenshot or browser.
 - `tsconfig.swap.json` is the server-only type-check gate for swaps.
 - `tsconfig.json` (server, tests, tooling) references `tsconfig.web.json` (browser: `web/src`, `extensions/**/*.tsx`).

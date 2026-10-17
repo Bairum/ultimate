@@ -1,8 +1,5 @@
-import {
-  formatSkillsForPrompt,
-  getAgentDir,
-  loadProjectContextFiles,
-} from '@earendil-works/pi-coding-agent'
+import { join } from 'node:path'
+import { formatSkillsForPrompt, loadProjectContextFiles } from '@earendil-works/pi-coding-agent'
 import { defineExtension, section } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 
@@ -75,7 +72,7 @@ export default function prompt(host: ExtensionHost) {
       section('project_context', (input) =>
         loadProjectContextFiles({
           cwd: input.env?.cwd ?? input.agent.cwd ?? host.projectRoot,
-          agentDir: getAgentDir(),
+          agentDir: join(host.userHome, '.ultimate'),
         })
           .map(
             (file) =>

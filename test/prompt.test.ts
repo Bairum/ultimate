@@ -7,6 +7,19 @@ import { fauxServer, temp, removeTemp, until } from './helpers.ts'
 it('renders only enabled guidance, lists off building blocks, and adds self guidance live', async () => {
   const home = await temp()
   vi.stubEnv('PI_CODING_AGENT_DIR', join(home, 'pi'))
+  // Pi's personal instructions and skills stay with Pi; Ultimate's come from ~/.ultimate.
+  for (const [dir, owner] of [
+    ['pi', 'Pi'],
+    ['.ultimate', 'Ultimate'],
+  ]) {
+    const skill = join(home, dir, 'skills', `${owner.toLowerCase()}-only`)
+    await mkdir(skill, { recursive: true })
+    await writeFile(join(home, dir, 'AGENTS.md'), `${owner} personal instructions.`)
+    await writeFile(
+      join(skill, 'SKILL.md'),
+      `---\nname: ${owner.toLowerCase()}-only\ndescription: ${owner} skill\n---\n`,
+    )
+  }
   const projectRoot = join(home, 'project')
   await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
   const settings = join(projectRoot, '.ultimate/settings.json')
@@ -57,6 +70,10 @@ it('renders only enabled guidance, lists off building blocks, and adds self guid
       const isolated = await render(checkout, useEnv)
       expect(isolated.cwd).toBe(checkout)
       expect(isolated.project_context).toContain('Isolated project instructions.')
+      expect(isolated.project_context).toContain('Ultimate personal instructions.')
+      expect(isolated.project_context).not.toContain('Pi personal instructions.')
+      expect(isolated.skills).toContain('ultimate-only')
+      expect(isolated.skills).not.toContain('pi-only')
       expect(skills).toHaveBeenLastCalledWith(checkout)
     }
     skills.mockRestore()

@@ -1,28 +1,22 @@
 import { join } from 'node:path'
 import { useProjectSetup } from './project-setup.ts'
-import { getAgentDir, loadSkills } from '@earendil-works/pi-coding-agent'
-import type { SettingsManager } from '@earendil-works/pi-coding-agent'
+import { loadSkills } from '@earendil-works/pi-coding-agent'
 
 export function projectSkills(
-  host: { ultimateRoot: string; projectRoot: string; userHome: string; settings: SettingsManager },
+  host: { ultimateRoot: string; projectRoot: string; userHome: string },
   cwd = host.projectRoot,
 ) {
   const layers = [
-    { paths: [join(host.ultimateRoot, 'skills')], defaults: false },
-    { paths: host.settings.getSkillPaths(), defaults: true },
-    { paths: [join(host.userHome, '.ultimate/skills')], defaults: false },
+    join(host.ultimateRoot, 'skills'),
+    join(cwd, '.pi/skills'),
+    join(host.userHome, '.ultimate/skills'),
     ...(useProjectSetup(host.projectRoot, host.userHome)
-      ? [{ paths: [join(host.projectRoot, '.ultimate/skills')], defaults: false }]
+      ? [join(host.projectRoot, '.ultimate/skills')]
       : []),
   ]
+  const agentDir = join(host.userHome, '.ultimate')
   const skills = layers.flatMap(
-    (layer) =>
-      loadSkills({
-        cwd,
-        agentDir: getAgentDir(),
-        skillPaths: layer.paths,
-        includeDefaults: layer.defaults,
-      }).skills,
+    (path) => loadSkills({ cwd, agentDir, skillPaths: [path], includeDefaults: false }).skills,
   )
   return [...new Map(skills.map((skill) => [skill.name, skill])).values()]
 }

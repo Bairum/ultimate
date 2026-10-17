@@ -63,7 +63,7 @@ Extensions outside the clone import exactly what built-ins import (`@/sdk`, `@/c
 `lucide-react`, any package installed in the clone): Ultimate resolves those from its clone, and Tailwind picks up their
 classes. In the clone, `pnpm check` type-checks and lints `extensions/` and `.ultimate/extensions/`; extensions of
 other projects are not checked by anything, so try them in the browser. Agents live in the same three places
-(`agents/`); skills come from clone `skills/`, then Pi (`~/.pi/agent/skills/`, the project's `.pi/skills/`), then `~/.ultimate/skills/`, then
+(`agents/`); skills come from clone `skills/`, then the project's `.pi/skills/`, then `~/.ultimate/skills/`, then
 `<project>/.ultimate/skills/`, later winning by name. A project's `.ultimate/settings.json` may set `defaultSurface` (see
 [Surfaces](#surfaces)).
 

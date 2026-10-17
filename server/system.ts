@@ -16,7 +16,7 @@ import { promisify } from 'node:util'
 import { relative, basename, join } from 'node:path'
 import { projectSkills } from './skills.ts'
 import { projectSetup, projectSettings } from './project-setup.ts'
-import { getAgentDir, loadProjectContextFiles } from '@earendil-works/pi-coding-agent'
+import { loadProjectContextFiles } from '@earendil-works/pi-coding-agent'
 import type { ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { Watch } from './extensions.ts'
 import type { PreparedHost } from './harness.ts'
@@ -41,7 +41,6 @@ export async function createSystem(
   origins: () => string[] = () => [],
 ) {
   const startedAt = new Date().toISOString()
-  const agentDir = getAgentDir()
   let coreStale = false
   let code: SystemInfo['code'] = {
     ultimateRoot: host.ultimateRoot,
@@ -125,9 +124,10 @@ export async function createSystem(
         description: skill.description,
         path: skill.filePath,
       })),
-      contextFiles: loadProjectContextFiles({ cwd: host.projectRoot, agentDir }).map(
-        (file) => file.path,
-      ),
+      contextFiles: loadProjectContextFiles({
+        cwd: host.projectRoot,
+        agentDir: join(host.userHome, '.ultimate'),
+      }).map((file) => file.path),
     }
     const json = JSON.stringify(value)
     if (json !== previous) {
@@ -156,7 +156,6 @@ export async function createSystem(
       join(host.projectRoot, '.ultimate'),
       join(host.userHome, '.ultimate/extensions'),
       join(host.userHome, '.ultimate/skills'),
-      join(agentDir, 'skills'),
       join(host.projectRoot, '.pi/skills'),
     ])
     const stopRoots = watchRoots([join(host.projectRoot, '.ultimate')], (root) => {
