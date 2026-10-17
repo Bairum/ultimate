@@ -72,7 +72,9 @@ Failed GETs fall back to the synced copy. Failed proxied writes return 502: the 
 
 Workers observability is enabled for persistent invocation logs and traces at full sampling. Query-string redaction is disabled; credentials must remain in Authorization headers, never query strings. The requested `issue_detection` setting is retained, but Wrangler 4.151.1 warns that it is unexpected (the installed schema does not yet support it). `wrangler deploy --dry-run` reports this warning; do not silently discard dashboard settings. As with sync, UI upload logs contain only build hashes and file counts, never headers or source. `wrangler tail` can miss Durable Object WebSocket events. Sync exceptions log only protocol message type and UTF-8 byte size, never content or exception text. Successful messages are not logged. Volatile system info refreshes once a minute, and the sender reconnects after an unacknowledged batch exceeds 60 seconds.
 
-## Deploy (user/coordinator only)
+## Deploy
+
+Deploys belong to the standing `@cloudflare` agent (`.ultimate/agents/cloudflare.md`): the lander hands it every landing that touches `cloud/`, `web/` or the dependencies (`lander.deploy` in `.ultimate/settings.json`), and it deploys that commit, verifies routes and telemetry, and rolls back on errors. Ask it for previews and experiments too. The one-time setup below stays with the user.
 
 The committed config is generic. Domains and tunnel IDs live in user settings, not the repository. `pnpm cloud:deploy` builds the UI and front page and writes the gitignored `cloud/wrangler.deploy.json`. No credentials belong in the repository or command arguments. Open tabs keep working across a deploy: they offer a reload once they see the new version.
 
