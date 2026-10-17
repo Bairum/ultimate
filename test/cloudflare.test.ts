@@ -236,6 +236,7 @@ it('parses the resident definition and enables its deferred tool', async () => {
     'web_fetch',
     'edit',
     'write',
+    'automation',
     'cloudflare_observability',
   ])
   const { tool } = await fixture(false)
