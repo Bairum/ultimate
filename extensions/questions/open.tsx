@@ -34,7 +34,7 @@ export function newestAsked(board: Doc, messages: readonly Message[]) {
 
 /**
  * The questions of final answer `entry` in `conversation` while it is @ultimate's current answer: none once any input
- * follows it in the transcript.
+ * or reset follows it in the transcript.
  */
 export function replyQuestions(
   board: Doc,
@@ -44,7 +44,10 @@ export function replyQuestions(
 ) {
   const reply = board?.reply
   if (!reply || reply.conversation !== conversation || reply.entry !== entry) return []
-  return transcript.some((item) => item.id > entry && (item.kind === 'pi.user' || item.input))
+  return transcript.some(
+    (item) =>
+      item.id > entry && (item.kind === 'pi.user' || item.kind === 'pi.reset' || item.input),
+  )
     ? []
     : reply.questions
 }

@@ -18,6 +18,7 @@ import type {
   TaskRuntime,
   Tx,
 } from '@earendil-works/pi-durable'
+import { copyJson } from '@earendil-works/chord'
 import type { Context } from '@earendil-works/chord'
 import type { JsonValue } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -198,27 +199,34 @@ export const actions = {
     }
   },
   /**
-   * Answer the questions of @ultimate's current final answer: a typed input in its conversation. The request id makes a
-   * double click one input; `reject` refuses a conversation that became busy after the check.
+   * Answer the questions of @ultimate's current final answer: a typed input in its conversation. The check claims the
+   * card by clearing `reply`, so one call wins; a submit that fails gives the claim back for a retry.
    */
   async reply(args: JsonValue, { host, signal }: ActionContext) {
     const data = args as { entryId: number; answers: { question: string; answer: string }[] }
     if (!data || !Number.isSafeInteger(data.entryId) || !validAnswers(data.answers))
       throw new Error('Invalid answers')
     const ctx = withAbortSignal(signal, context)
-    const id = await host.harness().commit(async (tx) => {
-      const reply = (await tx.doc(BoardQuestions, ROOT_CONVERSATION_ID)).reply
+    const claimed = await host.harness().commit(async (tx) => {
+      const state = await tx.doc(BoardQuestions, ROOT_CONVERSATION_ID)
+      const reply = state.reply
       if (
         reply?.entry !== data.entryId ||
         !(await currentAnswer(tx, reply.conversation as ConversationId, reply.entry as EntryId))
       )
         throw new Error(NOT_OPEN)
       checkAnswers(data.answers, reply.questions)
-      return reply.conversation as ConversationId
+      const claim = copyJson(reply) as typeof reply
+      delete state.reply
+      return claim
     }, ctx)
-    const conversation = await host.harness().conversation(id, ctx)
-    if (!conversation) throw new Error(NOT_OPEN)
+    // Without an input-placement hook, an input or reset can still land between this claim and the submit; we accept
+    // that window of milliseconds because the Q/A text is self-contained and the user's own words.
     try {
+      const conversation = await host
+        .harness()
+        .conversation(claimed.conversation as ConversationId, ctx)
+      if (!conversation) throw new Error(NOT_OPEN)
       await conversation.submit(
         {
           type: 'input',
@@ -229,6 +237,10 @@ export const actions = {
         ctx,
       )
     } catch (error) {
+      await host.harness().commit(async (tx) => {
+        const state = await tx.doc(BoardQuestions, ROOT_CONVERSATION_ID)
+        state.reply ??= claimed
+      }, context)
       if (error instanceof ConversationBusy) throw new Error(NOT_OPEN, { cause: error })
       throw error
     }

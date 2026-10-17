@@ -40,7 +40,8 @@ conversation (its final-answer card, else its newest open message card), without
 editing.
 
 A message card disappears once its message is answered: by the card, a Board Reply or new post to the sender, or
-typing in the sender's conversation. A final-answer card disappears as soon as any input follows the answer.
+typing in the sender's conversation. A final-answer card disappears as soon as any input or reset follows the answer,
+or once its answer is claimed.
 
 ## Actions
 
@@ -50,11 +51,13 @@ formatted as `Q: …\nA: …` blocks separated by blank lines.
 - `answer { messageId, answers: [{ question, answer }] }` posts a normal user Board reply to the sender with
   `re: messageId` and returns `{ id }`. Board admission atomically verifies that the original remains open, so
   concurrent answers produce exactly one reply; normal Board delivery wakes the sender.
-- `reply { entryId, answers }` refuses unless `entryId` is @ultimate's current answer, then submits a plain input in
-  its conversation with `requestId: questions:<entryId>` and `whenBusy: 'reject'`, so a double click submits once and
-  a conversation that became busy is refused. A typed input can still land between the check and the submit; then
-  both inputs reach @ultimate in order. That is acceptable: both are the user's own words and nothing is lost or
-  answered twice.
+- `reply { entryId, answers }` refuses unless `entryId` is @ultimate's current answer (`currentAnswer`: no later
+  input, queued input, run or reset) and claims the card by clearing `reply` in the same commit, so of concurrent
+  calls exactly one wins and the rest are refused. It then submits a plain input in @ultimate's conversation with
+  `requestId: questions:<entryId>` and `whenBusy: 'reject'`; if the submit fails, a compensating commit restores the
+  claim when no newer `reply` replaced it, so the user can retry. Without an input-placement hook, an input or reset
+  can still land between the claim and the submit; we accept that window of milliseconds because the Q/A text is
+  self-contained and the user's own words.
 
 Stored transcript `questions.asked` entries from older builds are hidden and never answerable. Stored
 `questions.answers` entries retain their read-only “Your answers” card.

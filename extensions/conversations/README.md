@@ -24,7 +24,8 @@ Idle, currently assessed replies may show a circular question (needs input) or g
 **summary model assessments, not verified completion**; the tooltips say so. For a child, a question means it may need its
 coordinator, not necessarily a human. Unknown, neutral, stale or failed assessments never show a success mark.
 There is no third red blocked/unfinished assessment. Assessments never trigger question extraction or answer
-cards: those belong to reply-expected [Board messages to the user](../questions/README.md), not final transcript replies.
+cards; [questions](../questions/README.md) extracts only from reply-expected Board messages to the user and from
+@ultimate's final answers to typed input.
 
 A conversation with genuinely owned children has an expandable Sub-agents group. Rows show the recorded agent role/name,
 actual Working/Queued/Idle/Replied/Run failed state, and a brief what-it-did description from its latest assessed reply.

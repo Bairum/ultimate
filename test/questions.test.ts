@@ -413,7 +413,13 @@ it("answers @ultimate's current answer with one typed input and refuses stale or
     'Unknown question',
   )
   await expect(f.reply(first.answer!, [])).rejects.toThrow('Invalid answers')
-  await Promise.allSettled([f.reply(first.answer!), f.reply(first.answer!)])
+  const results = await Promise.allSettled([f.reply(first.answer!), f.reply(first.answer!)])
+  expect(results.map((result) => result.status).toSorted()).toEqual(['fulfilled', 'rejected'])
+  expect(
+    String(
+      (results.find((result) => result.status === 'rejected') as PromiseRejectedResult).reason,
+    ),
+  ).toContain('These questions are no longer open')
   await f.settled()
   expect((await f.inputs(id)).map((entry) => entry.model?.[0]?.content)).toEqual([
     'ASK Keep it running?',
@@ -426,6 +432,13 @@ it("answers @ultimate's current answer with one typed input and refuses stale or
   await f.type(id, 'Typed instead')
   await f.settled()
   await expect(f.reply(second.answer!)).rejects.toThrow('These questions are no longer open')
+  // A reset after the answer refuses it too.
+  const third = await f.type(id, 'ASK Keep it running?')
+  await f.settled()
+  expect((await f.state())!.reply?.entry).toBe(third.answer)
+  await (await f.opened.harness.conversation(id, context))!.reset(undefined, context)
+  await f.settled()
+  await expect(f.reply(third.answer!)).rejects.toThrow('These questions are no longer open')
 })
 
 it("closes @ultimate's open message to the user when the user types in its conversation", async () => {

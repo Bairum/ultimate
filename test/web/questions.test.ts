@@ -37,6 +37,10 @@ describe("@ultimate's final-answer card", () => {
     expect(replyQuestions(asked, 3, 40, [answer])).toEqual([])
     expect(replyQuestions(board, 2, 40, [answer])).toEqual([])
   })
+  it('disappears once a reset follows the answer', () => {
+    expect(replyQuestions(asked, 2, 40, [answer, { id: 41, kind: 'pi.reset' }])).toEqual([])
+    expect(keyCard(asked, 2, [], [answer, { id: 41, kind: 'pi.reset' }])).toBeUndefined()
+  })
   it('disappears once any input follows the answer', () => {
     const later = [answer, { id: 41, kind: 'conversations.assessed' }]
     expect(replyQuestions(asked, 2, 40, later)).toEqual([question])
