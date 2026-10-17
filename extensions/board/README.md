@@ -37,10 +37,9 @@ The branch's answer therefore wakes its caller as a normal `board.reply`.
 The tool memoizes the created branch id before sending its first message, reuses that id on replay, and deduplicates
 message admission with the same task-scoped `board.sent` receipt as `message`.
 
-Ultimate's answers to inputs other than `board:` deliveries also go to the user's inbox. This includes answers to
-branch replies and direct questions in its pinned conversation. Committed answers are deduplicated by assistant entry id
-in `board.ultimate-answers`; a committed-submission subscription and reopen scan recover missing inbox items.
-Answers to board deliveries use the ordinary reply path only, so user posts do not produce duplicate inbox items.
+Ultimate's answers to the user's board posts reach the inbox through the ordinary reply path. Other answers stay
+in its conversation. To relay a branch result, decision or landing to the user, Ultimate sends one consolidated
+`message {to: 'user', text}` when the needed replies have arrived.
 
 ## Document and typed inputs
 

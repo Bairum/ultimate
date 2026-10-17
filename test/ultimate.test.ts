@@ -123,14 +123,6 @@ it('ships a resident Ultimate definition with valid tools; standing addresses cr
   await until(() =>
     f.requests.some((text) => text.startsWith(`Reply from #${dice} (@dice) to your message`)),
   )
-  await until(async () =>
-    (await log(f.server)).some(
-      (message) =>
-        message.from === ultimate &&
-        message.to === 'user' &&
-        message.text.startsWith(`Answer: Reply from #${dice} (@dice)`),
-    ),
-  )
   expect(
     (await (await f.server.harness.conversation(dice, context))!.agent(context)).tools.map(
       (tool) => tool.name,
@@ -222,75 +214,35 @@ it('starts a lineage branch with a board input and caller attribution, returns i
   expect(f.requests.some((text) => text.includes('Choose a root. Roots: (none)'))).toBe(true)
 })
 
-it('routes Ultimate own answers once, recovers answers committed with board disabled, and never duplicates board deliveries', async () => {
+it('keeps Ultimate answers to board replies out of the log, including after reopen', async () => {
   const f = await fixture()
   const ultimate = await f.subagents.standing('ultimate', context)
-  await ask(f.server, ultimate, 'Direct question')
+  const resident = (await f.server.harness.conversation(ultimate, context))!
   await until(async () =>
-    (await log(f.server)).some(
-      (m) => m.to === 'user' && m.answer !== undefined && m.text.includes('Direct question'),
-    ),
+    (await log(f.server)).some((m) => m.from === ultimate && m.to === 'user' && m.re !== undefined),
   )
-  expect(await log(f.server)).toEqual(
-    expect.arrayContaining([expect.objectContaining({ text: 'Answer: Direct question' })]),
+  const before = await log(f.server)
+  const receipt = await resident.submit(
+    {
+      type: 'input',
+      requestId: 'board-reply:quiet',
+      content: 'Branch result',
+      entry: {
+        kind: 'board.reply',
+        data: { id: 100, re: 99, from: 1, text: 'Branch result', failed: false },
+      },
+    },
+    context,
   )
-  await ask(
-    f.server,
-    f.server.root.id,
-    'SEND ' + JSON.stringify({ to: '@ultimate', text: 'Board question' }),
-  )
-  const question = (await log(f.server)).find((m) => m.text === 'Board question')!
-  await until(async () =>
-    (await log(f.server)).some((m) => m.re === question.id && m.from === ultimate),
-  )
+  expect(await receipt.wait(context)).toMatchObject({ status: 'done' })
   expect(
-    (await log(f.server)).filter(
-      (m) => m.from === ultimate && m.to === 'user' && m.text.includes('Board question'),
+    (await entries(f.server, ultimate)).some((entry) =>
+      JSON.stringify(entry).includes('Answer: Branch result'),
     ),
-  ).toHaveLength(0)
+  ).toBe(true)
+  expect(await log(f.server)).toEqual(before)
   await f.server.close()
   servers.splice(servers.indexOf(f.server), 1)
-  await writeFile(
-    join(f.root, '.ultimate/settings.json'),
-    JSON.stringify({ extensions: { disable: ['board'] }, summaryModel: 'unavailable/test' }),
-  )
-  const disabled = await f.open()
-  const resident = (await disabled.harness.conversation(ultimate, context))!
-  await (
-    await resident.submit(
-      {
-        type: 'input',
-        requestId: 'board-reply:recovery',
-        content: 'Committed while board is closed',
-        entry: {
-          kind: 'board.reply',
-          data: {
-            id: 100,
-            re: 99,
-            from: 1,
-            text: 'Committed while board is closed',
-            failed: false,
-          },
-        },
-      },
-      context,
-    )
-  ).wait(context)
-  await disabled.close()
-  servers.splice(servers.indexOf(disabled), 1)
-  await writeFile(
-    join(f.root, '.ultimate/settings.json'),
-    JSON.stringify({ summaryModel: 'unavailable/test' }),
-  )
   const reopened = await f.open()
-  await until(async () =>
-    (await log(reopened)).some((m) => m.text === 'Answer: Committed while board is closed'),
-  )
-  expect(
-    (await log(reopened)).filter(
-      (m) => m.from === ultimate && m.to === 'user' && m.text.includes('Board question'),
-    ),
-  ).toHaveLength(0)
-  for (const text of ['Answer: Direct question', 'Answer: Committed while board is closed'])
-    expect((await log(reopened)).filter((m) => m.text === text)).toHaveLength(1)
+  expect(await log(reopened)).toEqual(before)
 })

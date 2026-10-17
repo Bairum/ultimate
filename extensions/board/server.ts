@@ -15,14 +15,7 @@ import {
   ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
-import type {
-  ConversationId,
-  Cursor,
-  EntryId,
-  SubmissionRecord,
-  TaskId,
-  Tx,
-} from '@earendil-works/pi-durable'
+import type { ConversationId, EntryId, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
@@ -75,14 +68,6 @@ export type BoardService = {
     input: Pick<BoardMessage, 'from' | 'to' | 'text' | 'kind' | 'entry'>,
   ): Promise<number>
 }
-const Routed = defineDoc<{ answers: number[] }>({
-  kind: 'board.ultimate-answers',
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({ answers: [] }),
-})
 const Delivery = defineTask<
   { message: BoardMessage; steer: boolean; fromLabel: string; toLabel: string },
   { phase: 'deliver' } | { phase: 'reply'; message: BoardMessage; failed: boolean },
@@ -364,60 +349,6 @@ export default function board(host: ExtensionHost) {
     record: async (tx, input) =>
       (await append(tx, { ...input, reply: false, state: 'delivered' })).id,
   } satisfies BoardService)
-  let unsubscribe: (() => void) | undefined
-  let recovery = Promise.resolve()
-  const recover = async (submission: SubmissionRecord) => {
-    if (
-      submission.type !== 'input' ||
-      submission.status !== 'done' ||
-      submission.requestId?.startsWith('board:')
-    )
-      return
-    await host.harness().commit(async (tx) => {
-      const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
-      if (index.ultimate !== submission.conversationId) return
-      const routed = await tx.doc(Routed, ROOT_CONVERSATION_ID)
-      if (routed.answers.includes(submission.answer)) return
-      const model = (await tx.entry(AssistantEntry, submission.answer))?.model?.[0]
-      const text =
-        model?.role === 'assistant'
-          ? model.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
-          : ''
-      if (!text.trim()) return
-      await append(tx, {
-        from: submission.conversationId,
-        to: 'user',
-        text,
-        reply: false,
-        state: 'delivered',
-        answer: submission.answer,
-      })
-      routed.answers.push(submission.answer)
-    }, BACKGROUND_CONTEXT)
-  }
-  host.onClose(async () => {
-    unsubscribe?.()
-    unsubscribe = undefined
-    await recovery
-  })
-  host.onOpen(async () => {
-    unsubscribe = host.harness().subscribeCommits((publication) => {
-      for (const change of publication.changes) {
-        if (change.type !== 'submission') continue
-        recovery = recovery
-          .then(() => recover(change.value))
-          .catch((error: unknown) => {
-            host.notice(`Ultimate answer routing failed: ${String(error)}`)
-          })
-      }
-    })
-    let cursor: Cursor | undefined
-    do {
-      const page = await host.scanSubmissions({ status: 'done' }, 500, cursor, BACKGROUND_CONTEXT)
-      for (const submission of page.items) await recover(submission)
-      cursor = page.next
-    } while (cursor)
-  })
   return defineExtension({
     name: 'board',
     tasks: [Delivery],
