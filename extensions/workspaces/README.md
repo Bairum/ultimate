@@ -69,7 +69,7 @@ time, as a breadcrumb; synchronous `workspace land` is unchanged. One `workspace
 source checkout (`landers`) processes that source's entries in order; merging, checks, fast-forward and push are
 code, and a model runs only on a failure or when someone writes to the lander.
 
-The task runs in that source's lander conversation (`landerConversations`): ownerless, titled "Lander · <target>",
+The task runs in that source's lander conversation (`landerConversations`): ownerless, titled "@lander",
 labelled `lander`, its cwd the lander checkout. The project's checkout has one from the moment the extension opens
 (idempotently, the same record submit uses); another source gets its own on its first submit. It has no workspace and
 is no main, so `workspace submit` and `land` refuse it. The task is its conversation's foreground work, so the Agents

@@ -169,12 +169,6 @@ function BoardSurface() {
   useEffect(() => {
     if (following.current) feed.current?.scrollTo({ top: feed.current.scrollHeight })
   }, [latest, tab])
-  useEffect(() => {
-    if (tab !== 'inbox' || latest === undefined || latest <= board.readUpTo) return
-    api
-      .action('board', 'read', { upTo: latest })
-      .catch((failure: Error) => setError(failure.message))
-  }, [tab, latest, board.readUpTo])
   function choose(value: NonNullable<typeof choice>) {
     const next = draft.slice(0, value.start) + value.token + ' ' + draft.slice(caret)
     setDraft(next)

@@ -57,7 +57,7 @@ describe('board answer labels', () => {
 
 /** The status of idle coordinator #4 next to `conversations`. */
 const coordinatorStatus = (conversations: Parameters<typeof participants>[3]) =>
-  participants({ messages: [], next: 1, readUpTo: 0 }, { agents: [], conversations: [] }, {}, [
+  participants({ messages: [], next: 1 }, { agents: [], conversations: [] }, {}, [
     { id: 4, label: 'coordinator', busy: false },
     ...conversations,
   ]).find((item) => item.id === 4)?.status
@@ -77,7 +77,7 @@ describe('board roster', () => {
   ]
   it('lists standing agents, the lander and active coordinators without duplicates or concluded branches', () => {
     const roster = participants(
-      { messages, next: 3, readUpTo: 0 },
+      { messages, next: 3 },
       {
         agents: [{ name: 'ultimate' }, { name: 'dice', id: 3 }].map((agent) => ({
           ...agent,
@@ -230,7 +230,7 @@ describe('board addressing', () => {
     })
     expect(suggestions('email@dice', 10, addresses)).toEqual([])
   })
-  it('counts only inbox items after the read mark', () => {
+  it('counts only unanswered reply-enabled user messages', () => {
     const message = {
       from: 2 as const,
       to: 'user' as const,
@@ -243,11 +243,10 @@ describe('board addressing', () => {
       unreadCount({
         messages: [
           { ...message, id: 1 },
-          { ...message, id: 2 },
+          { ...message, id: 2, reply: true },
           { ...message, id: 3, to: 4 },
         ],
         next: 4,
-        readUpTo: 1,
       }),
     ).toBe(1)
   })

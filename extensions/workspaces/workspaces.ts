@@ -156,7 +156,7 @@ export function workspaces(host: Host) {
     started.add(index.landers[source])
   }
   /**
-   * The lander conversation of `source`, created once with title "Lander · <target>" and label `lander`; its cwd is the
+   * The lander conversation of `source`, created once with title "@lander" and label `lander`; its cwd is the
    * lander's checkout. Reads before writes, as a transaction requires: call it before anything else writes.
    */
   async function ensureLander(
@@ -168,11 +168,14 @@ export function workspaces(host: Host) {
     path: string,
   ) {
     const known = index.landerConversations[source] as ConversationId | undefined
-    if (known !== undefined && (await tx.conversation(known))) return known
+    if (known !== undefined && (await tx.conversation(known))) {
+      ;(await tx.doc(host.metadata, known)).title = '@lander'
+      return known
+    }
     const lander = (await tx.createConversation({ ownership: { kind: 'ownerless' } })).id
     await configure(tx, lander, { cwd: path })
     Object.assign(await tx.doc(host.metadata, lander), {
-      title: `Lander · ${target}`,
+      title: '@lander',
       label: 'lander',
     })
     index.landerConversations[source] = lander

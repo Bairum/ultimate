@@ -26,10 +26,12 @@ export type Addresses = {
   concluded?: number[]
   conversations: { id: number; title?: string }[]
 }
-export type BoardData = { messages: BoardMessage[]; next: number; readUpTo: number }
-export const emptyBoard: BoardData = { messages: [], next: 1, readUpTo: 0 }
+export type BoardData = { messages: BoardMessage[]; next: number }
+export const emptyBoard: BoardData = { messages: [], next: 1 }
 export const unreadCount = (board: BoardData) =>
-  board.messages.filter((message) => message.to === 'user' && message.id > board.readUpTo).length
+  board.messages.filter(
+    (message) => message.to === 'user' && message.reply && message.state === 'delivered',
+  ).length
 
 export type Participant = {
   key: string

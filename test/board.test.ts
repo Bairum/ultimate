@@ -239,6 +239,9 @@ async function fixture(
     (tx) => configure(tx, recipient.id, { model: agent.model, tools: agent.tools }),
     context,
   )
+  await opened!.harness.commit(async (tx) => {
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = ROOT_CONVERSATION_ID
+  }, context)
   const log = () => opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context)
   const action = () => ({ host, signal: new AbortController().signal }) as ActionContext
   const send = async (to: string, text = 'Hello', extra = {}) => {
@@ -292,7 +295,7 @@ it('records a one-way input answer without returning it to the sender', async ()
   await until(async () => (await f.log())!.messages[0]?.state === 'delivered')
   await f.recipient.waitForIdle(context)
   expect(f.observed).toContain(
-    'Message from #1:\nOne-way update\nOne-way message: #1 expects no answer, and your answer here is not sent to it. If it needs to hear from you, message it.',
+    'Message from #1 (@ultimate):\nOne-way update\nOne-way message: #1 (@ultimate) expects no answer, and your answer here is not sent to it. If it needs to hear from you, message it.',
   )
   await until(async () => (await f.log())!.messages[0]?.answer !== undefined)
   const log = (await f.log())!
@@ -398,6 +401,12 @@ it('still wakes a parent for a worker question and returns its typed reply', asy
     delivery: 'followUp',
   })
   parentView.dispose()
+  await until(async () => {
+    const current = await child.viewState(context)
+    const replied = current.value.entries.some((e) => e.kind === 'board.reply')
+    current.dispose()
+    return replied
+  })
   const view = await child.viewState(context)
   expect(view.value.entries.find((e) => e.kind === 'board.reply')?.data).toMatchObject({
     from: 1,
@@ -449,14 +458,19 @@ it('allows one-way updates to the sender while answering', async () => {
     { from: f.recipient.id, to: 1, re: 1 },
   ])
 })
-it('allows messaging other recipients while answering', async () => {
+it('refuses messages to the user from anyone but @ultimate', async () => {
   const f = await fixture()
   await f.send('@scout', 'SEND ' + JSON.stringify({ to: 'user', text: 'Update' }))
   await until(async () => (await replies(f)).length === 1)
-  expect((await f.log())!.messages[1]).toMatchObject({
-    from: f.recipient.id,
+  expect((await f.log())!.messages).toHaveLength(2)
+  expect(f.observed.join('\n')).toContain(
+    'Only @ultimate messages the user; send this to @ultimate (reply: false) and it relays it.',
+  )
+  await f.send('user', 'Relayed update')
+  expect((await f.log())!.messages.at(-1)).toMatchObject({
+    from: 1,
     to: 'user',
-    text: 'Update',
+    text: 'Relayed update',
   })
 })
 it('names the lander in both message and reply model text', async () => {
@@ -509,7 +523,6 @@ it('resolves a standing address and returns unanswered inputs as failure replies
 it('logs user inbox items without running and posts answers back to the user', async () => {
   const f = await fixture()
   await f.send('user', 'Inbox')
-  expect((await f.log())!.readUpTo).toBe(0)
   expect((await f.log())!.messages).toMatchObject([{ to: 'user', text: 'Inbox' }])
   expect(f.observed.filter((t) => t.includes('Message from'))).toHaveLength(0)
   await actions.post({ to: `#${f.recipient.id}`, text: 'From user', re: 1 }, f.action())
@@ -519,6 +532,9 @@ it('logs user inbox items without running and posts answers back to the user', a
 })
 it('answers questions to the user when the user replies, posts anew, or types in the conversation', async () => {
   const f = await fixture()
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = f.recipient.id
+  }, context)
   const ask = async (text: string, reply = true) => {
     await (
       await f.recipient.submit(
@@ -546,11 +562,10 @@ it('answers questions to the user when the user replies, posts anew, or types in
   await (await f.recipient.submit({ type: 'input', content: 'Yes' }, context)).wait(context)
   await until(async () => (await state(typed.id)) === 'answered')
 
-  // The root's question stays open: the user wrote to another conversation.
-  await f.send('user', 'Root question')
+  // The question stays open when the user writes to another conversation.
+  await ask('Another question?')
   const root = (await f.log())!.messages.at(-1)!
-  await actions.post({ to: `#${f.recipient.id}`, text: 'Elsewhere' }, f.action())
-  await (await f.recipient.submit({ type: 'input', content: 'More' }, context)).wait(context)
+  await actions.post({ to: '#1', text: 'Elsewhere' }, f.action())
   expect(await state(root.id)).toBe('delivered')
 })
 it('lets a subagent message only the conversation that started it', async () => {
@@ -591,16 +606,17 @@ it('lets a subagent message only the conversation that started it', async () => 
   await send(workerId, 'user')
   await send(workerId, `#${f.recipient.id}`)
   await send(workerId, '#1')
-  expect(f.observed.filter((text) => text.includes('message only #1'))).toHaveLength(2)
+  expect(f.observed.filter((text) => text.includes('message only #1'))).toHaveLength(1)
   expect((await f.log())!.messages.map((m) => [m.from, m.to])).toEqual([[workerId, 1]])
   const view = await (await f.opened.harness.conversation(workerId, context))!.viewState(context)
   expect(JSON.stringify(view.value.entries)).toContain('Use message only to update #1')
   view.dispose()
 
-  // An owned conversation that is no subagent, such as an automation run, still reaches the user.
+  // An owned conversation that is no subagent cannot bypass @ultimate either.
   const run = await child(false)
   await send(run, 'user')
-  expect((await f.log())!.messages.at(-1)).toMatchObject({ from: run, to: 'user' })
+  expect((await f.log())!.messages).toHaveLength(1)
+  expect(f.observed.join('\n')).toContain('Only @ultimate messages the user')
 })
 it('refuses self, unknown ids, tally roots and unknown names with valid names', async () => {
   const f = await fixture()
@@ -620,7 +636,17 @@ it('refuses self, unknown ids, tally roots and unknown names with valid names', 
   expect(JSON.stringify(view.value.entries)).toContain('cannot message yourself')
   view.dispose()
 })
-it('bounds the log, advances read monotonically, and declares user-only actions', async () => {
+it('loads existing version-1 logs with the unused read mark', async () => {
+  const f = await fixture()
+  await f.opened.harness.commit(async (tx) => {
+    Object.assign(await tx.doc(Board, ROOT_CONVERSATION_ID), { readUpTo: 7 })
+  }, context)
+  await f.opened.close()
+  await f.open()
+  await f.send('user', 'Still loadable')
+  expect((await f.log())!.messages).toMatchObject([{ text: 'Still loadable' }])
+})
+it('bounds the log and declares only post as a user-only action', async () => {
   const f = await fixture()
   await f.opened.harness.commit(async (tx) => {
     for (let i = 0; i < 310; i++)
@@ -628,10 +654,8 @@ it('bounds the log, advances read monotonically, and declares user-only actions'
   }, context)
   expect((await f.log())!.messages).toHaveLength(300)
   expect((await f.log())!.messages[0].id).toBe(11)
-  await actions.read({ upTo: 200 }, f.action())
-  await actions.read({ upTo: 100 }, f.action())
-  expect((await f.log())!.readUpTo).toBe(200)
-  expect(userActions).toEqual(['post', 'read'])
+  expect(userActions).toEqual(['post'])
+  expect(actions).not.toHaveProperty('read')
 })
 it('queues a busy recipient as follow-up, or steers its current run', async () => {
   for (const steer of [false, true]) {
@@ -695,10 +719,10 @@ async function codemodeFixture() {
     port: 0,
   })
 }
-it('rejects post and read through codemode at the installed action boundary', async () => {
+it('rejects post through codemode at the installed action boundary', async () => {
   const server = await codemodeFixture()
   try {
-    for (const action of ['post', 'read']) {
+    for (const action of ['post']) {
       server.host.faux!.setResponses([
         fauxAssistantMessage(
           [
@@ -729,6 +753,9 @@ it('rejects post and read through codemode at the installed action boundary', as
 it('keeps sequential and parallel message calls distinct within one codemode script', async () => {
   const server = await codemodeFixture()
   try {
+    await server.harness.commit(async (tx) => {
+      ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = server.root.id
+    }, context)
     server.host.faux!.setResponses([
       fauxAssistantMessage(
         [

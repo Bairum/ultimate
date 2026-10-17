@@ -1,7 +1,9 @@
 The project's conversations in the Agent surface's sidebar: branch, switch, rename, clear, and conclude them.
 Several branches run at once as separate agents; lineage roots keep their shared tally without running turns.
 A summary model (GPT-6 Luna by default) automatically gives top-level conversations concise titles and sidebar summaries, and assesses each final reply without
-changing the main agent.
+changing the main agent. Ownerless, top-level standing agents (label `agent`) and lander conversations
+(label `lander`) never schedule summary tasks: their `@name` titles stay fixed, with no automatic summary,
+feature, activity or reply assessment. This applies to intent, spawn and completed-reply triggers.
 
 ## Sidebar
 

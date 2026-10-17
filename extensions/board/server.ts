@@ -41,13 +41,13 @@ export type BoardMessage = {
   answer?: EntryId
   error?: string
 }
-export const Board = defineDoc<{ messages: BoardMessage[]; next: number; readUpTo: number }>({
+export const Board = defineDoc<{ messages: BoardMessage[]; next: number }>({
   kind: 'board',
   version: 1,
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
-  initial: () => ({ messages: [], next: 1, readUpTo: 0 }),
+  initial: () => ({ messages: [], next: 1 }),
 })
 export const docs = [Board]
 // The receipt commits with the message, closing the gap before api.memo records its id.
@@ -348,6 +348,13 @@ async function send(
     const sent = await host.harness().snapshot(Sent, taskId, ctx)
     if (callId !== undefined && sent?.ids[callId] !== undefined) return sent.ids[callId]
   }
+  if (input.to === 'user') {
+    const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
+    if (from !== standing?.ultimate)
+      throw new Error(
+        'Only @ultimate messages the user; send this to @ultimate (reply: false) and it relays it.',
+      )
+  }
   if (!input.text.trim()) throw new Error('Message text must not be empty')
   // Checked before resolving, which may create a standing agent's conversation.
   const parent = from === 'user' ? undefined : await parentOf(host, from, ctx)
@@ -414,19 +421,10 @@ async function send(
     return message.id
   }, ctx)
 }
-export const userActions = ['post', 'read']
+export const userActions = ['post']
 export const actions = {
   async post(args: { to: string; text: string; re?: number }, { host, signal }: ActionContext) {
     return { id: await send(host, 'user', args, withAbortSignal(signal, BACKGROUND_CONTEXT)) }
-  },
-  async read(args: { upTo: number }, { host }: ActionContext) {
-    if (!Number.isSafeInteger(args.upTo) || args.upTo < 0)
-      throw new Error('upTo must be a non-negative integer')
-    await host.harness().commit(async (tx) => {
-      const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
-      log.readUpTo = Math.max(log.readUpTo, Math.min(args.upTo, log.next - 1))
-    }, BACKGROUND_CONTEXT)
-    return {}
   },
   async addresses(_args: unknown, { host }: ActionContext) {
     const agents =
@@ -489,7 +487,7 @@ export default function board(host: ExtensionHost) {
         if (parent !== undefined)
           return `Use message only to update #${parent}, the conversation that started you, while you work; your final answer reaches it anyway. One-way updates (reply: false) reach #${parent} as notes it reads with its next input; ask with reply: true when you need its answer to continue.`
         const agents = (await host.use<SubagentsService>('subagents')?.residents(ctx)) ?? []
-        return `Use message to contact #id, @name or user. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
+        return `Use message to contact #id or @name. Only @ultimate messages user; send it updates with reply: false to relay. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
       }),
     ],
     tools: [
@@ -561,7 +559,7 @@ export default function board(host: ExtensionHost) {
       defineTool({
         name: 'message',
         description:
-          'Send a message to #id, @name or user. Returns immediately; the answer comes back as a reply.',
+          'Send a message to #id or @name (only @ultimate may send to user). Returns immediately; the answer comes back as a reply.',
         parameters: Type.Object({
           to: Type.String(),
           text: Type.String({ minLength: 1 }),

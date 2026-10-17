@@ -36,6 +36,31 @@ import {
   SummaryDiscarded,
 } from '../extensions/conversations/summary.ts'
 
+it.concurrent.each(['agent', 'lander'])(
+  'never schedules summaries for a standing %s',
+  async (label) => {
+    const f = await launch(false, true)
+    await f.server.harness.commit(async (tx) => {
+      Object.assign(await tx.doc(Metadata, f.server.root.id), { label, title: `@${label}` })
+    }, context)
+    f.server.host.faux!.setResponses([fauxAssistantMessage('A finished answer.')])
+    const input = await f.server.root.submit({ type: 'input', content: 'Continue.' }, context)
+    expect((await input.wait(context)).status).toBe('done')
+    await f.spawn((await f.entries()).findLast((entry) => entry.kind === 'pi.assistant')!.id)
+    const tasks = await f.server.harness.commit(
+      (tx) =>
+        tx.scanTasks({ conversationId: f.server.root.id, kind: 'conversations.summary' }, 100),
+      context,
+    )
+    expect(tasks.items).toEqual([])
+    expect(await f.read()).toBeUndefined()
+    expect(f.generated).not.toHaveBeenCalled()
+    expect(await f.server.harness.snapshot(Metadata, f.server.root.id, context)).toMatchObject({
+      title: `@${label}`,
+    })
+  },
+)
+
 const luna = { provider: 'openai', id: 'gpt-6-luna', thinking: 'medium' } as const
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 afterAll(async () => {

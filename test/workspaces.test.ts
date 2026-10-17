@@ -1037,7 +1037,7 @@ it.concurrent('lands and reports a submission without a lineage provider', async
   expect(await readFile(join(f.projectRoot, 'no-lineage.txt'), 'utf8')).toBe('no-lineage.txt')
   expect(await rootNotes(f)).toHaveLength(0)
 })
-it.concurrent('records a submission and its report on the board exactly once', async () => {
+it.concurrent('records only the submission on the board, not the landing report', async () => {
   const f = await lander({}, undefined, true)
   const id = await f.create()
   await f.service.ready(id, context)
@@ -1047,24 +1047,18 @@ it.concurrent('records a submission and its report on the board exactly once', a
   const result = await f.service.submit(id, 'None', context)
   await submitted(f, id)
   const messages = (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!.messages
-  expect(messages).toHaveLength(2)
+  expect(messages).toHaveLength(1)
   expect(messages[0]).toMatchObject({
     from: id,
     to: result.lander,
     kind: 'landing',
     text: `Submitted ${tip.slice(0, 7)} first.txt and 1 more`,
   })
-  expect(messages[1]).toMatchObject({
-    from: result.lander,
-    to: id,
-    kind: 'landing',
-    text: `Landed ${tip.slice(0, 7)} on main`,
-  })
   const report = await f.opened.harness.commit(
     (tx) => tx.submissionByRequest(id, `lander:${result.id}`),
     context,
   )
-  expect(messages[1].entry).toBe(report!.entry)
+  expect(report!.entry).toBeDefined()
 })
 it.concurrent('hands matching landings to the deploy agent exactly once', async () => {
   const f = await lander({ deploy: { agent: 'deploy-test', paths: ['cloud/'] } }, undefined, true)
@@ -1212,21 +1206,16 @@ it.concurrent.each([
     expect(notices).toContain(step ?? (invalid ? 'deploy hook disabled' : ''))
   },
 )
-it.concurrent('records a failed landing on the board', async () => {
+it.concurrent('does not record a failed landing on the board', async () => {
   const f = await lander({ checks: ['echo REJECTED; false'] }, undefined, true)
   const id = await f.create()
   await f.service.ready(id, context)
   await commit((await f.service.get(id, context))!.path)
-  const result = await f.service.submit(id, 'None', context)
+  await f.service.submit(id, 'None', context)
   await submitted(f, id)
   const messages = (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!.messages
-  expect(messages).toHaveLength(2)
-  expect(messages[1]).toMatchObject({
-    from: result.lander,
-    to: id,
-    kind: 'landing',
-    text: 'Not landed: check failed twice: echo REJECTED; false',
-  })
+  expect(messages).toHaveLength(1)
+  expect(messages[0]).toMatchObject({ from: id, kind: 'landing' })
 })
 it.concurrent('lands two submissions in order onto a moved target and reports both', async () => {
   const f = await lander({ checks: ['test -f base.txt'] })
@@ -1261,7 +1250,7 @@ it.concurrent('lands two submissions in order onto a moved target and reports bo
   )
   // Both submissions logged into one lander conversation, each ending with its landed outcome.
   const { id, metadata, cwd, kinds, log } = await landerLog(f)
-  expect(metadata).toEqual({ title: 'Lander · main', label: 'lander' })
+  expect(metadata).toEqual({ title: '@lander', label: 'lander' })
   expect(cwd).toMatch(/\/lander\/[0-9a-f]{12}$/)
   expect(kinds.every((kind) => kind === 'ultimate.lander')).toBe(true)
   expect(reportOne).toContain(`lander conversation #${id}`)
@@ -1577,10 +1566,8 @@ it.concurrent('resumes a landing interrupted before its push: pushes and reports
   const steps = result.steps.map((row) => row.step)
   expect(steps.slice(steps.lastIndexOf('started'))).toEqual(['started', 'pushing to origin'])
   const messages = (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!.messages
-  expect(messages).toHaveLength(2)
   expect(messages.map((message) => message.text)).toEqual([
     `Submitted ${landed.slice(0, 7)} landed.txt`,
-    `Landed ${landed.slice(0, 7)} on main`,
   ])
 })
 it.concurrent('reports a local landing whose push retry conflicts as landed locally', async () => {
@@ -1805,10 +1792,14 @@ it.concurrent('gives the standing lander a checkout at the target tip before any
   expect(cwd).toMatch(/\/lander\/[0-9a-f]{12}$/)
   const result = JSON.stringify(await f.call(id, 'bash', { command: 'git log -1 --format=%H' }))
   expect(result).toContain(await git(f.projectRoot, 'rev-parse', 'HEAD'))
-  // Opening again keeps the checkout as it is.
+  // Opening again keeps the checkout and updates an existing lander's old title.
   await writeFile(join(cwd!, 'kept.txt'), 'kept')
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Metadata, id)).title = 'Lander · main'
+  }, context)
   await f.reopen()
   expect(await readFile(join(cwd!, 'kept.txt'), 'utf8')).toBe('kept')
+  expect((await landerLog(f)).metadata).toEqual({ title: '@lander', label: 'lander' })
 })
 it.concurrent('fix: a model run that fails after committing lands nothing', async () => {
   const f = await lander({})

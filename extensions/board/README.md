@@ -5,7 +5,8 @@ Durable messages between conversations, standing agents and the user. Built in a
 ## Messaging
 
 `message { to, text, reply?: true, steer?: false }` returns the message id immediately. Address a conversation
-as `#123` or `123`, a standing agent as `@name`, the project's existing lander as `@lander`, or the inbox as `user`.
+as `#123` or `123`, a standing agent as `@name`, or the project's existing lander as `@lander`.
+Only the `ultimate` resident's standing conversation may message `user`; other senders must send @ultimate a one-way update to relay.
 Self-messages, unknown conversations and tallies are refused; use `note` for a tally. Unknown standing names list
 the valid ones. Standing agents are resolved and configured through the `subagents` service at delivery admission.
 
@@ -70,11 +71,11 @@ in its conversation. To relay a branch result, decision or landing to the user, 
 `Board` (kind `board`, version 1) is exported on `ROOT_CONVERSATION_ID`:
 
 ```ts
-{ messages: BoardMessage[]; next: number; readUpTo: number }
+{ messages: BoardMessage[]; next: number }
 ```
 
-`next` starts at 1; `readUpTo` starts at 0. The log keeps the newest 300 items; transcripts retain delivered inputs.
-An unread inbox item has `to === 'user' && id > readUpTo`.
+`next` starts at 1. The log keeps the newest 300 items; transcripts retain delivered inputs.
+Version 1 remains loadable: Pi documents do not validate object fields, so existing logs' unused `readUpTo` field needs no migration.
 
 ```ts
 type BoardMessage = {
@@ -100,11 +101,10 @@ The reply's `answer` links to the recipient's assistant entry; the original also
 ## Actions
 
 - `post({ to: string, text: string, re?: number }) → { id: number }`: posts as `user`, with replies enabled.
-- `read({ upTo: number }) → {}`: advances the read mark monotonically, capped at the latest allocated id.
 - `addresses({}) → { agents, lander?, conversations }`: resident names/descriptions with an id if already created,
   the existing project lander id, and up to 50 recent top-level conversation summaries (including title and label).
 
-`post` and `read` are user-only actions: codemode cannot impersonate the user or mark their inbox read.
+`post` is a user-only action: codemode cannot impersonate the user.
 Agents use the `message` tool instead. The prompt section is stable and lists resident names and descriptions.
 
 ## Service
@@ -122,7 +122,7 @@ record(tx: Tx, input: {
 ```
 
 It appends a delivered, one-way log item in the caller's transaction, without submitting an input or starting a run.
-Other extensions use this for events such as landings. Import the service type from `server.ts`.
+Workspaces uses this for submission admission; landing reports do not append log items. Import the service type from `server.ts`.
 
 ## UI
 
@@ -139,8 +139,8 @@ The Board surface shows all traffic oldest first, or just your Inbox, as a chat 
 the participant the feed is filtered to. Its own messages sit on the right, what it receives on the left, and traffic
 between others on the left too, quieter (no fill, slightly narrower) and naming both sides. Every sender has a stable
 accent (you the brand colour, others a small palette by id) shown as the bubble's stripe, a faint fill and the sender
-name; on phones bubbles take the full width and only the stripe's side tells them apart. Opening Inbox marks its
-messages read; a quiet `inbox N` status-line button appears on every surface while messages are unread. Bubbles show
+name; on phones bubbles take the full width and only the stripe's side tells them apart. A quiet `inbox N`
+status-line button counts unanswered reply-enabled messages to you. Bubbles show
 the sender, the recipient unless it is the perspective, time, reply quotes and an Open link when the transcript entry
 is known. Their footer says who waits on whom: an open question to you is an amber “awaiting your reply”, other open
 requests say “waiting on #x” (naming the sender unless it is the perspective), then answered, one-way, reply, landing,

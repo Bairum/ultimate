@@ -411,6 +411,9 @@ export async function requestSummary(
 ) {
   const own = await tx.conversation(id)
   if (!own || (request.reason !== 'reply' && own.owner)) return
+  const metadata = await tx.doc(host.metadata, id)
+  if (metadata.label === 'lander' || (metadata.label === 'agent' && !own.parent && !own.owner))
+    return
   const state = await tx.doc(Summaries, id)
   let intent: EntryId | undefined
   if (request.reason === 'intent') {
