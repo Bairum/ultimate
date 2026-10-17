@@ -14,12 +14,18 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
   those trees have none. Action `newRoot` `{ prompt, model?, thinkingLevel? }` → `{ id }` creates a root, titled by
   the prompt (what its tree is for), and starts its survey toward it; `id` is the root. The root uses the chosen model
   or conversation 1's default, and emits `lineage:rooted`.
+  A definition naming the deferred tool `seed_tally` `{ root, text }` can instead seed an empty listed root from
+  its own project reading. It atomically writes the same genesis reset as conversion and sets `lineage.tally.since`,
+  with `<tally from="#caller/latest-entry">` pointing at the reading. It refuses the caller itself, non-roots,
+  roots with entries, existing tallies, and roots surveying or converting. Replay recognises the committed genesis
+  with its memoised breadcrumb, so it writes only once. The genesis card links to that source reading.
   **Survey**: an empty root (a fresh project's conversation 1, a new root, an empty conversation made a root) has
   nothing to branch from, and `branch` refuses it. Action `survey` `{ root, focus? }` → `{ id }` sets
   `lineage.tally.surveying` and starts the background `lineage.survey` task: it submits the reading prompt (what the
   project is, how to run, check and test it, its architecture, conventions and current state; read-only; following the
   focus, the user's instructions, first) as a `lineage.survey` input, waits until the root is idle (the user can steer the reading), then
   converts the root as `root` does, distilling with a reading focus. Branching is refused while it reads or converts.
+  Alternatively, `seed_tally` lets another conversation supply that first reading without running a survey in the root.
   Typing in a tally's composer opens a side chat with it (↵) or starts a branch from its tip (⌥↵); the server refuses
   inputs to tallies.
   Action `root` `{ id }` (⌘K "Make this a root") adopts a top-level non-branch conversation or converts an existing

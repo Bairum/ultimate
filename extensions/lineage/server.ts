@@ -1745,6 +1745,54 @@ export default function lineageExtension(host: ExtensionHost) {
           }
         },
       }),
+      defineTool({
+        name: 'seed_tally',
+        deferred: true,
+        description:
+          "Write an empty root's first tally from your reading of the project, with a breadcrumb to this conversation. Refuses roots with history or a survey or conversion in progress.",
+        parameters: Type.Object({
+          root: Type.Integer({ minimum: 1 }),
+          text: Type.String({ minLength: 1 }),
+        }),
+        // The source is memoised before placement; the same genesis is recognised inside the write transaction.
+        replay: 'safe',
+        async execute({ root, text }, api, ctx) {
+          if (root === api.conversationId) throw new Error('A conversation cannot seed itself')
+          let at = await api.memo<number>('seed-source', ctx)
+          if (at === undefined) {
+            const latest = await api.commit(
+              async (tx) =>
+                (await tx.scanEntries({ conversationId: api.conversationId }, 1)).items[0]?.id,
+              ctx,
+            )
+            if (latest === undefined) throw new Error('The caller has no reading to seed from')
+            at = await api.memo('seed-source', latest, ctx)
+          }
+          const content = `<tally from="#${api.conversationId}/${at}">\n${text}\n</tally>`
+          await api.commit(async (tx) => {
+            const roots = await tx.doc(Roots, ROOT_CONVERSATION_ID)
+            if (!roots.roots.includes(root)) throw new Error(`#${root} is not a listed root`)
+            const id = root as ConversationId
+            const tally = await tx.doc(Tally, id)
+            const latest = (await tx.scanEntries({ conversationId: id }, 1)).items[0]
+            const genesis =
+              tally.since === undefined ? undefined : await tx.entry(tally.since as EntryId)
+            if (genesis?.kind === 'pi.reset' && genesis.model?.[0]?.content === content) return
+            if (tally.since !== undefined) throw new Error(`#${root} is already a tally`)
+            if (tally.surveying) throw new Error(`#${root} is surveying the project`)
+            if (tally.converting) throw new Error(`#${root} is becoming a tally`)
+            if (latest) throw new Error(`#${root} has entries; seed_tally needs an empty root`)
+            const entry = await tx.appendEntry(id, {
+              kind: 'pi.reset',
+              head: 'self',
+              data: { lineage: { tally: true } },
+              model: [{ role: 'user', content, timestamp: Date.now() }],
+            })
+            tally.since = entry.id
+          }, ctx)
+          return { output: [{ type: 'text', text: `Seeded the tally in #${root}.` }] }
+        },
+      }),
       // Offered only to side chats, which load it when they open.
       defineTool({
         name: PROPOSE,
