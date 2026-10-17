@@ -481,7 +481,7 @@ export default function codemode(host: ExtensionHost) {
     sections: [
       section('codemode', ({ agent }) =>
         agent.tools.some((tool) => tool.name === 'codemode')
-          ? 'Prefer codemode for many dependent or parallel tool calls, filtering large results, or introspecting Ultimate. For a single simple operation use its tool directly.' +
+          ? 'Prefer codemode for many dependent or parallel tool calls, filtering large results, or introspecting Ultimate. For a single simple operation use its tool directly. Change files with direct edit and write calls, never inside codemode, so each change shows as a diff.' +
             (agent.tools.some((tool) => tool.name === 'restart')
               ? ' Call restart only at top level.'
               : '') +
