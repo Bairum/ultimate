@@ -1,5 +1,11 @@
 # Ultimate
 
+> [!NOTE]
+> **A personal project, shared as inspiration.** Ultimate is not a library or a product with users to support. Copy
+> what you like, fork it, do whatever you want with it. I don't review issues or pull requests, and I change things as
+> I go, fundamental ones included, without migration paths or regard for anyone building on top. Whether that works
+> for you is your call. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 A coding agent you specialize for the project you work on. Start it in your repository and it is Pi's coding agent in a
 web UI. Then build what this project needs into it, such as custom tools, panels, subagents, skills, or whole screens,
 and keep them in the project's `.ultimate/` folder. Everyone who works on the project boots the same specialized agent,
