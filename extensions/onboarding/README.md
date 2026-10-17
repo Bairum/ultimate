@@ -1,64 +1,73 @@
-The two-page first run, the project question, and the Extensions panel that turns extensions on and off live.
+Inline setup choices, the first-run prerequisites, and the Extensions panel that turns extensions on and off live.
 
-## UI
+## First run
 
-- **First run, page 1 "Get ready"**: a checklist of what Ultimate needs, read live from `useModels()` and the shown
-  conversation, and announced as it changes: "Connect a model provider" (done once any provider but faux is logged
-  in, or while the conversation runs on the faux demo model, "Demo provider · faux"; Connect runs the `models` login,
-  `auth.login`) and "Choose a model" (done once the conversation's model is available; Choose runs `model.pick`).
-  Continue waits for both. When the login or the picker closes, or a step gets done, focus moves to the next action.
-- **First run, page 2 "Recommended extensions"**: `recommended` in `pages.tsx`, one entry per extension with a line of a
-  few words, as checkboxes, checked unless `~/.ultimate/settings.json` disables it; `needs` checks another with it
-  (`automations` needs `subagents`) and unchecking that one unchecks it; a needed extension outside the list turns on
-  with it (`parallel`, web search, needs `secrets`). A folder with a `.ultimate/` and no decision adds "Use this
-  project's setup" (on to start with only in Ultimate's own clone), with what the setup brings as chips (its own
-  extensions, the built-ins its settings turn on and off, folders that replace a built-in, agents, skills) and its
-  `.ultimate/README.md` behind "What's in it". While it is on, the rows its settings decide show "on in this project" or
-  "off in this project", locked; the user's own choice stays underneath and is what Continue saves. Back keeps the
-  choices. Continue applies it all with `applyFirstRun`, and the app switches live; with `parallel` on and
-  `PARALLEL_API_KEY` missing, the Secrets panel then opens at that key. Skip, Escape, and the close button (ignored
-  while Continue applies) keep the defaults, record the first run, and defer the project question for the tab.
-- **Project card** (a project with `.ultimate/` and no decision): "Use this project's setup?" with the same chips and
-  disclosure, and "Use it" or "Keep global", which both remember the choice. It never opens by itself: while the
-  decision is open, a quiet "project setup" entry on the right of the status line opens it, and so does the Extensions
-  panel ("About this setup"). Escape and the close button ("Decide later") just close it; until a choice is made the
-  global setup is in use.
-- **Git card** (a project that cannot have isolated conversations yet, per the `workspaces` `isolation` action): a quiet
-  "set up git" entry in the status line opens "Set up Git for this folder?", and so does the start page's disabled
-  Isolated switch. It says why (no repository, no first commit, no branch) and what Git brings. An empty folder gets
-  "Set up Git", the `workspaces` `setupGit` action (`git init` where needed and an empty first commit); a folder with
-  files gets "Ask the agent", a request to the shown conversation to write a `.gitignore` and make the first commit
-  without secrets, dependencies or build output, adding no remote. "Not now", Escape and the close button just close it.
-  The entry reads `isolation` again after the card acts and whenever the shown conversation finishes a run.
-- **Extensions panel** (right-panel tab, palette "Extensions…"): the project decision with a way to change it,
-  "Use this project's setup everywhere", and every extension, on and available, with its source, the layer that
-  decided it, its README line, and a switch. Switches save to this project (when its setup is in use) or everywhere.
-  Turning off `agent` or `onboarding` asks first, because the panel goes with them. Failures show on the row; the
-  list follows system info, so a change shows once it is live.
+The first run has only **Get ready**: connect a provider and choose an available model. The faux demo model also
+counts as ready. Continue waits for both, records `firstRunDone` and calls the `FirstRun` component's `onDone` hook;
+there is no second page. Escape or the close button records completion without changing settings. Closing returns
+focus to the composer. An automated browser (`navigator.webdriver`) does not get this dialog.
 
-An automated browser (`navigator.webdriver`, as in the agent's `browser` and `screenshot` tools) does not get the first
-run.
+## Setup cards
 
-The pages are dialogs: Escape or the close button dismisses them, focus moves into them and back to the composer.
-The first-run splash fades into page 1, already open beneath it.
+The deferred model tool `setup { card: 'extensions' | 'project' | 'git' }` is offered only to agent definitions that
+name `setup`. It returns immediately with the current situation. It does not apply settings or wait on the user;
+the agent should wait for an `onboarding.choice` input before continuing.
+
+The tool renderer shows a quiet, transcript-width card:
+
+- **Extensions:** recommended extensions as checkboxes, initially checked unless the user's settings disable them.
+  `subagents`, `board`, `lineage` and `onboarding` stay checked and disabled with "needed by @ultimate": turning them
+  off would cut off the agent and its setup cards. Dependencies are checked with their extension (`automations` needs
+  `subagents`, `parallel` needs `secrets`).
+  Continue applies user-global choices with `applyFirstRun`. Both checked and unchecked choices are saved explicitly;
+  project settings can still override user settings.
+- **Project:** "Use this project's setup?", chips showing its extensions, settings, agents and skills, and its
+  `.ultimate/README.md` behind "What's in it". Use it / Keep global remembers the decision through `decide`.
+  The tool refuses this card when there is no project setup or it is already decided.
+- **Git:** why isolation is unavailable, and what Git brings. An empty folder gets Set up Git, through the
+  workspaces user action `setupGit` (`git init` and an empty first commit). A folder with files gets
+  Let @ultimate do it: the choice input asks the agent to write a fitting `.gitignore` and choose the first commit's
+  contents without secrets, dependencies or generated output, adding no remote and pushing nothing. The tool refuses
+  when the folder is already isolatable.
+
+After applying a choice, the browser calls the user-only `choice { card, summary, toolCallId }` action in the same
+conversation. It submits a typed input, kind `onboarding.choice`, with data `{ card, summary, toolCallId }` and model
+text `Setup choice (<card>): <summary>`. Its stable request id `onboarding-choice:<toolCallId>` deduplicates double
+clicks. A quiet input card displays the summary. The original tool card shows **Chosen: …**, with no buttons, derived
+from the matching choice entry (or the current project/git status), so it stays settled after reload.
+
+The status line keeps **project setup** while the project decision is open and **set up git** while isolation is
+unavailable. Clicking posts "Help me decide whether to use this project's setup." or "Help me set up git for this
+folder." to @ultimate through the Board, then opens the standing conversation returned by `addresses`. The Extensions
+panel's About this setup and the start page's isolation shortcut route there too; they no longer open setup dialogs.
+The Git status is read again whenever the shown conversation finishes a run, including an agent's first Git commit.
+
+## Extensions panel
+
+The right-panel tab (palette **Extensions…**) shows the project decision, a way to change it, Use this project's setup
+everywhere, and every extension with its source, deciding layer, README line and switch. Switches save to this project
+(when its setup is in use) or everywhere. Turning off `agent` or `onboarding` asks first, because the panel goes with
+them. Failures show on the row; the list follows system info.
 
 ## Actions
 
-This default-on built-in exports browser actions (no model tools):
+This default-on built-in exports browser actions. Settings choices and completion actions are user-only: agents
+cannot apply them through codemode `ultimate.action`.
 
-- `status`: first-run state; project configuration, decision, and capped README; `user`, the `enable` and `disable`
-  lists of `~/.ultimate/settings.json`; and `adds`, what the project's setup brings, read even while undecided and
-  never loaded: the names of its `.ultimate/agents/*.md` (frontmatter `name`, else the file name), `.ultimate/skills`,
-  and extension folders (`extensions`, and `replaces` for those named like a built-in), and the `enable` and `disable`
-  lists of its settings.
+- `status`: first-run state; project configuration, decision and README; the user's enable/disable lists; and `adds`,
+  the project's agents, skills, extension folders, replacements and declared settings, inspected even while undecided.
 - `firstRunDone`: records completion in the injected user home's `.ultimate/onboarding.json`.
-- `applyFirstRun { extensions, local? }`: `extensions` maps non-empty names to booleans; true adds the name to the
-  user's `extensions.enable` and drops it from `disable`, false drops it from `enable`. Records the first run, then
-  applies the settings and, when `local` is given, the project decision with one reload.
-- `decide { local }`: saves the project choice with Pi's `ProjectTrustStore` in `.ultimate` and reloads extensions and web facets.
-  A linked git worktree reads and saves its main checkout's choice, so new worktrees of a decided project never ask.
-- `setExtension { name, enabled, scope }`: updates user or project settings, preserving other keys. Project writes require a local decision.
+- `applyFirstRun { extensions, local? }`: maps names to booleans, moving each name to user `extensions.enable` or
+  `disable` and removing it from the opposite list. Records completion, then reloads; optional `local` also decides
+  the project.
+- `decide { local }`: saves the project choice through Pi's `ProjectTrustStore` and reloads extensions/web facets.
+  Linked worktrees share their main checkout's choice.
+- `choice { card, summary, toolCallId }`: the deduplicated typed input described above. Requires a conversation.
+- `setExtension { name, enabled, scope }`: updates user or project settings, preserving other keys. Project writes
+  require a local decision.
 - `adoptProjectSetup`: merges project enable/disable lists into user settings.
-- `extensions`: discovered names, sources, effective enablement, deciding layers, and README first sentences, including project folders not yet selected.
+- `extensions`: discovered names, sources, effective enablement, deciding layers and README first sentences.
 
-Undecided projects use global configuration. Only a local decision enables project extension folders, extension settings, agents, and skills; other project settings remain readable. Settings and completion-marker writes use same-directory temporary files and atomic renames, with two-space JSON and a trailing newline; `settings.ts` holds that writer, which the conversations extension reuses for `summaryModel`. Project decisions, summaries, and deciding layers come through `ExtensionHost`; onboarding imports no core runtime modules.
+Undecided projects use global configuration. Only a local decision enables project extension folders, settings,
+agents and skills. Settings and completion-marker writes use same-directory temporary files and atomic renames,
+with two-space JSON and a trailing newline; `settings.ts` holds the writer.

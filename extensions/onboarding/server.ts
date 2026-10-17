@@ -2,7 +2,12 @@ import { existsSync } from 'node:fs'
 import { readFile, readdir } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { loadSkillsFromDir, parseFrontmatter } from '@earendil-works/pi-coding-agent'
-import { defineExtension } from '@earendil-works/pi-durable'
+import { defineEntry, defineExtension, defineTool } from '@earendil-works/pi-durable'
+import { Type } from '@earendil-works/pi-ai'
+import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
+import type { ConversationId } from '@earendil-works/pi-durable'
+import type { ExtensionHost } from '../../server/extensions.ts'
+import { isolatable } from '../workspaces/git.ts'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
 import { save, updateSettings } from './settings.ts'
@@ -83,6 +88,7 @@ async function declared(path: string) {
 const marker = (userHome: string) => join(userHome, '.ultimate/onboarding.json')
 
 export const userActions = [
+  'choice',
   'decide',
   'setExtension',
   'adoptProjectSetup',
@@ -91,6 +97,37 @@ export const userActions = [
 ]
 
 export const actions = {
+  choice: async (args, { host, conversationId }) => {
+    if (conversationId === undefined) throw new Error('A conversation is required')
+    const data = args as { card?: string; summary?: string; toolCallId?: string }
+    if (
+      !data ||
+      !['extensions', 'project', 'git'].includes(data.card ?? '') ||
+      typeof data.summary !== 'string' ||
+      !data.summary.trim() ||
+      typeof data.toolCallId !== 'string' ||
+      !data.toolCallId.trim()
+    )
+      throw new Error('Expected card, summary and toolCallId')
+    const conversation = await host
+      .harness()
+      .conversation(conversationId as ConversationId, context)
+    if (!conversation) throw new Error('Conversation not found')
+    await conversation.submit(
+      {
+        type: 'input',
+        content: `Setup choice (${data.card}): ${data.summary}`,
+        entry: {
+          kind: ChoiceEntry.kind,
+          data: { card: data.card!, summary: data.summary, toolCallId: data.toolCallId },
+        },
+        requestId: `onboarding-choice:${data.toolCallId}`,
+        whenBusy: 'followUp',
+      },
+      context,
+    )
+    return { sent: true }
+  },
   status: async (_args, { host }) => {
     const folders = await host.projectExtensions()
     return {
@@ -111,7 +148,7 @@ export const actions = {
   },
   /**
    * The first run's choices in one step: checked names join the user's `extensions.enable` (and leave `disable`),
-   * unchecked ones leave `enable`; `local`, when given, is the project decision. Records the first run, then applies
+   * unchecked names join `disable`; `local`, when given, is the project decision. Records the first run, then applies
    * it all with one reload.
    */
   applyFirstRun: async (args, { host }) => {
@@ -133,9 +170,7 @@ export const actions = {
     await updateSettings(join(host.userHome, '.ultimate/settings.json'), (value) => {
       const extensions = lists(value)
       for (const [name, enabled] of Object.entries(choices as Record<string, boolean>))
-        if (enabled) toggle(extensions, name, true)
-        else if (extensions.enable !== undefined)
-          extensions.enable = (extensions.enable as string[]).filter((entry) => entry !== name)
+        toggle(extensions, name, enabled)
     })
     await save(marker(host.userHome), { firstRunDone: true })
     if (local === undefined) await host.reloadExtensions()
@@ -225,4 +260,48 @@ export const actions = {
   },
 } satisfies Record<string, ExtensionAction>
 
-export default defineExtension({ name: 'onboarding' })
+export const ChoiceEntry = defineEntry<{ card: string; summary: string; toolCallId: string }>(
+  'onboarding.choice',
+)
+
+export default function onboarding(host: ExtensionHost) {
+  return defineExtension({
+    name: 'onboarding',
+    tools: [
+      defineTool({
+        name: 'setup',
+        deferred: true,
+        description:
+          'Show an inline setup card for the user to choose. Wait for the onboarding.choice input; only the user can apply choices.',
+        parameters: Type.Object({
+          card: Type.Union([
+            Type.Literal('extensions'),
+            Type.Literal('project'),
+            Type.Literal('git'),
+          ]),
+        }),
+        // Read-only inspection: repeating a card changes no state.
+        replay: 'safe',
+        async execute({ card }) {
+          const project = await host.projectSetup()
+          if (card === 'project' && (!project.config || project.decision !== null))
+            throw new Error(
+              !project.config
+                ? 'This project has no .ultimate/ setup'
+                : 'Project setup is already decided',
+            )
+          const checkout = card === 'git' ? await isolatable(host.projectRoot) : undefined
+          if (checkout && !('reason' in checkout))
+            throw new Error('This folder is already isolatable')
+          const text =
+            card === 'git' && checkout && 'reason' in checkout
+              ? checkout.reason
+              : card === 'project'
+                ? `Project has a .ultimate/ setup; undecided. ${JSON.stringify(await adds(host.projectRoot))}`
+                : 'Choose recommended extensions. Settings apply only when the user continues.'
+          return { output: [{ type: 'text', text }] }
+        },
+      }),
+    ],
+  })
+}
