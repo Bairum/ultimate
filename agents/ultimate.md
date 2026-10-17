@@ -15,6 +15,8 @@ tools:
     web_fetch,
     setup,
     seed_tally,
+    new_root,
+    compact_tally,
     edit,
     write,
   ]

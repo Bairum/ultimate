@@ -35,13 +35,7 @@ import { Workspaces, workspaces } from '../extensions/workspaces/workspaces.ts'
 import { git, setup } from '../extensions/workspaces/git.ts'
 import type { LanderEntry, WorkspaceIndex } from '../extensions/workspaces/types.ts'
 import { createLander, landerCheckout, landerPath } from '../extensions/workspaces/lander.ts'
-import lineage, {
-  actions as lineageActions,
-  leaveNote,
-  rootOf,
-  Roots,
-  startBranch,
-} from '../extensions/lineage/server.ts'
+import lineage, { leaveNote, rootOf, Roots, startBranch } from '../extensions/lineage/server.ts'
 import { subject } from '../extensions/conversations/server.ts'
 import type { ConversationsService } from '../extensions/conversations/server.ts'
 import { Summaries } from '../extensions/conversations/summary.ts'
@@ -837,34 +831,6 @@ it.concurrent('notes the root once for a landing even when its report phase is r
   )
   await f.reopen()
   expect(await rootNotes(f)).toHaveLength(1)
-})
-
-it.concurrent('refuses to make a submitter a tally while the lander still reports to it', async () => {
-  const f = await lander({})
-  const id = await f.create()
-  await f.service.ready(id, context)
-  await commit((await f.service.get(id, context))!.path, 'reported.txt')
-  const noting = Promise.withResolvers<void>()
-  const release = Promise.withResolvers<void>()
-  f.host.provide('lineage', {
-    rootOf: async () => ROOT_CONVERSATION_ID,
-    leaveNote: async () => {
-      noting.resolve()
-      await release.promise
-      return ROOT_CONVERSATION_ID
-    },
-  })
-  await f.service.submit(id, 'None', context)
-  await noting.promise
-  // Landed and out of the queue: only the report back to the submitter is still pending.
-  expect(
-    (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!.queue,
-  ).toEqual([])
-  await expect(lineageActions.root({ id }, { host: f.host } as ActionContext)).rejects.toThrow(
-    `#${id} cannot become a tally while the lander is still reporting its submission`,
-  )
-  release.resolve()
-  expect(await submitted(f, id)).toHaveLength(1)
 })
 
 it.concurrent('delivers a persisted version-one report without outcome as plain input once', async () => {

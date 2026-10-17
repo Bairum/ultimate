@@ -436,15 +436,24 @@ it('tells a branch its tree’s root was distilled into a tally after it forked'
   const f = await catchupFixture()
   await ask(f.server, ROOT_CONVERSATION_ID, 'We build a tree')
   const own = await branchFrom(f.server, { from: 1, prompt: 'Branch before the tally' })
-  expect(
-    (await post(f.server, '/api/extensions/lineage/actions/root', { args: { id: 1 } })).status,
-  ).toBe(200)
-  await until(
-    async () =>
-      (await f.server.harness.snapshot(Tally, ROOT_CONVERSATION_ID, context))?.since !== undefined,
-  )
+  // Legacy databases can contain a genesis distilled after a branch forked.
+  await f.server.harness.commit(async (tx) => {
+    const entry = await tx.appendEntry(ROOT_CONVERSATION_ID, {
+      kind: 'pi.reset',
+      head: 'self',
+      data: { lineage: { tally: true } },
+      model: [
+        {
+          role: 'user',
+          content: '<tally from="#1/1">\necho We build a tree\n</tally>',
+          timestamp: 0,
+        },
+      ],
+    })
+    ;(await tx.doc(Tally, ROOT_CONVERSATION_ID)).since = entry.id
+  }, context)
   const genesis = (await f.server.root.context(context)).entries[0]
-  await ask(f.server, own, 'resume after conversion')
+  await ask(f.server, own, 'resume after genesis')
   const text = ((await catchups(f.server, own))[0].data as { text: string }).text
   expect(text).toMatch(
     new RegExp(

@@ -134,7 +134,7 @@ export async function prepareFauxServer(options: FixtureOptions) {
 }
 /**
  * Make the empty root `id` (default the project's first conversation) a tally from an empty head, as if it had read
- * nothing yet, so tests branch from it without a survey. Does nothing when it already has entries.
+ * nothing yet, so tests can branch from it. Does nothing when it already has entries.
  */
 export async function seedTally(harness: Harness, id = 1) {
   await harness.commit(async (tx) => {
