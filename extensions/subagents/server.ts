@@ -7,6 +7,7 @@ import type { JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import {
+  AgentDoc,
   AssistantEntry,
   configure,
   ToolResultEntry,
@@ -618,14 +619,25 @@ export default function subagents(
           `Unknown standing agent @${name}. Standing agents: ${definitions.map((item) => `@${item.name}`).join(', ') || 'none'}`,
         )
       const root = (await host.harness().conversation(ROOT_CONVERSATION_ID, ctx))!
-      const change = definitionAgent(definition, await root.agent(ctx), host.modelRuntime)
+      const main = await root.agent(ctx)
       return host.harness().commit(async (tx) => {
         const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
         let id = Object.hasOwn(index, name) ? index[name] : undefined
-        if (id === undefined || !(await tx.conversation(id))) {
+        // A new conversation starts on the main conversation's model; an existing one keeps the model and thinking
+        // level chosen in it, so a refresh changes them only where the definition pins them.
+        let base = main
+        if (id !== undefined && (await tx.conversation(id))) {
+          const own = await tx.doc(AgentDoc, id)
+          base = {
+            ...main,
+            model: own.model ?? main.model,
+            thinkingLevel: own.thinkingLevel ?? main.thinkingLevel,
+          }
+        } else {
           id = (await tx.createConversation({ ownership: { kind: 'ownerless' } })).id
           index[name] = id
         }
+        const change = definitionAgent(definition, base, host.modelRuntime)
         await configure(tx, id, { ...change, cwd: host.projectRoot })
         Object.assign(await tx.doc(host.metadata, id), { label: 'agent', title: `@${name}` })
         return id
