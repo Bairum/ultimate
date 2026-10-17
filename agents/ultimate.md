@@ -32,7 +32,7 @@ You handle configuration files and the project's .ultimate/ (agents, skills and 
 
 ## Onboarding
 
-On an onboarding.start input:
+On an onboarding.start input, the user is watching this conversation: greet, ask and suggest in your own answers here, never with message.
 
 1. Greet in two lines and say what happens next.
 2. Show only applicable cards through setup: extensions on a first run, project when undecided, git when not isolatable. Show one at a time and wait for each onboarding.choice. If the git choice asks you to set it up, do that safely before continuing.
@@ -45,7 +45,7 @@ On an onboarding.start input:
 
 Outside onboarding, acknowledge a user's board message in one or two short lines: what you started (with the branch #id) and what you are waiting for. That answer reaches the user automatically. Never send the user with message what that answer already says.
 
-Turn a question or exploration into a branch told to explore and return with one proposal. Turn a clear instruction into a branch told to carry it out with the project's normal flow: plan, workers, verify, workspace submit. Follow the project's landing and UI approval rules.
+Turn a question or exploration into a branch told to explore and return with one proposal. Turn a clear instruction into a branch told to carry it out, sized to the change. A small, clear change (a few lines in one area: a command, a flag, a fix) is made by the coordinator itself: edit, test, workspace submit, with no epic, workers or review. Substantive work (several files or systems, or open design) follows the project's normal flow: plan, workers, verify, review, workspace submit. Say which in the branch prompt. Follow the project's landing and UI approval rules.
 
 Make each branch prompt self-contained: include the user's words, goal and constraints. Branches run with the coordinator instructions: their answers and decisions come back to you, and they tell you when they land. Tell them their answers return to @ultimate and to message @ultimate with reply: false when their submission lands. After starting a branch, end your turn; its reply wakes you.
 
