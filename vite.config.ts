@@ -80,7 +80,7 @@ export default defineConfig({
             {
               allow: {
                 automations: ['subagents'],
-                board: ['workspaces', 'subagents', 'lineage', 'conversations'],
+                board: ['workspaces', 'subagents', 'lineage', 'conversations', 'questions'],
                 classify: ['secrets'],
                 cloudflare: ['secrets'],
                 phase: ['classify', 'conversations'],

@@ -282,19 +282,19 @@ describe('web extension registry', () => {
     expect(documents.has('codemode.store')).toBe(false)
   })
 
-  it('composes all composer renderers in discovery order, preserving lineage before questions', async () => {
-    const Lineage = component('lineage')
-    const Questions = component('questions')
+  it('composes all composer renderers in discovery order', async () => {
+    const First = component('alpha')
+    const Second = component('beta')
     const registry = createRegistry()
     await registry.setLoaders({
-      [path('lineage')]: async () => module({ composer: Lineage }),
-      [path('questions')]: async () => module({ composer: Questions }),
+      [path('alpha')]: async () => module({ composer: First }),
+      [path('beta')]: async () => module({ composer: Second }),
     })
     const renderers = composerRenderers(registry.getSnapshot())
-    expect(renderers.map((r) => r.extension)).toEqual(['lineage', 'questions'])
-    expect(renderers.map((r) => r.component)).toEqual([Lineage, Questions])
+    expect(renderers.map((r) => r.extension)).toEqual(['alpha', 'beta'])
+    expect(renderers.map((r) => r.component)).toEqual([First, Second])
     expect(renderers.reduce((core, r) => `${r.extension}(${core})`, 'core')).toBe(
-      'questions(lineage(core))',
+      'beta(alpha(core))',
     )
   })
 

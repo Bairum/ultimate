@@ -15,6 +15,7 @@ import { MessageResponse } from '@/components/ai/message'
 import { cn, events, useConversation, useConversations, useDocOf, useNow, useUltimate } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import { ConversationRef } from '../conversations/feature.tsx'
+import { BoardQuestions } from '../questions/card.tsx'
 import { openAgentSource } from '../subagents/messages.tsx'
 import { useWorkspaceIndex } from '../workspaces/data.tsx'
 import { accentIndex, messageStatus, relativeTime, side } from './data.tsx'
@@ -221,11 +222,14 @@ export function BoardCard({
   message,
   perspective,
   quote,
+  answerKeys = false,
   onReply,
 }: {
   message: BoardMessage
   perspective: number | 'user'
   quote?: string
+  /** This message's answer card, if any, takes the desktop 1–9 and Enter keys. */
+  answerKeys?: boolean
   onReply: () => void
 }) {
   const { switchConversation, showSurface } = useUltimate()
@@ -278,6 +282,7 @@ export function BoardCard({
         </div>
       )}
       <Body text={message.text} compact={message.kind === 'landing'} />
+      <BoardQuestions message={message} keys={answerKeys} />
       <footer className="flex flex-wrap items-center gap-3 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
         <Status message={message} perspective={perspective} />
         {message.error && (
