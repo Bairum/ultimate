@@ -125,6 +125,86 @@ async function fixture() {
   }
 }
 
+it('ignores volatile system changes, refreshes them after a minute, and sends meaningful changes', async () => {
+  const f = await fixture()
+  try {
+    const system = {
+      build: { id: 'first' },
+      machine: { hostname: 'test', freeMemory: 100 },
+      persistence: { path: '/test/state.sqlite', sizeBytes: 100, walBytes: 10 },
+      extensions: [{ name: 'cloud' }],
+    }
+    f.host.system = () => system as unknown as ReturnType<ExtensionHost['system']>
+    const socket = f.sockets[0]
+    socket.open()
+    await f.drain()
+    const sent = () => socket.messages.filter((message) => message.type === 'system')
+    system.machine.freeMemory--
+    system.persistence.sizeBytes++
+    system.persistence.walBytes++
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(sent()).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(59_000)
+    expect(sent()).toHaveLength(2)
+    expect(sent()[1].value).toEqual(system)
+    system.build.id = 'second'
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(sent()).toHaveLength(3)
+    system.extensions.push({ name: 'info' })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(sent()).toHaveLength(4)
+    expect(sent()[3].value).toEqual(system)
+  } finally {
+    await f.close()
+  }
+})
+
+it('notices a batch older than 60 seconds once and reconnects from the replica cursor', async () => {
+  const f = await fixture()
+  try {
+    const socket = f.sockets[0]
+    socket.autoAck = false
+    socket.open()
+    await f.drain()
+    expect(socket.batches().length).toBeGreaterThan(0)
+    await vi.advanceTimersByTimeAsync(59_750)
+    expect(f.notices).toEqual([])
+    expect(socket.closed).toBe(false)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(f.notices).toEqual(['Cloud sync stalled: no acknowledgement for 60 s; reconnecting'])
+    expect(socket.closed).toBe(true)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(f.sockets).toHaveLength(2)
+    f.sockets[1].open()
+    await f.drain()
+    expect(f.sockets[1].batches().flatMap((batch) => batch.conversations)).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(f.notices).toHaveLength(1)
+    expect(f.sockets).toHaveLength(2)
+  } finally {
+    await f.close()
+  }
+})
+
+it('does not notice or reconnect when a batch is acknowledged within 60 seconds', async () => {
+  const f = await fixture()
+  try {
+    const socket = f.sockets[0]
+    socket.autoAck = false
+    socket.open()
+    await f.drain()
+    await vi.advanceTimersByTimeAsync(59_000)
+    for (const batch of socket.batches()) socket.receive({ type: 'ack', batch: batch.batch })
+    await f.drain()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(f.notices).toEqual([])
+    expect(socket.closed).toBe(false)
+    expect(f.sockets).toHaveLength(1)
+  } finally {
+    await f.close()
+  }
+})
+
 it('sends every conversation, only its own entries in ID order, and conversation docs from an empty cursor', async () => {
   const f = await fixture()
   try {

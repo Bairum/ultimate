@@ -87,29 +87,40 @@ export class Replica {
     for (const stream of this.streams) stream.send('view', this.store.view(stream.id))
   }
   webSocketMessage(socket: MachineSocket, raw: string | ArrayBuffer) {
-    if (socket.readyState !== WebSocket.OPEN || !this.ctx.getWebSockets().includes(socket)) return
-    const message = JSON.parse(
-      typeof raw === 'string' ? raw : new TextDecoder().decode(raw),
-    ) as MachineMessage
-    if (message.type === 'hello') {
-      const held = this.store.claimProject(message.project)
-      if (held !== message.project) {
-        let reason = ''
-        const encoder = new TextEncoder()
-        for (const character of held) {
-          if (encoder.encode(reason + character).byteLength > 123) break
-          reason += character
+    let type = 'unknown'
+    try {
+      if (socket.readyState !== WebSocket.OPEN || !this.ctx.getWebSockets().includes(socket)) return
+      const message = JSON.parse(
+        typeof raw === 'string' ? raw : new TextDecoder().decode(raw),
+      ) as MachineMessage
+      // Only protocol labels may reach logs, never arbitrary input or exception text.
+      if (['hello', 'batch', 'summaries', 'system', 'models', 'delivered'].includes(message?.type))
+        type = message.type
+      if (message.type === 'hello') {
+        const held = this.store.claimProject(message.project)
+        if (held !== message.project) {
+          let reason = ''
+          const encoder = new TextEncoder()
+          for (const character of held) {
+            if (encoder.encode(reason + character).byteLength > 123) break
+            reason += character
+          }
+          socket.close(PROJECT_MISMATCH, reason)
+          return
         }
-        socket.close(PROJECT_MISMATCH, reason)
-        return
-      }
-      for (const previous of this.sockets())
-        if (previous !== socket) previous.close(1000, 'Replaced by new machine connection')
-      socket.serializeAttachment(true)
-      for (const stream of this.streams) stream.close()
-    } else if (socket.deserializeAttachment() !== true) return
-    for (const reply of this.store.receive(message)) socket.send(JSON.stringify(reply))
-    if (message.type === 'delivered') this.refresh()
+        for (const previous of this.sockets())
+          if (previous !== socket) previous.close(1000, 'Replaced by new machine connection')
+        socket.serializeAttachment(true)
+        for (const stream of this.streams) stream.close()
+      } else if (socket.deserializeAttachment() !== true) return
+      for (const reply of this.store.receive(message)) socket.send(JSON.stringify(reply))
+      if (message.type === 'delivered') this.refresh()
+    } catch (error) {
+      const bytes =
+        typeof raw === 'string' ? new TextEncoder().encode(raw).byteLength : raw.byteLength
+      console.error(`Cloud sync WebSocket exception: type=${type} bytes=${bytes}`)
+      throw error
+    }
   }
   webSocketClose(socket: MachineSocket) {
     socket.close()

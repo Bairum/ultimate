@@ -63,7 +63,7 @@ export function startSync(
     let summariesDirty = true
     let ready = false
     let batch = 0
-    const unacked = new Set<number>()
+    const unacked = new Map<number, number>()
     const pending: Batch = { type: 'batch', batch: 0, conversations: [], entries: [], docs: [] }
     let pendingBytes = 0
     let bufferedBytes = 0
@@ -98,6 +98,7 @@ export function startSync(
     idle = () => chain
     let lastSummaries = ''
     let lastSystem = ''
+    let lastSystemAt = 0
     const send = (message: MachineMessage) => {
       if (!closed) socket.send(JSON.stringify(message))
     }
@@ -140,7 +141,7 @@ export function startSync(
           }
           pending[key].splice(0, count)
         }
-        unacked.add(next.batch)
+        unacked.set(next.batch, Date.now())
         send(next)
       }
     }
@@ -182,8 +183,20 @@ export function startSync(
       }
     }
     const metadata = () => {
+      const oldest = unacked.values().next().value
+      if (oldest !== undefined && Date.now() - oldest > 60_000) {
+        host.notice('Cloud sync stalled: no acknowledgement for 60 s; reconnecting')
+        close()
+        return
+      }
       const system = host.system()
-      const systemJson = JSON.stringify(system)
+      // RAM and SQLite sizes change constantly; keep them fresh once a minute without
+      // resending the full Info snapshot on every system refresh.
+      const systemJson = JSON.stringify({
+        ...system,
+        machine: { ...system.machine, freeMemory: undefined },
+        persistence: { ...system.persistence, sizeBytes: undefined, walBytes: undefined },
+      })
       if (summariesDirty) {
         summariesDirty = false
         const summaries = host.conversations()
@@ -194,8 +207,9 @@ export function startSync(
           send({ type: 'summaries', value: summaries })
         }
       }
-      if (systemJson !== lastSystem) {
+      if (systemJson !== lastSystem || Date.now() - lastSystemAt >= 60_000) {
         lastSystem = systemJson
+        lastSystemAt = Date.now()
         send({ type: 'system', value: system })
       }
     }

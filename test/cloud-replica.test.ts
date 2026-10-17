@@ -90,6 +90,36 @@ function batch(
   return store.receive(message)
 }
 
+it.each([
+  ['{"type":"batch","private":"do not log 🐈"}', 'batch'],
+  ['{"type":"do not log","private":"do not log"}', 'unknown'],
+  ['{"private":"do not log"', 'unknown'],
+])('logs only message type and byte size on WebSocket exceptions: %s', (raw, type) => {
+  const instance = worker()
+  const socket = {
+    readyState: WebSocket.OPEN,
+    deserializeAttachment: () => true,
+  } as unknown as Parameters<Replica['webSocketMessage']>[0]
+  Object.assign(instance, { ctx: { getWebSockets: () => [socket] } })
+  const error = new Error('private exception detail')
+  const receive = vi.spyOn(instance.store, 'receive').mockImplementation(() => {
+    throw error
+  })
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  for (const message of [raw, new TextEncoder().encode(raw).buffer]) {
+    expect(() => instance.webSocketMessage(socket, message)).toThrow(
+      raw.endsWith('}') ? error : SyntaxError,
+    )
+    expect(log).toHaveBeenLastCalledWith(
+      `Cloud sync WebSocket exception: type=${type} bytes=${Buffer.byteLength(raw)}`,
+    )
+  }
+  expect(log).toHaveBeenCalledTimes(2)
+  receive.mockReturnValue([])
+  instance.webSocketMessage(socket, '{"type":"models","value":[]}')
+  expect(log).toHaveBeenCalledTimes(2)
+})
+
 describe('cloud request admission and fallback', () => {
   it.each([false, true])(
     'rejects foreign Origin and cross-site POSTs before %s online forwarding or enqueueing',

@@ -20,4 +20,6 @@ Faux hosts and preview instances stay silent and do not sync from user settings.
 
 A replica holds one project, recorded from the first hello (including for existing trial data); another project is refused with close code `4009`, and its host reports the mismatch and stops retrying.
 
+System info is compared once a second, ignoring `machine.freeMemory` and the SQLite `persistence.sizeBytes`/`walBytes` counters. Meaningful changes (including build and extensions) send immediately; a full snapshot also refreshes every 60 seconds so volatile Info values are at most a minute stale. Summaries retain their change-driven behaviour. If the oldest unacknowledged batch exceeds 60 seconds, the sender raises one `Cloud sync stalled: no acknowledgement for 60 s; reconnecting` notice, closes the socket and resumes through the normal reconnect/cursor path.
+
 The cloud implementation and shared wire contract live in `cloud/`. Prompts queued there are submitted locally with the outbox UUID as Pi's `requestId`, so retries admit one submission. Unknown conversations produce a notice and leave the item undelivered. Closing the host closes the socket; failed connections retry with a 1–30 second backoff.

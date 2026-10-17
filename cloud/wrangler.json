@@ -5,6 +5,7 @@
   "compatibility_date": "2026-06-01",
   "workers_dev": false,
   "preview_urls": false,
+  "observability": { "enabled": true },
   "durable_objects": { "bindings": [{ "name": "REPLICA", "class_name": "Replica" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Replica"] }],
   "assets": {

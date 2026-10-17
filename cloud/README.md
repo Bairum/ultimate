@@ -64,6 +64,8 @@ With a machine socket open, API requests stream through the `MACHINE` VPC servic
 
 Several machines, matching the UI build to the machine, and offline images/actions/configure/abort/compact remain out of scope.
 
+Workers observability is enabled in `wrangler.json` for persistent logs; `wrangler tail` can miss Durable Object WebSocket events. A `webSocketMessage` exception emits one line with only the protocol message type (or `unknown`) and UTF-8 byte size, then rethrows. Message bodies and exception text are never included in that line, and successful messages emit nothing. The machine's sender refreshes volatile system info at most once a minute and reconnects with a notice when a batch remains unacknowledged for more than 60 seconds (see `extensions/cloud/README.md`).
+
 ## Deploy
 
 The committed `wrangler.json` is generic. Your domain and machine binding are personal and stay out of this repository: they live in your user settings, and `pnpm cloud:deploy` writes them into the gitignored `cloud/wrangler.deploy.json` before deploying. No credentials belong in the repository or in command arguments. Run commands from the repository with Wrangler logged in to the account that holds your domain's zone.
