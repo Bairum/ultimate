@@ -16,6 +16,7 @@ import { api } from '../sdk/client.ts'
 import { errorMessage } from '../sdk/format.ts'
 import { useConversation, useExtensions, useModels } from '../sdk/hooks.ts'
 import { isMac } from '../sdk/keys.ts'
+import { touchKeyboard } from '../sdk/viewport.ts'
 import type { ModelsResponse } from '../../../shared/protocol.ts'
 import type { WebExtension } from '../sdk/types.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
@@ -351,7 +352,7 @@ function ConversationComposer({
             remove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
           />
           <PromptInputTextarea
-            autoFocus
+            autoFocus={!touchKeyboard()}
             readOnly={loading || sending}
             onPaste={(event) => void paste(event)}
             id={inputId ?? 'composer-input'}

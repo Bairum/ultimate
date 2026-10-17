@@ -8,6 +8,7 @@ import {
   getState,
   getUiState,
   NewConversationComposer,
+  touchKeyboard,
   useAction,
   useConversation,
   useStore,
@@ -477,9 +478,9 @@ function New({
   const [choice, setChoice] = useState<'branch' | 'root'>('branch')
   const ready = info.data !== undefined && roots !== undefined
   const root = choice === 'root' || from === undefined
-  // The prompt takes focus once the page knows its modes, and again when the mode changes.
+  // The prompt takes focus once the page knows its modes, and again when the mode changes; a touch keyboard waits for a tap.
   useEffect(() => {
-    if (ready) document.getElementById('start-input')?.focus()
+    if (ready && !touchKeyboard()) document.getElementById('start-input')?.focus()
   }, [ready, root])
   return (
     <>

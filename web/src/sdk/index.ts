@@ -69,7 +69,7 @@ export {
   useUltimate,
 } from './hooks.ts'
 export type { ActionState, ConversationState, Restart } from './hooks.ts'
-export { useViewport } from './viewport.ts'
+export { touchKeyboard, useViewport } from './viewport.ts'
 export type { Viewport } from './viewport.ts'
 export type { Connection, State } from './store.ts'
 export type { DocumentItem } from './registry.ts'
