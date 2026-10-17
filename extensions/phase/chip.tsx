@@ -1,5 +1,6 @@
 import { useConversations, useDocOf, useExtensions } from '@/sdk'
 import type { Phase, PhaseState } from './types.ts'
+import { subagentsBusy } from '../conversations/subtree.tsx'
 
 export type DisplayPhase = Phase | 'waiting'
 export function usePhase(conversationId: number | undefined): DisplayPhase | undefined {
@@ -11,28 +12,7 @@ export function usePhase(conversationId: number | undefined): DisplayPhase | und
   if (!enabled || conversationId === undefined) return undefined
   if (conversations.find((conversation) => conversation.id === conversationId)?.busy)
     return phases?.conversations[conversationId]?.phase
-  const descendants = new Set([conversationId])
-  let changed = true
-  while (changed) {
-    changed = false
-    for (const conversation of conversations) {
-      if (
-        conversation.ownerTaskId !== undefined &&
-        conversation.parentConversationId !== undefined &&
-        descendants.has(conversation.parentConversationId) &&
-        !descendants.has(conversation.id)
-      ) {
-        descendants.add(conversation.id)
-        changed = true
-      }
-    }
-  }
-  return conversations.some(
-    (conversation) =>
-      conversation.id !== conversationId && descendants.has(conversation.id) && conversation.busy,
-  )
-    ? 'waiting'
-    : undefined
+  return subagentsBusy(conversations, conversationId) ? 'waiting' : undefined
 }
 const labels: Record<DisplayPhase, string> = {
   exploring: 'Exploring',

@@ -190,8 +190,10 @@ async function fixture(
     }),
   )
   const observed: string[] = []
+  const transcripts: string[] = []
   const route: FauxResponseFactory = (transcript) => {
     prepared.faux!.appendResponses([route])
+    transcripts.push(JSON.stringify(transcript.messages))
     const last = transcript.messages.findLast((m) => m.role !== 'system')!
     const text =
       typeof last.content === 'string'
@@ -261,6 +263,7 @@ async function fixture(
     hold,
     holding: () => holding,
     observed,
+    transcripts,
   }
 }
 async function replies(f: Awaited<ReturnType<typeof fixture>>) {
@@ -282,6 +285,125 @@ it('wakes an idle recipient and returns one typed reply; one-way messages return
   await f.recipient.waitForIdle(context)
   expect(await replies(f)).toHaveLength(1)
   expect(f.observed.some((t) => t.includes('One way'))).toBe(true)
+})
+it('records a one-way input answer without returning it to the sender', async () => {
+  const f = await fixture()
+  await f.send(String(f.recipient.id), 'One-way update', { reply: false })
+  await until(async () => (await f.log())!.messages[0]?.state === 'delivered')
+  await f.recipient.waitForIdle(context)
+  expect(f.observed).toContain(
+    'Message from #1:\nOne-way update\nOne-way message: #1 expects no answer, and your answer here is not sent to it. If it needs to hear from you, message it.',
+  )
+  await until(async () => (await f.log())!.messages[0]?.answer !== undefined)
+  const log = (await f.log())!
+  expect(log.messages).toHaveLength(1)
+  expect(log.messages[0]).toMatchObject({ state: 'delivered', reply: false })
+  const view = await f.recipient.viewState(context)
+  expect(view.value.entries.find((e) => e.id === log.messages[0].answer)?.kind).toBe('pi.assistant')
+  view.dispose()
+  expect(await replies(f)).toHaveLength(0)
+})
+async function worker(f: Awaited<ReturnType<typeof fixture>>) {
+  const agent = await f.opened.root.agent(context)
+  const childId = await f.opened.harness.commit(async (tx) => {
+    const owner = await tx.createTask(anchor, null, {
+      ownership: { kind: 'conversation' },
+      conversationId: ROOT_CONVERSATION_ID,
+      background: true,
+    })
+    const { id } = await tx.createConversation({ ownership: { kind: 'task', taskId: owner } })
+    await configure(tx, id, { model: agent.model, tools: agent.tools })
+    ;(await tx.doc(Subagents, ROOT_CONVERSATION_ID)).agents[String(id)] = {
+      conversationId: id,
+      agent: 'worker',
+      background: true,
+      reported: [],
+    }
+    return id
+  }, context)
+  return (await f.opened.harness.conversation(childId, context))!
+}
+it('places an idle parent update as a note without starting a run', async () => {
+  const f = await fixture()
+  const child = await worker(f)
+  await (
+    await child.submit(
+      { type: 'input', content: 'SEND {"to":"#1","text":"Progress","reply":false}' },
+      context,
+    )
+  ).wait(context)
+  await until(async () => (await f.log())!.messages[0]?.state === 'delivered')
+  const view = await f.opened.root.viewState(context)
+  const note = view.value.entries.find((e) => e.kind === 'board.message')!
+  expect(note.data).toMatchObject({ from: child.id, reply: false, delivery: 'note' })
+  expect(note.input).not.toBe(true)
+  expect(
+    view.value.entries.filter((e) => e.id > note.id && e.kind === 'pi.assistant'),
+  ).toHaveLength(0)
+  view.dispose()
+  const page = await f.host.scanSubmissions(
+    { conversationId: ROOT_CONVERSATION_ID },
+    100,
+    undefined,
+    context,
+  )
+  expect(page.items.find((s) => s.requestId === 'board:1')).toMatchObject({ type: 'write' })
+  expect((await f.log())!.messages[0].answer).toBeUndefined()
+})
+it('places a busy parent note at its next boundary for the model to read', async () => {
+  const f = await fixture()
+  const child = await worker(f)
+  await f.opened.root.submit({ type: 'input', content: 'HOLD' }, context)
+  await until(f.holding)
+  await (
+    await child.submit(
+      { type: 'input', content: 'SEND {"to":"#1","text":"Busy progress","reply":false}' },
+      context,
+    )
+  ).wait(context)
+  await until(async () => (await f.log())!.messages.length === 1)
+  const page = await f.host.scanSubmissions(
+    { conversationId: ROOT_CONVERSATION_ID },
+    100,
+    undefined,
+    context,
+  )
+  expect(page.items.find((s) => s.requestId === 'board:1')).toMatchObject({
+    type: 'write',
+    status: 'queued',
+  })
+  f.hold.release()
+  await f.opened.root.waitForIdle(context)
+  await until(async () => (await f.log())!.messages[0]?.state === 'delivered')
+  expect(
+    f.transcripts.some((t) =>
+      t.includes(`Note from #${child.id} (one-way update, no answer goes back):\\nBusy progress`),
+    ),
+  ).toBe(true)
+})
+it('still wakes a parent for a worker question and returns its typed reply', async () => {
+  const f = await fixture()
+  const child = await worker(f)
+  await (
+    await child.submit(
+      { type: 'input', content: 'SEND {"to":"#1","text":"Question?","reply":true}' },
+      context,
+    )
+  ).wait(context)
+  await until(async () => (await f.log())!.messages[0]?.state === 'answered')
+  await child.waitForIdle(context)
+  const parentView = await f.opened.root.viewState(context)
+  expect(parentView.value.entries.find((e) => e.kind === 'board.message')?.data).toMatchObject({
+    reply: true,
+    delivery: 'followUp',
+  })
+  parentView.dispose()
+  const view = await child.viewState(context)
+  expect(view.value.entries.find((e) => e.kind === 'board.reply')?.data).toMatchObject({
+    from: 1,
+    re: 1,
+  })
+  view.dispose()
 })
 it('refuses messaging a sender while answering, then allows it after the answer', async () => {
   const f = await fixture()
@@ -465,13 +587,13 @@ it('lets a subagent message only the conversation that started it', async () => 
     ).wait(context)
   }
 
-  const worker = await child(true)
-  await send(worker, 'user')
-  await send(worker, `#${f.recipient.id}`)
-  await send(worker, '#1')
+  const workerId = await child(true)
+  await send(workerId, 'user')
+  await send(workerId, `#${f.recipient.id}`)
+  await send(workerId, '#1')
   expect(f.observed.filter((text) => text.includes('message only #1'))).toHaveLength(2)
-  expect((await f.log())!.messages.map((m) => [m.from, m.to])).toEqual([[worker, 1]])
-  const view = await (await f.opened.harness.conversation(worker, context))!.viewState(context)
+  expect((await f.log())!.messages.map((m) => [m.from, m.to])).toEqual([[workerId, 1]])
+  const view = await (await f.opened.harness.conversation(workerId, context))!.viewState(context)
   expect(JSON.stringify(view.value.entries)).toContain('Use message only to update #1')
   view.dispose()
 
@@ -532,6 +654,11 @@ it('queues a busy recipient as follow-up, or steers its current run', async () =
     expect(f.observed.some((t) => t.startsWith('Message from') && t.includes('Busy message'))).toBe(
       true,
     )
+    const view = await f.recipient.viewState(context)
+    expect(view.value.entries.find((e) => e.kind === 'board.message')?.data).toMatchObject({
+      delivery: steer ? 'steer' : 'followUp',
+    })
+    view.dispose()
     const delivered = f.observed.findIndex(
       (t) => t.startsWith('Message from') && t.includes('Busy message'),
     )

@@ -1,3 +1,4 @@
+import type { EntryRecord } from '@earendil-works/pi-durable'
 import { ArrowUpIcon, MessagesSquareIcon, XIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -14,10 +15,11 @@ import {
   useUiState,
   useUltimate,
 } from '@/sdk'
-import { BoardCard, BoardInput, BoardRoster } from './cards.tsx'
+import { Address, BoardCard, BoardInput, BoardRoster } from './cards.tsx'
 import { useOverview } from '../conversations/feature.tsx'
 import {
   emptyBoard,
+  answeredMessages,
   parseAddress,
   suggestions,
   unreadCount,
@@ -27,6 +29,21 @@ import {
 import type { Addresses, BoardData } from './data.tsx'
 
 const useBoard = () => useDocOf<BoardData>(1, 'board') ?? emptyBoard
+
+function BoardAnswerLabel({ entry }: { entry: EntryRecord }) {
+  const board = useBoard()
+  const conversation = useConversation((value) => value.id)
+  const messages =
+    conversation === undefined ? [] : answeredMessages(board.messages, conversation, entry.id)
+  return messages.map((message) => (
+    <span
+      key={message.id}
+      className="inline-flex flex-wrap items-center gap-1 text-muted-foreground"
+    >
+      {message.reply ? '↩ sent to' : 'not sent · one-way from'} <Address id={message.from} />
+    </span>
+  ))
+}
 
 /** Stay mounted across surfaces so an Open click can reveal after Agent mounts and loads. */
 function BoardNavigation() {
@@ -358,4 +375,5 @@ export default defineWebExtension({
   ],
   slots: { 'statusline.right': [InboxBadge], overlay: [BoardNavigation] },
   entries: { 'board.message': BoardInput, 'board.reply': BoardInput },
+  answerLabels: [BoardAnswerLabel],
 })

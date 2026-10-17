@@ -38,7 +38,7 @@ export function BoardRoster({
               className="flex w-full cursor-pointer items-center gap-2 px-2.5 pt-2.5 text-left"
             >
               <span
-                className={`size-1.5 shrink-0 rounded-full ${participant.status === 'working' ? 'animate-pulse bg-brand' : participant.status === 'waiting' || participant.status === 'needs input' ? 'bg-amber-400' : 'bg-muted-foreground/50'}`}
+                className={`size-1.5 shrink-0 rounded-full ${participant.status === 'working' || participant.status === 'delegating' ? 'animate-pulse bg-brand' : participant.status === 'waiting' || participant.status === 'needs input' ? 'bg-amber-400' : 'bg-muted-foreground/50'}`}
               />
               <span className="min-w-0 flex-1 truncate text-foreground" title={participant.name}>
                 {typeof participant.id === 'number' && participant.address?.startsWith('#') ? (
@@ -57,7 +57,11 @@ export function BoardRoster({
             </button>
             <div className="flex items-center gap-2 px-2.5 pt-1 pb-2 text-[10px] text-muted-foreground">
               <span>
-                {participant.status === 'waiting' ? 'awaiting reply' : participant.status}
+                {participant.status === 'waiting'
+                  ? 'awaiting reply'
+                  : participant.status === 'delegating'
+                    ? 'subagents working'
+                    : participant.status}
               </span>
               {participant.at !== undefined && (
                 <time className="ml-auto" title={new Date(participant.at).toLocaleString()}>
@@ -205,7 +209,14 @@ export function BoardCard({
 }
 
 export function BoardInput({ entry }: { entry: EntryRecord }) {
-  const origin = entry.data as { id: number; from: number | 'user'; text: string; failed?: boolean }
+  const origin = entry.data as {
+    id: number
+    from: number | 'user'
+    text: string
+    reply: boolean
+    delivery?: 'steer' | 'followUp' | 'note'
+    failed?: boolean
+  }
   const receiver = useConversation((conversation) => conversation.id)
   const { switchConversation } = useUltimate()
   const reply = entry.kind === 'board.reply'
@@ -217,6 +228,13 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
           <Address id={origin.from} />
         </span>
         <span>{reply ? 'Reply' : 'Message'}</span>
+        {!reply && (
+          <span>
+            {origin.reply ? 'expects reply' : 'one-way'}
+            {origin.delivery &&
+              ` · ${{ steer: 'steered', followUp: 'follow-up', note: 'note' }[origin.delivery]}`}
+          </span>
+        )}
         {origin.failed && <span className="text-destructive">failed</span>}
         {typeof origin.from === 'number' && (
           <button

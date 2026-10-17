@@ -89,7 +89,7 @@ function delivery(host: ExtensionHost) {
     if (name !== undefined) await host.use<SubagentsService>('subagents')?.standing(name, ctx)
   }
   return defineTask<
-    { message: BoardMessage; steer: boolean; fromLabel: string; toLabel: string },
+    { message: BoardMessage; steer: boolean; note: boolean; fromLabel: string; toLabel: string },
     { phase: 'deliver' } | { phase: 'reply'; message: BoardMessage; failed: boolean },
     null
   >({
@@ -101,21 +101,41 @@ function delivery(host: ExtensionHost) {
         const m = task.input.message
         if (m.to === 'user') throw new Error('Inbox items need no delivery task')
         await refresh(m.to, ctx)
-        const recipient = await runtime.conversation(m.to as ConversationId, ctx)
+        const recipient = await host.harness().conversation(m.to as ConversationId, ctx)
         if (!recipient) throw new Error(`Unknown conversation #${m.to}`)
-        const receipt = await recipient.submit(
-          {
-            type: 'input',
-            requestId: `board:${m.id}`,
-            whenBusy: task.input.steer ? 'steer' : 'followUp',
-            entry: {
-              kind: 'board.message',
-              data: { id: m.id, from: m.from, text: m.text, reply: m.reply },
-            },
-            content: `Message from ${task.input.fromLabel}:\n${m.text}${m.reply ? `\nAnswer here; your answer is sent to ${task.input.fromLabel} automatically. Do not use message to reply.` : ''}`,
+        const entry = {
+          kind: 'board.message',
+          data: {
+            id: m.id,
+            from: m.from,
+            text: m.text,
+            reply: m.reply,
+            delivery: task.input.note ? 'note' : task.input.steer ? 'steer' : 'followUp',
           },
-          ctx,
-        )
+        }
+        const content = task.input.note
+          ? `Note from ${task.input.fromLabel} (one-way update, no answer goes back):\n${m.text}`
+          : `Message from ${task.input.fromLabel}:\n${m.text}${m.reply ? `\nAnswer here; your answer is sent to ${task.input.fromLabel} automatically. Do not use message to reply.` : `\nOne-way message: ${task.input.fromLabel} expects no answer, and your answer here is not sent to it. If it needs to hear from you, message it.`}`
+        const requestId = `board:${m.id}`
+        const receipt = task.input.note
+          ? await recipient.submit(
+              {
+                type: 'write',
+                requestId,
+                entry: { ...entry, model: [{ role: 'user', content, timestamp: Date.now() }] },
+              },
+              ctx,
+            )
+          : await recipient.submit(
+              {
+                type: 'input',
+                requestId,
+                whenBusy: task.input.steer ? 'steer' : 'followUp',
+                entry,
+                content,
+              },
+              ctx,
+            )
         {
           // Admission can precede placement while a recipient is busy. Watch its durable queue,
           // not a timer, so messages become delivered only after leaving the queue.
@@ -148,16 +168,23 @@ function delivery(host: ExtensionHost) {
               if ('entry' in placement && placement.entry !== undefined)
                 stored.entry = placement.entry
             }
-            if (!m.reply)
+            if (task.input.note)
               return { status: 'terminal', outcome: { status: 'completed', result: null } }
             return undefined
           }, ctx)
-          if (!m.reply) return
+          if (task.input.note) return
         }
         const settled = await receipt.wait(ctx)
         await runtime.commit(async (tx) => {
           const answer =
             settled.status === 'done' && settled.type === 'input' ? settled.answer : undefined
+          if (!m.reply) {
+            const original = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+              (item) => item.id === m.id,
+            )
+            if (original && answer !== undefined) original.answer = answer
+            return { status: 'terminal', outcome: { status: 'completed', result: null } }
+          }
           const model =
             answer === undefined ? undefined : (await tx.entry(AssistantEntry, answer))?.model?.[0]
           const text =
@@ -343,7 +370,13 @@ async function send(
     if (to !== 'user')
       await tx.createTask(
         delivery(host),
-        { message, steer: input.steer ?? false, fromLabel, toLabel },
+        {
+          message,
+          steer: input.steer ?? false,
+          note: parent === to && input.reply === false,
+          fromLabel,
+          toLabel,
+        },
         {
           conversationId: ROOT_CONVERSATION_ID,
           ownership: { kind: 'conversation' },
@@ -425,9 +458,9 @@ export default function board(host: ExtensionHost) {
         if (!input.agent.tools.some((tool) => tool.name === 'message')) return undefined
         const parent = await parentOf(host, input.conversationId, ctx)
         if (parent !== undefined)
-          return `Use message only to update #${parent}, the conversation that started you, while you work; your final answer reaches it anyway. Use reply: false for one-way updates.`
+          return `Use message only to update #${parent}, the conversation that started you, while you work; your final answer reaches it anyway. One-way updates (reply: false) reach #${parent} as notes it reads with its next input; ask with reply: true when you need its answer to continue.`
         const agents = (await host.use<SubagentsService>('subagents')?.residents(ctx)) ?? []
-        return `Use message to contact #id, @name or user. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. Use reply: false for one-way updates. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
+        return `Use message to contact #id, @name or user. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
       }),
     ],
     tools: [

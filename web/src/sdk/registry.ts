@@ -123,6 +123,7 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   start: [isFunction, 'a conversation starter function'],
   messageActions: [arrayOf(isComponent), 'an array of message action components'],
   messageDetails: [arrayOf(isComponent), 'an array of message detail components'],
+  answerLabels: [arrayOf(isComponent), 'an array of answer label components'],
   documents: [
     arrayOf(
       fields({
@@ -446,10 +447,10 @@ export function linkRenderers(
   })
 }
 
-/** Hover actions or details on stored messages, preserving discovery order and each facet's array order. */
+/** Message contributions, preserving discovery order and each facet's array order. */
 export function messageItems(
   records: readonly ExtensionRecord[],
-  contribution: 'messageActions' | 'messageDetails',
+  contribution: 'messageActions' | 'messageDetails' | 'answerLabels',
 ) {
   return records.flatMap(({ name, extension, version }) =>
     (extension?.[contribution] ?? []).map((component, index) => ({

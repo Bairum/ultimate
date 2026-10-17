@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  answeredMessages,
   parseAddress,
   participants,
   participantStatus,
@@ -8,6 +9,53 @@ import {
   suggestions,
   unreadCount,
 } from '../../extensions/board/data.tsx'
+
+describe('board answer labels', () => {
+  const request = {
+    id: 1,
+    from: 'user' as const,
+    to: 2,
+    text: 'Question',
+    at: 0,
+    reply: true,
+    state: 'answered' as const,
+    answer: 10,
+  }
+  it('selects a reply-enabled request for the answering entry', () => {
+    expect(answeredMessages([request], 2, 10)).toEqual([request])
+  })
+  it('includes one-way deliveries without requiring the answered state', () => {
+    const oneWay = { ...request, from: 4, reply: false, state: 'delivered' as const }
+    expect(answeredMessages([oneWay], 2, 10)).toEqual([oneWay])
+  })
+  it('ignores other answers, conversations and requests with no answer', () => {
+    expect(
+      answeredMessages(
+        [
+          { ...request, answer: 11 },
+          { ...request, to: 3 },
+          { ...request, answer: undefined },
+        ],
+        2,
+        10,
+      ),
+    ).toEqual([])
+  })
+  it('keeps every matching request in log order, excluding outgoing replies', () => {
+    const second = { ...request, id: 2, from: 4, reply: false }
+    expect(answeredMessages([request, second, { ...request, id: 3, to: 'user' }], 2, 10)).toEqual([
+      request,
+      second,
+    ])
+  })
+})
+
+/** The status of idle coordinator #4 next to `conversations`. */
+const coordinatorStatus = (conversations: Parameters<typeof participants>[3]) =>
+  participants({ messages: [], next: 1, readUpTo: 0 }, { agents: [], conversations: [] }, {}, [
+    { id: 4, label: 'coordinator', busy: false },
+    ...conversations,
+  ]).find((item) => item.id === 4)?.status
 
 describe('board roster', () => {
   const messages = [
@@ -69,6 +117,22 @@ describe('board roster', () => {
     expect(participantStatus(4, false, [{ ...messages[0], state: 'failed' }])).toBe('idle')
     expect(participantStatus(undefined, false, messages)).toBe('idle')
     expect(participantStatus(2, false, messages)).toBe('idle')
+    expect(participantStatus(4, false, messages, true, true)).toBe('delegating')
+    expect(participantStatus(4, true, messages, false, true)).toBe('working')
+  })
+  it('shows an idle coordinator as delegating while a subagent below it works, not a branch', () => {
+    // A worker's own reviewer, two levels down, still counts.
+    expect(
+      coordinatorStatus([
+        { id: 10, parentConversationId: 4, ownerTaskId: 1, busy: false },
+        { id: 11, parentConversationId: 10, ownerTaskId: 2, busy: true },
+      ]),
+    ).toBe('delegating')
+    expect(
+      coordinatorStatus([{ id: 10, parentConversationId: 4, ownerTaskId: 1, busy: false }]),
+    ).toBe('idle')
+    // A fork of the coordinator is not one of its subagents.
+    expect(coordinatorStatus([{ id: 12, parentConversationId: 4, busy: true }])).toBe('idle')
   })
   it('filters both directions without including unrelated messages', () => {
     expect(participantMessages(messages, 2)).toEqual(messages)

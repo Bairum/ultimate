@@ -191,7 +191,7 @@ No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, entries, link, messageActions, messageDetails, start, documents, commands })`; every key is optional. Extensions load
+`defineWebExtension({ slots, panels, surfaces, tools, entries, link, messageActions, messageDetails, answerLabels, start, documents, commands })`; every key is optional. Extensions load
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
 
 A `start(draft)` contribution starts a new conversation from the start page composer's prompt, images, branch point
@@ -331,6 +331,12 @@ messageActions: [
 
 `messageDetails` contributes readouts to the same row, before the message's time, under the same rules. `status-line`
 shows each message's context and cost there.
+
+`answerLabels` contributes inline labels after the **Final answer** heading, only on stored final assistant messages
+(not streaming updates). Like `messageDetails`, it is an array of components receiving `{ entry: EntryRecord }`,
+rendered in discovery and contribution order, each behind an extension boundary. Return `null` when the entry has
+no relevant label. Keep labels brief and muted; the header wraps at narrow widths. Board uses it to show where an
+answer was sent, or that a one-way message's answer was not sent.
 
 ### Entry renderers
 
