@@ -5,6 +5,7 @@ import type {
   ConversationId,
   Cursor,
   DocumentRecord,
+  DocumentId,
   EntryId,
   JsonObject,
 } from '@earendil-works/pi-durable'
@@ -14,6 +15,9 @@ import { docHash } from '../../cloud/protocol.ts'
 import type { CloudMessage, MachineMessage, ReplicaDoc } from '../../cloud/protocol.ts'
 
 type Batch = Extract<MachineMessage, { type: 'batch' }>
+export const MAX_RETAINED_BYTES = 16 * 1024 * 1024
+// Charge ID sets conservatively, including their bookkeeping rather than just their JSON digits.
+const ID_BYTES = 64
 export type SyncSocket = Pick<WebSocket, 'send' | 'close' | 'addEventListener'>
 export type Connect = (url: string, token: string) => SyncSocket
 // Node 26 accepts undici's options overload; DOM declarations only describe browser WebSockets.
@@ -37,6 +41,7 @@ export function startSync(
   let reconnect: ReturnType<typeof setTimeout> | undefined
   let dispose: (() => void) | undefined
   let idle: (() => Promise<void>) | undefined
+  let retainedBytes: (() => number) | undefined
   const open = () => {
     if (stopped) return
     let socket: SyncSocket
@@ -57,18 +62,34 @@ export function startSync(
     const unacked = new Set<number>()
     const pending: Batch = { type: 'batch', batch: 0, conversations: [], entries: [], docs: [] }
     let pendingBytes = 0
+    let bufferedBytes = 0
+    const bufferedEntries: Batch['entries'] = []
+    const changedDocs = new Set<DocumentId>()
+    const changedConversations = new Set<ConversationId>()
+    retainedBytes = () => pendingBytes + bufferedBytes
+    const reserve = (bytes: number) => {
+      if (closed) return false
+      if (pendingBytes + bufferedBytes + bytes > MAX_RETAINED_BYTES) {
+        host.notice('Cloud sync retained-data limit exceeded; reconnecting from the replica cursor')
+        close()
+        return false
+      }
+      return true
+    }
     let capacity: (() => void) | undefined
     const entryHeads: Record<string, number> = {}
     const append = (values: unknown[], value: unknown) => {
+      const bytes = Buffer.byteLength(JSON.stringify(value))
+      if (!reserve(bytes)) return
       values.push(value)
-      pendingBytes += Buffer.byteLength(JSON.stringify(value))
+      pendingBytes += bytes
     }
     const entry = (value: Batch['entries'][number]) => {
       if (value.id <= (entryHeads[value.conversationId] ?? 0)) return
       entryHeads[value.conversationId] = value.id
       append(pending.entries, value)
     }
-    let buffered: CommitPublication[] = []
+    let changesQueued = false
     let chain = Promise.resolve()
     idle = () => chain
     let lastSummaries = ''
@@ -144,12 +165,16 @@ export function startSync(
         value,
         hash: await docHash(value),
       }
+      if (closed) return
       const index = pending.docs.findIndex((item) => item.id === doc.id)
       if (index < 0) append(pending.docs, doc)
       else {
-        pendingBytes -= Buffer.byteLength(JSON.stringify(pending.docs[index]))
+        const delta =
+          Buffer.byteLength(JSON.stringify(doc)) -
+          Buffer.byteLength(JSON.stringify(pending.docs[index]))
+        if (!reserve(delta)) return
         pending.docs[index] = doc
-        pendingBytes += Buffer.byteLength(JSON.stringify(doc))
+        pendingBytes += delta
       }
     }
     const metadata = () => {
@@ -169,34 +194,80 @@ export function startSync(
         send({ type: 'system', value: system })
       }
     }
-    const live = async (publication: CommitPublication) => {
+    const mark = <T extends number>(ids: Set<T>, id: T) => {
+      if (!ids.has(id) && reserve(ID_BYTES)) {
+        ids.add(id)
+        bufferedBytes += ID_BYTES
+      }
+    }
+    const buffer = (publication: CommitPublication) => {
       for (const change of publication.changes) {
-        if (change.type === 'conversation') append(pending.conversations, change.value)
+        if (closed) return
+        if (change.type === 'conversation') mark(changedConversations, change.value.id)
         else if (
           (change.type === 'document' || change.type === 'document.copy') &&
           change.record.scope.kind === 'conversation'
-        ) {
-          const value =
-            change.type === 'document'
-              ? change.value
-              : (await host.document(change.record.id, 'current', context))?.value
-          if (value !== undefined) await document(change.record, value)
-        }
+        )
+          mark(changedDocs, change.record.id)
       }
-      // A publication's change order is unspecified; entry IDs order its entries.
+      // Publications have no change order. Do not retain the publication or its document values.
       for (const value of publication.changes
         .filter((change) => change.type === 'entry')
         .map((change) => change.value)
-        .toSorted((a, b) => a.id - b.id))
-        entry(value)
-      queue()
+        .toSorted((a, b) => a.id - b.id)) {
+        const bytes = Buffer.byteLength(JSON.stringify(value))
+        if (!reserve(bytes)) return
+        bufferedEntries.push(value)
+        bufferedBytes += bytes
+      }
+    }
+    const drainChanges = async () => {
+      while (bufferedEntries.length || changedConversations.size || changedDocs.size) {
+        if (closed) return
+        for (const value of bufferedEntries.splice(0, 256)) {
+          if (closed) return
+          bufferedBytes -= Buffer.byteLength(JSON.stringify(value))
+          entry(value)
+        }
+        const conversationId = changedConversations.values().next().value
+        if (conversationId !== undefined) {
+          changedConversations.delete(conversationId)
+          bufferedBytes -= ID_BYTES
+          const record = await host
+            .harness()
+            .commit((tx) => tx.conversation(conversationId), context)
+          if (record) append(pending.conversations, record)
+        }
+        const id = changedDocs.values().next().value
+        if (id !== undefined) {
+          changedDocs.delete(id)
+          bufferedBytes -= ID_BYTES
+          const stored = await host.document(id, 'current', context)
+          if (stored) await document(stored.record, stored.value)
+          else
+            append(pending.docs, {
+              id,
+              kind: '',
+              conversationId: 0,
+              value: null,
+              hash: await docHash(null),
+            })
+        }
+        queue()
+      }
       summariesDirty = true
     }
     const catchUp = async (cursor: Extract<CloudMessage, { type: 'cursor' }>) => {
       if (ready) throw new Error('Duplicate cloud cursor')
       unsubscribe = host.harness().subscribeCommits((publication) => {
-        if (!ready) buffered.push(publication)
-        else enqueue(() => live(publication))
+        buffer(publication)
+        if (ready && !closed && !changesQueued) {
+          changesQueued = true
+          enqueue(async () => {
+            changesQueued = false
+            await drainChanges()
+          })
+        }
       })
       Object.assign(entryHeads, cursor.entries)
       const harness = host.harness()
@@ -243,7 +314,8 @@ export function startSync(
               const stored = await host.document(doc.id, 'current', context)
               if (!stored) continue
               seen.add(doc.id)
-              if ((await docHash(stored.value)) !== cursor.docs[String(doc.id)])
+              const hash = await docHash(stored.value)
+              if (!changedDocs.has(doc.id) && hash !== cursor.docs[String(doc.id)])
                 await document(doc, stored.value)
             }
             docCursor = page.next
@@ -267,15 +339,22 @@ export function startSync(
       }
       await waitForCapacity()
       if (closed) return
-      for (const publication of buffered) await live(publication)
-      buffered = []
       ready = true
+      await drainChanges()
       queue()
     }
     const close = () => {
       if (closed) return
       closed = true
       unsubscribe?.()
+      pending.conversations.length = 0
+      pending.entries.length = 0
+      pending.docs.length = 0
+      bufferedEntries.length = 0
+      changedDocs.clear()
+      changedConversations.clear()
+      pendingBytes = 0
+      bufferedBytes = 0
       capacity?.()
       capacity = undefined
       clearTimeout(timer)
@@ -342,6 +421,7 @@ export function startSync(
       idle: async () => {
         await idle?.()
       },
+      retainedBytes: () => retainedBytes?.() ?? 0,
     },
   )
 }

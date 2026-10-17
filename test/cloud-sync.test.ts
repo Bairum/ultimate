@@ -1,7 +1,7 @@
 import { defineDoc } from '@earendil-works/pi-durable'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { afterEach, expect, it, vi } from 'vitest'
-import cloud, { startSync } from '../extensions/cloud/server.ts'
+import cloud, { MAX_RETAINED_BYTES, startSync } from '../extensions/cloud/server.ts'
 import type { SyncSocket } from '../extensions/cloud/server.ts'
 import { docHash } from '../cloud/protocol.ts'
 import type { CloudMessage, MachineMessage } from '../cloud/protocol.ts'
@@ -502,6 +502,101 @@ it('resumes each conversation exactly after its own partial cursor', async () =>
     expect(f.sockets[1].docs()).toEqual([])
     expect(f.notices).toEqual([])
   } finally {
+    await f.close()
+  }
+})
+
+it('reconnects on retained-data overflow and converges from the replica cursor', async () => {
+  const f = await fixture()
+  try {
+    const other = await f.opened.harness.commit(async (tx) => {
+      await tx.doc(Note, f.opened.root.id)
+      return tx.createConversation({ ownership: { kind: 'ownerless' } })
+    }, context)
+    const socket = f.sockets[0]
+    socket.open()
+    await f.drain()
+    socket.autoAck = false
+    const expected: Record<string, number[]> = { [f.opened.root.id]: [], [other.id]: [] }
+    const payload = 'x'.repeat(256 * 1024)
+    for (let index = 0; index < 96; index++) {
+      const id = index % 2 === 0 ? f.opened.root.id : other.id
+      const entry = await f.opened.harness.commit(async (tx) => {
+        ;(await tx.doc(Note, f.opened.root.id)).text = `latest ${index}`
+        return tx.appendEntry(id, { kind: 'cloud-test.overflow', data: { payload, index } })
+      }, context)
+      expected[id].push(entry.id)
+      expect(f.stop.retainedBytes()).toBeLessThanOrEqual(MAX_RETAINED_BYTES)
+      await f.stop.idle()
+      expect(f.stop.retainedBytes()).toBeLessThanOrEqual(MAX_RETAINED_BYTES)
+    }
+    expect(f.stop.retainedBytes()).toBe(0)
+    expect(socket.closed).toBe(true)
+    expect(f.notices).toEqual([
+      'Cloud sync retained-data limit exceeded; reconnecting from the replica cursor',
+    ])
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(f.sockets).toHaveLength(2)
+    f.sockets[1].open(socket.cursor())
+    await f.drain()
+    const entries = [...socket.entries(), ...f.sockets[1].entries()].filter(
+      (entry) => entry.kind === 'cloud-test.overflow',
+    )
+    for (const [id, ids] of Object.entries(expected)) {
+      expect(
+        entries.filter((entry) => String(entry.conversationId) === id).map((entry) => entry.id),
+      ).toEqual(ids)
+    }
+    expect(
+      [...socket.docs(), ...f.sockets[1].docs()]
+        .filter((doc) => doc.kind === Note.definition.kind)
+        .at(-1)?.value,
+    ).toEqual({ text: 'latest 95' })
+  } finally {
+    await f.close()
+  }
+})
+
+it('buffers only changed document IDs during catch-up and sends one current value', async () => {
+  const f = await fixture()
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  try {
+    await f.opened.harness.commit(async (tx) => {
+      await tx.doc(Note, f.opened.root.id)
+    }, context)
+    const read = f.host.document
+    let held = false
+    f.host.document = async (...args) => {
+      if (!held) {
+        held = true
+        entered.resolve()
+        await release.promise
+      }
+      return read(...args)
+    }
+    const socket = f.sockets[0]
+    socket.open()
+    await entered.promise
+    const payload = 'x'.repeat(1_100_000)
+    for (let index = 0; index < 16; index++) {
+      await f.opened.harness.commit(async (tx) => {
+        ;(await tx.doc(Note, f.opened.root.id)).text = `${index}:${payload}`
+      }, context)
+      expect(f.stop.retainedBytes()).toBeLessThan(1024)
+    }
+    expect(socket.closed).toBe(false)
+    release.resolve()
+    await f.drain()
+    expect(
+      socket
+        .docs()
+        .filter((doc) => doc.kind === Note.definition.kind)
+        .map((doc) => doc.value),
+    ).toEqual([{ text: `15:${payload}` }])
+    expect(f.notices).toEqual([])
+  } finally {
+    release.resolve()
     await f.close()
   }
 })
