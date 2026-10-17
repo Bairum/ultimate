@@ -91,31 +91,18 @@ the task completes. The method returns `{ id }`. With `deliver: false`, no `line
 must deliver its first input (the board uses a reply-enabled message). `by: conversationId` attributes the tally's prompt node to that caller,
 including its standing-agent name when available.
 
-New, "Branch…" and "Branch from here" open the start page (`start.tsx`) in `conversation.overlay`, with the
-conversation beneath inert. It shows New's Branch / New root tabs, source and quoted branch point above the
-new-conversation composer. Its URL (`?new`, `?new=<from>`, `?new=<from>.<at>`, or `?new=<root>&side=<side>` for the
-branch a side chat ends in, prefilled with its draft) survives reload; Back or Esc closes it,
-switching conversations closes it, and each start point keeps its draft. Sending replaces the composer with the sent
-prompt and its steps (forking the source, or creating the root, then starting the run); the page holds over the new
-conversation until its first message shows, then fades into it. A tally's ⌥↵ branch shows the same page. A failed start
-returns to the composer with the draft and the error. There is no briefing overlay or retry action. Old stored brief resets still render;
-a genesis reset instead shows a collapsible "Tally starts here" card.
+The user talks to @ultimate on the Board; it picks a root by reading tallies and starts coordinator branches.
+There is no manual creation page or message-hover branch action. Coordinator branches keep their composers for steering.
 
-New in the sidebar branches from the shown tree's root, else the most recently active root; `root: true` starts a
-new root, which reads the project in the shared checkout (no Isolated switch). While that root has not read the project,
-New's Branch tab explains why and offers to open it instead of a composer. An empty root's composer is the "Start here"
-card (`survey.tsx`): an optional focus and **Set up with @ultimate**. This calls user action `onboarding.start` with
-that root and the focus verbatim as instructions, then opens @ultimate. Once started, it shows a quiet
-**@ultimate is setting up this project · open** link from `onboarding.starts`. **Read it here instead** starts the
-in-place survey as a fallback; New → New root keeps its survey too. While a survey reads, the root keeps
-its composer for steering, with "Getting familiar with the project" in its status line; while its genesis is
-distilled, a quiet "Writing the tally…" line replaces it. The survey input renders as a collapsible "Getting familiar
-with the project" card. A tally replaces its conversation composer through the SDK's `composer` renderer:
-↵ opens a side chat (`start` prop of `NewConversationComposer`), ⌥↵ (`alternate` in the draft) starts a branch with
-the same start path and remembered Isolated/Shared preference. Its status line shows "Tally · … tokens" and both
-keys. A root with an open side chat shows the side chat instead (a replacing redirect, so Back leaves): its view is
-the tally as it was when the chat opened, then the chat, with a "Side chat · #S [Branch…] [Keep as note] [Discard]" bar
-above its composer; an ended one shows how it ended instead of a composer. The sidebar lists no side chats; a root
-with an open one is marked "side chat" and stands for it. A side note renders as a quiet "Side chat · #S" card with
-"→ #B" when it started a branch. Hover a stored message and choose
-**Branch from here** to fork at that entry; `lineage.branch-at` receives `conversationId` and `entryId` through the SDK.
+An empty root shows the **Start here** card (`survey.tsx`): an optional focus and **Set up with @ultimate**.
+This calls user action `onboarding.start` with that root and the focus verbatim as instructions, then opens @ultimate.
+Once started, it shows only a quiet **@ultimate is setting up this project · open** link from `onboarding.starts`.
+@ultimate reads the project and writes its first tally with `seed_tally` before starting work.
+
+Listed roots with a tally or existing history replace their composer through the SDK's `composer` renderer with a
+read-only footer: **Tally**, "The context every new branch starts from. @ultimate keeps it up to date.", estimated
+tokens, and **Talk to @ultimate**. There is no text input. @ultimate maintains standing decisions with `note` and
+reshapes tallies with `compact_tally`; the palette hides compact, clear-context and composer-focus commands on roots.
+
+Old stored notes and survey inputs still render quietly, without creation controls. Old brief resets still render;
+a genesis reset shows a collapsible **Tally starts here** card.

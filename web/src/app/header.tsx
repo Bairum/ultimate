@@ -82,9 +82,9 @@ function Trail() {
   const summary = conversations.find((conversation) => conversation.id === id)
   const trail = ancestors(id, conversations)
   const root = id === ROOT
-  // A conversation just started is named once its summary arrives, not "New conversation" before that.
+  // A conversation just started is named once its summary arrives, not given a placeholder before that.
   const title =
-    id === undefined ? 'connecting…' : summary ? (summary.title ?? 'New conversation') : ''
+    id === undefined ? 'connecting…' : summary ? (summary.title ?? 'Untitled conversation') : ''
   return (
     <>
       {trail.map((conversation) => (

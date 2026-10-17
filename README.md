@@ -30,9 +30,9 @@ place.
   subagents, plans, documents, automations, remote access and the rest ship in the clone and are on by default; turn any
   of them off per machine or per project (see "Building blocks" below).
 - **A forest of conversation trees.** Each root keeps a non-agent tally: prompts, latest conversation abstracts,
-  and landings with divergence and links back to their source. New branches inherit the tally's tip, then your prompt;
-  you can also fork any conversation at a chosen entry. Resuming a branch catches it up on what its tree learned.
-  Compaction keeps long conversations going and can reshape a tally without deleting history.
+  and landings with divergence and links back to their source. Talk to @ultimate on the Board: it starts coordinator
+  branches that inherit a root's tally before their prompt. Resuming a branch catches it up on what its tree learned.
+  Roots are read-only; @ultimate keeps their tallies accurate and compacts them without deleting history.
 - **You can build whole applications in it, too.** A surface is a full-screen app next to the docked agent.
   The point is an agent shaped for the project you work on.
 - **Lean and malleable.** Like Pi and Pi Durable, the core stays as small as possible and everything else is
@@ -136,7 +136,7 @@ and restarts land on the same view. The `surfaces` extension tells the agent whi
 - Press `Ctrl+Alt+B` for the right panel: Info (machine, process, storage, build, extensions, skills), Agents, Tasks,
   Documents (the plan, the codemode store, and every other extension document), Workspaces, Extensions and more, each
   a tab.
-- Hover a message and choose "Branch from here" to fork the conversation at that point.
+- Use **Talk to @ultimate** in the sidebar to ask for work, explore an idea, or start an independent line of work.
 
 ## How it is put together
 

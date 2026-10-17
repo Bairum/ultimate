@@ -8,20 +8,18 @@ tells you which change reloads how, so the conversation you are in keeps running
 
 A project is a forest of conversation trees, each tree like a history of commits.
 
-- **Roots** keep non-agent tallies: prompts, each conversation's latest abstract, and landings with divergence and
-  `#conversation/entry` breadcrumbs. An empty root starts its tree with a project reading, distilled into the tally's
-  first entry; nothing branches from a root before it. ⌘K "Make this a root" converts a
-  conversation's history into a genesis distillation; older roots can still run until converted.
+- **Roots** keep read-only tallies: prompts, each conversation's latest abstract, and landings with divergence and
+  `#conversation/entry` breadcrumbs. A tally is the context every branch starts from; it runs no turns.
   A new project starts by talking to @ultimate: Continue on Get ready or **Set up with @ultimate** on Start here.
   It handles setup cards, reads the project and seeds the root's first tally; the optional focus is your instructions.
-  **Read it here instead** keeps the in-place survey as a fallback, and New → New root still starts its own survey.
-  A tally runs no turns: typing in it opens a side chat with it (⌥↵ starts a branch instead), a full session that
-  ends only when you end it: as a note in the tally, as a branch after that note, or discarded. Its composer shows
-  estimated context tokens; manual compaction reshapes the tally, keeping the idea and standing decisions without
-  deleting history.
-- **A branch** is a feature, a fix, an experiment. New forks the shown tree's root tip; "Branch from here" forks a
-  chosen entry. No brief: the branch inherits that context, then gets your prompt. A branch is never a subagent.
-- **Talk to @ultimate on the board.** The user's standing agent starts and steers branches and relays their answers to the user's inbox.
+  @ultimate maintains standing decisions with `note`, seeds empty roots with `seed_tally`, and reshapes tallies with
+  `compact_tally` without deleting history. When the user asks for an independent line of work, it creates a root
+  with `new_root` and seeds it from its own reading. The read-only footer shows estimated context tokens and a
+  **Talk to @ultimate** link.
+- **A branch** is a feature, a fix, an experiment. @ultimate picks a root by reading its tally, then starts a
+  coordinator branch that inherits that context before its prompt. A branch is never a subagent.
+- **Talk to @ultimate on the Board.** The user's standing agent starts and steers branches and relays their answers to the user's inbox.
+  The sidebar's **Talk to @ultimate** button opens it; conversations and roots are not created by hand.
 - **Coordinators carry the work.** A branch plans, decides and verifies; subagents are for bounded execution and
   reconnaissance, and the lander is the final gate on main.
 - **Zoom out when you need to.** Read any root or sibling with codemode `ultimate.entries(id)` and
@@ -137,7 +135,7 @@ Start a subagent with `isolate: "worktree"` (the worker default) to give its too
 
 ### Main-agent final integration
 
-A top-level conversation created with New isolated conversation works in its own worktree.
+Coordinator branches started by @ultimate are isolated in their own worktrees by default.
 `workspace status` shows its tip and the original checkout's tip.
 Read worker reports and diffs; rerun checks only for missing or thin evidence, reported failures, changes crossing
 workers, `server/` or `shared/` changes, or surprises in the diff, then land and call `workspace submit`.

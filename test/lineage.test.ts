@@ -972,16 +972,6 @@ it('defaults a branch to its source’s configuration', async () => {
     ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.push(other.id)
   }, context)
   await seedTally(server.harness, other.id)
-  const defaults = async (args: unknown) =>
-    (await post(server, '/api/extensions/models/actions/defaultConfiguration', { args })).data
-  const project = await server.root.agent(context)
-  expect(project.model).toEqual({ provider: 'faux', modelId: 'faux-1' })
-  expect(await defaults({ id: other.id })).toEqual({ result: { model, thinkingLevel: 'high' } })
-  expect(await defaults(null)).toEqual({
-    result: { model: project.model, thinkingLevel: project.thinkingLevel },
-  })
-  expect((await defaults({ id: 999 })).error).toBe('No conversation #999')
-
   // Without a choice, the branch keeps its source's configuration.
   const agentOf = async (id: ConversationId) =>
     (await server.harness.conversation(id, context))!.agent(context)

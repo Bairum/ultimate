@@ -125,7 +125,7 @@ export function Row({
   const name =
     conversation.title ??
     (draft
-      ? 'New conversation'
+      ? 'Untitled conversation'
       : conversation.workspace
         ? 'Untitled conversation'
         : `#${conversation.id}`)

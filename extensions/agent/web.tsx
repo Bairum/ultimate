@@ -50,6 +50,8 @@ const commands: CommandContribution[] = [
   {
     id: 'agent.composer',
     title: 'Focus the composer',
+    when: (context) =>
+      context.conversationId === undefined || !getRoots()?.includes(context.conversationId),
     run: (context) => context.focusComposer(),
   },
   {

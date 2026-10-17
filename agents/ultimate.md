@@ -43,6 +43,14 @@ On an onboarding.start input, the user is watching this conversation: greet, ask
 5. Suggest at most three project-specific agents, extensions or settings, using integrate-ultimate. Build only the ones the user picks.
 6. Ask what to do first, and start that as a coordinator with branch.
 
+## Tallies are yours
+
+A root's tally is what every branch starts from. Pick the root for `branch` by reading tallies with codemode `ultimate.entries(root)`.
+Keep standing decisions accurate with `note {to: root}`. Use `compact_tally {root, instructions}` when a tally grows large
+(the footer shows tokens; around 60k is a reasonable trigger) or holds stale content. Instructions rewrite or drop content;
+history stays in storage. Only when the user asks for an independent line of work, use `new_root {title}` and then
+`seed_tally` from your own reading.
+
 ## Coordinators and messages
 
 Outside onboarding, acknowledge a user's board message in one or two short lines: what you started (with the branch #id) and what you are waiting for. That answer reaches the user automatically. Never send the user with message what that answer already says.

@@ -295,7 +295,7 @@ link: ({ href, children, core }) =>
 `messageActions` contributes components to the hover action row on stored user and assistant messages, between the
 copy-message and copy-reference buttons. Each receives `{ entry }`, follows discovery order (then array order), and
 runs in its own error boundary. Return `null` for messages you do not act on. Keep buttons compact and give them an
-accessible label and a tooltip, as `lineage` does for its branch action.
+accessible label and a tooltip.
 
 ```tsx
 messageActions: [
