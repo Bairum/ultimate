@@ -104,7 +104,7 @@ export default defineConfig({
                 'status-line': ['workspaces'],
                 subagents: ['conversations', 'plan', 'workspaces'],
                 tasks: ['conversations', 'plan', 'workspaces'],
-                workspaces: ['conversations', 'info', 'lineage', 'subagents'],
+                workspaces: ['board', 'conversations', 'info', 'lineage', 'subagents'],
               },
             },
           ],

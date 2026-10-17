@@ -59,6 +59,8 @@ once (`btrfs filesystem du`). Measuring takes seconds, so one runs at a time and
 
 ## Lander
 
+When the board is enabled, each submission and its landing result appear there as an exchange with `@lander`.
+
 `workspace submit` requires a non-empty `divergence` string: how the delivered result differs from the original
 request (new agreements, different approach or library, changed scope), or "None" when it matches. It queues a
 top-level main's clean tip in the root document's `queue` and returns its position and lander conversation at once;

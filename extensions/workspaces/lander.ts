@@ -22,6 +22,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { LineageService } from '../lineage/server.ts'
+import type { BoardService } from '../board/server.ts'
 import { definitionAgent, discoverAgents } from '../subagents/agents.ts'
 import { git, setup } from './git.ts'
 import type {
@@ -940,7 +941,24 @@ export function createLander(
           },
           context,
         )
-        await runtime.commit(() => ({ status: 'running', checkpoint: { phase: 'next' } }), context)
+        await runtime.commit(async (tx) => {
+          const report = await tx.submissionByRequest(
+            conversationId as ConversationId,
+            `lander:${id}`,
+          )
+          if (outcome && report)
+            await host.use<BoardService>('board')?.record(tx, {
+              from: runtime.conversationId,
+              to: conversationId,
+              text:
+                outcome.outcome === 'landed'
+                  ? `Landed ${outcome.sha!.slice(0, 7)} on ${outcome.target}`
+                  : `Not landed: ${(outcome.reason ?? text).split('\n')[0]}`,
+              kind: 'landing',
+              ...(report.entry !== undefined ? { entry: report.entry } : {}),
+            })
+          return { status: 'running', checkpoint: { phase: 'next' } }
+        }, context)
       },
     },
     abort: (task, runtime, context) =>
