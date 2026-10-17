@@ -1,12 +1,11 @@
 # Workspaces
 
-An isolated conversation gets its own Git checkout. New is isolated unless the start page's Isolated switch is off
-(remembered in `ext.conversations.creationType`); New isolated conversation always is. Subagents can select
-`isolate: "worktree"` for the same setup. Uncommitted source changes are not included.
+An isolated conversation gets its own Git checkout. Coordinator branches started by @ultimate are isolated by
+default. Subagents can select `isolate: "worktree"` for the same setup. Uncommitted source changes are not included.
 
 Isolation needs a Git repository with a checked-out branch and a first commit. Until a project has them, `isolation`
-returns `{ reason }`, the Isolated switch is off and disabled with that reason, New starts shared conversations,
-an explicit isolated start fails with the reason, and the project has no lander. `isolation` also reports whether the
+returns `{ reason }`, an isolated start fails with that reason, and the project has no lander.
+@ultimate handles Git setup through onboarding before starting isolated work. `isolation` also reports whether the
 folder is `empty`; once the project can be isolated, it stands the lander if there is none, so a first commit brings it
 without a restart. `setupGit` makes an empty folder isolatable (`git init` where needed, then an empty first commit) and
 refuses a folder with files, whose first commit is a judgement for an agent; onboarding's Git card offers both.

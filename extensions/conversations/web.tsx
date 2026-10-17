@@ -1,6 +1,6 @@
 import { defineWebExtension, getConversation, getState } from '@/sdk'
+import { getRoots } from '../lineage/roots.tsx'
 import { Conversations, Seen } from './sidebar.tsx'
-import { createConversation, newKeys } from './new.tsx'
 import { openReset, ResetDialog, SummaryModelDialog, summaryModelDialog } from './dialogs.tsx'
 import { SummaryAction } from './summary-entry.tsx'
 
@@ -14,19 +14,6 @@ export default defineWebExtension({
   },
   slots: { sidebar: Conversations, overlay: [ResetDialog, SummaryModelDialog, Seen] },
   commands: [
-    {
-      id: 'conversations.new',
-      title: 'New conversation',
-      keys: newKeys,
-      group: 'Conversations',
-      run: (context) => createConversation(context),
-    },
-    {
-      id: 'conversations.new-isolated',
-      title: 'New isolated conversation',
-      group: 'Conversations',
-      run: (actions) => createConversation(actions, true),
-    },
     {
       id: 'conversations.summary-model',
       title: 'Summary model…',
@@ -42,6 +29,7 @@ export default defineWebExtension({
         const summary = getState().conversations.find((conversation) => conversation.id === id)
         return (
           id !== undefined &&
+          !getRoots()?.includes(id) &&
           !busy &&
           entries.length > 0 &&
           summary?.parentConversationId === undefined

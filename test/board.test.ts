@@ -568,6 +568,26 @@ it('answers questions to the user when the user replies, posts anew, or types in
   await actions.post({ to: '#1', text: 'Elsewhere' }, f.action())
   expect(await state(root.id)).toBe('delivered')
 })
+it('atomically admits only one answer-card reply through the Board service', async () => {
+  const f = await fixture()
+  await f.send('user', 'Keep it running?')
+  const id = (await f.log())!.messages.at(-1)!.id
+  const results = await Promise.allSettled([
+    f.service().answer(id, 'Q: Keep it running?\nA: Yes', context),
+    f.service().answer(id, 'Q: Keep it running?\nA: No', context),
+  ])
+  expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+  expect(
+    String(
+      (results.find((result) => result.status === 'rejected') as PromiseRejectedResult).reason,
+    ),
+  ).toContain('These questions are no longer open')
+  expect(
+    (await f.log())!.messages.filter((message) => message.re === id && message.from === 'user'),
+  ).toHaveLength(1)
+  expect((await f.log())!.messages.find((message) => message.id === id)?.state).toBe('answered')
+})
+
 it('lets a subagent message only the conversation that started it', async () => {
   const f = await fixture()
   const agent = await f.opened.root.agent(context)

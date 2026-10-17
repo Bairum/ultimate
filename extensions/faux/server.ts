@@ -157,16 +157,16 @@ export default async function fauxExtension(host: ExtensionHost) {
             ),
           ])
       }
+      const decisions =
+        'The preview is ready. Two decisions before continuing:\n\nShould we keep the preview running?\n1. Yes\n2. No\n\nWhich layout should we use?\n1. Compact — fits the existing cards (recommended)\n2. Spacious — more room between options'
       if (last?.role === 'user' && last.content === 'questions demo')
-        return fauxAssistantMessage([
-          fauxText(
-            'The preview is ready. Two decisions before continuing:\n\nShould we keep the preview running?\n1. Yes\n2. No\n\nWhich layout should we use?\n1. Compact — fits the existing cards (recommended)\n2. Spacious — more room between options',
-          ),
-        ])
+        return tool('message', { to: 'user', text: decisions })
+      if (last?.role === 'user' && last.content === 'ask demo')
+        return fauxAssistantMessage([fauxText(decisions)])
       if (
         last?.role === 'user' &&
         typeof last.content === 'string' &&
-        last.content.startsWith('Q: ')
+        (last.content.startsWith('Q: ') || last.content.includes('\nQ: '))
       )
         return fauxAssistantMessage([fauxText('Understood. I’ll continue with your reply.')])
       if (transcript.messages[asked]?.content === 'phases demo') {
@@ -207,51 +207,6 @@ export default async function fauxExtension(host: ExtensionHost) {
             '## Idea\n\nUltimate is one tree of conversations: a tally root and its branches (#1/11).\n\n## Standing decisions\n\n- Keep it minimal; reuse the existing card language.\n- Open: how notes reach an idle conversation.',
           ),
         ])
-      }
-      if (
-        system?.role === 'system' &&
-        typeof system.content === 'string' &&
-        system.content.startsWith('You write the note')
-      ) {
-        return fauxAssistantMessage([
-          fauxText(
-            'Settled: notes stay plain lines in the tally, no separate panel.\nRuled out: a notes database; the tally already keeps history.\nOpen: whether notes need their own colour.',
-          ),
-        ])
-      }
-      if (
-        system?.role === 'system' &&
-        typeof system.content === 'string' &&
-        system.content.startsWith('You draft')
-      ) {
-        return fauxAssistantMessage([
-          fauxText(
-            'Show notes in the tally as plain lines, as the side chat settled. Verify on a faux preview.',
-          ),
-        ])
-      }
-      if (last?.role === 'user' && last.content === 'propose a branch') {
-        return fauxAssistantMessage(
-          [
-            fauxText('Settled, then: this is the branch I would start.'),
-            fauxToolCall('propose_branch', {
-              prompt:
-                'Render side notes in the tally as quiet cards with their text, linking the side chat and the branch it started.',
-            }),
-          ],
-          { stopReason: 'toolUse' },
-        )
-      }
-      const sections = (system as { sections?: Record<string, string> } | undefined)?.sections
-      if (last?.role === 'user' && sections?.lineage?.includes('a side chat with')) {
-        return fauxAssistantMessage([
-          fauxText(
-            'From the tally: notes reach the root as plain lines, and nothing else stores them. Keeping them there avoids a second place to look.',
-          ),
-        ])
-      }
-      if (last?.role === 'toolResult' && last.toolName === 'propose_branch') {
-        return fauxAssistantMessage([fauxText('Start it from the card when you are ready.')])
       }
       if (last?.role === 'user' && last.content === 'delegate to worker') {
         return fauxAssistantMessage(

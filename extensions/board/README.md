@@ -25,9 +25,18 @@ no reply is appended. A subagent's one-way update to its parent is instead a `bo
 The note's delivery decision is saved in the task input for replay. Sending to `user` only writes an
 unread inbox item; it starts no run. Replies to a user post also stay in the inbox without starting a run.
 A reply-enabled message to `user` stays open, and its sender shows as awaiting reply, until the user answers it:
-a Reply, any new post to the sender, or an input typed in the sender's conversation (a plain input or an answer
-card) marks it answered. Posts commit the change with the message; typed inputs close it through a commit
+a Reply, any new post to the sender, an answer card, or a plain input typed in the sender's conversation
+marks it answered. Posts commit the change with the message; typed inputs close it through a commit
 subscription, only for questions asked before that input.
+
+Reply-expected agent messages to `user` also request question extraction in the append transaction through the
+optional questions service. The sender's outgoing `message` card in its transcript shows extracted decisions
+under the message body while it is open: Yes/No or choice buttons with a recommended marker, plus Something
+else. The Board feed shows no card. The user-only questions `answer` action posts
+a normal user Board reply with `re` and Q/A text, waking the sender. Its admission atomically checks that the
+original message is still open, preventing duplicate replies. A Reply, a new post or typing in the sender's
+conversation closes the card too.
+One-way messages and user posts never request extraction; see [Questions](../questions/README.md).
 
 In the sender's transcript a `message` call renders as an outgoing card: recipient, one-way or expects reply, and
 the message's live state from the board log (sending, delivered, in your inbox, awaiting reply, answered, failed),

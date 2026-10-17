@@ -1,8 +1,7 @@
 A project is a forest of conversation trees. Each root keeps a non-agent tally of one line of work: prompts, each conversation's latest abstract, notes and landings. Branches do the work with that shared context.
 
-- **Branch** (⌘K "Branch…", "Branch from here" on a message, or action `branch`
-  `{ from, at?, prompt, images?, isolated?, model?, thinkingLevel? }` → `{ id }`). Every branch uses the same
-  start page as New (model, Isolated, pasted images). It forks the source at `at` (default: its latest entry) as an
+- **Branch** (action `branch`
+  `{ from, at?, prompt, images?, isolated?, model?, thinkingLevel? }` → `{ id }`). It forks the source at `at` (default: its latest entry) as an
   ownerless conversation in the project root, optionally isolated in its own worktree. There is no brief or reset:
   it inherits the source context, then the durable `lineage.prompt` task submits the prompt and images as its first
   input. Doc `lineage.branch` holds `{ from, at, intent }`; `inputAt` is when the branch was asked for, not inherited
@@ -11,37 +10,19 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
   when the source is not the root; that source also gets a display-only marker.
 - **Roots**: doc `lineage.roots` on conversation 1 (`{ roots }`, initially `[1]`) lists the roots. Clients stream it
   (`useRoots()` in `roots.tsx`). Root lookup walks owners and fork sources to a listed root; conversations outside
-  those trees have none. Action `newRoot` `{ prompt, model?, thinkingLevel? }` → `{ id }` creates a root, titled by
-  the prompt (what its tree is for), and starts its survey toward it; `id` is the root. The root uses the chosen model
-  or conversation 1's default, and emits `lineage:rooted`.
-  A definition naming the deferred tool `seed_tally` `{ root, text }` can instead seed an empty listed root from
-  its own project reading. It atomically writes the same genesis reset as conversion and sets `lineage.tally.since`,
-  with `<tally from="#caller/latest-entry">` pointing at the reading. It refuses the caller itself, non-roots,
-  roots with entries, existing tallies, and roots surveying or converting. Replay recognises the committed genesis
-  with its memoised breadcrumb, so it writes only once. The genesis card links to that source reading.
-  **Survey**: an empty root (a fresh project's conversation 1, a new root, an empty conversation made a root) has
-  nothing to branch from, and `branch` refuses it. Action `survey` `{ root, focus? }` → `{ id }` sets
-  `lineage.tally.surveying` and starts the background `lineage.survey` task: it submits the reading prompt (what the
-  project is, how to run, check and test it, its architecture, conventions and current state; read-only; following the
-  focus, the user's instructions, first) as a `lineage.survey` input, waits until the root is idle (the user can steer the reading), then
-  converts the root as `root` does, distilling with a reading focus. Branching is refused while it reads or converts.
-  Alternatively, `seed_tally` lets another conversation supply that first reading without running a survey in the root.
-  Typing in a tally's composer opens a side chat with it (↵) or starts a branch from its tip (⌥↵); the server refuses
-  inputs to tallies.
-  Action `root` `{ id }` (⌘K "Make this a root") adopts a top-level non-branch conversation or converts an existing
-  root. With history, it is refused while the conversation has a live run, compaction, notify or subagent report, or a
-  workspace submission queued or landing; otherwise `lineage.tally.converting` refuses inputs at once and a durable
-  `lineage.convert` task asks its own model for a genesis distillation. It writes a `pi.reset` with `head: 'self'`,
-  `data.lineage = { tally: true }` and model text `<tally from="#R/at">…</tally>` only while `at` is still the tip;
-  writes that arrived meanwhile (notes, landings) are distilled again with it. A failure clears `converting` and
-  leaves a notice. An empty conversation is only added to the roots and waits for its survey; converting a tally again
-  does nothing. Roots with history from before
-  tallies keep their ordinary composer and can run until converted. `info` returns `{ roots }`, and with `{ id }`
-  also its `root` and `branch` when present.
+  those trees have none. Deferred tool `new_root` `{ title }` → `{ id }` creates an empty, ownerless root in the
+  project checkout, using conversation 1's model and thinking level. It stores the title and emits `lineage:rooted`.
+  A task receipt commits with creation and a memo records the id, so replay creates only one root.
+  Deferred tool `seed_tally` `{ root, text }` seeds an empty listed root from the caller's project reading. It
+  atomically writes a genesis `pi.reset` with `head: 'self'`, `data.lineage = { tally: true }`, and
+  `<tally from="#caller/latest-entry">` pointing at the reading, then sets `lineage.tally.since`.
+  It refuses the caller itself, non-roots, roots with entries and existing tallies. Replay recognises the committed
+  genesis with its memoised breadcrumb, so it writes only once. The genesis card links to that source reading.
+  An empty root has nothing to branch from: seed it first. Tallies refuse inputs and run no turns.
+  `info` returns `{ roots }`, and with `{ id }` also its `root` and `branch` when present.
 - **Tally**: conversation-scoped doc `lineage.tally` (latest history) holds
-  `{ abstracts: Record<string, { anchor, at, text, title?, feature? }>, tokens: number, since?: number,
-converting?: true, surveying?: true }`: each conversation's open abstract, estimated model-visible context tokens, the
-  entry where the root became a tally, whether its genesis is being distilled, and whether it is reading the project. Forks start with an empty doc,
+  `{ abstracts: Record<string, { anchor, at, text, title?, feature? }>, tokens: number, since?: number }`:
+  each conversation's open abstract, estimated model-visible context tokens, and the entry where the root became a tally. Forks start with an empty doc,
   not the source's bookkeeping. Tokens are recounted from active context after commits that append root entries,
   including resets and compaction. The root composer status shows the estimate as "Tally · … tokens".
   `lineage.abstract` entries hold `{ conversation, at, text, title?, feature?, anchor? }`, with `at` pointing to the
@@ -52,28 +33,6 @@ converting?: true, surveying?: true }`: each conversation's open abstract, estim
   too and omits the old one, since the compaction may replace it after the update. Storage stays append-only. The
   transcript shows each anchor as a card with its newest carrier's text and `#N/at` breadcrumb; carriers render
   nothing, and a frozen anchor hides.
-- **Side chats**: a conversation with a tally at this point in time, before anything becomes a branch. Action `side`
-  `{ root, prompt, images?, model?, thinkingLevel? }` → `{ id }` forks the tally's tip as an ownerless conversation in
-  the shared checkout (never isolated) with label `side chat`; the `lineage.prompt` task delivers its prompt. A root
-  has one open at a time: `lineage.roots` keeps them as `sides` (root → side chat), so every client sees them with the
-  roots. Doc `lineage.side` on the side chat holds `{ root, at, ending?, ended?, branch? }`. It writes nothing into
-  the tally while open: no prompt node, no `lineage.branch`, no abstracts (`branchOf` is undefined for it); catch-up
-  applies as in any tree conversation. It has every tool a coordinator has, plus the deferred `propose_branch`.
-  `propose_branch` may only be called by an open side chat. A branch forked from a side chat's message
-  ("Branch from here") does not keep it: every branch starts with the tool configuration cleared.
-  `propose_branch` `{ prompt }` renders as a "Proposed branch" card whose "Start branch…" opens the start page with
-  that prompt. It ends only when the user ends it, with action
-  `endSide` `{ root, side, mode, prompt?, images?, isolated?, model?, thinkingLevel? }`, refused unless `side` is
-  still the root's open side chat, so a stale page cannot end a newer one:
-  `discard` closes it and the tally gets nothing; `note` has the summary model (else the side chat's own) write what
-  it settled, at most 800 characters, appended to the root as a model-visible `lineage.note`
-  `{ text, from, source: 'side' }` reading `Side chat #S: …`; `branch` writes the note, then starts a branch from the
-  tally's tip right after it, so the branch inherits the note; its prompt node carries `side` and reads
-  `#B was started from the tally (#R/at), ending side chat #S, with the prompt:`. Note and branch run in the
-  durable `lineage.side` task: the model's answer is memoised, the note commits with the close (or the step to the
-  branch), and the branch with the task's end, so a rerun writes each once. `sideDraft` `{ root, side }` →
-  `{ prompt }` returns the side chat's last proposal, else one the summary model drafts. An ended side chat takes no
-  input and stays readable. Ending is refused while it still answers.
 - **Notes**: `note` `{ to: id | 'root', text }` writes a `lineage.note` without waking the target; `'root'` resolves
   the caller's tree root. Its model reads `Note from #N: …` with its next input, or a future branch inherits it from
   the tally. Note cards use the mellow yellow `--note` theme token. `ConversationRef` names conversations by feature,
@@ -112,14 +71,18 @@ converting?: true, surveying?: true }`: each conversation's open abstract, estim
   inherited tally contents, and how to follow `#conversation/entry` breadcrumbs with `ultimate.entries(id)` and
   `ultimate.search()`. Other top-level conversations get their own id and lookup guidance. No list of roots changes
   the prompt cache.
-- **Compaction**: manual compaction reshapes a tally without deleting history. Its own model keeps the idea,
+- **Compaction**: deferred tool `compact_tally` `{ root, instructions? }` → `{ taskId }` starts the harness's
+  existing compaction on a listed tally root, refusing non-roots, non-tallies and roots already compacting.
+  Compaction summarizes older tally content and keeps recent entries verbatim; a short tally may stay unchanged.
+  Instructions guide that summary without deleting history. To correct a recent or standing decision, @ultimate leaves
+  a superseding `note {to: root}`. Its own model keeps the idea,
   principles, standing decisions and each conversation's id, prompt, outcome, divergence, commits and breadcrumbs,
   merging superseded detail. Every top-level conversation's summary source is its model view with edits applied, so
   abstracts read as last updated and frozen ones stay out. Branch compaction focuses on intent and progress; subagents keep Pi's default.
 
 Other extensions use `host.use<LineageService>('lineage')` (`server.ts`): `rootOf(id, ctx)` resolves tree membership,
 `leaveNote(to, text, source?)` writes without waking, and `branchOf(id, ctx)` returns `{ root, intent? }` for top-level
-non-root conversations in a tree (undefined for roots, owned conversations, side chats and outsiders).
+non-root conversations in a tree (undefined for roots, owned conversations and outsiders).
 `abstract(tx, id, { text, at, title?, feature? })` opens or updates `id`'s abstract in that root in the caller's
 transaction, before its first table write because it reads conversation records; it is a no-op wherever `branchOf`
 is undefined. The conversations summarizer uses this to publish an abstract after each completed exchange.
@@ -130,31 +93,18 @@ the task completes. The method returns `{ id }`. With `deliver: false`, no `line
 must deliver its first input (the board uses a reply-enabled message). `by: conversationId` attributes the tally's prompt node to that caller,
 including its standing-agent name when available.
 
-New, "Branch…" and "Branch from here" open the start page (`start.tsx`) in `conversation.overlay`, with the
-conversation beneath inert. It shows New's Branch / New root tabs, source and quoted branch point above the
-new-conversation composer. Its URL (`?new`, `?new=<from>`, `?new=<from>.<at>`, or `?new=<root>&side=<side>` for the
-branch a side chat ends in, prefilled with its draft) survives reload; Back or Esc closes it,
-switching conversations closes it, and each start point keeps its draft. Sending replaces the composer with the sent
-prompt and its steps (forking the source, or creating the root, then starting the run); the page holds over the new
-conversation until its first message shows, then fades into it. A tally's ⌥↵ branch shows the same page. A failed start
-returns to the composer with the draft and the error. There is no briefing overlay or retry action. Old stored brief resets still render;
-a genesis reset instead shows a collapsible "Tally starts here" card.
+The user talks to @ultimate on the Board; it picks a root by reading tallies and starts coordinator branches.
+There is no manual creation page or message-hover branch action. Coordinator branches keep their composers for steering.
 
-New in the sidebar branches from the shown tree's root, else the most recently active root; `root: true` starts a
-new root, which reads the project in the shared checkout (no Isolated switch). While that root has not read the project,
-New's Branch tab explains why and offers to open it instead of a composer. An empty root's composer is the "Start here"
-card (`survey.tsx`): an optional focus and **Set up with @ultimate**. This calls user action `onboarding.start` with
-that root and the focus verbatim as instructions, then opens @ultimate. Once started, it shows a quiet
-**@ultimate is setting up this project · open** link from `onboarding.starts`. **Read it here instead** starts the
-in-place survey as a fallback; New → New root keeps its survey too. While a survey reads, the root keeps
-its composer for steering, with "Getting familiar with the project" in its status line; while its genesis is
-distilled, a quiet "Writing the tally…" line replaces it. The survey input renders as a collapsible "Getting familiar
-with the project" card. A tally replaces its conversation composer through the SDK's `composer` renderer:
-↵ opens a side chat (`start` prop of `NewConversationComposer`), ⌥↵ (`alternate` in the draft) starts a branch with
-the same start path and remembered Isolated/Shared preference. Its status line shows "Tally · … tokens" and both
-keys. A root with an open side chat shows the side chat instead (a replacing redirect, so Back leaves): its view is
-the tally as it was when the chat opened, then the chat, with a "Side chat · #S [Branch…] [Keep as note] [Discard]" bar
-above its composer; an ended one shows how it ended instead of a composer. The sidebar lists no side chats; a root
-with an open one is marked "side chat" and stands for it. A side note renders as a quiet "Side chat · #S" card with
-"→ #B" when it started a branch. Hover a stored message and choose
-**Branch from here** to fork at that entry; `lineage.branch-at` receives `conversationId` and `entryId` through the SDK.
+An empty root shows the **Start here** card (`survey.tsx`): an optional focus and **Set up with @ultimate**.
+This calls user action `onboarding.start` with that root and the focus verbatim as instructions, then opens @ultimate.
+Once started, it shows only a quiet **@ultimate is setting up this project · open** link from `onboarding.starts`.
+@ultimate reads the project and writes its first tally with `seed_tally` before starting work.
+
+Listed roots with a tally or existing history replace their composer through the SDK's `composer` renderer with a
+read-only footer: **Tally**, "The context every new branch starts from. @ultimate keeps it up to date.", estimated
+tokens, and **Talk to @ultimate**. There is no text input. @ultimate maintains standing decisions with `note` and
+reshapes tallies with `compact_tally`; the palette hides compact, clear-context and composer-focus commands on roots.
+
+Old stored notes and survey inputs still render quietly, without creation controls. Old brief resets still render;
+a genesis reset shows a collapsible **Tally starts here** card.

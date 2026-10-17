@@ -13,9 +13,9 @@ import {
   branchOf,
   leaveNote,
   rootOf,
+  Roots,
   Tally,
 } from '../extensions/lineage/server.ts'
-import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 import type { LineageService } from '../extensions/lineage/server.ts'
 import { Plan } from '../extensions/plan/server.ts'
 import { Summaries, summaryBehavior } from '../extensions/conversations/summary.ts'
@@ -247,11 +247,6 @@ it('branches from a tally: the root gets the prompt node, the branch starts from
   expect(await section(server, first)).toContain(
     `You are #${first}, branched from #1 at entry ${reset.id} for: Add notes between conversations\nRoot: #1.\nYour context starts with the tally of your tree`,
   )
-  // A branch already has a root, so it cannot become one.
-  const refused = await post(server, '/api/extensions/lineage/actions/root', {
-    args: { id: first },
-  })
-  expect(refused.status).not.toBe(200)
   expect(
     (await post(server, '/api/extensions/lineage/actions/info', { args: { id: first } })).data
       .result,
@@ -304,7 +299,7 @@ it('refuses inputs in a tally and keeps notes as writes', async () => {
   const first = await branchFrom(server, { from: 1, prompt: 'Start' })
   await settled(server, first)
   await expect(server.root.submit({ type: 'input', content: 'Run here' }, context)).rejects.toThrow(
-    '#1 is a tally and runs no turns; start a branch from it instead',
+    '#1 is a tally and runs no turns; ask @ultimate to start a branch',
   )
   const refused = await post(server, '/api/conversations/1/submit', { text: 'Run here' })
   expect(refused.status).not.toBe(200)
@@ -511,197 +506,6 @@ it('places a landing in a tally in one transaction, so an abstract never opens b
   // The abstract is liquid after the landing, never left open above it.
   const open = (await server.harness.snapshot(Tally, server.root.id, context))!.abstracts[first]
   expect(open.anchor).toBeGreaterThan(notes[0].id)
-})
-
-it('turns a conversation with history into a tally with one genesis that branches start from', async () => {
-  const { server, requests } = await fixture()
-  await (
-    await server.root.submit(
-      { type: 'input', content: 'We build a tree of conversations.' },
-      context,
-    )
-  ).wait(context)
-  const tip = (await server.root.context(context)).entries.at(-1)!.id
-  // A root with history is no tally until it is converted: it still runs.
-  expect((await server.harness.snapshot(Tally, server.root.id, context))?.since).toBeUndefined()
-  for (let n = 0; n < 2; n++)
-    expect(
-      (await post(server, '/api/extensions/lineage/actions/root', { args: { id: 1 } })).data.result,
-    ).toEqual({ roots: [1] })
-  await until(
-    async () =>
-      (await server.harness.snapshot(Tally, server.root.id, context))?.since !== undefined,
-  )
-  const view = await server.root.context(context)
-  expect(view.entries).toHaveLength(1)
-  const [genesis] = view.entries
-  expect(genesis).toMatchObject({ kind: 'pi.reset', data: { lineage: { tally: true } } })
-  expect(genesis.head).toBe(genesis.id)
-  expect(textOf(genesis.model?.[0]?.content)).toBe(
-    `<tally from="#1/${tip}">\nLINEAGE SUMMARY of This is the tally of one line of work: t\n</tally>`,
-  )
-  const converts = await server.harness.commit(
-    async (tx) =>
-      (await tx.scanTasks({ conversationId: ROOT_CONVERSATION_ID, kind: 'lineage.convert' }, 10))
-        .items,
-    context,
-  )
-  expect(converts.map((task) => task.state.status)).toEqual(['terminal'])
-  await expect(server.root.submit({ type: 'input', content: 'More' }, context)).rejects.toThrow(
-    'is a tally',
-  )
-  // Converting again changes nothing.
-  await post(server, '/api/extensions/lineage/actions/root', { args: { id: 1 } })
-  expect((await server.root.context(context)).entries).toEqual([genesis])
-
-  const next = await branchFrom(server, { from: 1, prompt: 'Carry on' })
-  await settled(server, next)
-  const request = requests.find(
-    (messages) =>
-      textOf(messages.findLast((message) => message.role === 'user')?.content) === 'Carry on',
-  )!
-  expect(said(request).map(([, text]) => text)).toEqual([
-    textOf(genesis.model?.[0]?.content),
-    'Carry on',
-  ])
-})
-
-it('refuses to convert while a task runs in or delivers into the conversation, or a submission lands', async () => {
-  const { server } = await fixture()
-  const gates = new Map<string, PromiseWithResolvers<void>>()
-  const gate = (name: string) => {
-    if (!gates.has(name)) gates.set(name, Promise.withResolvers())
-    return gates.get(name)!
-  }
-  const route: FauxResponseFactory = async (transcript) => {
-    server.host.faux!.appendResponses([route])
-    const last = transcript.messages.at(-1)!
-    const text = textOf(last.content)
-    if (last.role === 'toolResult') return fauxAssistantMessage(`Tool: ${text}`)
-    if (text.startsWith('NOTIFY '))
-      return fauxAssistantMessage([fauxToolCall('notify', JSON.parse(text.slice(7)))], {
-        stopReason: 'toolUse',
-      })
-    if (text.startsWith('HOLD ')) await gate(text).promise
-    return fauxAssistantMessage(`echo ${text}`)
-  }
-  server.host.faux!.setResponses([route])
-  const convert = async () =>
-    (await post(server, '/api/extensions/lineage/actions/root', { args: { id: 1 } })).data
-  const other = await second(server)
-  await other.submit({ type: 'input', content: 'HOLD other' }, context)
-
-  // A running turn.
-  await server.root.submit({ type: 'input', content: 'HOLD root' }, context)
-  expect((await convert()).error).toBe(
-    '#1 cannot become a tally while its pi.generation task is still live',
-  )
-  gate('HOLD root').resolve()
-  await server.root.waitForIdle(context)
-
-  // A pending notify, which would deliver into it.
-  await ask(server, ROOT_CONVERSATION_ID, `NOTIFY ${JSON.stringify({ id: other.id, wake: false })}`)
-  expect((await convert()).error).toBe(
-    '#1 cannot become a tally while its lineage.notify task is still live',
-  )
-  gate('HOLD other').resolve()
-  await until(async () => (await pendingNotifies(server)).length === 0)
-
-  // A workspace submission whose outcome is reported back to it.
-  const submission = {
-    id: 'submission',
-    conversationId: 1,
-    source: server.host.projectRoot,
-    target: 'main',
-    tip: 'abc',
-    at: 1,
-    divergence: 'None',
-    state: 'queued' as const,
-    steps: [],
-  }
-  await server.harness.commit(async (tx) => {
-    ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue.push(submission)
-  }, context)
-  expect((await convert()).error).toBe(
-    '#1 cannot become a tally while its workspace submission is still landing',
-  )
-  // Refusals change nothing: it still runs.
-  expect(
-    (await server.harness.snapshot(Tally, server.root.id, context))?.converting,
-  ).toBeUndefined()
-  await ask(server, ROOT_CONVERSATION_ID, 'Still running')
-
-  await server.harness.commit(async (tx) => {
-    ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue = []
-  }, context)
-  await server.root.waitForIdle(context)
-  expect((await convert()).result).toEqual({ roots: [1] })
-  await until(
-    async () =>
-      (await server.harness.snapshot(Tally, server.root.id, context))?.since !== undefined,
-  )
-})
-
-it('distills the genesis again when the tally moved meanwhile, and refuses inputs while converting', async () => {
-  const { server } = await fixture()
-  const condensed: string[] = []
-  let fail = true
-  const held = Promise.withResolvers<void>()
-  const route: FauxResponseFactory = async (transcript) => {
-    server.host.faux!.appendResponses([route])
-    const [system, first] = transcript.messages
-    if (textOf(system.content).startsWith('You condense')) {
-      condensed.push(textOf(first.content))
-      if (fail) return fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'Overloaded' })
-      if (condensed.length === 2) await held.promise
-      return fauxAssistantMessage(`GENESIS ${condensed.length}`)
-    }
-    return fauxAssistantMessage(`echo ${textOf(transcript.messages.at(-1)!.content)}`)
-  }
-  server.host.faux!.setResponses([route])
-  const convert = () => post(server, '/api/extensions/lineage/actions/root', { args: { id: 1 } })
-  const tally = () => server.harness.snapshot(Tally, server.root.id, context)
-  await ask(server, ROOT_CONVERSATION_ID, 'We build a tree.')
-  await server.root.waitForIdle(context)
-
-  // A failed distillation leaves an ordinary conversation behind, with a notice.
-  expect((await convert()).status).toBe(200)
-  await until(async () => (await tally())?.converting === undefined)
-  expect((await tally())?.since).toBeUndefined()
-  await until(() =>
-    server.system
-      .current()
-      .extensionDiagnostics.includes('Could not turn #1 into a tally: Overloaded'),
-  )
-  await ask(server, ROOT_CONVERSATION_ID, 'Still mine.')
-  await server.root.waitForIdle(context)
-
-  fail = false
-  expect((await convert()).status).toBe(200)
-  await until(() => condensed.length === 2)
-  expect((await tally())?.converting).toBe(true)
-  await expect(server.root.submit({ type: 'input', content: 'Sneak in' }, context)).rejects.toThrow(
-    '#1 is becoming a tally and runs no turns; start a branch from it instead',
-  )
-  // Converting again while it converts starts nothing.
-  expect((await convert()).data.result).toEqual({ roots: [1] })
-  await leaveNote({ harness: () => server.harness }, ROOT_CONVERSATION_ID, 'Landed meanwhile.', {
-    from: 7,
-  })
-  const note = (await server.root.context(context)).entries.at(-1)!
-  held.resolve()
-  await until(async () => (await tally())?.since !== undefined)
-
-  // The note arrived after the first distillation began, so the genesis was distilled again with it.
-  expect(condensed).toHaveLength(3)
-  expect(condensed[1]).not.toContain('Landed meanwhile.')
-  expect(condensed[2]).toContain('Note from #7: Landed meanwhile.')
-  const [genesis, ...rest] = (await server.root.context(context)).entries
-  expect(rest).toEqual([])
-  expect(textOf(genesis.model?.[0]?.content)).toBe(
-    `<tally from="#1/${note.id}">\nGENESIS 3\n</tally>`,
-  )
-  expect((await tally())?.converting).toBeUndefined()
 })
 
 it('summarizes a branch into its title and its abstract in the tree root', async () => {
@@ -1115,101 +919,6 @@ it('branches in the shared checkout with workspaces disabled', async () => {
   expect((await conversation.agent(context)).cwd).toBe(server.host.projectRoot)
 })
 
-it('starts a new root that gets familiar with the project, then becomes the tally branches start from', async () => {
-  const { server, requests, condensed, gate } = await fixture()
-  const held = Promise.withResolvers<void>()
-  gate.condense = held.promise
-  const { status, data } = await post(server, '/api/extensions/lineage/actions/newRoot', {
-    args: { prompt: '  A second line of work  ' },
-  })
-  expect([status, data.error]).toEqual([200, undefined])
-  const root = data.result.id as ConversationId
-  expect((await server.harness.snapshot(Metadata, root, context))?.title).toBe(
-    'A second line of work',
-  )
-  expect((await server.harness.snapshot(Summaries, root, context))?.generatedTitle).toBe(
-    'A second line of work',
-  )
-  expect(
-    (await post(server, '/api/extensions/lineage/actions/info', { args: null })).data.result,
-  ).toEqual({ roots: [1, root] })
-
-  // The root reads with the survey as its own first input, then distills that reading into its genesis.
-  await until(async () => condensed.length === 1)
-  const reading = await (await server.harness.conversation(root, context))!.context(context)
-  const [input] = reading.entries
-  expect(input).toMatchObject({ kind: 'lineage.survey', data: { focus: 'A second line of work' } })
-  const survey = textOf(input.model?.[0]?.content)
-  expect(survey).toMatch(/^Make yourself familiar with this project\./)
-  expect(survey).toContain(
-    "The user's instructions for this reading come first, before the list above:\nA second line of work",
-  )
-  expect(said(requests.at(-1)!)).toEqual([['user', survey]])
-  expect(condensed[0]).toMatch(/^This is a reading of the project/)
-  expect((await server.harness.snapshot(Tally, root, context))?.converting).toBe(true)
-  const early = await post(server, '/api/extensions/lineage/actions/branch', {
-    args: { from: root, prompt: 'Too early' },
-  })
-  expect(early.data.error).toBe(
-    `#${root} is still writing its tally; branch from it once it is done`,
-  )
-  held.resolve()
-  await until(
-    async () => (await server.harness.snapshot(Tally, root, context))?.since !== undefined,
-  )
-  const tally = await (await server.harness.conversation(root, context))!.context(context)
-  const [genesis] = tally.entries
-  expect(genesis).toMatchObject({ kind: 'pi.reset', data: { lineage: { tally: true } } })
-  expect(textOf(genesis.model?.[0]?.content)).toMatch(
-    new RegExp(
-      `^<tally from="#${root}/\\d+">\nLINEAGE SUMMARY of This is a reading of the project`,
-    ),
-  )
-  expect((await server.harness.snapshot(Tally, root, context))?.surveying).toBeUndefined()
-
-  const id = await branchFrom(server, { from: root, prompt: 'Carry on', isolated: false })
-  await settled(server, id)
-  expect(
-    said((await (await server.harness.conversation(id, context))!.context(context)).messages),
-  ).toEqual([
-    ['user', textOf(genesis.model?.[0]?.content)],
-    ['user', 'Carry on'],
-    ['assistant', 'echo Carry on'],
-  ])
-  expect(await section(server, root)).toBeUndefined()
-  expect(
-    (await post(server, '/api/extensions/lineage/actions/newRoot', { args: { prompt: ' ' } }))
-      .status,
-  ).not.toBe(200)
-})
-
-it('refuses to branch from an empty root until it got familiar with the project', async () => {
-  const { server, requests } = await fixture()
-  const refused = await post(server, '/api/extensions/lineage/actions/branch', {
-    args: { from: 1, prompt: 'Too early' },
-  })
-  expect(refused.data.error).toBe(
-    '#1 is an empty root: let it get familiar with the project first, then branch from what it learned',
-  )
-  expect((await server.root.context(context)).entries).toEqual([])
-  expect(
-    (await post(server, '/api/extensions/lineage/actions/survey', { args: { root: 1 } })).data,
-  ).toEqual({ result: { id: 1 } })
-  await until(
-    async () =>
-      (await server.harness.snapshot(Tally, server.root.id, context))?.since !== undefined,
-  )
-  // Without a focus, the survey is the plain reading.
-  expect(said(requests[0])).toEqual([
-    ['user', expect.not.stringContaining("The user's instructions")],
-  ])
-  expect(
-    (await post(server, '/api/extensions/lineage/actions/survey', { args: { root: 1 } })).data
-      .error,
-  ).toBe('#1 is no empty root')
-  await settled(server, await branchFrom(server, { from: 1, prompt: 'Now' }))
-})
-
 it('delivers a branch’s prompt once when the process stops before it is submitted', async () => {
   const { server, home } = await fixture()
   // Without the prompt task's definition the task waits, as if the process went down right after creating the branch.
@@ -1252,41 +961,23 @@ it('delivers a branch’s prompt once when the process stops before it is submit
   ])
 })
 
-it('defaults a branch to its source’s configuration and a new root to the project default', async () => {
+it('defaults a branch to its source’s configuration', async () => {
   const { server } = await fixture()
   const model = { provider: 'faux', modelId: 'faux-b' }
   const other = await server.harness.createConversation(
     { ownership: { kind: 'ownerless' }, agent: { model, thinkingLevel: 'high' } },
     context,
   )
-  await post(server, '/api/extensions/lineage/actions/root', { args: { id: other.id } })
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.push(other.id)
+  }, context)
   await seedTally(server.harness, other.id)
-  const defaults = async (args: unknown) =>
-    (await post(server, '/api/extensions/models/actions/defaultConfiguration', { args })).data
-  const project = await server.root.agent(context)
-  expect(project.model).toEqual({ provider: 'faux', modelId: 'faux-1' })
-  expect(await defaults({ id: other.id })).toEqual({ result: { model, thinkingLevel: 'high' } })
-  expect(await defaults(null)).toEqual({
-    result: { model: project.model, thinkingLevel: project.thinkingLevel },
-  })
-  expect((await defaults({ id: 999 })).error).toBe('No conversation #999')
-
-  // Without a choice, the branch keeps its source's configuration and a new root takes the project default.
+  // Without a choice, the branch keeps its source's configuration.
   const agentOf = async (id: ConversationId) =>
     (await server.harness.conversation(id, context))!.agent(context)
   const followed = await branchFrom(server, { from: other.id, prompt: 'Follow B', isolated: false })
   expect(await agentOf(followed)).toMatchObject({ model, thinkingLevel: 'high' })
-  const created = (
-    await post(server, '/api/extensions/lineage/actions/newRoot', { args: { prompt: 'Start C' } })
-  ).data.result as { id: ConversationId }
-  expect(await agentOf(created.id)).toMatchObject({
-    model: project.model,
-    thinkingLevel: project.thinkingLevel,
-  })
   await settled(server, followed)
-  await until(
-    async () => (await server.harness.snapshot(Tally, created.id, context))?.since !== undefined,
-  )
 })
 
 const anchor = defineTask<null, { phase: 'done' }, null>({
@@ -1316,12 +1007,9 @@ it('resolves the root per tree for notes, the prompt and compaction', async () =
     return (await conversation.fork(at, { ownership: { kind: 'ownerless' } }, context)).id
   }
   const other = await second(server)
-  // ⌘K "Make this a root" adds it; adding again changes nothing.
-  for (let n = 0; n < 2; n++)
-    expect(
-      (await post(server, '/api/extensions/lineage/actions/root', { args: { id: other.id } })).data
-        .result,
-    ).toEqual({ roots: [1, other.id] })
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.push(other.id)
+  }, context)
   const first = await fork(ROOT_CONVERSATION_ID)
   const branch = await fork(other.id)
   const nested = await fork(branch)
@@ -1336,9 +1024,6 @@ it('resolves the root per tree for notes, the prompt and compaction', async () =
   const outside = (
     await server.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)
   ).id
-  expect(
-    (await post(server, '/api/extensions/lineage/actions/root', { args: { id: subagent } })).status,
-  ).not.toBe(200)
 
   const note = server.host.registry.snapshot().extension('lineage')!.tools![0]
   const send = (from: ConversationId) =>

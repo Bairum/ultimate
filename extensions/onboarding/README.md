@@ -21,7 +21,7 @@ so Start here can show **@ultimate is setting up this project · open** across r
 @ultimate greets, shows only applicable setup cards one at a time and waits for each choice, then reads the project
 with the user able to steer. It writes the root's first tally through `seed_tally`, suggests at most three useful
 project-specific agents, extensions or settings, and builds only what the user chooses. The first feature becomes a
-coordinator through `branch`. **Read it here instead** keeps the old survey fallback; New root still surveys in place.
+coordinator through `branch`. Roots stay read-only while @ultimate handles setup.
 Under faux the same flow is scripted without model tokens (see `faux/README.md`).
 
 ## Setup cards
@@ -62,9 +62,8 @@ The status line keeps **project setup** while the project decision is open and *
 unavailable. Clicking posts "Help me decide whether to use this project's setup." or "Help me set up git for this
 folder." to @ultimate through the Board, then opens the standing conversation returned by `addresses` on the Agent
 surface. First-run Continue and Start here's start/open links also select the Agent surface. While onboarding is
-in progress, Start here shows the open link and the survey fallback, without the focus textarea or keyboard hint.
-The Extensions panel's About this setup and the start page's isolation shortcut route there too; they no longer
-open setup dialogs.
+in progress, Start here shows only the open link, without the focus textarea or keyboard hint.
+The Extensions panel's About this setup routes there too rather than opening a setup dialog.
 The Git status is read again whenever the shown conversation finishes a run, including an agent's first Git commit.
 
 ## Extensions panel

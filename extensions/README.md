@@ -27,10 +27,8 @@ An optional `composer` renderer receives `{ core, dock? }` for the shown convers
 narrow side region). Render `core` to preserve the existing composer, optionally wrapping it. Facets compose in
 discovery order: each receives the previous rendering as `core`, behind its own extension boundary with that rendering
 as fallback. These renderers can use `useTranscript()` for the shown conversation's current entries and
-`useComposer()` for draft access. They do not replace the start-page composer.
-Lineage uses this to make a tally's composer open a side chat or start a branch instead of sending an input to the
-root, and to put a side chat's end bar above its composer. `NewConversationComposer` takes an optional `start` that
-replaces the extensions' starter for that composer, and `prompt`, the text it holds while its draft is empty.
+`useComposer()` for draft access.
+Lineage uses this to show a root's read-only tally footer, or an empty root's Start here card, instead of a composer.
 `switchConversation(id, { replace: true })` takes the current history entry instead of adding one, as a redirect does.
 
 ## Where extensions live
@@ -191,13 +189,8 @@ No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, entries, link, messageActions, messageDetails, answerLabels, chat, start, documents, commands })`; every key is optional. Extensions load
+`defineWebExtension({ slots, panels, surfaces, tools, entries, link, messageActions, messageDetails, answerLabels, chat, documents, commands })`; every key is optional. Extensions load
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
-
-A `start(draft)` contribution starts a new conversation from the start page composer's prompt, images, branch point
-(or `root: true`) and configuration, returning `Promise<{ id: number }>`; `alternate: true` marks a draft sent with ⌥↵
-instead of ↵, the starter's second way to start. The last starter in discovery order wins; without one, the
-new composer is blocked. The extension owns creation policy; `getUiState(key)` reads pending local UI choices too.
 
 ### Slots
 
@@ -221,21 +214,11 @@ title bar the host shows above every surface.
 slots: { 'header.right': [Badge], sidebar: { component: Conversations, order: -1 } }
 ```
 
-`useComposer()` returns `{ target: 'conversation' | 'new', source?, draft? }` inside composer slots and the shown
-conversation's composer renderers. `draft.read()` returns a text-only `{ text, revision }` snapshot;
+`useComposer()` returns `{ draft? }` inside composer slots and the shown conversation's composer renderers. `draft.read()` returns a text-only `{ text, revision }` snapshot;
 `draft.clear(snapshot)` clears it only if no edits were made since that snapshot (and preserves newer stored text).
 Use it after a successful submission; images are not included or cleared. The draft shares the normal composer's
-storage and submission-clear path, not separate state. `draft` is absent outside a composer. `source` is the
-conversation a new branch starts from. The Agent and dock
-composers target the shown conversation; `<NewConversationComposer onStarted={(id) => …} />`
-(with an optional `inputId` for focus control)
-uses the same input, toolbar and status slots to start a branch or a new root through the conversation starter. Toolbar contributions can edit pending
-choices for `new`; conversation-specific status items should return `null` there. Pending model and thinking
-choices live in `ultimate.newConversation`; isolation uses `ext.conversations.creationType` so it agrees with
-sidebar New. Without a choice a branch shows and keeps its source's model and thinking, a new root the project
-default's (models `defaultConfiguration`); choices are passed to lineage and remembered for the next one. Images disable send until the branch starts.
-An optional `isolated` prop forces that creation mode without changing the saved preference; `useComposer().isolated`
-lets the isolation control show the forced mode. Contextual commands can receive an `entryId` alongside `conversationId`
+storage and submission-clear path, not separate state. `draft` is absent outside a composer. The Agent and dock
+composers target the shown conversation. Contextual commands can receive an `entryId` alongside `conversationId`
 through `useCommands()`; a message-action component can pass its entry's id to a command.
 
 ### Panels
@@ -312,7 +295,7 @@ link: ({ href, children, core }) =>
 `messageActions` contributes components to the hover action row on stored user and assistant messages, between the
 copy-message and copy-reference buttons. Each receives `{ entry }`, follows discovery order (then array order), and
 runs in its own error boundary. Return `null` for messages you do not act on. Keep buttons compact and give them an
-accessible label and a tooltip, as `lineage` does for its branch action.
+accessible label and a tooltip.
 
 ```tsx
 messageActions: [

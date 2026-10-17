@@ -26,6 +26,7 @@ import {
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import { ConversationRef } from '../conversations/feature.tsx'
+import { MessageQuestions } from '../questions/card.tsx'
 import { openAgentSource } from '../subagents/messages.tsx'
 import { useWorkspaceIndex } from '../workspaces/data.tsx'
 import { accentOf } from './accent.tsx'
@@ -357,7 +358,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
   if (chat && toUser && sender !== undefined)
     return (
       <ChatBubble from={sender} message={message} text={text ?? ''}>
-        {/* The answer card of a question to you mounts here, beneath the text. */}
+        {message && <MessageQuestions message={message} />}
       </ChatBubble>
     )
   const state = outgoingState(message, toUser, call.status !== 'done')
@@ -410,6 +411,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
         </p>
       )}
       <Body text={text ?? ''} />
+      {message && <MessageQuestions message={message} />}
     </section>
   )
 }

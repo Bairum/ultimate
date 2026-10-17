@@ -1,23 +1,14 @@
-import { ChevronRightIcon, ChevronDownIcon, SquarePenIcon } from 'lucide-react'
+import { ChevronRightIcon, GitBranchIcon, MessageCircleIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import type { WorkspacePending } from '../workspaces/types.ts'
 import {
   api,
+  cn,
   errorMessage,
-  formatKeys,
   useExtensionUiState,
   useNow,
   useStore,
@@ -30,9 +21,11 @@ import { useOverview } from './feature.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
 import { currentAssessment, Row, ChildRow } from './rows.tsx'
-import { newKeys } from './new.tsx'
-import { useRoots, useSides } from '../lineage/roots.tsx'
-import { sideLabel } from '../lineage/side.tsx'
+import { useRoots } from '../lineage/roots.tsx'
+import { talkToUltimate } from './ultimate.tsx'
+
+/** The label of side chats with a tally, which old projects still store; they stay unlisted. */
+const sideLabel = 'side chat'
 
 /** The shown conversation, also while its snapshot is still on the way. */
 const useShownId = () => useStore((state) => state.view?.conversation.id ?? state.requested)
@@ -67,16 +60,6 @@ function workingByTop(conversations: readonly ConversationSummary[]) {
 const byInput = (a: ConversationSummary, b: ConversationSummary) =>
   (b.inputAt ?? 0) - (a.inputAt ?? 0) || b.id - a.id
 
-function Shortcut({ keys }: { keys: string }) {
-  return (
-    <KbdGroup>
-      {formatKeys(keys)[0]?.map((key) => (
-        <Kbd key={key}>{key}</Kbd>
-      ))}
-    </KbdGroup>
-  )
-}
-
 const pinned = (conversation: ConversationSummary) =>
   conversation.label === 'lander' ||
   (conversation.label === 'agent' &&
@@ -93,7 +76,6 @@ export function Conversations() {
       .map((task) => task.conversationId),
   )
   // The task graph reflects the run; the timestamp/title list can lag.
-  // Side chats are not listed: an open one shows in its root's place, an ended one through its note.
   const conversations = useConversations()
     .filter((conversation) => conversation.label !== sideLabel)
     .map((conversation) => ({
@@ -104,13 +86,8 @@ export function Conversations() {
   const workspacesEnabled = useSystem()?.extensions.some(
     (extension) => extension.name === 'workspaces' && extension.enabled,
   )
-  const sides = useSides() ?? {}
-  // A root's open side chat shows in its place.
-  const onScreen = useShownId()
-  const sideRoot = Object.keys(sides).find((root) => sides[root] === onScreen)
-  const shownId = sideRoot === undefined ? onScreen : Number(sideRoot)
+  const shownId = useShownId()
   const now = useNow(60_000)
-  const [type, setType] = useExtensionUiState('creationType', 'isolated')
   const [concludedIds] = useExtensionUiState<number[]>('concluded', [])
   const [seen] = useExtensionUiState<Record<string, number>>('seen', {})
   const shownTop = topOf(shownId, conversations)
@@ -188,19 +165,13 @@ export function Conversations() {
   }
   const row = (conversation: ConversationSummary, shown = conversation.id === shownTop?.id) => {
     const recorded = seen[conversation.id]
-    const side = sides[String(conversation.id)] as number | undefined
-    const state =
-      working.get(conversation.id) ??
-      (side !== undefined && (foreground.has(side) || overview[side]?.runState === 'working')
-        ? 'self'
-        : undefined)
+    const state = working.get(conversation.id)
     return (
       <Row
         activity={overview[conversation.id]?.activity}
         assessment={tasks ? currentAssessment(overview[conversation.id]) : undefined}
         concluded={!pinned(conversation) && hiddenIds.has(conversation.id)}
         root={roots.has(conversation.id)}
-        side={side}
         conversation={conversation}
         draft={conversation.inputAt === undefined}
         feature={overview[conversation.id]?.feature}
@@ -376,53 +347,39 @@ export function Conversations() {
       </Dialog>
       <div className="mb-1 flex h-10 shrink-0 items-center gap-2 border-b border-border/70 pr-1.5 pl-4 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
         Conversations
+        {workspacesEnabled && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Workspaces"
+                className="ml-auto size-7 cursor-pointer text-muted-foreground hover:text-foreground"
+                onClick={() => actions.openPanel('workspaces')}
+                size="icon"
+                variant="ghost"
+              >
+                <GitBranchIcon className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Workspaces</TooltipContent>
+          </Tooltip>
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
-              aria-label="New conversation"
-              className="ml-auto size-7 cursor-pointer text-muted-foreground hover:text-foreground"
-              onClick={() => actions.runCommand('conversations.new')}
+              aria-label="Talk to @ultimate"
+              className={cn(
+                'size-7 cursor-pointer text-muted-foreground hover:text-foreground',
+                !workspacesEnabled && 'ml-auto',
+              )}
+              onClick={() => void talkToUltimate(actions)}
               size="icon"
               variant="ghost"
             >
-              <SquarePenIcon className="size-4" />
+              <MessageCircleIcon className="size-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent className="flex items-center gap-2">
-            New {type === 'shared' ? 'shared' : 'isolated'} conversation
-            <Shortcut keys={newKeys} />
-          </TooltipContent>
+          <TooltipContent>Talk to @ultimate</TooltipContent>
         </Tooltip>
-        <DropdownMenu modal={false}>
-          <DropdownMenuTrigger
-            aria-label="Conversation creation options"
-            className="flex size-6 cursor-pointer items-center justify-center rounded-sm outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            <ChevronDownIcon className="size-3.5" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuRadioGroup
-              value={type}
-              onValueChange={(value) => {
-                setType(value)
-              }}
-            >
-              <DropdownMenuRadioItem className="cursor-pointer text-xs" value="isolated">
-                Isolated
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem className="cursor-pointer text-xs" value="shared">
-                Shared (not isolated)
-              </DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-            <div role="separator" className="my-1 border-t border-border" />
-            <DropdownMenuItem
-              className="cursor-pointer text-xs"
-              onSelect={() => actions.openPanel('workspaces')}
-            >
-              Workspaces
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
       </div>
       <nav aria-label="Conversations" className="flex flex-col gap-px">
         {landers.length > 0 && (

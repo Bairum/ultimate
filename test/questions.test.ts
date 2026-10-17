@@ -1,375 +1,469 @@
-import { fauxServer, sourceCopy, temp, until, post } from './helpers.ts'
-import { mkdir, readdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import { afterAll, beforeAll, expect, it, vi } from 'vitest'
-import { fauxAssistantMessage, fauxText } from '@earendil-works/pi-ai/providers/faux'
+import { temp, until } from './helpers.ts'
+import { afterEach, expect, it, vi } from 'vitest'
+import { awaitWithContext } from '@earendil-works/chord/context'
+import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { defineTask, InboxDoc, LiveDoc } from '@earendil-works/pi-durable'
-import { context } from '../server/harness.ts'
-import { Summaries, currentAnswer } from '../extensions/conversations/summary.ts'
+import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import type { ConversationId, Task } from '@earendil-works/pi-durable'
+import type { JsonValue } from '@earendil-works/chord'
+import { context, prepareHarness } from '../server/harness.ts'
+import type { OpenHost } from '../server/harness.ts'
+import type { ExtensionHost } from '../server/extensions.ts'
+import type { ActionContext } from '../server/actions.ts'
+import boardExtension, { Board, actions as boardActions } from '../extensions/board/server.ts'
 import questionsExtension, {
   actions,
+  BoardQuestions,
   parseQuestions,
   QUESTIONS_SYSTEM,
+  userActions,
 } from '../extensions/questions/server.ts'
-import type { ExtensionHost } from '../server/extensions.ts'
-import type { Submission } from '@earendil-works/pi-durable'
-import type { Tx, ConversationId } from '@earendil-works/pi-durable'
-import type { QuestionsService } from '../extensions/questions/server.ts'
-import type { EntryId } from '@earendil-works/pi-durable'
+import { Standing } from '../extensions/subagents/server.ts'
 
-let ultimateRoot: string
-const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
-beforeAll(async () => {
-  ultimateRoot = await sourceCopy(await temp('ultimate-questions-source-'))
+const hosts: OpenHost[] = []
+afterEach(async () => {
+  for (const host of hosts.splice(0)) await host.close()
 })
-afterAll(async () => {
-  await Promise.all(servers.map((s) => s.close()))
-})
-
-async function launch() {
-  const home = await temp('ultimate-questions-')
-  const projectRoot = join(home, 'project')
-  await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
-  await writeFile(
-    join(projectRoot, '.ultimate/settings.json'),
-    JSON.stringify({
-      extensions: {
-        disable: (await readdir(join(ultimateRoot, 'extensions'))).filter(
-          (name) => !['conversations', 'questions'].includes(name),
-        ),
-      },
-    }),
-  )
-  const server = await fauxServer({
-    ultimateRoot,
-    projectRoot,
+function gate() {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  return { promise, release: resolve }
+}
+async function fixture() {
+  const home = await temp('ultimate-board-questions-')
+  const prepared = await prepareHarness({ home, ultimateRoot: home, userHome: home, faux: true })
+  let opened: OpenHost
+  const services = new Map<string, unknown>()
+  const openers: (() => Promise<void>)[] = []
+  const closers: (() => Promise<void>)[] = []
+  const host = {
+    ...prepared,
     userHome: home,
-    home: join(home, 'state'),
+    projectSettings: async () => ({}),
+    harness: () => opened.harness,
+    provide: (name: string, value: unknown) => services.set(name, value),
+    use: (name: string) => services.get(name),
+    doc: () => undefined,
+    onOpen: (fn: () => Promise<void>) => openers.push(fn),
+    onClose: (fn: () => Promise<void>) => closers.push(fn),
+    notice: (message: string) => {
+      throw new Error(message)
+    },
+  } as unknown as ExtensionHost
+  prepared.registry.install(boardExtension(host))
+  const extension = questionsExtension(host)
+  let beforeCommit: ReturnType<typeof gate> | undefined
+  let committing = false
+  prepared.registry.install({
+    ...extension,
+    tasks: extension.tasks!.map((value) => {
+      const task = value as Task<JsonValue, { phase: string }, JsonValue, object>
+      return {
+        definition: {
+          ...task.definition,
+          phases: {
+            ...task.definition.phases,
+            extract: (
+              ...[record, runtime, ctx]: Parameters<typeof task.definition.phases.extract>
+            ) =>
+              task.definition.phases.extract(
+                record,
+                {
+                  ...runtime,
+                  commit: async (...args) => {
+                    if (beforeCommit) {
+                      committing = true
+                      await awaitWithContext(beforeCommit.promise, ctx)
+                    }
+                    return runtime.commit(...args)
+                  },
+                },
+                ctx,
+              ),
+          },
+        },
+      }
+    }),
   })
-  servers.push(server)
-  let assessment = 'needs_input'
   let extraction: unknown = { questions: [{ text: 'Keep it running?', kind: 'confirm' }] }
-  let gate: Promise<void> | undefined
-  let runGate: Promise<void> | undefined
+  let hold: ReturnType<typeof gate> | undefined
   const extract = vi.fn<() => void>()
-  const requests: unknown[] = []
-  const demo: FauxResponseFactory = async (transcript) => {
-    server.host.faux!.appendResponses([demo])
-    requests.push(transcript)
-    const system = transcript.messages[0]
-    const prompt = system?.role === 'system' ? system.content : ''
-    if (prompt === QUESTIONS_SYSTEM) {
+  const observed: string[] = []
+  const route: FauxResponseFactory = async (transcript) => {
+    prepared.faux!.appendResponses([route])
+    const first = transcript.messages[0]
+    if (first?.role === 'system' && first.content === QUESTIONS_SYSTEM) {
+      // The root stands in for @ultimate while sending, so its final answer to the typed SEND is read too; it asks nothing.
+      if (transcript.messages.at(-1)?.content === 'Sent.')
+        return fauxAssistantMessage([fauxText('{"questions":[]}')])
       extract()
-      if (gate) await gate
+      if (hold) await hold.promise
       return fauxAssistantMessage([fauxText(JSON.stringify(extraction))])
     }
-    if (
-      typeof prompt === 'string' &&
-      /^(Assess the latest|Summarize the initial|Refresh a coding)/.test(prompt)
-    )
-      return fauxAssistantMessage([
-        fauxText(
-          JSON.stringify({
-            assessment,
-            activity: 'Asked a decision.',
-            title: 'Questions',
-            summary: 'Decide on a preview.',
-            feature: 'Questions',
-          }),
-        ),
-      ])
-    if (runGate) await runGate
-    return fauxAssistantMessage([fauxText('Keep it running? 1. Yes 2. No')])
+    const last = transcript.messages.at(-1)!
+    const text = typeof last.content === 'string' ? last.content : ''
+    observed.push(text)
+    if (last.role === 'user' && text.startsWith('ASK '))
+      return fauxAssistantMessage([fauxText(text.slice(4))])
+    if (last.role === 'user' && text.startsWith('SEND '))
+      return fauxAssistantMessage([fauxToolCall('message', JSON.parse(text.slice(5)))], {
+        stopReason: 'toolUse',
+      })
+    return fauxAssistantMessage([fauxText('Sent.')])
   }
-  server.host.faux!.setResponses([demo])
-  const entries = (id = server.root.id) =>
-    server.harness.commit(
-      async (tx) => (await tx.scanEntries({ conversationId: id }, 1000)).items,
+  prepared.faux!.setResponses([route])
+  const open = async () => {
+    opened = await prepared.open()
+    hosts.push(opened)
+    for (const fn of openers) await fn()
+  }
+  const close = async () => {
+    for (const fn of closers) await fn()
+    hosts.splice(hosts.indexOf(opened), 1)
+    await opened.close()
+  }
+  await open()
+  const log = () => opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context)
+  const state = () => opened.harness.snapshot(BoardQuestions, ROOT_CONVERSATION_ID, context)
+  const settled = () =>
+    until(() =>
+      opened.harness.commit(
+        async (tx) =>
+          (await tx.scanTasks({}, 1000)).items.every((task) => task.state.status === 'terminal'),
+        context,
+      ),
+    )
+  const send = async (extra = {}) => {
+    // Only @ultimate may message the user, so the root stands in for it while it sends.
+    await opened.harness.commit(async (tx) => {
+      ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = opened.root.id
+    }, context)
+    await (
+      await opened.root.submit(
+        {
+          type: 'input',
+          content: `SEND ${JSON.stringify({ to: 'user', text: 'Keep it running?', ...extra })}`,
+        },
+        context,
+      )
+    ).wait(context)
+    await opened.harness.commit(async (tx) => {
+      delete (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
+    }, context)
+    return (await log())!.messages.at(-1)!.id
+  }
+  const action = () => ({ host, signal: new AbortController().signal }) as ActionContext
+  const answer = (messageId: number, answers = [{ question: 'Keep it running?', answer: 'Yes' }]) =>
+    actions.answer({ messageId, answers }, action())
+  /** A new conversation registered as the standing @ultimate. */
+  const ultimate = async () => {
+    const conversation = await opened.harness.createConversation(
+      { ownership: { kind: 'ownerless' } },
       context,
     )
-  const settled = async () => {
-    await until(async () =>
-      server.harness.commit(async (tx) => {
-        const tasks = await tx.scanTasks({}, 1000)
-        return tasks.items
-          .filter((task) => task.kind !== 'questions-test-owner')
-          .every((task) => task.state.status === 'terminal')
-      }, context),
-    )
+    const agent = await opened.root.agent(context)
+    await opened.harness.commit(async (tx) => {
+      await configure(tx, conversation.id, { model: agent.model, tools: agent.tools })
+      ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = conversation.id
+    }, context)
+    return conversation.id
   }
-  const exchange = async (id = server.root.id) => {
-    const conversation = await server.harness.conversation(id, context)
-    const submission = await conversation!.submit(
-      { type: 'input', content: 'Preview it.' },
-      context,
-    )
-    expect((await submission.wait(context)).status).toBe('done')
-    return submission
+  const type = async (id: ConversationId, content: string) => {
+    const conversation = (await opened.harness.conversation(id, context))!
+    return (await conversation.submit({ type: 'input', content }, context)).wait(context)
   }
+  const reply = (entryId: number, answers = [{ question: 'Keep it running?', answer: 'Yes' }]) =>
+    actions.reply({ entryId, answers }, action())
+  const inputs = async (id: ConversationId) =>
+    (
+      await opened.harness.commit((tx) => tx.scanEntries({ conversationId: id }, 1000), context)
+    ).items
+      .filter((entry) => entry.kind === 'pi.user')
+      .toSorted((a, b) => a.id - b.id)
   return {
-    server,
-    entries,
-    settled,
-    exchange,
+    ultimate,
+    type,
+    reply,
+    inputs,
+    get opened() {
+      return opened
+    },
+    host,
+    send,
+    log,
+    state,
     extract,
-    requests,
-    holdRun: (value: Promise<void>) => {
-      runGate = value
-    },
-    setAssessment: (value: string) => {
-      assessment = value
-    },
-    setExtraction: (value: unknown) => {
+    observed,
+    settled,
+    action,
+    answer,
+    open,
+    close,
+    result: (value: unknown) => {
       extraction = value
     },
-    hold: (value: Promise<void> | undefined) => {
-      gate = value
+    hold: (value: ReturnType<typeof gate>) => {
+      hold = value
     },
+    pauseCommit: (value: ReturnType<typeof gate> | undefined) => {
+      beforeCommit = value
+    },
+    committing: () => committing,
   }
 }
 
-it('extracts only accepted needs_input replies, deduplicates, and keeps asked entries out of model context without invalidating assessment', async () => {
-  const f = await launch()
-  for (const value of ['done', 'neutral']) {
-    f.setAssessment(value)
-    await f.exchange()
-    await f.settled()
-    expect(f.extract).not.toHaveBeenCalled()
-    expect((await f.entries()).filter((e) => e.kind === 'questions.asked')).toHaveLength(0)
-  }
-  f.setAssessment('needs_input')
-  await f.exchange()
+it('extracts once only for reply-expected agent messages to the user', async () => {
+  const f = await fixture()
+  await f.send({ reply: false })
+  await f.send({
+    to: `#${(await f.opened.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)).id}`,
+    reply: true,
+  })
+  await boardActions.post({ to: '#1', text: 'User post' }, f.action())
   await f.settled()
-  const asked = (await f.entries()).filter((e) => e.kind === 'questions.asked')
-  expect(asked).toHaveLength(1)
+  expect(f.extract).not.toHaveBeenCalled()
+  const id = await f.send()
+  await f.settled()
   expect(f.extract).toHaveBeenCalledTimes(1)
-  expect(asked[0].model).toBeUndefined()
-  const state = await f.server.harness.snapshot(Summaries, f.server.root.id, context)
-  expect(state?.assessment?.value).toBe('needs_input')
-  expect(
-    await f.server.harness.commit(
-      (tx) => currentAnswer(tx, f.server.root.id, state!.assessment!.answerId),
-      context,
-    ),
-  ).toBe(true)
-  // A second ordinary request proves the prior display-only entry is absent from actual provider context.
-  f.setAssessment('done')
-  await f.exchange()
+  expect(await f.state()).toMatchObject({
+    requested: [id],
+    asked: { [id]: [{ text: 'Keep it running?', kind: 'confirm' }] },
+  })
+  const message = (await f.log())!.messages.find((m) => m.id === id)!
+  await f.opened.harness.commit(
+    (tx) =>
+      f.host
+        .use<import('../extensions/questions/server.ts').QuestionsService>('questions')!
+        .request(tx, message),
+    context,
+  )
   await f.settled()
-  expect(JSON.stringify(f.requests)).not.toContain('questions.asked')
-  expect(JSON.stringify(f.requests)).not.toContain('Keep it running?","kind":"confirm"')
-  expect((await f.entries()).filter((e) => e.kind === 'questions.asked')).toHaveLength(1)
+  expect(f.extract).toHaveBeenCalledTimes(1)
+  const entries = await f.opened.harness.commit(
+    (tx) => tx.scanEntries({ conversationId: f.opened.root.id }, 1000),
+    context,
+  )
+  expect(entries.items.some((entry) => entry.kind === 'questions.asked')).toBe(false)
 })
 
-it('discards empty, invalid and failed extractions', async () => {
-  const f = await launch()
+it('posts exactly one Board reply atomically, wakes the sender, and rejects unknown or duplicate answers', async () => {
+  const f = await fixture()
+  const id = await f.send()
+  await f.settled()
+  expect(userActions).toEqual(['answer', 'reply'])
+  await expect(f.answer(id, [{ question: 'Unknown', answer: 'Yes' }])).rejects.toThrow(
+    'Unknown question',
+  )
+  await expect(
+    f.answer(id, [
+      { question: 'Keep it running?', answer: 'Yes' },
+      { question: 'Keep it running?', answer: 'No' },
+    ]),
+  ).rejects.toThrow('Unknown question')
+  await expect(f.answer(id, [])).rejects.toThrow('Invalid answers')
+  const results = await Promise.allSettled([f.answer(id), f.answer(id)])
+  expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+  expect(
+    String(
+      (results.find((result) => result.status === 'rejected') as PromiseRejectedResult).reason,
+    ),
+  ).toContain('These questions are no longer open')
+  await f.settled()
+  expect((await f.log())!.messages).toMatchObject([
+    { id, state: 'answered' },
+    { from: 'user', to: 1, re: id, text: 'Q: Keep it running?\nA: Yes' },
+    { from: 1, to: 'user', reply: false },
+  ])
+  expect(f.observed.some((text) => text.includes('Q: Keep it running?\nA: Yes'))).toBe(true)
+  await expect(f.answer(id)).rejects.toThrow('These questions are no longer open')
+})
+
+it('refuses answers after a typed Reply or new post and discards a stale in-flight extraction', async () => {
+  const f = await fixture()
+  const id = await f.send()
+  await f.settled()
+  await boardActions.post({ to: '#1', text: 'Typed reply', re: id }, f.action())
+  await expect(f.answer(id)).rejects.toThrow('These questions are no longer open')
+  await f.settled()
+  const hold = gate()
+  f.hold(hold)
+  const stale = await f.send()
+  await until(() => f.extract.mock.calls.length === 2)
+  await boardActions.post({ to: '#1', text: 'A new post' }, f.action())
+  hold.release()
+  await f.settled()
+  expect((await f.state())!.asked[String(stale)]).toBeUndefined()
+})
+
+it('discards empty and invalid extractions', async () => {
+  const f = await fixture()
   for (const result of [
     { questions: [] },
     { questions: [{ text: 'Bad', kind: 'choice' }] },
     null,
   ]) {
-    f.setExtraction(result)
-    await f.exchange()
+    f.result(result)
+    await f.send()
     await f.settled()
-    expect((await f.entries()).filter((e) => e.kind === 'questions.asked')).toHaveLength(0)
   }
   expect(f.extract).toHaveBeenCalledTimes(3)
+  expect((await f.state())!.asked).toEqual({})
 })
 
-it('discards an extraction once a newer input arrives', async () => {
-  const f = await launch()
-  let release!: () => void
-  f.hold(
-    new Promise<void>((done) => {
-      release = done
-    }),
-  )
-  await f.exchange()
-  await until(() => f.extract.mock.calls.length === 1)
-  f.setAssessment('done')
-  await f.server.harness.commit(
-    (tx) =>
-      tx.appendEntry(f.server.root.id, {
-        kind: 'pi.user',
-        input: true,
-        model: [{ role: 'user', content: 'Newer input', timestamp: 1 }],
-      }),
-    context,
-  )
-  release()
+it('resumes a memoized response during reopen and never extracts again after completion', async () => {
+  const f = await fixture()
+  f.pauseCommit(gate())
+  const id = await f.send()
+  await until(f.committing)
+  expect(f.extract).toHaveBeenCalledTimes(1)
+  await f.close()
+  f.pauseCommit(undefined)
+  await f.open()
   await f.settled()
-  expect((await f.entries()).filter((e) => e.kind === 'questions.asked')).toHaveLength(0)
+  expect((await f.state())!.asked[String(id)]).toHaveLength(1)
+  expect(f.extract).toHaveBeenCalledTimes(1)
+  await f.close()
+  await f.open()
+  await f.settled()
+  expect(f.extract).toHaveBeenCalledTimes(1)
+  expect((await f.state())!.requested).toEqual([id])
 })
 
-it('submits a typed Q/A input with its note and refuses a stale answer action', async () => {
-  const f = await launch()
-  await f.exchange()
+it('prunes extraction state to messages still in the Board log', async () => {
+  const f = await fixture()
+  const id = await f.send()
   await f.settled()
-  const asked = (await f.entries()).find((e) => e.kind === 'questions.asked')!
-  f.setAssessment('done')
-  const args = {
-    askedId: asked.id,
-    answers: [{ question: 'Keep it running?', answer: 'Yes' }],
-    note: 'For the review.',
-  }
-  const response = await post(f.server, '/api/extensions/questions/actions/answer', {
-    conversationId: f.server.root.id,
-    args,
-  })
-  expect(response.status).toBe(200)
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Board, ROOT_CONVERSATION_ID)).messages = []
+  }, context)
+  const next = await f.send()
   await f.settled()
-  const answer = (await f.entries()).find((e) => e.kind === 'questions.answers')!
-  expect(answer.input).toBe(true)
-  expect(answer.data).toEqual(args)
-  expect(answer.model?.[0]).toMatchObject({
-    role: 'user',
-    content: 'Q: Keep it running?\nA: Yes\n\nFor the review.',
-  })
-  expect(
-    (
-      await post(f.server, '/api/extensions/questions/actions/answer', {
-        conversationId: f.server.root.id,
-        args,
-      })
-    ).status,
-  ).not.toBe(200)
+  expect((await f.state())!.requested).toEqual([next])
+  expect((await f.state())!.asked[String(id)]).toBeUndefined()
 })
 
-it('rejects the answer when a newer run starts between validation and admission, without queueing or faulting it', async () => {
-  const f = await launch()
-  await f.exchange()
+it("extracts @ultimate's final answers to typed input only, once per answer", async () => {
+  const f = await fixture()
+  const id = await f.ultimate()
+  // Another conversation's answer, a Board message and a Board reply to @ultimate ask nothing.
+  await f.type(f.opened.root.id, 'ASK Keep it running?')
+  await boardActions.post({ to: `#${id}`, text: 'ASK Keep it running?' }, f.action())
   await f.settled()
-  const asked = (await f.entries()).find((e) => e.kind === 'questions.asked')!
-  const data = { askedId: asked.id, answers: [{ question: 'Keep it running?', answer: 'Yes' }] }
-  let release!: () => void
-  f.holdRun(
-    new Promise<void>((done) => {
-      release = done
-    }),
-  )
-  f.setAssessment('done')
-  let newer!: Submission
-  const host = {
-    harness: () => ({
-      commit: f.server.harness.commit.bind(f.server.harness),
-      // The action has finished its freshness transaction before it gets this handle.
-      conversation: async () => {
-        newer = await f.server.root.submit({ type: 'input', content: 'A newer prompt' }, context)
-        return f.server.root
-      },
-    }),
-  } as unknown as ExtensionHost
-  try {
-    await expect(
-      actions.answer(data, {
-        host,
-        conversationId: f.server.root.id,
-        signal: new AbortController().signal,
-        exec: async () => {
-          throw new Error('Unexpected exec')
-        },
-      }),
-    ).rejects.toThrow('These questions are no longer open')
-    expect((await f.server.harness.snapshot(LiveDoc, f.server.root.id, context))?.run).toBeDefined()
-    expect((await f.server.harness.snapshot(InboxDoc, f.server.root.id, context))?.items).toEqual(
-      [],
-    )
-    expect((await f.entries()).filter((e) => e.kind === 'questions.answers')).toHaveLength(0)
-  } finally {
-    release()
-  }
-  expect((await newer.wait(context)).status).toBe('done')
-  await f.settled()
-  expect((await f.server.harness.snapshot(InboxDoc, f.server.root.id, context))?.items).toEqual([])
-  expect((await f.server.harness.snapshot(LiveDoc, f.server.root.id, context))?.run).toBeUndefined()
-})
-
-it('refuses an answer superseded before typed input placement', async () => {
-  const f = await launch()
-  await f.exchange()
-  await f.settled()
-  const asked = (await f.entries()).find((e) => e.kind === 'questions.asked')!
-  const data = { askedId: asked.id, answers: [{ question: 'Keep it running?', answer: 'Yes' }] }
-  await f.server.harness.commit(
-    (tx) =>
-      tx.appendEntry(f.server.root.id, {
-        kind: 'pi.user',
-        input: true,
-        model: [{ role: 'user', content: 'A newer prompt', timestamp: 1 }],
-      }),
-    context,
-  )
-  const before = await f.server.harness.commit((tx) => tx.scanTasks({}, 1000), context)
-  await expect(
-    f.server.root.submit(
+  await (
+    await (await f.opened.harness.conversation(id, context))!.submit(
       {
         type: 'input',
-        whenBusy: 'reject',
-        content: 'Q: Keep it running?\nA: Yes',
-        entry: { kind: 'questions.answers', data },
+        entry: { kind: 'board.reply', data: { id: 9, re: 8, from: 2, text: 'Done' } },
+        content: 'ASK Keep it running?',
       },
       context,
-    ),
-  ).rejects.toThrow('These questions are no longer open')
-  expect((await f.entries()).filter((e) => e.kind === 'questions.answers')).toHaveLength(0)
-  expect((await f.server.harness.snapshot(InboxDoc, f.server.root.id, context))?.items).toEqual([])
-  expect((await f.server.harness.snapshot(LiveDoc, f.server.root.id, context))?.run).toBeUndefined()
-  const after = await f.server.harness.commit((tx) => tx.scanTasks({}, 1000), context)
-  expect(after).toEqual(before)
-  f.setAssessment('done')
-  await f.exchange()
+    )
+  ).wait(context)
   await f.settled()
-})
-
-it('does not request extraction for an owned subagent', async () => {
-  const f = await launch()
-  f.setAssessment('done')
-  await f.exchange()
-  await f.settled()
-  const anchor = defineTask<null, { phase: 'hold' }, null>({
-    name: 'questions-test-owner',
-    version: 1,
-    initial: () => ({ phase: 'hold' }),
-    phases: { hold: async () => {} },
-    abort: (_task, runtime, ctx) =>
-      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
-  })
-  const at = (await f.entries())[0].id
-  const child = await f.server.harness.commit(async (tx) => {
-    const owner = await tx.createTask(anchor, null, {
-      ownership: { kind: 'conversation' },
-      conversationId: f.server.root.id,
-      background: true,
-    })
-    return tx.forkConversation(f.server.root.id, at, {
-      ownership: { kind: 'task', taskId: owner },
-    })
-  }, context)
-  f.setAssessment('needs_input')
-  await f.exchange(child.id)
-  await f.settled()
-  expect((await f.server.harness.snapshot(Summaries, child.id, context))?.assessment?.value).toBe(
-    'needs_input',
-  )
   expect(f.extract).not.toHaveBeenCalled()
-  expect((await f.entries(child.id)).filter((e) => e.kind === 'questions.asked')).toHaveLength(0)
+  expect((await f.state())!.reply).toBeUndefined()
+  const settled = await f.type(id, 'ASK Keep it running?')
+  await f.settled()
+  expect(f.extract).toHaveBeenCalledTimes(1)
+  expect((await f.state())!.reply).toEqual({
+    conversation: id,
+    entry: settled.answer,
+    questions: [{ text: 'Keep it running?', kind: 'confirm' }],
+  })
+  // An answer that asks nothing clears the card.
+  f.result({ questions: [] })
+  await f.type(id, 'ASK All done.')
+  await f.settled()
+  expect(f.extract).toHaveBeenCalledTimes(2)
+  expect((await f.state())!.reply).toBeUndefined()
 })
 
-it('deduplicates durable extraction requests per answer', async () => {
-  let service!: QuestionsService
-  questionsExtension({
-    provide: (_name: string, value: QuestionsService) => {
-      service = value
-    },
-  } as unknown as ExtensionHost)
-  const state = { answers: [] as number[] }
-  const createTask = vi.fn<() => Promise<number>>(async () => 1)
-  const tx = { doc: async () => state, createTask } as unknown as Tx
-  await service.request(tx, 1 as ConversationId, 2 as EntryId)
-  await service.request(tx, 1 as ConversationId, 2 as EntryId)
-  expect(createTask).toHaveBeenCalledTimes(1)
-  expect(state.answers).toEqual([2])
+it("resumes an @ultimate answer's extraction on reopen without asking again", async () => {
+  const f = await fixture()
+  const id = await f.ultimate()
+  f.pauseCommit(gate())
+  const settled = await f.type(id, 'ASK Keep it running?')
+  await until(f.committing)
+  await f.close()
+  f.pauseCommit(undefined)
+  await f.open()
+  await f.settled()
+  expect((await f.state())!.reply?.entry).toBe(settled.answer)
+  await f.close()
+  await f.open()
+  await f.settled()
+  expect(f.extract).toHaveBeenCalledTimes(1)
+})
+
+it('stores nothing for an answer that newer input superseded', async () => {
+  const f = await fixture()
+  const id = await f.ultimate()
+  const hold = gate()
+  f.hold(hold)
+  await f.type(id, 'ASK Keep it running?')
+  await until(() => f.extract.mock.calls.length === 1)
+  const { id: posted } = await boardActions.post(
+    { to: `#${id}`, text: 'Something else' },
+    f.action(),
+  )
+  await until(
+    async () => (await f.log())!.messages.find((m) => m.id === posted)?.state === 'answered',
+  )
+  hold.release()
+  await f.settled()
+  expect((await f.state())!.reply).toBeUndefined()
+})
+
+it("answers @ultimate's current answer with one typed input and refuses stale or repeated answers", async () => {
+  const f = await fixture()
+  const id = await f.ultimate()
+  const first = await f.type(id, 'ASK Keep it running?')
+  await f.settled()
+  await expect(f.reply(first.answer! + 1)).rejects.toThrow('These questions are no longer open')
+  await expect(f.reply(first.answer!, [{ question: 'Unknown', answer: 'Yes' }])).rejects.toThrow(
+    'Unknown question',
+  )
+  await expect(f.reply(first.answer!, [])).rejects.toThrow('Invalid answers')
+  const results = await Promise.allSettled([f.reply(first.answer!), f.reply(first.answer!)])
+  expect(results.map((result) => result.status).toSorted()).toEqual(['fulfilled', 'rejected'])
+  expect(
+    String(
+      (results.find((result) => result.status === 'rejected') as PromiseRejectedResult).reason,
+    ),
+  ).toContain('These questions are no longer open')
+  await f.settled()
+  expect((await f.inputs(id)).map((entry) => entry.model?.[0]?.content)).toEqual([
+    'ASK Keep it running?',
+    'Q: Keep it running?\nA: Yes',
+  ])
+  await expect(f.reply(first.answer!)).rejects.toThrow('These questions are no longer open')
+  // A later typed input makes an earlier answer's card stale.
+  const second = await f.type(id, 'ASK Keep it running?')
+  await f.settled()
+  await f.type(id, 'Typed instead')
+  await f.settled()
+  await expect(f.reply(second.answer!)).rejects.toThrow('These questions are no longer open')
+  // A reset after the answer refuses it too.
+  const third = await f.type(id, 'ASK Keep it running?')
+  await f.settled()
+  expect((await f.state())!.reply?.entry).toBe(third.answer)
+  await (await f.opened.harness.conversation(id, context))!.reset(undefined, context)
+  await f.settled()
+  await expect(f.reply(third.answer!)).rejects.toThrow('These questions are no longer open')
+})
+
+it("closes @ultimate's open message to the user when the user types in its conversation", async () => {
+  const f = await fixture()
+  const id = await f.ultimate()
+  await f.type(id, `SEND ${JSON.stringify({ to: 'user', text: 'Keep it running?' })}`)
+  await f.settled()
+  const message = (await f.log())!.messages.at(-1)!
+  expect(message).toMatchObject({ from: id, state: 'delivered' })
+  expect((await f.state())!.asked[String(message.id)]).toHaveLength(1)
+  await f.type(id, 'Yes, keep it')
+  await until(
+    async () => (await f.log())!.messages.find((m) => m.id === message.id)?.state === 'answered',
+  )
+  await expect(f.answer(message.id)).rejects.toThrow('These questions are no longer open')
 })
 
 it('validates extracted choices and ignores fields outside the schema', () => {

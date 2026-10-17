@@ -121,7 +121,6 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   inbox: [isComponent, 'an inbox renderer component'],
   composer: [isComponent, 'a composer renderer component'],
   link: [isComponent, 'a link renderer component'],
-  start: [isFunction, 'a conversation starter function'],
   messageActions: [arrayOf(isComponent), 'an array of message action components'],
   messageDetails: [arrayOf(isComponent), 'an array of message detail components'],
   answerLabels: [arrayOf(isComponent), 'an array of answer label components'],
@@ -487,9 +486,4 @@ export function chatTools(
     }
   })
   return matching.length ? new Set(matching.flatMap((chat) => chat.tools ?? [])) : undefined
-}
-
-/** The last new-conversation starter in discovery order. */
-export function conversationStarter(records: readonly ExtensionRecord[]) {
-  return records.toReversed().find((record) => record.extension?.start)?.extension?.start
 }

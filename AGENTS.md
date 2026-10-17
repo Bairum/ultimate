@@ -8,20 +8,18 @@ tells you which change reloads how, so the conversation you are in keeps running
 
 A project is a forest of conversation trees, each tree like a history of commits.
 
-- **Roots** keep non-agent tallies: prompts, each conversation's latest abstract, and landings with divergence and
-  `#conversation/entry` breadcrumbs. An empty root starts its tree with a project reading, distilled into the tally's
-  first entry; nothing branches from a root before it. ⌘K "Make this a root" converts a
-  conversation's history into a genesis distillation; older roots can still run until converted.
+- **Roots** keep read-only tallies: prompts, each conversation's latest abstract, and landings with divergence and
+  `#conversation/entry` breadcrumbs. A tally is the context every branch starts from; it runs no turns.
   A new project starts by talking to @ultimate: Continue on Get ready or **Set up with @ultimate** on Start here.
   It handles setup cards, reads the project and seeds the root's first tally; the optional focus is your instructions.
-  **Read it here instead** keeps the in-place survey as a fallback, and New → New root still starts its own survey.
-  A tally runs no turns: typing in it opens a side chat with it (⌥↵ starts a branch instead), a full session that
-  ends only when you end it: as a note in the tally, as a branch after that note, or discarded. Its composer shows
-  estimated context tokens; manual compaction reshapes the tally, keeping the idea and standing decisions without
-  deleting history.
-- **A branch** is a feature, a fix, an experiment. New forks the shown tree's root tip; "Branch from here" forks a
-  chosen entry. No brief: the branch inherits that context, then gets your prompt. A branch is never a subagent.
-- **Talk to @ultimate on the board.** The user's standing agent starts and steers branches and relays their answers to the user's inbox.
+  @ultimate maintains standing decisions with `note`, seeds empty roots with `seed_tally`, and reshapes tallies with
+  `compact_tally` without deleting history. When the user asks for an independent line of work, it creates a root
+  with `new_root` and seeds it from its own reading. The read-only footer shows estimated context tokens and a
+  **Talk to @ultimate** link.
+- **A branch** is a feature, a fix, an experiment. @ultimate picks a root by reading its tally, then starts a
+  coordinator branch that inherits that context before its prompt. A branch is never a subagent.
+- **Talk to @ultimate on the Board.** The user's standing agent starts and steers branches and relays their answers to the user's inbox.
+  The sidebar's **Talk to @ultimate** button opens it; conversations and roots are not created by hand.
 - **Coordinators carry the work.** A branch plans, decides and verifies; subagents are for bounded execution and
   reconnaissance, and the lander is the final gate on main.
 - **Zoom out when you need to.** Read any root or sibling with codemode `ultimate.entries(id)` and
@@ -75,7 +73,7 @@ Skills load from clone `skills/`, then the project's `.pi/skills/`, then `~/.ult
 `<project>/.ultimate/skills/`, with later names winning. Personal instructions load from `~/.ultimate/AGENTS.md`
 (or `CLAUDE.md`) ahead of the project's. Pi's own `~/.pi/agent/skills/` and `~/.pi/agent/AGENTS.md` are not read: they
 belong to Pi, so link a skill into `~/.ultimate/skills/` to use it here.
-Every built-in is on by default, including `board` (durable agent messages and the user's inbox), `questions` (answer cards for replies needing a decision), `faux` (inert unless `ULTIMATE_FAUX=1`), `lineage` (conversation trees: roots, branches, notes), `parallel` (web tools; reads `secrets`), `classify` (Jev typed judgments; reads `secrets`), `cloud` (replica sync; inert until configured in user settings and Secrets), `cloudflare` (deferred Workers Observability tool; inert without a call and its secret), `phase` (working phases; requires `classify`), and `tailscale` (remote access; inert on faux servers except previews, and only user settings can turn it off for good). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
+Every built-in is on by default, including `board` (durable agent messages and the user's inbox), `questions` (answer cards for @ultimate's questions to the user), `faux` (inert unless `ULTIMATE_FAUX=1`), `lineage` (conversation trees: roots, branches, notes), `parallel` (web tools; reads `secrets`), `classify` (Jev typed judgments; reads `secrets`), `cloud` (replica sync; inert until configured in user settings and Secrets), `cloudflare` (deferred Workers Observability tool; inert without a call and its secret), `phase` (working phases; requires `classify`), and `tailscale` (remote access; inert on faux servers except previews, and only user settings can turn it off for good). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
 restart. User/project extension folders are on by default too; `disable` turns off any extension. Unknown names
 produce a notice. `summaryModel` (`"provider/id[:thinking]"`, default `openai/gpt-6-luna:medium`; project over user)
@@ -137,7 +135,7 @@ Start a subagent with `isolate: "worktree"` (the worker default) to give its too
 
 ### Main-agent final integration
 
-A top-level conversation created with New isolated conversation works in its own worktree.
+Coordinator branches started by @ultimate are isolated in their own worktrees by default.
 `workspace status` shows its tip and the original checkout's tip.
 Read worker reports and diffs; rerun checks only for missing or thin evidence, reported failures, changes crossing
 workers, `server/` or `shared/` changes, or surprises in the diff, then land and call `workspace submit`.
@@ -211,8 +209,8 @@ definition in parallel and returns one merged verdict. Add a reviewer by adding 
 - `server/http.ts` — adapted HTTP dispatcher, not exported; prevents early provider stream termination. undici in package.json exists only for this file. Drop when Pi exports configureHttpDispatcher and applyHttpProxySettings; keep the MIT notice until then.
 - `pnpm-workspace.yaml` — registers patches/@earendil-works__chord@1.3.0.patch, patching sanitizeOutput to remove whole CSI/OSC/control strings while keeping numeric SGR, patches/@earendil-works__pi-durable@1.3.0.patch, adding transactional input-placement hooks, marking entries placed from input submissions (input: true) so extensions can distinguish requests from user-role writes, and recording the requested thinkingLevel on each response as pi-agent-core does, and patches/@earendil-works__pi-claude-code@0.1.0.patch, rebuilding replay cache markers to stay within Claude's four-block limit. Drop each patch when upstream ships the corresponding fix; pnpm errors when a versioned patch no longer matches.
 - `test/claude-code-cache.test.ts` — internal imports exercise the pi-claude-code replay cache patch registered in pnpm-workspace.yaml. Drop this coupling and the patch when upstream rebuilds cache breakpoints within Claude's four-block limit.
+- `extensions/lineage/server.ts` — inlines Pi's unexported createCompaction so tally checks and manual compaction creation share one transaction. Drop when Pi exposes atomic compaction admission.
 - `extensions/lineage/catchup.ts` — uses the patched transactional beforeInput hook to place catch-up notes before inputs. Drop the patch when Pi ships input-placement hooks.
-- `extensions/questions/server.ts` — uses the same patched transactional beforeInput hook to refuse answers superseded between the action's check and input placement. Drop the coupling when Pi ships input-placement hooks.
 - `extensions/coding-tools/diff.tsx` — internal untyped details.patch/details.diff formats drive the diff renderer. Drop when Pi exports structured diff rows for rendering.
 - `extensions/prompt/server.ts` — tool guidance adapted from unexported prompt contributions, not Ultimate's personality. Drop when Pi exports buildSystemPromptSections and the per-tool system prompt contributions.
 - `web/src/app/model.ts` — internal trailing <harness> text block duplicates diagnostics and is stripped for display. Drop when Pi exports a diagnostic-free tool-result content accessor.

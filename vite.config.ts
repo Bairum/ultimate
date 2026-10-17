@@ -79,8 +79,9 @@ export default defineConfig({
             'error',
             {
               allow: {
+                agent: ['lineage'],
                 automations: ['subagents'],
-                board: ['workspaces', 'subagents', 'lineage', 'conversations'],
+                board: ['workspaces', 'subagents', 'lineage', 'conversations', 'questions'],
                 classify: ['secrets'],
                 cloudflare: ['secrets'],
                 phase: ['classify', 'conversations'],
@@ -99,7 +100,7 @@ export default defineConfig({
                 instance: ['subagents', 'tailscale', 'workspaces'],
                 lineage: ['conversations', 'workspaces'],
                 parallel: ['secrets'],
-                questions: ['conversations', 'lineage'],
+                questions: ['conversations', 'lineage', 'board', 'subagents'],
                 onboarding: ['workspaces', 'subagents', 'lineage'],
                 plan: ['lineage', 'workspaces'],
                 self: ['workspaces'],

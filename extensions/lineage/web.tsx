@@ -3,40 +3,32 @@ import {
   CircleCheckIcon,
   GitBranchIcon,
   GitForkIcon,
+  MessagesSquareIcon,
   ScrollTextIcon,
   StickyNoteIcon,
 } from 'lucide-react'
-import { createContext, use, useState } from 'react'
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
-import { Kbd } from '@/components/ui/kbd'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
-  api,
   cn,
   defineWebExtension,
-  formatKeys,
   formatTime,
   formatTokens,
-  getConversation,
-  getState,
-  NewConversationComposer,
-  useComposer,
   useConversation,
-  useConversations,
   useDocOf,
   useTranscript,
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import { ConversationRef } from '../conversations/feature.tsx'
+import { talkToUltimate } from '../conversations/ultimate.tsx'
 import { Open } from '../workspaces/landing.tsx'
-import { getRoots, useRoots } from './roots.tsx'
-import { ProposeCall, SideComposer, sideLabel, SideNote, SideRedirect } from './side.tsx'
-import { entryText, launching, openStart, start, StartPage } from './start.tsx'
-import { Distilling, Familiarize, Survey, SurveyStatus } from './survey.tsx'
+import { useRoots } from './roots.tsx'
+import { column, Familiarize, Survey } from './survey.tsx'
 
-type Tally = { tokens: number; since?: number; surveying?: true; converting?: true }
+type Tally = { tokens: number; since?: number }
 const tallyKind = 'lineage.tally'
 
 function userText(entry: EntryRecord) {
@@ -392,139 +384,111 @@ function Reset({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   return core
 }
 
-/** What starts a branch from a tally's composer; ↵ opens a side chat. */
-const branchKeys = formatKeys('alt+enter')[0].join(' ')
-
-/** The root a composer starts branches of; set by `TallyComposer` for its status line. */
-const TallyContext = createContext<number | undefined>(undefined)
-
-/** Under the composer: a tally's size, a root's reading, or the start page's keys. */
-function ComposerStatus() {
-  const tally = use(TallyContext)
-  const { target } = useComposer()
-  if (tally !== undefined) return <TallyStatus id={tally} />
-  return target === 'new' ? (
-    <span className="text-muted-foreground/70 pointer-coarse:hidden">
-      <Kbd>↵</Kbd> start · <Kbd>esc</Kbd> close
-    </span>
-  ) : null
-}
-
-function TallyStatus({ id }: { id: number }) {
-  const tally = useDocOf<Tally>(id, tallyKind)
-  if (tally?.surveying) return <SurveyStatus />
-  const tokens = tally?.tokens
-  return (
-    <>
-      <span className="text-muted-foreground/70" data-lineage-tokens={tokens}>
-        Tally{tokens === undefined ? '' : ` · ${formatTokens(tokens)} tokens`}
-      </span>
-      <span className="text-muted-foreground/70 pointer-coarse:hidden">
-        <Kbd>↵</Kbd> side chat · <Kbd>{branchKeys}</Kbd> branch
-      </span>
-    </>
-  )
-}
-
-/**
- * A root's composer opens a side chat with it, or starts a branch from its tip; a side chat's ends it. Other
- * conversations keep theirs.
- */
+/** A root takes no input: an empty one starts by getting familiar with the project, any other shows its tally footer. */
 function RootComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
   const id = useConversation((conversation) => conversation.id)
   const roots = useRoots()
-  const side = useConversations().some(
-    (conversation) => conversation.id === id && conversation.label === sideLabel,
-  )
-  if (id !== undefined && side) return <SideComposer core={core} dock={dock} id={id} key={id} />
   if (id === undefined || !roots?.includes(id)) return core
-  return <TallyComposer core={core} dock={dock} id={id} key={id} />
+  return <TallyComposer dock={dock} id={id} key={id} />
 }
 
-/**
- * Only a root subscribes to its `lineage.tally` document. An empty root starts by getting familiar with the project; it
- * takes steering while it reads, and no input while its genesis is distilled. A root with history that is no tally yet
- * (made a root before tallies existed) keeps its own composer until "Make this a root" converts it.
- */
-function TallyComposer({ id, core, dock }: { id: number; core: ReactNode; dock?: boolean }) {
-  const { switchConversation } = useUltimate()
+/** Only a root subscribes to its `lineage.tally` document; a root from before tallies has none and shows the footer. */
+function TallyComposer({ id, dock }: { id: number; dock?: boolean }) {
   const tally = useDocOf<Tally>(id, tallyKind)
   const history = useConversation((conversation) =>
     conversation.loading ? undefined : conversation.entries.length > 0,
   )
-  if (tally?.converting) return <Distilling dock={dock} id={id} />
-  if (tally?.surveying) return <TallyContext value={id}>{core}</TallyContext>
-  if (tally !== undefined && tally?.since === undefined)
-    return history === false ? <Familiarize dock={dock} id={id} /> : core
+  if (tally === undefined || history === undefined) return null
+  if (tally?.since === undefined && !history) return <Familiarize dock={dock} id={id} />
+  return <TallyFooter dock={dock} id={id} tokens={tally?.tokens} />
+}
+
+/** In place of a tally's composer: what it is, its size, and the way to @ultimate, who keeps it. */
+function TallyFooter({ id, tokens, dock }: { id: number; tokens?: number; dock?: boolean }) {
+  const actions = useUltimate()
   return (
-    <TallyContext value={id}>
-      <NewConversationComposer
-        branch={{ from: id }}
-        dock={dock}
-        onStarted={switchConversation}
-        placeholder={`Talk it through in a side chat, or ${branchKeys} to start a branch…`}
-        start={(draft) =>
-          draft.alternate
-            ? launching({ from: id }, start)(draft)
-            : api.action<{ id: number }>('lineage', 'side', {
-                root: id,
-                prompt: draft.prompt,
-                ...(draft.images ? { images: draft.images } : {}),
-                ...(draft.model ? { model: draft.model } : {}),
-                ...(draft.thinkingLevel ? { thinkingLevel: draft.thinkingLevel } : {}),
-              })
-        }
-      />
-    </TallyContext>
+    <div className={cn(column(dock), 'pb-3')}>
+      <div
+        className="rounded-lg border border-border bg-muted/20 px-3.5 py-2.5"
+        data-lineage-tally-footer={id}
+      >
+        <div className="flex min-w-0 items-center gap-2 font-mono text-[11px] text-muted-foreground">
+          <ScrollTextIcon className="size-3.5 shrink-0 text-brand" />
+          <span className="shrink-0 text-foreground">Tally</span>
+          {tokens !== undefined && (
+            <span className="shrink-0" data-lineage-tokens={tokens}>
+              · {formatTokens(tokens)} tokens
+            </span>
+          )}
+          <button
+            className="ml-auto shrink-0 cursor-pointer text-brand hover:underline"
+            onClick={() => void talkToUltimate(actions)}
+            type="button"
+          >
+            Talk to @ultimate
+          </button>
+        </div>
+        <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
+          The context every new branch starts from. @ultimate keeps it up to date.
+        </p>
+      </div>
+    </div>
   )
 }
 
-function BranchAction({ entry }: { entry: EntryRecord }) {
-  return (
+/** What a side chat with a tally, from before tallies were read-only, left in it: its note, and the branch it ended in. */
+function SideNote({ entry }: { entry: EntryRecord }) {
+  const { switchConversation } = useUltimate()
+  const transcript = useTranscript()
+  const { from, text } = entry.data as { from: number; text: string }
+  const started = transcript.find(
+    (other) =>
+      other.id > entry.id &&
+      other.kind === 'lineage.branched' &&
+      (other.data as { side?: number }).side === from,
+  )
+  const branch = (started?.data as { branch: number } | undefined)?.branch
+  const open = (to: number) => (
     <button
-      aria-label="Branch from here"
-      title="Branch from here"
-      className="cursor-pointer rounded p-0.5 transition-colors hover:text-foreground"
-      onClick={() =>
-        openStart({ from: entry.conversationId, at: entry.id }, { excerpt: entryText(entry) })
-      }
+      className="flex min-w-0 cursor-pointer text-foreground hover:underline"
+      onClick={() => switchConversation(to)}
+      title={`Open #${to}`}
       type="button"
     >
-      <GitBranchIcon className="size-3" />
+      <ConversationRef id={to} />
     </button>
+  )
+  return (
+    <section
+      className="min-w-0 rounded-md border border-border bg-muted/20"
+      data-lineage-side-note={from}
+    >
+      <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+        <MessagesSquareIcon className="size-3.5 shrink-0" />
+        <span className="shrink-0">Side chat ·</span>
+        {open(from)}
+        {branch !== undefined && (
+          <>
+            <span className="shrink-0">→</span>
+            {open(branch)}
+          </>
+        )}
+      </header>
+      <p className="min-w-0 px-3 py-2.5 text-[12.5px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
+        {text}
+      </p>
+    </section>
   )
 }
 
-/** Keeps the roots streaming, for the synchronous `when` of "Make this a root", and shows a root's open side chat. */
+/** Keeps the roots streaming for synchronous readers, such as the `when` of the agent's Compact command. */
 function Roots() {
   useRoots()
-  return <SideRedirect />
-}
-
-/** The shown conversation, when it is top-level (not a subagent or other owned conversation) and not a branch. */
-function topLevel() {
-  const { id } = getConversation()
-  const summary = getState().conversations.find((conversation) => conversation.id === id)
-  return id !== undefined && summary?.parentConversationId === undefined && !summary?.branchOf
-}
-
-/**
- * Whether the shown conversation is a tally, or a root on its way to one (empty, reading or distilling); undefined while
- * unknown. A root's composer keeps its `lineage.tally` document streaming.
- */
-function shownIsTally() {
-  const { id, entries, loading } = getConversation()
-  const roots = getRoots()
-  if (id === undefined || !roots) return undefined
-  if (!roots.includes(id)) return false
-  const doc = getState().docsOf[id]?.[tallyKind] as Tally | null | undefined
-  if (doc === undefined || loading) return undefined
-  return doc?.since !== undefined || !!doc?.surveying || !!doc?.converting || entries.length === 0
+  return null
 }
 
 export default defineWebExtension({
-  start,
-  tools: { note: NoteCall, propose_branch: ProposeCall },
+  tools: { note: NoteCall },
   entries: {
     'lineage.branched': Branched,
     'lineage.note': Note,
@@ -534,42 +498,5 @@ export default defineWebExtension({
     'pi.reset': Reset,
   },
   composer: RootComposer,
-  slots: {
-    'composer.status': [ComposerStatus],
-    'conversation.overlay': [StartPage],
-    overlay: [Roots],
-  },
-  messageActions: [BranchAction],
-  commands: [
-    {
-      id: 'lineage.branch-at',
-      title: 'Branch from here',
-      group: 'Conversations',
-      when: (context) => context.entryId !== undefined,
-      run: (context) => {
-        if (context.conversationId !== undefined && context.entryId !== undefined)
-          openStart({ from: context.conversationId, at: context.entryId })
-      },
-    },
-    {
-      id: 'lineage.branch',
-      title: 'Branch…',
-      group: 'Conversations',
-      when: () => getConversation().id !== undefined,
-      run: () => {
-        const { id } = getConversation()
-        if (id !== undefined) openStart({ from: id })
-      },
-    },
-    {
-      id: 'lineage.add-root',
-      title: 'Make this a root',
-      group: 'Conversations',
-      when: () => topLevel() && shownIsTally() === false,
-      run: async () => {
-        const { id } = getConversation()
-        if (id !== undefined) await api.action('lineage', 'root', { id })
-      },
-    },
-  ],
+  slots: { overlay: [Roots] },
 })
