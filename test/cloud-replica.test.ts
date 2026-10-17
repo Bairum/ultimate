@@ -521,10 +521,12 @@ describe('cloud replica', () => {
     const sql = replica().sql
     const sockets: ReturnType<Replica['sockets']> = []
     const ctx = {
+      id: { toString: () => '0123456789abcdef' },
       storage: { sql, transactionSync: <T>(run: () => T) => sql.transaction(run) },
       getWebSockets: () => sockets,
       waitUntil: vi.fn<() => void>(),
     } as unknown as ConstructorParameters<typeof Replica>[0]
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const env = {
       DIRECTORY: {
         idFromName: () => 'directory',
@@ -565,8 +567,12 @@ describe('cloud replica', () => {
     const { item } = instance.store.enqueue(1, 'queued before hibernation')
     accepted.socket.send.mockClear()
 
+    // A fresh object has no sockets and logs nothing; a woken one reports what it still holds.
+    expect(log).not.toHaveBeenCalled()
     const previous = instance
     instance = new Replica(ctx, env)
+    expect(log.mock.calls).toEqual([['Replica woke: object=01234567 sockets=2 admitted=1']])
+    log.mockRestore()
     expect(instance).not.toBe(previous)
     expect(instance.store).not.toBe(previous.store)
     expect(instance.sockets()).toEqual([accepted.machine])

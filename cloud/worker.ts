@@ -190,6 +190,14 @@ export class Replica {
       exec: (query, ...bindings) => ctx.storage.sql.exec(query, ...bindings),
       transaction: (run) => ctx.storage.transactionSync(run),
     } as Sql)
+    // Constructed with sockets still attached means the object was evicted while they stayed open:
+    // the only observable sign of hibernation. It logs in the waking event's trace, so that event's
+    // outcome shows whether admission survived. Counts and an object-id prefix only, no content.
+    const attached = ctx.getWebSockets()
+    if (attached.length)
+      console.log(
+        `Replica woke: object=${ctx.id.toString().slice(0, 8)} sockets=${attached.length} admitted=${attached.filter((socket) => socket.deserializeAttachment() === true).length}`,
+      )
   }
   sockets() {
     return this.ctx
