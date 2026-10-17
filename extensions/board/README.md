@@ -30,7 +30,9 @@ subscription, only for questions asked before that input.
 
 In the sender's transcript a `message` call renders as an outgoing card: recipient, one-way or expects reply, and
 the message's live state from the board log (sending, delivered, in your inbox, awaiting reply, answered, failed),
-with a link to the Board or the recipient's entry. A failed call keeps the generic tool card with its error.
+with a link to the Board or the recipient's entry. A `branch` call renders as a branch-start card: the branch's
+feature and title, its root, isolated or shared, working or reported back, an Open link to its first input, and
+the prompt. Failed calls of either tool keep the generic tool card with their error.
 
 The message tool is replay-safe: it memoizes the sent id. A task-scoped `board.sent` receipt commits with the
 message and delivery task, preventing a duplicate even if interrupted before the memo is saved.
