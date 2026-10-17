@@ -15,17 +15,14 @@ import {
   ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, EntryId, Tx } from '@earendil-works/pi-durable'
+import type { ConversationId, EntryId, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
 import { isolatable } from '../workspaces/git.ts'
 
-// Replaced by the exported subagents contract when the standing-agent task lands.
-type SubagentsService = {
-  residents(ctx: Context): Promise<{ name: string; description: string }[]>
-  standing(name: string, ctx: Context): Promise<ConversationId>
-}
+import type { SubagentsService } from '../subagents/server.ts'
+import { Standing } from '../subagents/server.ts'
 export type BoardMessage = {
   id: number
   from: number | 'user'
@@ -49,6 +46,13 @@ export const Board = defineDoc<{ messages: BoardMessage[]; next: number; readUpT
   initial: () => ({ messages: [], next: 1, readUpTo: 0 }),
 })
 export const docs = [Board]
+// The receipt commits with the message, closing the gap before api.memo records its id.
+const Sent = defineDoc<{ id?: number }>({
+  kind: 'board.sent',
+  version: 1,
+  scope: 'task',
+  initial: () => ({}),
+})
 async function append(tx: Tx, input: Omit<BoardMessage, 'id' | 'at'>) {
   const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
   const message = { ...input, id: log.next++, at: Date.now() }
@@ -243,10 +247,17 @@ async function send(
   from: number | 'user',
   input: { to: string; text: string; reply?: boolean; steer?: boolean; re?: number },
   ctx: Context,
+  taskId?: TaskId,
 ) {
+  if (taskId !== undefined) {
+    const sent = await host.harness().snapshot(Sent, taskId, ctx)
+    if (sent?.id !== undefined) return sent.id
+  }
   if (!input.text.trim()) throw new Error('Message text must not be empty')
   const to = await resolve(host, input.to, from, ctx)
   return host.harness().commit(async (tx) => {
+    const receipt = taskId === undefined ? undefined : await tx.doc(Sent, taskId)
+    if (receipt?.id !== undefined) return receipt.id
     const message = await append(tx, {
       from,
       to,
@@ -265,6 +276,7 @@ async function send(
           background: true,
         },
       )
+    if (receipt) receipt.id = message.id
     return message.id
   }, ctx)
 }
@@ -285,12 +297,7 @@ export const actions = {
   async addresses(_args: unknown, { host }: ActionContext) {
     const agents =
       (await host.use<SubagentsService>('subagents')?.residents(BACKGROUND_CONTEXT)) ?? []
-    const standing = host.doc('ultimate.standing-agents')
-    const index = standing
-      ? ((await host.harness().snapshot(standing, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)) as
-          | Record<string, number>
-          | undefined)
-      : undefined
+    const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)
     const conversations = host
       .conversations()
       .filter((c) => !c.parentConversationId)
@@ -332,8 +339,16 @@ export default function board(host: ExtensionHost) {
           reply: Type.Optional(Type.Boolean()),
           steer: Type.Optional(Type.Boolean()),
         }),
+        // The task-scoped receipt deduplicates admission; the memo returns the same id on replay.
+        replay: 'safe',
         async execute(input, api, ctx) {
-          const id = await send(host, api.conversationId, input, ctx)
+          const id =
+            (await api.memo<number>('message-id', ctx)) ??
+            (await api.memo(
+              'message-id',
+              await send(host, api.conversationId, input, ctx, api.taskId),
+              ctx,
+            ))
           return { output: [{ type: 'text', text: `Message ${id} sent.` }] }
         },
       }),

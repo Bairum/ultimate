@@ -12,7 +12,7 @@ import {
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import type { Task } from '@earendil-works/pi-durable'
-import type { JsonValue } from '@earendil-works/chord'
+import type { Context, JsonValue } from '@earendil-works/chord'
 import { afterEach, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
@@ -22,6 +22,7 @@ import { Metadata } from '../server/metadata.ts'
 import board, { Board, actions, userActions } from '../extensions/board/server.ts'
 import type { BoardService } from '../extensions/board/server.ts'
 import { Roots, Tally } from '../extensions/lineage/server.ts'
+import { Standing } from '../extensions/subagents/server.ts'
 
 const homes: string[] = []
 const hosts: OpenHost[] = []
@@ -38,7 +39,10 @@ function gate() {
     release: () => release(),
   }
 }
-async function fixture(replyGate?: ReturnType<typeof gate>) {
+async function fixture(
+  replyGate?: ReturnType<typeof gate>,
+  sendGate?: { gate: ReturnType<typeof gate>; afterMemo: boolean; entered: boolean },
+) {
   const home = await temp('ultimate-board-')
   homes.push(home)
   const prepared = await prepareHarness({ home, ultimateRoot: home, userHome: home, faux: true })
@@ -64,7 +68,35 @@ async function fixture(replyGate?: ReturnType<typeof gate>) {
     doc: (kind: string) =>
       kind === 'lineage.roots' ? Roots : kind === 'lineage.tally' ? Tally : undefined,
   } as unknown as ExtensionHost
-  const backend = board(host)
+  let backend = board(host)
+  if (sendGate)
+    backend = {
+      ...backend,
+      tools: backend.tools!.map((tool) => ({
+        ...tool,
+        execute: (...[input, api, ctx]: Parameters<typeof tool.execute>) =>
+          tool.execute(
+            input,
+            {
+              ...api,
+              memo: async (name: string, value: JsonValue | Context, memoContext?: Context) => {
+                if (memoContext === undefined) return api.memo(name, value as Context)
+                if (!sendGate.afterMemo) {
+                  sendGate.entered = true
+                  await awaitWithContext(sendGate.gate.promise, memoContext)
+                }
+                const result = await api.memo(name, value as JsonValue, memoContext)
+                if (sendGate.afterMemo) {
+                  sendGate.entered = true
+                  await awaitWithContext(sendGate.gate.promise, memoContext)
+                }
+                return result
+              },
+            },
+            ctx,
+          ),
+      })),
+    }
   prepared.registry.install(
     replyGate
       ? {
@@ -202,8 +234,11 @@ it('resolves a standing address and returns unanswered inputs as failure replies
     { from: f.recipient.id, to: 1, re: 1, state: 'failed' },
   ])
   expect((await replies(f))[0].data).toMatchObject({ failed: true })
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).scout = f.recipient.id
+  }, context)
   expect(await actions.addresses({}, f.action())).toMatchObject({
-    agents: [{ name: 'scout', description: 'Search' }],
+    agents: [{ name: 'scout', description: 'Search', id: f.recipient.id }],
   })
   await expect(actions.post({ to: '@lander', text: 'Hi' }, f.action())).rejects.toThrow(
     'No recipient for @lander',
@@ -334,6 +369,31 @@ it('rejects post and read through codemode at the installed action boundary', as
   } finally {
     await server.vite.watcher.close()
     await server.close()
+  }
+})
+it('replays interrupted sends once, both before and after memoizing the message id', async () => {
+  for (const afterMemo of [false, true]) {
+    const sendGate = { gate: gate(), afterMemo, entered: false }
+    const f = await fixture(undefined, sendGate)
+    await f.opened.root.submit(
+      { type: 'input', content: 'SEND {"to":"user","text":"One item"}' },
+      context,
+    )
+    await until(() => sendGate.entered)
+    expect((await f.log())!.messages).toHaveLength(1)
+    await f.opened.close()
+    await f.open()
+    sendGate.gate.release()
+    await f.opened.root.waitForIdle(context)
+    expect((await f.log())!.messages).toMatchObject([{ id: 1, to: 'user', text: 'One item' }])
+    expect((await f.log())!.next).toBe(2)
+    const view = await f.opened.root.viewState(context)
+    try {
+      const result = view.value.entries.findLast((e) => e.kind === 'pi.tool-result')!
+      expect(JSON.stringify(result)).toContain('Message 1 sent.')
+    } finally {
+      view.dispose()
+    }
   }
 })
 it('recovers once after input placement, before the recipient settles', async () => {

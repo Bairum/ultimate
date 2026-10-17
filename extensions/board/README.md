@@ -15,6 +15,8 @@ The answer returns as `board.reply`, steering the sender. An unanswered input pr
 `reply: false` is one-way: it wakes the recipient without returning an answer. Sending to `user` only writes an
 unread inbox item; it starts no run. Replies to a user post also stay in the inbox without starting a run.
 
+The message tool is replay-safe: it memoizes the sent id. A task-scoped `board.sent` receipt commits with the
+message and delivery task, preventing a duplicate even if interrupted before the memo is saved.
 Delivery is a background durable task owned by the root conversation. Stable request ids (`board:<id>` and
 `board-reply:<reply-id>`) deduplicate submissions across reopen. Recording the answer, appending its reply and
 advancing the task checkpoint happen in one transaction. A reopened task resumes that checkpoint, so both a
