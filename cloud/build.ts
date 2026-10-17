@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'vite-plus'
 import { extensionModules } from '../server/vite-extensions.ts'
 
+// Vite keeps an inherited NODE_ENV, and a development one bundles development React; deploys always ship production.
+process.env.NODE_ENV = 'production'
 const root = fileURLToPath(new URL('../', import.meta.url))
 const configFile = fileURLToPath(new URL('../vite.config.ts', import.meta.url))
 const alias = { '@': fileURLToPath(new URL('../web/src', import.meta.url)) }
