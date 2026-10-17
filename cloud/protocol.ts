@@ -5,18 +5,22 @@
 //
 // Order of a connection:
 // 1. The machine connects to `/sync` with `Authorization: Bearer <token>` and sends `hello`.
-// 2. The cloud answers `cursor`: the newest entry it holds and the hash of every document it holds.
-// 3. The machine subscribes to commits first (buffering them), then sends catch-up `batch`es: every conversation
-//    record, its own entries newer than `maxEntryId`, and every current conversation-scoped document whose hash differs
-//    or which the cloud lacks (and a retirement, `value: null`, for one the cloud holds but the machine no longer has).
-//    Then it flushes the buffered commits and keeps sending live `batch`es in commit order.
+// 2. The cloud answers `cursor`: per conversation, the newest of its own entries it holds, and the hash of every
+//    document it holds.
+// 3. The machine subscribes to commits first (buffering them), then sends catch-up `batch`es, reading page by page
+//    outside any commit and never more than the unacknowledged window ahead: every conversation record, each
+//    conversation's own entries newer than its cursor value in ascending order, and every current conversation-scoped
+//    document whose hash differs or which the cloud lacks (and a retirement, `value: null`, for one the cloud holds but
+//    the machine no longer has). Then it flushes the buffered commits and keeps sending live `batch`es in commit order.
 // 4. The cloud applies each batch atomically, in order, and answers `ack` with its `batch` number. The machine keeps at
 //    most a few batches unacknowledged.
 // 5. The cloud sends `outbox` with every undelivered item at connect and whenever one is added; the machine answers
 //    `delivered` once Pi admitted the submission, and the cloud deletes the item.
 //
-// Entry IDs come from one counter allocated by Pi's serialized commits, so entries applied in commit order leave no gap
-// below the replica's `maxEntryId`. Every message is idempotent: applying a record or document twice is harmless.
+// Entry IDs come from one counter allocated by Pi's serialized commits, so each conversation's entries arrive in
+// ascending order, catch-up and live alike, and a conversation's cursor value never has a gap below it, even when a
+// connection drops in the middle of catch-up. Every message is idempotent: applying a record or document twice is
+// harmless.
 
 import type { ConversationRecord, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
 import type { ConversationSummary, SystemInfo } from '../shared/protocol.ts'
@@ -60,7 +64,13 @@ export type MachineMessage =
   | { type: 'delivered'; id: string; submissionId: number }
 
 export type CloudMessage =
-  | { type: 'cursor'; maxEntryId: number; docs: Record<string, string> }
+  | {
+      type: 'cursor'
+      /** Conversation ID to the newest of its own entries the replica holds; absent conversations hold none. */
+      entries: Record<string, number>
+      /** Document ID to the hash the replica holds. */
+      docs: Record<string, string>
+    }
   | { type: 'ack'; batch: number }
   | { type: 'outbox'; items: OutboxItem[] }
 
