@@ -10,7 +10,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { docHash } from '../../cloud/protocol.ts'
+import { docHash, PROJECT_MISMATCH } from '../../cloud/protocol.ts'
 import type { CloudMessage, MachineMessage, ReplicaDoc } from '../../cloud/protocol.ts'
 import { cloudConfig } from './config.ts'
 
@@ -372,7 +372,7 @@ export function startSync(
     }
     dispose = close
     socket.addEventListener('open', () => {
-      send({ type: 'hello', machine, build: host.build().id })
+      send({ type: 'hello', machine, build: host.build().id, project: host.projectRoot })
       metadata()
       metadataTimer = setInterval(metadata, 1000)
       enqueue(async () => send({ type: 'models', value: await host.modelsResponse() }))
@@ -411,7 +411,16 @@ export function startSync(
         fail(error)
       }
     })
-    socket.addEventListener('close', close)
+    socket.addEventListener('close', (event) => {
+      if (closed) return
+      if (event.code === PROJECT_MISMATCH) {
+        stopped = true
+        host.notice(
+          `Cloud sync stopped: the replica at ${url} belongs to another project (${event.reason}).`,
+        )
+      }
+      close()
+    })
     socket.addEventListener('error', close)
   }
   const schedule = () => {

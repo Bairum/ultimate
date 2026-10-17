@@ -8,6 +8,7 @@ import type {
 import { ReplicaStore, proxyRequest, admitsRequest } from './replica.ts'
 
 import type { Sql } from './replica.ts'
+import { PROJECT_MISMATCH } from './protocol.ts'
 import type { MachineMessage } from './protocol.ts'
 import type { ConversationSummary } from '../shared/protocol.ts'
 
@@ -61,16 +62,37 @@ export class Replica {
     } as Sql)
   }
   sockets() {
-    return this.ctx.getWebSockets().filter((socket) => socket.readyState === WebSocket.OPEN)
+    return this.ctx
+      .getWebSockets()
+      .filter(
+        (socket) => socket.readyState === WebSocket.OPEN && socket.deserializeAttachment() === true,
+      )
   }
   refresh() {
     for (const stream of this.streams) stream.send('view', this.store.view(stream.id))
   }
   webSocketMessage(socket: MachineSocket, raw: string | ArrayBuffer) {
-    if (!this.sockets().includes(socket)) return
+    if (socket.readyState !== WebSocket.OPEN || !this.ctx.getWebSockets().includes(socket)) return
     const message = JSON.parse(
       typeof raw === 'string' ? raw : new TextDecoder().decode(raw),
     ) as MachineMessage
+    if (message.type === 'hello') {
+      const held = this.store.claimProject(message.project)
+      if (held !== message.project) {
+        let reason = ''
+        const encoder = new TextEncoder()
+        for (const character of held) {
+          if (encoder.encode(reason + character).byteLength > 123) break
+          reason += character
+        }
+        socket.close(PROJECT_MISMATCH, reason)
+        return
+      }
+      for (const previous of this.sockets())
+        if (previous !== socket) previous.close(1000, 'Replaced by new machine connection')
+      socket.serializeAttachment(true)
+      for (const stream of this.streams) stream.close()
+    } else if (socket.deserializeAttachment() !== true) return
     for (const reply of this.store.receive(message)) socket.send(JSON.stringify(reply))
     if (message.type === 'delivered') this.refresh()
   }
@@ -90,10 +112,8 @@ export class Replica {
         return Response.json({ error: 'Unauthorized' }, { status: 401 })
       if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket')
         return new Response('Expected WebSocket', { status: 426 })
-      for (const socket of this.sockets()) socket.close(1000, 'Replaced by new machine connection')
       const [client, server] = Object.values(new WebSocketPair())
       this.ctx.acceptWebSocket(server)
-      for (const stream of this.streams) stream.close()
       const upgrade = { status: 101, webSocket: client }
       return new Response(null, upgrade)
     }

@@ -4,6 +4,7 @@ import { Replica } from '../cloud/worker.ts'
 import type { ConversationRecord, EntryRecord } from '@earendil-works/pi-durable'
 import { ReplicaStore, proxyRequest } from '../cloud/replica.ts'
 import type { Sql } from '../cloud/replica.ts'
+import { PROJECT_MISMATCH } from '../cloud/protocol.ts'
 import type { MachineMessage, ReplicaDoc } from '../cloud/protocol.ts'
 
 const databases: DatabaseSync[] = []
@@ -155,13 +156,121 @@ describe('cloud request admission and fallback', () => {
   })
 })
 
+const hello = (project: string): MachineMessage => ({
+  type: 'hello',
+  machine: 'test',
+  build: 'test',
+  project,
+})
+
 describe('cloud replica', () => {
+  it('rejects a second project without changing data or sending a cursor, and accepts the same project again', () => {
+    const sockets: ReturnType<Replica['sockets']> = []
+    const instance = Object.assign(Object.create(Replica.prototype) as Replica, {
+      store: replica(),
+      streams: new Set(),
+      ctx: { getWebSockets: () => sockets },
+    })
+    const connect = () => {
+      let attachment: unknown
+      const socket = {
+        readyState: WebSocket.OPEN as number,
+        send: vi.fn<(data: string) => void>(),
+        close: vi.fn<(code: number, reason: string) => void>(() => {
+          socket.readyState = WebSocket.CLOSED
+        }),
+        serializeAttachment: (value: unknown) => {
+          attachment = value
+        },
+        deserializeAttachment: () => attachment,
+      }
+      sockets.push(socket as unknown as (typeof sockets)[number])
+      const receive = (message: MachineMessage) =>
+        instance.webSocketMessage(
+          socket as unknown as (typeof sockets)[number],
+          JSON.stringify(message),
+        )
+      return { socket, receive }
+    }
+    // Existing dry-run data has no project yet; the first hello adopts it without changing it.
+    batch(instance.store, [entry(1)], [doc(1)])
+    instance.store.enqueue(1, 'queued')
+    const first = connect()
+    first.receive({
+      type: 'batch',
+      batch: 1,
+      conversations: [conversation(99)],
+      entries: [],
+      docs: [],
+    })
+    expect(instance.store.conversation(99)).toBeUndefined()
+    expect(first.socket.send).not.toHaveBeenCalled()
+    expect(instance.sockets()).toEqual([])
+    first.receive(hello('/ultimate'))
+    expect(first.socket.send.mock.calls.map(([data]) => JSON.parse(data).type)).toEqual([
+      'cursor',
+      'outbox',
+    ])
+    expect(instance.store.metadata(4)).toBe('/ultimate')
+    const snapshot = () =>
+      ['metadata', 'conversations', 'entries', 'docs', 'outbox'].map((table) => [
+        ...instance.store.sql.exec(`SELECT * FROM ${table} ORDER BY 1`),
+      ])
+    const before = snapshot()
+    // Reopening the store over the same database must preserve the project guard.
+    Object.assign(instance, { store: new ReplicaStore(instance.store.sql) })
+    const second = connect()
+    second.receive(hello('/poe2-rust'))
+    expect(second.socket.close).toHaveBeenCalledWith(PROJECT_MISMATCH, '/ultimate')
+    expect(second.socket.send).not.toHaveBeenCalled()
+    second.receive({
+      type: 'batch',
+      batch: 1,
+      conversations: [conversation(99)],
+      entries: [entry(2)],
+      docs: [],
+    })
+    expect(snapshot()).toEqual(before)
+    expect(first.socket.close).not.toHaveBeenCalled()
+    const reconnect = connect()
+    reconnect.receive(hello('/ultimate'))
+    expect(reconnect.socket.close).not.toHaveBeenCalled()
+    expect(reconnect.socket.send.mock.calls.map(([data]) => JSON.parse(data).type)).toEqual([
+      'cursor',
+      'outbox',
+    ])
+    expect(first.socket.close).toHaveBeenCalledWith(1000, 'Replaced by new machine connection')
+  })
+
+  it('truncates a mismatched project reason on a UTF-8 boundary within 123 bytes', () => {
+    const instance = worker()
+    const held = '/projects/' + '🦀'.repeat(40)
+    instance.store.claimProject(held)
+    const socket = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn<(data: string) => void>(),
+      close: vi.fn<(code: number, reason: string) => void>(),
+    }
+    Object.assign(instance, { ctx: { getWebSockets: () => [socket] } })
+    instance.webSocketMessage(
+      socket as unknown as ReturnType<Replica['sockets']>[number],
+      JSON.stringify({ type: 'hello', machine: 'test', build: 'test', project: '/other' }),
+    )
+    const [code, reason] = socket.close.mock.calls[0]
+    expect(code).toBe(PROJECT_MISMATCH)
+    expect(new TextEncoder().encode(reason).byteLength).toBeLessThanOrEqual(123)
+    expect(reason).toBe('/projects/' + '🦀'.repeat(28))
+    expect(socket.send).not.toHaveBeenCalled()
+    expect(instance.store.metadata(4)).toBe(held)
+  })
   it('applies a batch twice idempotently, returns its ack and cursor hashes, and retires docs', () => {
     const store = replica()
     batch(store, [entry(1), entry(2)], [doc(3)])
     expect(batch(store, [entry(1), entry(2)], [doc(3)])).toEqual([{ type: 'ack', batch: 1 }])
     expect(store.view(1)?.entries.map((record) => record.id)).toEqual([1, 2])
-    expect(store.receive({ type: 'hello', machine: 'test', build: 'test' })).toEqual([
+    expect(
+      store.receive({ type: 'hello', machine: 'test', build: 'test', project: '/test' }),
+    ).toEqual([
       { type: 'cursor', entries: { 1: 2 }, docs: { 3: 'hash-3' } },
       { type: 'outbox', items: [] },
     ])
@@ -270,7 +379,9 @@ describe('cloud replica', () => {
         { id: submissionId, mode: 'steer', content: 'offline prompt' },
       ],
     })
-    expect(store.receive({ type: 'hello', machine: 'test', build: 'test' })[1]).toEqual({
+    expect(
+      store.receive({ type: 'hello', machine: 'test', build: 'test', project: '/test' })[1],
+    ).toEqual({
       type: 'outbox',
       items: [item],
     })

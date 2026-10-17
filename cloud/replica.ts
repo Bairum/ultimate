@@ -51,6 +51,15 @@ export class ReplicaStore {
   metadata(id: number): unknown {
     return this.get('metadata', id)
   }
+  /** Adopt existing trial data on first hello; later hosts must name the same project. */
+  claimProject(project: string): string {
+    return this.sql.transaction(() => {
+      const held = this.metadata(4) as string | undefined
+      if (held !== undefined) return held
+      this.put('metadata', 4, project)
+      return project
+    })
+  }
   conversation(id: number): ConversationRecord | undefined {
     return this.get('conversations', id) as ConversationRecord | undefined
   }

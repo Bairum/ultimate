@@ -5,6 +5,9 @@
 //
 // Order of a connection:
 // 1. The machine connects to `/sync` with `Authorization: Bearer <token>` and sends `hello`.
+//    A replica holds one project: it records the first `hello.project` it sees and closes any connection naming
+//    another project with code `PROJECT_MISMATCH`; the machine then stops reconnecting and tells the user,
+//    since retrying cannot succeed.
 // 2. The cloud answers `cursor`: per conversation, the newest of its own entries it holds, and the hash of every
 //    document it holds.
 // 3. The machine subscribes to commits first (buffering them), then sends catch-up `batch`es, reading page by page
@@ -49,8 +52,16 @@ export interface OutboxItem {
   createdAt: number
 }
 
+export const PROJECT_MISMATCH = 4009
+
 export type MachineMessage =
-  | { type: 'hello'; machine: string; build: string }
+  | {
+      type: 'hello'
+      machine: string
+      build: string
+      /** Absolute project root. Pi IDs are per project, so one replica must never mix two. */
+      project: string
+    }
   | {
       type: 'batch'
       batch: number

@@ -3,7 +3,7 @@ import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { afterEach, expect, it, vi } from 'vitest'
 import cloud, { MAX_RETAINED_BYTES, startSync } from '../extensions/cloud/server.ts'
 import type { SyncSocket } from '../extensions/cloud/server.ts'
-import { docHash } from '../cloud/protocol.ts'
+import { docHash, PROJECT_MISMATCH } from '../cloud/protocol.ts'
 import type { CloudMessage, MachineMessage } from '../cloud/protocol.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { context, prepareHarness } from '../server/harness.ts'
@@ -91,6 +91,7 @@ async function fixture() {
   const notices: string[] = []
   const host = {
     ...prepared,
+    projectRoot: home,
     harness: () => opened.harness,
     conversations: () => [],
     system: () => ({ online: true }),
@@ -150,6 +151,7 @@ it('sends every conversation, only its own entries in ID order, and conversation
       type: 'hello',
       machine: 'test-machine',
       build: 'test-build',
+      project: f.host.projectRoot,
     })
     expect(
       socket
@@ -634,6 +636,50 @@ it('buffers only changed document IDs during catch-up and sends one current valu
     expect(f.notices).toEqual([])
   } finally {
     release.resolve()
+    await f.close()
+  }
+})
+
+it('stops reconnecting after a project mismatch and reports it only once', async () => {
+  const f = await fixture()
+  try {
+    const socket = f.sockets[0]
+    socket.open()
+    await f.drain()
+    const event = Object.assign(new Event('close'), {
+      code: PROJECT_MISMATCH,
+      reason: '/other-project',
+    })
+    socket.dispatchEvent(event)
+    socket.dispatchEvent(event)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(f.sockets).toHaveLength(1)
+    expect(f.notices).toEqual([
+      'Cloud sync stopped: the replica at ws://fake/sync belongs to another project (/other-project).',
+    ])
+    expect(vi.getTimerCount()).toBe(0)
+  } finally {
+    await f.close()
+  }
+})
+
+it('keeps exponential reconnect backoff for ordinary close codes', async () => {
+  const f = await fixture()
+  try {
+    f.sockets[0].dispatchEvent(
+      Object.assign(new Event('close'), { code: 1011, reason: 'temporary' }),
+    )
+    await vi.advanceTimersByTimeAsync(999)
+    expect(f.sockets).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(f.sockets).toHaveLength(2)
+    f.sockets[1].dispatchEvent(Object.assign(new Event('close'), { code: 1000, reason: '' }))
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(f.sockets).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(f.sockets).toHaveLength(3)
+    expect(f.notices).toEqual([])
+  } finally {
     await f.close()
   }
 })

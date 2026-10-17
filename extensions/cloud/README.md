@@ -18,4 +18,6 @@ Environment overrides take precedence, for process-scoped experiments:
 
 Faux hosts and preview instances stay silent and do not sync from user settings. An explicit `ULTIMATE_CLOUD_URL` enables them for local experiments (with a token from the environment or Secrets). Previews strip all three cloud environment variables inherited from their parent. A configured URL without a token produces one notice naming the missing secret, and no connection.
 
+A replica holds one project, recorded from the first hello (including for existing trial data); another project is refused with close code `4009`, and its host reports the mismatch and stops retrying.
+
 The cloud implementation and shared wire contract live in `cloud/`. Prompts queued there are submitted locally with the outbox UUID as Pi's `requestId`, so retries admit one submission. Unknown conversations produce a notice and leave the item undelivered. Closing the host closes the socket; failed connections retry with a 1–30 second backoff.

@@ -53,7 +53,9 @@ During open, conversation switching, scrolling and opening the Info panel, the u
 
 ## Routing and data
 
-Every `/api/*` and `/sync` request goes to `Replica`, named `default`; other routes serve static assets with SPA fallback. `/sync` requires `Authorization: Bearer <SYNC_TOKEN>` and accepts one machine WebSocket, replacing any previous connection. It stores batches atomically and returns cursor hashes and acknowledgements. Retired documents are deleted.
+Every `/api/*` and `/sync` request goes to `Replica`, named `default`; other routes serve static assets with SPA fallback. `/sync` requires `Authorization: Bearer <SYNC_TOKEN>` and accepts one machine WebSocket after its project hello passes, replacing any previous accepted connection. It stores batches atomically and returns cursor hashes and acknowledgements. Retired documents are deleted.
+
+The first `hello.project` durably binds the replica to one project, including existing trial data; a different project is closed with `PROJECT_MISMATCH` (`4009`) without receiving a cursor or changing data, and its host stops retrying.
 
 With a machine socket open, API requests stream through to `MACHINE_ORIGIN`, with loopback Host/Origin and without forwarding/browser admission headers. A failed GET falls back to the last synced data. A failed write returns 502 instead: its response may have been lost after the machine committed it, so check before retrying. Browser requests must have no fetch-site header or use `same-origin`/`none`, and any Origin must match the cloud URL, before headers are rewritten or prompts are queued. Without a machine, events, history, and models come from the replica. Live task state is omitted. Text submissions queue in an outbox and are resent until the machine acknowledges delivery. Queue IDs are negative local integers; the delivery identity is a UUID, used by the machine for exactly-once admission. Offline cancellation is not supported: the existing cancel button returns the offline error and leaves the item queued. All other offline API operations return 503. An offline SSE connection closes when the machine connects so the browser reconnects to the live proxy.
 
