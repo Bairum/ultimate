@@ -244,7 +244,7 @@ function BoardSurface() {
                   ? 'Message @ultimate, or start with @agent / #conversation…'
                   : 'Start with @agent or #conversation…'
               }
-              className="block max-h-48 min-h-20 w-full resize-y bg-transparent px-3 pt-3 pb-1 text-[14px] outline-none placeholder:text-muted-foreground/70"
+              className="block max-h-48 min-h-20 w-full resize-none field-sizing-content bg-transparent px-3 pt-3 pb-1 text-[14px] outline-none placeholder:text-muted-foreground/70"
               onChange={(event) => {
                 setDraft(event.target.value)
                 setCaret(event.target.selectionStart)
