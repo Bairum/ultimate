@@ -69,6 +69,8 @@ async function fixture(
   let service!: BoardService
   const hold = gate()
   let holding = false
+  const openers: (() => Promise<void>)[] = []
+  const closers: (() => Promise<void>)[] = []
   const host = {
     ...prepared,
     metadata: Metadata,
@@ -91,8 +93,11 @@ async function fixture(
                 branch: (input: BranchInput, ctx: Context) => startBranch(host, input, ctx),
               }
             : undefined,
-    onOpen: () => {},
-    onClose: () => {},
+    onOpen: (callback: () => Promise<void>) => openers.push(callback),
+    onClose: (cleanup: () => Promise<void>) => closers.push(cleanup),
+    notice: (message: string) => {
+      throw new Error(message)
+    },
     conversations: () => [],
     doc: (kind: string) =>
       kind === 'lineage.roots' ? Roots : kind === 'lineage.tally' ? Tally : undefined,
@@ -199,9 +204,11 @@ async function fixture(
     const close = current.close.bind(current)
     current.close = async () => {
       hosts.splice(hosts.indexOf(current), 1)
+      for (const cleanup of closers) await cleanup()
       await close()
     }
     hosts.push(opened)
+    for (const opener of openers) await opener()
     return opened
   }
   await open()
@@ -371,6 +378,42 @@ it('logs user inbox items without running and posts answers back to the user', a
   await until(async () => (await f.log())!.messages.length === 3)
   expect((await f.log())!.messages[2]).toMatchObject({ to: 'user', from: f.recipient.id, re: 2 })
   expect(await replies(f)).toHaveLength(0)
+})
+it('answers questions to the user when the user replies, posts anew, or types in the conversation', async () => {
+  const f = await fixture()
+  const ask = async (text: string, reply = true) => {
+    await (
+      await f.recipient.submit(
+        { type: 'input', content: 'SEND ' + JSON.stringify({ to: 'user', text, reply }) },
+        context,
+      )
+    ).wait(context)
+    return (await f.log())!.messages.at(-1)!
+  }
+  const state = async (id: number) => (await f.log())!.messages.find((m) => m.id === id)?.state
+
+  // Asking typed into the recipient leaves that question open: only later input answers it.
+  const replied = await ask('Which option?')
+  expect(replied).toMatchObject({ to: 'user', reply: true, state: 'delivered' })
+  await actions.post({ to: `#${f.recipient.id}`, text: 'Option 1', re: replied.id }, f.action())
+  expect(await state(replied.id)).toBe('answered')
+
+  const report = await ask('Landed', false)
+  const posted = await ask('Ship it?')
+  await actions.post({ to: `#${f.recipient.id}`, text: 'Also add a flag' }, f.action())
+  expect(await state(posted.id)).toBe('answered')
+  expect(await state(report.id)).toBe('delivered')
+
+  const typed = await ask('Keep going?')
+  await (await f.recipient.submit({ type: 'input', content: 'Yes' }, context)).wait(context)
+  await until(async () => (await state(typed.id)) === 'answered')
+
+  // The root's question stays open: the user wrote to another conversation.
+  await f.send('user', 'Root question')
+  const root = (await f.log())!.messages.at(-1)!
+  await actions.post({ to: `#${f.recipient.id}`, text: 'Elsewhere' }, f.action())
+  await (await f.recipient.submit({ type: 'input', content: 'More' }, context)).wait(context)
+  expect(await state(root.id)).toBe('delivered')
 })
 it('refuses self, unknown ids, tally roots and unknown names with valid names', async () => {
   const f = await fixture()

@@ -57,6 +57,18 @@ const Sent = defineDoc<{ ids: Record<string, number> }>({
   scope: 'task',
   initial: () => ({ ids: {} }),
 })
+/** A reply-enabled message to the user that the user has not answered yet. */
+const openQuestion = (m: BoardMessage) => m.to === 'user' && m.reply && m.state === 'delivered'
+/** Typing in a conversation answers the questions it asked the user before that input. */
+async function answerByInput(host: ExtensionHost, from: number, at: number) {
+  const asked = (m: BoardMessage) => openQuestion(m) && m.from === from && m.at < at
+  const log = await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)
+  if (!log?.messages.some(asked)) return
+  await host.harness().commit(async (tx) => {
+    for (const m of (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages)
+      if (asked(m)) m.state = 'answered'
+  }, BACKGROUND_CONTEXT)
+}
 async function append(tx: Tx, input: Omit<BoardMessage, 'id' | 'at'>) {
   const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
   const message = { ...input, id: log.next++, at: Date.now() }
@@ -287,6 +299,10 @@ async function send(
   return host.harness().commit(async (tx) => {
     const receipt = taskId === undefined ? undefined : await tx.doc(Sent, taskId)
     if (callId !== undefined && receipt?.ids[callId] !== undefined) return receipt.ids[callId]
+    // Writing to a conversation, as a Reply or a new post, answers the questions it asked the user.
+    if (from === 'user' && to !== 'user')
+      for (const m of (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages)
+        if (openQuestion(m) && (m.from === to || m.id === input.re)) m.state = 'answered'
     if (from !== 'user' && input.reply !== false) {
       const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
       const pending = log.messages.find(
@@ -361,6 +377,31 @@ export default function board(host: ExtensionHost) {
     record: async (tx, input) =>
       (await append(tx, { ...input, reply: false, state: 'delivered' })).id,
   } satisfies BoardService)
+  let stop: (() => void) | undefined
+  const answering = new Set<Promise<void>>()
+  host.onOpen(async () => {
+    stop = host.harness().subscribeCommits((publication) => {
+      for (const change of publication.changes)
+        if (
+          change.type === 'entry' &&
+          (change.value.kind === 'pi.user' || change.value.kind === 'questions.answers')
+        ) {
+          const done: Promise<void> = answerByInput(
+            host,
+            change.value.conversationId,
+            change.value.model?.[0]?.timestamp ?? Date.now(),
+          )
+            .catch((error: unknown) => host.notice(`Board: ${String(error)}`))
+            .finally(() => answering.delete(done))
+          answering.add(done)
+        }
+    })
+  })
+  host.onClose(async () => {
+    stop?.()
+    stop = undefined
+    await Promise.all(answering)
+  })
   return defineExtension({
     name: 'board',
     tasks: [delivery(host)],

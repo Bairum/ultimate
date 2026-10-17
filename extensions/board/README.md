@@ -15,6 +15,10 @@ The answer returns as `board.reply`, steering the sender. An unanswered input pr
 Answer directly rather than messaging the sender: the tool refuses reply-enabled messages back to a sender whose reply-enabled message is still unanswered, while `reply: false` updates and other recipients remain allowed.
 `reply: false` is one-way: it wakes the recipient without returning an answer. Sending to `user` only writes an
 unread inbox item; it starts no run. Replies to a user post also stay in the inbox without starting a run.
+A reply-enabled message to `user` stays open, and its sender shows as awaiting reply, until the user answers it:
+a Reply, any new post to the sender, or an input typed in the sender's conversation (a plain input or an answer
+card) marks it answered. Posts commit the change with the message; typed inputs close it through a commit
+subscription, only for questions asked before that input.
 
 The message tool is replay-safe: it memoizes the sent id. A task-scoped `board.sent` receipt commits with the
 message and delivery task, preventing a duplicate even if interrupted before the memo is saved.
