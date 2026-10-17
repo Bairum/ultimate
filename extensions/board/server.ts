@@ -106,7 +106,7 @@ const Delivery = defineTask<
             kind: 'board.message',
             data: { id: m.id, from: m.from, text: m.text, reply: m.reply },
           },
-          content: `Message from ${task.input.fromLabel}:\n${m.text}${m.reply ? '\nYour answer to this message goes back to its sender.' : ''}`,
+          content: `Message from ${task.input.fromLabel}:\n${m.text}${m.reply ? `\nAnswer here; your answer is sent to ${task.input.fromLabel} automatically. Do not use message to reply.` : ''}`,
         },
         ctx,
       )
@@ -290,6 +290,20 @@ async function send(
   return host.harness().commit(async (tx) => {
     const receipt = taskId === undefined ? undefined : await tx.doc(Sent, taskId)
     if (receipt?.id !== undefined) return receipt.id
+    if (from !== 'user' && input.reply !== false) {
+      const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
+      const pending = log.messages.find(
+        (m) =>
+          m.to === from &&
+          m.from === to &&
+          m.reply &&
+          (m.state === 'sent' || m.state === 'delivered'),
+      )
+      if (pending)
+        throw new Error(
+          `Your answer to ${toLabel}'s message ${pending.id} is sent back automatically. Answer instead of messaging.`,
+        )
+    }
     const message = await append(tx, {
       from,
       to,
@@ -411,7 +425,7 @@ export default function board(host: ExtensionHost) {
       section('board', async (input, ctx) => {
         if (!input.agent.tools.some((tool) => tool.name === 'message')) return undefined
         const agents = (await host.use<SubagentsService>('subagents')?.residents(ctx)) ?? []
-        return `Use message to contact #id, @name or user. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. Use reply: false for one-way updates. Inputs identify their sender; your answer to a message is delivered back to its sender.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
+        return `Use message to contact #id, @name or user. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. Use reply: false for one-way updates. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
       }),
     ],
     tools: [

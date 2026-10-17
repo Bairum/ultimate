@@ -12,6 +12,7 @@ the valid ones. Standing agents are resolved and configured through the `subagen
 An idle recipient wakes. A busy one receives a follow-up after its current run, or steering during that run with
 `steer: true`. The typed `board.message` input identifies its sender and explains where its answer goes.
 The answer returns as `board.reply`, steering the sender. An unanswered input produces a failure reply instead.
+Answer directly rather than messaging the sender: the tool refuses reply-enabled messages back to a sender whose reply-enabled message is still unanswered, while `reply: false` updates and other recipients remain allowed.
 `reply: false` is one-way: it wakes the recipient without returning an answer. Sending to `user` only writes an
 unread inbox item; it starts no run. Replies to a user post also stay in the inbox without starting a run.
 

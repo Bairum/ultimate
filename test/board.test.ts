@@ -163,8 +163,9 @@ async function fixture(
       return fauxAssistantMessage([fauxToolCall('branch', JSON.parse(text.slice(7)))], {
         stopReason: 'toolUse',
       })
-    if (last.role === 'user' && text.startsWith('SEND '))
-      return fauxAssistantMessage([fauxToolCall('message', JSON.parse(text.slice(5)))], {
+    const command = text.startsWith('Message from') ? text.split('\n')[1] : text
+    if (last.role === 'user' && command.startsWith('SEND '))
+      return fauxAssistantMessage([fauxToolCall('message', JSON.parse(command.slice(5)))], {
         stopReason: 'toolUse',
       })
     if (last.role === 'user' && (text === 'HOLD' || text.includes('\nHOLD')))
@@ -240,6 +241,60 @@ it('wakes an idle recipient and returns one typed reply; one-way messages return
   await f.recipient.waitForIdle(context)
   expect(await replies(f)).toHaveLength(1)
   expect(f.observed.some((t) => t.includes('One way'))).toBe(true)
+})
+it('refuses messaging a sender while answering, then allows it after the answer', async () => {
+  const f = await fixture()
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = ROOT_CONVERSATION_ID
+  }, context)
+  await f.send('@scout', 'SEND ' + JSON.stringify({ to: '#1', text: 'Duplicate' }))
+  await until(async () => (await replies(f)).length === 1)
+  expect(f.observed).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining(
+        "Your answer to #1 (@ultimate)'s message 1 is sent back automatically. Answer instead of messaging.",
+      ),
+    ]),
+  )
+  expect((await f.log())!.messages).toHaveLength(2)
+  expect(f.observed).toContain(
+    'Message from #1 (@ultimate):\nSEND ' +
+      JSON.stringify({ to: '#1', text: 'Duplicate' }) +
+      '\nAnswer here; your answer is sent to #1 (@ultimate) automatically. Do not use message to reply.',
+  )
+  await (
+    await f.recipient.submit(
+      { type: 'input', content: 'SEND ' + JSON.stringify({ to: '#1', text: 'After answer' }) },
+      context,
+    )
+  ).wait(context)
+  await until(async () => (await f.log())!.messages.length === 4)
+  expect((await f.log())!.messages[2]).toMatchObject({
+    from: f.recipient.id,
+    to: 1,
+    text: 'After answer',
+    state: 'answered',
+  })
+})
+it('allows one-way updates to the sender while answering', async () => {
+  const f = await fixture()
+  await f.send('@scout', 'SEND ' + JSON.stringify({ to: '#1', text: 'Progress', reply: false }))
+  await until(async () => (await replies(f)).length === 1)
+  expect((await f.log())!.messages).toMatchObject([
+    { from: 1, to: f.recipient.id, state: 'answered' },
+    { from: f.recipient.id, to: 1, text: 'Progress', reply: false, state: 'delivered' },
+    { from: f.recipient.id, to: 1, re: 1 },
+  ])
+})
+it('allows messaging other recipients while answering', async () => {
+  const f = await fixture()
+  await f.send('@scout', 'SEND ' + JSON.stringify({ to: 'user', text: 'Update' }))
+  await until(async () => (await replies(f)).length === 1)
+  expect((await f.log())!.messages[1]).toMatchObject({
+    from: f.recipient.id,
+    to: 'user',
+    text: 'Update',
+  })
 })
 it('names the lander in both message and reply model text', async () => {
   const f = await fixture()
