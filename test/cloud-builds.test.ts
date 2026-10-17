@@ -52,6 +52,19 @@ it('serves private project HTML with its UI version, falling back without a buil
     await (await worker.fetch(new Request('https://cloud.example/p/desk/one/'), env)).text(),
   ).toBe('generic')
 })
+// An R2 list stub that pages one key at a time, so a missing cursor loop drops keys.
+function listing(held: Set<string> | Map<string, string>) {
+  return async ({ prefix, cursor }: { prefix: string; cursor?: string }) => {
+    const keys = [...held.keys()].filter((key) => key.startsWith(prefix)).toSorted()
+    const start = cursor ? Number(cursor) : 0
+    return {
+      objects: keys.slice(start, start + 1).map((key) => ({ key })),
+      truncated: start + 1 < keys.length,
+      cursor: String(start + 1),
+    }
+  }
+}
+
 it('checks missing names, deduplicates assets and rejects paths and excessive manifests', async () => {
   Object.defineProperty(crypto.subtle, 'timingSafeEqual', {
     configurable: true,
@@ -60,8 +73,9 @@ it('checks missing names, deduplicates assets and rejects paths and excessive ma
   const held = new Set<string>()
   const env = {
     SYNC_TOKEN: 'dev',
+    // No head(): the missing-name check must list prefixes, not probe every file.
     BUILDS: {
-      head: async (key: string) => (held.has(key) ? {} : null),
+      list: listing(held),
       put: async (key: string) => {
         held.add(key)
       },
@@ -85,6 +99,7 @@ it('checks missing names, deduplicates assets and rejects paths and excessive ma
       missing: files.map((f) => f.name),
     })
     held.add('ui/assets/main-abcdefgh.js')
+    held.add('ui/assets/other-abcdefgh.js')
     expect(await (await call('1123456789ab', 'POST', files)).json()).toEqual({
       missing: ['index.html'],
     })
@@ -100,7 +115,7 @@ it('checks missing names, deduplicates assets and rejects paths and excessive ma
 it('enforces the manifest byte budget, actual PUT size and index hash; retains old builds and protects assets', async () => {
   const held = new Map<string, string>()
   const bucket = {
-    head: async (key: string) => (held.has(key) ? {} : null),
+    list: listing(held),
     get: async (key: string) =>
       held.has(key) ? { body: held.get(key), json: async () => JSON.parse(held.get(key)!) } : null,
     put: async (key: string, value: string | Uint8Array) => {

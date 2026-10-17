@@ -88,9 +88,18 @@ export async function uploadBuild(request: Request, bucket: R2Bucket, id: string
       files.reduce((size, f) => size + f.size, 0) > MAX_BUILD
     )
       return bad()
-    const missing: string[] = []
-    for (const file of files)
-      if (!(await bucket.head(buildKey(id, file.name)))) missing.push(file.name)
+    // One listing per prefix instead of a head per file: hundreds of heads for absent files each show up as an
+    // R2 error span in telemetry, and cost an operation apiece.
+    const held = new Set<string>()
+    for (const prefix of ['ui/assets/', `ui/builds/${id}/`]) {
+      let cursor: string | undefined
+      do {
+        const page = await bucket.list({ prefix, cursor })
+        for (const object of page.objects) held.add(object.key)
+        cursor = page.truncated ? page.cursor : undefined
+      } while (cursor)
+    }
+    const missing = files.filter((file) => !held.has(buildKey(id, file.name))).map((f) => f.name)
     await bucket.put(manifestKey, JSON.stringify(files))
     return Response.json({ missing })
   }
