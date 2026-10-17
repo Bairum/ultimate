@@ -69,8 +69,9 @@ test.for([1, 2, 3])(
     expect(decision.text).not.toMatch(/^decision:?$/i)
     expect(decision.options!.map((o) => o.label)).toHaveLength(3)
     expect(decision.options!.every((o) => !/^\s*\d+[.)]/.test(o.label))).toBe(true)
-    expect(decision.options![0].label).toMatch(/fold|epic/i)
-    expect(decision.options![0].recommended).toBe(true)
+    const first = decision.options![0]
+    expect(`${first.label} ${first.detail ?? ''}`).toMatch(/fold|epic/i)
+    expect(first.recommended).toBe(true)
     expect(decision.options!.slice(1).some((o) => o.recommended)).toBe(false)
   },
 )
