@@ -239,6 +239,40 @@ const hello = (project: string): MachineMessage => ({
 })
 
 describe('cloud replica', () => {
+  it('records UI builds from hello and updates and reports them to the Directory', async () => {
+    const instance = worker()
+    const directory = new DirectoryStore(replica().sql)
+    const socket = { readyState: WebSocket.OPEN, deserializeAttachment: () => true, send() {} }
+    const pending: Promise<unknown>[] = []
+    Object.assign(instance, {
+      ctx: {
+        getWebSockets: () => [socket],
+        waitUntil: (promise: Promise<unknown>) => pending.push(promise),
+      },
+      env: {
+        DIRECTORY: {
+          idFromName: () => 'directory',
+          get: () => ({
+            fetch: async (_url: string, init: RequestInit) => {
+              directory.update(JSON.parse(init.body as string))
+              return new Response()
+            },
+          }),
+        },
+      },
+    })
+    instance.store.receive({ ...hello('/test'), uiBuild: '0123456789ab' } as MachineMessage)
+    expect(instance.store.identity()?.uiBuild).toBe('0123456789ab')
+    instance.webSocketMessage(
+      socket as unknown as Parameters<Replica['webSocketMessage']>[0],
+      JSON.stringify({ type: 'uiBuild', value: '1123456789ab' }),
+    )
+    await Promise.all(pending)
+    expect(instance.store.identity()?.uiBuild).toBe('1123456789ab')
+    expect(directory.resolve('test/test')?.uiBuild).toBe('1123456789ab')
+    instance.store.receive({ type: 'uiBuild', value: '../invalid' })
+    expect(instance.store.identity()?.uiBuild).toBe('1123456789ab')
+  })
   it('assigns stable safe slugs, resolves collisions, and forgets only offline projects without entries', () => {
     const directory = new DirectoryStore(replica().sql)
     const value = {

@@ -20,6 +20,7 @@
     "shared",
     "cloud/protocol.ts",
     "cloud/build.ts",
+    "cloud/ui-build.ts",
     "cloud/deploy.ts",
     "extensions/**/*.ts",
     ".ultimate/extensions/**/*.ts",

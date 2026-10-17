@@ -1,4 +1,5 @@
 import type {
+  R2Bucket,
   DurableObjectNamespace,
   DurableObjectState,
   Fetcher,
@@ -12,6 +13,7 @@ import type { AccessConfig } from './access.ts'
 import type { Sql } from './replica.ts'
 import { PROJECT_MISMATCH } from './protocol.ts'
 import type { MachineMessage } from './protocol.ts'
+import { BUILD_ID, buildKey, contentType, uploadBuild, validName } from './builds.ts'
 import { DirectoryStore } from './directory.ts'
 import type { Instance, Presence } from './directory.ts'
 
@@ -19,6 +21,7 @@ import type { Instance, Presence } from './directory.ts'
 declare const WebSocketPair: typeof MachineSocketPair
 
 interface Env extends AccessConfig {
+  BUILDS: R2Bucket
   VERSION?: WorkerVersionMetadata
   REPLICA: DurableObjectNamespace
   ASSETS: Fetcher
@@ -59,7 +62,10 @@ export default {
     // A WebSocket upgrade keeps its own response.
     if (!env.VERSION || response.webSocket) return response
     const versioned = new Response(response.body, response)
-    versioned.headers.set('x-ultimate-cloud-version', env.VERSION.id)
+    versioned.headers.set(
+      'x-ultimate-cloud-version',
+      response.headers.get('x-ultimate-cloud-version') ?? env.VERSION.id,
+    )
     return versioned
   },
 }
@@ -69,8 +75,30 @@ async function route(request: Request, env: Env): Promise<Response> {
   const prefix = /^\/p\/([^/]+\/[^/]+)(?=\/|$)/.exec(url.pathname)
   const path = prefix ? url.pathname.slice(prefix[0].length) : url.pathname
   const api = path === '/api' || path.startsWith('/api/')
-  if (api && !(await admitsAccess(request, env)))
+  if ((api || prefix || url.pathname.startsWith('/b/')) && !(await admitsAccess(request, env)))
     return Response.json({ error: 'Unauthorized' }, { status: 401 })
+  if (url.pathname.startsWith('/sync/builds/')) {
+    if (!env.SYNC_TOKEN || !matchesSyncToken(request.headers.get('Authorization'), env.SYNC_TOKEN))
+      return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    const [, id, name] = /^\/sync\/builds\/([^/]+)(?:\/(.+))?$/.exec(url.pathname) ?? []
+    return uploadBuild(request, env.BUILDS, id ?? '', name)
+  }
+  if (url.pathname.startsWith('/b/')) {
+    const [, id, name = 'index.html'] = /^\/b\/([^/]+)\/(.*)?$/.exec(url.pathname) ?? []
+    if (!id || (id !== 'shared' && !BUILD_ID.test(id)))
+      return new Response('Not found', { status: 404 })
+    if (!validName(name)) return new Response('Not found', { status: 404 })
+    const object = await env.BUILDS.get(buildKey(id, name))
+    return object
+      ? new Response(object.body, {
+          headers: {
+            'content-type': contentType(name),
+            'cache-control':
+              name === 'index.html' ? 'no-cache' : 'private, max-age=31536000, immutable',
+          },
+        })
+      : new Response('Not found', { status: 404 })
+  }
   // The front page is a static shell built by cloud/build.ts; its data comes from /api/directory behind Access.
   if (url.pathname === '/') return env.ASSETS.fetch(new Request(new URL('/front/', url), request))
   if (url.pathname === '/api/directory') return directory(env).fetch('https://directory/list')
@@ -85,17 +113,36 @@ async function route(request: Request, env: Env): Promise<Response> {
       request,
     )
   }
-  if (api) {
+  if (api || prefix) {
     if (!prefix) return Response.json({ error: 'Unknown project' }, { status: 404 })
     const resolved = await directory(env).fetch(
       `https://directory/resolve?slug=${encodeURIComponent(prefix[1])}`,
     )
     if (!resolved.ok) return resolved
     const instance: Instance = await resolved.json()
-    url.pathname = path
-    return env.REPLICA.get(
-      env.REPLICA.idFromName(JSON.stringify([instance.machine, instance.project])),
-    ).fetch(new Request(url, request))
+    const version = env.VERSION
+      ? `${env.VERSION.id}${instance.uiBuild ? ':' + instance.uiBuild : ''}`
+      : undefined
+    let response: Response
+    if (!api) {
+      const object =
+        instance.uiBuild && (await env.BUILDS.get(buildKey(instance.uiBuild, 'index.html')))
+      response = object
+        ? new Response(object.body, {
+            headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' },
+          })
+        : await env.ASSETS.fetch(request)
+    } else {
+      url.pathname = path
+      response = await env.REPLICA.get(
+        env.REPLICA.idFromName(JSON.stringify([instance.machine, instance.project])),
+      ).fetch(new Request(url, request))
+    }
+    if (version) {
+      response = new Response(response.body, response)
+      response.headers.set('x-ultimate-cloud-version', version)
+    }
+    return response
   }
   return env.ASSETS.fetch(request)
 }
@@ -180,11 +227,16 @@ export class Replica {
         typeof raw === 'string' ? raw : new TextDecoder().decode(raw),
       ) as MachineMessage
       // Only protocol labels may reach logs, never arbitrary input or exception text.
-      if (['hello', 'batch', 'summaries', 'system', 'models', 'delivered'].includes(message?.type))
+      if (
+        ['hello', 'uiBuild', 'batch', 'summaries', 'system', 'models', 'delivered'].includes(
+          message?.type,
+        )
+      )
         type = message.type
       if (message.type === 'hello') {
         const held = this.store.metadata(4) as string | undefined
         if (
+          (message.uiBuild !== undefined && !BUILD_ID.test(message.uiBuild)) ||
           (held !== undefined && held !== message.project) ||
           this.store.key() !== JSON.stringify([message.machine, message.project]) ||
           !Number.isInteger(message.port) ||
@@ -211,6 +263,7 @@ export class Replica {
       for (const reply of this.store.receive(message)) socket.send(JSON.stringify(reply))
       if (
         message.type === 'hello' ||
+        message.type === 'uiBuild' ||
         (count !== undefined && count !== this.store.summaryCount()) ||
         (message.type === 'batch' && hasEntries !== this.store.hasEntries())
       )
