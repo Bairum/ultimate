@@ -175,7 +175,7 @@ export interface WebExtension {
   /** Entry renderers by entry kind; they also replace the core renderer of a `pi.*` kind. */
   entries?: Readonly<Record<string, EntryRenderer>>
   inbox?: InboxRenderer
-  /** Replaces the shown conversation's composer where it returns something other than `core`; the last facet wins. */
+  /** Wraps the shown conversation's composer; facets compose in discovery order, each receiving the previous core. */
   composer?: ComposerRenderer
   /** Renders links in Markdown; renderers compose in discovery order, each wrapping the one before it. */
   link?: LinkRenderer

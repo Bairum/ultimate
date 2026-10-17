@@ -23,6 +23,76 @@ export default async function fauxExtension(host: ExtensionHost) {
       const last = transcript.messages.findLast((message) => message.role !== 'system')
       const system = transcript.messages[0]
       const asked = transcript.messages.findLastIndex((message) => message.role === 'user')
+      if (system?.role === 'system' && typeof system.content === 'string') {
+        if (system.content.startsWith('Extract questions addressed'))
+          return fauxAssistantMessage([
+            fauxText(
+              JSON.stringify({
+                questions:
+                  typeof last?.content === 'string' &&
+                  last.content.includes('Should we keep the preview running?')
+                    ? [
+                        { text: 'Should we keep the preview running?', kind: 'confirm' },
+                        {
+                          text: 'Which layout should we use?',
+                          kind: 'choice',
+                          options: [
+                            {
+                              label: 'Compact',
+                              detail: 'Fits the existing cards',
+                              recommended: true,
+                            },
+                            { label: 'Spacious', detail: 'More room between options' },
+                          ],
+                        },
+                      ]
+                    : [],
+              }),
+            ),
+          ])
+        if (
+          system.content.startsWith('Assess the latest') ||
+          system.content.startsWith('Summarize the initial') ||
+          system.content.startsWith('Refresh a coding')
+        ) {
+          const source = typeof last?.content === 'string' ? last.content : ''
+          const prompt = source
+            .split(/(?:^|\n\n)user: /)
+            .at(-1)!
+            .split('\n\nassistant: ')[0]
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 60)
+          const needsInput = source
+            .split('\n\nassistant: ')
+            .at(-1)
+            ?.includes('Should we keep the preview running?')
+          return fauxAssistantMessage([
+            fauxText(
+              JSON.stringify({
+                assessment: needsInput ? 'needs_input' : 'done',
+                activity: 'Replied in the demo.',
+                title: prompt,
+                summary: 'Scripted demo conversation.',
+                feature: 'Demo',
+                abstract: `Ask: ${prompt}\nState: ${needsInput ? 'awaiting a decision' : 'scripted demo reply'}`,
+              }),
+            ),
+          ])
+        }
+      }
+      if (last?.role === 'user' && last.content === 'questions demo')
+        return fauxAssistantMessage([
+          fauxText(
+            'The preview is ready. Two decisions before continuing:\n\nShould we keep the preview running?\n1. Yes\n2. No\n\nWhich layout should we use?\n1. Compact — fits the existing cards (recommended)\n2. Spacious — more room between options',
+          ),
+        ])
+      if (
+        last?.role === 'user' &&
+        typeof last.content === 'string' &&
+        last.content.startsWith('Q: ')
+      )
+        return fauxAssistantMessage([fauxText('Understood. I’ll continue with your reply.')])
       if (transcript.messages[asked]?.content === 'phases demo') {
         const steps = [
           [

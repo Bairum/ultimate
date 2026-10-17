@@ -128,9 +128,16 @@ export function Transcript({ dock }: { dock?: boolean }) {
   useLayoutEffect(() => {
     const scroll = stick.current?.scrollRef.current
     const content = stick.current?.contentRef.current
-    if (!scroll || !content) return
+    if (!scroll || !content) return undefined
     scroll.scrollTop = scroll.scrollHeight
     if (id !== undefined) reveal(scroll, content)
+    // The library observes content growth, not viewport shrinkage as the composer grows.
+    // Reuse its follow lock so resizing never pulls someone away from older messages.
+    const resize = new ResizeObserver(() => {
+      void stick.current?.scrollToBottom({ animation: 'instant', preserveScrollPosition: true })
+    })
+    resize.observe(scroll)
+    return () => resize.disconnect()
   }, [id])
   // Keyed so a conversation never inherits the previous one's scroll position or follow state.
   return (

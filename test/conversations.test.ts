@@ -27,7 +27,10 @@ async function launch() {
   await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
   await writeFile(
     join(projectRoot, '.ultimate/settings.json'),
-    JSON.stringify({ extensions: { enable: ['subagents', 'surfaces'] } }),
+    JSON.stringify({
+      summaryModel: 'unavailable/test',
+      extensions: { enable: ['subagents', 'surfaces'] },
+    }),
   )
   const server = await fauxServer({
     ultimateRoot: resolve('.'),

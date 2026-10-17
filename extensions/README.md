@@ -24,8 +24,10 @@ existing extension and change it:
 An optional `inbox` renderer wraps each queued composer input with `{ item, core, cancel }`. Return `core` for inputs you do not own; when replacing it, include `cancel` to retain core cancellation. Like entry renderers, the last facet in discovery order wins and runs behind an extension boundary with core fallback. Keep provenance and domain-specific UI in the extension.
 
 An optional `composer` renderer receives `{ core, dock? }` for the shown conversation's composer (`dock` marks a
-narrow side region). Return `core` where you do not own it; otherwise render the replacement. The last facet in
-discovery order wins, behind an extension boundary with core fallback. It does not replace the start-page composer.
+narrow side region). Render `core` to preserve the existing composer, optionally wrapping it. Facets compose in
+discovery order: each receives the previous rendering as `core`, behind its own extension boundary with that rendering
+as fallback. These renderers can use `useTranscript()` for the shown conversation's current entries and
+`useComposer()` for draft access. They do not replace the start-page composer.
 Lineage uses this to make a tally's composer open a side chat or start a branch instead of sending an input to the
 root, and to put a side chat's end bar above its composer. `NewConversationComposer` takes an optional `start` that
 replaces the extensions' starter for that composer, and `prompt`, the text it holds while its draft is empty.
@@ -219,7 +221,11 @@ title bar the host shows above every surface.
 slots: { 'header.right': [Badge], sidebar: { component: Conversations, order: -1 } }
 ```
 
-`useComposer()` returns `{ target: 'conversation' | 'new', source? }` inside composer slots; `source` is the
+`useComposer()` returns `{ target: 'conversation' | 'new', source?, draft? }` inside composer slots and the shown
+conversation's composer renderers. `draft.read()` returns a text-only `{ text, revision }` snapshot;
+`draft.clear(snapshot)` clears it only if no edits were made since that snapshot (and preserves newer stored text).
+Use it after a successful submission; images are not included or cleared. The draft shares the normal composer's
+storage and submission-clear path, not separate state. `draft` is absent outside a composer. `source` is the
 conversation a new branch starts from. The Agent and dock
 composers target the shown conversation; `<NewConversationComposer onStarted={(id) => …} />`
 (with an optional `inputId` for focus control)

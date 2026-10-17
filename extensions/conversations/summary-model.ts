@@ -12,9 +12,10 @@ export const DEFAULT_SUMMARY_MODEL = 'openai/gpt-6-luna:medium'
 /** A resolved summary model, kept in a task's memo so a resumed task asks the same one. */
 export type SummaryModel = { provider: string; id: string; thinking: ModelThinkingLevel }
 
-export type SummaryModelHost = Pick<ExtensionHost, 'userHome' | 'projectSettings' | 'notice'> & {
-  modelRuntime: Pick<ExtensionHost['modelRuntime'], 'getAvailableSnapshot'>
-}
+export type SummaryModelHost = Pick<ExtensionHost, 'userHome' | 'projectSettings' | 'notice'> &
+  Pick<Partial<ExtensionHost>, 'faux'> & {
+    modelRuntime: Pick<ExtensionHost['modelRuntime'], 'getAvailableSnapshot'>
+  }
 
 /** The configured value and where it comes from: the project's settings override the user's. */
 export async function summaryModelSetting(
@@ -46,6 +47,7 @@ const reported = new Set<string>()
  */
 export async function summaryModel(host: SummaryModelHost): Promise<SummaryModel | undefined> {
   const { value, source } = await summaryModelSetting(host)
+  if (host.faux && source === 'default') return { provider: 'faux', id: 'faux-1', thinking: 'off' }
   const parsed = typeof value === 'string' ? parseSummaryModel(value) : undefined
   if (!parsed) {
     const message = `Invalid summaryModel ${JSON.stringify(value)} in ${source} settings: expected "provider/id[:thinking]"; summaries are off`

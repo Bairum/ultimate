@@ -52,6 +52,11 @@ export async function getNewConversationConfiguration(source?: number) {
 
 export const ComposerContext = createContext<{
   target: ComposerTarget
+  /** Text-only draft access; clear preserves edits made after the snapshot. */
+  draft?: {
+    read(): { text: string; revision: number }
+    clear(snapshot: { text: string; revision: number }): void
+  }
   isolated?: boolean
   /** The conversation a new branch starts from; absent for a new root. */
   source?: number

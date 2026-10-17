@@ -14,7 +14,14 @@ it('keeps stores local while exposing projects, conversations and live URLs thro
   const userHome = await temp('ultimate-projects-')
   const aRoot = join(userHome, 'a')
   const bRoot = join(userHome, 'b')
-  for (const root of [aRoot, bRoot]) await mkdir(root)
+  for (const root of [aRoot, bRoot]) {
+    await mkdir(join(root, '.ultimate'), { recursive: true })
+    // This test observes input-derived titles, not the background summary model.
+    await writeFile(
+      join(root, '.ultimate/settings.json'),
+      JSON.stringify({ summaryModel: 'unavailable/test' }),
+    )
+  }
   const launch = async (projectRoot: string) => {
     const server = await fauxServer({
       ultimateRoot: resolve('.'),

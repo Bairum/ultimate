@@ -31,7 +31,10 @@ beforeAll(async () => {
   ultimateRoot = await sourceCopy(await temp())
   await writeFile(
     join(ultimateRoot, '.ultimate/settings.json'),
-    JSON.stringify({ extensions: { enable: ['plan', 'subagents'] } }),
+    JSON.stringify({
+      summaryModel: 'unavailable/test',
+      extensions: { enable: ['plan', 'subagents'] },
+    }),
   )
 })
 
