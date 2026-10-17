@@ -1,0 +1,360 @@
+import { temp, removeTemp, until, fauxServer, linkDependencies } from './helpers.ts'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { awaitWithContext } from '@earendil-works/chord/context'
+import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
+import { Type } from '@earendil-works/pi-ai'
+import {
+  configure,
+  defineExtension,
+  defineTool,
+  ROOT_CONVERSATION_ID,
+} from '@earendil-works/pi-durable'
+import type { Task } from '@earendil-works/pi-durable'
+import type { JsonValue } from '@earendil-works/chord'
+import { afterEach, expect, it } from 'vitest'
+import { context, prepareHarness } from '../server/harness.ts'
+import type { OpenHost } from '../server/harness.ts'
+import type { ExtensionHost } from '../server/extensions.ts'
+import type { ActionContext } from '../server/actions.ts'
+import { Metadata } from '../server/metadata.ts'
+import board, { Board, actions, userActions } from '../extensions/board/server.ts'
+import type { BoardService } from '../extensions/board/server.ts'
+import { Roots, Tally } from '../extensions/lineage/server.ts'
+
+const homes: string[] = []
+const hosts: OpenHost[] = []
+afterEach(async () => {
+  for (const host of hosts.splice(0)) await host.close()
+  for (const home of homes.splice(0)) await removeTemp(home)
+})
+function gate() {
+  let release!: () => void
+  return {
+    promise: new Promise<void>((done) => {
+      release = done
+    }),
+    release: () => release(),
+  }
+}
+async function fixture(replyGate?: ReturnType<typeof gate>) {
+  const home = await temp('ultimate-board-')
+  homes.push(home)
+  const prepared = await prepareHarness({ home, ultimateRoot: home, userHome: home, faux: true })
+  let opened: OpenHost
+  let service!: BoardService
+  const hold = gate()
+  let holding = false
+  const host = {
+    ...prepared,
+    metadata: Metadata,
+    harness: () => opened.harness,
+    provide: (_name: string, value: BoardService) => {
+      service = value
+    },
+    use: (name: string) =>
+      name === 'subagents'
+        ? {
+            residents: async () => [{ name: 'scout', description: 'Search' }],
+            standing: async () => recipient.id,
+          }
+        : undefined,
+    conversations: () => [],
+    doc: (kind: string) =>
+      kind === 'lineage.roots' ? Roots : kind === 'lineage.tally' ? Tally : undefined,
+  } as unknown as ExtensionHost
+  const backend = board(host)
+  prepared.registry.install(
+    replyGate
+      ? {
+          ...backend,
+          tasks: backend.tasks!.map((t) => {
+            const task = t as unknown as Task<JsonValue, { phase: string }, JsonValue, object>
+            return {
+              definition: {
+                ...task.definition,
+                phases: {
+                  ...task.definition.phases,
+                  reply: async (...args: Parameters<typeof task.definition.phases.reply>) => {
+                    await awaitWithContext(replyGate.promise, args[2])
+                    await task.definition.phases.reply(...args)
+                  },
+                },
+              },
+            }
+          }),
+        }
+      : backend,
+  )
+  prepared.registry.install(
+    defineExtension({
+      name: 'test-hold',
+      tools: [
+        defineTool({
+          name: 'hold',
+          description: 'Hold the current run',
+          parameters: Type.Object({}),
+          // Waiting has no side effects; replay simply waits on the same test gate.
+          replay: 'safe',
+          async execute(_input, _api, ctx) {
+            holding = true
+            await awaitWithContext(hold.promise, ctx)
+            return { output: [{ type: 'text', text: 'released' }] }
+          },
+        }),
+      ],
+    }),
+  )
+  const observed: string[] = []
+  const route: FauxResponseFactory = (transcript) => {
+    prepared.faux!.appendResponses([route])
+    const last = transcript.messages.findLast((m) => m.role !== 'system')!
+    const text =
+      typeof last.content === 'string'
+        ? last.content
+        : last.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
+    observed.push(text)
+    if (last.role === 'user' && text.startsWith('SEND '))
+      return fauxAssistantMessage([fauxToolCall('message', JSON.parse(text.slice(5)))], {
+        stopReason: 'toolUse',
+      })
+    if (last.role === 'user' && (text === 'HOLD' || text.includes('\nHOLD')))
+      return fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
+    if (last.role === 'user' && text.startsWith('Message from') && text.includes('NOANSWER'))
+      return fauxAssistantMessage([])
+    return fauxAssistantMessage([fauxText(last.role === 'toolResult' ? 'Done' : `Answer: ${text}`)])
+  }
+  prepared.faux!.setResponses([route])
+  const open = async () => {
+    opened = await prepared.open()
+    const current = opened
+    const close = current.close.bind(current)
+    current.close = async () => {
+      hosts.splice(hosts.indexOf(current), 1)
+      await close()
+    }
+    hosts.push(opened)
+    return opened
+  }
+  await open()
+  const recipient = await opened!.harness.createConversation(
+    { ownership: { kind: 'ownerless' } },
+    context,
+  )
+  const agent = await opened!.root.agent(context)
+  await opened!.harness.commit(
+    (tx) => configure(tx, recipient.id, { model: agent.model, tools: agent.tools }),
+    context,
+  )
+  const log = () => opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context)
+  const action = () => ({ host, signal: new AbortController().signal }) as ActionContext
+  const send = async (to: string, text = 'Hello', extra = {}) => {
+    await (
+      await opened.root.submit(
+        { type: 'input', content: `SEND ${JSON.stringify({ to, text, ...extra })}` },
+        context,
+      )
+    ).wait(context)
+  }
+  return {
+    host,
+    get opened() {
+      return opened
+    },
+    recipient,
+    send,
+    log,
+    action,
+    service: () => service,
+    open,
+    hold,
+    holding: () => holding,
+    observed,
+  }
+}
+async function replies(f: Awaited<ReturnType<typeof fixture>>) {
+  const view = await f.opened.root.viewState(context)
+  const entries = view.value.entries.filter((e) => e.kind === 'board.reply')
+  view.dispose()
+  return entries
+}
+it('wakes an idle recipient and returns one typed reply; one-way messages return nothing', async () => {
+  const f = await fixture()
+  await f.send(`#${f.recipient.id}`)
+  await until(async () => (await replies(f)).length === 1)
+  expect((await f.log())!.messages.map((m) => [m.from, m.to, m.state])).toEqual([
+    [1, f.recipient.id, 'answered'],
+    [f.recipient.id, 1, 'delivered'],
+  ])
+  await f.send(String(f.recipient.id), 'One way', { reply: false })
+  await until(async () => (await f.log())!.messages.at(-1)?.state === 'delivered')
+  await f.recipient.waitForIdle(context)
+  expect(await replies(f)).toHaveLength(1)
+  expect(f.observed.some((t) => t.includes('One way'))).toBe(true)
+})
+it('resolves a standing address and returns unanswered inputs as failure replies', async () => {
+  const f = await fixture()
+  await f.send('@scout', 'NOANSWER')
+  await until(async () => (await replies(f)).length === 1)
+  expect((await f.log())!.messages).toMatchObject([
+    { to: f.recipient.id, state: 'failed', error: expect.stringContaining('without an answer') },
+    { from: f.recipient.id, to: 1, re: 1, state: 'failed' },
+  ])
+  expect((await replies(f))[0].data).toMatchObject({ failed: true })
+  expect(await actions.addresses({}, f.action())).toMatchObject({
+    agents: [{ name: 'scout', description: 'Search' }],
+  })
+  await expect(actions.post({ to: '@lander', text: 'Hi' }, f.action())).rejects.toThrow(
+    'No recipient for @lander',
+  )
+})
+it('logs user inbox items without running and posts answers back to the user', async () => {
+  const f = await fixture()
+  await f.send('user', 'Inbox')
+  expect((await f.log())!.readUpTo).toBe(0)
+  expect((await f.log())!.messages).toMatchObject([{ to: 'user', text: 'Inbox' }])
+  expect(f.observed.filter((t) => t.includes('Message from'))).toHaveLength(0)
+  await actions.post({ to: `#${f.recipient.id}`, text: 'From user', re: 1 }, f.action())
+  await until(async () => (await f.log())!.messages.length === 3)
+  expect((await f.log())!.messages[2]).toMatchObject({ to: 'user', from: f.recipient.id, re: 2 })
+  expect(await replies(f)).toHaveLength(0)
+})
+it('refuses self, unknown ids, tally roots and unknown names with valid names', async () => {
+  const f = await fixture()
+  await expect(actions.post({ to: '999', text: 'x' }, f.action())).rejects.toThrow(
+    'Unknown conversation',
+  )
+  await expect(actions.post({ to: '@missing', text: 'x' }, f.action())).rejects.toThrow('@scout')
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.push(f.recipient.id)
+    ;(await tx.doc(Tally, f.recipient.id)).since = 2
+  }, context)
+  await expect(actions.post({ to: String(f.recipient.id), text: 'x' }, f.action())).rejects.toThrow(
+    'use note',
+  )
+  await f.send('#1')
+  const view = await f.opened.root.viewState(context)
+  expect(JSON.stringify(view.value.entries)).toContain('cannot message yourself')
+  view.dispose()
+})
+it('bounds the log, advances read monotonically, and declares user-only actions', async () => {
+  const f = await fixture()
+  await f.opened.harness.commit(async (tx) => {
+    for (let i = 0; i < 310; i++)
+      await f.service().record(tx, { from: 1, to: 'user', text: String(i), kind: 'landing' })
+  }, context)
+  expect((await f.log())!.messages).toHaveLength(300)
+  expect((await f.log())!.messages[0].id).toBe(11)
+  await actions.read({ upTo: 200 }, f.action())
+  await actions.read({ upTo: 100 }, f.action())
+  expect((await f.log())!.readUpTo).toBe(200)
+  expect(userActions).toEqual(['post', 'read'])
+})
+it('queues a busy recipient as follow-up, or steers its current run', async () => {
+  for (const steer of [false, true]) {
+    const f = await fixture()
+    await f.recipient.submit({ type: 'input', content: 'HOLD' }, context)
+    await until(f.holding)
+    await f.send(String(f.recipient.id), 'Busy message', { steer })
+    const page = await f.host.scanSubmissions(
+      { conversationId: f.recipient.id },
+      100,
+      undefined,
+      context,
+    )
+    expect(page.items.find((s) => s.requestId === 'board:1')).toMatchObject({ status: 'queued' })
+    expect(f.observed.some((t) => t.startsWith('Message from') && t.includes('Busy message'))).toBe(
+      false,
+    )
+    f.hold.release()
+    await until(async () => (await replies(f)).length === 1)
+    expect(f.observed.some((t) => t.startsWith('Message from') && t.includes('Busy message'))).toBe(
+      true,
+    )
+    const delivered = f.observed.findIndex(
+      (t) => t.startsWith('Message from') && t.includes('Busy message'),
+    )
+    const released = f.observed.indexOf('released')
+    expect(steer ? released === -1 : released < delivered).toBe(true)
+  }
+})
+it('rejects post and read through codemode at the installed action boundary', async () => {
+  const home = await temp('ultimate-board-actions-')
+  homes.push(home)
+  await mkdir(join(home, 'extensions/board'), { recursive: true })
+  await mkdir(join(home, 'extensions/codemode'), { recursive: true })
+  await mkdir(join(home, 'web'))
+  await linkDependencies(home)
+  await writeFile(
+    join(home, 'extensions/board/server.ts'),
+    `export { default, actions, docs, userActions } from ${JSON.stringify(resolve('extensions/board/server.ts'))}`,
+  )
+  await writeFile(
+    join(home, 'extensions/codemode/server.ts'),
+    `export { default, docs } from ${JSON.stringify(resolve('extensions/codemode/server.ts'))}`,
+  )
+  await writeFile(
+    join(home, 'vite.config.ts'),
+    "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', optimizeDeps: { noDiscovery: true } })",
+  )
+  await writeFile(join(home, 'web/index.html'), '<html>Board actions</html>')
+  const server = await fauxServer({
+    home: join(home, 'state'),
+    ultimateRoot: home,
+    projectRoot: home,
+    userHome: home,
+    faux: true,
+    port: 0,
+  })
+  try {
+    for (const action of ['post', 'read']) {
+      server.host.faux!.setResponses([
+        fauxAssistantMessage(
+          [
+            fauxToolCall('codemode', {
+              code: `return await ultimate.action('board', '${action}', ${action === 'post' ? "{to:'user',text:'fake'}" : '{upTo:1}'});`,
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('Complete'),
+      ])
+      await (
+        await server.root.submit({ type: 'input', content: 'Try action' }, context)
+      ).wait(context)
+      const view = await server.root.viewState(context)
+      try {
+        const result = view.value.entries.findLast((e) => e.kind === 'pi.tool-result')!
+        expect(JSON.stringify(result)).toContain(`board/${action} is a user-only action`)
+      } finally {
+        view.dispose()
+      }
+    }
+  } finally {
+    await server.vite.watcher.close()
+    await server.close()
+  }
+})
+it('recovers once after input placement, before the recipient settles', async () => {
+  const f = await fixture()
+  await f.send(String(f.recipient.id), 'HOLD')
+  await until(f.holding)
+  await f.opened.close()
+  await f.open()
+  f.hold.release()
+  await until(async () => (await replies(f)).length === 1)
+  expect((await f.log())!.messages.filter((m) => m.re === 1)).toHaveLength(1)
+})
+it('recovers once after the answer is recorded but before reply submission', async () => {
+  const g = gate()
+  const f = await fixture(g)
+  await f.send(String(f.recipient.id))
+  await until(async () => (await f.log())!.messages.length === 2)
+  expect(await replies(f)).toHaveLength(0)
+  await f.opened.close()
+  await f.open()
+  g.release()
+  await until(async () => (await replies(f)).length === 1)
+  expect((await f.log())!.messages.filter((m) => m.re === 1)).toHaveLength(1)
+})
