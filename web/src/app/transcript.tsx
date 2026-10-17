@@ -675,6 +675,8 @@ function AssistantView({
   busy: boolean
   streaming?: boolean
 }) {
+  const extensions = useExtensions()
+  const labels = messageItems(extensions, 'answerLabels')
   const last = message.content.length - 1
   const final =
     !streaming &&
@@ -694,8 +696,16 @@ function AssistantView({
       from="assistant"
     >
       {final && (
-        <div className="flex items-center gap-1.5 font-mono text-[11px] text-success">
-          <CheckIcon aria-hidden="true" className="size-3.5" /> Final answer
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-success">
+          <span className="inline-flex items-center gap-1.5">
+            <CheckIcon aria-hidden="true" className="size-3.5" /> Final answer
+          </span>
+          {entry &&
+            labels.map(({ key, extension, version, component: Label }) => (
+              <ExtensionBoundary extension={extension} fallback={null} key={key} version={version}>
+                <Label entry={entry} />
+              </ExtensionBoundary>
+            ))}
         </div>
       )}
       {message.content.map((block, index) => {

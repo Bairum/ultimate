@@ -205,7 +205,14 @@ export function BoardCard({
 }
 
 export function BoardInput({ entry }: { entry: EntryRecord }) {
-  const origin = entry.data as { id: number; from: number | 'user'; text: string; failed?: boolean }
+  const origin = entry.data as {
+    id: number
+    from: number | 'user'
+    text: string
+    reply: boolean
+    delivery?: 'steer' | 'followUp' | 'note'
+    failed?: boolean
+  }
   const receiver = useConversation((conversation) => conversation.id)
   const { switchConversation } = useUltimate()
   const reply = entry.kind === 'board.reply'
@@ -217,6 +224,13 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
           <Address id={origin.from} />
         </span>
         <span>{reply ? 'Reply' : 'Message'}</span>
+        {!reply && (
+          <span>
+            {origin.reply ? 'expects reply' : 'one-way'}
+            {origin.delivery &&
+              ` · ${{ steer: 'steered', followUp: 'follow-up', note: 'note' }[origin.delivery]}`}
+          </span>
+        )}
         {origin.failed && <span className="text-destructive">failed</span>}
         {typeof origin.from === 'number' && (
           <button

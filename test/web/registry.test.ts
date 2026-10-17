@@ -316,6 +316,29 @@ describe('web extension registry', () => {
     expect(conversationStarter(registry.getSnapshot())).toBe(last)
   })
 
+  it('lists answer labels independently in discovery order and rejects malformed labels', async () => {
+    const First = component('first')
+    const Second = component('second')
+    const registry = createRegistry()
+    await registry.setLoaders({
+      [path('a')]: async () => module({ answerLabels: [First, Second] }),
+      [path('b')]: async () => module({ answerLabels: [Second] }),
+    })
+    expect(messageItems(registry.getSnapshot(), 'answerLabels')).toEqual([
+      { key: 'a:0', extension: 'a', version: 1, component: First },
+      { key: 'a:1', extension: 'a', version: 1, component: Second },
+      { key: 'b:0', extension: 'b', version: 1, component: Second },
+    ])
+    expect(messageItems(registry.getSnapshot(), 'messageDetails')).toEqual([])
+    for (const answerLabels of [First, [42]]) {
+      registry.replace('b', { default: { answerLabels } })
+      expect(registry.getSnapshot()[1]?.error).toBe(
+        'answerLabels must be an array of answer label components',
+      )
+      expect(messageItems(registry.getSnapshot(), 'answerLabels')).toHaveLength(3)
+    }
+  })
+
   it('lists message actions in discovery and contribution order, validating their shape', async () => {
     const First = component('first')
     const Second = component('second')
