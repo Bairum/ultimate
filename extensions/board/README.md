@@ -35,6 +35,7 @@ It chooses the explicit root, otherwise the caller's tree root, otherwise the on
 produce an error listing the available ids. It forks the root's tally tip through lineage, attributes the tally prompt
 to the caller, and sends the first input as a board message with replies enabled. It returns the branch id and message id.
 The branch's answer therefore wakes its caller as a normal `board.reply`.
+Before sending its first input, the tool rereads the `coordinator` definition (built-in, user, then trusted project override), applies only its instructions, and marks `ultimate.metadata.label = 'coordinator'`. The branch keeps its inherited model and tools. Coordinators report decisions to @ultimate and send it one-way landing or failure updates with the sha and divergence.
 The tool gives lineage its task and call ids for a task-scoped receipt, recorded atomically with the fork, so replay cannot
 create another branch even before the branch-id memo is saved. Pi retires that receipt when the originating task completes.
 It deduplicates message admission with the same task-scoped `board.sent-calls` receipt as `message`, indexed by call id
@@ -104,6 +105,8 @@ It appends a delivered, one-way log item in the caller's transaction, without su
 Other extensions use this for events such as landings. Import the service type from `server.ts`.
 
 ## UI
+
+The participants rail above the feed lists you (with unread count), standing agents, the existing lander, and unconcluded coordinators. Other top-level conversations with board messages appear too. It scrolls horizontally on phones. Status dots show working (busy), needs input (a current overview assessment), awaiting reply (an open reply-enabled outgoing message), or idle, alongside the latest conversation or board activity time. Click a participant to filter both directions; click again or Clear to restore the feed. Open / #id opens its conversation, and Mention addresses the composer.
 
 The Board surface shows all traffic oldest first, or just your Inbox. Opening Inbox marks its messages read;
 a quiet `inbox N` status-line button appears on every surface while messages are unread. Cards show addresses,

@@ -7,6 +7,7 @@ import {
 import { Type } from '@earendil-works/pi-ai'
 import {
   AssistantEntry,
+  configure,
   InboxDoc,
   defineDoc,
   defineExtension,
@@ -23,6 +24,7 @@ import { isolatable } from '../workspaces/git.ts'
 
 import type { SubagentsService } from '../subagents/server.ts'
 import { Standing } from '../subagents/server.ts'
+import { discoverAgents } from '../subagents/agents.ts'
 import { Roots } from '../lineage/server.ts'
 import type { LineageService } from '../lineage/server.ts'
 export type BoardMessage = {
@@ -396,6 +398,14 @@ export default function board(host: ExtensionHost) {
               throw new Error(
                 `Choose a root. Roots: ${roots.map((candidate) => `#${candidate}`).join(', ') || '(none)'}`,
               )
+            const { definitions } = await discoverAgents(
+              host.ultimateRoot,
+              host.projectRoot,
+              host.userHome,
+              host.modelRuntime,
+            )
+            const coordinator = definitions.find((definition) => definition.name === 'coordinator')
+            if (!coordinator) throw new Error('Missing coordinator definition')
             const branch = await lineage.branch(
               {
                 from: root,
@@ -407,6 +417,11 @@ export default function board(host: ExtensionHost) {
               },
               ctx,
             )
+            // The fork has no input yet. Only instructions change: its model and tools stay inherited.
+            await host.harness().commit(async (tx) => {
+              await configure(tx, branch.id, { instructions: coordinator.instructions })
+              ;(await tx.doc(host.metadata, branch.id)).label = 'coordinator'
+            }, ctx)
             id = await api.memo('branch-id', branch.id, ctx)
           }
           const message = await send(

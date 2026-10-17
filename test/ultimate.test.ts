@@ -156,6 +156,7 @@ it('starts a lineage branch with a board input and caller attribution, returns i
   ).toMatchObject([{ data: { from: ultimate, text: 'Explore the task', reply: true } }])
   expect(await f.server.harness.snapshot(Metadata, branch, context)).toMatchObject({
     title: 'Explore the task',
+    label: 'coordinator',
   })
   expect(
     (await entries(f.server, ROOT_CONVERSATION_ID)).some((entry) =>
@@ -194,6 +195,14 @@ it('starts a lineage branch with a board input and caller attribution, returns i
   // A branch caller's tree wins over an ambiguous project root list.
   const branchConversation = (await f.server.harness.conversation(branch, context))!
   const configured = await branchConversation.agent(context)
+  const coordinator = parseDefinition(
+    await readFile(resolve('agents/coordinator.md'), 'utf8'),
+    'coordinator',
+  )
+  expect(coordinator.resident).not.toBe(true)
+  expect(coordinator.tools).toBeUndefined()
+  expect(coordinator.model).toBeUndefined()
+  expect(configured.instructions).toBe(coordinator.instructions)
   expect(configured.tools.map((tool) => tool.name)).not.toContain('branch')
   const agentBranch = (await f.server.root.agent(context)).deferred.find(
     (tool) => tool.name === 'branch',
@@ -202,12 +211,25 @@ it('starts a lineage branch with a board input and caller attribution, returns i
     (tx) => configure(tx, branch, { modelTools: { add: [agentBranch] } }),
     context,
   )
+  await writeFile(
+    join(f.home, '.ultimate/agents/coordinator.md'),
+    '---\nname: coordinator\ndescription: Custom coordinator\n---\nUse the project procedure.',
+  )
   await ask(f.server, branch, 'BRANCH ' + JSON.stringify({ prompt: 'Same tree', isolated: false }))
   await until(async () => (await log(f.server)).some((m) => m.text === 'Same tree'))
   const sameTree = (await log(f.server)).find((m) => m.text === 'Same tree')!
   expect(
     await f.server.harness.snapshot(Branch, sameTree.to as ConversationId, context),
   ).toMatchObject({ branch: { from: 1 } })
+  const overridden = await (await f.server.harness.conversation(
+    sameTree.to as ConversationId,
+    context,
+  ))!.agent(context)
+  expect(overridden.instructions).toBe('Use the project procedure.')
+  expect(overridden.model).toEqual(configured.model)
+  expect(overridden.tools.map((tool) => tool.name)).toEqual(
+    configured.tools.map((tool) => tool.name),
+  )
   await f.server.harness.commit(async (tx) => {
     ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = []
   }, context)

@@ -1,5 +1,5 @@
 import { temp, removeTemp, until, fauxServer, linkDependencies } from './helpers.ts'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -59,6 +59,11 @@ async function fixture(
 ) {
   const home = await temp('ultimate-board-')
   homes.push(home)
+  await mkdir(join(home, 'agents'), { recursive: true })
+  await writeFile(
+    join(home, 'agents/coordinator.md'),
+    await readFile(resolve('agents/coordinator.md'), 'utf8'),
+  )
   const prepared = await prepareHarness({ home, ultimateRoot: home, userHome: home, faux: true })
   let opened: OpenHost
   let service!: BoardService

@@ -16,12 +16,108 @@ export type BoardMessage = {
 export type Addresses = {
   agents: { name: string; description: string; id?: number }[]
   lander?: number
+  concluded?: number[]
   conversations: { id: number; title?: string }[]
 }
 export type BoardData = { messages: BoardMessage[]; next: number; readUpTo: number }
 export const emptyBoard: BoardData = { messages: [], next: 1, readUpTo: 0 }
 export const unreadCount = (board: BoardData) =>
   board.messages.filter((message) => message.to === 'user' && message.id > board.readUpTo).length
+
+export type Participant = {
+  key: string
+  id?: number | 'user'
+  name: string
+  address?: string
+  status: 'working' | 'waiting' | 'needs input' | 'idle'
+  at?: number
+}
+type Conversation = {
+  id: number
+  title?: string
+  label?: string
+  parentConversationId?: number
+  busy: boolean
+  inputAt?: number
+  answerAt?: number
+}
+export function participantMessages(messages: BoardMessage[], id: number | 'user') {
+  return messages.filter((message) => message.from === id || message.to === id)
+}
+export function participantStatus(
+  id: number | 'user' | undefined,
+  busy: boolean,
+  messages: BoardMessage[],
+  needsInput = false,
+): Participant['status'] {
+  if (busy) return 'working'
+  if (needsInput) return 'needs input'
+  return id !== undefined &&
+    messages.some(
+      (message) =>
+        message.from === id &&
+        message.reply &&
+        (message.state === 'sent' || message.state === 'delivered'),
+    )
+    ? 'waiting'
+    : 'idle'
+}
+export function participants(
+  board: BoardData,
+  addresses: Addresses,
+  standing: Record<string, number>,
+  conversations: readonly Conversation[],
+  needsInput: ReadonlySet<number> = new Set(),
+): Participant[] {
+  const result: Participant[] = []
+  const seen = new Set<number | 'user'>()
+  function add(key: string, name: string, id?: number | 'user', address?: string) {
+    if (id !== undefined && seen.has(id)) return
+    if (id !== undefined) seen.add(id)
+    const conversation = conversations.find((item) => item.id === id)
+    const times = [
+      conversation?.inputAt,
+      conversation?.answerAt,
+      ...board.messages
+        .filter((message) => message.from === id || message.to === id)
+        .map((message) => message.at),
+    ].filter((at): at is number => at !== undefined)
+    result.push({
+      key,
+      id,
+      name,
+      address,
+      status: participantStatus(
+        id,
+        conversation?.busy ?? false,
+        board.messages,
+        typeof id === 'number' && needsInput.has(id),
+      ),
+      at: times.length ? Math.max(...times) : undefined,
+    })
+  }
+  add('user', 'you', 'user')
+  for (const agent of addresses.agents)
+    add(`@${agent.name}`, `@${agent.name}`, standing[agent.name] ?? agent.id, `@${agent.name}`)
+  if (addresses.lander !== undefined) add('@lander', '@lander', addresses.lander, '@lander')
+  for (const conversation of conversations) {
+    if (conversation.parentConversationId || addresses.concluded?.includes(conversation.id))
+      continue
+    if (
+      conversation.label === 'coordinator' ||
+      board.messages.some(
+        (message) => message.from === conversation.id || message.to === conversation.id,
+      )
+    )
+      add(
+        `#${conversation.id}`,
+        conversation.title ?? 'Coordinator',
+        conversation.id,
+        `#${conversation.id}`,
+      )
+  }
+  return result
+}
 
 export function relativeTime(at: number, now: number) {
   const minutes = Math.max(0, Math.floor((now - at) / 60000))
