@@ -52,6 +52,44 @@ type Conversation = {
 export function participantMessages(messages: BoardMessage[], id: number | 'user') {
   return messages.filter((message) => message.from === id || message.to === id)
 }
+
+/** A reply-enabled message still waiting for its answer. */
+export const isOpen = (message: BoardMessage) =>
+  message.reply && (message.state === 'sent' || message.state === 'delivered')
+
+/** Where a message sits in a chat seen from `perspective`: its own messages right, received ones left, others aside. */
+export function side(message: BoardMessage, perspective: number | 'user') {
+  return message.from === perspective ? 'right' : message.to === perspective ? 'left' : 'aside'
+}
+
+/** Who waits on whom for one message; `yours` is an open question to the user. */
+export function messageStatus(message: BoardMessage) {
+  if (message.state === 'failed') return 'failed'
+  if (message.state === 'answered') return 'answered'
+  if (isOpen(message)) return message.to === 'user' ? 'yours' : 'waiting'
+  if (message.state === 'sent') return 'sending'
+  if (message.kind === 'landing') return 'landing'
+  return message.re === undefined ? 'one-way' : 'reply'
+}
+
+/** Open reply-enabled messages around `id`: sent by it (it waits) and sent to it (it owes), and those with the user. */
+export function waits(messages: BoardMessage[], id: number | 'user') {
+  const open = messages.filter(isOpen)
+  return {
+    waiting: open.filter((message) => message.from === id).length,
+    owes: open.filter((message) => message.to === id).length,
+    onUser: open.filter((message) => message.from === id && message.to === 'user').length,
+    onIt: open.filter((message) => message.from === 'user' && message.to === id).length,
+  }
+}
+
+/** A stable palette slot for a sender other than the user. */
+export function accentIndex(id: number, size: number) {
+  let hash = 0
+  for (const char of `#${id}`) hash = (Math.imul(hash, 31) + char.codePointAt(0)!) | 0
+  return (hash >>> 0) % size
+}
+
 export function participantStatus(
   id: number | 'user' | undefined,
   busy: boolean,
@@ -62,13 +100,7 @@ export function participantStatus(
   if (busy) return 'working'
   if (delegating) return 'delegating'
   if (needsInput) return 'needs input'
-  return id !== undefined &&
-    messages.some(
-      (message) =>
-        message.from === id &&
-        message.reply &&
-        (message.state === 'sent' || message.state === 'delivered'),
-    )
+  return id !== undefined && messages.some((message) => message.from === id && isOpen(message))
     ? 'waiting'
     : 'idle'
 }

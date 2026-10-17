@@ -1,6 +1,7 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import {
   ArrowRightIcon,
+  CheckIcon,
   GitBranchIcon,
   GitMergeIcon,
   InboxIcon,
@@ -11,12 +12,12 @@ import {
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
-import { events, useConversation, useConversations, useDocOf, useNow, useUltimate } from '@/sdk'
+import { cn, events, useConversation, useConversations, useDocOf, useNow, useUltimate } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import { ConversationRef } from '../conversations/feature.tsx'
 import { openAgentSource } from '../subagents/messages.tsx'
 import { useWorkspaceIndex } from '../workspaces/data.tsx'
-import { relativeTime } from './data.tsx'
+import { accentIndex, messageStatus, relativeTime, side } from './data.tsx'
 import type { BoardData, BoardMessage, Participant } from './data.tsx'
 
 export function BoardRoster({
@@ -138,12 +139,92 @@ function Body({ text, compact = false }: { text: string; compact?: boolean }) {
   )
 }
 
+/** Quiet sender accents: stripe, a faint fill and the name colour. The user always has the brand colour. */
+const accents = [
+  {
+    left: 'border-l-sky-500/60',
+    right: 'border-r-sky-500/60',
+    fill: 'bg-sky-500/5',
+    name: 'text-sky-700 dark:text-sky-300',
+  },
+  {
+    left: 'border-l-emerald-500/60',
+    right: 'border-r-emerald-500/60',
+    fill: 'bg-emerald-500/5',
+    name: 'text-emerald-700 dark:text-emerald-300',
+  },
+  {
+    left: 'border-l-teal-500/60',
+    right: 'border-r-teal-500/60',
+    fill: 'bg-teal-500/5',
+    name: 'text-teal-700 dark:text-teal-300',
+  },
+  {
+    left: 'border-l-rose-500/60',
+    right: 'border-r-rose-500/60',
+    fill: 'bg-rose-500/5',
+    name: 'text-rose-700 dark:text-rose-300',
+  },
+  {
+    left: 'border-l-orange-500/60',
+    right: 'border-r-orange-500/60',
+    fill: 'bg-orange-500/5',
+    name: 'text-orange-700 dark:text-orange-300',
+  },
+  {
+    left: 'border-l-lime-500/60',
+    right: 'border-r-lime-500/60',
+    fill: 'bg-lime-500/5',
+    name: 'text-lime-700 dark:text-lime-300',
+  },
+]
+const userAccent = {
+  left: 'border-l-brand/60',
+  right: 'border-r-brand/60',
+  fill: 'bg-brand/5',
+  name: 'text-brand',
+}
+const accentOf = (id: number | 'user') =>
+  id === 'user' ? userAccent : accents[accentIndex(id, accents.length)]
+
+/** Who waits on whom, in words: an open question to the user stands out, other open requests stay amber-muted. */
+function Status({ message, perspective }: { message: BoardMessage; perspective: number | 'user' }) {
+  const status = messageStatus(message)
+  if (status === 'yours')
+    return (
+      <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-700 dark:text-amber-300">
+        awaiting your reply
+      </span>
+    )
+  if (status === 'waiting')
+    return (
+      <span className="flex min-w-0 flex-wrap items-center gap-1 text-amber-700/80 dark:text-amber-300/70">
+        {message.from !== perspective && <Address id={message.from} />}
+        waiting on <Address id={message.to} />
+      </span>
+    )
+  if (status === 'answered')
+    return (
+      <span className="flex items-center gap-1">
+        <CheckIcon className="size-3" />
+        answered
+      </span>
+    )
+  return <span className={status === 'failed' ? 'text-destructive' : ''}>{status}</span>
+}
+
+/**
+ * One board message as a chat bubble seen from `perspective`: its own messages on the right, received ones on the
+ * left, and traffic between others quieter on the left with both sides named.
+ */
 export function BoardCard({
   message,
+  perspective,
   quote,
   onReply,
 }: {
   message: BoardMessage
+  perspective: number | 'user'
   quote?: string
   onReply: () => void
 }) {
@@ -152,24 +233,34 @@ export function BoardCard({
   const isAnswer = message.re !== undefined && message.answer !== undefined
   const destination = isAnswer ? message.from : message.to === 'user' ? message.from : message.to
   const entry = isAnswer || message.to === 'user' ? message.answer : message.entry
+  const position = side(message, perspective)
+  const accent = accentOf(message.from)
   return (
     <section
       data-board-message={message.id}
-      className="min-w-0 rounded-md border border-border bg-muted/20"
+      data-side={position}
+      className={cn(
+        'min-w-0 rounded-md border max-sm:w-full sm:w-fit sm:min-w-[20rem]',
+        position === 'right'
+          ? `self-end border-r-2 border-border sm:max-w-[85%] ${accent.right} ${accent.fill}`
+          : position === 'left'
+            ? `self-start border-l-2 border-border sm:max-w-[85%] ${accent.left} ${accent.fill}`
+            : `self-start border-l-2 border-border/60 sm:max-w-[78%] ${accent.left}`,
+      )}
     >
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-        {message.kind === 'landing' ? (
-          <GitMergeIcon className="size-3.5 text-brand" />
-        ) : (
-          <MailIcon className="size-3.5 text-brand" />
-        )}
-        <span className="text-foreground">
+        {message.kind === 'landing' && <GitMergeIcon className={cn('size-3.5', accent.name)} />}
+        <span className={cn('flex min-w-0 font-semibold', accent.name)}>
           <Address id={message.from} />
         </span>
-        <ArrowRightIcon className="size-3 shrink-0" />
-        <span className="text-foreground">
-          <Address id={message.to} />
-        </span>
+        {message.to !== perspective && (
+          <>
+            <ArrowRightIcon className="size-3 shrink-0" />
+            <span className="flex min-w-0 text-foreground">
+              <Address id={message.to} />
+            </span>
+          </>
+        )}
         <time
           className="ml-auto"
           dateTime={new Date(message.at).toISOString()}
@@ -188,9 +279,7 @@ export function BoardCard({
       )}
       <Body text={message.text} compact={message.kind === 'landing'} />
       <footer className="flex flex-wrap items-center gap-3 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
-        <span className={message.state === 'failed' ? 'text-destructive' : ''}>
-          {message.state === 'sent' ? 'sending' : message.state}
-        </span>
+        <Status message={message} perspective={perspective} />
         {message.error && (
           <span className="min-w-0 break-words text-destructive">{message.error}</span>
         )}
