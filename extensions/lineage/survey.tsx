@@ -56,7 +56,7 @@ export function Familiarize({ id, dock }: { id: number; dock?: boolean }) {
             event.preventDefault()
             void begin()
           }}
-          placeholder="What will you work on? Optional: the reading leans toward it."
+          placeholder="Optional instructions: what this tree is for and how to read, e.g. focus on the API, also look through past conversations…"
           value={focus}
         />
         <div className="mt-2.5 flex items-center gap-3">
@@ -115,7 +115,7 @@ export function Survey({ entry, text }: { entry: EntryRecord; text: string }) {
         </span>
         <span className="text-xs text-muted-foreground">
           {focus
-            ? `Toward: ${focus}`
+            ? `Your instructions: ${focus}`
             : 'A general reading: what it is, how to run and test it, its layout and conventions.'}
         </span>
       </CollapsibleTrigger>

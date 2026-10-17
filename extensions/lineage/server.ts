@@ -1054,11 +1054,13 @@ Find out, from the files rather than by guessing:
 Skim broadly and open only what explains the structure. End with the orientation itself: those findings with exact paths and commands, and anything surprising.`
 
 function surveyText(focus: string | undefined) {
-  return focus ? `${SURVEY}\n\nThis tree is for: ${focus}\nWeigh your reading toward it.` : SURVEY
+  return focus
+    ? `${SURVEY}\n\nThe user's instructions for this reading come first, before the list above:\n${focus}`
+    : SURVEY
 }
 
 const SURVEY_FOCUS =
-  'This is a reading of the project that starts the tally every branch of this tree begins from. Keep what someone starting work here needs: what the project is, how to run, check and test it, its architecture with exact paths, its conventions, its current state, and what the tree is for. Drop how the reading went.'
+  'This is a reading of the project that starts the tally every branch of this tree begins from. Keep what someone starting work here needs: what the project is, how to run, check and test it, its architecture with exact paths, its conventions and its current state. When the user gave instructions for the reading, they come first: keep what they asked for in full and lead with it. Drop how the reading went.'
 
 const PROPOSE = 'propose_branch'
 /** At most this long, a side chat's note. */

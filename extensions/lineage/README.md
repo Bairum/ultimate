@@ -17,8 +17,8 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
   **Survey**: an empty root (a fresh project's conversation 1, a new root, an empty conversation made a root) has
   nothing to branch from, and `branch` refuses it. Action `survey` `{ root, focus? }` → `{ id }` sets
   `lineage.tally.surveying` and starts the background `lineage.survey` task: it submits the reading prompt (what the
-  project is, how to run, check and test it, its architecture, conventions and current state; read-only; weighted
-  toward the focus) as a `lineage.survey` input, waits until the root is idle (the user can steer the reading), then
+  project is, how to run, check and test it, its architecture, conventions and current state; read-only; following the
+  focus, the user's instructions, first) as a `lineage.survey` input, waits until the root is idle (the user can steer the reading), then
   converts the root as `root` does, distilling with a reading focus. Branching is refused while it reads or converts.
   Typing in a tally's composer opens a side chat with it (↵) or starts a branch from its tip (⌥↵); the server refuses
   inputs to tallies.

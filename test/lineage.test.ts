@@ -1138,7 +1138,9 @@ it('starts a new root that gets familiar with the project, then becomes the tall
   expect(input).toMatchObject({ kind: 'lineage.survey', data: { focus: 'A second line of work' } })
   const survey = textOf(input.model?.[0]?.content)
   expect(survey).toMatch(/^Make yourself familiar with this project\./)
-  expect(survey).toContain('This tree is for: A second line of work')
+  expect(survey).toContain(
+    "The user's instructions for this reading come first, before the list above:\nA second line of work",
+  )
   expect(said(requests.at(-1)!)).toEqual([['user', survey]])
   expect(condensed[0]).toMatch(/^This is a reading of the project/)
   expect((await server.harness.snapshot(Tally, root, context))?.converting).toBe(true)
@@ -1195,7 +1197,9 @@ it('refuses to branch from an empty root until it got familiar with the project'
       (await server.harness.snapshot(Tally, server.root.id, context))?.since !== undefined,
   )
   // Without a focus, the survey is the plain reading.
-  expect(said(requests[0])).toEqual([['user', expect.not.stringContaining('This tree is for')]])
+  expect(said(requests[0])).toEqual([
+    ['user', expect.not.stringContaining("The user's instructions")],
+  ])
   expect(
     (await post(server, '/api/extensions/lineage/actions/survey', { args: { root: 1 } })).data
       .error,
