@@ -1,13 +1,37 @@
-import { ReplicaStore, proxyRequest } from './replica.ts'
+import type {
+  DurableObjectNamespace,
+  DurableObjectState,
+  Fetcher,
+  WebSocket as MachineSocket,
+  WebSocketPair as MachineSocketPair,
+} from '@cloudflare/workers-types'
+import { ReplicaStore, proxyRequest, admitsRequest } from './replica.ts'
+
 import type { Sql } from './replica.ts'
 import type { MachineMessage } from './protocol.ts'
 import type { ConversationSummary } from '../shared/protocol.ts'
+
+// Workers provides this constructor; Node-side request tests do not use WebSocket upgrades.
+declare const WebSocketPair: typeof MachineSocketPair
 
 interface Env {
   REPLICA: DurableObjectNamespace
   ASSETS: Fetcher
   MACHINE_ORIGIN: string
   SYNC_TOKEN: string
+}
+
+// Drain rejected bodies without retaining them before returning across the Worker/DO boundary.
+async function discardBody(request: Request) {
+  if (!request.body) return
+  const reader = request.body.getReader()
+  try {
+    while (!(await reader.read()).done) {
+      // Discard each chunk; the forwarding stream must finish before the response is sent.
+    }
+  } finally {
+    reader.releaseLock()
+  }
 }
 
 export default {
@@ -42,7 +66,7 @@ export class Replica {
   refresh() {
     for (const stream of this.streams) stream.send('view', this.store.view(stream.id))
   }
-  webSocketMessage(socket: WebSocket, raw: string | ArrayBuffer) {
+  webSocketMessage(socket: MachineSocket, raw: string | ArrayBuffer) {
     if (!this.sockets().includes(socket)) return
     const message = JSON.parse(
       typeof raw === 'string' ? raw : new TextDecoder().decode(raw),
@@ -50,10 +74,10 @@ export class Replica {
     for (const reply of this.store.receive(message)) socket.send(JSON.stringify(reply))
     if (message.type === 'delivered') this.refresh()
   }
-  webSocketClose(socket: WebSocket) {
+  webSocketClose(socket: MachineSocket) {
     socket.close()
   }
-  webSocketError(socket: WebSocket) {
+  webSocketError(socket: MachineSocket) {
     socket.close(1011, 'Sync failed')
   }
   async fetch(request: Request): Promise<Response> {
@@ -70,13 +94,25 @@ export class Replica {
       const [client, server] = Object.values(new WebSocketPair())
       this.ctx.acceptWebSocket(server)
       for (const stream of this.streams) stream.close()
-      return new Response(null, { status: 101, webSocket: client })
+      const upgrade = { status: 101, webSocket: client }
+      return new Response(null, upgrade)
+    }
+    if (!admitsRequest(request)) {
+      await discardBody(request)
+      return Response.json({ error: 'Forbidden' }, { status: 403 })
     }
     if (this.sockets().length) {
       try {
         return await fetch(proxyRequest(request.clone(), this.env.MACHINE_ORIGIN))
       } catch {
-        // A connected sync socket does not guarantee the HTTP origin is reachable; serve the last replica instead.
+        // A lost response may follow a committed write. Only reads can safely fall back to the replica.
+        if (request.method !== 'GET') {
+          await discardBody(request)
+          return Response.json(
+            { error: 'The machine did not answer; check before retrying' },
+            { status: 502 },
+          )
+        }
       }
     }
     if (request.method === 'GET' && url.pathname === '/api/events') return this.events(request, url)
@@ -124,7 +160,7 @@ export class Replica {
     }
     // Drain unsupported request bodies before replying across the Worker/DO boundary. Cancelling leaves
     // Wrangler's forwarding stream reading after the response, which can turn an expected 503 into a 500.
-    if (request.body) await request.arrayBuffer()
+    await discardBody(request)
     return Response.json({ error: 'The machine is offline', offline: true }, { status: 503 })
   }
   events(request: Request, url: URL) {
@@ -137,23 +173,32 @@ export class Replica {
         const send = (name: string, value: unknown) =>
           controller.enqueue(encoder.encode(`event: ${name}\ndata: ${JSON.stringify(value)}\n\n`))
         controller.enqueue(encoder.encode('retry: 500\n\n'))
-        send('system', { ...(this.store.metadata(2) as object | undefined), offline: true })
-        send(
-          'conversations',
-          ((this.store.metadata(1) as ConversationSummary[] | undefined) ?? []).map((summary) => ({
-            ...summary,
-            busy: false,
-          })),
-        )
-        send('view', this.store.view(id))
-        send('ui', { value: this.store.doc(this.store.root(), 'ultimate.ui') ?? {} })
-        send('tasks', { tasks: {} })
-        for (const kind of new Set((url.searchParams.get('docs') ?? '').split(',').filter(Boolean)))
-          send('doc', { kind, value: this.store.doc(id, kind) })
-        send('notice', {
-          level: 'warning',
-          message: 'The machine is offline. This is the last synced state.',
-        })
+        const system = this.store.metadata(2)
+        if (!system) {
+          send('notice', { level: 'warning', message: 'No machine has synced yet' })
+        } else {
+          send('system', { ...system, offline: true })
+          send(
+            'conversations',
+            ((this.store.metadata(1) as ConversationSummary[] | undefined) ?? []).map(
+              (summary) => ({
+                ...summary,
+                busy: false,
+              }),
+            ),
+          )
+          send('view', this.store.view(id))
+          send('ui', { value: this.store.doc(this.store.root(), 'ultimate.ui') ?? {} })
+          send('tasks', { tasks: {} })
+          for (const kind of new Set(
+            (url.searchParams.get('docs') ?? '').split(',').filter(Boolean),
+          ))
+            send('doc', { kind, value: this.store.doc(id, kind) })
+          send('notice', {
+            level: 'warning',
+            message: 'The machine is offline. This is the last synced state.',
+          })
+        }
         const timer = setInterval(
           () => controller.enqueue(encoder.encode(': heartbeat\n\n')),
           15000,

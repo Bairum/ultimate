@@ -21,11 +21,17 @@ export class ReplicaStore {
     )
     sql.exec('CREATE INDEX IF NOT EXISTS entries_conversation ON entries (conversation_id, id)')
     sql.exec(
+      'CREATE INDEX IF NOT EXISTS entry_heads_conversation ON entries (conversation_id, id) WHERE head IS NOT NULL',
+    )
+    sql.exec(
       'CREATE TABLE IF NOT EXISTS docs (id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL, kind TEXT NOT NULL, hash TEXT NOT NULL, value TEXT NOT NULL)',
     )
     sql.exec('CREATE INDEX IF NOT EXISTS docs_conversation_kind ON docs (conversation_id, kind)')
     sql.exec(
-      'CREATE TABLE IF NOT EXISTS outbox (submissionId INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, value TEXT NOT NULL)',
+      'CREATE TABLE IF NOT EXISTS outbox (submissionId INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, conversation_id INTEGER NOT NULL, value TEXT NOT NULL)',
+    )
+    sql.exec(
+      'CREATE INDEX IF NOT EXISTS outbox_conversation ON outbox (conversation_id, submissionId)',
     )
   }
 
@@ -34,11 +40,6 @@ export class ReplicaStore {
       `INSERT INTO ${table} (id, value) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value=excluded.value`,
       id,
       JSON.stringify(value),
-    )
-  }
-  private values<T>(table: string): T[] {
-    return [...this.sql.exec<{ value: string }>(`SELECT value FROM ${table} ORDER BY id`)].map(
-      (row) => JSON.parse(row.value) as T,
     )
   }
   private get(table: string, id: number): unknown {
@@ -85,7 +86,9 @@ export class ReplicaStore {
     }
   }
   outbox(): OutboxItem[] {
-    return this.values<OutboxItem>('outbox')
+    return [
+      ...this.sql.exec<{ value: string }>('SELECT value FROM outbox ORDER BY submissionId'),
+    ].map((row) => JSON.parse(row.value) as OutboxItem)
   }
   enqueue(conversationId: number, text: string, whenBusy?: OutboxItem['whenBusy']) {
     const item: OutboxItem = {
@@ -95,7 +98,12 @@ export class ReplicaStore {
       whenBusy,
       createdAt: Date.now(),
     }
-    this.sql.exec('INSERT INTO outbox (id, value) VALUES (?, ?)', item.id, JSON.stringify(item))
+    this.sql.exec(
+      'INSERT INTO outbox (id, conversation_id, value) VALUES (?, ?, ?)',
+      item.id,
+      conversationId,
+      JSON.stringify(item),
+    )
     const row = [
       ...this.sql.exec<{ submissionId: number }>(
         'SELECT submissionId FROM outbox WHERE id=?',
@@ -199,13 +207,12 @@ export class ReplicaStore {
       docs[doc.kind] = JSON.parse(doc.value) as JsonObject
     const queued = [
       ...this.sql.exec<{ submissionId: number; value: string }>(
-        'SELECT submissionId, value FROM outbox ORDER BY submissionId',
+        'SELECT submissionId, value FROM outbox WHERE conversation_id=? ORDER BY submissionId',
+        id,
       ),
     ].flatMap((row) => {
       const item = JSON.parse(row.value) as OutboxItem
-      return item.conversationId === id
-        ? [{ id: -row.submissionId, mode: item.whenBusy ?? 'followUp', content: item.text }]
-        : []
+      return [{ id: -row.submissionId, mode: item.whenBusy ?? 'followUp', content: item.text }]
     })
     docs['pi.inbox'] = {
       items: [...(Array.isArray(docs['pi.inbox']?.items) ? docs['pi.inbox'].items : []), ...queued],
@@ -228,8 +235,19 @@ export class ReplicaStore {
   }
 }
 
+/** Check the browser's original authority before rewriting headers for the machine's loopback gate. */
+export function admitsRequest(request: Request): boolean {
+  const site = request.headers.get('Sec-Fetch-Site')
+  const origin = request.headers.get('Origin')
+  return (
+    (site === null || site === 'same-origin' || site === 'none') &&
+    (origin === null || origin === new URL(request.url).origin)
+  )
+}
+
 /** Strip edge/browser forwarding metadata before passing the request to Ultimate's loopback admission gate. */
 export function proxyRequest(request: Request, origin: string): Request {
+  if (!admitsRequest(request)) throw new Error('Forbidden')
   const url = new URL(request.url)
   const target = new URL(origin)
   const headers = new Headers(request.headers)

@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Replica } from '../cloud/worker.ts'
 import type { ConversationRecord, EntryRecord } from '@earendil-works/pi-durable'
 import { ReplicaStore, proxyRequest } from '../cloud/replica.ts'
 import type { Sql } from '../cloud/replica.ts'
@@ -8,6 +9,8 @@ import type { MachineMessage, ReplicaDoc } from '../cloud/protocol.ts'
 const databases: DatabaseSync[] = []
 afterEach(() => {
   for (const db of databases.splice(0)) db.close()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 function replica(rowsRead?: (count: number) => void) {
   const db = new DatabaseSync(':memory:')
@@ -40,6 +43,25 @@ function replica(rowsRead?: (count: number) => void) {
   }
   return new ReplicaStore(sql)
 }
+function worker(online = false) {
+  const instance = Object.assign(Object.create(Replica.prototype) as Replica, {
+    store: replica(),
+    streams: new Set(),
+    env: { MACHINE_ORIGIN: 'http://127.0.0.1:4800' },
+  })
+  vi.spyOn(instance, 'sockets').mockReturnValue(
+    online
+      ? [{ send: vi.fn<() => void>() } as unknown as ReturnType<Replica['sockets']>[number]]
+      : [],
+  )
+  return instance
+}
+const submitRequest = (headers: Record<string, string> = {}) =>
+  new Request('https://cloud.example/api/conversations/1/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify({ text: 'prompt' }),
+  })
 const conversation = (id: number, parent?: { conversationId: number; at: number }) =>
   ({ id, ...(parent ? { parent } : {}) }) as ConversationRecord
 const entry = (id: number, conversationId = 1, head?: number) =>
@@ -66,6 +88,72 @@ function batch(
   const message: MachineMessage = { type: 'batch', batch: 1, conversations, entries, docs }
   return store.receive(message)
 }
+
+describe('cloud request admission and fallback', () => {
+  it.each([false, true])(
+    'rejects foreign Origin and cross-site POSTs before %s online forwarding or enqueueing',
+    async (online) => {
+      const instance = worker(online)
+      const forward = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ ok: true }))
+      vi.stubGlobal('fetch', forward)
+      for (const headers of [
+        { 'Sec-Fetch-Site': 'cross-site' },
+        { 'Sec-Fetch-Site': 'same-site' },
+        { Origin: 'https://evil.example' },
+        { Origin: 'null' },
+      ] as Record<string, string>[]) {
+        const response = await instance.fetch(submitRequest(headers))
+        expect(response.status).toBe(403)
+      }
+      expect(forward).not.toHaveBeenCalled()
+      expect(instance.store.outbox()).toEqual([])
+      const allowed = await instance.fetch(
+        submitRequest({ Origin: 'https://cloud.example', 'Sec-Fetch-Site': 'same-origin' }),
+      )
+      expect(allowed.status).toBe(online ? 200 : 202)
+      expect(forward).toHaveBeenCalledTimes(online ? 1 : 0)
+      expect(instance.store.outbox()).toHaveLength(online ? 0 : 1)
+    },
+  )
+  it('allows absent browser headers and Sec-Fetch-Site none, but checks proxy headers before rewriting', () => {
+    for (const headers of [{}, { 'Sec-Fetch-Site': 'none' }] as Record<string, string>[])
+      expect(
+        proxyRequest(submitRequest(headers), 'http://127.0.0.1:4800').headers.get('Host'),
+      ).toBe('127.0.0.1:4800')
+    expect(() =>
+      proxyRequest(submitRequest({ Origin: 'https://evil.example' }), 'http://127.0.0.1:4800'),
+    ).toThrow('Forbidden')
+  })
+  it('never enqueues an ambiguous proxied write, while failed GETs fall back', async () => {
+    const instance = worker(true)
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Response lost after commit')))
+    const response = await instance.fetch(submitRequest())
+    expect(response.status).toBe(502)
+    expect(await response.json()).toEqual({
+      error: 'The machine did not answer; check before retrying',
+    })
+    expect(instance.store.outbox()).toEqual([])
+    const read = await instance.fetch(new Request('https://cloud.example/api/models'))
+    expect(read.status).toBe(200)
+    expect(await read.json()).toEqual({ providers: [], models: [] })
+  })
+  it('publishes only a notice until a machine has synced a valid system', async () => {
+    const instance = worker()
+    const response = await instance.fetch(new Request('https://cloud.example/api/events'))
+    const reader = response.body!.getReader()
+    let events = ''
+    for (let chunk = 0; chunk < 2; chunk++) {
+      const { value } = await reader.read()
+      events += new TextDecoder().decode(value)
+    }
+    await reader.cancel()
+    expect(events).not.toContain('event: system')
+    expect(events).toBe(
+      'retry: 500\n\nevent: notice\ndata: {"level":"warning","message":"No machine has synced yet"}\n\n',
+    )
+    expect(instance.streams.size).toBe(0)
+  })
+})
 
 describe('cloud replica', () => {
   it('applies a batch twice idempotently, returns its ack and cursor hashes, and retires docs', () => {
@@ -205,6 +293,8 @@ describe('cloud replica', () => {
       ],
       [conversation(1), conversation(2)],
     )
+    for (let index = 0; index < 5000; index++) store.enqueue(2, `unrelated ${index}`)
+    store.enqueue(1, 'own queued input')
     rows = 0
     expect(store.view(1)?.entries).toEqual([entry(1), entry(2)])
     expect(rows).toBeLessThan(12)
@@ -232,6 +322,39 @@ describe('cloud replica', () => {
     rows = 0
     expect(store.history(3, 10005).entries).toHaveLength(64)
     expect(rows).toBeLessThan(70)
+
+    batch(
+      store,
+      [entry(10005, 4, 10005), entry(10006, 4)],
+      [],
+      [conversation(4, { conversationId: 2, at: 5002 })],
+    )
+    rows = 0
+    expect(store.view(4)?.entries.map((record) => record.id)).toEqual([10005, 10006])
+    expect(rows).toBeLessThan(10)
+    const plan = [
+      ...store.sql.exec<{ detail: string }>(
+        'EXPLAIN QUERY PLAN SELECT value FROM entries WHERE conversation_id=? AND id<=? AND head IS NOT NULL ORDER BY id DESC LIMIT 1',
+        2,
+        5002,
+      ),
+    ]
+    expect(plan.map((row) => row.detail).join(' ')).toContain('entry_heads_conversation')
+  })
+  it('delivers and displays outbox items in insertion order rather than UUID order', () => {
+    const store = replica()
+    batch(store)
+    vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce('ffffffff-ffff-ffff-ffff-ffffffffffff')
+      .mockReturnValueOnce('88888888-8888-8888-8888-888888888888')
+      .mockReturnValueOnce('00000000-0000-0000-0000-000000000000')
+    for (const text of ['first', 'second', 'third']) store.enqueue(1, text)
+    expect(store.outbox().map((item) => item.text)).toEqual(['first', 'second', 'third'])
+    expect(store.view(1)?.docs['pi.inbox'].items).toEqual([
+      { id: -1, mode: 'followUp', content: 'first' },
+      { id: -2, mode: 'followUp', content: 'second' },
+      { id: -3, mode: 'followUp', content: 'third' },
+    ])
   })
   it('stores the latest metadata', () => {
     const store = replica()
