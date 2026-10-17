@@ -33,6 +33,8 @@ It chooses the explicit root, otherwise the caller's tree root, otherwise the on
 produce an error listing the available ids. It forks the root's tally tip through lineage, attributes the tally prompt
 to the caller, and sends the first input as a board message with replies enabled. It returns the branch id and message id.
 The branch's answer therefore wakes its caller as a normal `board.reply`.
+The tool memoizes the created branch id before sending its first message, reuses that id on replay, and deduplicates
+message admission with the same task-scoped `board.sent` receipt as `message`.
 
 Ultimate's answers to inputs other than `board:` deliveries also go to the user's inbox. This includes answers to
 branch replies and direct questions in its pinned conversation. Committed answers are deduplicated by assistant entry id

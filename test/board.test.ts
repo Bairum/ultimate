@@ -21,7 +21,8 @@ import type { ActionContext } from '../server/actions.ts'
 import { Metadata } from '../server/metadata.ts'
 import board, { Board, actions, userActions } from '../extensions/board/server.ts'
 import type { BoardService } from '../extensions/board/server.ts'
-import { Roots, Tally } from '../extensions/lineage/server.ts'
+import { Branch, Roots, Tally, rootOf, startBranch } from '../extensions/lineage/server.ts'
+import type { BranchInput } from '../extensions/lineage/server.ts'
 import { Standing } from '../extensions/subagents/server.ts'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 
@@ -54,6 +55,7 @@ async function fixture(
   const host = {
     ...prepared,
     metadata: Metadata,
+    events: { emit: () => {} },
     harness: () => opened.harness,
     provide: (_name: string, value: BoardService) => {
       service = value
@@ -65,8 +67,13 @@ async function fixture(
             standing: async () => recipient.id,
           }
         : name === 'workspaces'
-          ? { doc: Workspaces }
-          : undefined,
+          ? { doc: Workspaces, git: async () => '' }
+          : name === 'lineage'
+            ? {
+                rootOf: (id: number, ctx: Context) => rootOf(host, id, ctx),
+                branch: (input: BranchInput, ctx: Context) => startBranch(host, input, ctx),
+              }
+            : undefined,
     onOpen: () => {},
     onClose: () => {},
     conversations: () => [],
@@ -152,6 +159,10 @@ async function fixture(
         ? last.content
         : last.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
     observed.push(text)
+    if (last.role === 'user' && text.startsWith('BRANCH '))
+      return fauxAssistantMessage([fauxToolCall('branch', JSON.parse(text.slice(7)))], {
+        stopReason: 'toolUse',
+      })
     if (last.role === 'user' && text.startsWith('SEND '))
       return fauxAssistantMessage([fauxToolCall('message', JSON.parse(text.slice(5)))], {
         stopReason: 'toolUse',
@@ -428,6 +439,58 @@ it('replays interrupted sends once, both before and after memoizing the message 
       view.dispose()
     }
   }
+})
+it('replays a branch interrupted after creation and memoization, before sending its first input', async () => {
+  const pause = { gate: gate(), afterMemo: true, entered: false }
+  const f = await fixture(undefined, pause)
+  const tool = (await f.opened.root.agent(context)).deferred.find(
+    (candidate) => candidate.name === 'branch',
+  )!
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1]
+    await configure(tx, f.opened.root.id, { modelTools: { add: [tool] } })
+  }, context)
+  await f.opened.root.submit(
+    {
+      type: 'input',
+      content: 'BRANCH ' + JSON.stringify({ prompt: 'Explore durably', isolated: false }),
+    },
+    context,
+  )
+  await until(() => pause.entered || f.observed.length > 1)
+  expect(f.observed).toEqual([expect.stringContaining('BRANCH ')])
+  expect(pause.entered).toBe(true)
+  const branches = async () => {
+    const conversations = await f.opened.harness.commit(
+      (tx) => tx.scanConversations({}, 100),
+      context,
+    )
+    const ids = []
+    for (const conversation of conversations.items) {
+      if (
+        (await f.opened.harness.snapshot(Branch, conversation.id, context))?.branch?.intent ===
+        'Explore durably'
+      )
+        ids.push(conversation.id)
+    }
+    return ids
+  }
+  const created = await branches()
+  expect(created).toHaveLength(1)
+  expect((await f.log())?.messages ?? []).toHaveLength(0)
+  await f.opened.close()
+  await f.open()
+  pause.gate.release()
+  await until(async () => (await replies(f)).length === 1)
+  expect(await branches()).toEqual(created)
+  expect((await f.log())!.messages.filter((message) => message.to === created[0])).toMatchObject([
+    { from: 1, text: 'Explore durably' },
+  ])
+  expect(
+    (await f.log())!.messages.filter(
+      (message) => message.from === created[0] && message.re !== undefined,
+    ),
+  ).toHaveLength(1)
 })
 it('recovers once after input placement, before the recipient settles', async () => {
   const f = await fixture()

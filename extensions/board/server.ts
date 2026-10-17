@@ -424,39 +424,44 @@ export default function board(host: ExtensionHost) {
           root: Type.Optional(Type.Number()),
           isolated: Type.Optional(Type.Boolean()),
         }),
+        // The memo reuses the created branch; the task-scoped Sent receipt deduplicates its first message.
+        replay: 'safe',
         async execute(input, api, ctx) {
-          const lineage = host.use<LineageService>('lineage')
-          if (!lineage) throw new Error('Branches require lineage')
-          const roots =
-            (await host.harness().snapshot(Roots, ROOT_CONVERSATION_ID, ctx))?.roots ?? []
-          const root =
-            input.root ??
-            (await lineage.rootOf(api.conversationId, ctx)) ??
-            (roots.length === 1 ? roots[0] : undefined)
-          if (root === undefined || !roots.includes(root))
-            throw new Error(
-              `Choose a root. Roots: ${roots.map((id) => `#${id}`).join(', ') || '(none)'}`,
+          let id = await api.memo<number>('branch-id', ctx)
+          if (id === undefined) {
+            const lineage = host.use<LineageService>('lineage')
+            if (!lineage) throw new Error('Branches require lineage')
+            const roots =
+              (await host.harness().snapshot(Roots, ROOT_CONVERSATION_ID, ctx))?.roots ?? []
+            const root =
+              input.root ??
+              (await lineage.rootOf(api.conversationId, ctx)) ??
+              (roots.length === 1 ? roots[0] : undefined)
+            if (root === undefined || !roots.includes(root))
+              throw new Error(
+                `Choose a root. Roots: ${roots.map((candidate) => `#${candidate}`).join(', ') || '(none)'}`,
+              )
+            const branch = await lineage.branch(
+              {
+                from: root,
+                prompt: input.prompt,
+                isolated: input.isolated ?? true,
+                deliver: false,
+                by: api.conversationId,
+              },
+              ctx,
             )
-          const branch = await lineage.branch(
-            {
-              from: root,
-              prompt: input.prompt,
-              isolated: input.isolated ?? true,
-              deliver: false,
-              by: api.conversationId,
-            },
-            ctx,
-          )
+            id = await api.memo('branch-id', branch.id, ctx)
+          }
           const message = await send(
             host,
             api.conversationId,
-            { to: `#${branch.id}`, text: input.prompt, reply: true },
+            { to: `#${id}`, text: input.prompt, reply: true },
             ctx,
+            api.taskId,
           )
           return {
-            output: [
-              { type: 'text', text: `Branch #${branch.id} started; message ${message} sent.` },
-            ],
+            output: [{ type: 'text', text: `Branch #${id} started; message ${message} sent.` }],
           }
         },
       }),
