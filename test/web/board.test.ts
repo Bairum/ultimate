@@ -1,14 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import {
+  accentIndex,
   answeredMessages,
+  messageStatus,
   parseAddress,
   participants,
   participantStatus,
   participantMessages,
   relativeTime,
+  side,
   suggestions,
   unreadCount,
+  waits,
 } from '../../extensions/board/data.tsx'
+import type { BoardMessage } from '../../extensions/board/data.tsx'
 
 describe('board answer labels', () => {
   const request = {
@@ -139,6 +144,58 @@ describe('board roster', () => {
     expect(participantMessages(messages, 4)).toEqual([messages[0]])
     expect(participantMessages(messages, 'user')).toEqual([messages[1]])
     expect(participantMessages(messages, 9)).toEqual([])
+  })
+})
+
+describe('board chat', () => {
+  const base = { text: '', at: 0, reply: true, state: 'delivered' as const }
+  // #2 is @ultimate, #4 a branch it started.
+  const messages: BoardMessage[] = [
+    { ...base, id: 1, from: 2, to: 'user' }, // @ultimate asks the user
+    { ...base, id: 2, from: 'user', to: 2 }, // the user asks @ultimate
+    { ...base, id: 3, from: 2, to: 4 }, // @ultimate asks the branch
+    { ...base, id: 4, from: 2, to: 4, state: 'answered' },
+    { ...base, id: 5, from: 4, to: 2, reply: false, re: 4 }, // the branch's answer
+    { ...base, id: 6, from: 2, to: 'user', reply: false }, // one-way update
+    { ...base, id: 7, from: 'user', to: 4, state: 'sent' },
+    { ...base, id: 8, from: 2, to: 4, state: 'failed' },
+  ]
+  it('puts the perspective on the right, what it receives left and other traffic aside', () => {
+    expect(messages.slice(0, 3).map((message) => side(message, 'user'))).toEqual([
+      'left',
+      'right',
+      'aside',
+    ])
+    expect(messages.slice(0, 3).map((message) => side(message, 2))).toEqual([
+      'right',
+      'left',
+      'right',
+    ])
+    expect(side(messages[2], 4)).toBe('left')
+  })
+  it('says who waits: open questions to the user apart from other open requests', () => {
+    expect(messages.map(messageStatus)).toEqual([
+      'yours',
+      'waiting',
+      'waiting',
+      'answered',
+      'reply',
+      'one-way',
+      'waiting',
+      'failed',
+    ])
+    expect(messageStatus({ ...messages[5], state: 'sent' })).toBe('sending')
+    expect(messageStatus({ ...messages[5], kind: 'landing' })).toBe('landing')
+  })
+  it('counts open requests a participant sent and owes, and those with the user', () => {
+    expect(waits(messages, 'user')).toEqual({ waiting: 2, owes: 1, onUser: 0, onIt: 0 })
+    expect(waits(messages, 2)).toEqual({ waiting: 2, owes: 1, onUser: 1, onIt: 1 })
+    expect(waits(messages, 4)).toEqual({ waiting: 0, owes: 2, onUser: 0, onIt: 1 })
+    expect(waits(messages, 9)).toEqual({ waiting: 0, owes: 0, onUser: 0, onIt: 0 })
+  })
+  it('gives each sender a stable palette slot', () => {
+    expect(accentIndex(2, 6)).toBe(accentIndex(2, 6))
+    expect(new Set([2, 3, 4, 5, 6, 7].map((id) => accentIndex(id, 6))).size).toBe(6)
   })
 })
 

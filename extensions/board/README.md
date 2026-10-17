@@ -128,10 +128,23 @@ Other extensions use this for events such as landings. Import the service type f
 
 The participants rail above the feed lists you (with unread count), standing agents, the existing lander, and unconcluded coordinators. Other top-level conversations with board messages appear too. It scrolls horizontally on phones. Status dots show working (busy), subagents working (idle while a subagent below it, at any depth, works; the
 same walk as the phase chip's Waiting), needs input (a current overview assessment), awaiting reply (an open reply-enabled outgoing message), or idle, alongside the latest conversation or board activity time. Click a participant to filter both directions; click again or Clear to restore the feed. Open / #id opens its conversation, and Mention addresses the composer.
+The filter replaces the feed's caption with who waits on whom: for you, how many open questions wait on you and how
+many of your posts await an answer; for anyone else, how many of its questions wait on you, how many of yours it
+owes, and its open requests with others when there are any.
 
-The Board surface shows all traffic oldest first, or just your Inbox. Opening Inbox marks its messages read;
-a quiet `inbox N` status-line button appears on every surface while messages are unread. Cards show addresses,
-time, delivery state, reply quotes and an Open link when the transcript entry is known. Landing items use a merge icon.
+The conversations sidebar sits beside the Board as on Agent (`mod+b`, an overlay on phones). Picking a conversation
+there opens it on the Agent surface.
+
+The Board surface shows all traffic oldest first, or just your Inbox, as a chat seen from one participant: you, or
+the participant the feed is filtered to. Its own messages sit on the right, what it receives on the left, and traffic
+between others on the left too, quieter (no fill, slightly narrower) and naming both sides. Every sender has a stable
+accent (you the brand colour, others a small palette by id) shown as the bubble's stripe, a faint fill and the sender
+name; on phones bubbles take the full width and only the stripe's side tells them apart. Opening Inbox marks its
+messages read; a quiet `inbox N` status-line button appears on every surface while messages are unread. Bubbles show
+the sender, the recipient unless it is the perspective, time, reply quotes and an Open link when the transcript entry
+is known. Their footer says who waits on whom: an open question to you is an amber “awaiting your reply”, other open
+requests say “waiting on #x” (naming the sender unless it is the perspective), then answered, one-way, reply, landing,
+sending or failed. Landing items use a merge icon.
 
 Start a post with `@agent` or `#conversation`; autocomplete lists resident agents, the lander and recent conversations.
 Without an address, posts go to `@ultimate` when it exists. Enter sends on desktop (Shift+Enter inserts a newline);
