@@ -43,7 +43,14 @@ const role = (
   project: { key: KEY },
   epoch,
   free: false,
-  writer: { machine: 'writer-machine', root: '/writer', epoch, online, secrets: [] },
+  writer: {
+    machine: 'writer-machine',
+    root: '/writer',
+    epoch,
+    online,
+    secrets: [],
+    secretsComplete: true,
+  },
 })
 
 class FakeCloud extends EventTarget implements SyncSocket {
@@ -273,6 +280,7 @@ it('sends every conversation, only its own entries in ID order, and conversation
       build: 'test-build',
       history: true,
       secrets: [],
+      secretsComplete: true,
     })
     expect(
       socket
@@ -899,7 +907,14 @@ it('sends nothing but its hello as a standby, keeps the socket and follows role 
       project: { key: KEY },
       epoch: 2,
       free: false,
-      writer: { machine: 'writer-machine', root: '/writer', epoch: 2, online: true, secrets: [] },
+      writer: {
+        machine: 'writer-machine',
+        root: '/writer',
+        epoch: 2,
+        online: true,
+        secrets: [],
+        secretsComplete: true,
+      },
     })
     await expect(readFile(join(f.host.home, 'cloud-lease.json'))).rejects.toThrow('ENOENT')
     socket.receive(role('standby', 2, false))
@@ -910,7 +925,14 @@ it('sends nothing but its hello as a standby, keeps the socket and follows role 
       ...role('standby', 2, false),
       free: true,
       snapshot: { id: 'snap-1', epoch: 2 },
-      writer: { machine: null, root: '/writer', epoch: 2, online: false, secrets: [] },
+      writer: {
+        machine: null,
+        root: '/writer',
+        epoch: 2,
+        online: false,
+        secrets: [],
+        secretsComplete: true,
+      },
     })
     await f.drain()
     expect(f.stop.state()).toMatchObject({

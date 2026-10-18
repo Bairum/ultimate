@@ -245,7 +245,7 @@ interface Attachment {
   machine?: string
   role?: 'writer' | 'standby'
   /** This socket's checkout, from its hello: a claim takes the lease for it, not for another checkout of the machine. */
-  checkout?: { root: string; port: number; secrets: string[] }
+  checkout?: { root: string; port: number; secrets: string[]; secretsComplete: boolean }
 }
 const attachment = (socket: MachineSocket) =>
   socket.deserializeAttachment() as Attachment | null | undefined
@@ -270,6 +270,7 @@ function validHello(hello: Hello, { key, alias }: Attachment) {
     Array.isArray(hello.secrets) &&
     hello.secrets.length <= HELLO_LIMITS.secrets &&
     hello.secrets.every((name) => typeof name === 'string' && HELLO_LIMITS.secret.test(name)) &&
+    typeof hello.secretsComplete === 'boolean' &&
     (hello.transition === undefined ||
       (typeof hello.transition === 'string' && /^[\w-]{1,64}$/.test(hello.transition)))
   )
@@ -418,7 +419,12 @@ export class SharedReplica {
           ...held,
           machine: message.machine,
           role,
-          checkout: { root: message.root, port: message.port, secrets: message.secrets },
+          checkout: {
+            root: message.root,
+            port: message.port,
+            secrets: message.secrets,
+            secretsComplete: message.secretsComplete,
+          },
         })
         if (role === 'writer') {
           for (const previous of this.sockets())
@@ -432,13 +438,13 @@ export class SharedReplica {
         return
       }
       if (message.type === 'claim') {
-        if (
-          held?.role !== 'standby' ||
-          !held.machine ||
-          !held.checkout ||
-          !Number.isSafeInteger(message.epoch)
-        )
+        if (held?.role !== 'standby' || !Number.isSafeInteger(message.epoch)) return
+        // Admitted before sockets kept their checkout: reconnecting sends a fresh hello, after which the claim's
+        // reconciliation settles it, so the claimant never waits on a claim nobody will answer.
+        if (!held.machine || !held.checkout) {
+          socket.close(1012, 'Say hello again')
           return
+        }
         const replies = this.store.claim(held.machine, held.checkout, message.epoch)
         if (!replies) {
           socket.send(JSON.stringify(this.store.role('standby', this.sockets().length > 0)))

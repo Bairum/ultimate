@@ -31,7 +31,14 @@ it('routes sync by project key and refuses other keys and the retired endpoint',
       expect(await (await sync(`/sync/v2?project=${encodeURIComponent(key)}`)).text()).toBe('sync')
       expect(idFromName).toHaveBeenLastCalledWith(key)
     }
-    for (const key of ['', 'github.com/HazAT/ultimate', 'gitlab.com/o/r', 'github.com/o/r/x'])
+    for (const key of [
+      '',
+      'github.com/HazAT/ultimate',
+      'gitlab.com/o/r',
+      'github.com/o/r/x',
+      // Keys live in socket attachments: one longer than GitHub allows is refused.
+      `github.com/o/${'r'.repeat(101)}`,
+    ])
       expect((await sync(`/sync/v2?project=${encodeURIComponent(key)}`)).status).toBe(400)
     expect((await sync('/sync?machine=desk&project=%2Fone')).status).toBe(404)
     expect(idFromName).toHaveBeenCalledTimes(2)

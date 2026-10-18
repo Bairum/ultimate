@@ -153,16 +153,17 @@ export function startSync(
     await writeFile(`${leasePath}.tmp`, JSON.stringify({ key: identity.key, epoch }))
     await rename(`${leasePath}.tmp`, leasePath)
   }
+  /** Secret names the cloud accepts, and whether that is every one in the store. */
   const secretNames = async () => {
     try {
-      // Only names the cloud accepts: a hello carrying any other is refused as malformed.
-      return (await secretMetadata(host.userHome))
-        .map((secret) => secret.name)
+      const all = (await secretMetadata(host.userHome)).map((secret) => secret.name)
+      const names = all
         .filter((name) => HELLO_LIMITS.secret.test(name))
         .slice(0, HELLO_LIMITS.secrets)
+      return { secrets: names, secretsComplete: names.length === all.length }
     } catch {
-      // The Secrets panel reports an unreadable store; until it is repaired this machine advertises none.
-      return []
+      // The Secrets panel reports an unreadable store; until it is repaired this machine cannot vouch for any.
+      return { secrets: [], secretsComplete: false }
     }
   }
   const hasHistory = async () =>
@@ -553,7 +554,7 @@ export function startSync(
           port: Number(new URL(host.system().process.url).port),
           epoch: (await claimEpoch()) ?? (await readLease()),
           history: await hasHistory(),
-          secrets: await secretNames(),
+          ...(await secretNames()),
           ...(hooks.transition?.() ? { transition: hooks.transition() } : {}),
         })
       }),

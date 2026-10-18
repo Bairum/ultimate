@@ -65,6 +65,7 @@ const hello = (overrides: Partial<Hello> = {}): Hello => ({
   build: 'test',
   history: false,
   secrets: [],
+  secretsComplete: true,
   ...overrides,
 })
 /** The laptop preparing a move, downloading. */
@@ -327,6 +328,7 @@ describe('project replica sockets', () => {
           epoch: 1,
           online: true,
           secrets: ['OPENAI_API_KEY'],
+          secretsComplete: true,
         },
       },
       { type: 'cursor', entries: {}, docs: {} },
@@ -376,6 +378,7 @@ describe('project replica sockets', () => {
           epoch: 1,
           online: true,
           secrets: ['GITHUB_TOKEN'],
+          secretsComplete: true,
         },
       },
     ])
@@ -486,7 +489,14 @@ describe('project replica sockets', () => {
       epoch: 1,
       free: true,
       snapshot: { id: 'snap-1', epoch: 1 },
-      writer: { machine: null, root: '/test', epoch: 1, online: false, secrets: [] },
+      writer: {
+        machine: null,
+        root: '/test',
+        epoch: 1,
+        online: false,
+        secrets: [],
+        secretsComplete: true,
+      },
     }
     expect(writer.sent().at(-1)).toEqual(free)
     expect(laptop.sent().at(-1)).toEqual(free)
@@ -509,6 +519,7 @@ describe('project replica sockets', () => {
           epoch: 2,
           online: true,
           secrets: ['A'],
+          secretsComplete: true,
         },
       },
       { type: 'cursor', entries: {}, docs: {} },
@@ -994,7 +1005,7 @@ describe('project replica sockets', () => {
     expect(instance.store.lease()).toMatchObject({ machine: 'laptop', epoch: 2, root: '/test' })
   })
 
-  it('ignores a claim from an admitted socket whose attachment has no checkout', () => {
+  it('closes an admitted socket that claims without a checkout, so its claim settles on reconnect', () => {
     const { instance, connect } = shared()
     const writer = connect()
     writer.receive(hello())
@@ -1004,6 +1015,7 @@ describe('project replica sockets', () => {
     old.receive({ type: 'claim', epoch: 1 })
     expect(instance.store.lease()).toMatchObject({ machine: null, epoch: 1 })
     expect(old.sent()).toEqual([])
+    expect(old.socket.close).toHaveBeenCalledWith(1012, 'Say hello again')
   })
 
   it('refuses a hello whose checkout could outgrow the socket attachment, and keeps admitted ones small', () => {
@@ -1019,9 +1031,12 @@ describe('project replica sockets', () => {
       socket.receive(hello(oversized))
       expect(socket.socket.close).toHaveBeenCalledWith(PROJECT_MISMATCH, 'invalid hello')
     }
+    const longest = `github.com/${'o'.repeat(100)}/${'r'.repeat(100)}`
     const largest = connect()
+    largest.socket.serializeAttachment({ key: longest, alias: longest })
     largest.receive(
       hello({
+        key: longest,
         root: `/${'r'.repeat(1023)}`,
         machine: 'm'.repeat(128),
         secrets: Array.from({ length: 64 }, (_, index) => `S${index}`.padEnd(64, 'X')),

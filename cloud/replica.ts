@@ -11,7 +11,9 @@ import type {
 
 type Role = Extract<CloudMessage, { type: 'role' }>
 /** A machine that said hello: how to reach it should it claim the lease, and when it was last seen. */
-export type MachineRecord = Pick<Hello, 'root' | 'port' | 'secrets'> & { lastSeen: number }
+export type MachineRecord = Pick<Hello, 'root' | 'port' | 'secrets' | 'secretsComplete'> & {
+  lastSeen: number
+}
 import type { ConversationSummary } from '../shared/protocol.ts'
 
 /** The repository a replica belongs to, fixed by the first hello. */
@@ -33,6 +35,7 @@ export interface LeaseRecord {
   port: number
   uiBuild?: string
   secrets: string[]
+  secretsComplete: boolean
   /** The snapshot the last release uploaded, and the epoch it was taken at. */
   snapshot?: { id: string; epoch: number }
 }
@@ -100,13 +103,18 @@ export class ReplicaStore {
   seen(machine: string, hello?: Hello) {
     const machines = this.machines()
     const known = hello
-      ? { root: hello.root, port: hello.port, secrets: hello.secrets }
+      ? {
+          root: hello.root,
+          port: hello.port,
+          secrets: hello.secrets,
+          secretsComplete: hello.secretsComplete,
+        }
       : machines[machine]
     if (known)
       this.put('metadata', 6, { ...machines, [machine]: { ...known, lastSeen: Date.now() } })
   }
   role(role: Role['role'], online: boolean): Role {
-    const { machine, root, epoch, secrets, snapshot } = this.lease()!
+    const { machine, root, epoch, secrets, secretsComplete, snapshot } = this.lease()!
     const transition = this.transition()
     return {
       type: 'role',
@@ -116,7 +124,14 @@ export class ReplicaStore {
       epoch,
       free: machine === null,
       ...(snapshot ? { snapshot } : {}),
-      writer: { machine, root, epoch, online: machine !== null && online, secrets },
+      writer: {
+        machine,
+        root,
+        epoch,
+        online: machine !== null && online,
+        secrets,
+        secretsComplete,
+      },
       ...(transition ? { transition } : {}),
     }
   }
@@ -215,7 +230,7 @@ export class ReplicaStore {
    */
   claim(
     machine: string,
-    claimant: { root: string; port: number; secrets: string[] },
+    claimant: { root: string; port: number; secrets: string[]; secretsComplete: boolean },
     epoch: number,
   ): CloudMessage[] | undefined {
     return this.sql.transaction(() => {
@@ -228,6 +243,7 @@ export class ReplicaStore {
         root: claimant.root,
         port: claimant.port,
         secrets: claimant.secrets,
+        secretsComplete: claimant.secretsComplete,
       } satisfies LeaseRecord)
       return this.admitted()
     })
@@ -265,6 +281,7 @@ export class ReplicaStore {
         port: message.port,
         uiBuild: message.uiBuild ?? lease.uiBuild,
         secrets: message.secrets,
+        secretsComplete: message.secretsComplete,
       } satisfies LeaseRecord)
       return this.admitted()
     })

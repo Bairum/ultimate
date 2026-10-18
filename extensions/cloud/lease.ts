@@ -131,6 +131,16 @@ const foreground = (graph: { value: { tasks: Record<string, { background: boolea
 /** Transition text bounded well under the replica's limit, keeping the end, where errors say what failed. */
 const clip = (text: string) => (text.length > 500 ? `…${text.slice(-499)}` : text)
 const runs = (count: number) => `${count} running ${count === 1 ? 'task' : 'tasks'}`
+/**
+ * The writer's secret names this machine lacks. A writer that could not name all of its secrets adds one entry for
+ * the unnamed rest, so an ordinary move stops at checks rather than proceeding unverified.
+ */
+const missingSecrets = (state: SyncState | undefined, local: Set<string>) => {
+  const writer = state?.writer
+  const missing = (writer?.secrets ?? []).filter((name) => !local.has(name))
+  if (writer && !writer.secretsComplete) missing.push('(more the writer could not list)')
+  return missing
+}
 
 export function startLease(host: ExtensionHost, options: LeaseOptions, deps: LeaseDeps) {
   const { identity } = options
@@ -596,7 +606,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       const key = await secret()
       if (!key) throw new Error(missingKey)
       const local = await localSecrets()
-      const missing = (state.writer?.secrets ?? []).filter((name) => !local.has(name))
+      const missing = missingSecrets(state, local)
       if (missing.length && !force) throw new Error(`Missing secrets: ${missing.join(', ')}`)
       end('done', missing.length ? `Continuing without ${missing.join(', ')}` : 'Ready')
 
@@ -901,7 +911,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         role: state?.role,
         free: !!state?.free,
         writer: state?.writer,
-        missing: (state?.writer?.secrets ?? []).filter((name) => !local.has(name)),
+        missing: missingSecrets(state, local),
         blocked: blocked(state),
         progress,
         ...(transition ? { transition: structuredClone(transition) } : {}),

@@ -11,6 +11,7 @@ import type { Transition } from '../cloud/protocol.ts'
 import cloudExtension, { actions, joinOnStandby } from '../extensions/cloud/server.ts'
 import type { SyncSocket } from '../extensions/cloud/server.ts'
 import * as snapshot from '../extensions/cloud/snapshot.ts'
+import { writeSecret } from '../extensions/secrets/store.ts'
 import { git } from '../extensions/workspaces/git.ts'
 import type { ActionContext } from '../server/actions.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
@@ -246,6 +247,25 @@ it('fast-forwards the checkout and installs when the lockfile changed, rerunning
   expect(states(await laptop.transition())).toMatchObject({ fetch: 'done', install: 'done' })
   await writer(laptop)
   expect(existsSync(join(laptop.home, 'cloud-install-pending'))).toBe(false)
+})
+
+it('refuses a plain move when the writer has more secrets than its hello could name', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const repo = await checkout()
+  const desk = await machine('desk', project, repo.root)
+  // One past the limit: the hello names 64 and says the list is incomplete.
+  for (let index = 0; index <= 64; index++) await writeSecret(desk.home, `SECRET_${index}`, 'x')
+  await writer(desk)
+  await idleRelease(desk)
+  const laptop = await machine('laptop', project, repo.root, { autoClaim: false })
+  for (let index = 0; index < 64; index++) await writeSecret(laptop.home, `SECRET_${index}`, 'x')
+  await standbyOn(laptop)
+  expect((await laptop.lease.state()).missing).toEqual(['(more the writer could not list)'])
+  expect(await laptop.lease.move()).toBe(false)
+  expect(project.replica.store.transition()!.error).toMatch(/^Missing secrets: /)
+  expect(project.replica.store.lease()).toMatchObject({ machine: null })
+  expect(await laptop.lease.move({ force: true })).toBe(true)
 })
 
 it('bounds a successful step detail too, so a long branch name never stalls the transition', async () => {

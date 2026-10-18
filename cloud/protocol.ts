@@ -74,11 +74,12 @@ export interface OutboxItem {
 export const PROJECT_MISMATCH = 4009
 
 /** A project key: `github.com/<owner>/<repo>`, lowercased. */
-export const PROJECT_KEY = /^github\.com\/[a-z0-9_.-]+\/[a-z0-9_.-]+$/
+export const PROJECT_KEY = /^github\.com\/[a-z0-9_.-]{1,100}\/[a-z0-9_.-]{1,100}$/
 
 /**
- * A hello's checkout (root, machine and secret names) lives in the replica's socket attachment, which the platform caps
- * at 16 KiB; these bounds keep it far below that. Machines advertise only secret names that fit, never cutting one.
+ * A hello's checkout (root, machine and secret names) lives in the replica's socket attachment with the project key
+ * and alias (each bounded by `PROJECT_KEY`), which the platform caps at 16 KiB; these bounds keep it far below that. Machines advertise only secret
+ * names that fit, never cutting one, and say when they left any out (`secretsComplete: false`).
  */
 export const HELLO_LIMITS = {
   root: 1024,
@@ -145,6 +146,8 @@ export interface Writer {
   online: boolean
   /** Names, never values, of the secrets in the writer's store. */
   secrets: string[]
+  /** False when the writer's store holds secrets its hello could not name: a move cannot verify them. */
+  secretsComplete: boolean
 }
 
 export type Hello = {
@@ -164,6 +167,8 @@ export type Hello = {
   history: boolean
   /** Names, never values, of the secrets in this machine's store. */
   secrets: string[]
+  /** False when the store holds secrets beyond `HELLO_LIMITS`, which `secrets` leaves out. */
+  secretsComplete: boolean
   /** The transition this machine is preparing, if any; another one targeting it has ended. */
   transition?: string
 }
