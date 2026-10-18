@@ -1,6 +1,6 @@
 import './front.css'
 import { cn } from 'cn'
-import { ChevronDownIcon, KeyRoundIcon, LoaderCircleIcon } from 'lucide-react'
+import { ChevronDownIcon, KeyRoundIcon, LoaderCircleIcon, NetworkIcon } from 'lucide-react'
 import { StrictMode, useEffect, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -20,10 +20,40 @@ interface Project {
   key: string
   name: string
   slug: string
-  writer: { machine: string | null; online: boolean; lastSeen?: number }
-  machines: { machine: string; role: 'writer' | 'standby'; connected: boolean; lastSeen: number }[]
+  writer: { machine: string | null; online: boolean; lastSeen?: number; tailnet?: string }
+  machines: {
+    machine: string
+    role: 'writer' | 'standby'
+    connected: boolean
+    lastSeen: number
+    tailnet?: string
+  }[]
   count: number
   transition?: Transition
+}
+
+/** "Open on tailnet": the running writer, directly over Tailscale, skipping the cloud. Only while it is online. */
+function Tailnet({ project }: { project: Project }) {
+  const { machine, online, tailnet } = project.writer
+  if (!online || !machine || !tailnet) return null
+  return (
+    <Button
+      asChild
+      className="h-6 shrink-0 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
+      size="xs"
+      variant="ghost"
+    >
+      <a
+        aria-label={`Open ${project.name} on ${machine} over the tailnet`}
+        data-tailnet
+        href={tailnet}
+        title={`Open ${project.name} directly on ${machine}: ${tailnet}`}
+      >
+        <NetworkIcon className="size-3 opacity-70" />
+        <span className="max-sm:hidden">Open on tailnet</span>
+      </a>
+    </Button>
+  )
 }
 
 /** `just now`, `5m ago`, `3h ago`, `2d ago`: the app's compact relative times. */
@@ -364,6 +394,7 @@ function Row({ project, now }: { project: Project; now: number }) {
         )}
         {error && <span className="truncate pl-3.5 font-mono text-[11px] text-error">{error}</span>}
       </a>
+      <Tailnet project={project} />
       <RunOn onError={setError} project={project} />
     </li>
   )

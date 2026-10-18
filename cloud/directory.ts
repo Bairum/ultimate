@@ -6,9 +6,18 @@ export interface Project {
   key: string
   name: string
   slug: string
-  /** `machine` is null while the lease is free; `lastSeen` is when the writer last connected or left. */
-  writer: { machine: string | null; online: boolean; lastSeen?: number }
-  machines: { machine: string; role: 'writer' | 'standby'; connected: boolean; lastSeen: number }[]
+  /**
+   * `machine` is null while the lease is free; `lastSeen` is when the writer last connected or left; `tailnet` is where
+   * the writing checkout answers on the tailnet.
+   */
+  writer: { machine: string | null; online: boolean; lastSeen?: number; tailnet?: string }
+  machines: {
+    machine: string
+    role: 'writer' | 'standby'
+    connected: boolean
+    lastSeen: number
+    tailnet?: string
+  }[]
   count: number
   uiBuild?: string
   /** The latest move, running or ended. */

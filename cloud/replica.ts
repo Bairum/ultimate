@@ -12,7 +12,10 @@ import type {
 
 type Role = Extract<CloudMessage, { type: 'role' }>
 /** A machine that said hello: how to reach it should it claim the lease, and when it was last seen. */
-export type MachineRecord = Pick<Hello, 'root' | 'port' | 'secrets' | 'secretsComplete'> & {
+export type MachineRecord = Pick<
+  Hello,
+  'root' | 'port' | 'secrets' | 'secretsComplete' | 'tailnet'
+> & {
   lastSeen: number
 }
 import type { ConversationSummary } from '../shared/protocol.ts'
@@ -109,6 +112,7 @@ export class ReplicaStore {
           port: hello.port,
           secrets: hello.secrets,
           secretsComplete: hello.secretsComplete,
+          ...(hello.tailnet ? { tailnet: hello.tailnet } : {}),
         }
       : machines[machine]
     if (known)
@@ -117,6 +121,7 @@ export class ReplicaStore {
   role(role: Role['role'], online: boolean): Role {
     const { machine, root, epoch, secrets, secretsComplete, snapshot } = this.lease()!
     const transition = this.transition()
+    const tailnet = this.tailnet()
     return {
       type: 'role',
       role,
@@ -132,9 +137,28 @@ export class ReplicaStore {
         online: machine !== null && online,
         secrets,
         secretsComplete,
+        ...(tailnet ? { tailnet } : {}),
       },
       ...(transition ? { transition } : {}),
     }
+  }
+  /** The writer's tailnet address, when the machine holding the lease reported one from the writing checkout. */
+  tailnet(): string | undefined {
+    const lease = this.lease()
+    const known = lease?.machine ? this.machines()[lease.machine] : undefined
+    return known?.root === lease?.root ? known?.tailnet : undefined
+  }
+  /**
+   * The tailnet address `machine`'s checkout at `root` reported after its hello. False: nothing changed, as for an
+   * unknown machine or another checkout of it.
+   */
+  setTailnet(machine: string, root: string, url: string | null): boolean {
+    const machines = this.machines()
+    const known = machines[machine]
+    if (!known || known.root !== root || (known.tailnet ?? null) === url) return false
+    const { tailnet: _, ...rest } = known
+    this.put('metadata', 6, { ...machines, [machine]: url ? { ...rest, tailnet: url } : rest })
+    return true
   }
   /** The latest transition a machine reported, running or ended. */
   transition(): Transition | undefined {
@@ -236,6 +260,7 @@ export class ReplicaStore {
         connected: connected.has(machine),
         root: known.root,
         lastSeen: known.lastSeen,
+        ...(known.tailnet ? { tailnet: known.tailnet } : {}),
         missingSecrets:
           machine === writer
             ? []

@@ -11,7 +11,7 @@ import { admitsAccess } from './access.ts'
 import type { AccessConfig } from './access.ts'
 
 import type { Sql } from './replica.ts'
-import { bounded, HELLO_LIMITS, PROJECT_KEY, PROJECT_MISMATCH } from './protocol.ts'
+import { bounded, HELLO_LIMITS, PROJECT_KEY, PROJECT_MISMATCH, validTailnet } from './protocol.ts'
 import type { CloudMessage, Hello, MachineMessage } from './protocol.ts'
 import { BUILD_ID, buildKey, contentType, uploadBuild, validName } from './builds.ts'
 import { DirectoryStore } from './directory.ts'
@@ -379,6 +379,7 @@ function validHello(hello: Hello, { key, alias }: Attachment) {
     (hello.epoch === undefined || (Number.isSafeInteger(hello.epoch) && hello.epoch >= 1)) &&
     typeof hello.history === 'boolean' &&
     validSecrets(hello) &&
+    (hello.tailnet === undefined || validTailnet(hello.tailnet)) &&
     (hello.transition === undefined ||
       (typeof hello.transition === 'string' && /^[\w-]{1,64}$/.test(hello.transition)))
   )
@@ -450,11 +451,12 @@ export class SharedReplica {
     )
     const known = this.store.machines()
     const machines = Object.entries(known)
-      .map(([machine, { lastSeen }]) => ({
+      .map(([machine, { lastSeen, tailnet }]) => ({
         machine,
         role: machine === lease.machine ? ('writer' as const) : ('standby' as const),
         connected: connected.has(machine),
         lastSeen,
+        ...(tailnet ? { tailnet } : {}),
       }))
       // The writer first, then standbys by name.
       .toSorted((a, b) => b.role.localeCompare(a.role) || a.machine.localeCompare(b.machine))
@@ -465,6 +467,7 @@ export class SharedReplica {
         machine: lease.machine,
         online: this.sockets().some((socket) => socket !== closing),
         lastSeen: lease.machine === null ? undefined : known[lease.machine]?.lastSeen,
+        ...(this.store.tailnet() ? { tailnet: this.store.tailnet() } : {}),
       },
       machines,
       count: this.store.summaryCount(),
@@ -504,6 +507,7 @@ export class SharedReplica {
           'release-waiting',
           'transition',
           'secrets',
+          'tailnet',
         ].includes(message?.type)
       )
         type = message.type
@@ -598,6 +602,16 @@ export class SharedReplica {
           secretsComplete,
         })
         this.broadcast()
+        return
+      }
+      // Writer and standbys both report where they answer on the tailnet; the writer's shows on the front page.
+      if (message.type === 'tailnet') {
+        if (!held?.role || !held.machine || !held.checkout) return
+        if (message.url !== null && !validTailnet(message.url)) return
+        if (this.store.setTailnet(held.machine, held.checkout.root, message.url)) {
+          this.broadcast()
+          this.presence()
+        }
         return
       }
       // Only the writer's data is applied: a standby is fenced off.

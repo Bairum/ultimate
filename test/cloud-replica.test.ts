@@ -869,6 +869,46 @@ describe('project replica sockets', () => {
     expect(laptop.socket.close).not.toHaveBeenCalled()
   })
 
+  it("shows the writing checkout's tailnet address to standbys and the directory, refusing malformed ones", () => {
+    const { instance, connect, updates } = shared()
+    const writer = connect()
+    writer.receive(hello({ tailnet: 'https://rog.tail3a3a66.ts.net:4747' }))
+    const laptop = connect()
+    laptop.receive(hello({ machine: 'laptop', root: '/laptop' }))
+    expect(laptop.sent().at(-1)).toMatchObject({
+      role: 'standby',
+      writer: { machine: 'test', tailnet: 'https://rog.tail3a3a66.ts.net:4747' },
+    })
+    expect(updates.at(-1)?.writer.tailnet).toBe('https://rog.tail3a3a66.ts.net:4747')
+    // A standby's own address is its machine's, never the writer's.
+    laptop.receive({ type: 'tailnet', url: 'https://laptop.tail3a3a66.ts.net:4748' })
+    expect(updates.at(-1)).toMatchObject({
+      writer: { tailnet: 'https://rog.tail3a3a66.ts.net:4747' },
+      machines: expect.arrayContaining([
+        expect.objectContaining({
+          machine: 'laptop',
+          tailnet: 'https://laptop.tail3a3a66.ts.net:4748',
+        }),
+      ]),
+    })
+    // The writer loses its address (Tailscale stopped): standbys hear it at once.
+    writer.receive({ type: 'tailnet', url: null })
+    expect((laptop.sent().at(-1) as { writer: object }).writer).not.toHaveProperty('tailnet')
+    expect(updates.at(-1)?.writer).not.toHaveProperty('tailnet')
+    // Anything but a ts.net HTTPS origin changes nothing; a hello carrying one is refused.
+    const before = [...instance.store.sql.exec('SELECT * FROM metadata ORDER BY 1')]
+    for (const url of [
+      'http://rog.tail3a3a66.ts.net:4747',
+      'https://evil.example',
+      'https://x.ts.net/p',
+    ])
+      writer.receive({ type: 'tailnet', url })
+    expect([...instance.store.sql.exec('SELECT * FROM metadata ORDER BY 1')]).toEqual(before)
+    const bad = connect()
+    bad.receive(hello({ machine: 'bad', tailnet: 'https://evil.example' }))
+    expect(bad.socket.close).toHaveBeenCalledWith(PROJECT_MISMATCH, 'invalid hello')
+  })
+
   it('names the worktrees a releasing writer leaves uncommitted in the handover and keeps them on the transition', () => {
     const { instance, connect } = shared()
     const writer = connect()

@@ -15,7 +15,13 @@ import type { JsonValue } from '@earendil-works/chord'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { docHash, HELLO_LIMITS, PROJECT_KEY, PROJECT_MISMATCH } from '../../cloud/protocol.ts'
+import {
+  docHash,
+  HELLO_LIMITS,
+  PROJECT_KEY,
+  PROJECT_MISMATCH,
+  validTailnet,
+} from '../../cloud/protocol.ts'
 import type {
   CloudMessage,
   MachineMessage,
@@ -25,6 +31,7 @@ import type {
 } from '../../cloud/protocol.ts'
 import { projectBuilds } from '../../cloud/ui-build.ts'
 import { secretMetadata } from '../secrets/store.ts'
+import type { TailscaleService } from '../tailscale/server.ts'
 import { cloudConfig, leaseSettings } from './config.ts'
 import { projectIdentity } from './identity.ts'
 import { startLease } from './lease.ts'
@@ -160,6 +167,26 @@ export function startSync(
     if ((await readLease()) === epoch) return
     await writeFile(`${leasePath}.tmp`, JSON.stringify({ key: identity.key, epoch }))
     await rename(`${leasePath}.tmp`, leasePath)
+  }
+  // On standby, `<home>/cloud-writer.json` names the machine running the project and its tailnet address, so the
+  // `ultimate` command opens that machine directly. It goes away when this checkout writes or the writer has none.
+  const writerPath = join(host.home, 'cloud-writer.json')
+  let lastWriter: string | undefined
+  const recordWriter = async (writer: Writer | undefined) => {
+    const value =
+      writer?.machine && writer.machine !== machine && writer.tailnet
+        ? JSON.stringify({ machine: writer.machine, tailnet: writer.tailnet })
+        : ''
+    if (value === lastWriter) return
+    lastWriter = value
+    if (!value) return rm(writerPath, { force: true })
+    await writeFile(`${writerPath}.tmp`, value)
+    await rename(`${writerPath}.tmp`, writerPath)
+  }
+  /** Where this checkout answers on the tailnet, once the `tailscale` extension published it. */
+  const tailnet = () => {
+    const published = host.use<TailscaleService>('tailscale')?.status().url
+    return validTailnet(published) ? published : undefined
   }
   /** Secret names the cloud accepts, and whether that is every one in the store. */
   const secretNames = async () => {
@@ -575,14 +602,21 @@ export function startSync(
         )
     }
     dispose = close
-    // The user's secret names travel in hello, then whenever they change, so missing secrets stay current.
+    // The user's secret names and the tailnet address travel in hello, then whenever they change, so missing secrets
+    // stay current and the address shows once Tailscale published it.
     let lastSecrets: string | undefined
+    let lastTailnet: string | null | undefined
     socket.addEventListener('open', () => {
       openedAt = Date.now()
       secretsTimer = setInterval(
         () =>
           enqueue(async () => {
             if (!role || lastSecrets === undefined) return
+            const address = tailnet() ?? null
+            if (address !== lastTailnet) {
+              lastTailnet = address
+              send({ type: 'tailnet', url: address })
+            }
             const current = await secretNames()
             if (JSON.stringify(current) === lastSecrets) return
             lastSecrets = JSON.stringify(current)
@@ -594,6 +628,8 @@ export function startSync(
         hooks.hello?.()
         const names = await secretNames()
         lastSecrets = JSON.stringify(names)
+        const address = tailnet()
+        lastTailnet = address ?? null
         send({
           type: 'hello',
           key: identity.key,
@@ -607,6 +643,7 @@ export function startSync(
           history: await hasHistory(),
           ...names,
           ...(hooks.transition?.() ? { transition: hooks.transition() } : {}),
+          ...(address ? { tailnet: address } : {}),
         })
       })
     })
@@ -620,6 +657,7 @@ export function startSync(
             if (message.role === 'writer' && serving) await writeLease(message.epoch)
             state = { key: identity.key, connected: true, ...given }
             hooks.role?.(state)
+            await recordWriter(message.role === 'standby' ? message.writer : undefined)
             // On standby nothing was sent, so a changed role needs no fresh hello.
             if (!serving) {
               role = message.role

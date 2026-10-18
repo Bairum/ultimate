@@ -280,9 +280,22 @@ function LocalStandby() {
         </p>
       )}
       {!moving && (
-        <Button disabled={busy || !!state.blocked} onClick={() => act(() => moveHere())} size="sm">
-          {state.free && released ? 'Resume here' : 'Move here'}
-        </Button>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {state.writer?.online && state.writer.machine && state.writer.tailnet && (
+            <Button asChild size="sm" variant="outline">
+              <a data-cloud-open-writer href={state.writer.tailnet}>
+                Open on {state.writer.machine}
+              </a>
+            </Button>
+          )}
+          <Button
+            disabled={busy || !!state.blocked}
+            onClick={() => act(() => moveHere())}
+            size="sm"
+          >
+            {state.free && released ? 'Resume here' : 'Move here'}
+          </Button>
+        </div>
       )}
       {error && <p className="text-[12px] text-error">{error}</p>}
       {!error && state.lastError && !state.transition && (
