@@ -563,6 +563,9 @@ export default function subagents(
     | 'scanSubmissions'
   >,
 ) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(ConversationsApi)
+  host.want(WorkspacesApi)
   const residentDefinitions = async () =>
     (
       await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)

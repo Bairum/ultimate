@@ -60,6 +60,8 @@ const terminal = {
 export default function phase(
   host: Pick<ExtensionHost, 'want' | 'harness' | 'projectRoot' | 'conversations'>,
 ) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(ClassifyApi)
   const ClassifyTask = defineTask<{ run: number }, { phase: 'classify' }, null>({
     name: 'phase.classify',
     version: 1,

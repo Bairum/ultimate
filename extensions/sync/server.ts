@@ -558,6 +558,9 @@ export const actions = {
 }
 
 export default function sync(host: ExtensionHost) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(HealthApi)
+  host.want(SubagentsApi)
   if (!isMachineHome(host.projectRoot, host.userHome)) return defineExtension({ name: 'sync' })
   const deps = syncDeps(host)
   const watcher = createWatcher(deps, (input) => submitMove(host, input))

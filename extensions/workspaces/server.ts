@@ -18,7 +18,9 @@ import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- workspace discovery shares the core root watcher
 import { watchRoots } from '../../server/watch-roots.ts'
+import { BoardApi } from '../board/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
+import { LineageApi } from '../lineage/api.ts'
 import { agentRoots } from '../../lib/agents.ts'
 import { WorkspacesApi } from './api.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
@@ -140,6 +142,10 @@ function watchDefinitions(
   }
 }
 export default function workspaceExtension(host: ExtensionHost) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(BoardApi)
+  host.want(ConversationsApi)
+  host.want(LineageApi)
   const service = workspaces(host)
   host.implement(WorkspacesApi, {
     ...service,

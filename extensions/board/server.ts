@@ -537,6 +537,11 @@ export const actions = {
   },
 }
 export default function board(host: ExtensionHost) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(LineageApi)
+  host.want(QuestionsApi)
+  host.want(SubagentsApi)
+  host.want(WorkspacesApi)
   host.implement(BoardApi, {
     answer: async (messageId, text, ctx) => {
       const log = await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, ctx)

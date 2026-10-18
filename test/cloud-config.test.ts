@@ -121,6 +121,7 @@ it('reports a missing token once at host open and never opens a connection', asy
         close = callback
       },
       onRelease: () => {},
+      want: () => undefined,
       resource: <T>(_key: string, create: () => T) => create(),
     } as unknown as ExtensionHost)
     await open!()

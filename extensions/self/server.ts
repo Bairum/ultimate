@@ -7,6 +7,8 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 
 export default function self(host: ExtensionHost) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(WorkspacesApi)
   const service = () => host.want(WorkspacesApi)
   return defineExtension({
     name: 'self',

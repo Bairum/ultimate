@@ -466,6 +466,10 @@ export const ChoiceEntry = defineEntry<{ card: string; summary: string; toolCall
 )
 
 export default function onboarding(host: ExtensionHost) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(LineageApi)
+  host.want(SubagentsApi)
+  host.want(WorkspacesApi)
   return defineExtension({
     name: 'onboarding',
     tools: [

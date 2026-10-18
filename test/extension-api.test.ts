@@ -110,7 +110,12 @@ it('serves typed APIs through held handles across provider reloads, failures and
   expect(await invoke('fresh')).toEqual({ need: `Error: ${missing}`, want: 'undefined' })
   await expect(invoke('held')).rejects.toThrow(missing)
   expect(server.extensions.catalogue().missing).toEqual(['test-echo'])
-  expect(server.extensions.catalogue().cycles).toEqual([])
+  // Only this test's extensions: the built-ins' own cycles are theirs.
+  expect(
+    server.extensions
+      .catalogue()
+      .cycles.filter((cycle) => cycle.some((name) => name.startsWith('api-'))),
+  ).toEqual([])
   await until(() => server.system.current().extensionDiagnostics.includes(missing))
 })
 

@@ -196,6 +196,7 @@ it('waits on standby with no database while the cloud is unreachable, however lo
       resource: <T>(_key: string, create: () => T) => create(),
       onOpen: () => {},
       onRelease: () => {},
+      want: () => undefined,
       onClose: (close: () => Promise<void>) => closers.push(close),
       harness: () => {
         throw new Error('Harness is not open')

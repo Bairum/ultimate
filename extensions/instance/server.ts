@@ -212,6 +212,9 @@ export default function instanceExtension(
     | 'metadata'
   >,
 ) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(TailscaleApi)
+  host.want(WorkspacesApi)
   const service = () => host.want(WorkspacesApi)
   const instances = running(host)
   const starts = host.resource('instance.starts', () => ({ pending: 0 }))

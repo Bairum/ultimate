@@ -23,7 +23,11 @@ afterEach(async () => {
 
 it('derives neutral faux summaries from the latest prompt and only flags the questions reply', async () => {
   const faux = fauxProvider()
-  await fauxExtension({ faux, home: await temp('ultimate-faux-summary-demo-') } as ExtensionHost)
+  await fauxExtension({
+    faux,
+    home: await temp('ultimate-faux-summary-demo-'),
+    want: () => undefined,
+  } as unknown as ExtensionHost)
   const models = createModels()
   models.setProvider(faux.provider)
   const summarize = (source: string) =>

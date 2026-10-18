@@ -11,7 +11,7 @@ import {
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { Branched, Rooted } from '../lineage/api.ts'
+import { Branched, LineageApi, Rooted } from '../lineage/api.ts'
 import type { LandingSubject } from '../workspaces/types.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 // oxlint-disable-next-line no-restricted-imports -- conversations publishes the core UI state document
@@ -197,6 +197,9 @@ export async function subject(
 
 /** Tells each top-level conversation which other conversations work in this project. */
 export default (host: ExtensionHost) => {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(LineageApi)
+  host.want(WorkspacesApi)
   host.implement(ConversationsApi, {
     subject: (id, caller) => subject(host, id, caller),
     summaryModel: () => summaryModel(host),

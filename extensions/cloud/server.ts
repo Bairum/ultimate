@@ -31,6 +31,8 @@ import type {
 } from '../../cloud/protocol.ts'
 import { projectBuilds } from '../../cloud/ui-build.ts'
 import { secretMetadata } from '../../lib/secrets.ts'
+import { AutomationsApi } from '../automations/api.ts'
+import { HealthApi } from '../health/api.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
 import { cloudConfig, leaseSettings } from '../../lib/cloud.ts'
 import { projectIdentity } from '../../lib/project-identity.ts'
@@ -870,6 +872,10 @@ export async function joinOnStandby(home: string, key: string) {
 }
 
 export default async function cloud(host: ExtensionHost, deps: Partial<LeaseDeps> = {}) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(AutomationsApi)
+  host.want(HealthApi)
+  host.want(TailscaleApi)
   // The process stopping, not a reload of this facet, releases the lease.
   const stopping = host.resource('cloud.process', () => {
     const current: { lease?: Lease } = {}

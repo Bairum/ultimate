@@ -220,6 +220,8 @@ export const actions = {
 }
 
 export default function models(host: ExtensionHost) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(HealthApi)
   // At load, so the next start marks flows of the previous process cancelled.
   liveFlows(host)
   return defineExtension({ name: 'models' })

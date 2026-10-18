@@ -26,6 +26,8 @@ const tool = (name: string, args: JsonObject, greeting?: string) =>
   })
 
 export default async function fauxExtension(host: ExtensionHost) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(LineageApi)
   const faux = host.faux
   if (faux) {
     const scratch = join(host.home, 'demo.txt')

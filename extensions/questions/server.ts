@@ -311,6 +311,8 @@ export const actions = {
 }
 
 export default function questionsExtension(host: ExtensionHost) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(BoardApi)
   const conversations = host.need(ConversationsApi)
   const abort = aborted(conversations)
   const Extract = defineTask<{ messageId: number; text: string }, { phase: 'extract' }, null>({

@@ -1060,6 +1060,8 @@ async function refuseTally(tx: Tx, id: ConversationId) {
 }
 
 export default function lineageExtension(host: ExtensionHost) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(WorkspacesApi)
   host.implement(LineageApi, {
     branch: (input, ctx) => startBranch(host, input, ctx),
     rootOf: (id, ctx) => rootOf(host, id, ctx),
