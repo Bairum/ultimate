@@ -100,6 +100,7 @@ export default defineConfig({
                 codemode: ['subagents'],
                 cloud: ['automations', 'health', 'onboarding', 'secrets', 'sync'],
                 fast: ['onboarding'],
+                faux: ['lineage'],
                 health: ['cloud', 'subagents', 'sync'],
                 conversations: [
                   'board',

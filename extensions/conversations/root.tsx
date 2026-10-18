@@ -73,9 +73,10 @@ function useBranchState(conversation: ConversationSummary, working: boolean) {
       label: phase && phase !== 'waiting' ? phaseText(phase).toLowerCase() : 'working',
       tone: 'brand',
     } as const
-  // A branch's decisions reach you through @ultimate: an open question it asked waits on your answer.
+  // A branch's decisions reach you through @ultimate: an open question it asked (an approval, a choice) waits on an
+  // answer from @ultimate or you.
   if (board.messages.some((message) => message.from === conversation.id && isOpen(message)))
-    return { label: 'waiting on you', tone: 'waiting' } as const
+    return { label: 'awaiting reply', tone: 'waiting' } as const
   return { label: 'idle', tone: 'quiet' } as const
 }
 
@@ -222,8 +223,8 @@ export function RootRow({
   const actions = useUltimate()
   const id = conversation.id
   const tally = useDocOf<{ tokens: number; since?: number }>(id, 'lineage.tally')
-  const [open, setOpen] = useExtensionUiState<number[]>('landingsOpen', [])
-  const more = open.includes(id)
+  const [unfolded, setUnfolded] = useExtensionUiState<number[]>('landingsOpen', [])
+  const more = unfolded.includes(id)
   const landings = useAction<Landing[]>(
     'lineage',
     'recent',
@@ -245,6 +246,16 @@ export function RootRow({
   const name = 'Project context'
   const landed = landings.data ?? []
   const shownLandings = more ? landed : landed.slice(0, 3)
+  // The root's own landing notes count too: the lander keeps only recent results.
+  const open = flights.filter(
+    (flight) =>
+      flight.working ||
+      !landed.some(
+        (event) =>
+          event.from === flight.conversation.id &&
+          (event.at ?? 0) >= (flight.conversation.inputAt ?? 0),
+      ),
+  )
   return (
     <div
       className={cn(
@@ -282,11 +293,11 @@ export function RootRow({
           </span>
         )}
       </button>
-      {flights.length > 0 && (
+      {open.length > 0 && (
         <section aria-label={`In flight in ${name}`}>
-          <h3 className={heading}>In flight · {flights.length}</h3>
+          <h3 className={heading}>In flight · {open.length}</h3>
           <ul className="flex flex-col">
-            {flights.map((flight) => (
+            {open.map((flight) => (
               <FlightRow
                 conversation={flight.conversation}
                 key={flight.conversation.id}
@@ -305,7 +316,7 @@ export function RootRow({
               aria-expanded={more}
               className={cn(heading, 'cursor-pointer outline-none hover:text-foreground')}
               onClick={() =>
-                setOpen((previous) => [
+                setUnfolded((previous) => [
                   ...previous.filter((root) => root !== id),
                   ...(more ? [] : [id]),
                 ])
