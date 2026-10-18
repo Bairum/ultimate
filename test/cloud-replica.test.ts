@@ -725,6 +725,28 @@ describe('project replica sockets', () => {
     expect(instance.store.hasEntries()).toBe(false)
   })
 
+  it('gives a claimed lease to the claiming checkout, not to another checkout of its machine', () => {
+    const { instance, connect } = shared()
+    const writer = connect()
+    writer.receive(hello())
+    writer.receive({ type: 'release', epoch: 1, snapshot: { id: 'snap-1' } })
+    const claimant = connect()
+    claimant.receive(hello({ epoch: 1 }))
+    // A second checkout of the same machine says hello after the claimant, at another root.
+    connect().receive(hello({ root: '/elsewhere/test', port: 4900, secrets: ['ELSEWHERE'] }))
+    claimant.receive({ type: 'claim', epoch: 1 })
+    expect(instance.store.lease()).toMatchObject({
+      machine: 'test',
+      epoch: 2,
+      root: '/test',
+      port: 4800,
+      secrets: [],
+    })
+    const back = connect()
+    back.receive(hello({ epoch: 2 }))
+    expect(back.sent()[0]).toMatchObject({ type: 'role', role: 'writer', epoch: 2 })
+  })
+
   it('admits a hello naming the relinked key on the replica it was relinked to', () => {
     const { instance, connect } = shared()
     connect().receive(hello())

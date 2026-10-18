@@ -476,7 +476,11 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     clearTimeout(trailing)
     trailing = undefined
     published = Date.now()
-    sync?.send({ type: 'transition', value: structuredClone(moving.transition) })
+    // Every detail is bounded here, whichever step wrote it, so the cloud never refuses an update for its size.
+    const value = structuredClone(moving.transition)
+    for (const step of value.steps) if (step.detail !== undefined) step.detail = clip(step.detail)
+    if (value.error !== undefined) value.error = clip(value.error)
+    sync?.send({ type: 'transition', value })
   }
   const cancel = () => {
     if (moving?.transition.cancellable) moving.abort.abort(new Error('Cancelled'))
@@ -559,7 +563,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     }
     const end = (state: 'done' | 'skipped', detail?: string) => {
       current!.state = state
-      if (detail !== undefined) current!.detail = clip(detail)
+      if (detail !== undefined) current!.detail = detail
       publish()
     }
     try {
@@ -661,7 +665,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       claimed = state.epoch! + 1
     } catch (error) {
       const reason: unknown = signal.aborted ? signal.reason : error
-      const message = clip(reason instanceof Error ? reason.message : String(reason))
+      const message = reason instanceof Error ? reason.message : String(reason)
       // Only the download and the claim intent go; the holder and the local database stay as they are.
       if (downloaded) await rm(downloaded, { force: true })
       await rm(claimPath, { force: true })

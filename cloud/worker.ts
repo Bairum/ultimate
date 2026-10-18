@@ -244,6 +244,8 @@ interface Attachment {
   alias?: string
   machine?: string
   role?: 'writer' | 'standby'
+  /** This socket's checkout, from its hello: a claim takes the lease for it, not for another checkout of the machine. */
+  checkout?: { root: string; port: number; secrets: string[] }
 }
 const attachment = (socket: MachineSocket) =>
   socket.deserializeAttachment() as Attachment | null | undefined
@@ -409,7 +411,12 @@ export class SharedReplica {
           return
         }
         const { role } = replies[0] as Extract<CloudMessage, { type: 'role' }>
-        socket.serializeAttachment({ ...held, machine: message.machine, role })
+        socket.serializeAttachment({
+          ...held,
+          machine: message.machine,
+          role,
+          checkout: { root: message.root, port: message.port, secrets: message.secrets },
+        })
         if (role === 'writer') {
           for (const previous of this.sockets())
             if (previous !== socket) previous.close(1000, 'Replaced by new machine connection')
@@ -422,9 +429,14 @@ export class SharedReplica {
         return
       }
       if (message.type === 'claim') {
-        if (held?.role !== 'standby' || !held.machine || !Number.isSafeInteger(message.epoch))
+        if (
+          held?.role !== 'standby' ||
+          !held.machine ||
+          !held.checkout ||
+          !Number.isSafeInteger(message.epoch)
+        )
           return
-        const replies = this.store.claim(held.machine, message.epoch)
+        const replies = this.store.claim(held.machine, held.checkout, message.epoch)
         if (!replies) {
           socket.send(JSON.stringify(this.store.role('standby', this.sockets().length > 0)))
           return

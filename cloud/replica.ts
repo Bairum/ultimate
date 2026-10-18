@@ -209,12 +209,18 @@ export class ReplicaStore {
       return true
     })
   }
-  /** Take the free lease at its epoch, raising it by one. Undefined: taken, or another epoch. */
-  claim(machine: string, epoch: number): CloudMessage[] | undefined {
+  /**
+   * Take the free lease at its epoch for the claiming socket's checkout, raising the epoch by one. Undefined: taken, or
+   * another epoch.
+   */
+  claim(
+    machine: string,
+    claimant: { root: string; port: number; secrets: string[] },
+    epoch: number,
+  ): CloudMessage[] | undefined {
     return this.sql.transaction(() => {
       const lease = this.lease()
-      const claimant = this.machines()[machine]
-      if (!lease || !claimant || lease.machine !== null || lease.epoch !== epoch) return undefined
+      if (!lease || lease.machine !== null || lease.epoch !== epoch) return undefined
       this.put('metadata', 5, {
         ...lease,
         machine,

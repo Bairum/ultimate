@@ -248,6 +248,27 @@ it('fast-forwards the checkout and installs when the lockfile changed, rerunning
   expect(existsSync(join(laptop.home, 'cloud-install-pending'))).toBe(false)
 })
 
+it('bounds a successful step detail too, so a long branch name never stalls the transition', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const repo = await checkout()
+  const desk = await machine('desk', project, repo.root)
+  await writer(desk)
+  await idleRelease(desk)
+  const laptop = await machine('laptop', project, repo.root, { autoClaim: false })
+  await standbyOn(laptop)
+  // Long as a whole; each path segment stays within file-name limits.
+  const branch = Array.from({ length: 6 }, () => 'x'.repeat(100)).join('/')
+  await git(repo.root, 'checkout', '-q', '-b', branch)
+  await git(repo.root, 'push', '-q', 'origin', branch)
+  await git(repo.root, 'remote', 'set-head', 'origin', branch)
+  expect(await laptop.lease.move()).toBe(true)
+  const fetch = project.replica.store.transition()!.steps.find((step) => step.name === 'fetch')!
+  expect(fetch.state).toBe('done')
+  expect(fetch.detail!.length).toBeLessThanOrEqual(500)
+  expect(fetch.detail!.endsWith('is up to date')).toBe(true)
+})
+
 it('reports an oversized install failure by its last 500 characters, which the cloud keeps', async () => {
   snapshotFetch()
   const project = cloud()
