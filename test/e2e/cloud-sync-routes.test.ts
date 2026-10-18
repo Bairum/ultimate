@@ -78,7 +78,13 @@ describe.skipIf(cloudSkip)(
           standbys: [expect.objectContaining({ machine: 'b', connected: true })],
         }),
       ])
-      expect(value.machines.map((machine) => machine.machine)).toEqual(['a', 'b'])
+      expect(value.machines.map((machine) => machine.machine)).toEqual(['a', 'b', 'sync-e2e'])
+      expect(value.machines.find((machine) => machine.machine === 'sync-e2e')).toEqual({
+        machine: 'sync-e2e',
+        online: false,
+        projects: 0,
+        health: [],
+      })
       const refused = await fleet(deps('wrong'))
       expect(refused.error).toContain('401')
       expect(refused.projects).toEqual([])
