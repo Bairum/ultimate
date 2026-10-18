@@ -4,15 +4,17 @@ import { join } from 'node:path'
 /** An extension folder as discovery reports it (`host.extensions()`). */
 type Folder = { name: string; path: string; enabled: boolean }
 
-/** The first sentence of the doc comment that opens an `api.ts`, or '' without one. */
+/**
+ * The first sentence of the doc comment that opens an `api.ts`: its one-line summary. '' when the file does not open
+ * with a doc comment holding a complete sentence, which the `api-file-shape` lint rule rejects.
+ */
 export function apiSummary(text: string) {
   const header = /^\/\*\*([\s\S]*?)\*\//
     .exec(text.trimStart())?.[1]
     .replace(/^\s*\*\s?/gm, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-  if (!header) return ''
-  return /^.*?[.!?](?=\s|$)/.exec(header)?.[0] ?? header
+  return (header && /^.*?[.!?](?=\s|$)/.exec(header)?.[0]) || ''
 }
 
 async function read(folder: Folder) {

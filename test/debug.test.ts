@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path'
 import { afterAll, expect, it } from 'vitest'
 import { context } from '../server/harness.ts'
 import { age } from '../extensions/debug/server.ts'
+import { apiSummary } from '../lib/api-files.ts'
 import { fauxServer, linkDependencies, removeTemp, temp, until } from './helpers.ts'
 
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
@@ -138,6 +139,15 @@ it('lists extension contracts with summaries and returns one by name', async () 
   await expect(debug({ call: 'api', name: 'alpha' })).rejects.toThrow(
     'No enabled extension "alpha" with an api.ts; known: beta',
   )
+})
+
+it('summarises an api.ts by the first sentence of its opening doc comment, as the lint rule requires', () => {
+  expect(apiSummary('/**\n * Beta: pings,\n * across lines. More.\n */\nexport {}')).toBe(
+    'Beta: pings, across lines.',
+  )
+  expect(apiSummary('/** No sentence end */')).toBe('')
+  expect(apiSummary('export {}\n/** Too late. */')).toBe('')
+  expect(apiSummary('// Not a doc comment.\nexport {}')).toBe('')
 })
 
 it('says ages in the largest whole unit', () => {
