@@ -48,7 +48,7 @@ machine → project; later layers win. Settings changes apply live without a res
 
 The `parallel` web tools read their key from `secrets`. Secrets are user-global, not project state.
 
-A server facet may export `secrets: { name: string; description: string; url?: string }[]`. Names must match `^[A-Z][A-Z0-9_]*$`, descriptions must be non-empty, and optional URLs must use http(s). Installed declarations appear in `ExtensionInfo.server.secrets` and the Secrets panel; values never appear in extension info. Other server facets may import `readSecret(userHome, name)` from `extensions/secrets/store.ts`, like automations imports subagent helpers.
+A server facet may export `secrets: { name: string; description: string; url?: string }[]`. Names must match `^[A-Z][A-Z0-9_]*$`, descriptions must be non-empty, and optional URLs must use http(s). Installed declarations appear in `ExtensionInfo.server.secrets` and the Secrets panel; values never appear in extension info. Other server facets read values with `readSecret(userHome, name)` from `lib/secrets.ts`; only the secrets extension writes them.
 
 The `tailscale` built-in exposes Ultimate to your own Tailscale login by default; only user settings set its allowlist, and a project cannot turn on what they disable. See [tailscale](tailscale/README.md) for stable project URLs and owner-login admission.
 
@@ -843,6 +843,10 @@ Keep UI state that should survive a reload in `useExtensionUiState`; keep throwa
 - One feature per folder; the folder name is the extension name; a README is required. Keep it small.
 - Prefer documents, commands, events, or the SDK. Imports from another extension's files are dependencies:
   declare them in `vite.config.ts` `ultimate/extension-imports`. Lint enforces declarations and forbids cycles.
+- Shared pure helpers live in the top-level `lib/`, not in another extension: `exec.ts` (run a program), `git.ts`
+  (git and isolation checks), `json-file.ts` (read, atomic write, serialised update), `settings.ts`, `secrets.ts`
+  (read-only) and `machine.ts` (machine-home checks, browser-safe). Import them freely; they hot reload with the
+  extensions that import them. `lib/` holds no state and imports no extension, `web/` or server runtime code.
 - Server facets: see `prompt/` for prompt sections and `coding-tools/server.ts` for tools; the root `AGENTS.md` explains
   reloads and durability. Server facets may `export const order = -100`: lower values come first, with the default 0
   keeping discovery order (built-in → user → project, then folder name); changing it reorders the server prompt and tools once.

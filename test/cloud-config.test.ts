@@ -6,7 +6,7 @@ import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../server/extensions.ts'
 import cloud from '../extensions/cloud/server.ts'
 import { cloudConfig, leaseSettings } from '../extensions/cloud/config.ts'
-import { save } from '../extensions/onboarding/settings.ts'
+import { writeJson } from '../lib/json-file.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
 import { temp } from './helpers.ts'
 
@@ -21,7 +21,7 @@ async function fixture() {
   }))
   const host = { userHome, projectRoot, faux: undefined, notice, projectSettings }
   const settings = (value: JsonObject) =>
-    save(join(userHome, '.ultimate/settings.json'), { cloud: value })
+    writeJson(join(userHome, '.ultimate/settings.json'), { cloud: value })
   await settings({ url: 'wss://user/sync', machine: 'user-machine' })
   await writeSecret(userHome, 'ULTIMATE_CLOUD_TOKEN', 'secret-token')
   return { host, settings }
@@ -97,7 +97,7 @@ it('reads the lease timing from user settings, with defaults for missing or inva
 
 it('reports a missing token once at host open and never opens a connection', async () => {
   const userHome = await temp()
-  await save(join(userHome, '.ultimate/settings.json'), { cloud: { url: 'wss://user/sync' } })
+  await writeJson(join(userHome, '.ultimate/settings.json'), { cloud: { url: 'wss://user/sync' } })
   for (const key of [
     'ULTIMATE_CLOUD_URL',
     'ULTIMATE_CLOUD_TOKEN',

@@ -1,7 +1,7 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api, cn, getState, useDocOf, useStore, useSystem, useTasks, useUltimate } from '@/sdk'
 import type { UltimateActions } from '@/sdk'
-import { primaryAgent } from '../subagents/primary.ts'
+import { primaryAgent } from '../../lib/machine.ts'
 import { emptyBoard, waitingOnUser } from '../board/data.tsx'
 import type { BoardData } from '../board/data.tsx'
 import type { QuestionsBoard } from '../questions/open.tsx'

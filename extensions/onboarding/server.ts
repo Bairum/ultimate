@@ -13,10 +13,12 @@ import { Type } from '@earendil-works/pi-ai'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { isolatable } from '../workspaces/git.ts'
+import { isolatable } from '../../lib/git.ts'
+import { writeJson } from '../../lib/json-file.ts'
+import { isMachineHome } from '../../lib/machine.ts'
+import { updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
-import { save, updateSettings } from './settings.ts'
 import type { SubagentsService } from '../subagents/server.ts'
 import type { LineageService } from '../lineage/server.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
@@ -124,9 +126,7 @@ async function declared(path: string) {
   }
 }
 
-/** The machine home (`subagents/primary.ts`) has no project to set up or read: @sync is its only standing agent. */
-const isMachineHome = (projectRoot: string, userHome: string) =>
-  projectRoot === join(userHome, '.ultimate/machine')
+/** The machine home has no project to set up or read: @sync is its only standing agent. */
 const refuseMachineHome = (host: { projectRoot: string; userHome: string }) => {
   if (isMachineHome(host.projectRoot, host.userHome))
     throw new Error('The machine home has no onboarding; talk to @sync')
@@ -335,7 +335,7 @@ export const actions: Record<string, ExtensionAction> = {
         !existsSync(marker(host.userHome)) && !isMachineHome(host.projectRoot, host.userHome),
       project: await host.projectSetup(),
       // The user's own lists, for the first run's checkboxes.
-      user: await declared(join(host.userHome, '.ultimate/settings.json')),
+      user: await declared(userSettingsPath(host.userHome)),
       adds: {
         ...(await adds(host.projectRoot)),
         extensions: folders.filter((entry) => !entry.replaces).map((entry) => entry.name),
@@ -344,7 +344,7 @@ export const actions: Record<string, ExtensionAction> = {
     }
   },
   firstRunDone: async (_args, { host }) => {
-    await save(marker(host.userHome), { firstRunDone: true })
+    await writeJson(marker(host.userHome), { firstRunDone: true })
     return { firstRun: false }
   },
   /**
@@ -368,12 +368,12 @@ export const actions: Record<string, ExtensionAction> = {
         'Expected extensions as non-empty names to booleans, and local as a boolean if given',
       )
     const { local } = args as { local?: boolean }
-    await updateSettings(join(host.userHome, '.ultimate/settings.json'), (value) => {
+    await updateSettings(userSettingsPath(host.userHome), (value) => {
       const extensions = lists(value)
       for (const [name, enabled] of Object.entries(choices as Record<string, boolean>))
         toggle(extensions, name, enabled)
     })
-    await save(marker(host.userHome), { firstRunDone: true })
+    await writeJson(marker(host.userHome), { firstRunDone: true })
     if (local === undefined) await host.reloadExtensions()
     else await host.setProjectDecision(local)
     return { firstRun: false }
@@ -416,7 +416,7 @@ export const actions: Record<string, ExtensionAction> = {
       !(project.disable as string[] | undefined)?.length
     )
       return { ok: true }
-    const path = join(host.userHome, '.ultimate/settings.json')
+    const path = userSettingsPath(host.userHome)
     await updateSettings(path, (value) => {
       const extensions = lists(value)
       for (const [key, enabled] of [

@@ -18,7 +18,7 @@ export interface AgentDefinition {
   thinking?: ModelThinkingLevel
   tools?: string[]
   isolate?: 'none' | 'worktree'
-  /** A standing agent: `true` in project homes, `machine` in the machine home (see `primary.ts`). */
+  /** A standing agent: `true` in project homes, `machine` in the machine home (see `lib/machine.ts`). */
   resident?: boolean | 'machine'
   /** What the lander does when a submission fails: explain it, or fix it and land. Only the lander reads it. */
   onFailure?: 'diagnose' | 'fix'

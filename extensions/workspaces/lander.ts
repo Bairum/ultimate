@@ -1,8 +1,7 @@
-import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, realpath, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { promisify, stripVTControlCharacters } from 'node:util'
+import { stripVTControlCharacters } from 'node:util'
 import { copyJson } from '@earendil-works/chord'
 import type { Context } from '@earendil-works/chord'
 import { withAbortSignal } from '@earendil-works/chord/context'
@@ -20,11 +19,12 @@ import type {
   ConversationId,
   Tx,
 } from '@earendil-works/pi-durable'
+import { git } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { LineageService } from '../lineage/server.ts'
 import type { BoardService } from '../board/server.ts'
 import { definitionAgent, discoverAgents } from '../subagents/agents.ts'
-import { git, setup } from './git.ts'
+import { setup } from './setup.ts'
 import type {
   Landed,
   LanderAsk,
@@ -34,7 +34,6 @@ import type {
   WorkspaceIndex,
 } from './types.ts'
 
-const exec = promisify(execFile)
 /** One line of the lander conversation's log; it carries no model message, so no model ever sees it. */
 export const LanderLog = defineEntry<LanderEntry>('ultimate.lander')
 /** The entry kind of the lander task's question to its model; the model reads the prompt. */
@@ -270,7 +269,7 @@ const failure = (error: unknown) => {
 }
 /** Run a network git command in `cwd`; longer than git()'s local timeout. */
 const remote = (cwd: string, signal: AbortSignal, ...args: string[]) =>
-  exec('git', args, { cwd, signal, timeout: 300000, maxBuffer: 1024 * 1024 })
+  git({ cwd, signal, timeout: 300000 }, ...args)
 
 /** A failure the lander's model works on: the checkout stays as it failed, at `head` on top of target `base`. */
 type Failure = {
@@ -693,14 +692,9 @@ export function createLander(
                   return
               }
               if (settings.push) {
-                const { stdout } = await remote(
-                  path,
-                  signal,
-                  'ls-remote',
-                  settings.push,
-                  `refs/heads/${target}`,
-                )
-                if (stdout.trim()) {
+                if (
+                  await remote(path, signal, 'ls-remote', settings.push, `refs/heads/${target}`)
+                ) {
                   await remote(path, signal, 'fetch', '-q', settings.push, target)
                   const fetched = await git(path, 'rev-parse', 'FETCH_HEAD')
                   if (!(await contains(path, fetched, 'HEAD'))) {

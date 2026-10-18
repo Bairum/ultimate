@@ -12,14 +12,13 @@
 //   snapshot installed. The transition records who started it (`by`).
 //
 // Lifecycle switches never run inside a socket handler: roles are handled after a `setTimeout(0)`, one switch at a time.
-import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream, existsSync } from 'node:fs'
 import { readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { JsonObject } from '@earendil-works/pi-durable'
+import { exec as run } from '../../lib/exec.ts'
 import { applyWaiting, handoverDetail, LEFT_LIMITS } from '../../cloud/protocol.ts'
 import type { MoveBy, Transition, TransitionStep } from '../../cloud/protocol.ts'
 import type { projectBuilds } from '../../cloud/ui-build.ts'
@@ -27,7 +26,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- a stop release holds storage's lock, which a swapped-in core owns
 import { acquireLock } from '../../server/lock.ts'
 import type { AutomationsService } from '../automations/server.ts'
-import { readSecret, secretMetadata } from '../secrets/store.ts'
+import { readSecret, secretMetadata } from '../../lib/secrets.ts'
 import { modelLogin, noLogin } from './login.ts'
 import type { ModelLogin } from './types.ts'
 import type { Connect, startSync, SyncOptions, SyncState } from './server.ts'
@@ -99,7 +98,6 @@ const STEPS: TransitionStep['name'][] = [
   'branches',
   'claim',
 ]
-const run = promisify(execFile)
 const exec: Exec = (command, args, options) =>
   run(command, args, { ...options, maxBuffer: 16 * 1024 * 1024 })
 

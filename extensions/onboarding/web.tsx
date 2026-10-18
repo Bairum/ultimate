@@ -133,7 +133,7 @@ function Undecided() {
 }
 function NoGit() {
   const system = useSystem()
-  // The machine home is a plain folder on purpose (`subagents/primary.ts`); it needs no Git.
+  // The machine home is a plain folder on purpose (`lib/machine.ts`); it needs no Git.
   const machine = !!system && system.project.root === `${system.machine.home}/.ultimate/machine`
   const reason = useIsolation()?.reason
   return reason && !machine ? <SetupLink card="git">set up git</SetupLink> : null

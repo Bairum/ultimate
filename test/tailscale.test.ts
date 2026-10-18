@@ -114,6 +114,7 @@ async function repo(home: string) {
   await mkdir(join(root, 'web'), { recursive: true })
   await mkdir(join(root, '.ultimate'), { recursive: true })
   await cp(resolve('extensions/tailscale'), join(root, 'extensions/tailscale'), { recursive: true })
+  await cp(resolve('lib'), join(root, 'lib'), { recursive: true })
   await mkdir(join(root, 'server'))
   await cp(resolve('server/lock.ts'), join(root, 'server/lock.ts'))
   await linkDependencies(root)

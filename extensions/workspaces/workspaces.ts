@@ -1,6 +1,4 @@
-import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { promisify } from 'node:util'
 import { lstat, mkdir, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Context } from '@earendil-works/chord'
@@ -13,9 +11,11 @@ import {
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, TaskId, Tx } from '@earendil-works/pi-durable'
+import { exec } from '../../lib/exec.ts'
+import { git, isolatable } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ConversationsService } from '../conversations/server.ts'
-import { git, isolatable, setup } from './git.ts'
+import { setup } from './setup.ts'
 import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
 import type {
   LandResult,
@@ -26,8 +26,6 @@ import type {
   WorkspaceStats,
   WorkspacePending,
 } from './types.ts'
-
-const exec = promisify(execFile)
 
 export const Workspaces = defineDoc<WorkspaceIndex>({
   kind: 'ultimate.workspaces',

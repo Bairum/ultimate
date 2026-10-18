@@ -30,7 +30,7 @@ import type {
   Writer,
 } from '../../cloud/protocol.ts'
 import { projectBuilds } from '../../cloud/ui-build.ts'
-import { secretMetadata } from '../secrets/store.ts'
+import { secretMetadata } from '../../lib/secrets.ts'
 import type { TailscaleService } from '../tailscale/server.ts'
 import { cloudConfig, leaseSettings } from './config.ts'
 import { projectIdentity } from './identity.ts'

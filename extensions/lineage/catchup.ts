@@ -1,6 +1,4 @@
-import { execFile } from 'node:child_process'
 import { isAbsolute, relative, resolve } from 'node:path'
-import { promisify } from 'node:util'
 import type { Context } from '@earendil-works/chord'
 import { AgentDoc, defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { estimateTextTokens } from '@earendil-works/pi-ai/utils/estimate'
@@ -11,6 +9,7 @@ import type {
   EntryRecord,
   Tx,
 } from '@earendil-works/pi-durable'
+import { git } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
 import type { OpenAbstract } from './server.ts'
@@ -27,12 +26,6 @@ export const Seen = defineDoc<{ main?: string; at?: number; tally?: number }>({
   fork: 'initial',
   initial: () => ({}),
 })
-
-const exec = promisify(execFile)
-async function git(cwd: string, ...args: string[]) {
-  const { stdout } = await exec('git', args, { cwd, timeout: 30000, maxBuffer: 1024 * 1024 })
-  return stdout.trim()
-}
 
 type Main = { cwd: string; target: string; sha: string; workspace?: string }
 async function mainOf(

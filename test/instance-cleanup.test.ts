@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { acquireLock } from '../server/lock.ts'
 import { cleanPreview, sweepPreviews } from '../extensions/instance/cleanup.ts'
-import { git } from '../extensions/workspaces/git.ts'
+import { git } from '../lib/git.ts'
 
 const roots: string[] = []
 afterEach(async () => {

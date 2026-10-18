@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { projectIdentity, projectKey } from '../extensions/cloud/identity.ts'
-import { git } from '../extensions/workspaces/git.ts'
+import { git } from '../lib/git.ts'
 import { temp } from './helpers.ts'
 
 it.each([

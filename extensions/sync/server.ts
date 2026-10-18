@@ -1,12 +1,12 @@
-import { execFile } from 'node:child_process'
 import { readdir } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { promisify } from 'node:util'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import type { JsonObject } from '@earendil-works/pi-durable'
+import { git } from '../../lib/git.ts'
+import { isMachineHome, machineRoot } from '../../lib/machine.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { startedBy } from '../../cloud/protocol.ts'
@@ -17,11 +17,8 @@ import { projectIdentity } from '../cloud/identity.ts'
 import type { CloudState } from '../cloud/types.ts'
 import { readHealth } from '../health/store.ts'
 import type { SubagentsService } from '../subagents/server.ts'
-import { isMachineHome, machineRoot } from '../subagents/primary.ts'
 import { ended } from './moves.ts'
 import type { Fleet, FleetProject, LocalProject, MoveEnded, SyncReport } from './types.ts'
-
-const run = promisify(execFile)
 
 /** A project home on this machine; `url` while its server runs. */
 export interface Home {
@@ -83,12 +80,13 @@ export function syncDeps(host: ExtensionHost): SyncDeps {
     },
     async keptRefs(root) {
       try {
-        const { stdout } = await run(
-          'git',
-          ['for-each-ref', '--format=%(refname:short)', 'refs/heads/ultimate-moved'],
-          { cwd: root },
+        const refs = await git(
+          root,
+          'for-each-ref',
+          '--format=%(refname:short)',
+          'refs/heads/ultimate-moved',
         )
-        return stdout.split('\n').filter(Boolean)
+        return refs.split('\n').filter(Boolean)
       } catch {
         // A missing checkout or no repository keeps no refs aside.
         return []

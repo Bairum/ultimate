@@ -73,6 +73,47 @@ export default defineConfig({
         },
       },
       {
+        files: ['lib/**'],
+        rules: {
+          'no-restricted-imports': [
+            'error',
+            {
+              patterns: [
+                {
+                  group: ['**/extensions/**', '**/web/**', '**/bin/**'],
+                  message:
+                    'lib/ holds pure helpers that extensions share; it imports none of them.',
+                },
+                {
+                  group: ['**/server/**'],
+                  allowTypeImports: true,
+                  message:
+                    'lib/ holds pure helpers; core runtime behaviour comes from host capabilities.',
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        // The browser shares it (`tsconfig.web.json`), so it repeats the lib/ restriction and adds Node.
+        files: ['lib/machine.ts'],
+        rules: {
+          'no-restricted-imports': [
+            'error',
+            {
+              patterns: [
+                {
+                  group: ['node:*', '**/server/**', '**/extensions/**', '**/web/**', '**/bin/**'],
+                  message:
+                    'lib/machine.ts runs in the browser too; keep it free of Node and other layers.',
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
         files: ['extensions/**'],
         rules: {
           'no-restricted-imports': [
@@ -94,29 +135,23 @@ export default defineConfig({
                 agent: ['lineage'],
                 automations: ['subagents'],
                 board: ['workspaces', 'subagents', 'lineage', 'conversations', 'questions'],
-                classify: ['secrets'],
-                cloudflare: ['secrets'],
                 phase: ['classify', 'conversations'],
                 codemode: ['subagents'],
-                cloud: ['automations', 'health', 'onboarding', 'secrets', 'sync', 'tailscale'],
-                fast: ['onboarding'],
+                cloud: ['automations', 'health', 'sync', 'tailscale'],
                 faux: ['lineage'],
-                health: ['cloud', 'subagents', 'sync'],
+                health: ['cloud', 'sync'],
                 conversations: [
                   'board',
                   'lineage',
                   'models',
-                  'onboarding',
                   'phase',
                   'plan',
                   'questions',
-                  'subagents',
                   'workspaces',
                 ],
                 instance: ['subagents', 'tailscale', 'workspaces'],
                 models: ['health'],
                 lineage: ['cloud', 'conversations', 'workspaces'],
-                parallel: ['secrets'],
                 questions: ['conversations', 'lineage', 'board', 'subagents'],
                 onboarding: ['workspaces', 'subagents', 'lineage'],
                 plan: ['lineage', 'workspaces'],
@@ -124,7 +159,7 @@ export default defineConfig({
                 sounds: ['conversations', 'board', 'questions'],
                 'status-line': ['workspaces'],
                 subagents: ['conversations', 'plan', 'workspaces'],
-                sync: ['cloud', 'health', 'onboarding', 'secrets', 'subagents'],
+                sync: ['cloud', 'health', 'subagents'],
                 tasks: ['conversations', 'plan', 'workspaces'],
                 workspaces: ['board', 'conversations', 'info', 'lineage', 'subagents'],
               },

@@ -8,7 +8,7 @@ import worker from '../cloud/worker.ts'
 import { MAX_SNAPSHOT_OBJECT } from '../cloud/snapshots.ts'
 import { databaseHash, downloadSnapshot, uploadSnapshot } from '../extensions/cloud/snapshot.ts'
 import type { SnapshotManifest } from '../extensions/cloud/snapshot.ts'
-import { git } from '../extensions/workspaces/git.ts'
+import { git } from '../lib/git.ts'
 import { temp } from './helpers.ts'
 
 type Env = Parameters<typeof worker.fetch>[1]

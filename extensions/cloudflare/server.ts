@@ -1,9 +1,9 @@
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
+import { readJson } from '../../lib/json-file.ts'
+import { readSecret } from '../../lib/secrets.ts'
+import { userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { readSecret } from '../secrets/store.ts'
 
 export const secrets = [
   {
@@ -103,17 +103,13 @@ export default function cloudflare(host: ExtensionHost) {
           )
           let account = accounts.length === 1 ? accounts[0]?.id : undefined
           if (!account) {
-            let settings: { cloud?: { accountId?: string } } = {}
-            try {
-              settings = JSON.parse(
-                await readFile(join(host.userHome, '.ultimate/settings.json'), 'utf8'),
-              )
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-                // Settings parse errors can include file contents; do not attach the cause.
-                // oxlint-disable-next-line preserve-caught-error
-                throw new Error('Cannot read user settings; check ~/.ultimate/settings.json.')
-            }
+            const settings = await readJson<{ cloud?: { accountId?: string } }>(
+              userSettingsPath(host.userHome),
+              {},
+            ).catch(() => {
+              // Settings parse errors can include file contents; do not attach the cause.
+              throw new Error('Cannot read user settings; check ~/.ultimate/settings.json.')
+            })
             account = accounts.find((item) => item.id === settings.cloud?.accountId)?.id
             if (!account)
               throw new Error(

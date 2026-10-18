@@ -32,7 +32,7 @@ import type { SummaryModel } from '../conversations/summary-model.ts'
 import type { BoardMessage, BoardService } from '../board/server.ts'
 import { Board } from '../board/server.ts'
 import { Standing } from '../subagents/server.ts'
-import { primaryAgent } from '../subagents/primary.ts'
+import { primaryAgent } from '../../lib/machine.ts'
 
 import type { Question } from './types.ts'
 export const BoardQuestions = defineDoc<{

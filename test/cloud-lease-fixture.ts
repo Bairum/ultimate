@@ -19,7 +19,7 @@ import type { Connect, SyncSocket, SyncState } from '../extensions/cloud/server.
 import { startLease } from '../extensions/cloud/lease.ts'
 import type { Exec } from '../extensions/cloud/lease.ts'
 import * as snapshot from '../extensions/cloud/snapshot.ts'
-import { git } from '../extensions/workspaces/git.ts'
+import { git } from '../lib/git.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { context, prepareHarness } from '../server/harness.ts'
 import { temp, until } from './helpers.ts'

@@ -176,12 +176,8 @@ it('reserves trust and secret writes for the UI while allowing normal actions', 
   const { server, options } = await fixture()
   await mkdir(join(options.ultimateRoot, 'server'), { recursive: true })
   await cp(resolve('server/lock.ts'), join(options.ultimateRoot, 'server/lock.ts'))
-  // Onboarding's setup tool inspects isolation with the shared Git helper.
-  await mkdir(join(options.ultimateRoot, 'extensions/workspaces'), { recursive: true })
-  await cp(
-    resolve('extensions/workspaces/git.ts'),
-    join(options.ultimateRoot, 'extensions/workspaces/git.ts'),
-  )
+  // Onboarding and secrets use the shared helpers in lib/.
+  await cp(resolve('lib'), join(options.ultimateRoot, 'lib'), { recursive: true })
   for (const name of ['onboarding', 'secrets']) {
     await cp(resolve(`extensions/${name}`), join(options.ultimateRoot, `extensions/${name}`), {
       recursive: true,

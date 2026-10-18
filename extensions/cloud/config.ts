@@ -1,15 +1,12 @@
 import { hostname } from 'node:os'
-import { join } from 'node:path'
+import { readSecret } from '../../lib/secrets.ts'
+import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { readSettings } from '../onboarding/settings.ts'
-import { readSecret } from '../secrets/store.ts'
 
 /** The user's `cloud` settings object; project settings are never read. */
 async function userCloudSettings(host: Pick<ExtensionHost, 'userHome'>) {
   // Invalid user settings are reported by the settings loader; treat them as unset here.
-  const settings = await readSettings(join(host.userHome, '.ultimate/settings.json')).catch(
-    () => ({}),
-  )
+  const settings = await readSettings(userSettingsPath(host.userHome)).catch(() => ({}))
   const cloud = 'cloud' in settings ? settings.cloud : undefined
   return cloud && typeof cloud === 'object' && !Array.isArray(cloud) ? cloud : {}
 }
