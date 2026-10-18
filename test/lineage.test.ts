@@ -92,24 +92,31 @@ async function fixture(reopen?: string) {
   return { server, home, requests, condensed, gate }
 }
 
-it('unlists only an empty root that is not the last', async () => {
+it('unlists a root that never became a tally, never a tally or the last root', async () => {
   const { server } = await fixture()
   const create = async () =>
     (await server.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)).id
-  const [empty, tally, last] = [await create(), await create(), await create()]
+  const [plain, tally, last] = [await create(), await create(), await create()]
   await server.harness.commit(async (tx) => {
-    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.push(empty, tally)
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.push(plain, tally)
+    await tx.appendEntry(plain, {
+      kind: 'pi.user',
+      model: [{ role: 'user', content: 'An old chat', timestamp: 1 }],
+    })
   }, context)
   await seedTally(server.harness, tally)
   await branchFrom(server, { from: tally, prompt: 'Work on it' })
+  const stale = await branchFrom(server, { from: plain, prompt: 'Stale work' })
   const unlist = async (id: number) =>
     (await post(server, '/api/extensions/lineage/actions/unlist', { args: { id } })).data
 
   expect((await unlist(tally)).error).toBe(
-    `#${tally} has history; only an empty root can be unlisted`,
+    `#${tally} is a tally; only a root that never became one can be unlisted`,
   )
-  expect((await unlist(empty)).result).toEqual({ roots: [1, tally] })
-  expect((await unlist(empty)).error).toBe(`#${empty} is not a listed root`)
+  expect((await unlist(plain)).result).toEqual({ roots: [1, tally] })
+  expect((await unlist(plain)).error).toBe(`#${plain} is not a listed root`)
+  // Its branch now belongs to no tree.
+  expect(await rootOf({ harness: () => server.harness }, stale, context)).toBeUndefined()
 
   await server.harness.commit(async (tx) => {
     ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [last]

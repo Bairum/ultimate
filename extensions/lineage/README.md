@@ -20,9 +20,9 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
   genesis with its memoised breadcrumb, so it writes only once. The genesis card links to that source reading.
   An empty root has nothing to branch from: seed it first. Tallies refuse inputs and run no turns.
   `info` returns `{ roots }`, and with `{ id }` also its `root` and `branch` when present.
-  `unlist` `{ id }` → `{ roots }` removes an empty root from the list: it refuses non-roots, the last root, and roots
-  with any entries (a tally starts with its genesis and every branch forks at an entry). Concluding only hides a
-  conversation; unlisting is how a mistaken empty root stops being offered to `branch`.
+  `unlist` `{ id }` → `{ roots }` removes a root that never became a tally from the list: it refuses non-roots, the
+  last root and tallies. The root and its branches then belong to no tree. Concluding only hides a conversation;
+  unlisting is how a mistaken or abandoned root stops being offered to `branch`.
 - **Tally**: conversation-scoped doc `lineage.tally` (latest history) holds
   `{ abstracts: Record<string, { anchor, at, text, title?, feature? }>, tokens: number, since?: number }`:
   each conversation's open abstract, estimated model-visible context tokens, and the entry where the root became a tally. Forks start with an empty doc,
