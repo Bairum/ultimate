@@ -24,7 +24,6 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { QuestionsApi } from '../questions/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { isolatable } from '../../lib/git.ts'
 
@@ -32,7 +31,7 @@ import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import { primaryAgent } from '../../lib/machine.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { LineageApi, Roots } from '../lineage/api.ts'
-import { Board, BoardApi } from './api.ts'
+import { Asked, Board, BoardApi } from './api.ts'
 import type { BoardMessage } from './api.ts'
 export const docs = [Board]
 // The receipt commits with the message, closing the gap before api.memo records its id.
@@ -495,7 +494,7 @@ async function send(
       ...(callId === undefined ? {} : { call: callId }),
     })
     if (to === 'user' && message.reply && from !== 'user')
-      await host.want(QuestionsApi)?.request(tx, message)
+      await host.emit(tx, Asked, { message: message.id, from })
     if (to !== 'user')
       await tx.createTask(
         delivery(host),
@@ -539,7 +538,6 @@ export const actions = {
 export default function board(host: ExtensionHost) {
   // Optional services, resolved where they are called; declared here so the catalogue lists them.
   host.want(LineageApi)
-  host.want(QuestionsApi)
   host.want(SubagentsApi)
   host.want(WorkspacesApi)
   host.implement(BoardApi, {

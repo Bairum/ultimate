@@ -27,12 +27,11 @@ import { ConversationsApi } from '../conversations/api.ts'
 import type { ConversationsService } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
-import { Board, BoardApi } from '../board/api.ts'
+import { Asked, Board, BoardApi } from '../board/api.ts'
 import type { BoardMessage } from '../board/api.ts'
 import { Standing } from '../subagents/api.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { primaryAgent } from '../../lib/machine.ts'
-import { QuestionsApi } from './api.ts'
 
 import { AnswerAction, QuestionsDoc, ReplyAction } from './refs.ts'
 import type { Question } from './types.ts'
@@ -438,21 +437,21 @@ export default function questionsExtension(host: ExtensionHost) {
     stop = undefined
     await Promise.all(ending)
   })
-  host.implement(QuestionsApi, {
-    async request(tx, message) {
-      const { state } = await stateFor(tx)
-      if (state.requested.includes(message.id)) return
-      state.requested.push(message.id)
-      await tx.createTask(
-        Extract,
-        { messageId: message.id, text: message.text },
-        {
-          ownership: { kind: 'conversation' },
-          conversationId: ROOT_CONVERSATION_ID,
-          background: true,
-        },
-      )
-    },
+  // Each asking message is extracted once: the reactor's transaction records the request with the extraction task.
+  host.react('asked', [Asked], async (tx, { data }) => {
+    const { log, state } = await stateFor(tx)
+    const message = log.messages.find((m) => m.id === data.message)
+    if (!message || state.requested.includes(message.id)) return
+    state.requested.push(message.id)
+    await tx.createTask(
+      Extract,
+      { messageId: message.id, text: message.text },
+      {
+        ownership: { kind: 'conversation' },
+        conversationId: ROOT_CONVERSATION_ID,
+        background: true,
+      },
+    )
   })
   return defineExtension({
     name: 'questions',

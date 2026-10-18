@@ -3,10 +3,12 @@
 Optional answer cards for @ultimate's questions to the user, in its own transcript. Two things ask:
 
 - **A reply-expected Board message to the user.** @ultimate's `message { to: 'user', text, reply: true }` (the
-  default) triggers extraction in the same transaction that appends the message. One-way messages, user posts and
-  messages to conversations never do. These explicit asks bypass the final-answer punctuation gate, so requests such
-  as “Please confirm whether to proceed” still extract. The card shows under the outgoing `message` tool card in the sender's
-  transcript.
+  default) makes board emit `board.asked` in the transaction that appends the message; questions' `asked` reactor
+  records the request and creates the extraction task in one transaction, once per message. One-way messages, user
+  posts and messages to conversations never do. These explicit asks bypass the final-answer punctuation gate, so
+  requests such as “Please confirm whether to proceed” still extract. The card shows under the outgoing `message` tool
+  card in the sender's transcript, through board's `MessageAnswers` point; board's `AnswerWaits` point counts an
+  asking final answer among what waits on the user.
 - **@ultimate's final answer to a typed input.** Only in the standing `ultimate` conversation (the `Standing` index
   of `subagents`), and only when the answer settles a plain `pi.user` input: answers to Board messages, Board
   replies, and every other conversation's answers never trigger it. The card shows under that final answer.

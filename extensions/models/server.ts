@@ -5,7 +5,7 @@ import { defineDoc, defineExtension, ROOT_CONVERSATION_ID } from '@earendil-work
 import type { ConversationId, Cursor } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { HealthApi } from '../health/api.ts'
+import { LoginChanged } from './api.ts'
 import { implementAction } from '../../lib/actions.ts'
 import type { ActionInput } from '../../lib/actions.ts'
 import { AnswerAction, CancelAction, LoginAction, LoginDoc, LogoutAction } from './refs.ts'
@@ -100,16 +100,16 @@ const json = <T>(value: T): Json<T> => JSON.parse(JSON.stringify(value))
 export const userActions = ['login', 'answer', 'cancel', 'logout']
 
 /**
- * A login or logout makes the provider's recorded health meaningless: reset it to unknown. The machine home sees
- * `auth.json` change, pings the provider and reports it to the cloud (`extensions/health`).
+ * Record that `provider`'s login changed: its recorded health is meaningless now, and health resets it to unknown. The
+ * machine home sees `auth.json` change, pings the provider and reports it to the cloud (`extensions/health`).
  */
-const forgetHealth = async (host: ActionContext['host'], provider: string) =>
+const loginChanged = async (host: ActionContext['host'], provider: string) =>
   host
-    .want(HealthApi)
-    ?.forget(provider)
+    .harness()
+    .commit((tx) => host.emit(tx, LoginChanged, { provider }), context)
     .catch((error: unknown) => {
       // Health is advisory: the login itself succeeded, and the next call or ping corrects the record.
-      console.error('models: health not reset:', error)
+      console.error('models: login change not recorded:', error)
     })
 
 export const actions = {
@@ -188,7 +188,7 @@ export const actions = {
       )
       .then(async (status) => {
         live.delete(flowId)
-        if (status === 'complete') await forgetHealth(host, provider)
+        if (status === 'complete') await loginChanged(host, provider)
         return update((state) => {
           state.status = status
           delete state.prompt
@@ -216,14 +216,12 @@ export const actions = {
   logout: implementAction(LogoutAction, async (args, { host }) => {
     const provider = text(args, 'provider')
     await host.modelRuntime.logout(provider)
-    await forgetHealth(host, provider)
+    await loginChanged(host, provider)
     return null
   }),
 }
 
 export default function models(host: ExtensionHost) {
-  // Optional services, resolved where they are called; declared here so the catalogue lists them.
-  host.want(HealthApi)
   // At load, so the next start marks flows of the previous process cancelled.
   liveFlows(host)
   return defineExtension({ name: 'models' })

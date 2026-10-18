@@ -11,6 +11,7 @@ import { cloudConfig, httpBase } from '../../lib/cloud.ts'
 import { isMachineHome } from '../../lib/machine.ts'
 import { readFileHealth, readHealth, record, reset, toHealth } from './store.ts'
 import { HealthApi } from './api.ts'
+import { LoginChanged } from '../models/api.ts'
 import type { HealthEntry } from './store.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { StateAction } from './refs.ts'
@@ -259,8 +260,11 @@ async function report(host: ExtensionHost) {
 }
 
 export default function health(host: ExtensionHost) {
+  // A login added, replaced or removed through Ultimate makes the provider's record meaningless: start it over.
+  host.react('login-changed', [LoginChanged], async (_tx, { data }) => {
+    await reset(host.userHome, [data.provider])
+  })
   host.implement(HealthApi, {
-    forget: (provider) => reset(host.userHome, [provider]),
     providers: () => readHealth(host.userHome),
     confirm: (provider) => confirm(hostDeps(host), provider),
   })
