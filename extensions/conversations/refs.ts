@@ -19,7 +19,7 @@ export type SummaryModelSetting = {
 export const OverviewDoc = docRef<OverviewState>('ultimate.conversation-overview')
 
 /** `{ id, title }` → `{ ok }`: rename top-level conversation `id`; a blank title lets its first message name it again. */
-export const RenameAction = actionRef<{ id: number; title: string }, { ok: true }>(
+export const RenameAction = actionRef<{ id: number; title: string }, { ok: boolean }>(
   'conversations',
   'rename',
 )

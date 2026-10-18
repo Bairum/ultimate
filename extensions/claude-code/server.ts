@@ -7,7 +7,8 @@ import {
   closeClaudeProcesses,
 } from '@earendil-works/pi-claude-code/src/claude-cli.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { ExtensionAction } from '../../server/actions.ts'
+import { implementAction } from '../../lib/actions.ts'
+import { StatusAction } from './refs.ts'
 
 export function createUltimateClaudeCodeProvider() {
   const provider = createClaudeCodeProvider()
@@ -68,7 +69,7 @@ export default function claudeCode(host: ExtensionHost) {
 }
 
 export const actions = {
-  async status(_args, { host, signal }) {
+  status: implementAction(StatusAction, async (_args, { host, signal }) => {
     signal.throwIfAborted()
     const refreshed = await host.modelRuntime.refresh({ allowNetwork: false, signal })
     if (refreshed.aborted || refreshed.errors.has('claude-code'))
@@ -81,5 +82,5 @@ export const actions = {
       subscription: status.subscription,
       plan: status.plan ?? null,
     }
-  },
-} satisfies Record<string, ExtensionAction>
+  }),
+}

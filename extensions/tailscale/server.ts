@@ -12,6 +12,8 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ExtensionAction } from '../../server/actions.ts'
 import { TailscaleApi } from './api.ts'
 import type { Status } from './api.ts'
+import { implementAction } from '../../lib/actions.ts'
+import { RetryAction, StatusAction } from './refs.ts'
 interface Serve {
   TCP?: Record<string, unknown>
   Web?: Record<string, { Handlers?: Record<string, { Proxy?: string }> }>
@@ -37,13 +39,16 @@ export const reloadOnSettings = true
 const statuses = new WeakMap<ExtensionHost, Status>()
 const retries = new WeakMap<ExtensionHost, () => Promise<void>>()
 export const actions: Record<string, ExtensionAction> = {
-  status: async (_args, { host }): Promise<Status> =>
-    statuses.get(host) ?? { state: 'disabled', allow: [] },
+  status: implementAction(
+    StatusAction,
+    async (_args, { host }): Promise<Status> =>
+      statuses.get(host) ?? { state: 'disabled', allow: [] },
+  ),
   /** Starts again unless ready, for example after fixing what a problem state names, and returns the new status. */
-  retry: async (_args, { host }): Promise<Status> => {
+  retry: implementAction(RetryAction, async (_args, { host }): Promise<Status> => {
     await retries.get(host)?.()
     return statuses.get(host) ?? { state: 'disabled', allow: [] }
-  },
+  }),
 }
 
 export default function tailscale(host: ExtensionHost) {

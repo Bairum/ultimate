@@ -85,11 +85,12 @@ export async function linkDependencies(root: string) {
   }
 }
 /**
- * Copy `shared/` and every extension's `api.ts` and `refs.ts` into `root`, so partially copied extensions find their
- * contracts.
+ * Copy `shared/`, `lib/` and every extension's `api.ts` and `refs.ts` into `root`, so partially copied extensions find
+ * their contracts and helpers.
  */
 export async function copyApis(root: string) {
   await cp(resolve('shared'), join(root, 'shared'), { recursive: true })
+  await cp(resolve('lib'), join(root, 'lib'), { recursive: true })
   for (const name of await readdir(resolve('extensions')))
     for (const file of ['api.ts', 'refs.ts']) {
       const contract = resolve('extensions', name, file)

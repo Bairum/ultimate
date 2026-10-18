@@ -1,13 +1,13 @@
-import type { JsonValue } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { TaskId } from '@earendil-works/pi-durable'
-import type { ActionContext } from '../../server/actions.ts'
+import { implementAction } from '../../lib/actions.ts'
+import { StartedAction } from './refs.ts'
 
 export default { name: 'tasks' }
 
 export const actions = {
   /** When each of `ids` first ran, in wall-clock milliseconds; tasks not yet started or gone are left out. */
-  async started(args: JsonValue, { host }: ActionContext) {
+  started: implementAction(StartedAction, async (args, { host }) => {
     const ids = (args as { ids?: unknown } | null)?.ids
     if (!Array.isArray(ids) || !ids.every((id) => Number.isSafeInteger(id)))
       throw new Error('Expected task ids')
@@ -19,5 +19,5 @@ export const actions = {
       }
       return started
     }, context)
-  },
+  }),
 }

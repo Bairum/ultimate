@@ -2,11 +2,11 @@ import { lazyStream } from '@earendil-works/pi-ai'
 import type { ProviderStreams } from '@earendil-works/pi-ai'
 import { openAICodexResponsesApi } from '@earendil-works/pi-ai/api/openai-codex-responses.lazy'
 import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy'
-import type { JsonValue } from '@earendil-works/chord'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { readSettings, updateSettings, userSettingsPath } from '../../lib/settings.ts'
-import type { ActionContext, ExtensionAction } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { implementAction } from '../../lib/actions.ts'
+import { SetAction, StatusAction } from './refs.ts'
 
 type Overlay = Parameters<ExtensionHost['modelRuntime']['registerProvider']>[1]
 type Stream = NonNullable<Overlay['streamSimple']>
@@ -54,14 +54,14 @@ const status = async (host: FastHost) => ({
 
 export const actions = {
   /** `{ models, project }`: the fast models, and whether the project's settings decide them. */
-  async status(_args: JsonValue, { host }: ActionContext) {
+  status: implementAction(StatusAction, async (_args, { host }) => {
     return status(host)
-  },
+  }),
   /**
    * `{ model, on }`: adds `"openai-codex/<id>"` or `"openai/<id>"` to the user's `fastModels` or removes it. The project's tracked settings
    * file is never written: while it sets the list, this refuses.
    */
-  async set(args: JsonValue, { host }: ActionContext) {
+  set: implementAction(SetAction, async (args, { host }) => {
     const { model, on } = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
     if (typeof model !== 'string' || !fastProvider(model) || typeof on !== 'boolean')
       throw new Error('Expected { model: "openai-codex/<id>" or "openai/<id>", on: boolean }')
@@ -79,8 +79,8 @@ export const actions = {
       else delete settings.fastModels
     })
     return status(host)
-  },
-} satisfies Record<string, ExtensionAction>
+  }),
+}
 
 /** Stream (Codex) Responses requests, asking for the priority (fast) service tier for the models `listed` names. */
 export function fastStream(listed: () => Promise<Set<string>>, api: ProviderStreams): Stream {

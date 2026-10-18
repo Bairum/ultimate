@@ -19,6 +19,8 @@ import { HealthApi } from '../health/api.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { ended } from './moves.ts'
 import type { Fleet, FleetProject, LocalProject, MoveEnded, SyncReport } from './types.ts'
+import { implementAction } from '../../lib/actions.ts'
+import { HomeAction, TransitionAction } from './refs.ts'
 
 /** A project home on this machine; `url` while its server runs. */
 export interface Home {
@@ -518,16 +520,16 @@ export async function machineHome(
 
 export const actions = {
   /** Project homes: `{url}` of this machine's running machine home, for "Ask @sync" links; null when it is not running. */
-  async home(_args: JsonValue, { host }: ActionContext) {
+  home: implementAction(HomeAction, async (_args, { host }) => {
     if (isMachineHome(host.projectRoot, host.userHome)) return null
     return machineHome(host)
-  },
+  }),
   /** Machine home: `{project}`, the project's current move for the move card. */
-  async transition(args: JsonValue, { host }: ActionContext) {
+  transition: implementAction(TransitionAction, async (args, { host }) => {
     const project = (args as { project?: unknown } | null)?.project
     if (typeof project !== 'string') throw new Error('project is required')
-    return (await transition(syncDeps(host), project)) as unknown as JsonObject
-  },
+    return transition(syncDeps(host), project)
+  }),
   /**
    * Project homes: `{from, text}`, a one-way report from @sync to this project's @ultimate. Refused on standby, where
    * the project's storage is closed.

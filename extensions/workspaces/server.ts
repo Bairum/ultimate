@@ -13,6 +13,8 @@ import {
   ToolTask,
 } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
+import { implementAction } from '../../lib/actions.ts'
+import type { ActionInput } from '../../lib/actions.ts'
 import { empty, git, isolatable, noCommit, noRepository } from '../../lib/git.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -22,6 +24,7 @@ import { BoardApi } from '../board/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { agentRoots } from '../../lib/agents.ts'
 import { WorkspacesApi } from './api.ts'
+import { DiskAction, InfoAction, IsolationAction, PendingAction, StatsAction } from './refs.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
 export const order = -200
 export const docs = [Workspaces]
@@ -31,7 +34,7 @@ export const reloadOnSettings = true
 const finish = (value: unknown) => ({
   output: [{ type: 'text' as const, text: JSON.stringify(value) }],
 })
-function workspaceId(args: JsonValue) {
+function workspaceId(args: ActionInput<{ id: number }>) {
   const id = args && typeof args === 'object' && !Array.isArray(args) ? args.id : undefined
   if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1)
     throw new Error('Expected a workspace conversation id')
@@ -49,7 +52,7 @@ async function setupGit(host: ExtensionHost) {
 }
 
 export const actions = {
-  pending(args: JsonValue, { host }: ActionContext) {
+  pending: implementAction(PendingAction, (args, { host }) => {
     const ids = args && typeof args === 'object' && !Array.isArray(args) ? args.ids : undefined
     if (
       !Array.isArray(ids) ||
@@ -57,7 +60,7 @@ export const actions = {
     )
       throw new Error('Expected workspace conversation ids')
     return workspaces(host).pending(ids as number[], context)
-  },
+  }),
   async create(args: JsonValue, { host }: ActionContext) {
     const input = (args ?? {}) as { cwd?: string; title?: string }
     if (input.cwd !== undefined && typeof input.cwd !== 'string')
@@ -84,7 +87,7 @@ export const actions = {
    * `setupGit` can make the first commit. Once it can, the project's lander is stood if it has none yet, so a first
    * commit made in a conversation brings the lander without a restart.
    */
-  async isolation(_args: JsonValue, { host }: ActionContext) {
+  isolation: implementAction(IsolationAction, async (_args, { host }) => {
     const checkout = await isolatable(host.projectRoot)
     if ('reason' in checkout)
       return { reason: checkout.reason, empty: await empty(host.projectRoot) }
@@ -92,7 +95,7 @@ export const actions = {
     if (index?.landerConversations[checkout.source] === undefined)
       await workspaces(host).standLander(context)
     return {}
-  },
+  }),
   /**
    * Make an empty folder isolatable: `git init` where there is no repository, then an empty first commit. A folder
    * with files needs judgement about what to commit, so it is left to an agent.
@@ -101,18 +104,14 @@ export const actions = {
     await setupGit(host)
     return {}
   },
-  info(args: JsonValue, { host }: ActionContext) {
-    return workspaces(host).info(workspaceId(args), context)
-  },
+  info: implementAction(InfoAction, (args, { host }) =>
+    workspaces(host).info(workspaceId(args), context),
+  ),
   discard(args: JsonValue, { host }: ActionContext) {
     return workspaces(host).discard(workspaceId(args), context)
   },
-  stats(_args: JsonValue, { host }: ActionContext) {
-    return workspaces(host).stats(context)
-  },
-  disk(_args: JsonValue, { host }: ActionContext) {
-    return workspaces(host).disk()
-  },
+  stats: implementAction(StatsAction, (_args, { host }) => workspaces(host).stats(context)),
+  disk: implementAction(DiskAction, (_args, { host }) => workspaces(host).disk()),
 }
 /** Call `changed` on any change to a definition folder, also one that appears later. */
 function watchDefinitions(

@@ -43,6 +43,8 @@ export { api } from './client.ts'
 export { ActionError, projectBase } from './api.ts'
 export type { ActionOptions, Api } from './api.ts'
 export type { UseActionOptions } from './hooks.ts'
+/** Typed refs for a project extension's own documents and actions; built-ins keep theirs in `refs.ts`. */
+export { actionRef, docRef } from '../../../shared/extension-api.ts'
 export type { ActionRef, DocRef } from '../../../shared/extension-api.ts'
 export {
   getConversation,

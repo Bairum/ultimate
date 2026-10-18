@@ -9,7 +9,6 @@ import {
   section,
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
-import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Branched, LineageApi, Rooted } from '../lineage/api.ts'
 import type { LandingSubject } from '../workspaces/types.ts'
@@ -25,10 +24,19 @@ import {
 } from './summary.ts'
 import { summaryModel, summaryModelSetting } from './summary-model.ts'
 import { parseSummaryModel } from './summary-model-ref.ts'
+import { implementAction } from '../../lib/actions.ts'
+import type { ActionInput } from '../../lib/actions.ts'
 import { updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import { Overview, overviewBehavior } from './overview.ts'
 import { activityBehavior } from './activity.ts'
 import { ConversationsApi } from './api.ts'
+import {
+  ConcludeAction,
+  RenameAction,
+  ResumeAction,
+  SetSummaryModelAction,
+  SummaryModelAction,
+} from './refs.ts'
 
 export const docs = [Summaries, Overview]
 
@@ -36,7 +44,7 @@ const record = (host: Pick<ExtensionHost, 'harness'>, id: ConversationId, caller
   host.harness().commit((tx) => tx.conversation(id), caller)
 
 /** The id of a top-level conversation: not owned by another conversation. */
-async function topLevelId(host: ExtensionHost, args: JsonValue) {
+async function topLevelId(host: ExtensionHost, args: ActionInput<{ id: number }>) {
   const id = args && typeof args === 'object' && !Array.isArray(args) ? args.id : undefined
   if (typeof id !== 'number' || !Number.isInteger(id)) throw new Error('Expected a conversation id')
   const found = await record(host, id as ConversationId, context)
@@ -75,7 +83,7 @@ export const order = 100
 
 /** Called by the sidebar; each acts on a top-level conversation by id. */
 export const actions = {
-  async conclude(args: JsonValue, { host }: ActionContext) {
+  conclude: implementAction(ConcludeAction, async (args, { host }) => {
     const ids = conversationIds(args)
     await host.harness().commit(async (tx) => {
       for (const id of ids) {
@@ -93,14 +101,14 @@ export const actions = {
     }, context)
     const kept = (await host.want(WorkspacesApi)?.release(ids, context)) ?? []
     return { concluded: ids, kept }
-  },
-  async resume(args: JsonValue, { host }: ActionContext) {
+  }),
+  resume: implementAction(ResumeAction, async (args, { host }) => {
     const ids = conversationIds(args)
     const resumed = await resume(host, ids)
     return { resumed }
-  },
+  }),
   /** `{id, title}`: a blank title removes it, so the first message names the conversation again. */
-  async rename(args: JsonValue, { host }: ActionContext) {
+  rename: implementAction(RenameAction, async (args, { host }) => {
     const id = await topLevelId(host, args)
     const title = (args as { title?: JsonValue }).title
     if (typeof title !== 'string') throw new Error('Expected a title')
@@ -113,19 +121,19 @@ export const actions = {
       else delete metadata.title
     }, context)
     return { ok: true }
-  },
+  }),
   /**
    * The effective `summaryModel` setting: `{ value, source: 'default' | 'user' | 'project', default, path? }`, with the
    * project file's `path` when the project's settings decide it.
    */
-  async summaryModel(_args: JsonValue, { host }: ActionContext) {
+  summaryModel: implementAction(SummaryModelAction, async (_args, { host }) => {
     return effectiveSummaryModel(host)
-  },
+  }),
   /**
    * `{value}`: sets `summaryModel` in the user's settings; `null` removes it, back to the default. The project's
    * tracked settings file is never written: while it sets the model, this refuses.
    */
-  async setSummaryModel(args: JsonValue, { host }: ActionContext) {
+  setSummaryModel: implementAction(SetSummaryModelAction, async (args, { host }) => {
     const value = args && typeof args === 'object' && !Array.isArray(args) ? args.value : undefined
     if (value !== null && (typeof value !== 'string' || !parseSummaryModel(value)))
       throw new Error('Expected value "provider/id[:thinking]" or null')
@@ -138,10 +146,10 @@ export const actions = {
       else settings.summaryModel = value
     })
     return effectiveSummaryModel(host)
-  },
+  }),
 }
 
-function conversationIds(args: JsonValue): ConversationId[] {
+function conversationIds(args: ActionInput<{ ids: number[] }>): ConversationId[] {
   const ids = args && typeof args === 'object' && !Array.isArray(args) ? args.ids : undefined
   if (
     !Array.isArray(ids) ||
@@ -170,7 +178,9 @@ async function resumeIn(tx: Tx, ids: ConversationId[]) {
   const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
   const previous = ui['ext.conversations.concluded']
   const removed = Array.isArray(previous)
-    ? previous.filter((id) => ancestors.has(id as ConversationId))
+    ? previous.filter(
+        (id): id is number => typeof id === 'number' && ancestors.has(id as ConversationId),
+      )
     : []
   if (removed.length)
     ui['ext.conversations.concluded'] = (previous as JsonValue[]).filter(

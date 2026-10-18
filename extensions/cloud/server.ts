@@ -40,6 +40,8 @@ import { startLease } from './lease.ts'
 import type { Lease, LeaseDeps } from './lease.ts'
 import type { CloudState, SyncProgress } from './types.ts'
 import * as snapshot from './snapshot.ts'
+import { implementAction } from '../../lib/actions.ts'
+import { CancelAction, MoveHereAction, StateAction } from './refs.ts'
 
 export const secrets = [
   { name: 'ULTIMATE_CLOUD_TOKEN', description: 'Bearer token for the cloud sync endpoint' },
@@ -789,7 +791,7 @@ export const actions = {
   /**
    * `{status, machine, role, free, writer, missing, blocked, progress, transition, sync, lastError}` for the cloud UI.
    */
-  state: async (): Promise<CloudState> =>
+  state: implementAction(StateAction, async (): Promise<CloudState> =>
     active
       ? {
           ...(await active.state()),
@@ -798,22 +800,23 @@ export const actions = {
           ...(active.sync() ? { sync: active.sync()!.progress() } : {}),
         }
       : { free: false, missing: [], status: localOnly ? 'local' : 'off' },
+  ),
   /**
    * `{force?, by?}`: prepare this machine and take the project, from a free lease or from the online writer. Resolves
    * the transition ID at once; `state` follows its steps. `force` continues although the writer has secrets this
    * machine lacks. `by: 'sync'` records @sync as the move's initiator; otherwise it is this machine's page.
    */
-  moveHere: async (args: JsonValue) => {
+  moveHere: implementAction(MoveHereAction, async (args) => {
     if (!active) throw new Error('Cloud sync is off')
     const { force, by } = (args ?? {}) as { force?: unknown; by?: unknown }
     return active.moveHere({ force: force === true, by: by === 'sync' ? 'sync' : 'local' })
-  },
+  }),
   /** Stop the preparing move, until its claim is sent. */
-  cancel: async () => {
+  cancel: implementAction(CancelAction, async () => {
     if (!active) throw new Error('Cloud sync is off')
     active.cancel()
     return { ok: true }
-  },
+  }),
   /**
    * `{from}`: sync this project's key to the replica of `from` from now on, after a repository rename or a root-commit
    * mismatch. The cloud names the epoch again on the next hello.

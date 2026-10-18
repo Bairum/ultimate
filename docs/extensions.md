@@ -74,7 +74,11 @@ so lint (`lint/ultimate.ts`) keeps them small and documented:
   escape for views of every kind (the Documents tab). `api-file-shape` holds it to the same documentation as `api.ts`
   (an action ref documents its arguments and result, which agents read before `ultimate.action`) and keeps it
   browser-safe: runtime imports of `shared/` only, types from packages, `shared/` and extensions' `refs.ts` or
-  `types.ts`, and `tsconfig.web.json` type-checks it with the web. A server `defineDoc` uses `kind: Ref.kind`.
+  `types.ts`, and `tsconfig.web.json` type-checks it with the web. The server is tied to the same refs: its
+  `defineDoc` uses `kind: Ref.kind`, and each action handler is `implementAction(Ref, handler)` (`lib/actions.ts`),
+  whose types fail when the handler returns something other than the ref's result or reads an argument name the
+  ref does not declare (`ActionInput`). `test/refs.test.ts` fails when an action ref has no `implementAction` of that
+  ref in its extension's `actions`, or a doc ref names a kind no server facet's `docs` exports.
 - `ui.tsx`: what other extensions' browser code imports, components, hooks and the refs they need, opening with a doc
   comment on what it offers.
 

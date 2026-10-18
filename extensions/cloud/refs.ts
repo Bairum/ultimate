@@ -17,4 +17,4 @@ export const MoveHereAction = actionRef<{ force?: boolean; by?: 'local' | 'sync'
   'moveHere',
 )
 /** No arguments → `{ ok }`: stop the preparing move, until its claim is sent. */
-export const CancelAction = actionRef<null, { ok: true }>('cloud', 'cancel')
+export const CancelAction = actionRef<null, { ok: boolean }>('cloud', 'cancel')

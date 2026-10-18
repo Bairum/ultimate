@@ -5,13 +5,15 @@ import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { createRateSampler, keys, zero, type Rates, type RateSample } from './rates.ts'
 import { usageTotals } from './context.ts'
+import { implementAction } from '../../lib/actions.ts'
+import { RatesAction } from './refs.ts'
 
 type Totals = ReturnType<typeof usageTotals>
 const snapshots = new WeakMap<object, () => (RateSample & { totals: Totals }) | null>()
 export const actions = {
-  rates(_args: unknown, { host }: Pick<ActionContext, 'host'>) {
+  rates: implementAction(RatesAction, (_args, { host }: Pick<ActionContext, 'host'>) => {
     return snapshots.get(host)?.() ?? null
-  },
+  }),
 }
 
 const settled = (usage: UsageState | null | undefined) => {

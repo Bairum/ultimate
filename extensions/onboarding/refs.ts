@@ -38,7 +38,10 @@ export const StartsDoc = docRef<{ roots: Record<string, number> }>('onboarding.s
 /** No arguments → the first-run flag, the project's setup and what it would add, and the user's extension lists. */
 export const StatusAction = actionRef<null, OnboardingStatus>('onboarding', 'status')
 /** No arguments → `{ firstRun: false }`: record that the user finished or skipped the first run. */
-export const FirstRunDoneAction = actionRef<null, { firstRun: false }>('onboarding', 'firstRunDone')
+export const FirstRunDoneAction = actionRef<null, { firstRun: boolean }>(
+  'onboarding',
+  'firstRunDone',
+)
 /**
  * `{ root?, instructions? }` → `{ id }`: start getting familiar with the project in @ultimate for root `root` (by
  * default the caller's), with the user's optional focus as `instructions`; `id` is @ultimate's conversation.
@@ -64,7 +67,7 @@ export const ChooseAction = actionRef<
     local?: boolean
     initialize?: boolean
   },
-  { sent: true }
+  { sent: boolean }
 >('onboarding', 'choose')
 /** `{ local }` → `{ project }`: decide whether this project's own setup applies. */
 export const DecideAction = actionRef<{ local: boolean }, { project: ProjectSetup }>(
@@ -77,10 +80,10 @@ export const DecideAction = actionRef<{ local: boolean }, { project: ProjectSetu
  */
 export const SetExtensionAction = actionRef<
   { name: string; enabled: boolean; scope: 'user' | 'project' },
-  { ok: true }
+  { ok: boolean }
 >('onboarding', 'setExtension')
 /** No arguments → `{ ok }`: copy the project's extension choices into the user's settings, then reload extensions. */
-export const AdoptProjectSetupAction = actionRef<null, { ok: true }>(
+export const AdoptProjectSetupAction = actionRef<null, { ok: boolean }>(
   'onboarding',
   'adoptProjectSetup',
 )

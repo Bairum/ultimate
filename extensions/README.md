@@ -147,8 +147,22 @@ export const EchoAction = actionRef<{ text: string }, { at: number }>('echo', 'e
 ```
 
 The web reads and calls through the refs, typed: `useDoc(LogDoc)`, `useDocOf(1, LogDoc)`, `useAction(EchoAction,
-args)`, `api.action(EchoAction, args)`. The server's `defineDoc` can use `kind: LogDoc.kind` so the two never drift.
-What other extensions' browser code uses (shared components, hooks and the refs they need) is exported from the
+args)`, `api.action(EchoAction, args)`. The server ties itself to the same refs: its `defineDoc` uses
+`kind: LogDoc.kind`, and each handler is `implementAction(Ref, handler)` from `lib/actions.ts`, which fails the type
+check when the handler's result is not the ref's or it reads an argument the ref does not name:
+
+```ts
+export const actions = {
+  echo: implementAction(EchoAction, async (args, ctx) => {
+    const text = args && typeof args === 'object' && !Array.isArray(args) ? args.text : undefined
+    if (typeof text !== 'string') throw new Error('Expected { text }')
+    return { at: await log(ctx.host, text) }
+  }),
+}
+```
+
+`test/refs.test.ts` holds every action ref to an `implementAction` of that ref in its extension's `actions`, and
+every doc ref to a kind some server facet's `docs` exports. What other extensions' browser code uses (shared components, hooks and the refs they need) is exported from the
 owner's `ui.tsx`, which starts with a doc comment on what it offers. A `.tsx` file imports another extension at
 runtime only from its `ui.tsx`, and its `api.ts` or `refs.ts` only as types (`ultimate/api-only-imports`). `refs.ts`
 imports at runtime only `shared/`, and types only from packages, `shared/` and extensions' `refs.ts` or `types.ts`;
@@ -493,7 +507,7 @@ replace one, declare its id; to drop it, replace or delete its extension.
 
 A web facet runs in the browser; its server facet runs in Ultimate's Node process, next to the project's files, its
 command-line tools, and the network. Actions connect the two: `server.ts` exports `actions`, plain async functions, and
-the UI calls them through a typed ref in the extension's `refs.ts`, JSON in and JSON out.
+the UI calls them through a typed ref, JSON in and JSON out.
 
 ```ts
 // server.ts
@@ -511,17 +525,13 @@ export const actions = {
 }
 ```
 
-```ts
-// refs.ts
-/** Todos in the browser: the project's TODO comments. */
-import { actionRef } from '../../shared/extension-api.ts'
-
-/** No arguments → every `TODO` line as `file:line:text`. */
-export const ListAction = actionRef<null, string[]>('todos', 'list')
-```
-
 ```tsx
 // web.tsx
+import { actionRef, useAction } from '@/sdk'
+
+/** No arguments → every `TODO` line as `file:line:text`. */
+const ListAction = actionRef<null, string[]>('todos', 'list')
+
 const todos = useAction(ListAction)
 // todos.data, todos.error, todos.loading, todos.refetch()
 ```
@@ -537,7 +547,8 @@ An action is `(args, ctx)`; `ctx` has:
 
 The `ActionContext` import is type-only. The path above is right for `.ultimate/extensions/<name>/` in Ultimate's clone
 (built-ins use `../../server/actions.ts`); in another project nothing type-checks it and the import is erased, so it
-runs either way.
+runs either way. A project extension keeps its refs in `web.tsx`, from `@/sdk`; built-ins keep them in `refs.ts` and
+check their handlers against them with `implementAction` (see [Extension APIs](#the-browser-side-refsts-and-uitsx)).
 
 - **Arguments are untrusted, from the browser or an agent**: make actions safe to call from an agent and validate args before they reach a command line. `exec` takes an argument list,
   never a shell string, so quoting is never the problem; meaning is.
@@ -668,7 +679,7 @@ Pass the header your own title or controls as children: `<Header><span className
 ### Example: a Commits app
 
 A complete app: the project's recent commits in a list, the selected one beside it with a button that hands it to the
-agent, and the agent docked on the right. It needs nothing but `git`. Put the four files in
+agent, and the agent docked on the right. It needs nothing but `git`. Put the three files in
 `<project>/.ultimate/extensions/commits/`; on save, Commits appears in the switcher (`mod+2`).
 
 `server.ts`, the data:
@@ -680,7 +691,7 @@ import type { ActionContext } from '../../../server/actions.ts'
 
 export default defineExtension({ name: 'commits' })
 
-/** The UI calls these through the refs in `refs.ts`; each returns JSON. */
+/** The UI calls these through the refs in `web.tsx`; each returns JSON. */
 export const actions = {
   /** The latest 50 commits of the project. */
   async list(_args: JsonValue, ctx: ActionContext) {
@@ -703,20 +714,6 @@ export const actions = {
 }
 ```
 
-`refs.ts`, the actions as the browser calls them:
-
-```ts
-/** Commits in the browser: the project's recent commits and one commit's message and files. */
-import { actionRef } from '../../../shared/extension-api.ts'
-
-export type Commit = { sha: string; subject: string; author: string; when: string }
-
-/** No arguments → the latest 50 commits of the project. */
-export const ListAction = actionRef<null, Commit[]>('commits', 'list')
-/** A sha → that commit's message and the files it changed. */
-export const ShowAction = actionRef<string, { sha: string; text: string }>('commits', 'show')
-```
-
 `web.tsx`, the surface:
 
 ```tsx
@@ -727,13 +724,19 @@ import {
   Dock,
   Header,
   StatusLine,
+  actionRef,
   api,
   cn,
   defineWebExtension,
   useAction,
   useExtensionUiState,
 } from '@/sdk'
-import { ListAction, ShowAction } from './refs.ts'
+
+type Commit = { sha: string; subject: string; author: string; when: string }
+
+/** The actions of `server.ts`, typed: no arguments → the latest 50 commits; a sha → its message and files. */
+const ListAction = actionRef<null, Commit[]>('commits', 'list')
+const ShowAction = actionRef<string, { sha: string; text: string }>('commits', 'show')
 
 /** One commit, and a button that hands it to the agent. */
 function Detail({ sha, text }: { sha: string; text: string }) {
@@ -836,7 +839,7 @@ For a request such as "build a triage surface for this repo's GitHub issues":
    their args, and return small JSON shaped for the UI. Return setup states (missing tool, no login, no repository)
    as data, so the UI can say what to do.
 4. **Check each action with codemode `ultimate.action`** (see [Actions](#actions)) before any UI exists.
-5. **Write `refs.ts` and `web.tsx`** from the Commits example: a documented ref per action; keep `Header`, `Dock`
+5. **Write `web.tsx`** from the Commits example: a typed ref per action; keep `Header`, `Dock`
    with `Conversation variant="dock"`, and `StatusLine`; replace the list and the detail. Read with `useAction`, act with `api.action` then `refetch`, keep
    the selection and filters in `useExtensionUiState`, and hand work to the agent with `api.submit(text, 'followUp')`,
    saying exactly what to do with which item.
@@ -877,6 +880,7 @@ live stream for the shown conversation plus one for each conversation whose docu
 | `useUiState(key, initial)`                                                | Durable UI state, stored with the main conversation: survives reloads and restarts, shared by every tab. `[value, set]`, JSON values only                                                                                |
 | `useExtensionUiState(key, initial)`                                       | `useUiState` under `ext.<your extension>.<key>`; use it for your own UI state                                                                                                                                            |
 | `useUltimate()`                                                           | `conversationId`, `surface`, actions (`switchConversation`, `showSurface`, `openPanel`, `closePanel`, `togglePanel`, `toggleSidebar`, `runCommand`, `open`/`close(dialog)`, `openPalette`, `focusComposer`, `setTheme`)  |
+| `actionRef<Args, Result>(extension, name)`, `docRef<T>(kind)`             | Typed refs of a project extension's own actions and documents; built-ins keep theirs in `refs.ts`                                                                                                                        |
 | `useAction(ref, args?, options?)`                                         | A server action's result, called on mount and when its args change: `{ data, error, loading, refetch }` (see [Actions](#actions))                                                                                        |
 | `useDialog(id)`                                                           | `[open, setOpen]` for a dialog an `overlay` component renders; `useUltimate().open(id)` opens it anywhere                                                                                                                |
 | `useConnection()`                                                         | Stream status: `connecting`, `open`, `reconnecting`                                                                                                                                                                      |

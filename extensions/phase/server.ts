@@ -14,6 +14,7 @@ import type { ClassifyQuestion, ClassifyAnswer } from '../classify/api.ts'
 import { isInput } from '../../lib/entries.ts'
 import { phaseState } from './state.ts'
 import type { Phase, PhaseState } from './types.ts'
+import { PhasesDoc } from './refs.ts'
 
 export const question = {
   type: 'choice',
@@ -37,7 +38,7 @@ export const question = {
 } satisfies ClassifyQuestion
 export type { Phase } from './types.ts'
 export const Phases = defineDoc<PhaseState>({
-  kind: 'ultimate.conversation-phases',
+  kind: PhasesDoc.kind,
   version: 1,
   scope: 'conversation',
   history: 'latest',
