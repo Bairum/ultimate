@@ -22,9 +22,22 @@ import type { ExtensionAction } from '../../server/actions.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { LineageApi } from '../lineage/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
+import { implementAction } from '../../lib/actions.ts'
+import {
+  AdoptProjectSetupAction,
+  ChooseAction,
+  DecideAction,
+  ExtensionsAction,
+  FirstRunDoneAction,
+  HelpAction,
+  SetExtensionAction,
+  StartAction,
+  StartsDoc,
+  StatusAction,
+} from './refs.ts'
 
 export const Starts = defineDoc<{ roots: Record<string, number> }>({
-  kind: 'onboarding.starts',
+  kind: StartsDoc.kind,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -146,7 +159,7 @@ export const userActions = [
 ]
 
 export const actions: Record<string, ExtensionAction> = {
-  help: async (args, { host }) => {
+  help: implementAction(HelpAction, async (args, { host }) => {
     const card = args && typeof args === 'object' && !Array.isArray(args) ? args.card : undefined
     if (card !== 'project' && card !== 'git') throw new Error('Expected project or git card')
     refuseMachineHome(host)
@@ -166,8 +179,8 @@ export const actions: Record<string, ExtensionAction> = {
       context,
     )
     return { id }
-  },
-  start: async (args, { host, conversationId }) => {
+  }),
+  start: implementAction(StartAction, async (args, { host, conversationId }) => {
     const input = args as { root?: number; instructions?: string } | null
     if (
       input !== null &&
@@ -235,8 +248,8 @@ export const actions: Record<string, ExtensionAction> = {
       ;(await tx.doc(Starts, ROOT_CONVERSATION_ID)).roots[String(root)] = id
     }, context)
     return { id }
-  },
-  choose: async (args, actionContext) => {
+  }),
+  choose: implementAction(ChooseAction, async (args, actionContext) => {
     const { host, conversationId } = actionContext
     if (conversationId === undefined) throw new Error('A conversation is required')
     if (
@@ -326,8 +339,8 @@ export const actions: Record<string, ExtensionAction> = {
       },
     )
     return operation
-  },
-  status: async (_args, { host }) => {
+  }),
+  status: implementAction(StatusAction, async (_args, { host }) => {
     const folders = await host.projectExtensions()
     return {
       // The machine home shows no Get ready page: its first run starts no onboarding.
@@ -342,11 +355,11 @@ export const actions: Record<string, ExtensionAction> = {
         replaces: folders.filter((entry) => entry.replaces).map((entry) => entry.name),
       },
     }
-  },
-  firstRunDone: async (_args, { host }) => {
+  }),
+  firstRunDone: implementAction(FirstRunDoneAction, async (_args, { host }) => {
     await writeJson(marker(host.userHome), { firstRunDone: true })
     return { firstRun: false }
-  },
+  }),
   /**
    * The first run's choices in one step: checked names join the user's `extensions.enable` (and leave `disable`),
    * unchecked names join `disable`; `local`, when given, is the project decision. Records the first run, then applies
@@ -378,13 +391,13 @@ export const actions: Record<string, ExtensionAction> = {
     else await host.setProjectDecision(local)
     return { firstRun: false }
   },
-  decide: async (args, { host }) => {
+  decide: implementAction(DecideAction, async (args, { host }) => {
     if (!args || typeof args !== 'object' || Array.isArray(args) || typeof args.local !== 'boolean')
       throw new Error('local must be a boolean')
     await host.setProjectDecision(args.local)
     return { project: await host.projectSetup() }
-  },
-  setExtension: async (args, { host }) => {
+  }),
+  setExtension: implementAction(SetExtensionAction, async (args, { host }) => {
     if (
       !args ||
       typeof args !== 'object' ||
@@ -406,8 +419,8 @@ export const actions: Record<string, ExtensionAction> = {
     )
     await host.reloadExtensions()
     return { ok: true }
-  },
-  adoptProjectSetup: async (_args, { host }) => {
+  }),
+  adoptProjectSetup: implementAction(AdoptProjectSetupAction, async (_args, { host }) => {
     if ((await host.projectSetup()).decision !== true)
       throw new Error("Choose this project's local setup before adopting project extensions")
     const project = lists(await host.projectSettings())
@@ -427,8 +440,8 @@ export const actions: Record<string, ExtensionAction> = {
     })
     await host.reloadExtensions()
     return { ok: true }
-  },
-  extensions: async (_args, { host }) => {
+  }),
+  extensions: implementAction(ExtensionsAction, async (_args, { host }) => {
     const project = await host.projectExtensions()
     return Promise.all(
       [
@@ -458,7 +471,7 @@ export const actions: Record<string, ExtensionAction> = {
         }
       }),
     )
-  },
+  }),
 }
 
 export const ChoiceEntry = defineEntry<{ card: string; summary: string; toolCallId: string }>(

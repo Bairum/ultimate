@@ -1,13 +1,5 @@
-import type { Question } from './types.ts'
+import type { QuestionsBoard } from './types.ts'
 
-/** Questions in @ultimate's latest final answer to a typed input. */
-export type Reply = { conversation: number; entry: number; questions: Question[] }
-/** The root's `questions.board` document: extracted questions by Board message id, and @ultimate's latest answer's. */
-export type QuestionsBoard = {
-  requested: number[]
-  asked: Record<string, Question[]>
-  reply?: Reply
-}
 type Doc = Readonly<QuestionsBoard> | null | undefined
 /** The fields of a Board message the answer card reads. */
 export type Message = {

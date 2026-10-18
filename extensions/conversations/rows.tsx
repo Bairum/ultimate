@@ -17,11 +17,12 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api, cn, useUltimate } from '@/sdk'
 import { FeatureTag } from './feature.tsx'
-import { TaskChip, useTaskOf } from '../plan/chip.tsx'
-import { PhaseLabel, usePhase } from '../phase/chip.tsx'
-import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
+import { TaskChip, useTaskOf } from '../plan/ui.tsx'
+import { PhaseLabel, usePhase } from '../phase/ui.tsx'
+import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
 import type { Assessment, OverviewRow } from './types.ts'
 import { ago } from './lander.tsx'
+import { RenameAction } from './refs.ts'
 import { AgentMark, agentTitle } from './marks.tsx'
 import type { Presence } from './marks.tsx'
 
@@ -139,7 +140,7 @@ export function Row({
     setEditing(false)
     if (cancelled.current) return
     const title = value.trim()
-    void api.action('conversations', 'rename', { id: conversation.id, title })
+    void api.action(RenameAction, { id: conversation.id, title })
   }
   const title = (
     <span

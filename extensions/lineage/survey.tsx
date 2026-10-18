@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import { api, cn, errorMessage, touchKeyboard, useDocOf, useSystem, useUltimate } from '@/sdk'
+import { StartAction, StartsDoc } from '../onboarding/ui.tsx'
 
 /** The composer's reading column, as the core lays it out. */
 export const column = (dock?: boolean) =>
@@ -15,9 +16,7 @@ export const column = (dock?: boolean) =>
 export function Familiarize({ id, dock }: { id: number; dock?: boolean }) {
   const project = useSystem()?.project.name
   const ui = useUltimate()
-  const started = useDocOf<{ roots: Record<string, number> }>(1, 'onboarding.starts')?.roots[
-    String(id)
-  ]
+  const started = useDocOf(1, StartsDoc)?.roots[String(id)]
   const [focus, setFocus] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string>()
@@ -26,7 +25,7 @@ export function Familiarize({ id, dock }: { id: number; dock?: boolean }) {
     setSending(true)
     setError(undefined)
     try {
-      const result = await api.action<{ id: number }>('onboarding', 'start', {
+      const result = await api.action(StartAction, {
         root: id,
         ...(focus.trim() ? { instructions: focus } : {}),
       })

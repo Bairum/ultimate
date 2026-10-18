@@ -17,8 +17,10 @@ import {
   useTranscript,
 } from '@/sdk'
 import type { AssistantMessage, EntryRecord, Usage } from '@/sdk'
-import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
+import { useWorkspaceConversations as useConversations } from '../workspaces/ui.tsx'
 import { lastAssistant, promptTokens as prompt, usageTotals } from './context.ts'
+import { RatesAction } from './refs.ts'
+import type { RateSample } from './refs.ts'
 import { responseAfter, turnOf } from './turns.ts'
 
 /** A status-line item with a tooltip of details. */
@@ -79,12 +81,6 @@ function Cwd() {
   )
 }
 
-type RateSample = {
-  rates: Pick<Usage, 'input' | 'output' | 'cacheRead' | 'cacheWrite'>
-  elapsed: number
-  totals: ReturnType<typeof usageTotals>
-}
-
 function useTokenRates() {
   const connection = useConnection()
   const system = useSystem()
@@ -102,7 +98,7 @@ function useTokenRates() {
       request = new AbortController()
       requestTimeout = setTimeout(() => request?.abort(), 5000)
       try {
-        const sample = await api.action<RateSample | null>('status-line', 'rates', null, {
+        const sample = await api.action(RatesAction, null, {
           signal: request.signal,
         })
         request.signal.throwIfAborted()

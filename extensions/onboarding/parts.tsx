@@ -2,33 +2,7 @@ import { useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { cn, useAction, useSystem } from '@/sdk'
 import type { ExtensionInfo, SystemInfo } from '@/sdk'
-
-/**
- * What the `status` action returns: first-run state, and what the project's setup brings, read even while undecided:
- * its own agents, skills, and extension folders, the folders that replace a built-in of the same name, and the names
- * its settings turn on and off.
- */
-export interface Status {
-  firstRun: boolean
-  /** What `~/.ultimate/settings.json` enables and disables. */
-  user: { enable: string[]; disable: string[] }
-  adds: {
-    agents: string[]
-    skills: string[]
-    extensions: string[]
-    replaces: string[]
-    enable: string[]
-    disable: string[]
-  }
-}
-/** One entry of the `extensions` action: the first sentence of its README is the line the UI shows. */
-interface Described {
-  name: string
-  source: ExtensionInfo['source']
-  readme: string
-  /** A project folder named like a built-in: with the project's setup it runs instead. */
-  replaces?: 'builtin'
-}
+import { ExtensionsAction } from './refs.ts'
 
 /** The Extensions panel's setup entry point; the overlay routes it to @ultimate, not a dialog. */
 export const projectDialog = 'onboarding.project'
@@ -47,7 +21,7 @@ export const sources: Record<ExtensionInfo['source'], string> = {
  */
 export function useDescribed() {
   const system = useSystem()
-  const described = useAction<Described[]>('onboarding', 'extensions')
+  const described = useAction(ExtensionsAction)
   const folders = system?.extensions.map((extension) => extension.path).join('\n')
   const seen = useRef(folders)
   const { refetch } = described

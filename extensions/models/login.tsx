@@ -27,26 +27,17 @@ import {
 import type { AuthEvent, AuthPrompt } from '@/sdk'
 import { authLabel, dialogs, openPicker, useLoginProvider } from './state.tsx'
 import type { ProviderInfo } from './state.tsx'
+import { AnswerAction, CancelAction, LoginAction, LoginDoc, LogoutAction } from './refs.ts'
 
 type AuthType = ProviderInfo['authTypes'][number]['type']
-/** A flow of `models.login`, the document `server.ts` keeps on the conversation that started it. */
-interface LoginFlow {
-  provider: string
-  type: AuthType
-  status: 'running' | 'complete' | 'cancel' | 'error'
-  /** The prompt waiting for an answer. */
-  prompt?: AuthPrompt
-  events: AuthEvent[]
-  error?: string
-}
 function useLoginFlow(flowId: string | undefined) {
-  const flows = useDoc('models.login')?.flows as Readonly<Record<string, LoginFlow>> | undefined
+  const flows = useDoc(LoginDoc)?.flows
   return flowId === undefined ? undefined : flows?.[flowId]
 }
 /** Cancel a running flow; it may have just ended, which needs no notice. */
 const cancel = (flowId: string) =>
   // The flow may have just ended; a failed cancel needs no notice.
-  api.action('models', 'cancel', { flowId }, { keepalive: true }).catch(() => undefined)
+  api.action(CancelAction, { flowId }, { keepalive: true }).catch(() => undefined)
 interface Method {
   provider: ProviderInfo
   type: AuthType
@@ -199,7 +190,7 @@ function PromptForm({ flowId, prompt }: { flowId: string; prompt: AuthPrompt }) 
   const answer = (text: string) => {
     setSending(true)
     setError(undefined)
-    api.action('models', 'answer', { flowId, value: text }).then(
+    api.action(AnswerAction, { flowId, value: text }).then(
       () => undefined,
       (failure: unknown) => {
         setSending(false)
@@ -440,7 +431,7 @@ function Chooser({
     setConfirming(undefined)
     setBusy(provider.id)
     setError(undefined)
-    api.action('models', 'logout', { provider: provider.id }).then(
+    api.action(LogoutAction, { provider: provider.id }).then(
       () => {
         setBusy(undefined)
         void refreshModels()
@@ -577,7 +568,7 @@ export function LoginDialog() {
   const start = (method: Method) => {
     setState({ method })
     api
-      .action<{ flowId: string }>('models', 'login', {
+      .action(LoginAction, {
         provider: method.provider.id,
         type: method.type,
       })

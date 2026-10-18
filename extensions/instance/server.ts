@@ -23,6 +23,8 @@ import { Subagents } from '../subagents/api.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { cleanPreview, sweepPreviews } from './cleanup.ts'
+import { implementAction } from '../../lib/actions.ts'
+import { ListAction } from './refs.ts'
 
 /** A preview keeps ordinary parent variables, but gets its own host identity and no inherited cloud sync. */
 export function previewEnv(
@@ -176,7 +178,7 @@ export const actions: Record<string, ExtensionAction> = {
    * The instances that served their UI, running or not since, for the title bar's switcher and preview links. A start
    * that failed is not among them.
    */
-  list: async (_args, { host }) => {
+  list: implementAction(ListAction, async (_args, { host }) => {
     const addresses = await tailnet(host)
     return [
       ...[...running(host).values()]
@@ -190,7 +192,7 @@ export const actions: Record<string, ExtensionAction> = {
         .filter((item) => ![...running(host).values()].some((run) => run.url === item.url))
         .map((item) => ({ ...item, running: false })),
     ]
-  },
+  }),
 }
 
 export default function instanceExtension(

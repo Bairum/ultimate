@@ -1,3 +1,4 @@
+/** The plan's components for other extensions: the task chip of a conversation that works on a plan task. */
 import {
   CircleAlertIcon,
   CircleCheckIcon,
@@ -10,14 +11,8 @@ import {
 import { useCallback } from 'react'
 import type { SyntheticEvent } from 'react'
 import { cn, useDocOf, useUiState, useUltimate } from '@/sdk'
-/** One entry of the root `ultimate.plan.tasks` index, as `server.ts` defines it. */
-export type TaskLink = {
-  coordinator: number
-  epic: string
-  key: string
-  title: string
-  status: string
-}
+import { TaskIndexDoc } from './refs.ts'
+import type { TaskLink } from './refs.ts'
 
 const statuses: Record<string, { icon: typeof CircleIcon; tone: string; dot: string }> = {
   backlog: { icon: CircleDashedIcon, tone: 'text-muted-foreground/70', dot: 'bg-muted-foreground' },
@@ -52,9 +47,7 @@ const noTasks: Record<string, TaskLink> = {}
 
 /** Every linked child conversation id → its plan task, live from the root's `ultimate.plan.tasks`. */
 export function useTaskIndex() {
-  return (
-    useDocOf<{ children: Record<string, TaskLink> }>(1, 'ultimate.plan.tasks')?.children ?? noTasks
-  )
+  return useDocOf(1, TaskIndexDoc)?.children ?? noTasks
 }
 
 /** The plan task conversation `id` works on, if a coordinator linked it. */

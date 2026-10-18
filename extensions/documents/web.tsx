@@ -5,7 +5,7 @@ import {
   ExtensionBoundary,
   defineWebExtension,
   useConversations,
-  useDoc,
+  useDocKind,
   useDocumentRenderers,
   useExtensionUiState,
   useSystem,
@@ -37,7 +37,7 @@ function Document({
   open: boolean
   setOpen: (open: boolean) => void
 }) {
-  const value = useDoc(kind)
+  const value = useDocKind(kind)
   const { conversationId } = useUltimate()
   if (!value || conversationId === undefined) return null
   const Icon = renderer?.icon ?? BracesIcon

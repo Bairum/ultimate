@@ -15,23 +15,9 @@ import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api, cn, defineWebExtension, errorMessage, useAction, useSystem, useUltimate } from '@/sdk'
 import { encode } from 'uqr'
-
-/** What the `status` action returns; `Status` in server.ts. */
-interface Status {
-  state:
-    | 'disabled'
-    | 'starting'
-    | 'ready'
-    | 'not-installed'
-    | 'not-running'
-    | 'not-operator'
-    | 'https-disabled'
-    | 'port-conflict'
-    | 'error'
-  url?: string
-  allow: string[]
-  hint?: string
-}
+import { SetExtensionAction } from '../onboarding/ui.tsx'
+import { RetryAction, StatusAction } from './refs.ts'
+import type { Status } from './refs.ts'
 type Problem = Exclude<Status['state'], 'disabled' | 'starting' | 'ready'>
 
 const problems: Record<Problem, { title: string; link?: { href: string; label: string } }> = {
@@ -56,7 +42,7 @@ const problems: Record<Problem, { title: string; link?: { href: string; label: s
 function useStatus() {
   const system = useSystem()
   // Failures show where the status does, not as notices: the status line reads it on every page.
-  const status = useAction<Status>('tailscale', 'status', null, { onError: () => {} })
+  const status = useAction(StatusAction, null, { onError: () => {} })
   const signature = JSON.stringify([
     system?.access.origins,
     system?.extensionDiagnostics,
@@ -222,7 +208,7 @@ function TurnOn() {
     setBusy(true)
     setError(undefined)
     try {
-      await api.action('onboarding', 'setExtension', {
+      await api.action(SetExtensionAction, {
         name: 'tailscale',
         enabled: true,
         scope: 'user',
@@ -260,7 +246,7 @@ function CheckAgain({ onChecked }: { onChecked: () => Promise<unknown> }) {
     setBusy(true)
     setError(undefined)
     try {
-      await api.action('tailscale', 'retry')
+      await api.action(RetryAction)
       await onChecked()
     } catch (failure) {
       setError(errorMessage(failure))

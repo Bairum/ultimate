@@ -1,13 +1,13 @@
 import { defineWebExtension, useDocOf, useUltimate } from '@/sdk'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import type { PhaseState } from './types.ts'
-import { PhaseLabel, usePhase } from './chip.tsx'
+import { PhasesDoc } from './refs.ts'
+import { PhaseLabel, usePhase } from './ui.tsx'
 
 /** The shown conversation's phase, right-aligned on the line under its composer. */
 function PhaseStatus() {
   const { conversationId } = useUltimate()
   const phase = usePhase(conversationId)
-  const phases = useDocOf<PhaseState>(1, 'ultimate.conversation-phases')
+  const phases = useDocOf(1, PhasesDoc)
   if (!phase) return null
   const confidence = phases?.conversations[conversationId!]?.confidence ?? 0
   return (

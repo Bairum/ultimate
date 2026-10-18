@@ -29,6 +29,8 @@ import type {
   TaskId,
   Tx,
 } from '@earendil-works/pi-durable'
+import { implementAction } from '../../lib/actions.ts'
+import type { ActionInput } from '../../lib/actions.ts'
 import { git } from '../../lib/git.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
@@ -36,6 +38,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import type { LandedData } from '../workspaces/api.ts'
 import { Branch, Branched, LineageApi, Rooted, Roots } from './api.ts'
+import { CompactAction, GithubAction, RecentAction, TallyDoc } from './refs.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 import type { Tree } from './catchup.ts'
 import type { RootEvent } from './types.ts'
@@ -64,7 +67,7 @@ export type TallyState = {
  * tally itself, and copying the map would let its own abstracts omit entries of another conversation.
  */
 export const Tally = defineDoc<TallyState>({
-  kind: 'lineage.tally',
+  kind: TallyDoc.kind,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -877,7 +880,7 @@ function compactFocus(root: boolean, intent?: string) {
     : `This is a branch${intent ? ` started for: ${intent}` : ''}. Keep its intent and progress toward it: decisions, changed files, verification, what remains. Drop what the intent no longer needs.`
 }
 
-function conversationArg(args: JsonValue) {
+function conversationArg(args: ActionInput<{ id: number }> | JsonValue) {
   const value = args && typeof args === 'object' && !Array.isArray(args) ? args.id : undefined
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1)
     throw new Error('Expected a conversation id')
@@ -1038,7 +1041,7 @@ export const actions = {
    * `{id, limit?, types?}`: the newest landings, notes, branches and compactions in root `id`, newest first (default
    * 3), only of `types` when given. A landing on a GitHub `origin` links its compare range.
    */
-  async recent(args: JsonValue, { host }: ActionContext) {
+  recent: implementAction(RecentAction, async (args, { host }) => {
     const id = conversationArg(args)
     const types = (args as { types?: unknown }).types
     if (
@@ -1077,14 +1080,14 @@ export const actions = {
       return { events, older }
     }, context)
     return withCompare(host.projectRoot, scanned.events, scanned.older)
-  },
+  }),
   /** `https://github.com/<owner>/<repo>` of the project's `origin`, or null off GitHub: landing cards link ranges. */
-  async github(_args: JsonValue, { host }: ActionContext) {
+  github: implementAction(GithubAction, async (_args, { host }) => {
     const repo = await githubRepo(host.projectRoot)
     return repo ? `https://${repo}` : null
-  },
+  }),
   /** `{id, instructions?}`: compact root tally `id`, as @ultimate's `compact_tally` does. */
-  async compact(args: JsonValue, { host }: ActionContext) {
+  compact: implementAction(CompactAction, async (args, { host }) => {
     const id = conversationArg(args)
     const instructions = (args as { instructions?: unknown }).instructions
     if (instructions !== undefined && typeof instructions !== 'string')
@@ -1092,7 +1095,7 @@ export const actions = {
     const taskId = await host.harness().commit((tx) => compactTally(tx, id, instructions), context)
     host.harness().resume()
     return { taskId }
-  },
+  }),
   /** Remove a root that never became a tally from `lineage.roots`, never the last; its tree's conversations leave every tree. */
   async unlist(args: JsonValue, { host }: ActionContext) {
     const id = conversationArg(args)

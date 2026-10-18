@@ -23,6 +23,8 @@
     ".ultimate/extensions/**/*.tsx",
     "shared/protocol.ts",
     "shared/events.ts",
+    "shared/extension-api.ts",
+    "extensions/*/refs.ts",
     "cloud/protocol.ts",
     "extensions/cloud/types.ts",
     "extensions/conversations/types.ts",

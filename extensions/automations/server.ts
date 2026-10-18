@@ -16,9 +16,20 @@ import {
 import type { TaskId, ConversationId, Cursor, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ActionContext } from '../../server/actions.ts'
+import { implementAction } from '../../lib/actions.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { AutomationsApi } from './api.ts'
+import {
+  CreateAction,
+  DeleteAction,
+  DescribeAction,
+  ListAction,
+  PauseAction,
+  ResumeAction,
+  RunAction,
+  UpdateAction,
+} from './refs.ts'
 import { describeSchedule, nextAt, parseSchedule } from './schedule.ts'
 import type { Schedule } from './schedule.ts'
 
@@ -390,36 +401,72 @@ const operations = [
   'delete',
   'abort',
 ] as const
-export const actions = Object.fromEntries(
-  [...operations, 'describe'].map((action) => [
-    action,
-    async (input: JsonValue, { host }: ActionContext) => {
-      const args = { ...(input as Omit<Args, 'action'>), action }
-      if (action === 'describe') {
-        const schedule = parseSchedule(args.schedule ?? '')
-        let time = Date.now()
-        const next: number[] = []
-        for (let i = 0; i < (schedule.kind === 'at' ? 1 : 3); i++) {
-          time = nextAt(schedule, time)
-          next.push(time)
-        }
-        return { schedule, description: describeSchedule(schedule), next }
-      }
-      const api = backend(host)
-      await api.validate(args)
-      const receipt = await host.harness().commit(
-        async (tx) =>
-          JSON.parse(JSON.stringify(await api.change(tx, args))) as {
-            result: JsonValue
-            abort?: TaskId
-          },
-        BACKGROUND_CONTEXT,
-      )
-      if (receipt.abort) await host.harness().abortTask(receipt.abort, BACKGROUND_CONTEXT)
-      return receipt.result
-    },
-  ]),
-)
+/** Run ledger operation `action` with the tool's validation, in one transaction; resolves with its JSON result. */
+async function operate(
+  host: ExtensionHost,
+  action: (typeof operations)[number],
+  input: unknown,
+): Promise<JsonValue> {
+  const args = { ...(input as Omit<Args, 'action'>), action }
+  const api = backend(host)
+  await api.validate(args)
+  const receipt = await host.harness().commit(
+    async (tx) =>
+      JSON.parse(JSON.stringify(await api.change(tx, args))) as {
+        result: JsonValue
+        abort?: TaskId
+      },
+    BACKGROUND_CONTEXT,
+  )
+  if (receipt.abort) await host.harness().abortTask(receipt.abort, BACKGROUND_CONTEXT)
+  return receipt.result
+}
+
+// `change` returns each operation's value as JSON: the ledger's automations, a run, or an id.
+export const actions = {
+  list: implementAction(
+    ListAction,
+    async (args, { host }) => (await operate(host, 'list', args)) as Automation[],
+  ),
+  create: implementAction(
+    CreateAction,
+    async (args, { host }) => (await operate(host, 'create', args)) as Automation,
+  ),
+  update: implementAction(
+    UpdateAction,
+    async (args, { host }) => (await operate(host, 'update', args)) as Automation,
+  ),
+  pause: implementAction(
+    PauseAction,
+    async (args, { host }) => (await operate(host, 'pause', args)) as Automation,
+  ),
+  resume: implementAction(
+    ResumeAction,
+    async (args, { host }) => (await operate(host, 'resume', args)) as Automation,
+  ),
+  run: implementAction(
+    RunAction,
+    async (args, { host }) => (await operate(host, 'run', args)) as Run,
+  ),
+  runs: (input: JsonValue, { host }: ActionContext) => operate(host, 'runs', input),
+  delete: implementAction(
+    DeleteAction,
+    async (args, { host }) => (await operate(host, 'delete', args)) as { id: string },
+  ),
+  abort: (input: JsonValue, { host }: ActionContext) => operate(host, 'abort', input),
+  describe: implementAction(DescribeAction, (args) => {
+    const input =
+      args && typeof args === 'object' && !Array.isArray(args) ? args.schedule : undefined
+    const schedule = parseSchedule((input ?? '') as string | Schedule)
+    let time = Date.now()
+    const next: number[] = []
+    for (let i = 0; i < (schedule.kind === 'at' ? 1 : 3); i++) {
+      time = nextAt(schedule, time)
+      next.push(time)
+    }
+    return { schedule, description: describeSchedule(schedule), next }
+  }),
+}
 
 export default function automations(
   host: Host & Pick<ExtensionHost, 'onOpen' | 'service' | 'implement' | 'want'>,

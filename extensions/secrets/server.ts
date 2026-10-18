@@ -2,6 +2,8 @@ import { defineExtension, section } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
 import { secretMetadata, validateName, validateValue } from '../../lib/secrets.ts'
 import { writeSecret } from './store.ts'
+import { implementAction } from '../../lib/actions.ts'
+import { DeleteAction, ListAction, SetAction } from './refs.ts'
 
 export default defineExtension({
   name: 'secrets',
@@ -16,7 +18,7 @@ export default defineExtension({
 export const userActions = ['set', 'delete']
 
 export const actions: Record<string, ExtensionAction> = {
-  async list(_args, { host }) {
+  list: implementAction(ListAction, async (_args, { host }) => {
     const items = new Map<
       string,
       {
@@ -44,16 +46,16 @@ export const actions: Record<string, ExtensionAction> = {
       })
     }
     return [...items.values()].toSorted((a, b) => a.name.localeCompare(b.name))
-  },
-  async set(args, { host }) {
+  }),
+  set: implementAction(SetAction, async (args, { host }) => {
     const input = args as { name?: unknown; value?: unknown } | null
     validateName(input?.name)
     validateValue(input?.value)
     return writeSecret(host.userHome, input.name, input.value)
-  },
-  async delete(args, { host }) {
+  }),
+  delete: implementAction(DeleteAction, async (args, { host }) => {
     const input = args as { name?: unknown } | null
     validateName(input?.name)
     return writeSecret(host.userHome, input.name)
-  },
+  }),
 }

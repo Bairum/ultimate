@@ -5,15 +5,15 @@ import { basename, dirname, join } from 'node:path'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import type { Api, AssistantMessage, Model, Models } from '@earendil-works/pi-ai'
 import { defineExtension, GenerationTask, hook } from '@earendil-works/pi-durable'
-import type { JsonValue } from '@earendil-works/chord'
 import type { MachineHealth, ProviderHealth } from '../../cloud/protocol.ts'
-import type { ActionContext, ExtensionAction } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { cloudConfig, httpBase } from '../../lib/cloud.ts'
 import { isMachineHome } from '../../lib/machine.ts'
 import { readFileHealth, readHealth, record, reset, toHealth } from './store.ts'
 import { HealthApi } from './api.ts'
 import type { HealthEntry } from './store.ts'
+import { implementAction } from '../../lib/actions.ts'
+import { StateAction } from './refs.ts'
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
@@ -225,13 +225,13 @@ async function machineName(host: Pick<ExtensionHost, 'userHome' | 'faux' | 'noti
 
 export const actions = {
   /** `{ machine, providers }`: this machine's provider health; a faux host answers a fixed demo. */
-  async state(_args: JsonValue, { host }: ActionContext) {
+  state: implementAction(StateAction, async (_args, { host }) => {
     const providers = host.faux
       ? demoHealth(Date.now())
       : toHealth(await readFileHealth(host.userHome))
-    return { machine: await machineName(host), providers } as unknown as JsonValue
-  },
-} satisfies Record<string, ExtensionAction>
+    return { machine: await machineName(host), providers }
+  }),
+}
 
 /** When the cloud last accepted a report, and whether a newer one is still owed (a failed attempt). */
 export type Reports = { reported: number; pending?: boolean }

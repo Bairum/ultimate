@@ -21,9 +21,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import { copyJson } from '@earendil-works/chord'
 import type { Context } from '@earendil-works/chord'
-import type { JsonValue } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { ActionContext } from '../../server/actions.ts'
 import { BACKGROUND_CONTEXT as context, withAbortSignal } from '@earendil-works/chord/context'
 import { ConversationsApi } from '../conversations/api.ts'
 import type { ConversationsService } from '../conversations/api.ts'
@@ -32,9 +30,11 @@ import type { SummaryModel } from '../conversations/summary-model.ts'
 import { Board, BoardApi } from '../board/api.ts'
 import type { BoardMessage } from '../board/api.ts'
 import { Standing } from '../subagents/api.ts'
+import { implementAction } from '../../lib/actions.ts'
 import { primaryAgent } from '../../lib/machine.ts'
 import { QuestionsApi } from './api.ts'
 
+import { AnswerAction, QuestionsDoc, ReplyAction } from './refs.ts'
 import type { Question } from './types.ts'
 export const BoardQuestions = defineDoc<{
   requested: number[]
@@ -44,7 +44,7 @@ export const BoardQuestions = defineDoc<{
   /** Questions stay open until typed user input, reset, or a card answer. */
   reply?: { conversation: number; entry: number; questions: Question[] }
 }>({
-  kind: 'questions.board',
+  kind: QuestionsDoc.kind,
   version: 1,
   history: 'latest',
   fork: 'initial',
@@ -239,7 +239,7 @@ export function parseQuestions(text: string): Question[] {
 export const userActions = ['answer', 'reply']
 export const actions = {
   /** Answer the questions of an open Board message: a user Board reply to its sender. */
-  async answer(args: JsonValue, { host, signal }: ActionContext) {
+  answer: implementAction(AnswerAction, async (args, { host, signal }) => {
     const data = args as { messageId: number; answers: { question: string; answer: string }[] }
     if (!data || !Number.isSafeInteger(data.messageId) || !validAnswers(data.answers))
       throw new Error('Invalid answers')
@@ -259,12 +259,12 @@ export const actions = {
         withAbortSignal(signal, context),
       ),
     }
-  },
+  }),
   /**
    * Answer the questions of @ultimate's current final answer: a typed input in its conversation. The check claims the
    * card by clearing `reply`, so one call wins; a submit that fails gives the claim back for a retry.
    */
-  async reply(args: JsonValue, { host, signal }: ActionContext) {
+  reply: implementAction(ReplyAction, async (args, { host, signal }) => {
     const data = args as { entryId: number; answers: { question: string; answer: string }[] }
     if (!data || !Number.isSafeInteger(data.entryId) || !validAnswers(data.answers))
       throw new Error('Invalid answers')
@@ -307,7 +307,7 @@ export const actions = {
       throw error
     }
     return {}
-  },
+  }),
 }
 
 export default function questionsExtension(host: ExtensionHost) {

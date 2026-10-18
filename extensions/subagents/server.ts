@@ -30,7 +30,6 @@ import type {
   ToolExecutionApi,
   SubmissionRecord,
 } from '@earendil-works/pi-durable'
-import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { Source } from '../../server/project.ts'
 import {
@@ -41,11 +40,19 @@ import {
   saveDefinition,
 } from '../../lib/agents.ts'
 import { createChild } from './children.ts'
+import { implementAction } from '../../lib/actions.ts'
 import { exec } from '../../lib/exec.ts'
 import { residentHere } from '../../lib/machine.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { Standing, Subagents, SubagentsApi } from './api.ts'
+import {
+  DefinitionAction,
+  DefinitionsAction,
+  DeleteDefinitionAction,
+  SaveDefinitionAction,
+  StandingAction,
+} from './refs.ts'
 
 export const docs = [Subagents, Standing]
 const Anchor = defineTask<null, { phase: 'done' }, null>({
@@ -411,17 +418,17 @@ async function waitInterruptibly(
 /** Browser actions for the Agents tab. */
 export const actions = {
   /** `{name}`: open the current definition's standing conversation. */
-  async standing(args: JsonValue, { host }: ActionContext) {
+  standing: implementAction(StandingAction, async (args, { host }) => {
     const { name } = (args ?? {}) as Record<string, JsonValue>
     if (typeof name !== 'string') throw new Error('name is required')
     return host.need(SubagentsApi).standing(name, BACKGROUND_CONTEXT)
-  },
+  }),
   /**
    * The definitions without their instructions and the files that failed to parse, and for the config view the main
    * conversation's model and tools (a definition may list a subset), where each scope saves, and whether the
    * project's setup is local, which the project scope needs.
    */
-  async definitions(_args: JsonValue, { host }: ActionContext) {
+  definitions: implementAction(DefinitionsAction, async (_args, { host }) => {
     const { definitions, errors } = await discoverAgents(
       host.ultimateRoot,
       host.projectRoot,
@@ -450,9 +457,9 @@ export const actions = {
       },
       projectLocal: local,
     }
-  },
+  }),
   /** `{name}`: the definition that applies, its source and path, the raw file, and the scopes with a file of that name. */
-  async definition(args: JsonValue, { host }: ActionContext) {
+  definition: implementAction(DefinitionAction, async (args, { host }) => {
     const name = (args as { name?: JsonValue } | null)?.name
     if (typeof name !== 'string' || !name) throw new Error('name is required')
     const { definitions, errors } = await discoverAgents(
@@ -477,9 +484,9 @@ export const actions = {
       raw: await readFile(shown.path, 'utf8'),
       files,
     }
-  },
+  }),
   /** `{name, scope, frontmatter, instructions}`: write `<scope>/agents/<name>.md`; invalid input writes nothing. */
-  async saveDefinition(args: JsonValue, { host }: ActionContext) {
+  saveDefinition: implementAction(SaveDefinitionAction, async (args, { host }) => {
     const { name, scope, frontmatter, instructions, create } = (args ?? {}) as Record<
       string,
       JsonValue
@@ -531,14 +538,14 @@ export const actions = {
       },
       instructions,
     )
-  },
+  }),
   /** `{name, scope}`: remove a user or project definition; a built-in or user one of that name applies again. */
-  async deleteDefinition(args: JsonValue, { host }: ActionContext) {
+  deleteDefinition: implementAction(DeleteDefinitionAction, async (args, { host }) => {
     const { name, scope } = (args ?? {}) as Record<string, JsonValue>
     if (typeof name !== 'string') throw new Error('name is required')
     if (scope !== 'user' && scope !== 'project') throw new Error('scope must be user or project')
     return deleteDefinition(host, scope, name)
-  },
+  }),
 }
 
 export default function subagents(

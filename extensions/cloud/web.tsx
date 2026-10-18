@@ -8,7 +8,8 @@ import { api, defineWebExtension, errorMessage, projectBase, useSystem } from '@
 import type { CloudInfo, Transition } from '../../cloud/protocol.ts'
 import type { CloudState } from './types.ts'
 import { movedAway, phaseOf, TransitionCard } from './transition.tsx'
-import { AskSync } from '../sync/link.tsx'
+import { AskSync } from '../sync/ui.tsx'
+import { CancelAction, MoveHereAction, StateAction } from './refs.ts'
 
 // Locally the facet asks its own server (`cloud.state`, `moveHere`, `cancel`); in the cloud, at `/p/<slug>/`, it asks
 // the project's replica (`/api/cloud`), which answers while the writer machine is off too.
@@ -61,7 +62,7 @@ const running = (transition?: Transition | null) =>
   !!transition && phaseOf(transition) === 'running'
 
 const local = poll(
-  (signal) => api.action<CloudState>('cloud', 'state', null, { signal }),
+  (signal) => api.action(StateAction, null, { signal }),
   (state) =>
     state?.status === 'off'
       ? 30_000
@@ -82,11 +83,11 @@ const useLocal = () => useSyncExternalStore(local.subscribe, local.get)
 const useRemote = () => useSyncExternalStore(remote.subscribe, remote.get)
 
 const moveHere = async (force = false) => {
-  await api.action('cloud', 'moveHere', { force })
+  await api.action(MoveHereAction, { force })
   local.refresh()
 }
 const cancelHere = async () => {
-  await api.action('cloud', 'cancel')
+  await api.action(CancelAction)
   local.refresh()
 }
 /** `POST /api/cloud/<route>` of this project; rejects with the replica's error. */

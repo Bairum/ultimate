@@ -1,3 +1,4 @@
+/** Info's components for other extensions: the panel's sections, label/value rows, copy buttons, meters and tags. */
 import { CheckIcon, ChevronRightIcon, CopyIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'

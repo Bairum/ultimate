@@ -16,13 +16,12 @@ import {
   useExtensionUiState,
   useUltimate,
 } from '@/sdk'
-import { emptyBoard, isOpen } from '../board/data.tsx'
-import type { BoardData } from '../board/data.tsx'
+import { BoardDoc, emptyBoard, isOpen } from '../board/ui.tsx'
+import { CompactAction, RecentAction, TallyDoc } from '../lineage/ui.tsx'
 import type { RootEvent } from '../lineage/types.ts'
-import { phaseText, usePhase } from '../phase/chip.tsx'
-import { useWorkspaceIndex } from '../workspaces/data.tsx'
-import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
-import { CommitCount } from '../workspaces/landing.tsx'
+import { phaseText, usePhase } from '../phase/ui.tsx'
+import { CommitCount, useWorkspaceIndex } from '../workspaces/ui.tsx'
+import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
 import { FeatureTag, useOverview } from './feature.tsx'
 import { ago } from './lander.tsx'
 import { AgentMark } from './marks.tsx'
@@ -63,7 +62,7 @@ export function inFlight(
 /** Where an open branch stands, in a word or two, and how loud to say it. */
 function useBranchState(conversation: ConversationSummary, working: boolean) {
   const index = useWorkspaceIndex()
-  const board = useDocOf<BoardData>(1, 'board') ?? emptyBoard
+  const board = useDocOf(1, BoardDoc) ?? emptyBoard
   const phase = usePhase(working ? conversation.id : undefined)
   const queued = index.queue.find((item) => item.conversationId === conversation.id)
   if (queued?.state === 'landing') return { label: 'landing', tone: 'success' } as const
@@ -222,12 +221,11 @@ export function RootRow({
 }) {
   const actions = useUltimate()
   const id = conversation.id
-  const tally = useDocOf<{ tokens: number; since?: number }>(id, 'lineage.tally')
+  const tally = useDocOf(id, TallyDoc)
   const [unfolded, setUnfolded] = useExtensionUiState<number[]>('landingsOpen', [])
   const more = unfolded.includes(id)
-  const landings = useAction<Landing[]>(
-    'lineage',
-    'recent',
+  const landings = useAction(
+    RecentAction,
     { id, types: ['landed'], limit: 10 },
     { onError: () => {} },
   )
@@ -244,7 +242,8 @@ export function RootRow({
   }, [tokens, refetch])
   // A hardcoded name: the root's summary title described its pre-context history, not what it holds now.
   const name = 'Project context'
-  const landed = landings.data ?? []
+  // Asked for landings only.
+  const landed = (landings.data ?? []) as Landing[]
   const shownLandings = more ? landed : landed.slice(0, 3)
   // The root's own landing notes count too: the lander keeps only recent results.
   const open = flights.filter(
@@ -350,7 +349,7 @@ export function RootRow({
           <DropdownMenuItem
             className="text-[12.5px]"
             disabled={tally?.since === undefined || working === 'self'}
-            onSelect={() => void api.action('lineage', 'compact', { id })}
+            onSelect={() => void api.action(CompactAction, { id })}
           >
             <FoldVerticalIcon />
             Compact context

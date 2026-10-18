@@ -45,7 +45,15 @@ import {
   until,
   words,
 } from './parts.tsx'
-import type { Automation, Described, Run, Schedule } from './parts.tsx'
+import {
+  DeleteAction,
+  DescribeAction,
+  ListAction,
+  PauseAction,
+  ResumeAction,
+  RunAction,
+} from './refs.ts'
+import type { Automation, Run, Schedule } from './refs.ts'
 
 /**
  * Refetches when automation work changes: a scheduler or run task in the live task graph, or a run conversation
@@ -96,9 +104,8 @@ const raw = (schedule: Schedule) =>
 
 /** The schedule in words, from the backend's `describe`; a one-shot needs only its time. */
 function useWords(schedule: Schedule, now: number) {
-  const { data } = useAction<Described>(
-    'automations',
-    'describe',
+  const { data } = useAction(
+    DescribeAction,
     { schedule },
     { enabled: schedule.kind !== 'at', onError: () => {} },
   )
@@ -267,21 +274,19 @@ function AutomationRow({
   }
   const toggle = (enabled: boolean) => {
     setPending(enabled)
-    void act(() =>
-      api.action('automations', enabled ? 'resume' : 'pause', { id: automation.id }),
-    ).finally(() => setPending(undefined))
+    void act(() => api.action(enabled ? ResumeAction : PauseAction, { id: automation.id })).finally(
+      () => setPending(undefined),
+    )
   }
   const runNow = () => {
     setBusy('run')
     onExpand(true)
-    void act(() => api.action('automations', 'run', { id: automation.id })).finally(() =>
-      setBusy(undefined),
-    )
+    void act(() => api.action(RunAction, { id: automation.id })).finally(() => setBusy(undefined))
   }
   const remove = () => {
     setBusy('delete')
     void act(async () => {
-      await api.action('automations', 'delete', { id: automation.id })
+      await api.action(DeleteAction, { id: automation.id })
       onDeleted()
     }).finally(() => setBusy(undefined))
   }
@@ -459,7 +464,7 @@ function AutomationRow({
  * Edit and Delete, and its past runs, each a conversation to open. Refetched as the automation tasks change.
  */
 export function AutomationsPanel() {
-  const list = useAction<Automation[]>('automations', 'list', null, { onError: () => {} })
+  const list = useAction(ListAction, null, { onError: () => {} })
   const { refetch } = list
   const ui = useUltimate()
   const extensionsPanel = useCommands().some((command) => command.id === 'onboarding.extensions')

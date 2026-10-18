@@ -21,14 +21,11 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
-import { ConversationRef } from '../conversations/feature.tsx'
-import { talkToUltimate, usePrimaryAgent } from '../conversations/ultimate.tsx'
-import { Open } from '../workspaces/landing.tsx'
-import { useRoots } from './roots.tsx'
+import { ConversationRef, talkToUltimate, usePrimaryAgent } from '../conversations/ui.tsx'
+import { Open } from '../workspaces/ui.tsx'
+import { TallyDoc } from './refs.ts'
 import { column, Familiarize } from './survey.tsx'
-
-type Tally = { tokens: number; since?: number }
-const tallyKind = 'lineage.tally'
+import { useRoots } from './ui.tsx'
 
 function userText(entry: EntryRecord) {
   const message = entry.model?.[0]
@@ -335,7 +332,7 @@ function RootComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
 
 /** Only a root subscribes to its `lineage.tally` document; a root from before tallies has none and shows the footer. */
 function TallyComposer({ id, dock }: { id: number; dock?: boolean }) {
-  const tally = useDocOf<Tally>(id, tallyKind)
+  const tally = useDocOf(id, TallyDoc)
   const history = useConversation((conversation) =>
     conversation.loading ? undefined : conversation.entries.length > 0,
   )

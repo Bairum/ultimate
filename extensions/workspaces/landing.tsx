@@ -11,7 +11,8 @@ import type { ReactNode } from 'react'
 import { MentionText } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
 import { api, useConversations, useUltimate } from '@/sdk'
-import { FeatureTag } from '../conversations/feature.tsx'
+import { FeatureTag } from '../conversations/ui.tsx'
+import { GithubAction } from '../lineage/ui.tsx'
 import type { LandingSubject } from './types.ts'
 
 /** "open #id", with a dot while that conversation works. */
@@ -52,7 +53,7 @@ let repo: Promise<string | null> | undefined
 export function useGithubRepo() {
   const [url, setUrl] = useState<string | null>()
   useEffect(() => {
-    repo ??= api.action<string | null>('lineage', 'github').catch(
+    repo ??= api.action(GithubAction).catch(
       // No lineage or no repository: landings show their count without a link.
       () => null,
     )

@@ -4,10 +4,11 @@ import type { ConversationId, Cursor, SubmissionRecord } from '@earendil-works/p
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { currentAnswer, resetAfter, Summaries } from './summary.ts'
 import { isInput } from '../../lib/entries.ts'
+import { OverviewDoc } from './refs.ts'
 import type { OverviewRow, OverviewState } from './types.ts'
 
 export const Overview = defineDoc<OverviewState>({
-  kind: 'ultimate.conversation-overview',
+  kind: OverviewDoc.kind,
   version: 1,
   scope: 'conversation',
   history: 'latest',

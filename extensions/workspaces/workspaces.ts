@@ -15,6 +15,7 @@ import { exec } from '../../lib/exec.ts'
 import { git, isolatable } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
+import { WorkspacesDoc } from './refs.ts'
 import { setup } from './setup.ts'
 import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
 import type {
@@ -28,7 +29,7 @@ import type {
 } from './types.ts'
 
 export const Workspaces = defineDoc<WorkspaceIndex>({
-  kind: 'ultimate.workspaces',
+  kind: WorkspacesDoc.kind,
   version: 4,
   scope: 'conversation',
   history: 'latest',

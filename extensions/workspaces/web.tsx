@@ -13,10 +13,10 @@ import {
 import type { WorkspaceConversation as ConversationSummary } from './data.tsx'
 import { CommitCount, LandingCard, useGithubRepo } from './landing.tsx'
 import { LanderAskEntry, LanderLogEntry, LanderReport, WorkspaceCall } from './log.tsx'
-import type { WorkspaceDisk, WorkspaceInfo, WorkspaceStats } from './types.ts'
+import { DiskAction, InfoAction, StatsAction } from './refs.ts'
 import type { EntryRecord } from '@earendil-works/pi-durable'
-import { ConversationRef } from '../conversations/feature.tsx'
-import { Row, Rows } from '../info/rows.tsx'
+import { ConversationRef } from '../conversations/ui.tsx'
+import { Row, Rows } from '../info/ui.tsx'
 
 /** The lander's note in the root: the landing's card, from the note's own data, with the state it froze. */
 function LandingNote({ entry }: { entry: EntryRecord }) {
@@ -119,9 +119,8 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
   const actions = useUltimate()
   const shown = useConversation().id === conversation.id
   const [open, setOpen] = useState(shown)
-  const info = useAction<WorkspaceInfo | null>(
-    'workspaces',
-    'info',
+  const info = useAction(
+    InfoAction,
     { id: conversation.id },
     {
       enabled: false,
@@ -258,8 +257,8 @@ const parts = (entries: [number, string][]) =>
 /** How many checkouts there are, what their commits are, and the disk they take. */
 function Stats() {
   const records = useWorkspaces()
-  const { data, error, refetch } = useAction<WorkspaceStats>('workspaces', 'stats')
-  const disk = useAction<WorkspaceDisk>('workspaces', 'disk')
+  const { data, error, refetch } = useAction(StatsAction)
+  const disk = useAction(DiskAction)
   const { refetch: refetchDisk } = disk
   const states = Object.entries(records)
     .map(([id, workspace]) => `${id}:${workspace.state}:${workspace.landed ?? ''}`)

@@ -4,21 +4,13 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { events, useEvent, useConversation, useUltimate } from '@/sdk'
-import { ConversationRef } from '../conversations/feature.tsx'
-import { TaskChip, useTaskOf } from '../plan/chip.tsx'
-import { useWorkspaceConversations } from '../workspaces/data.tsx'
+import { ConversationRef } from '../conversations/ui.tsx'
+import { TaskChip, useTaskOf } from '../plan/ui.tsx'
+import { useWorkspaceConversations } from '../workspaces/ui.tsx'
 import type { AgentOrigin } from './message-types.ts'
+import { openAgentSource } from './ui.tsx'
 
 type Destination = { conversation: number; entry?: number }
-
-export function openAgentSource(
-  switchConversation: (id: number) => void,
-  source: { conversation: number; entry?: number },
-  receiver: { conversation: number; entry?: number },
-) {
-  events.emit('subagents:source', { target: source, back: receiver })
-  switchConversation(source.conversation)
-}
 
 export function AgentMessages() {
   const { id, entries, loading } = useConversation()

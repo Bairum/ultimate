@@ -4,11 +4,10 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { cn, defineWebExtension, useDocOf, useExtensionUiState, useTasks } from '@/sdk'
-import { emptyBoard } from '../board/data.tsx'
-import type { BoardData } from '../board/data.tsx'
-import { usePrimaryAgent } from '../conversations/ultimate.tsx'
-import type { OverviewState } from '../conversations/types.ts'
-import type { QuestionsBoard } from '../questions/open.tsx'
+import { BoardDoc, emptyBoard } from '../board/ui.tsx'
+import { OverviewDoc, usePrimaryAgent } from '../conversations/ui.tsx'
+import { QuestionsDoc } from '../questions/ui.tsx'
+import { StandingDoc } from '../subagents/ui.tsx'
 import { listener, settle, sounds } from './cues.ts'
 import type { Cue, Sound } from './cues.ts'
 import { play } from './tones.ts'
@@ -41,11 +40,11 @@ async function announce(cue: Cue) {
  * a failed run. Whatever it shows when this tab opens has been heard already.
  */
 function Player() {
-  const overview = useDocOf<OverviewState>(1, 'ultimate.conversation-overview')
-  const board = useDocOf<BoardData>(1, 'board')
-  const questions = useDocOf<QuestionsBoard>(1, 'questions.board')
+  const overview = useDocOf(1, OverviewDoc)
+  const board = useDocOf(1, BoardDoc)
+  const questions = useDocOf(1, QuestionsDoc)
   const name = usePrimaryAgent()
-  const agent = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')?.[name]
+  const agent = useDocOf(1, StandingDoc)?.[name]
   const tasks = useTasks()
   const extracting = Object.values(tasks?.tasks ?? {}).some(
     (task) => task.kind === 'questions.reply-extract' && task.conversationId === agent,

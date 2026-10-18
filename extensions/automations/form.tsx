@@ -20,7 +20,9 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { api, cn, errorMessage, events, formatKeys, useAction, useEvent, useNow } from '@/sdk'
 import { clock, full, until, words } from './parts.tsx'
-import type { Automation, Described } from './parts.tsx'
+import { DefinitionsAction } from '../subagents/ui.tsx'
+import { CreateAction, DescribeAction, UpdateAction } from './refs.ts'
+import type { Automation } from './refs.ts'
 
 type Mode = 'cron' | 'at' | 'every'
 interface Draft {
@@ -36,15 +38,6 @@ interface Draft {
   agent: string
 }
 type Model = { model?: { provider: string; modelId: string }; thinking?: string }
-/** The `definitions` action of `subagents`: what an automation can name as its agent, and the main agent's model. */
-interface Definitions {
-  definitions: (Model & {
-    name: string
-    description: string
-    source: 'builtin' | 'user' | 'project'
-  })[]
-  main?: Model
-}
 const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
 const zones = Intl.supportedValuesOf('timeZone')
 const pad = (value: number) => String(value).padStart(2, '0')
@@ -143,9 +136,8 @@ function Field({
 /** What the backend makes of the schedule: in words, the next fire times, and how often it costs a run. */
 function Preview({ schedule }: { schedule: string | undefined }) {
   const settled = useSettled(schedule, 250)
-  const described = useAction<Described>(
-    'automations',
-    'describe',
+  const described = useAction(
+    DescribeAction,
     { schedule: settled ?? '' },
     { enabled: settled !== undefined, onError: () => {} },
   )
@@ -211,7 +203,7 @@ const model = (agent: Model | undefined, fallback: string) =>
 
 /** Which agent runs the prompt: a copy of the main agent, or a shared agent definition with its own model. */
 function AgentPicker({ value, onChange }: { value: string; onChange: (agent: string) => void }) {
-  const { data, refetch } = useAction<Definitions>('subagents', 'definitions', null, {
+  const { data, refetch } = useAction(DefinitionsAction, null, {
     onError: () => {},
   })
   // A definition changed in its config dialog shows its new model here once the dialog closes, and focus comes back to
@@ -349,12 +341,12 @@ export function AutomationForm({
     try {
       const fields = { name: draft.name.trim(), prompt: draft.prompt.trim(), schedule }
       const saved = automation
-        ? await api.action<Automation>('automations', 'update', {
+        ? await api.action(UpdateAction, {
             id: automation.id,
             ...fields,
             agent: draft.agent,
           })
-        : await api.action<Automation>('automations', 'create', {
+        : await api.action(CreateAction, {
             ...fields,
             ...(draft.agent ? { agent: draft.agent } : {}),
           })

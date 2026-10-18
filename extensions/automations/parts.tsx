@@ -1,38 +1,7 @@
 import { CheckIcon, LoaderCircleIcon, MinusCircleIcon, SkipForwardIcon, XIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { cn, formatTime } from '@/sdk'
-
-/** The shapes the server facet's actions return (`server.ts`, which the browser does not import). */
-export type Schedule =
-  | { kind: 'cron'; expr: string; tz: string }
-  | { kind: 'at'; time: string }
-  | { kind: 'every'; ms: number }
-export interface Run {
-  id: string
-  firedAt: number
-  conversationId?: number
-  status: 'running' | 'done' | 'failed' | 'aborted' | 'skipped'
-  finishedAt?: number
-  answer?: string
-}
-export interface Automation {
-  id: string
-  name: string
-  prompt: string
-  schedule: Schedule
-  enabled: boolean
-  createdAt: number
-  updatedAt: number
-  nextAt?: number
-  runs: Run[]
-  agent?: string
-}
-/** The `describe` action: the schedule parsed, in words, and its next fire times. */
-export interface Described {
-  schedule: Schedule
-  description: string
-  next: number[]
-}
+import type { Automation, Run, Schedule } from './refs.ts'
 
 /** A one-shot schedule whose time has passed: resuming it would fire at once, so its switch stays off. */
 export const spent = (automation: Automation, now: number) =>

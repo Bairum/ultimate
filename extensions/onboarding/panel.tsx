@@ -29,6 +29,7 @@ import {
   sources,
   useDescribed,
 } from './parts.tsx'
+import { AdoptProjectSetupAction, DecideAction, SetExtensionAction } from './refs.ts'
 
 type Scope = 'project' | 'user'
 
@@ -132,7 +133,7 @@ function ProjectSetup({ system }: { system: SystemInfo }) {
         className="mt-2.5 flex w-full"
         label="Setup for this folder"
         onChange={(value) =>
-          void run(value, () => api.action('onboarding', 'decide', { local: value === 'local' }))
+          void run(value, () => api.action(DecideAction, { local: value === 'local' }))
         }
         options={[
           {
@@ -171,7 +172,7 @@ function ProjectSetup({ system }: { system: SystemInfo }) {
         <Button
           className="mt-2 h-7 w-full justify-start gap-1.5 px-2 font-mono text-[11px] text-muted-foreground"
           disabled={busy !== undefined || copies === 0}
-          onClick={() => void run('adopt', () => api.action('onboarding', 'adoptProjectSetup'))}
+          onClick={() => void run('adopt', () => api.action(AdoptProjectSetupAction))}
           size="sm"
           title={
             copies === 0
@@ -395,7 +396,7 @@ export function ExtensionsPanel() {
     setErrors(without(name))
     setNotes(without(name))
     try {
-      await api.action('onboarding', 'setExtension', { name, enabled, scope })
+      await api.action(SetExtensionAction, { name, enabled, scope })
       if (scope === 'user' && extension.layer === 'project' && local) {
         const note = `Saved everywhere; this project's settings keep it ${extension.enabled ? 'on' : 'off'} here.`
         setNotes((previous) => ({ ...previous, [name]: note }))

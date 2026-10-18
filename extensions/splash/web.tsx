@@ -1,6 +1,7 @@
 import { TriangleAlertIcon, XIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api, defineWebExtension, resumed, useReady, useStore } from '@/sdk'
+import { StatusAction } from '../onboarding/ui.tsx'
 import { Electric } from './electric.tsx'
 
 /** The core's readiness deadline: not ready by then, the app opens anyway and the notice names what is missing. */
@@ -348,7 +349,7 @@ function Splash({ replay }: { replay?: () => void }) {
     show.current = current
     // The first run plays the signature version, then hands over to onboarding's first page.
     let active = true
-    api.action<{ firstRun?: boolean }>('onboarding', 'status').then(
+    api.action(StatusAction).then(
       (status) => {
         if (active && (status.firstRun || rehearsal === 'first')) current.signature()
       },

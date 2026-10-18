@@ -13,6 +13,7 @@ import {
 import type { ConversationId, Cursor, EntryId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Branch } from '../lineage/api.ts'
+import { PlanDoc, TaskIndexDoc } from './refs.ts'
 
 export type Task = {
   key: string
@@ -34,7 +35,7 @@ export type Epic = {
   tasks: Record<string, Task>
 }
 export const Plan = defineDoc<{ next: number; epics: Record<string, Epic> }>({
-  kind: 'ultimate.plan',
+  kind: PlanDoc.kind,
   version: 1,
   scope: 'conversation',
   history: 'rewindable',
@@ -50,7 +51,7 @@ export type TaskLink = {
   status: Task['status']
 }
 export const TaskIndex = defineDoc<{ children: Record<string, TaskLink> }>({
-  kind: 'ultimate.plan.tasks',
+  kind: TaskIndexDoc.kind,
   version: 1,
   scope: 'conversation',
   history: 'latest',

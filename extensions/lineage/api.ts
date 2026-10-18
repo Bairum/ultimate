@@ -7,6 +7,7 @@ import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { Tx } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
 import { defineEvent } from '../../shared/events.ts'
+import { RootsDoc } from './refs.ts'
 import type {
   AbstractInput,
   BranchInput,
@@ -18,7 +19,7 @@ import type {
 
 /** The project's roots, each the top of one conversation tree; a fresh project's first conversation is its first. */
 export const Roots = defineDoc<{ roots: number[] }>({
-  kind: 'lineage.roots',
+  kind: RootsDoc.kind,
   version: 1,
   scope: 'conversation',
   history: 'latest',

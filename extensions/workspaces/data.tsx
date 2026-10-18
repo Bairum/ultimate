@@ -1,5 +1,6 @@
 import { useConversations, useDocOf } from '@/sdk'
 import type { ConversationSummary } from '@/sdk'
+import { WorkspacesDoc } from './refs.ts'
 import type { Workspace, WorkspaceIndex } from './types.ts'
 
 export type WorkspaceConversation = ConversationSummary & { workspace?: Workspace }
@@ -15,7 +16,7 @@ export function useWorkspaces() {
 }
 /** The whole root index: queue, lander conversations and recent outcomes. */
 export function useWorkspaceIndex() {
-  return useDocOf<WorkspaceIndex>(1, 'ultimate.workspaces') ?? none
+  return useDocOf(1, WorkspacesDoc) ?? none
 }
 /** Submissions waiting for or being processed by a lander, oldest first. */
 export function useLanderQueue() {

@@ -2,7 +2,7 @@ import { PencilIcon } from 'lucide-react'
 import { formatTime, useChat } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import type { Assessed, IntentSummary, SpawnSummary, SummaryDiscard, TitleChange } from './types.ts'
-import { useRoots } from '../lineage/roots.tsx'
+import { useRoots } from '../lineage/ui.tsx'
 
 const assessmentLabel = { needs_input: 'may need input', done: 'Done', neutral: 'neutral' }
 

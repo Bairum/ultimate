@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import type { JsonValue } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { AuthEvent, AuthPrompt, AuthType } from '@earendil-works/pi-ai'
 import { defineDoc, defineExtension, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
@@ -7,6 +6,9 @@ import type { ConversationId, Cursor } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { HealthApi } from '../health/api.ts'
+import { implementAction } from '../../lib/actions.ts'
+import type { ActionInput } from '../../lib/actions.ts'
+import { AnswerAction, CancelAction, LoginAction, LoginDoc, LogoutAction } from './refs.ts'
 
 /** A Pi type as a document holds it: plain JSON, arrays mutable. */
 type Json<T> = T extends readonly (infer U)[]
@@ -27,7 +29,7 @@ export type LoginFlow = {
 }
 /** The login flows started from a conversation, by flow id; the login dialog streams it with `useDoc`. */
 export const Logins = defineDoc<{ flows: Record<string, LoginFlow> }>({
-  kind: 'models.login',
+  kind: LoginDoc.kind,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -80,14 +82,14 @@ function liveFlows(host: ExtensionHost) {
   })
 }
 
-const field = (args: JsonValue, name: string) =>
+const field = <Name extends string>(args: ActionInput<Record<Name, unknown>>, name: Name) =>
   args && typeof args === 'object' && !Array.isArray(args) ? args[name] : undefined
-function text(args: JsonValue, name: string) {
+function text<Name extends string>(args: ActionInput<Record<Name, unknown>>, name: Name) {
   const value = field(args, name)
   if (typeof value !== 'string' || !value) throw new Error(`Expected ${name}`)
   return value
 }
-function running(host: ExtensionHost, args: JsonValue) {
+function running(host: ExtensionHost, args: ActionInput<{ flowId: string }>) {
   const flow = liveFlows(host).get(text(args, 'flowId'))
   if (!flow) throw new Error('Unknown login flow')
   return flow
@@ -112,7 +114,7 @@ const forgetHealth = async (host: ActionContext['host'], provider: string) =>
 
 export const actions = {
   /** Start a login flow for the calling conversation and resolve with its id; the document shows its progress. */
-  async login(args: JsonValue, { host, conversationId }: ActionContext) {
+  login: implementAction(LoginAction, async (args, { host, conversationId }) => {
     const provider = text(args, 'provider')
     const type = field(args, 'type')
     if (type !== 'api_key' && type !== 'oauth') throw new Error('Invalid auth type')
@@ -194,9 +196,9 @@ export const actions = {
         })
       })
     return { flowId }
-  },
+  }),
   /** Answer the flow's pending prompt; an empty answer is allowed. */
-  async answer(args: JsonValue, { host }: ActionContext) {
+  answer: implementAction(AnswerAction, async (args, { host }) => {
     const flow = running(host, args)
     const value = field(args, 'value')
     if (typeof value !== 'string') throw new Error('Expected value')
@@ -205,18 +207,18 @@ export const actions = {
     // The prompt leaves the document before the UI hears back.
     await flow.writes
     return null
-  },
-  async cancel(args: JsonValue, { host }: ActionContext) {
+  }),
+  cancel: implementAction(CancelAction, async (args, { host }) => {
     running(host, args).controller.abort()
     return null
-  },
+  }),
   /** Remove the provider's stored credential, which pi shares. */
-  async logout(args: JsonValue, { host }: ActionContext) {
+  logout: implementAction(LogoutAction, async (args, { host }) => {
     const provider = text(args, 'provider')
     await host.modelRuntime.logout(provider)
     await forgetHealth(host, provider)
     return null
-  },
+  }),
 }
 
 export default function models(host: ExtensionHost) {

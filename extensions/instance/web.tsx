@@ -23,6 +23,8 @@ import {
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import { at } from './links.ts'
+import { ListAction } from './refs.ts'
+import type { Preview } from './refs.ts'
 
 interface Instance {
   id: string
@@ -150,17 +152,6 @@ function InstanceCall({ call }: { call: ToolCallView }) {
 }
 
 /** What the `list` action returns. */
-interface Preview {
-  id: string
-  url: string
-  conversationId: number
-  faux: boolean
-  /** False once it exited or was stopped. */
-  running: boolean
-  /** Where the tailnet reaches it while it runs, when it publishes itself there. */
-  tailnet?: string
-}
-
 const isLoopback = (hostname: string) =>
   /^(127\.0\.0\.1|localhost|\[::1\])$|\.localhost$/.test(hostname)
 /** Previews bind to loopback, so a page opened from elsewhere, such as the tailnet, cannot frame them. */
@@ -190,7 +181,7 @@ const usePreviews = () => useSyncExternalStore(subscribe, () => previews)
 
 /** Asks for the previews every 5 s, for the switcher and preview links; showing one that stopped returns. */
 function Poll() {
-  const { data, refetch: again } = useAction<Preview[]>('instance', 'list', null, {
+  const { data, refetch: again } = useAction(ListAction, null, {
     // A failed poll leaves the last list; the next one tries again.
     onError: () => {},
   })

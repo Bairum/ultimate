@@ -43,7 +43,7 @@ not invent an event only to replace one.
 ## Extension APIs
 
 A service one extension offers another is a typed token, `defineApi<Service>()('name')` from
-`shared/extension-api.ts`, kept in the provider's `api.ts` (browser-safe, so web code can import it too). The provider
+`shared/extension-api.ts`, kept in the provider's `api.ts`. The provider
 calls `host.implement(Token, value)`; consumers call `host.need(Token)` for a hard dependency or `host.want(Token)` for
 an optional one. Both return a handle that resolves the current provider on every member access, so a handle taken at
 setup survives provider reloads. Every method call goes through one internal `call`, which traces it (below).
@@ -56,17 +56,31 @@ other in a cycle).
 An extension's `api.ts` is its whole server-side surface for others, and agents discover APIs by reading these files,
 so lint (`lint/ultimate.ts`) keeps them small and documented:
 
-- `api-file-shape`: the file starts with a doc comment on the extension's intent, its first sentence the one-line
-  summary. It holds only imports (runtime ones of `shared/`, packages and other extensions' `api.ts`; anything else
-  with `import type`; no `node:*`), types, and `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)`.
-  Every exported token and every member of a service type passed to `defineApi` has a doc comment saying what it does
-  and when to use it.
-- `api-naming`: `defineApi<…>()('<folder>')` and `defineEvent('<folder>.<event>')`.
-- `api-only-imports`: a server-side `.ts` file imports another extension's runtime code only from its `api.ts`; types
-  come with `import type`, pure helpers from `lib/`.
+- `api-file-shape`: the file starts with a doc comment on what it offers, its first sentence the one-line summary.
+  It holds only imports (runtime ones of `shared/`, packages, its own `refs.ts` and other extensions' `api.ts`;
+  anything else with `import type`; no `node:*`), types, and
+  `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)`. Every exported token and every member of a
+  service type passed to `defineApi` has a doc comment saying what it does and when to use it.
+- `api-naming`: `defineApi<…>()('<folder>')`, `defineEvent('<folder>.<event>')` and `actionRef('<folder>', name)`.
+- `api-only-imports`: a server-side `.ts` file imports another extension's runtime code only from its `api.ts`, a
+  browser `.tsx` file only from its `ui.tsx`; types come with `import type`, pure helpers from `lib/`.
 - `no-raw-services`: no `host.provide`, `host.use` or `host.events` in `extensions/`.
 
-Browser `.tsx` files still declare their imports of other extensions in `ultimate/extension-imports`.
+`api.ts` type-imports server code, so the browser never imports it. The browser's contract is two more files:
+
+- `refs.ts`: `docRef<T>(kind)` for each document and `actionRef<Args, Result>(extension, name)` for each action the
+  browser reads or calls, from `shared/extension-api.ts`. The SDK takes them typed: `useDoc(ref)`,
+  `useDocOf(conversation, ref)`, `useAction(ref, args)`, `api.action(ref, args)`; `useDocKind(kind)` is the untyped
+  escape for views of every kind (the Documents tab). `api-file-shape` holds it to the same documentation as `api.ts`
+  (an action ref documents its arguments and result, which agents read before `ultimate.action`) and keeps it
+  browser-safe: runtime imports of `shared/` only, types from packages, `shared/` and extensions' `refs.ts` or
+  `types.ts`, and `tsconfig.web.json` type-checks it with the web. The server is tied to the same refs: its
+  `defineDoc` uses `kind: Ref.kind`, and each action handler is `implementAction(Ref, handler)` (`lib/actions.ts`),
+  whose types fail when the handler returns something other than the ref's result or reads an argument name the
+  ref does not declare (`ActionInput`). `test/refs.test.ts` fails when an action ref has no `implementAction` of that
+  ref in its extension's `actions`, or a doc ref names a kind no server facet's `docs` exports.
+- `ui.tsx`: what other extensions' browser code imports, components, hooks and the refs they need, opening with a doc
+  comment on what it offers.
 
 Pick the channel by what crosses it: services for calls between extensions, documents for durable state, durable
 events (above) for "this happened", actions for the UI and user boundary.

@@ -1,4 +1,3 @@
-import type { JsonValue } from '@earendil-works/chord'
 import type {
   CompactResponse,
   ConfigureRequest,
@@ -12,6 +11,7 @@ import type {
   SubmitResponse,
   UiUpdateRequest,
 } from '../../../shared/protocol.ts'
+import type { ActionRef } from '../../../shared/extension-api.ts'
 import { errorMessage } from './format.ts'
 import type { Store } from './store.ts'
 
@@ -19,6 +19,14 @@ import type { Store } from './store.ts'
 export function projectBase(path = typeof location === 'undefined' ? '/' : location.pathname) {
   return /^\/p\/[^/]+(?=\/|$)/.exec(path)?.[0] ?? ''
 }
+
+/** Per-call options of `api.action`. */
+export type ActionOptions = { conversationId?: number; signal?: AbortSignal; keepalive?: boolean }
+
+/** How a call passes an action's arguments: optional when the action takes `null`, required otherwise. */
+export type ActionArgs<Args, Options> = null extends Args
+  ? [args?: Args, options?: Options]
+  : [args: Args, options?: Options]
 
 /** The root conversation's id (`ROOT_CONVERSATION_ID` in Pi Durable): Ultimate's one ongoing conversation. */
 export const ROOT = 1
@@ -128,30 +136,26 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
       post<CreateConversationResponse>('/api/conversations', create),
     restart: () => post<unknown>('/api/restart'),
     /**
-     * Call action `name` of `extension`'s server facet (`export const actions` in its `server.ts`) with JSON `args`,
-     * on behalf of the shown conversation (none on standby), and resolve with its result. Rejects with
-     * `MachineOfflineError` for an offline replica, otherwise `ActionError`; an uncaught rejection shows as a notice.
-     * Aborting `signal` aborts the action's processes too; `keepalive` lets the call outlive the page, such as one
-     * sent on `pagehide`.
+     * Call the action `ref` names (`export const actions` in its extension's `server.ts`, typed in its `refs.ts`)
+     * with JSON `args`, on behalf of the shown conversation (none on standby), and resolve with its result. Rejects
+     * with `MachineOfflineError` for an offline replica, otherwise `ActionError`; an uncaught rejection shows as a
+     * notice. Aborting `signal` aborts the action's processes too; `keepalive` lets the call outlive the page, such as
+     * one sent on `pagehide`.
      */
-    action: async <T = JsonValue>(
-      extension: string,
-      name: string,
-      args: JsonValue = null,
-      {
-        conversationId,
-        signal,
-        keepalive,
-      }: { conversationId?: number; signal?: AbortSignal; keepalive?: boolean } = {},
-    ): Promise<T> => {
+    action: async <Args, Result>(
+      ref: ActionRef<Args, Result>,
+      ...[args, call = {}]: ActionArgs<Args, ActionOptions>
+    ): Promise<Result> => {
+      const { extension, name } = ref
+      const { conversationId, signal, keepalive } = call
       const path = `/api/extensions/${encodeURIComponent(extension)}/actions/${encodeURIComponent(name)}`
       const body: ExtensionActionRequest = {
-        args,
+        args: args ?? null,
         conversationId: conversationId ?? (store.getState().system?.standby ? undefined : shown()),
       }
       try {
         const { result } = await post<ExtensionActionResponse>(path, body, { signal, keepalive })
-        return result as T
+        return result as Result
       } catch (error) {
         if (signal?.aborted || error instanceof MachineOfflineError) throw error
         throw new ActionError(

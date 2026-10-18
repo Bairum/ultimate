@@ -1,4 +1,5 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises'
+import type { JsonValue } from '@earendil-works/chord'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -96,8 +97,8 @@ async function fixture() {
   prepared.faux!.setResponses([route])
   opened = await prepared.open()
   hosts.push(opened)
-  const action = async (name: string, args: unknown = {}) =>
-    actions[name](args as never, { host } as unknown as ActionContext)
+  const action = async (name: keyof typeof actions, args: JsonValue = {}): Promise<unknown> =>
+    actions[name](args, { host } as unknown as ActionContext)
   const records = async () =>
     Object.values((await opened.harness.snapshot(Automations, context))?.automations ?? {})
   return {

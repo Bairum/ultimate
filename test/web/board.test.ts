@@ -11,7 +11,7 @@ import {
   ultimateChat,
   waitingOnUser,
 } from '../../extensions/board/data.tsx'
-import type { BoardMessage } from '../../extensions/board/data.tsx'
+import type { BoardMessage } from '../../extensions/board/refs.ts'
 
 describe('board answer labels', () => {
   const request = {

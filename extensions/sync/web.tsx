@@ -3,8 +3,9 @@ import { useEffect } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { cn, defineWebExtension, shortenPath, useAction, useSystem } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
-import type { ProviderHealth, Transition } from '../../cloud/protocol.ts'
-import { phaseOf, TransitionCard } from '../cloud/transition.tsx'
+import type { ProviderHealth } from '../../cloud/protocol.ts'
+import { TransitionAction } from './refs.ts'
+import { phaseOf, TransitionCard } from '../cloud/ui.tsx'
 import { polling } from './moves.ts'
 import type { Fleet, FleetProject, MoveEnded, SyncReport } from './types.ts'
 
@@ -226,9 +227,8 @@ function FleetCall({ call, core }: { call: ToolCallView; core: React.ReactNode }
 function MoveCall({ call, core }: { call: ToolCallView; core: React.ReactNode }) {
   const project = typeof call.args.project === 'string' ? call.args.project : undefined
   const started = (call.details as { id?: string } | undefined)?.id
-  const state = useAction<{ transition: Transition | null }>(
-    'sync',
-    'transition',
+  const state = useAction(
+    TransitionAction,
     { project: project ?? '' },
     { enabled: !!project && !!started, onError: () => {} },
   )
