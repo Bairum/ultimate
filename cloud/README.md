@@ -29,6 +29,8 @@ Uploads use the sync bearer token in the Authorization header (never in URLs), o
 
 `uiBuild` is the first 12 hex digits of the SHA-256 of `index.html`. To avoid a circular hash/base dependency, builds use the fixed `/b/shared/` base: Vite's content-hashed asset names are unique URLs and deduplicate across builds at `ui/assets/*`. Each index is kept at `ui/builds/<uiBuild>/index.html`. `/b/<uiBuild>/` keeps old HTML addressable; `/b/<uiBuild>/assets/*` also serves the shared hashed assets. **No garbage collection yet.**
 
+Snapshots carry a project's database and branches from one machine to the next (`snapshots.ts`, written by `extensions/cloud/snapshot.ts`). `PUT` and `GET /sync/snapshots/<sha256(project key) hex>/<id>/<name>` store and read opaque objects under `snapshots/` in the same private bucket, with the same bearer token. `<id>` matches `^[a-z0-9-]{8,64}$`, `<name>` is `manifest`, `db-<n>` or `bundle-<n>`, and a body may be at most 17 MiB (413 above). The machine compresses and encrypts every object, the manifest included, so R2 holds only ciphertext and the Worker logs nothing about them. A manifest upload completes a snapshot and prunes the project's prefix: the snapshot just uploaded and the two newest other complete ones stay, older complete ones and partial uploads idle for an hour are deleted.
+
 After all uploads finish, the writer's hello or `uiBuild` message records the build in the replica and Directory. `/p/<slug>/` serves that build with no-cache, including while the machine is offline. Until an uploaded index is available, it falls back to the generic deploy build. `/p/*` and `/b/*` require the Worker's own Access JWT check: project bundles can contain private source. Assets are private-cacheable and immutable; the generic `ASSETS` files and front page stay public shells.
 
 Its second entry is the front page (`front/`): a small React page with the app's Tailwind theme, styles and UI primitives (`web/src/components/ui`), built to `dist/front/`. Rebuild after changing it; `wrangler dev` picks up the new files.
@@ -65,7 +67,7 @@ The first host to connect registers the project and becomes its writer (`cloud-l
 - `/p/<slug>/` serves the SPA. Selecting conversations changes only `?conversation=N`, preserving the project path.
 - `/p/<slug>/api/*` goes to that project's replica with the prefix removed: proxied to the writer while it is online, from the synced copy otherwise. Assets stay absolute.
 - `/p/<machine>/<name>/…`, the URLs from before projects were shared, answer 308 to `/p/<name>/…` when `<machine>` is no project slug and `<name>` is one.
-- `/sync/v2?project=<key>` routes to `REPLICA.idFromName(key)`. Any other `/sync` path but builds answers 404, so an old sender keeps retrying instead of syncing.
+- `/sync/v2?project=<key>` routes to `REPLICA.idFromName(key)`. Any other `/sync` path but builds and snapshots answers 404, so an old sender keeps retrying instead of syncing.
 
 ### Project identity and the writer lease
 

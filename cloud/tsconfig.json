@@ -12,5 +12,5 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["worker.ts", "replica.ts", "protocol.ts", "directory.ts"]
+  "include": ["worker.ts", "replica.ts", "protocol.ts", "directory.ts", "snapshots.ts"]
 }

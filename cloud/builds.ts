@@ -29,7 +29,7 @@ export function contentType(name: string) {
   )
 }
 // Content-length alone is untrusted; stop reading once the actual limit is exceeded.
-async function bounded(request: Request, limit: number) {
+export async function bounded(request: Request, limit: number) {
   const chunks: Uint8Array[] = []
   let size = 0
   const reader = request.body?.getReader()

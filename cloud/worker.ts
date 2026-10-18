@@ -15,6 +15,7 @@ import { PROJECT_KEY, PROJECT_MISMATCH } from './protocol.ts'
 import type { CloudMessage, Hello, MachineMessage } from './protocol.ts'
 import { BUILD_ID, buildKey, contentType, uploadBuild, validName } from './builds.ts'
 import { DirectoryStore } from './directory.ts'
+import { snapshotObject } from './snapshots.ts'
 import type { Presence, Project } from './directory.ts'
 
 // Workers provides this constructor; Node-side request tests do not use WebSocket upgrades.
@@ -77,9 +78,14 @@ async function route(request: Request, env: Env): Promise<Response> {
   const api = path === '/api' || path.startsWith('/api/')
   if ((api || prefix || url.pathname.startsWith('/b/')) && !(await admitsAccess(request, env)))
     return Response.json({ error: 'Unauthorized' }, { status: 401 })
-  if (url.pathname.startsWith('/sync/builds/')) {
+  if (url.pathname.startsWith('/sync/builds/') || url.pathname.startsWith('/sync/snapshots/')) {
     if (!env.SYNC_TOKEN || !matchesSyncToken(request.headers.get('Authorization'), env.SYNC_TOKEN))
       return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    if (url.pathname.startsWith('/sync/snapshots/')) {
+      const [, project = '', id = '', name = ''] =
+        /^\/sync\/snapshots\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(url.pathname) ?? []
+      return snapshotObject(request, env.BUILDS, project, id, name)
+    }
     const [, id, name] = /^\/sync\/builds\/([^/]+)(?:\/(.+))?$/.exec(url.pathname) ?? []
     return uploadBuild(request, env.BUILDS, id ?? '', name)
   }

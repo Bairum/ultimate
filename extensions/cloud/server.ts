@@ -21,6 +21,11 @@ import { projectIdentity } from './identity.ts'
 
 export const secrets = [
   { name: 'ULTIMATE_CLOUD_TOKEN', description: 'Bearer token for the cloud sync endpoint' },
+  {
+    name: 'ULTIMATE_CLOUD_SNAPSHOT_KEY',
+    description:
+      'Encrypts project snapshots moved between machines; use the same value on every machine',
+  },
 ]
 
 type Batch = Extract<MachineMessage, { type: 'batch' }>
