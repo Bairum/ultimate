@@ -22,6 +22,7 @@
     "cloud/build.ts",
     "cloud/ui-build.ts",
     "cloud/deploy.ts",
+    "scripts",
     "extensions/**/*.ts",
     ".ultimate/extensions/**/*.ts",
     "test",

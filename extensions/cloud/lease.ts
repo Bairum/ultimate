@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { JsonObject } from '@earendil-works/pi-durable'
+import { handoverDetail, LEFT_LIMITS } from '../../cloud/protocol.ts'
 import type { Transition, TransitionStep } from '../../cloud/protocol.ts'
 import type { projectBuilds } from '../../cloud/ui-build.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -332,11 +333,17 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         // A replaced connection's last roles no longer apply.
         role: (state) => setTimeout(() => sync === current && onRole(state, current), 0),
         releaseRequested: (by, id) => setTimeout(() => void moveTo(by, id).catch(report), 0),
-        releaseWaiting: (by, tasks) => {
-          host.notice(`Move to ${by} waits for ${runs(tasks)}`)
-          const handover = moving?.transition.steps.find((step) => step.name === 'handover')
-          if (handover) {
-            handover.detail = `finishing ${tasks} ${tasks === 1 ? 'run' : 'runs'}`
+        releaseWaiting: (by, tasks, dirty) => {
+          if (tasks > 0) host.notice(`Move to ${by} waits for ${runs(tasks)}`)
+          if (!moving) return
+          if (dirty) moving.transition.left = dirty
+          const handover = moving.transition.steps.find((step) => step.name === 'handover')
+          if (handover && moving.transition.from) {
+            handover.detail = handoverDetail(
+              moving.transition.from,
+              tasks,
+              moving.transition.left?.length,
+            )
             publish()
           }
         },
@@ -526,10 +533,36 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       await writeFile(owed, '')
     if (behind) await git('merge', '--ff-only', '--quiet', remote)
     const after = await git('rev-parse', 'HEAD')
-    step.detail =
-      before === after
-        ? `${branch} is up to date`
-        : `${branch} fast-forwarded ${before.slice(0, 7)}..${after.slice(0, 7)}`
+    if (before === after) {
+      step.detail = `${branch} already up to date`
+      return
+    }
+    step.commits = behind
+    step.detail = `${branch} fast-forwarded ${behind} ${behind === 1 ? 'commit' : 'commits'}, ${before.slice(0, 7)}..${after.slice(0, 7)}`
+  }
+
+  /**
+   * The worktrees of this checkout, the main one included, with uncommitted changes: they stay on this machine when
+   * the project moves. At most `LEFT_LIMITS.paths`, each path bounded, keeping its end.
+   */
+  const dirtyWorktrees = async () => {
+    const signal = AbortSignal.timeout(30_000)
+    const gitIn = async (cwd: string, ...args: string[]) =>
+      (await execute('git', args, { cwd, signal })).stdout
+    const list = await gitIn(host.projectRoot, 'worktree', 'list', '--porcelain')
+    const dirty: string[] = []
+    for (const block of list.split('\n\n')) {
+      const path = /^worktree (.+)$/m.exec(block)?.[1]
+      if (!path || /^(bare|prunable)/m.test(block)) continue
+      // A worktree whose folder is gone or broken has nothing left here to lose.
+      const status = await gitIn(path, 'status', '--porcelain').catch(() => '')
+      if (status.trim())
+        dirty.push(
+          path.length > LEFT_LIMITS.path ? `…${path.slice(-(LEFT_LIMITS.path - 1))}` : path,
+        )
+      if (dirty.length === LEFT_LIMITS.paths) break
+    }
+    return dirty
   }
 
   /**
@@ -623,7 +656,13 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
           signal.removeEventListener('abort', aborted)
           freed = undefined
         }
-        end('done', `${transition.from} released the project`)
+        // Uncommitted work the writer left behind stays the step's line once it released.
+        end(
+          'done',
+          transition.left?.length
+            ? handoverDetail(transition.from!, 0, transition.left.length)
+            : `${transition.from} released the project`,
+        )
       }
 
       const download = begin('download')
@@ -810,11 +849,17 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       const ended = (state: SyncState) => state.transition?.id === id && !!state.transition.error
       const graph = await host.harness().taskGraph(context)
       let outcome: 'drained' | 'cancelled' = 'drained'
+      // Uncommitted work stays on this machine: the target hears which worktrees hold it, once, before the release.
+      const dirty = await dirtyWorktrees().catch((error: unknown) => {
+        host.notice(`Could not list worktrees with uncommitted changes: ${String(error)}`)
+        return []
+      })
       try {
         let tasks = foreground(graph)
+        if (tasks > 0 || dirty.length)
+          sync.send({ type: 'release-waiting', by, tasks, ...(dirty.length ? { dirty } : {}) })
         if (tasks > 0) {
           host.notice(`Move to ${by} waits for ${runs(tasks)}`)
-          sync.send({ type: 'release-waiting', by, tasks })
           outcome = await new Promise((resolve) => {
             const timer = setTimeout(() => finish('drained'), MOVE_CAP)
             const unsubscribe = graph.subscribe(() => {
