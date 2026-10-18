@@ -171,10 +171,14 @@ async function fixture(
       use: () => undefined,
       resource: (_key, create) => create(),
       onOpen: () => {},
+      onRelease: () => {},
       onClose: () => {},
       harness: () => {
         throw new Error('Not used')
       },
+      standby: () => undefined,
+      deactivate: async () => {},
+      activate: async () => {},
       system: () => {
         throw new Error('Not used')
       },

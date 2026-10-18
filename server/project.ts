@@ -25,7 +25,7 @@ export async function writeProject(home: string, root: string) {
     JSON.stringify({ root, name: basename(root), openedAt: Date.now() }),
   )
 }
-async function atomicJson(path: string, value: string) {
+export async function atomicJson(path: string, value: string) {
   const temporary = `${path}.${process.pid}.tmp`
   await writeFile(temporary, value + '\n')
   await rename(temporary, path)

@@ -129,10 +129,10 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
     restart: () => post<unknown>('/api/restart'),
     /**
      * Call action `name` of `extension`'s server facet (`export const actions` in its `server.ts`) with JSON `args`,
-     * on behalf of the shown conversation, and resolve with its result. Rejects with `MachineOfflineError` for an
-     * offline replica, otherwise `ActionError`; an uncaught rejection shows as a notice. Aborting `signal` aborts
-     * the action's processes too; `keepalive` lets the call outlive
-     * the page, such as one sent on `pagehide`.
+     * on behalf of the shown conversation (none on standby), and resolve with its result. Rejects with
+     * `MachineOfflineError` for an offline replica, otherwise `ActionError`; an uncaught rejection shows as a notice.
+     * Aborting `signal` aborts the action's processes too; `keepalive` lets the call outlive the page, such as one
+     * sent on `pagehide`.
      */
     action: async <T = JsonValue>(
       extension: string,
@@ -145,7 +145,10 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
       }: { conversationId?: number; signal?: AbortSignal; keepalive?: boolean } = {},
     ): Promise<T> => {
       const path = `/api/extensions/${encodeURIComponent(extension)}/actions/${encodeURIComponent(name)}`
-      const body: ExtensionActionRequest = { args, conversationId: conversationId ?? shown() }
+      const body: ExtensionActionRequest = {
+        args,
+        conversationId: conversationId ?? (store.getState().system?.standby ? undefined : shown()),
+      }
       try {
         const { result } = await post<ExtensionActionResponse>(path, body, { signal, keepalive })
         return result as T

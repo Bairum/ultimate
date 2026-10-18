@@ -507,7 +507,7 @@ export default host => { host.resource('cleanup.process',()=>{
       expect((await fetch(prepared.url)).status).toBe(503)
       await expect(readFile(prepared.host.database)).rejects.toMatchObject({ code: 'ENOENT' })
       const opened = await prepared.go()
-      expect(opened.root.id).toBe(1)
+      expect(opened!.root.id).toBe(1)
       expect((await readFile(prepared.host.database)).length).toBeGreaterThan(0)
     } finally {
       await prepared.close()

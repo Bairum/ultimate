@@ -73,14 +73,14 @@ export async function activationFailure(root: string) {
   const file = join(root, 'server/main.ts')
   await writeFile(
     join(root, 'server/activation.ts'),
-    "export async function activate(): Promise<void> { throw new Error('Injected activation failure') }\n",
+    "export async function failActivation(): Promise<void> { throw new Error('Injected activation failure') }\n",
   )
   await writeFile(
     file,
-    "import { activate } from './activation.ts'\n" +
+    "import { failActivation } from './activation.ts'\n" +
       (await readFile(file, 'utf8')).replace(
-        'opened = await host.open(false)',
-        'opened = await host.open(false); await activate()',
+        'opened = harness\n',
+        'opened = harness; await failActivation()\n',
       ),
   )
 }

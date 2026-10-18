@@ -92,8 +92,18 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
   describes services: it does not start processes, schedule work, poll, or persist state. Example:
   `const status = host.service('worker', { state: 'starting' }); host.onOpen(async () => { status.update({ state: 'ready' }) })`.
 - `notice(message)`: publish a warning notice and retain it in this facet's system diagnostics for later clients, until unload/reload.
-- `resource(key, create)`, `onOpen(callback)`, `onClose(cleanup)`: shared reload-stable resources, async work each
-  time the harness opens (at once if it is open; the server serves once it settles), and async cleanup. Facet-level callbacks are removed on unload/reload, with cleanup run before the replacement opens. Callbacks registered inside a shared resource's creation belong to that reload-stable resource and survive until server shutdown.
+- `resource(key, create)`, `onOpen(callback)`, `onRelease(callback)`, `onClose(cleanup)`: shared reload-stable resources, async work each
+  time the harness opens (at once if it is open; the server serves once it settles), async work each time before it closes while the process stays (deactivate, a core swap; drop commit subscriptions there), and async cleanup. Facet-level callbacks are removed on unload/reload, with cleanup run before the replacement opens. Callbacks registered inside a shared resource's creation belong to that reload-stable resource and survive until server shutdown.
+- `standby()`, `deactivate(info, park?)`, `activate(install?)`: standby is the server running without storage, while
+  `<home>/standby.json` (a JSON object such as `{ reason }`) exists; it never opens `state.sqlite` or takes the storage
+  lock, and `system().standby` holds the parsed file. On standby `/api/events` streams `system` and notices, actions
+  without a `conversationId` run, `harness()` throws, and every other endpoint answers 503
+  `{ error: 'standby', standby }`. `deactivate` runs the `onRelease` callbacks, closes the API and harness, writes
+  `standby.json`, then awaits `park(database)` while nothing has the database open (copy or rename it with its
+  `-wal`/`-shm`); a failing `park` stays on standby and rejects. `activate` awaits `install(database)` while storage is
+  closed (it may put another `state.sqlite` in place), removes `standby.json`, opens the harness, runs the `onOpen`
+  callbacks and serves. Switches run one at a time; `deactivate` on standby and `activate` while open do nothing.
+  Never await `deactivate` in a tool or hook: closing the harness waits for running task code to return.
 
 ## Lifecycle
 
@@ -209,6 +219,7 @@ title bar the host shows above every surface.
 | `composer.status`      | Line under the composer; conversation-specific, monospace, one line (`<Conversation />`)       |
 | `conversation.overlay` | Over the transcript and the composer (`<Conversation />`); position it `absolute inset-0`      |
 | `overlay`              | Always mounted at the root, above every surface: dialogs, toasts, global effects               |
+| `standby`              | The standby page, which replaces every surface, under its reason: the way back                 |
 
 ```tsx
 slots: { 'header.right': [Badge], sidebar: { component: Conversations, order: -1 } }

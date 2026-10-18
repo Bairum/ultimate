@@ -20,6 +20,7 @@ import { loadProjectContextFiles } from '@earendil-works/pi-coding-agent'
 import type { ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { Watch } from './extensions.ts'
 import type { PreparedHost } from './harness.ts'
+import type { JsonObject } from '@earendil-works/pi-durable'
 import { watchRoots } from './watch-roots.ts'
 
 const run = promisify(execFile)
@@ -37,7 +38,7 @@ export async function createSystem(
   registry: (() => ExtensionInfo[]) & { diagnostics: () => string[] },
   emit: (info: SystemInfo) => void,
   notice: (message: string) => void = () => {},
-  processInfo: { activationError?: string } = {},
+  processInfo: { activationError?: string; standby?: JsonObject } = {},
   origins: () => string[] = () => [],
 ) {
   const startedAt = new Date().toISOString()
@@ -128,6 +129,7 @@ export async function createSystem(
         cwd: host.projectRoot,
         agentDir: join(host.userHome, '.ultimate'),
       }).map((file) => file.path),
+      ...(processInfo.standby ? { standby: processInfo.standby } : {}),
     }
     const json = JSON.stringify(value)
     if (json !== previous) {

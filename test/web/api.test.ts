@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ActionError, createApi, MachineOfflineError } from '../../web/src/sdk/api.ts'
 import { createStore } from '../../web/src/sdk/store.ts'
+import type { SystemInfo } from '../../shared/protocol.ts'
 
 function setup(respond: (url: string, init: RequestInit) => Response | Promise<Response>) {
   const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) =>
@@ -26,6 +27,20 @@ describe('extension actions', () => {
       conversationId: 1,
     })
     await api.action('notes', 'list', null, { conversationId: 7 })
+    expect(JSON.parse(fetch.mock.calls[1][1]?.body as string)).toEqual({
+      args: null,
+      conversationId: 7,
+    })
+  })
+
+  it('names no conversation on standby unless given one', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => json(200, { result: true }))
+    const store = createStore()
+    const standby = { ...store.getState(), system: { standby: {} } as SystemInfo }
+    const api = createApi({ ...store, getState: () => standby }, { fetch })
+    await api.action('cloud', 'move')
+    expect(JSON.parse(fetch.mock.calls[0][1]?.body as string)).toEqual({ args: null })
+    await api.action('cloud', 'move', null, { conversationId: 7 })
     expect(JSON.parse(fetch.mock.calls[1][1]?.body as string)).toEqual({
       args: null,
       conversationId: 7,

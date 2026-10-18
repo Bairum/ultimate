@@ -62,6 +62,133 @@ function text(value: unknown, name: string): string {
 }
 const validUiKey = (key: unknown) =>
   typeof key === 'string' && key.length <= 200 && /^[A-Za-z0-9_.:-]+$/.test(key)
+const actionPath = /^\/api\/extensions\/([^/]+)\/actions\/([^/]+)$/
+function reply(response: ServerResponse, status: number, data: unknown) {
+  response.writeHead(status, { 'Content-Type': 'application/json' })
+  response.end(JSON.stringify(data))
+}
+function failed(response: ServerResponse, error: unknown) {
+  if (!response.headersSent)
+    reply(response, error instanceof HttpError ? error.status : 500, {
+      error: error instanceof HttpError ? error.message : 'Request failed',
+    })
+  else response.destroy()
+}
+/** Start a server-sent event stream; `end` stops its heartbeat and closes it. */
+function eventStream(response: ServerResponse) {
+  response.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  })
+  response.write('retry: 500\n\n')
+  const heartbeat = setInterval(() => {
+    if (!response.destroyed) response.write(': heartbeat\n\n')
+  }, 15000)
+  return {
+    send: (name: keyof ServerEvents, data: ServerEvents[keyof ServerEvents]) => {
+      if (!response.destroyed) response.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`)
+    },
+    end: () => {
+      clearInterval(heartbeat)
+      response.end()
+    },
+  }
+}
+/** `POST /api/extensions/:name/actions/:action`: answers `{ result }`, or the action's error message. */
+async function runAction(
+  request: IncomingMessage,
+  response: ServerResponse,
+  extensions: Extensions,
+  [, name, key]: RegExpExecArray,
+  data: Record<string, unknown>,
+) {
+  if (request.headers['sec-fetch-site'] !== 'same-origin' && !request.headers.origin)
+    throw new HttpError(403, 'Extension actions require a browser request')
+  if (!extensions.action(name, key)) throw new HttpError(404, 'Unknown extension action')
+  if (!Object.hasOwn(data, 'args')) throw new HttpError(400, 'Expected args')
+  const id = data.conversationId
+  if (id !== undefined && (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1))
+    throw new HttpError(400, 'Invalid conversation id')
+  const controller = new AbortController()
+  const cancel = () => {
+    if (!response.writableEnded) controller.abort()
+  }
+  response.once('close', cancel)
+  try {
+    const result = await extensions.invoke(name, key, data.args as JsonValue, controller.signal, id)
+    reply(response, 200, { result })
+  } catch (error) {
+    // An aborted action is the client leaving (a newer call, an unmount), not a fault.
+    if (!controller.signal.aborted && (error as Error)?.name !== 'AbortError')
+      console.error(`Extension action ${name}/${key}:`, error)
+    // The message is the action author's; the UI shows it, so a setup problem can say what is missing.
+    const message = error instanceof Error ? error.message : String(error)
+    reply(response, 500, { error: message.slice(0, 500) })
+  } finally {
+    response.off('close', cancel)
+  }
+}
+
+/**
+ * The API while the server runs without storage: `/api/events` streams `system` and notices, extension actions without
+ * a conversation run, and everything else answers 503 `{ error: 'standby', standby }`.
+ */
+export function createStandbyApi(
+  events: Events,
+  system: Awaited<ReturnType<typeof createSystem>>,
+  extensions: Extensions,
+  access: Access,
+  standby: () => JsonObject | undefined,
+) {
+  const streams = new Set<() => void>()
+  return {
+    async handle(request: IncomingMessage, response: ServerResponse) {
+      const url = new URL(request.url ?? '/', 'http://localhost')
+      if (!url.pathname.startsWith('/api/')) return false
+      try {
+        if (
+          !(await admit(request, new URL(system.current().process.url).port || '80', access.rules))
+        )
+          throw new HttpError(403, 'Forbidden')
+        if (request.method === 'GET' && url.pathname === '/api/events') {
+          const stream = eventStream(response)
+          const send: Parameters<typeof events.listeners.add>[0] = (name, data) => {
+            if (name === 'system' || name === 'notice') stream.send(name, data)
+          }
+          const stop = () => {
+            events.listeners.delete(send)
+            streams.delete(stop)
+            stream.end()
+          }
+          stream.send('system', system.current())
+          events.listeners.add(send)
+          streams.add(stop)
+          response.on('close', stop)
+          if (request.destroyed || response.destroyed) stop()
+          return true
+        }
+        const action = actionPath.exec(url.pathname)
+        if (request.method === 'POST' && action) {
+          const data = await body(request)
+          if (data.conversationId === undefined) {
+            await runAction(request, response, extensions, action, data)
+            return true
+          }
+        }
+        reply(response, 503, { error: 'standby', standby: standby() })
+      } catch (error) {
+        failed(response, error)
+      }
+      return true
+    },
+    /** End the open streams, so their clients reconnect to whatever serves next. */
+    close() {
+      for (const stop of streams) stop()
+    },
+  }
+}
 
 export async function createApi(
   host: PreparedHost,
@@ -211,16 +338,8 @@ export async function createApi(
       if (ui) watches.push(ui)
       const watch = await conversation.watch(context)
       watches.push(watch)
-      const send = (name: keyof ServerEvents, data: ServerEvents[keyof ServerEvents]) => {
-        if (!response.destroyed) response.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`)
-      }
-      response.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      })
-      response.write('retry: 500\n\n')
+      const sse = eventStream(response)
+      const { send } = sse
       send('system', system.current())
       send('conversations', summaries)
       send('view', watch.value)
@@ -241,20 +360,16 @@ export async function createApi(
       watch.start(async (_value, ops) => {
         send('ops', ops)
       })
-      const heartbeat = setInterval(() => {
-        if (!response.destroyed) response.write(': heartbeat\n\n')
-      }, 15000)
       let stopped = false
       const stop = async () => {
         if (stopped) return
         stopped = true
-        clearInterval(heartbeat)
         events.listeners.delete(send)
         streams.delete(stop)
         await watch.stop()
         await ui!.stop()
         await Promise.all(docs.map((doc) => doc.watch.stop()))
-        response.end()
+        sse.end()
       }
       streams.add(stop)
       response.on('close', () => {
@@ -273,13 +388,9 @@ export async function createApi(
     async handle(request: IncomingMessage, response: ServerResponse) {
       const url = new URL(request.url ?? '/', 'http://localhost')
       if (!url.pathname.startsWith('/api/')) return false
-      const json = (status: number, data: unknown) => {
-        response.writeHead(status, { 'Content-Type': 'application/json' })
-        response.end(JSON.stringify(data))
-      }
+      const json = (status: number, data: unknown) => reply(response, status, data)
       try {
         // Local-only does not mean safe from cross-origin browser requests.
-        const origin = request.headers.origin
         if (
           !(await admit(request, new URL(system.current().process.url).port || '80', access.rules))
         )
@@ -327,40 +438,9 @@ export async function createApi(
           request,
           /^\/api\/conversations\/\d+\/submit$/.test(url.pathname) ? 12 * 1024 * 1024 : undefined,
         )
-        const action = /^\/api\/extensions\/([^/]+)\/actions\/([^/]+)$/.exec(url.pathname)
+        const action = actionPath.exec(url.pathname)
         if (action) {
-          if (request.headers['sec-fetch-site'] !== 'same-origin' && !origin)
-            throw new HttpError(403, 'Extension actions require a browser request')
-          const [, name, key] = action
-          if (!extensions.action(name, key)) throw new HttpError(404, 'Unknown extension action')
-          if (!Object.hasOwn(data, 'args')) throw new HttpError(400, 'Expected args')
-          const id = data.conversationId
-          if (id !== undefined && (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1))
-            throw new HttpError(400, 'Invalid conversation id')
-          const controller = new AbortController()
-          const cancel = () => {
-            if (!response.writableEnded) controller.abort()
-          }
-          response.once('close', cancel)
-          try {
-            const result = await extensions.invoke(
-              name,
-              key,
-              data.args as JsonValue,
-              controller.signal,
-              id,
-            )
-            json(200, { result })
-          } catch (error) {
-            // An aborted action is the client leaving (a newer call, an unmount), not a fault.
-            if (!controller.signal.aborted && (error as Error)?.name !== 'AbortError')
-              console.error(`Extension action ${name}/${key}:`, error)
-            // The message is the action author's; the UI shows it, so a setup problem can say what is missing.
-            const message = error instanceof Error ? error.message : String(error)
-            json(500, { error: message.slice(0, 500) })
-          } finally {
-            response.off('close', cancel)
-          }
+          await runAction(request, response, extensions, action, data)
           return true
         }
         if (url.pathname === '/api/ui') {
@@ -541,11 +621,7 @@ export async function createApi(
         }
         throw new HttpError(404, 'Unknown endpoint')
       } catch (error) {
-        if (!response.headersSent)
-          json(error instanceof HttpError ? error.status : 500, {
-            error: error instanceof HttpError ? error.message : 'Request failed',
-          })
-        else response.destroy()
+        failed(response, error)
       }
       return true
     },

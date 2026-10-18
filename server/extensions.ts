@@ -61,8 +61,23 @@ export type ExtensionHost = Pick<
   resource<T>(key: string, create: () => T): T
   /** Run `callback` each time the harness opens, at once when it is open; the server serves once it settles. */
   onOpen(callback: () => Promise<void>): void
+  /** Run `callback` each time before the harness closes while the process stays: on deactivate and on a core swap. */
+  onRelease(callback: () => Promise<void>): void
   onClose(cleanup: () => Promise<void>): void
   harness(): Harness
+  /** The parsed `<home>/standby.json` while the server runs without storage, otherwise undefined. */
+  standby(): JsonObject | undefined
+  /**
+   * Close storage and serve standby: runs the `onRelease` callbacks, closes the API and the harness, writes
+   * `standby.json` with `info`, then awaits `park(database)` while nothing has the database open. Does nothing in
+   * standby. A failing `park` leaves standby in place and rejects.
+   */
+  deactivate(info: JsonObject, park?: (database: string) => Promise<void>): Promise<void>
+  /**
+   * Leave standby: awaits `install(database)` while storage is closed, removes `standby.json`, then opens the harness,
+   * runs the `onOpen` callbacks and serves. Does nothing while open.
+   */
+  activate(install?: (database: string) => Promise<void>): Promise<void>
   system(): SystemInfo
   /** Summaries of every conversation, as the web's conversation list shows them; empty until the harness is open. */
   conversations(): ConversationSummary[]
@@ -94,13 +109,18 @@ export type ExtensionHost = Pick<
 const events = createEventBus()
 const runOpener = (callback: () => Promise<void>) =>
   callback().catch((error: unknown) => console.error('Extension onOpen:', error))
+const runReleaser = (callback: () => Promise<void>) =>
+  callback().catch((error: unknown) => console.error('Extension onRelease:', error))
 /** Attach listeners to Vite's current watcher and to each replacement; `attach` returns their removal. */
 export type Watch = (attach: (watcher: ViteDevServer['watcher']) => () => void) => () => void
 export async function loadExtensions(
   vite: ViteDevServer,
   host: PreparedHost,
   changed: () => void | Promise<void>,
-  runtime: Pick<ExtensionHost, 'harness' | 'system' | 'conversations' | 'access'>,
+  runtime: Pick<
+    ExtensionHost,
+    'harness' | 'system' | 'conversations' | 'access' | 'standby' | 'deactivate' | 'activate'
+  >,
   watch: Watch,
   notice: (message: string) => void = () => {},
 ) {
@@ -115,6 +135,7 @@ export async function loadExtensions(
   const facetHosts = new Map<string, ExtensionHost>()
   const subscriptions = new Map<ExtensionHost, Set<() => void>>()
   const facetOpeners = new Map<ExtensionHost, Set<() => Promise<void>>>()
+  const facetReleasers = new Map<ExtensionHost, Set<() => Promise<void>>>()
   const facetCleanups = new Map<ExtensionHost, Set<() => Promise<void>>>()
   const facetNotices = new Map<ExtensionHost, Set<string>>()
   const dispose = async (facetHost: ExtensionHost | undefined) => {
@@ -127,6 +148,8 @@ export async function loadExtensions(
     subscriptions.delete(facetHost)
     for (const callback of facetOpeners.get(facetHost) ?? []) openers.delete(callback)
     facetOpeners.delete(facetHost)
+    for (const callback of facetReleasers.get(facetHost) ?? []) releasers.delete(callback)
+    facetReleasers.delete(facetHost)
     for (const cleanup of facetCleanups.get(facetHost) ?? []) {
       try {
         await cleanup()
@@ -183,6 +206,13 @@ export async function loadExtensions(
           if (open && [...facetHosts.values()].includes(facetHost)) void runOpener(callback)
         }
       },
+      onRelease: (callback) => {
+        if (sharedResource) extensionHost.onRelease(callback)
+        else {
+          facetReleasers.get(facetHost)!.add(callback)
+          releasers.add(callback)
+        }
+      },
       onClose: (cleanup) => {
         if (sharedResource) extensionHost.onClose(cleanup)
         else facetCleanups.get(facetHost)!.add(cleanup)
@@ -204,6 +234,7 @@ export async function loadExtensions(
     facetServices.set(facetHost, serviceScope)
     subscriptions.set(facetHost, stops)
     facetOpeners.set(facetHost, new Set())
+    facetReleasers.set(facetHost, new Set())
     facetCleanups.set(facetHost, new Set())
     facetNotices.set(facetHost, new Set())
     return facetHost
@@ -216,6 +247,7 @@ export async function loadExtensions(
   const findDoc = (kind: string) =>
     [...documents.values()].flat().find((doc) => doc.definition.kind === kind)
   const openers = new Set<() => Promise<void>>()
+  const releasers = new Set<() => Promise<void>>()
   let open = false
   const cleanups = new Set<() => Promise<void>>()
   const resources = new Map<string, unknown>()
@@ -278,6 +310,9 @@ export async function loadExtensions(
       openers.add(callback)
       if (open) void runOpener(callback)
     },
+    onRelease: (callback) => {
+      releasers.add(callback)
+    },
     onClose: (cleanup) => cleanups.add(cleanup),
     ultimateRoot: host.ultimateRoot,
     projectRoot: host.projectRoot,
@@ -298,6 +333,9 @@ export async function loadExtensions(
     skills: (cwd) => host.skills(cwd),
     restart: (approved) => host.restart(approved),
     harness: runtime.harness,
+    standby: runtime.standby,
+    deactivate: runtime.deactivate,
+    activate: runtime.activate,
     system: runtime.system,
     conversations: runtime.conversations,
     projects: () => projects(host.userHome, host.home),
@@ -646,9 +684,11 @@ export async function loadExtensions(
       await Promise.all([...openers].map(runOpener))
     },
     services: services.snapshot,
-    released() {
+    /** The harness is about to close: run the `onRelease` callbacks. */
+    async released() {
       services.visible(false)
       open = false
+      await Promise.all([...releasers].map(runReleaser))
     },
     async close() {
       closed = true

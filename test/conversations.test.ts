@@ -393,7 +393,7 @@ it('keeps unmarked Pi input history and makes no metadata writes on an unchanged
     })
     return opened
   }
-  const reopened = { ...prepared, ...(await prepared.go()) }
+  const reopened = { ...prepared, ...(await prepared.go())! }
   servers.push(reopened)
   expect(reopened.api.conversations().find((item) => item.id === id)).toMatchObject({
     title: 'Existing parser work',
