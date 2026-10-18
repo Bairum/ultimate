@@ -236,6 +236,9 @@ export default defineConfig({
     include: ['test/**/*.test.ts'],
     exclude: ['test/e2e/**'],
     testTimeout: 30000,
+    // A hung hook or teardown fails within seconds and names its test, instead of stalling the run.
+    hookTimeout: 5000,
+    teardownTimeout: 5000,
     maxWorkers: 8,
   },
 })

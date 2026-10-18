@@ -151,17 +151,27 @@ export async function landerAgent(
     }),
   }
 }
+/** One check command, with its own total limit in seconds when set. */
+type Check = { command: string; timeout?: number }
 /** Checks run in order; an array is a group whose commands run concurrently. */
 type Settings = {
-  checks: (string | string[])[]
+  checks: (Check | Check[])[]
   push?: string
   deploy?: { agent: string; paths: string[] }
 }
 /** Bounded retries when the target moves while a submission is integrated. */
 const attempts = 3
-/** Seconds without output and total seconds allowed for one check. */
+/** Seconds without output and total seconds allowed for one check, unless the check sets its own `timeout`. */
 type CheckLimits = { stall: number; total: number }
-const checkLimits: CheckLimits = { stall: 5 * 60, total: 15 * 60 }
+const checkLimits: CheckLimits = { stall: 2 * 60, total: 10 * 60 }
+/** A check's limits: its `timeout` replaces the total, and the stall limit never exceeds it. */
+export const limitsFor = (check: Check, limits: CheckLimits): CheckLimits =>
+  check.timeout === undefined
+    ? limits
+    : { stall: Math.min(limits.stall, check.timeout), total: check.timeout }
+/** Lines naming failed tests (vitest's `FAIL`, `×` and `✗` marks), kept from a check's whole output. */
+const failedLine = /^\s*(FAIL|×|✗)\s/
+const seconds = (value: number) => (value < 60 ? `${value} s` : `${+(value / 60).toFixed(1)} min`)
 
 /** Watchdog aborts use the execution environment's process-group kill, just like task cancellation. */
 export async function runLanderCheck(
@@ -171,6 +181,8 @@ export async function runLanderCheck(
   limits: CheckLimits = checkLimits,
 ) {
   let output = ''
+  let partial = ''
+  const failed = new Set<string>()
   let stopped: string | undefined
   const watchdog = new AbortController()
   const signal = AbortSignal.any([
@@ -182,18 +194,31 @@ export async function runLanderCheck(
     stopped = reason
     watchdog.abort()
   }
-  const stalled = () => stop(`Stalled: no output for ${limits.stall / 60} min, stopped`)
+  const stalled = () => stop(`Stalled: no output for ${seconds(limits.stall)}, stopped`)
   let stallTimer = setTimeout(stalled, limits.stall * 1000)
   const totalTimer = setTimeout(
-    () => stop(`Timed out after ${limits.total / 60} min`),
+    () => stop(`Timed out after ${seconds(limits.total)}`),
     limits.total * 1000,
   )
+  /** A watchdog report: the limit that fired, the failed tests seen so far, then the output tail. */
+  const watchdogFailure = (reason: string) => {
+    const tests = [...failed].slice(-20)
+    return [reason, ...(tests.length ? ['Failed tests so far:', ...tests] : []), output]
+      .join('\n')
+      .trim()
+  }
   try {
     const result = await new NodeExecutionEnv({ cwd: path }).exec(
       command,
       {
         onOutput: (text) => {
           output = (output + text).slice(-3000)
+          const split = (partial + text).split('\n')
+          partial = split.pop()!.slice(-1000)
+          for (const line of split) {
+            const plain = stripVTControlCharacters(line).trim()
+            if (failedLine.test(plain)) failed.add(plain.slice(0, 300))
+          }
           clearTimeout(stallTimer)
           stallTimer = setTimeout(stalled, limits.stall * 1000)
         },
@@ -201,7 +226,7 @@ export async function runLanderCheck(
       withAbortSignal(signal, context),
     )
     context.abortSignal?.throwIfAborted()
-    if (stopped) return { failure: `${stopped}\n${output}`.trim() }
+    if (stopped) return { failure: watchdogFailure(stopped) }
     if (!result.ok) return { failure: `${output}\n${result.error.message}`.trim() }
     if (result.value.exitCode !== 0)
       return { failure: `${output}\nexit ${result.value.exitCode}`.trim() }
@@ -213,24 +238,35 @@ export async function runLanderCheck(
   }
 }
 
+/** A check from settings: a command, or `{ command, timeout }` with a positive timeout in seconds. */
+const parseCheck = (value: unknown): Check | undefined => {
+  if (typeof value === 'string') return { command: value }
+  if (!value || typeof value !== 'object') return undefined
+  const { command, timeout } = value as { command?: unknown; timeout?: unknown }
+  if (typeof command !== 'string') return undefined
+  if (timeout === undefined) return { command }
+  return typeof timeout === 'number' && timeout > 0 ? { command, timeout } : undefined
+}
 export const landerSettings = async (
   host: Pick<Host, 'projectSettings' | 'notice'>,
 ): Promise<Settings> => {
   const lander = (await host.projectSettings()).lander as
     | { checks?: unknown; push?: unknown; deploy?: unknown }
     | undefined
-  const checks = lander?.checks ?? []
-  if (
-    !Array.isArray(checks) ||
-    !checks.every(
-      (check) =>
-        typeof check === 'string' ||
-        (Array.isArray(check) &&
-          check.length > 0 &&
-          check.every((command) => typeof command === 'string')),
+  const entries = lander?.checks ?? []
+  const checks = Array.isArray(entries)
+    ? entries.map((entry) =>
+        Array.isArray(entry)
+          ? entry.length > 0
+            ? entry.map(parseCheck)
+            : [undefined]
+          : parseCheck(entry),
+      )
+    : undefined
+  if (!checks?.every((group) => (Array.isArray(group) ? group.every(Boolean) : group)))
+    throw new Error(
+      'lander.checks must be an array of checks or check groups; a check is a command or { "command", "timeout" } with timeout in seconds',
     )
-  )
-    throw new Error('lander.checks must be an array of commands or command groups')
   if (lander?.push !== undefined && typeof lander.push !== 'string')
     throw new Error('lander.push must be a remote name')
   let deploy: Settings['deploy']
@@ -253,7 +289,11 @@ export const landerSettings = async (
         'lander.deploy must name an agent and a non-empty array of path prefixes; deploy hook disabled',
       )
   }
-  return { checks, ...(lander?.push ? { push: lander.push } : {}), ...(deploy ? { deploy } : {}) }
+  return {
+    checks: checks as Settings['checks'],
+    ...(lander?.push ? { push: lander.push } : {}),
+    ...(deploy ? { deploy } : {}),
+  }
 }
 const contains = (cwd: string, ancestor: string, descendant: string) =>
   git(cwd, 'merge-base', '--is-ancestor', ancestor, descendant).then(
@@ -735,17 +775,19 @@ export function createLander(
             await setup(source, path, await host.projectSettings(), signal)
             const flaky: string[] = []
             for (const [position, group] of settings.checks.entries()) {
-              const commands = typeof group === 'string' ? [group] : group
-              const run = (command: string) => runLanderCheck(path, command, checkContext, limits)
+              const members = Array.isArray(group) ? group : [group]
+              const commands = members.map((check) => check.command)
+              const run = (command: string, member: number) =>
+                runLanderCheck(path, command, checkContext, limitsFor(members[member], limits))
               /** One command: its first run, then one rerun when that failed; its output tail if it failed twice. */
               const settle = async (command: string, member: number) => {
                 // Outcomes are durable (memos are first-writer-wins, so the rerun has its own key): a resume
                 // neither reruns a passed check nor grants another rerun, and keeps the flaky note.
-                const key = `check:${id}:${attempt}:${typeof group === 'string' ? position : `${position}.${member}`}`
+                const key = `check:${id}:${attempt}:${Array.isArray(group) ? `${position}.${member}` : position}`
                 let first = await runtime.memo<'passed' | 'failed'>(key, context)
                 if (!first) {
                   await step(`checking: ${command}`)
-                  const ran = await run(command)
+                  const ran = await run(command, member)
                   const result = ran.failure === undefined ? 'passed' : 'failed'
                   // Logged before the memo: a crash in between reruns the check and logs it again, as it ran.
                   // A failure keeps its output tail, so a check that passes on its rerun can still be diagnosed.
@@ -762,7 +804,7 @@ export function createLander(
                 let rerun = await runtime.memo<{ failure?: string }>(`${key}:rerun`, context)
                 if (!rerun) {
                   await step(`rerunning: ${command}`)
-                  const ran = await run(command)
+                  const ran = await run(command, member)
                   if (ran.failure === undefined)
                     await step(`checked: ${command}`, {
                       command,
