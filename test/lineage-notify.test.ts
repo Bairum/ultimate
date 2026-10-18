@@ -1,7 +1,10 @@
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { expect, it } from 'vitest'
+import { Notified } from '../extensions/lineage/server.ts'
 import { context } from '../server/harness.ts'
 import { until } from './helpers.ts'
 import {
@@ -93,6 +96,69 @@ it.concurrent('re-armed on an idle target, waits for its next answer instead of 
   expect(delivered).toHaveLength(2)
   expect(delivered[1].kind).toBe('lineage.note')
   expect(delivered[1].data).toMatchObject({ from: other.id, text: 'echo Second' })
+})
+
+it.concurrent('a replacing notify finds the delivery its aborted predecessor made before recording it', async () => {
+  const { server } = await notifyFixture()
+  const other = await second(server)
+  await ask(server, other.id, 'Once')
+  await ask(server, ROOT_CONVERSATION_ID, `NOTIFY ${JSON.stringify({ id: other.id })}`)
+  await until(async () => (await pendingNotifies(server)).length === 0)
+  await server.root.waitForIdle(context)
+  // As if the re-arm aborted the task after its submit and before its record.
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(Notified, ROOT_CONVERSATION_ID)).answers = {}
+  }, context)
+  await ask(server, ROOT_CONVERSATION_ID, `NOTIFY ${JSON.stringify({ id: other.id, wake: false })}`)
+  await until(async () => (await pendingNotifies(server)).length === 0)
+  const entries = await kinds(server, ROOT_CONVERSATION_ID)
+  expect(entries.filter((kind) => kind === 'lineage.finished')).toHaveLength(1)
+  expect(entries).not.toContain('lineage.note')
+  expect(
+    (await server.harness.snapshot(Notified, ROOT_CONVERSATION_ID, context))?.answers[other.id],
+  ).toBeGreaterThan(0)
+})
+
+it.concurrent('delivers a deliver checkpoint stored before answers were tracked', async () => {
+  const { server, home } = await notifyFixture()
+  const other = await second(server)
+  await (await server.harness.conversation(other.id, context))!.submit(
+    { type: 'input', content: 'HOLD' },
+    context,
+  )
+  await ask(server, ROOT_CONVERSATION_ID, `NOTIFY ${JSON.stringify({ id: other.id, wake: false })}`)
+  const [task] = await pendingNotifies(server)
+  await server.close()
+  servers.splice(servers.indexOf(server), 1)
+  const database = new DatabaseSync(join(home, 'state.sqlite'))
+  const record = JSON.parse(
+    (database.prepare('SELECT record FROM tasks WHERE id = ?').get(task.id) as { record: string })
+      .record,
+  )
+  record.state = { status: 'pending', checkpoint: { phase: 'deliver', text: 'Legacy answer' } }
+  database
+    .prepare("UPDATE tasks SET status = 'pending', record = ? WHERE id = ?")
+    .run(JSON.stringify(record), task.id)
+  database.close()
+
+  const { server: reopened, release } = await notifyFixture(home)
+  release()
+  await until(async () => (await pendingNotifies(reopened)).length === 0)
+  expect((await reopened.harness.getTask(task.id, context))?.state.outcome).toEqual({
+    status: 'completed',
+    result: null,
+  })
+  const notes = (await reopened.root.context(context)).entries.filter(
+    (entry) => entry.kind === 'lineage.note',
+  )
+  expect(notes.map((note) => note.data)).toEqual([
+    { text: 'Legacy answer', from: other.id, source: 'finished' },
+  ])
+  expect(
+    Object.keys(
+      (await reopened.harness.snapshot(Notified, ROOT_CONVERSATION_ID, context))?.answers ?? {},
+    ),
+  ).toEqual([])
 })
 
 it.concurrent('keeps one pending notify per target and delivers it once across a reopen', async () => {

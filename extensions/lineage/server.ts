@@ -387,7 +387,7 @@ function lineage(host: ExtensionHost) {
   })
   const Notify = defineTask<
     { target: ConversationId; wake: boolean },
-    { phase: 'wait' } | { phase: 'deliver'; title?: string; text: string; answer: number },
+    { phase: 'wait' } | { phase: 'deliver'; title?: string; text: string; answer?: number },
     null
   >({
     name: 'lineage.notify',
@@ -454,14 +454,23 @@ function lineage(host: ExtensionHost) {
       },
       deliver: async (task, runtime, ctx) => {
         const { target, wake } = task.input
+        // A checkpoint from before answers were tracked has none: it delivers as it did then and records nothing.
         const { title, text, answer } = task.state.checkpoint as {
           title?: string
           text: string
-          answer: number
+          answer?: number
         }
-        const requestId = `lineage:notify:${target}:${task.id}`
-        if (wake)
-          await (await runtime.conversation(runtime.conversationId, ctx))!.submit(
+        // Keyed by the answer, so a task that replaced one aborted between submit and record finds its delivery.
+        const requestId = answer
+          ? `lineage:notify:${target}:answer:${answer}`
+          : `lineage:notify:${target}:${task.id}`
+        const caller = runtime.conversationId
+        // A delivery found here (follow-up or note: a re-arm may switch `wake`) only lacks its record.
+        const delivered = await host
+          .harness()
+          .commit((tx) => tx.submissionByRequest(caller, requestId), ctx)
+        if (!delivered && wake)
+          await (await runtime.conversation(caller, ctx))!.submit(
             {
               type: 'input',
               content: finishedText(target, title, text),
@@ -474,15 +483,15 @@ function lineage(host: ExtensionHost) {
             },
             ctx,
           )
-        else
-          await leaveNote(host, runtime.conversationId, text, {
+        else if (!delivered)
+          await leaveNote(host, caller, text, {
             from: target,
             source: 'finished',
             ...(title ? { data: { title } } : {}),
             requestId,
           })
         await runtime.commit(async (tx) => {
-          ;(await tx.doc(Notified, runtime.conversationId)).answers[target] = answer
+          if (answer !== undefined) (await tx.doc(Notified, caller)).answers[target] = answer
           return { status: 'terminal', outcome: { status: 'completed', result: null } }
         }, ctx)
       },
@@ -497,7 +506,7 @@ function lineage(host: ExtensionHost) {
  * Per target, the answer entry a notify last delivered to this conversation (`0`: it had none), so a re-armed notify
  * waits for a newer one instead of repeating it. A fork keeps it with the deliveries it inherits.
  */
-const Notified = defineDoc<{ answers: Record<string, number> }>({
+export const Notified = defineDoc<{ answers: Record<string, number> }>({
   kind: 'lineage.notified',
   version: 1,
   scope: 'conversation',
