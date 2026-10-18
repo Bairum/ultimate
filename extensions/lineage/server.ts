@@ -838,6 +838,22 @@ export const actions = {
     if (input.from === undefined) throw new Error('from must be a positive integer')
     return startBranch(host, input as BranchInput, context)
   },
+  /** Remove an empty root from `lineage.roots`: one with no entries (so no tally and no branches), never the last. */
+  async unlist(args: JsonValue, { host }: ActionContext) {
+    const id = conversationArg(args)
+    const roots = await host.harness().commit(async (tx) => {
+      const doc = await tx.doc(Roots, ROOT_CONVERSATION_ID)
+      if (!doc.roots.includes(id)) throw new Error(`#${id} is not a listed root`)
+      if (doc.roots.length === 1) throw new Error(`#${id} is the last root`)
+      // A tally starts with its genesis entry and a branch forks at an entry, so no entries means neither.
+      if ((await tx.scanEntries({ conversationId: id }, 1)).items.length)
+        throw new Error(`#${id} has history; only an empty root can be unlisted`)
+      const remaining = doc.roots.filter((root) => root !== id)
+      doc.roots = remaining
+      return [...remaining]
+    }, context)
+    return { roots }
+  },
 }
 
 /** The tally `id` catches up on: its tree root's, once that root is a tally. */

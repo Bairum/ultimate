@@ -92,6 +92,31 @@ async function fixture(reopen?: string) {
   return { server, home, requests, condensed, gate }
 }
 
+it('unlists only an empty root that is not the last', async () => {
+  const { server } = await fixture()
+  const create = async () =>
+    (await server.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)).id
+  const [empty, tally, last] = [await create(), await create(), await create()]
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.push(empty, tally)
+  }, context)
+  await seedTally(server.harness, tally)
+  await branchFrom(server, { from: tally, prompt: 'Work on it' })
+  const unlist = async (id: number) =>
+    (await post(server, '/api/extensions/lineage/actions/unlist', { args: { id } })).data
+
+  expect((await unlist(tally)).error).toBe(
+    `#${tally} has history; only an empty root can be unlisted`,
+  )
+  expect((await unlist(empty)).result).toEqual({ roots: [1, tally] })
+  expect((await unlist(empty)).error).toBe(`#${empty} is not a listed root`)
+
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [last]
+  }, context)
+  expect((await unlist(last)).error).toBe(`#${last} is the last root`)
+})
+
 const branchFrom = async (server: Server, args: Record<string, unknown>) => {
   // An empty first conversation is a root that read nothing yet; one with history stays an ordinary root.
   if (args.from === 1) await seedTally(server.harness)
