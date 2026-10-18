@@ -70,8 +70,9 @@ The Git status is read again whenever the shown conversation finishes a run, inc
 
 The right-panel tab (palette **Extensions…**) shows the project decision, a way to change it, Use this project's setup
 everywhere, and every extension with its source, deciding layer, README line and switch. Switches save to this project
-(when its setup is in use) or everywhere. Turning off `agent` or `onboarding` asks first, because the panel goes with
-them. Failures show on the row; the list follows system info.
+(when its setup is in use) or everywhere. A core-tier extension's switch stays on and disabled, its deciding layer
+reads `core`: the server keeps the core tier enabled whatever the settings say. Failures show on the row; the list
+follows system info.
 
 ## Actions
 

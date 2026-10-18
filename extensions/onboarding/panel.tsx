@@ -38,14 +38,9 @@ const without =
   <T,>(record: Record<string, T>) =>
     Object.fromEntries(Object.entries(record).filter(([key]) => key !== name))
 
-/** Turning these off takes this panel away with them, so they ask first. */
-const holds: Record<string, string> = {
-  onboarding: 'This panel goes with it; turn it back on in settings.json.',
-  agent: 'The window falls back to a bare conversation, without this panel.',
-}
-
 /** Which layer decided an extension's state: a short label and the sentence behind it. */
 function decided(extension: ExtensionInfo, local: boolean): [string, string] {
+  if (extension.core) return ['core', 'On: the core tier is always on, whatever the settings say']
   const state = extension.enabled ? 'On' : 'Off'
   const verb = extension.enabled ? 'enables' : 'disables'
   if (extension.source === 'project' && !local)
@@ -208,9 +203,7 @@ function Row({
   pending,
   error,
   note,
-  confirming,
   onToggle,
-  onConfirm,
   switchRef,
 }: {
   extension: ExtensionInfo
@@ -221,9 +214,7 @@ function Row({
   pending?: boolean
   error?: string
   note?: string
-  confirming: boolean
   onToggle: (enabled: boolean) => void
-  onConfirm: (confirming: boolean) => void
   switchRef: Ref<HTMLButtonElement>
 }) {
   const web = useExtensions().find((record) => record.name === extension.name)
@@ -287,43 +278,20 @@ function Row({
           <Switch
             busy={pending !== undefined}
             checked={checked}
-            disabled={unusable}
+            disabled={unusable || extension.core}
             aria-label={`${extension.name} ${scope === 'project' ? 'for this project' : 'everywhere'}`}
-            onCheckedChange={(next) =>
-              !next && holds[extension.name] ? onConfirm(true) : onToggle(next)
-            }
+            onCheckedChange={onToggle}
             title={
-              unusable
-                ? "Choose this project's setup to use it"
-                : `${checked ? 'Turn off' : 'Turn on'} ${scope === 'project' ? 'for this project' : 'everywhere'}`
+              extension.core
+                ? 'Core tier: always on'
+                : unusable
+                  ? "Choose this project's setup to use it"
+                  : `${checked ? 'Turn off' : 'Turn on'} ${scope === 'project' ? 'for this project' : 'everywhere'}`
             }
             ref={switchRef}
           />
         </span>
       </div>
-      {confirming && (
-        <div className="mt-1.5 flex flex-col gap-1.5 rounded-md border border-warning/40 bg-warning/8 px-2.5 py-2">
-          <p className="text-[12px] leading-snug text-foreground/90">{holds[extension.name]}</p>
-          <div className="flex justify-end gap-1.5">
-            <Button
-              className="h-6 text-[11.5px]"
-              onClick={() => onConfirm(false)}
-              size="xs"
-              variant="ghost"
-            >
-              Keep it on
-            </Button>
-            <Button
-              className="h-6 text-[11.5px]"
-              onClick={() => onToggle(false)}
-              size="xs"
-              variant="outline"
-            >
-              Turn off
-            </Button>
-          </div>
-        </div>
-      )}
       {failure && (
         <p className="mt-1 line-clamp-3 font-mono text-[11px] leading-snug break-words whitespace-pre-wrap text-error/85">
           {failure}
@@ -353,7 +321,6 @@ export function ExtensionsPanel() {
   const [pending, setPending] = useState<Record<string, boolean>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [notes, setNotes] = useState<Record<string, string>>({})
-  const [confirming, setConfirming] = useState<string>()
   // Read by screen readers once a toggle has applied, since the row has moved.
   const [announcement, setAnnouncement] = useState('')
   const root = useRef<HTMLDivElement>(null)
@@ -391,7 +358,6 @@ export function ExtensionsPanel() {
   const toggle = async (extension: ExtensionInfo, enabled: boolean) => {
     const { name } = extension
     track(name, enabled)
-    setConfirming(undefined)
     setPending((previous) => ({ ...previous, [name]: enabled }))
     setErrors(without(name))
     setNotes(without(name))
@@ -463,18 +429,12 @@ export function ExtensionsPanel() {
           <ul>
             {extensions.map((extension) => (
               <Row
-                confirming={confirming === extension.name}
                 error={errors[extension.name]}
                 extension={extension}
                 key={extension.name}
                 line={line(extension.name, extension.source)}
                 local={local}
                 note={notes[extension.name]}
-                onConfirm={(next) => {
-                  // Keeping it on closes the question under focus; focus goes back to the switch.
-                  if (!next) track(extension.name, extension.enabled)
-                  setConfirming(next ? extension.name : undefined)
-                }}
                 onToggle={(enabled) => void toggle(extension, enabled)}
                 pending={pending[extension.name]}
                 replaces={replaces(extension.name)}
