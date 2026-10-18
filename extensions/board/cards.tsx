@@ -106,12 +106,15 @@ export function ChatBubble({
   message,
   text,
   running,
+  at = message?.at,
   children,
 }: {
   from: number
   message: BoardMessage | undefined
   text: string
   running: boolean
+  /** When it was said; a message's own time by default. */
+  at?: number
   children?: ReactNode
 }) {
   const now = useNow(60000)
@@ -131,13 +134,13 @@ export function ChatBubble({
         <span className={cn('flex min-w-0 font-semibold', accent.name)}>
           <Address id={from} />
         </span>
-        {message && (
+        {at !== undefined && (
           <time
             className="ml-auto"
-            dateTime={new Date(message.at).toISOString()}
-            title={new Date(message.at).toLocaleString()}
+            dateTime={new Date(at).toISOString()}
+            title={new Date(at).toLocaleString()}
           >
-            {relativeTime(message.at, now)}
+            {relativeTime(at, now)}
           </time>
         )}
       </header>
@@ -377,7 +380,12 @@ export function ChatAnswer({
   const chat = useChat()
   const message = entry.model?.[0]
   if (!chat || message?.role !== 'assistant') return core
-  if (message.stopReason === 'stop') return <ReplyFold entry={entry} core={core} />
+  if (message.stopReason === 'stop') {
+    const text = message.content
+      .flatMap((block) => (block.type === 'text' && block.text.trim() ? [block.text] : []))
+      .join('\n\n')
+    return <ReplyFold entry={entry} core={core} text={text} at={message.timestamp} />
+  }
   const shown = (blocks ?? message.content.map((_, index) => index)).flatMap((index) => {
     const block = message.content[index]
     return block?.type === 'toolCall' ? [block] : []
@@ -436,10 +444,32 @@ function ScriptMessages({
   )
 }
 
-function ReplyFold({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
+function ReplyFold({
+  entry,
+  core,
+  text,
+  at,
+}: {
+  entry: EntryRecord
+  core: ReactNode
+  text: string
+  at: number
+}) {
   const board = useDocOf<BoardData>(1, 'board') ?? emptyBoard
   const answered = answeredMessages(board.messages, entry.conversationId, entry.id)
-  if (!answered.length || answered.some((m) => !m.reply || m.from === 'user')) return core
+  if (!answered.length || answered.some((m) => !m.reply || m.from === 'user'))
+    // An answer to you is a bubble like its messages, not a final-answer card.
+    return text ? (
+      <ChatBubble
+        at={at}
+        from={entry.conversationId}
+        message={undefined}
+        running={false}
+        text={text}
+      />
+    ) : (
+      core
+    )
   return (
     <Collapsible className="group/reply">
       <CollapsibleTrigger className="flex cursor-pointer flex-wrap items-center gap-1.5 font-mono text-[11px] text-muted-foreground/70 hover:text-muted-foreground">
