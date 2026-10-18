@@ -3,6 +3,8 @@ import type { CloudState, SyncProgress } from '../cloud/types.ts'
 
 /** A project home on this machine, as `fleet` sees it. */
 export interface LocalProject {
+  /** The checkout's GitHub origin key when the cloud admitted it under another (a relinked repository). */
+  origin?: string
   root: string
   home: string
   /** The running server, when it runs. */

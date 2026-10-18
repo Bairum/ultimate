@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { renderUnits } from '../scripts/setup-machine.ts'
+import { renderUnits, selfUnits } from '../scripts/setup-machine.ts'
 
 const options = {
   clone: '/home/u/ultimate',
@@ -52,4 +52,53 @@ it('renders ultimate, the machine home and the tunnel with absolute paths', () =
 it('leaves the tunnel out when the machine has none', () => {
   const names = renderUnits({ ...options, tunnel: false }).map((unit) => unit.name)
   expect(names).toEqual(['ultimate.service', 'ultimate-machine.service'])
+})
+
+it('refuses paths systemd would read differently, naming the path', () => {
+  for (const [field, path] of [
+    ['clone', '/home/u/my ultimate'],
+    ['project', '/home/u/work/a"pp'],
+    ['project', "/home/u/work/it's"],
+    ['home', '/home/u\\x'],
+    ['node', '/opt/node%i/bin/node'],
+    ['project', '/home/u/$HOME/app'],
+    ['project', '/home/u/tab\there'],
+  ] as const)
+    expect(() => renderUnits({ ...options, [field]: path })).toThrow(
+      `${field} path ${JSON.stringify(path)} contains whitespace`,
+    )
+  // Ordinary punctuation in paths stays allowed.
+  expect(() => renderUnits({ ...options, project: '/home/u/work/my-app_2.0+x@y' })).not.toThrow()
+})
+
+it('never restarts the unit it runs inside: by InvocationID, and both Ultimate units when supervised', () => {
+  const changed = ['ultimate.service', 'ultimate-machine.service', 'ultimate-tunnel.service']
+  const ids: Record<string, string> = {
+    'ultimate.service': 'aaa',
+    'ultimate-machine.service': 'bbb',
+    'ultimate-tunnel.service': 'ccc',
+  }
+  const invocation = (name: string) => ids[name] ?? ''
+  // Run by hand outside any unit: everything restarts.
+  expect(selfUnits(changed, {}, invocation)).toEqual([])
+  // Inside the machine home's unit, found by its InvocationID.
+  expect(selfUnits(changed, { INVOCATION_ID: 'bbb' }, invocation)).toEqual([
+    'ultimate-machine.service',
+  ])
+  // Inside the tunnel's unit.
+  expect(selfUnits(changed, { INVOCATION_ID: 'ccc' }, invocation)).toEqual([
+    'ultimate-tunnel.service',
+  ])
+  // Under Ultimate's supervisor, either Ultimate unit may be the one: both are left alone.
+  expect(selfUnits(changed, { ULTIMATE_SUPERVISED: '1' }, invocation)).toEqual([
+    'ultimate.service',
+    'ultimate-machine.service',
+  ])
+  // An unknown INVOCATION_ID matches nothing; an empty one never matches a unit without an id.
+  expect(selfUnits(changed, { INVOCATION_ID: 'zzz' }, invocation)).toEqual([])
+  expect(selfUnits(['other.service'], { INVOCATION_ID: '' }, () => '')).toEqual([])
+  // Only changed units are considered.
+  expect(selfUnits(['ultimate-tunnel.service'], { ULTIMATE_SUPERVISED: '1' }, invocation)).toEqual(
+    [],
+  )
 })

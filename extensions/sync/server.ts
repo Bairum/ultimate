@@ -16,6 +16,7 @@ import { projectIdentity } from '../cloud/identity.ts'
 import type { CloudState } from '../cloud/types.ts'
 import type { SubagentsService } from '../subagents/server.ts'
 import { isMachineHome, machineRoot } from '../subagents/primary.ts'
+import { ended } from './moves.ts'
 import type { Fleet, FleetProject, LocalProject, MoveEnded, SyncReport } from './types.ts'
 
 const run = promisify(execFile)
@@ -150,8 +151,11 @@ async function local(deps: SyncDeps, home: Home): Promise<LocalProject & { key?:
       // A server that stops between the lock read and the call shows as not running.
       () => undefined,
     )
+  // The cloud admits a relinked checkout under the replica's own key, which the directory lists.
+  const key = state?.key ?? identity?.key
   return {
-    ...(identity ? { key: identity.key } : {}),
+    ...(key ? { key } : {}),
+    ...(identity && identity.key !== key ? { origin: identity.key } : {}),
     root: home.root,
     home: home.home,
     ...(home.url ? { url: home.url } : {}),
@@ -213,10 +217,10 @@ export async function fleet(deps: SyncDeps): Promise<Fleet> {
 }
 const strip = ({ key: _key, ...rest }: LocalProject & { key?: string }): LocalProject => rest
 
-/** The project named by key or name; throws with the known names otherwise. */
+/** The project named by its key, the local checkout's origin key after a relink, or its name; throws otherwise. */
 function find(projects: FleetProject[], name: string) {
   const found =
-    projects.find((project) => project.key === name) ??
+    projects.find((project) => project.key === name || project.local?.origin === name) ??
     projects.find((project) => project.name === name)
   if (!found)
     throw new Error(
@@ -286,14 +290,6 @@ export async function transition(deps: SyncDeps, name: string) {
   return { transition: project.transition ?? null, machine: current.machine }
 }
 
-/** `done` once the claim is done, `failed` once an error is set, else undefined while it runs. */
-export function ended(moved: Transition) {
-  if (moved.error) return 'failed' as const
-  return moved.steps.find((step) => step.name === 'claim')?.state === 'done'
-    ? ('done' as const)
-    : undefined
-}
-
 /**
  * Wakes @sync once per ended move involving this machine: each tick reads `cloud.state` of the running local projects
  * and submits a `sync.move` input with requestId `sync-move:<id>`, which Pi deduplicates across restarts.
@@ -311,17 +307,23 @@ export function createWatcher(
           // A project home stopping between ticks has no state; the next tick reads it again.
           () => undefined,
         )
-        const moved = state?.transition
         const machine = state?.machine
-        if (!moved || !machine || submitted.has(moved.id) || !ended(moved)) continue
-        if (moved.target !== machine && moved.from !== machine) continue
-        const key = (await deps.identity(home.root))?.key ?? ''
-        await submit({
-          project: { key, name: home.name, root: home.root },
-          machine,
-          transition: moved,
-        })
-        submitted.add(moved.id)
+        if (!state || !machine) continue
+        // The move this machine ran itself survives a newer one the cloud reports since.
+        const seen = new Map<string, Transition>()
+        for (const candidate of [state.ran, state.transition])
+          if (candidate && !seen.has(candidate.id)) seen.set(candidate.id, candidate)
+        for (const moved of seen.values()) {
+          if (submitted.has(moved.id) || !ended(moved)) continue
+          if (moved.target !== machine && moved.from !== machine) continue
+          const key = state.key ?? (await deps.identity(home.root))?.key ?? ''
+          await submit({
+            project: { key, name: home.name, root: home.root },
+            machine,
+            transition: moved,
+          })
+          submitted.add(moved.id)
+        }
       }
     },
   }

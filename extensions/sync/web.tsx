@@ -5,6 +5,7 @@ import { cn, defineWebExtension, shortenPath, useAction, useSystem } from '@/sdk
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import type { Transition } from '../../cloud/protocol.ts'
 import { phaseOf, TransitionCard } from '../cloud/transition.tsx'
+import { polling } from './moves.ts'
 import type { Fleet, FleetProject, MoveEnded, SyncReport } from './types.ts'
 
 function Dot({ on }: { on: boolean }) {
@@ -151,13 +152,13 @@ function MoveCall({ call, core }: { call: ToolCallView; core: React.ReactNode })
     { enabled: !!project && !!started, onError: () => {} },
   )
   const transition = state.data?.transition
-  const running = transition && transition.id === started && phaseOf(transition) === 'running'
+  const live = polling(started, transition)
   const { refetch } = state
   useEffect(() => {
-    if (!started || (transition && !running)) return undefined
+    if (!live) return undefined
     const timer = setInterval(() => void refetch(), 1500)
     return () => clearInterval(timer)
-  }, [started, transition, running, refetch])
+  }, [live, refetch])
   if (call.status === 'error' || call.status === 'interrupted') return core
   if (!started) return <Pending name="move" title={`${project ?? ''}…`} />
   if (!transition || transition.id !== started)

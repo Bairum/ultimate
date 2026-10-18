@@ -69,6 +69,10 @@ export interface LeaseState {
   progress?: { kind: 'upload'; done: number; total: number }
   /** The move this machine runs, or else the latest one the cloud reported. */
   transition?: Transition
+  /** The last move this machine ran itself, ended or not, also when a newer one shows as `transition`. */
+  ran?: Transition
+  /** The replica's project key the cloud admitted this machine under; a relinked checkout's differs from its origin's. */
+  key?: string
   lastError?: string
 }
 
@@ -849,16 +853,10 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       const ended = (state: SyncState) => state.transition?.id === id && !!state.transition.error
       const graph = await host.harness().taskGraph(context)
       let outcome: 'drained' | 'cancelled' = 'drained'
-      // Uncommitted work stays on this machine: the target hears which worktrees hold it, once, before the release.
-      const dirty = await dirtyWorktrees().catch((error: unknown) => {
-        host.notice(`Could not list worktrees with uncommitted changes: ${String(error)}`)
-        return []
-      })
       try {
         let tasks = foreground(graph)
-        if (tasks > 0 || dirty.length)
-          sync.send({ type: 'release-waiting', by, tasks, ...(dirty.length ? { dirty } : {}) })
         if (tasks > 0) {
+          sync.send({ type: 'release-waiting', by, tasks })
           host.notice(`Move to ${by} waits for ${runs(tasks)}`)
           outcome = await new Promise((resolve) => {
             const timer = setTimeout(() => finish('drained'), MOVE_CAP)
@@ -887,6 +885,13 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         host.notice(`The move to ${by} stopped; this machine keeps the project`)
         return false
       }
+      // Uncommitted work stays on this machine: scanned once the drained runs have written theirs, right before the
+      // release, so the target hears which worktrees hold it.
+      const dirty = await dirtyWorktrees().catch((error: unknown) => {
+        host.notice(`Could not list worktrees with uncommitted changes: ${String(error)}`)
+        return []
+      })
+      if (dirty.length) sync.send({ type: 'release-waiting', by, tasks: 0, dirty })
       releasingFor = id
       try {
         return await release({ reason: `Moved to ${by}` })
@@ -960,6 +965,8 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         blocked: blocked(state),
         progress,
         ...(transition ? { transition: structuredClone(transition) } : {}),
+        ...(ran ? { ran: structuredClone(ran) } : {}),
+        ...(state?.project ? { key: state.project.key } : {}),
         lastError,
       }
     },

@@ -53,9 +53,41 @@ function unit(description: string, service: string[]) {
 /** The clone's own Wrangler, the bin entry of node_modules/wrangler/package.json. */
 const wranglerBin = (clone: string) => join(clone, 'node_modules/wrangler/bin/wrangler.js')
 
-/** Renders the unit files; pure, so the side effects stay in main. */
+/** Whitespace and the characters systemd treats specially in unit values: quotes, escapes, specifiers, variables. */
+const special = /[\s"'\\%$]/
+
+/** Paths go into units unescaped, so one systemd would read differently is refused rather than escaped. */
+export function checkPaths(paths: Record<string, string>) {
+  for (const [name, path] of Object.entries(paths))
+    if (special.test(path))
+      throw new Error(
+        `${name} path ${JSON.stringify(path)} contains whitespace or one of " ' \\ % $, which systemd units treat specially; move it to a plain path.`,
+      )
+}
+
+/** Both units run bin/ultimate.ts, so a supervised run may be inside either. */
+const ultimateUnits = ['ultimate.service', 'ultimate-machine.service']
+
+/**
+ * The changed units this script runs inside, which it must not restart: the one whose InvocationID is the
+ * process's INVOCATION_ID, and under Ultimate's supervisor both Ultimate units, since either may be the one.
+ */
+export function selfUnits(
+  changed: string[],
+  env: { INVOCATION_ID?: string; ULTIMATE_SUPERVISED?: string },
+  invocation: (unit: string) => string,
+) {
+  return changed.filter(
+    (name) =>
+      (env.ULTIMATE_SUPERVISED === '1' && ultimateUnits.includes(name)) ||
+      (!!env.INVOCATION_ID && invocation(name) === env.INVOCATION_ID),
+  )
+}
+
+/** Renders the unit files; pure, so the side effects stay in main. Throws for a path systemd would misread. */
 export function renderUnits(options: UnitOptions): Unit[] {
   const { clone, project, home, node, machine } = options
+  checkPaths({ clone, project, home, node })
   // pnpm run prepends node_modules/.bin folders and its own version-pinned folder (.tools/@pnpm+exe/<version>),
   // which disappears when pnpm updates itself; a unit must depend on neither.
   const user = options.path
@@ -175,14 +207,12 @@ function main() {
   }
   run('systemctl', ['--user', 'daemon-reload'])
   run('systemctl', ['--user', 'enable', '--now', ...units.map(({ name }) => name)])
-  // Restarting ultimate.service from inside it would kill this script with it.
-  const inside =
-    process.env.ULTIMATE_SUPERVISED === '1' ||
-    (process.env.INVOCATION_ID !== undefined &&
-      process.env.INVOCATION_ID === query(['show', 'ultimate.service', '-p', 'InvocationID']))
+  // Restarting the unit this script runs inside would kill the script with it.
+  const inside = selfUnits(changed, process.env, (name) =>
+    query(['show', name, '-p', 'InvocationID']),
+  )
   for (const name of changed) {
-    if (name === 'ultimate.service' && inside)
-      console.log('ultimate.service changed: restart ultimate.service yourself.')
+    if (inside.includes(name)) console.log(`${name} changed: restart ${name} yourself.`)
     else run('systemctl', ['--user', 'restart', name])
   }
   const user = userInfo().username

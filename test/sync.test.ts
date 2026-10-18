@@ -19,6 +19,7 @@ import {
   submitMove,
 } from '../extensions/sync/server.ts'
 import type { Home, SyncDeps } from '../extensions/sync/server.ts'
+import { polling } from '../extensions/sync/moves.ts'
 import type { MoveEnded } from '../extensions/sync/types.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { Transition } from '../cloud/protocol.ts'
@@ -390,4 +391,100 @@ it("links a project to this machine's running machine home, @sync's conversation
   ).toEqual({
     url: 'http://127.0.0.1:4700/?conversation=18',
   })
+})
+
+it('keeps the move card polling until the started transition ends, past an older one still shown', () => {
+  const running = transition({
+    id: 'new',
+    steps: [step('fetch', 'running'), step('claim', 'pending')],
+  })
+  expect(polling(undefined, undefined)).toBe(false)
+  // Nothing fetched yet, or the previous move still shown before the target publishes the new one's first step.
+  expect(polling('new', undefined)).toBe(true)
+  expect(polling('new', null)).toBe(true)
+  expect(polling('new', transition({ id: 'old' }))).toBe(true)
+  expect(polling('new', transition({ id: 'old', error: 'Cancelled' }))).toBe(true)
+  expect(polling('new', running)).toBe(true)
+  // Done or failed: the card holds still.
+  expect(polling('new', transition({ id: 'new' }))).toBe(false)
+  expect(polling('new', transition({ id: 'new', error: 'Missing secrets: X' }))).toBe(false)
+})
+
+it('matches a relinked checkout by the key the cloud admitted, and resolves it by either key', async () => {
+  // The directory lists the replica's canonical key; this checkout's origin is the repository's old name.
+  const canonical: Project[] = [
+    {
+      ...directory[0],
+      key: 'github.com/hazat/ultimate-v2',
+      name: 'ultimate-v2',
+      slug: 'ultimate-v2',
+    },
+  ]
+  const { deps, requests } = fake({
+    directory: () => Response.json(canonical),
+    state: () => ({
+      status: 'on',
+      machine: 'rog',
+      role: 'standby',
+      free: false,
+      missing: [],
+      key: 'github.com/hazat/ultimate-v2',
+    }),
+  })
+  const value = await fleet(deps)
+  expect(value.projects.map((project) => project.key)).toEqual([
+    'github.com/hazat/ultimate-v2',
+    'scratch',
+  ])
+  expect(value.projects[0].local).toMatchObject({
+    root: '/u/Projects/ultimate',
+    origin: 'github.com/hazat/ultimate',
+  })
+  // Here by the origin key, elsewhere by the canonical one: both reach the same project.
+  expect(await move(deps, { project: 'github.com/hazat/ultimate' })).toMatchObject({
+    id: 'local-1',
+    key: 'github.com/hazat/ultimate-v2',
+    local: true,
+  })
+  expect(
+    await move(deps, { project: 'github.com/hazat/ultimate-v2', to: 'haza-pc' }),
+  ).toMatchObject({
+    key: 'github.com/hazat/ultimate-v2',
+    local: false,
+  })
+  expect(requests.at(-1)?.url).toBe(
+    'https://cloud.example/sync/move?project=github.com%2Fhazat%2Fultimate-v2',
+  )
+  expect(await cancel(deps, 'github.com/hazat/ultimate')).toEqual({
+    key: 'github.com/hazat/ultimate-v2',
+    local: false,
+  })
+})
+
+it('wakes @sync for the move this machine ran even after a newer one replaced it', async () => {
+  // Between two ticks this machine's move ended and another started; the cloud now reports the newer one.
+  const ran = transition({ id: 'mine' })
+  const newer = transition({
+    id: 'newer',
+    target: 'haza-pc',
+    from: 'rog',
+    steps: [step('fetch', 'running'), step('claim', 'pending')],
+  })
+  const { deps } = fake({
+    state: () => ({
+      status: 'on',
+      machine: 'rog',
+      free: false,
+      missing: [],
+      transition: newer,
+      ran,
+    }),
+  })
+  const submitted: MoveEnded[] = []
+  const watcher = createWatcher(deps, async (input) => {
+    submitted.push(input)
+  })
+  await watcher.tick()
+  await watcher.tick()
+  expect(submitted.map((input) => input.transition.id)).toEqual(['mine'])
 })

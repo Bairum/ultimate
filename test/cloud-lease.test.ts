@@ -103,6 +103,11 @@ it('releases an idle writer, and another machine prepares and takes over the sam
   const download = transition.steps.find((step) => step.name === 'download')!
   expect(download.total).toBeGreaterThan(0)
   expect(download.done).toBe(download.total)
+  // `state` names the key the cloud admitted and the move this machine ran itself, for @sync's fleet and watcher.
+  expect(await laptop.lease.state()).toMatchObject({
+    key: KEY,
+    ran: { id: transition.id, target: 'laptop' },
+  })
   // The desk keeps its database and hears who runs the project now.
   await until(() => desk.role()?.writer?.machine === 'laptop')
   expect(desk.serving()).toBe(false)
@@ -359,6 +364,32 @@ it('tells the target which worktrees with uncommitted changes stay behind, even 
   expect(transition.steps.find((step) => step.name === 'handover')).toMatchObject({
     state: 'done',
     detail: '2 worktrees with uncommitted changes stay on desk',
+  })
+})
+
+it('lists the worktrees left dirty by the runs it drained: the scan follows the drain', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const desk = await machine('desk', project, root)
+  await writer(desk)
+  const worktrees = await temp('ultimate-lease-drained-')
+  const edited = join(worktrees, 'edited')
+  await git(root, 'worktree', 'add', '-q', '-b', 'ultimate/drained', edited)
+  const task = await sleep(desk.harness(), false)
+  const laptop = await machine('laptop', project, root)
+  await standbyOn(laptop)
+  expect((await project.api('/api/cloud/move', { machine: 'laptop' })).status).toBe(202)
+  await until(() => desk.notices.includes('Move to laptop waits for 1 running task'))
+  // The run still draining edits its worktree; the release must name it.
+  await writeFile(join(edited, 'README.md'), 'written while draining\n')
+  await desk.harness().abortTask(task, context)
+  await writer(laptop)
+  const transition = project.replica.store.transition()!
+  expect(transition.left).toEqual([edited])
+  expect(transition.steps.find((step) => step.name === 'handover')).toMatchObject({
+    state: 'done',
+    detail: '1 worktree with uncommitted changes stays on desk',
   })
 })
 

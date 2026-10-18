@@ -30,6 +30,10 @@ export interface CloudState {
   progress?: { kind: 'upload'; done: number; total: number }
   /** The move this machine runs, or else the latest one the cloud reported. */
   transition?: Transition
+  /** The last move this machine ran itself, ended or not, also when a newer one shows as `transition`. */
+  ran?: Transition
+  /** The replica's project key the cloud admitted this machine under; a relinked checkout's differs from its origin's. */
+  key?: string
   /** The sync connection's catch-up and backlog. */
   sync?: SyncProgress
   lastError?: string

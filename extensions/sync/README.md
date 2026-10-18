@@ -23,7 +23,7 @@ In the machine home, @sync's empty conversation says what it does and its compos
 
 ## Tools (machine home only)
 
-- `fleet`: the cloud's `GET /sync/directory` (the user's `cloud.url` with `https`, `Authorization: Bearer <ULTIMATE_CLOUD_TOKEN>`, as `cloud/config.ts` reads them), merged with every local project home from `host.projects()`: `cloud.state` of the running ones over loopback (`POST <url>/api/extensions/cloud/actions/state` with `Origin: <url>`; standby servers answer too), `state.stale-*.sqlite` in each home and `refs/heads/ultimate-moved/*` in each checkout. Returns `{ machine, machines[], projects[{ key, name, writer, standbys, transition?, local? }], error? }` (`types.ts`) and renders as the fleet card. A failed directory read keeps the local projects and names the error. On faux hosts it returns a fixed demo fleet.
+- `fleet`: the cloud's `GET /sync/directory` (the user's `cloud.url` with `https`, `Authorization: Bearer <ULTIMATE_CLOUD_TOKEN>`, as `cloud/config.ts` reads them), merged with every local project home from `host.projects()`: `cloud.state` of the running ones over loopback (`POST <url>/api/extensions/cloud/actions/state` with `Origin: <url>`; standby servers answer too), `state.stale-*.sqlite` in each home and `refs/heads/ultimate-moved/*` in each checkout. Returns `{ machine, machines[], projects[{ key, name, writer, standbys, transition?, local? }], error? }` (`types.ts`) and renders as the fleet card. A local home matches the directory by the key the cloud admitted it under (`cloud.state`'s `key`, the replica's own key after a relink), falling back to its GitHub origin's key; `local.origin` keeps the origin key when the two differ, and `move`, `cancel` and `report` accept either. A failed directory read keeps the local projects and names the error. On faux hosts it returns a fixed demo fleet.
 - `move { project, to?, force? }`: to this machine (no `to`, or this machine's name) through the local project's `cloud.moveHere`, elsewhere through `POST /sync/move?project=<key> { machine, force? }`. `force` is sent only when given; the prompt allows it only after the user confirmed the missing secrets. Renders the move card, polling the `transition` action.
 - `cancel { project }`: the local `cloud.cancel` when this machine runs the move, else `POST /sync/cancel?project=<key>`.
 - `report { project, text }`: calls the project's `sync.report` action over loopback.
@@ -31,6 +31,10 @@ In the machine home, @sync's empty conversation says what it does and its compos
 ## Watcher
 
 Every 5 s the machine home reads `cloud.state` of the running local project homes. When a transition with this machine as target or source ends (claim step done, or an error set), it submits one `sync.move` input to @sync's conversation with the transition as typed entry data and requestId `sync-move:<transition id>`, so Pi admits it once across restarts. No model runs for it until a move ends.
+
+Each tick considers both transitions `cloud.state` names: `transition` (the move this machine runs, or else the latest one the cloud reported) and `ran` (the last move this machine ran itself, kept in memory by the project home's lease even after a newer move replaces it in the cloud). So a move this machine took is never missed while its project home keeps running, also when the next move starts before the next tick.
+
+**The remaining window.** A move this machine only gave away (it was the source, not the target) is seen only through the cloud's latest transition. If a newer move replaces it within one 5 s tick, or while the machine home is down, @sync is not woken for it. The same holds for any move whose project home restarts before the machine home reads it, because `ran` lives in the project home's memory. Closing this fully needs a durable outbox in the project home, which this does not build: run `fleet` after the machine home was down to see the latest moves.
 
 ## Actions
 
