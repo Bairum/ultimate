@@ -27,7 +27,7 @@ export type WorkspaceService = {
   /** Make the project folder a Git repository with a first commit, so worktrees and landing work. */
   setupGit(): Promise<void>
 }
-/** Worktrees and landing; `want` it where isolation is optional, as workspaces may be disabled. */
+/** Worktrees and landing; core, so `need` it. */
 export const WorkspacesApi = defineApi<WorkspaceService>()('workspaces')
 
 export type LandedData = {
@@ -59,3 +59,4 @@ export type LandedData = {
  * only the push failed afterwards; react to it for anything that must follow every landing exactly once.
  */
 export const SubmissionLanded = defineEvent<LandedData>('workspaces.landed')
+export const tier = 'core'

@@ -98,10 +98,17 @@ export function helper() {}
     "api.ts imports at runtime only shared/, packages, its refs.ts and other extensions' api.ts; use `import type` for the rest.",
     "api.ts imports at runtime only shared/, packages, its refs.ts and other extensions' api.ts; use `import type` for the rest.",
     'Document each exported token: what it is and when to use it.',
-    'api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)` and types.',
-    'api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)` and types.',
+    "api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)`, types and `export const tier = 'core'`.",
+    "api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)`, types and `export const tier = 'core'`.",
     'Document EchoService.echo: what it does and when to call it.',
   ])
+  // The tier line joins the core tier; any other tier is rejected.
+  expect(
+    lint('api-file-shape', 'extensions/echo/api.ts', `${api}export const tier = 'core'\n`),
+  ).toEqual([])
+  expect(
+    lint('api-file-shape', 'extensions/echo/api.ts', `${api}export const tier = 'optional'\n`),
+  ).toEqual(["An extension declares its tier as `export const tier = 'core'` or not at all."])
   // A header without a sentence is no summary.
   expect(
     lint(

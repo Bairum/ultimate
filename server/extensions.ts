@@ -510,13 +510,16 @@ export async function loadExtensions(
       ...[...settings.overrides.keys()]
         .filter((name) => !folders.includes(name))
         .map((name) => `Unknown extension: ${name}`),
+      ...winners
+        .filter((winner) => winner.core && settings.overrides.get(winner.name) === false)
+        .map((winner) => `${winner.name} is core and stays enabled; extensions.disable ignores it`),
     ]
     const signature = JSON.stringify([settings.contents, folders, diagnostics])
     if (signature !== previousSettings) {
       for (const message of diagnostics) notice(message)
       previousSettings = signature
     }
-    for (const { name, path, source, enabled, files, error: discoveryError } of winners) {
+    for (const { name, path, source, enabled, files, core, error: discoveryError } of winners) {
       const previous = records.get(name)
       host.extensionSources.set(name, source)
       const layer = settings.layers.get(name) ?? (source === 'builtin' ? 'default' : 'folder')
@@ -532,6 +535,7 @@ export async function loadExtensions(
         path,
         source,
         enabled,
+        ...(core ? { core } : {}),
         layer,
         actions: Object.keys(actions.get(name) ?? {}),
         readme,

@@ -1,5 +1,3 @@
-import { writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
@@ -12,7 +10,7 @@ import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import { emit, EventLog } from '../server/events.ts'
 import type { HistoryResponse } from '../shared/protocol.ts'
-import { fauxServer, post, seedTally, sourceCopy, temp, until } from './helpers.ts'
+import { post, seedTally, until } from './helpers.ts'
 import {
   anchor,
   branchFrom,
@@ -446,21 +444,6 @@ it.concurrent('refuses inputs in a tally and keeps notes as writes', async () =>
       (await server.harness.snapshot(Tally, server.root.id, context))?.tokens ===
       (await tallyTokens(server, server.root.id)),
   )
-})
-
-it.concurrent('branches in the shared checkout with workspaces disabled', async () => {
-  const home = await temp('ultimate-lineage-no-workspaces-')
-  const source = await sourceCopy(home)
-  await writeFile(
-    join(source, '.ultimate/settings.json'),
-    JSON.stringify({ extensions: { disable: ['workspaces'] } }),
-  )
-  const server = await fauxServer({ ultimateRoot: source, home, userHome: home })
-  servers.push(server)
-  expect(server.host.registry.snapshot().extension('workspaces')).toBeUndefined()
-  const id = await branchFrom(server, { from: 1, prompt: 'Shared intent', isolated: false })
-  const conversation = await settled(server, id)
-  expect((await conversation.agent(context)).cwd).toBe(server.host.projectRoot)
 })
 
 it.concurrent('delivers a branch’s prompt once when the process stops before it is submitted', async () => {

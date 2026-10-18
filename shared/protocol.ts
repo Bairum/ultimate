@@ -71,6 +71,8 @@ export interface ExtensionActionResponse {
 export interface ExtensionInfo {
   name: string
   enabled: boolean
+  /** Core tier (`export const tier = 'core'` in its api.ts): always on; settings cannot disable it. */
+  core?: true
   source: 'builtin' | 'user' | 'project'
   replaces?: 'builtin'
   layer: 'default' | 'user' | 'project' | 'folder'

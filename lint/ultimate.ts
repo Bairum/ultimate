@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { apiSummary } from '../lib/api-files.ts'
+import { coreTier } from '../shared/extension-api.ts'
 
 interface ImportNode {
   source?: { value?: unknown }
@@ -95,6 +96,13 @@ const definers: Record<'api.ts' | 'refs.ts', Set<string>> = {
   'api.ts': new Set(['defineApi', 'defineEvent', 'defineDoc', 'defineEntry']),
   'refs.ts': new Set(['docRef', 'actionRef']),
 }
+
+/** The declarator of `export const tier = …`, which declares an extension's tier, if `statement` is one. */
+const tierOf = (statement: Node) =>
+  statement.type === 'ExportNamedDeclaration' &&
+  statement.declaration?.type === 'VariableDeclaration'
+    ? statement.declaration.declarations?.find((declarator) => declarator.id?.name === 'tier')
+    : undefined
 
 const propertyName = (node: Node | undefined) =>
   node?.computed ? node.property?.value : (node?.property?.name ?? node?.property?.value)
@@ -458,7 +466,13 @@ export default {
                       statement.declaration?.type === 'TSInterfaceDeclaration')))
               )
                 continue
-              else if (
+              else if (file === 'api.ts' && tierOf(statement) !== undefined) {
+                if (!coreTier.test(context.sourceCode.text))
+                  report(
+                    statement,
+                    "An extension declares its tier as `export const tier = 'core'` or not at all.",
+                  )
+              } else if (
                 statement.type === 'ExportNamedDeclaration' &&
                 statement.declaration?.type === 'VariableDeclaration' &&
                 statement.declaration.kind === 'const' &&
@@ -483,7 +497,7 @@ export default {
                   statement,
                   file === 'refs.ts'
                     ? 'refs.ts holds only contracts: imports, `export const X = docRef/actionRef(...)` and types.'
-                    : 'api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)` and types.',
+                    : "api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)`, types and `export const tier = 'core'`.",
                 )
             }
             for (const statement of body) {

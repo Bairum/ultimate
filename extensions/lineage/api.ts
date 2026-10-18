@@ -69,3 +69,4 @@ export const Rooted = defineEvent<{ id: number; intent: string }>('lineage.roote
 
 /** Trees, branches and notes; core, so `need` it. */
 export const LineageApi = defineApi<LineageService>()('lineage')
+export const tier = 'core'

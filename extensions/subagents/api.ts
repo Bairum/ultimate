@@ -59,3 +59,4 @@ export type SubagentsService = {
 }
 /** Child conversations and standing agents; `need` it where delegation is required, else `want` it. */
 export const SubagentsApi = defineApi<SubagentsService>()('subagents')
+export const tier = 'core'

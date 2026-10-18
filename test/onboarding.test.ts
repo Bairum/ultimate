@@ -41,7 +41,7 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
     JSON.stringify({
       defaultSurface: 'workbench',
       custom: { keep: 1 },
-      extensions: { disable: ['subagents'], extra: 'keep' },
+      extensions: { disable: ['automations'], extra: 'keep' },
     }),
   )
   const options = {
@@ -84,7 +84,7 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
         extensions: ['x'],
         replaces: [],
         enable: [],
-        disable: ['subagents'],
+        disable: ['automations'],
       },
     })
     expect(server.system.current().project).toMatchObject({
@@ -93,8 +93,8 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
       settings: {},
     })
     expect(enabled('x')).toBe(false)
-    expect(enabled('subagents')).toBe(true)
-    expect(await tools()).toContain('subagent')
+    expect(enabled('automations')).toBe(true)
+    expect(await tools()).toContain('automation')
     expect(server.system.current().skills.some((skill) => skill.name === 'local-skill')).toBe(false)
     expect(
       (await action('extensions')).find((entry: { name: string }) => entry.name === 'x'),
@@ -111,8 +111,8 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
     expect(denied.data.error).toContain('local setup')
     await action('decide', { local: true })
     expect(enabled('x')).toBe(true)
-    expect(enabled('subagents')).toBe(false)
-    expect(await tools()).not.toContain('subagent')
+    expect(enabled('automations')).toBe(false)
+    expect(await tools()).not.toContain('automation')
     expect((await web()).some((path) => path.endsWith('/x/web.tsx'))).toBe(true)
     expect(server.system.current().skills.some((skill) => skill.name === 'local-skill')).toBe(true)
     expect(projectDecision(project, home)).toBe(true)
@@ -130,7 +130,7 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
     expect(projectSettings).toMatchObject({
       custom: { keep: 1 },
       defaultSurface: 'workbench',
-      extensions: { extra: 'keep', enable: ['splash'], disable: ['subagents'] },
+      extensions: { extra: 'keep', enable: ['splash'], disable: ['automations'] },
     })
     await Promise.all(
       ['info', 'documents'].map((name) =>
@@ -140,35 +140,35 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
     expect(JSON.parse(await readFile(userFile, 'utf8')).extensions.enable).toEqual(
       expect.arrayContaining(['info', 'documents']),
     )
-    await action('setExtension', { name: 'theme', enabled: false, scope: 'user' })
+    await action('setExtension', { name: 'sounds', enabled: false, scope: 'user' })
     expect(JSON.parse(await readFile(userFile, 'utf8'))).toEqual({
-      extensions: { enable: expect.arrayContaining(['info', 'documents']), disable: ['theme'] },
+      extensions: { enable: expect.arrayContaining(['info', 'documents']), disable: ['sounds'] },
     })
     await writeFile(
       userFile + '.tmp',
-      JSON.stringify({ custom: 'user', extensions: { disable: ['theme'], extra: 2 } }),
+      JSON.stringify({ custom: 'user', extensions: { disable: ['sounds'], extra: 2 } }),
     )
     await rename(userFile + '.tmp', userFile)
-    await action('setExtension', { name: 'theme', enabled: true, scope: 'user' })
-    expect(enabled('theme')).toBe(true)
-    expect((await web()).some((path) => path.endsWith('/theme/web.tsx'))).toBe(true)
-    await action('setExtension', { name: 'theme', enabled: false, scope: 'user' })
-    expect(enabled('theme')).toBe(false)
-    expect((await web()).some((path) => path.endsWith('/theme/web.tsx'))).toBe(false)
+    await action('setExtension', { name: 'sounds', enabled: true, scope: 'user' })
+    expect(enabled('sounds')).toBe(true)
+    expect((await web()).some((path) => path.endsWith('/sounds/web.tsx'))).toBe(true)
+    await action('setExtension', { name: 'sounds', enabled: false, scope: 'user' })
+    expect(enabled('sounds')).toBe(false)
+    expect((await web()).some((path) => path.endsWith('/sounds/web.tsx'))).toBe(false)
     expect(JSON.parse(await readFile(userFile, 'utf8'))).toMatchObject({
       custom: 'user',
-      extensions: { extra: 2, enable: [], disable: ['theme'] },
+      extensions: { extra: 2, enable: [], disable: ['sounds'] },
     })
     expect(
       (await action('extensions')).find((entry: { name: string }) => entry.name === 'splash').layer,
     ).toBe('project')
     expect(
-      (await action('extensions')).find((entry: { name: string }) => entry.name === 'theme').layer,
+      (await action('extensions')).find((entry: { name: string }) => entry.name === 'sounds').layer,
     ).toBe('user')
     await action('decide', { local: false })
     expect(enabled('x')).toBe(false)
-    expect(enabled('subagents')).toBe(true)
-    expect(await tools()).toContain('subagent')
+    expect(enabled('automations')).toBe(true)
+    expect(await tools()).toContain('automation')
     expect((await web()).some((path) => path.endsWith('/x/web.tsx'))).toBe(false)
     expect(server.system.current().skills.some((skill) => skill.name === 'local-skill')).toBe(false)
     const adoptDenied = await post(server, '/api/extensions/onboarding/actions/adoptProjectSetup', {
@@ -178,10 +178,10 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
     await action('decide', { local: true })
     await action('adoptProjectSetup')
     await action('decide', { local: false })
-    expect(enabled('subagents')).toBe(false)
+    expect(enabled('automations')).toBe(false)
     expect(JSON.parse(await readFile(userFile, 'utf8'))).toMatchObject({
       custom: 'user',
-      extensions: { extra: 2, enable: ['splash'], disable: ['theme', 'subagents'] },
+      extensions: { extra: 2, enable: ['splash'], disable: ['sounds', 'automations'] },
     })
     await action('firstRunDone')
     expect((await action('status')).firstRun).toBe(false)

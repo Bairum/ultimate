@@ -30,3 +30,4 @@ export type ConversationsService = {
 }
 /** Conversation subjects and the summary model; core, so `need` it. */
 export const ConversationsApi = defineApi<ConversationsService>()('conversations')
+export const tier = 'core'

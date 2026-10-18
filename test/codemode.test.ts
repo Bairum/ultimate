@@ -207,7 +207,7 @@ it('discovers extension contracts: summaries first, then one api.ts by name', as
     server,
     `const apis = await ultimate.apis();
     let unknown;
-    try { await ultimate.api('coding-tools') } catch (error) { unknown = error.message }
+    try { await ultimate.api('codemode') } catch (error) { unknown = error.message }
     return { apis, source: await ultimate.api('contract-test'), unknown };`,
   )
   const value = result.data.details.value as {
@@ -223,7 +223,7 @@ it('discovers extension contracts: summaries first, then one api.ts by name', as
   for (const api of value.apis) expect(api.summary).not.toBe('')
   expect(value.source).toBe(source)
   expect(value.unknown).toMatch(
-    /^No enabled extension "coding-tools" with an api\.ts; known: .*\bcontract-test\b/,
+    /^No enabled extension "codemode" with an api\.ts; known: .*\bcontract-test\b/,
   )
 })
 
