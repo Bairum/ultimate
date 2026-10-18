@@ -339,6 +339,8 @@ export async function machine(
     fail?: 'park' | 'rename' | 'open'
     /** Runs before each git command, which waits for it: a test can hold one. */
     git?: (args: readonly string[]) => Promise<void>
+    /** The model login; faux hosts have one. */
+    login?: { provider: string; ok: boolean }
   } = {},
 ) {
   const home = options.home ?? (await temp('ultimate-lease-'))
@@ -477,6 +479,7 @@ export async function machine(
         await at('checks')
         return 'snapshot secret'
       },
+      ...(options.login ? { login: async () => options.login! } : {}),
     },
   )
   host.onOpen(async () => lease.opened())

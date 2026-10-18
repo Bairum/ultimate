@@ -115,11 +115,29 @@ export interface TransitionStep {
   /** Commits the `fetch` step fast-forwarded. */
   commits?: number
 }
+/**
+ * Who started a move: `local` this machine's own page ("Move here", "Resume here"), `cloud` the cloud UI or its front
+ * page behind Access, `sync` @sync (its loopback `moveHere` or the bearer `/sync/move`), `auto` a starting machine
+ * taking a free lease (`cloud.autoClaim`).
+ */
+export type MoveBy = 'local' | 'cloud' | 'sync' | 'auto'
+export const MOVE_BY: readonly MoveBy[] = ['local', 'cloud', 'sync', 'auto']
+/** "started from the cloud UI", "by @sync", "from rog's page", "automatically": who started `transition`. */
+export function startedBy({ by, target }: Pick<Transition, 'by' | 'target'>) {
+  if (by === 'cloud') return 'started from the cloud UI'
+  if (by === 'sync') return 'by @sync'
+  if (by === 'local') return `from ${target}'s page`
+  if (by === 'auto') return 'automatically'
+  return undefined
+}
+
 /** A machine preparing to take the lease (`target`) from the current writer (`from`, null while it is free). */
 export interface Transition {
   id: string
   target: string
   from: string | null
+  /** Who started it; absent on transitions machines reported before they recorded it. */
+  by?: MoveBy
   /** The step running now, or the last one that ran. */
   step: TransitionStep['name']
   steps: TransitionStep[]
@@ -249,8 +267,8 @@ export type CloudMessage =
   | { type: 'outbox'; items: OutboxItem[] }
   /** To the writer: the standby `by` asked for the lease, for transition `id`. */
   | { type: 'release-requested'; by: string; id: string }
-  /** To a standby, from the cloud UI: prepare and take the lease as transition `id`. */
-  | { type: 'move-to'; id: string; force?: boolean }
+  /** To a standby, from the cloud UI or @sync's bearer route (`by`): prepare and take the lease as transition `id`. */
+  | { type: 'move-to'; id: string; by: Extract<MoveBy, 'cloud' | 'sync'>; force?: boolean }
   /** To the target, from the cloud UI: stop transition `id` if it can still stop. */
   | { type: 'cancel'; id: string }
   /** To the requester `by`: the writer's release waits for `tasks` running tasks, leaving `dirty` worktrees behind. */

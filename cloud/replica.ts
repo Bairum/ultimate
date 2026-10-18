@@ -1,5 +1,5 @@
 import type { ConversationRecord, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
-import { handoverDetail, LEFT_LIMITS } from './protocol.ts'
+import { handoverDetail, LEFT_LIMITS, MOVE_BY } from './protocol.ts'
 import type {
   CloudInfo,
   CloudMessage,
@@ -551,6 +551,7 @@ function validTransition(value: Transition, machine: string) {
     /^[\w-]{1,64}$/.test(value.id) &&
     value.target === machine &&
     (value.from === null || typeof value.from === 'string') &&
+    (value.by === undefined || MOVE_BY.includes(value.by)) &&
     STEPS.includes(value.step) &&
     Array.isArray(value.steps) &&
     value.steps.length <= STEPS.length &&

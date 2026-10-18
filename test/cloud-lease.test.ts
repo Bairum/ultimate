@@ -14,6 +14,7 @@ import cloudExtension, {
   SECRETS_CHECK,
 } from '../extensions/cloud/server.ts'
 import type { SyncSocket } from '../extensions/cloud/server.ts'
+import { modelLogin } from '../extensions/cloud/login.ts'
 import * as snapshot from '../extensions/cloud/snapshot.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
 import { git } from '../extensions/workspaces/git.ts'
@@ -256,6 +257,93 @@ it('fast-forwards the checkout and installs when the lockfile changed, rerunning
   expect(states(await laptop.transition())).toMatchObject({ fetch: 'done', install: 'done' })
   await writer(laptop)
   expect(existsSync(join(laptop.home, 'cloud-install-pending'))).toBe(false)
+})
+
+it('records who started each move: @sync through the bearer route or loopback, this page by default', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const desk = await machine('desk', project, root)
+  await writer(desk)
+  await idleRelease(desk)
+  const laptop = await machine('laptop', project, root, { autoClaim: false })
+  await standbyOn(laptop)
+  await until(() => !!laptop.role()?.free)
+  // The Worker sends @sync's `/sync/move` to this replica path, which no browser request reaches.
+  const moved = await project.replica.fetch(
+    new Request('https://replica/sync/move', {
+      method: 'POST',
+      body: JSON.stringify({ machine: 'laptop' }),
+    }),
+  )
+  expect(moved.status).toBe(202)
+  const { id } = (await moved.json()) as { id: string }
+  await writer(laptop)
+  expect(project.replica.store.transition()).toMatchObject({ id, by: 'sync' })
+
+  await idleRelease(laptop)
+  await until(() => !!desk.role()?.free)
+  const local = desk.lease.moveHere()
+  await writer(desk)
+  expect(project.replica.store.transition()).toMatchObject({ id: local.id, by: 'local' })
+
+  await idleRelease(desk)
+  await until(() => !!laptop.role()?.free)
+  const loopback = laptop.lease.moveHere({ by: 'sync' })
+  await writer(laptop)
+  expect(project.replica.store.transition()).toMatchObject({ id: loopback.id, by: 'sync' })
+  expect(await laptop.transition()).toMatchObject({ id: loopback.id, by: 'sync' })
+})
+
+it('fails the checks without a model login, also when forced, leaving the lease free', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const repo = await checkout()
+  const desk = await machine('desk', project, repo.root)
+  await writer(desk)
+  await idleRelease(desk)
+  const login = { provider: 'anthropic', ok: false }
+  const laptop = await machine('laptop', project, repo.root, { autoClaim: false, login })
+  await standbyOn(laptop)
+  await until(() => !!laptop.role()?.free)
+  expect((await laptop.lease.state()).login).toEqual(login)
+  const error = 'No model login: anthropic is not configured here; log in with ⌘K → Log in'
+  for (const force of [false, true]) {
+    expect(await laptop.lease.move({ force })).toBe(false)
+    expect(project.replica.store.transition()).toMatchObject({ error })
+    expect(states(project.replica.store.transition())).toMatchObject({
+      checks: 'failed',
+      handover: 'pending',
+    })
+  }
+  expect(project.replica.store.lease()).toMatchObject({ machine: null, epoch: 1 })
+  expect(laptop.serving()).toBe(false)
+  expect(laptop.snapshots.downloadSnapshot).not.toHaveBeenCalled()
+})
+
+/** The login of a host whose default provider is `provider`, with `configured` providers and models `available`. */
+const loginOf = (provider: string | undefined, configured: string[], available: string[]) =>
+  modelLogin({
+    faux: undefined,
+    settings: { getDefaultProvider: () => provider } as unknown as ExtensionHost['settings'],
+    modelRuntime: {
+      getProviderAuthStatus: (id: string) => ({ configured: configured.includes(id) }),
+      getAvailable: async () => available.map((id) => ({ provider: id })),
+    } as unknown as ExtensionHost['modelRuntime'],
+  })
+
+it('reads the model login of the default provider, or of any available model without one', async () => {
+  // Another provider's login does not run the default model.
+  expect(await loginOf('anthropic', ['openai'], ['openai'])).toEqual({
+    provider: 'anthropic',
+    ok: false,
+  })
+  expect(await loginOf('anthropic', ['anthropic'], [])).toEqual({ provider: 'anthropic', ok: true })
+  expect(await loginOf(undefined, ['openai'], ['openai'])).toEqual({
+    provider: 'openai',
+    ok: true,
+  })
+  expect(await loginOf(undefined, [], [])).toEqual({ provider: 'a model provider', ok: false })
 })
 
 it('refuses a plain move when the writer has more secrets than its hello could name', async () => {
@@ -526,6 +614,7 @@ it('moves from the cloud UI: the online writer drains, and every step reaches it
   await desk.harness().abortTask(task, context)
   await writer(laptop)
   expect(project.replica.store.lease()).toMatchObject({ machine: 'laptop', epoch: 2 })
+  expect(project.replica.store.transition()).toMatchObject({ id, by: 'cloud' })
   expect(desk.host.standby()).toMatchObject({ reason: 'Moved to laptop' })
   expect(states(project.replica.store.transition())).toMatchObject({
     handover: 'done',
@@ -681,6 +770,8 @@ it('claims its own released snapshot on start without downloading it', async () 
   await writer(restarted)
   expect(restarted.snapshots.downloadSnapshot).not.toHaveBeenCalled()
   expect(states(await restarted.transition())).toMatchObject({ download: 'skipped', claim: 'done' })
+  // Nobody clicked: the starting machine took the free lease by itself.
+  expect(project.replica.store.transition()?.by).toBe('auto')
   expect(await inventory(restarted.harness())).toEqual(before)
   expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 2 })
   expect(await restarted.files()).toEqual(['state.sqlite'])

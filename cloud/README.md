@@ -32,7 +32,7 @@ To add a machine to the projects a deployed cloud already holds (see [Deploy](#d
    - **No GitHub origin:** the project stays local only; the status line says `local only`.
 4. Move a project with **Move here** on a standby's page or in the status line's `on <machine>` popover, or pick the
    machine under **Run on…** in the cloud: the project page's status line, its offline banner, or a row of the front
-   page. The machine fast-forwards its checkout, installs when the lockfile changed, checks secrets, has the writer
+   page. The machine fast-forwards its checkout, installs when the lockfile changed, checks its model login and secrets, has the writer
    finish its running tasks and release, downloads the snapshot and takes over; every step shows in the move's card on
    both machines and in the cloud. An idle writer releases the project by itself after `cloud.idleRelease` minutes
    (default 10) and when Ultimate stops, so the next machine takes it without waiting for the first; **Resume here**
@@ -109,7 +109,7 @@ The two checkouts sit at different paths, so moving between them is refused. `te
 - Agents, which cannot pass Access, reach the cloud UI's routes with `Authorization: Bearer <SYNC_TOKEN>` alone (401 without it). `project=<key>` resolves through relinks exactly as `/sync/v2` does, and the project's replica answers with its own handlers:
   - `GET /sync/directory`: the same JSON as `/api/directory`.
   - `GET /sync/cloud?project=<key>`: the same as the project's `GET /api/cloud`.
-  - `POST /sync/move?project=<key>` `{ machine, force? }`: the same as `POST /api/cloud/move` (202 `{ id }`, 409 `{ error }`).
+  - `POST /sync/move?project=<key>` `{ machine, force? }`: the same as `POST /api/cloud/move` (202 `{ id }`, 409 `{ error }`), but the move is recorded as started by @sync (`by: 'sync'`). The Worker sends it to the replica's own `/sync/move` path, which no browser request reaches.
   - `POST /sync/cancel?project=<key>`: the same as `POST /api/cloud/cancel`.
 - `POST /sync/relink` with `{ key, from }` and the bearer token records in the Directory that `key` syncs to `from`'s replica from now on (a renamed repository keeps its replica and lease). The replica then admits hellos naming either key, its root commit still checked; the relinked key's own row leaves the directory. An alias that would point back at itself is refused.
 
@@ -138,6 +138,7 @@ interface Transition {
   id: string
   target: string // the machine taking the lease
   from: string | null // the writer it takes it from; null while the lease is free
+  by?: 'local' | 'cloud' | 'sync' | 'auto' // who started it; absent from machines that predate it
   step: 'fetch' | 'install' | 'checks' | 'handover' | 'download' | 'branches' | 'claim' // running now, or the last one
   steps: {
     name: Transition['step'] // in the order they run, as listed above
@@ -153,9 +154,11 @@ interface Transition {
 }
 ```
 
+`by` says who started the move: `local` the target's own page ("Move here", "Resume here"), `cloud` the cloud UI or front page behind Access, `sync` @sync (its loopback `moveHere { by: 'sync' }` or `/sync/move`), `auto` a starting machine taking a free lease (`cloud.autoClaim`). The target records it; the replica refuses any other value. The move card's header names it ("Preparing haza-pc · started from the cloud UI").
+
 A step may also carry `commits`: the fetch step's fast-forward count. Its detail names it, `main fast-forwarded 2 commits, 3779f5b..34596c0`, or says `main already up to date`.
 
-The replica keeps the latest transition, running or ended, accepting it only from its target's socket, and sends it in `role` (`transition`) to every socket, the writer's too, and in the project's Directory row. While the writer drains for a move, its `release-waiting { by, tasks, dirty? }` sets the handover step's detail to `finishing N runs`. Once, before it releases, even with no task running, the writer lists the worktrees of its checkout (the main one included) with uncommitted changes in `dirty`, at most 20 paths of 500 characters; the replica keeps them as the transition's `left` and adds `2 worktrees with uncommitted changes stay on haza-pc` to the handover's detail. It informs; it does not block the move. A failed or cancelled transition ends a writer's drain, and it keeps the project. A missing-secrets failure of `checks` (`error: 'Missing secrets: A, B'`) can be retried with `force`. Machines bound each `detail` and `error` to 500 characters, keeping the end; the replica refuses longer text.
+The replica keeps the latest transition, running or ended, accepting it only from its target's socket, and sends it in `role` (`transition`) to every socket, the writer's too, and in the project's Directory row. While the writer drains for a move, its `release-waiting { by, tasks, dirty? }` sets the handover step's detail to `finishing N runs`. Once, before it releases, even with no task running, the writer lists the worktrees of its checkout (the main one included) with uncommitted changes in `dirty`, at most 20 paths of 500 characters; the replica keeps them as the transition's `left` and adds `2 worktrees with uncommitted changes stay on haza-pc` to the handover's detail. It informs; it does not block the move. A failed or cancelled transition ends a writer's drain, and it keeps the project. A missing-secrets failure of `checks` (`error: 'Missing secrets: A, B'`) can be retried with `force`; a missing model login (`No model login: anthropic is not configured here; …`) cannot. Machines bound each `detail` and `error` to 500 characters, keeping the end; the replica refuses longer text.
 
 Every `role` names the replica's own key, `project: { key }`. Snapshots are stored under it and sealed with it as the HKDF salt, on both ends of a move, so a machine connecting with a relinked key finds the snapshots the others wrote.
 
@@ -164,7 +167,7 @@ A transition does not outlive the machines in it. When its target's last socket 
 The project API answers three routes itself, before any request goes to the machine, behind the same Access check as every `/p/*` path:
 
 - `GET /api/cloud`: `{ machines: [{ machine, role: 'writer' | 'standby', connected, root, lastSeen, missingSecrets }], lease: { machine, epoch, root, online, snapshot? } | null, transition: Transition | null }`. `missingSecrets` are the writer's secret names a standby lacks.
-- `POST /api/cloud/move { machine, force? }`: sends `{ type: 'move-to', id, force? }` to that machine's standby socket and answers 202 `{ id }`; 409 `{ error: 'not connected' }` without one, `runs there already` for the writer.
+- `POST /api/cloud/move { machine, force? }`: sends `{ type: 'move-to', id, by: 'cloud', force? }` (`by: 'sync'` from `/sync/move`) to that machine's standby socket and answers 202 `{ id }`; 409 `{ error: 'not connected' }` without one, `runs there already` for the writer.
 - `POST /api/cloud/cancel`: sends `{ type: 'cancel', id }` to the running transition's target and answers 202 `{ id }`; 409 when nothing can be cancelled or the target is not connected.
 
 ### Guarantees

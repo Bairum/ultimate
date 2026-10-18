@@ -16,6 +16,7 @@ import {
   fleet,
   machineHome,
   move,
+  moveText,
   submitMove,
 } from '../extensions/sync/server.ts'
 import type { Home, SyncDeps } from '../extensions/sync/server.ts'
@@ -178,6 +179,7 @@ function fake(options: { state?: () => unknown; directory?: () => Response } = {
             role: 'standby',
             free: false,
             missing: ['OPENAI_API_KEY'],
+            login: { provider: 'anthropic', ok: false },
             sync: { connected: true, catchingUp: false, backlog: 0 },
           },
         })
@@ -190,7 +192,7 @@ function fake(options: { state?: () => unknown; directory?: () => Response } = {
   return { deps, requests }
 }
 
-it('merges the cloud directory with local project homes, warnings included', async () => {
+it('merges the cloud directory with local project homes, warnings and the model login included', async () => {
   const { deps, requests } = fake()
   const value = await fleet(deps)
   expect(requests.find((request) => request.url.endsWith('/sync/directory'))?.auth).toBe(
@@ -217,10 +219,13 @@ it('merges the cloud directory with local project homes, warnings included', asy
       status: 'on',
       sync: { connected: true, catchingUp: false, backlog: 0 },
       missing: ['OPENAI_API_KEY'],
+      login: { provider: 'anthropic', ok: false },
       stale: ['state.stale-1.sqlite'],
       keptRefs: ['ultimate-moved/t0/ultimate/x'],
     },
   })
+  // A project home that is not running reports no login: only its server knows which model it would use.
+  expect(value.projects[1].local).not.toHaveProperty('login')
   // A local project without a GitHub origin still shows, local only.
   expect(value.projects[1]).toMatchObject({ key: 'scratch', writer: { machine: null } })
   expect(value.error).toBeUndefined()
@@ -231,7 +236,7 @@ it('merges the cloud directory with local project homes, warnings included', asy
   expect(partial.projects.map((project) => project.name)).toEqual(['ultimate', 'scratch'])
 })
 
-it('routes moves here over loopback and elsewhere through the cloud, sending force only when given', async () => {
+it('routes moves here over loopback as @sync and elsewhere through the cloud, sending force only when given', async () => {
   const { deps, requests } = fake()
   expect(await move(deps, { project: 'ultimate' })).toEqual({
     id: 'local-1',
@@ -255,10 +260,13 @@ it('routes moves here over loopback and elsewhere through the cloud, sending for
     (request) => request.url.includes('moveHere') || request.url.includes('/sync/move'),
   )
   expect(moves.map(({ url, body }) => ({ url, body }))).toEqual([
-    { url: 'http://127.0.0.1:4747/api/extensions/cloud/actions/moveHere', body: { args: {} } },
     {
       url: 'http://127.0.0.1:4747/api/extensions/cloud/actions/moveHere',
-      body: { args: { force: true } },
+      body: { args: { by: 'sync' } },
+    },
+    {
+      url: 'http://127.0.0.1:4747/api/extensions/cloud/actions/moveHere',
+      body: { args: { force: true, by: 'sync' } },
     },
     {
       url: 'https://cloud.example/sync/move?project=github.com%2Fhazat%2Fultimate',
@@ -351,6 +359,23 @@ it('wakes @sync once per ended transition involving this machine, also across re
   expect(entries.find((entry) => entry.kind === 'sync.move')?.data).toMatchObject({
     transition: { id: 't1' },
   })
+})
+
+it('names who started a move in the input that wakes @sync', () => {
+  const project = {
+    key: 'github.com/hazat/ultimate',
+    name: 'ultimate',
+    root: '/u/Projects/ultimate',
+  }
+  const first = (moved: Transition) =>
+    moveText({ project, machine: 'rog', transition: moved }).split('\n')[0]
+  expect(first(transition({ by: 'cloud' }))).toBe(
+    'Move of ultimate (github.com/hazat/ultimate) from haza-pc to rog, started from the cloud UI, finished.',
+  )
+  expect(first(transition({ by: 'local' }))).toContain("to rog, from rog's page, finished.")
+  expect(first(transition({ by: 'sync' }))).toContain('to rog, by @sync, finished.')
+  expect(first(transition({ by: 'auto' }))).toContain('to rog, automatically, finished.')
+  expect(first(transition())).toContain('to rog finished.')
 })
 
 /** Projects as `host.projects()` lists them, for `machineHome`. */

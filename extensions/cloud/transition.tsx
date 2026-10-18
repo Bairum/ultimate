@@ -11,7 +11,9 @@ import {
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { errorMessage } from '@/sdk'
+import { startedBy } from '../../cloud/protocol.ts'
 import type { Transition, TransitionStep } from '../../cloud/protocol.ts'
+import type { CloudState } from './types.ts'
 
 const labels: Record<TransitionStep['name'], string> = {
   fetch: 'update checkout',
@@ -53,6 +55,36 @@ function title(transition: Transition, source: boolean) {
   if (draining && transition.from)
     return `Handing over: ${transition.from} ${handover.detail ?? 'releasing'}`
   return `Preparing ${transition.target}`
+}
+
+/** `13:51`, local time. */
+const clock = (at: number) => {
+  const date = new Date(at)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+/**
+ * On the machine the project moved away from, while it runs elsewhere: "The project moved to haza-pc (by @sync ·
+ * 13:51). Move here pulls it back to rog." Known from the finished move this machine left, or else from its standby
+ * reason "Moved to haza-pc".
+ */
+export function movedAway(
+  state: Pick<CloudState, 'machine' | 'role' | 'writer' | 'transition'>,
+  reason: unknown,
+) {
+  const writer = state.writer?.machine
+  if (state.role !== 'standby' || !writer || !state.machine || writer === state.machine)
+    return undefined
+  const left = state.transition
+  const detail =
+    left && left.from === state.machine && left.target === writer && phaseOf(left) === 'done'
+      ? ` (${[startedBy(left), clock(left.startedAt)].filter(Boolean).join(' · ')})`
+      : reason === `Moved to ${writer}`
+        ? ''
+        : undefined
+  return detail === undefined
+    ? undefined
+    : `The project moved to ${writer}${detail}. Move here pulls it back to ${state.machine}.`
 }
 
 const mb = (bytes: number) => {
@@ -194,8 +226,14 @@ export function TransitionCard({
         ) : (
           <XIcon className="size-3.5 shrink-0 text-error" />
         )}
-        <span className="min-w-0 flex-1 truncate text-[12px] text-foreground/90">
+        <span
+          className="min-w-0 flex-1 truncate text-[12px] text-foreground/90"
+          title={[title(transition, source), startedBy(transition)].filter(Boolean).join(' · ')}
+        >
           {title(transition, source)}
+          {startedBy(transition) && (
+            <span className="text-muted-foreground/60"> · {startedBy(transition)}</span>
+          )}
         </span>
         {phase === 'running' && transition.cancellable && onCancel && (
           <Button

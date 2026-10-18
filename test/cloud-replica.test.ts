@@ -552,6 +552,7 @@ describe('project replica sockets', () => {
       id: 'move-1',
       target: 'laptop',
       from: 'test',
+      by: 'cloud',
       step: 'handover',
       steps: [
         { name: 'fetch', state: 'done', detail: 'main is up to date' },
@@ -568,7 +569,14 @@ describe('project replica sockets', () => {
       value: { ...transition, steps: [{ name: 'x' }] } as never,
     })
     expect(instance.store.transition()).toBeUndefined()
+    // Who started it is one of the four initiators, or absent from a machine that predates it.
+    laptop.receive({ type: 'transition', value: { ...transition, by: 'someone' } as never })
+    expect(instance.store.transition()).toBeUndefined()
+    const { by: _by, ...unattributed } = transition
+    laptop.receive({ type: 'transition', value: unattributed })
+    expect(instance.store.transition()).toEqual(unattributed)
     laptop.receive({ type: 'transition', value: transition })
+    expect(instance.store.transition()?.by).toBe('cloud')
     for (const machine of [writer, laptop, desk])
       expect(machine.sent().at(-1)).toMatchObject({ type: 'role', transition })
     expect(writer.sent().at(-1)).toMatchObject({ role: 'writer' })
@@ -689,7 +697,8 @@ describe('project replica sockets', () => {
     const moved = await api('/api/cloud/move', { machine: 'laptop', force: true })
     expect(moved.status).toBe(202)
     const { id } = (await moved.json()) as { id: string }
-    expect(laptop.sent().at(-1)).toEqual({ type: 'move-to', id, force: true })
+    // The cloud UI's move: Access admitted it, and the target records it as started there.
+    expect(laptop.sent().at(-1)).toEqual({ type: 'move-to', id, by: 'cloud', force: true })
     for (const [body, error] of [
       [{ machine: 'test' }, 'runs there already'],
       [{ machine: 'desk' }, 'not connected'],
@@ -793,7 +802,8 @@ describe('project replica sockets', () => {
       })
       expect(moved.status).toBe(202)
       const { id } = (await moved.json()) as { id: string }
-      expect(laptop.sent().at(-1)).toEqual({ type: 'move-to', id, force: true })
+      // The bearer route is @sync's: the target records the move as started by it.
+      expect(laptop.sent().at(-1)).toEqual({ type: 'move-to', id, by: 'sync', force: true })
       const refused = await call(`/sync/move?project=${KEY}`, {
         method: 'POST',
         body: JSON.stringify({ machine: 'test' }),

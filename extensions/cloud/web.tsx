@@ -7,7 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { api, defineWebExtension, errorMessage, projectBase, useSystem } from '@/sdk'
 import type { CloudInfo, Transition } from '../../cloud/protocol.ts'
 import type { CloudState } from './types.ts'
-import { phaseOf, TransitionCard } from './transition.tsx'
+import { movedAway, phaseOf, TransitionCard } from './transition.tsx'
 import { AskSync } from '../sync/link.tsx'
 
 // Locally the facet asks its own server (`cloud.state`, `moveHere`, `cancel`); in the cloud, at `/p/<slug>/`, it asks
@@ -253,10 +253,12 @@ function LocalTransition({
 /** The standby page's controls: who runs the project, what this machine lacks, "Move here", the move in progress. */
 function LocalStandby() {
   const state = useLocal()
-  const released = useSystem()?.standby?.released === true
+  const standby = useSystem()?.standby
+  const released = standby?.released === true
   const { busy, error, act } = useAct()
   if (state?.status !== 'on') return null
   const moving = running(state.transition) && state.transition!.target === state.machine
+  const away = moving ? undefined : movedAway(state, standby?.reason)
   return (
     <div className="flex w-full flex-col items-center gap-3">
       <div className="flex items-center gap-2 font-mono text-[12px] text-muted-foreground">
@@ -271,6 +273,11 @@ function LocalStandby() {
       )}
       {state.blocked && !moving && (
         <p className="text-[12px] leading-relaxed text-muted-foreground">{state.blocked}</p>
+      )}
+      {away && (
+        <p className="text-[12px] leading-relaxed text-muted-foreground" data-cloud-moved-away>
+          {away}
+        </p>
       )}
       {!moving && (
         <Button disabled={busy || !!state.blocked} onClick={() => act(() => moveHere())} size="sm">
@@ -288,11 +295,13 @@ function LocalStandby() {
 }
 
 function LocalPicker({ state }: { state: CloudState }) {
-  const released = useSystem()?.standby?.released === true
+  const standby = useSystem()?.standby
+  const released = standby?.released === true
   const { busy, error, act } = useAct()
   const { writer, machine = 'this machine' } = state
   const here = state.role === 'writer'
   const moving = running(state.transition)
+  const away = moving ? undefined : movedAway(state, standby?.reason)
   return (
     <>
       <Heading>Where this project runs</Heading>
@@ -344,6 +353,11 @@ function LocalPicker({ state }: { state: CloudState }) {
       {state.role === 'standby' && state.blocked && (
         <p className="border-t border-border/60 px-3 py-1.5 font-sans text-[12px] text-muted-foreground">
           {state.blocked}
+        </p>
+      )}
+      {away && (
+        <p className="border-t border-border/60 px-3 py-1.5 font-sans text-[12px] text-muted-foreground">
+          {away}
         </p>
       )}
       {error && <p className="px-3 pb-2 font-sans text-[12px] text-error">{error}</p>}

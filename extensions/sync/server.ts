@@ -9,6 +9,7 @@ import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { startedBy } from '../../cloud/protocol.ts'
 import type { Transition } from '../../cloud/protocol.ts'
 import type { Project } from '../../cloud/directory.ts'
 import { cloudConfig } from '../cloud/config.ts'
@@ -163,6 +164,7 @@ async function local(deps: SyncDeps, home: Home): Promise<LocalProject & { key?:
     ...(state?.status ? { status: state.status } : {}),
     ...(state?.sync !== undefined ? { sync: state.sync } : {}),
     missing: state?.missing ?? [],
+    ...(state?.login ? { login: state.login } : {}),
     stale,
     keptRefs,
   }
@@ -231,7 +233,8 @@ function find(projects: FleetProject[], name: string) {
 
 /**
  * Move `project` to `to`, or here when `to` is absent or this machine: here through the local project's `moveHere`,
- * elsewhere through the cloud. `force` is sent only when given.
+ * elsewhere through the cloud's bearer route; both record @sync as the move's initiator. `force` is sent only when
+ * given.
  */
 export async function move(
   deps: SyncDeps,
@@ -243,13 +246,10 @@ export async function move(
   if (!input.to || input.to === current.machine) {
     if (!project.local?.url)
       throw new Error(`${project.name} has no running project home on this machine`)
-    const { id } = await localAction<{ id: string }>(
-      deps,
-      project.local.url,
-      'cloud',
-      'moveHere',
-      force,
-    )
+    const { id } = await localAction<{ id: string }>(deps, project.local.url, 'cloud', 'moveHere', {
+      ...force,
+      by: 'sync',
+    })
     return { id, key: project.key, target: current.machine, local: true }
   }
   const { id } = await cloudRoute<{ id: string }>(deps, '/sync/move', {
@@ -330,8 +330,9 @@ export function createWatcher(
 }
 export const moveText = ({ project, machine, transition: moved }: MoveEnded) => {
   const outcome = ended(moved) === 'done' ? 'finished' : `failed: ${moved.error}`
+  const by = startedBy(moved) ? `, ${startedBy(moved)},` : ''
   return [
-    `Move of ${project.name} (${project.key || project.root}) from ${moved.from ?? 'a free lease'} to ${moved.target} ${outcome}.`,
+    `Move of ${project.name} (${project.key || project.root}) from ${moved.from ?? 'a free lease'} to ${moved.target}${by} ${outcome}.`,
     `This machine: ${machine}.`,
     ...moved.steps.map(
       (step) => `- ${step.name}: ${step.state}${step.detail ? ` · ${step.detail}` : ''}`,
@@ -381,6 +382,7 @@ export const demoFleet = (userHome: string): Fleet => ({
         id: 'demo',
         target: 'rog',
         from: 'haza-pc',
+        by: 'cloud',
         step: 'download',
         steps: [
           {
@@ -411,6 +413,7 @@ export const demoFleet = (userHome: string): Fleet => ({
         role: 'standby',
         status: 'on',
         missing: ['OPENAI_API_KEY'],
+        login: { provider: 'anthropic', ok: true },
         stale: ['state.stale-2026-10-18T11:01:59.676Z.sqlite'],
         keptRefs: [],
       },
@@ -433,6 +436,7 @@ export const demoFleet = (userHome: string): Fleet => ({
           conversations: { synced: 120, total: 537 },
         },
         missing: [],
+        login: { provider: 'anthropic', ok: false },
         stale: [],
         keptRefs: ['ultimate-moved/7f3e/ultimate/draft'],
       },
@@ -528,7 +532,7 @@ export default function sync(host: ExtensionHost) {
         // Reads only: the directory, local cloud state, files and refs.
         replay: 'safe',
         description:
-          'Every machine and project: writer, standbys, the move in flight, and this machine’s local view of each project (role, sync progress, missing secrets, stale databases, kept ultimate-moved refs).',
+          'Every machine and project: writer, standbys, the move in flight, and this machine’s local view of each project (role, sync progress, missing secrets, model login, stale databases, kept ultimate-moved refs).',
         parameters: Type.Object({}),
         async execute() {
           const value = host.faux ? demoFleet(host.userHome) : await fleet(deps)
