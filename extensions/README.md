@@ -45,6 +45,10 @@ Every extension folder is on by default, built-in, user or project: adding the f
 with `{ "extensions": { "disable": ["hello"] } }` in `~/.ultimate/settings.json` (this machine) or
 `<project>/.ultimate/settings.json` (this project), and back on with `extensions.enable`. Settings layer defaults →
 machine → project; later layers win. Settings changes apply live without a restart; unknown names produce a notice.
+A core-tier extension (`export const tier = 'core'` in its `api.ts`, such as conversations, workspaces, subagents,
+lineage, board and sidebar) stays on whatever the settings say, and depends only on other core-tier extensions: an
+optional extension plugs into it through a point or an event, never the other way round (lint `core-tier-deps`; see
+[Core tier](../docs/extensions.md#core-tier)).
 
 The `parallel` web tools read their key from `secrets`. Secrets are user-global, not project state.
 

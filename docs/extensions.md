@@ -33,12 +33,47 @@ a token once with `defineEvent<Data>('<extension>.<event>', { version? })` from 
 Each distinct `host.notice` message of a facet is also recorded as an `ultimate.notice` event while storage is open.
 Keep events few and small: they are history.
 
-The events today: `lineage.branched` and `lineage.rooted` (conversations titles the new conversation) and
-`workspaces.landed` (lineage notes the submitter's tree root). Something the user must see exactly once and that
-feeds the result the owner reports, like the lander's deploy handoff, stays with its owner, idempotent by request id.
+The events today: `lineage.branched` and `lineage.rooted` (lineage has conversations mark the intent title as
+generated), `workspaces.landed` (lineage notes the submitter's tree root), `board.asked` (questions extracts the
+message's answer card) and `models.login-changed` (health resets the provider's record). Something the user must see
+exactly once and that feeds the result the owner reports, like the lander's deploy handoff, stays a call, idempotent by
+request id; when it calls up the layering, it goes through an extension point (below).
 `host.harness().subscribeCommits` remains for watching Pi's own records (entries, tasks, submissions, conversation
 records, usage and live documents), which are no domain events; each such watcher says so in a comment above it. Do
 not invent an event only to replace one.
+
+## Core tier
+
+The core tier is the fixed heart of Ultimate that every other extension may rely on. An extension joins it with one
+line in its `api.ts`, `export const tier = 'core'` (`coreTier` in `shared/extension-api.ts`); nothing in `server/`
+names them. Discovery reads the line: a core-tier extension stays enabled whatever `extensions.disable` says (the
+ignored entry becomes an extension diagnostic), and `ExtensionInfo.core` marks it, so onboarding locks its switch.
+
+Today's core tier: agent, prompt, coding-tools, conversations, models, documents, notices, secrets, theme, surfaces,
+workspaces, subagents, lineage, board, onboarding (the first run and @ultimate's setup cards need it) and sidebar.
+
+Dependencies point one way. A core-tier extension imports (runtime or type), needs and wants only core-tier
+extensions; lint's `core-tier-deps` enforces the imports, and the import graph and the catalogue have no cycles. The
+core layers, lowest first, each depending only on layers below it:
+
+1. prompt, coding-tools, documents, notices, secrets, theme, surfaces: stand alone.
+2. models.
+3. conversations: titles, summaries, overview, concluding; `ConversationRef`, `FeatureTag`, `AgentMark`.
+4. workspaces: worktrees and the lander.
+5. subagents: child conversations and standing agents.
+6. lineage: roots, branches, tallies, notes.
+7. board: messages and the `branch` tool.
+8. onboarding and agent.
+9. sidebar: the sidebar and the @ultimate button, the UI that brings the core together.
+
+Where a lower extension needs something a higher one knows, it declares the contract and the higher one fills it:
+server extension points (`conversations.trees` and `conversations.release` from conversations, `workspaces.handoff`
+from workspaces), web points (`conversations.phase`, `conversations.task`, `conversations.unsummarized`,
+`board.message-answers`, `board.answer-waits`, `lineage.empty-root`), or durable events (`board.asked`,
+`models.login-changed`). Optional extensions plug into the core the same way: phase, plan and questions provide
+points and react to events; the core never imports them. A web point is `definePoint` in the owner's `ui.tsx`,
+rendered with `<Provided>` and filled by `provides` in another facet (see
+[Talking to other extensions](../extensions/README.md#the-browser-side-refsts-and-uitsx)).
 
 ## Extension APIs
 
