@@ -132,6 +132,32 @@ export class ReplicaStore {
     this.put('metadata', 7, value)
     return true
   }
+  /**
+   * End a running transition `machine` takes part in as failed with "<machine> disconnected", unless it is `keep`, the
+   * one its hello says it still takes part in. Its target closing its last socket ends it (`closing`). So does a hello
+   * from either end without it: the target, or the writer it waits for while that still holds the lease (a releasing
+   * writer reconnects naming it; a restarted one does not). True when it ended one.
+   */
+  abandon(machine: string, keep?: string, closing = false): boolean {
+    const transition = this.transition()
+    const involved =
+      transition?.target === machine ||
+      (!closing && transition?.from === machine && this.lease()?.machine === machine)
+    if (
+      !transition ||
+      !involved ||
+      transition.id === keep ||
+      transition.error ||
+      // A claim that won is no stale transition, even when its reply was lost.
+      this.lease()?.machine === transition.target
+    )
+      return false
+    const error = `${machine} disconnected`
+    const step = transition.steps.find((item) => item.state === 'running')
+    if (step) Object.assign(step, { state: 'failed', detail: error })
+    this.put('metadata', 7, { ...transition, error, cancellable: false })
+    return true
+  }
   /** The writer's drain progress shows as the handover step's detail of the transition to `by`. */
   draining(by: string, tasks: number): boolean {
     const transition = this.transition()

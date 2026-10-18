@@ -67,6 +67,19 @@ const hello = (overrides: Partial<Hello> = {}): Hello => ({
   secrets: [],
   ...overrides,
 })
+/** The laptop preparing a move, downloading. */
+const running = (id: string): Transition => ({
+  id,
+  target: 'laptop',
+  from: 'test',
+  step: 'download',
+  steps: [
+    { name: 'fetch', state: 'done' },
+    { name: 'download', state: 'running' },
+  ],
+  cancellable: true,
+  startedAt: 1,
+})
 function worker(online = false) {
   const instance = Object.assign(Object.create(SharedReplica.prototype) as SharedReplica, {
     store: replica(),
@@ -571,6 +584,53 @@ describe('project replica sockets', () => {
     expect(instance.store.transition()).toBeDefined()
     laptop.receive({ type: 'transition', value: null })
     expect(instance.store.transition()).toBeUndefined()
+  })
+
+  it('fails a target transition when the target goes away or comes back without it', () => {
+    const { instance, connect } = shared()
+    const writer = connect()
+    writer.receive(hello())
+    const failed = {
+      error: 'laptop disconnected',
+      cancellable: false,
+      steps: [
+        { name: 'fetch', state: 'done' },
+        { name: 'download', state: 'failed', detail: 'laptop disconnected' },
+      ],
+    }
+    // Its last socket closing ends it; a second socket of the same machine keeps it.
+    const laptop = connect()
+    laptop.receive(hello({ machine: 'laptop' }))
+    laptop.receive({ type: 'transition', value: running('move-1') })
+    const second = connect()
+    second.receive(hello({ machine: 'laptop', transition: 'move-1' }))
+    laptop.socket.readyState = WebSocket.CLOSED
+    instance.webSocketClose(laptop.machine)
+    expect(instance.store.transition()?.error).toBeUndefined()
+    second.socket.readyState = WebSocket.CLOSED
+    instance.webSocketClose(second.machine)
+    expect(instance.store.transition()).toMatchObject(failed)
+    expect(writer.sent().at(-1)).toMatchObject({ role: 'writer', transition: failed })
+    // A hello that names another transition, or none, ends the stored one.
+    const back = connect()
+    back.receive(hello({ machine: 'laptop' }))
+    back.receive({ type: 'transition', value: running('move-2') })
+    connect().receive(hello({ machine: 'laptop' }))
+    expect(instance.store.transition()).toMatchObject({ id: 'move-2', ...failed })
+    // The writer it waits for may reconnect while releasing, naming it, and close sockets on the way; a writer that
+    // comes back without it restarted and keeps its lease.
+    const target = connect()
+    target.receive(hello({ machine: 'laptop', transition: 'move-3' }))
+    target.receive({ type: 'transition', value: running('move-3') })
+    writer.socket.readyState = WebSocket.CLOSED
+    instance.webSocketClose(writer.machine)
+    connect().receive(hello({ transition: 'move-3' }))
+    expect(instance.store.transition()?.error).toBeUndefined()
+    connect().receive(hello())
+    expect(instance.store.transition()).toMatchObject({
+      id: 'move-3',
+      error: 'test disconnected',
+    })
   })
 
   it('answers /api/cloud itself while the writer is online, and forwards moves and cancels to the target', async () => {

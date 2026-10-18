@@ -295,6 +295,32 @@ export async function host(
   return { name, child, url, home, output: () => output }
 }
 
+/**
+ * Kill `machine` and every process below it at once (supervisor, core, namespace wrappers), as a power cut would:
+ * nothing gets to clean up or release.
+ */
+export async function crash(machine: Host) {
+  const table = execFileSync('ps', ['-eo', 'pid=,ppid='], { encoding: 'utf8' })
+    .trim()
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/).map(Number))
+  const tree = [machine.child.pid!]
+  for (let index = 0; index < tree.length; index++)
+    for (const [pid, parent] of table) if (parent === tree[index]) tree.push(pid)
+  const exited =
+    machine.child.exitCode === null && machine.child.signalCode === null
+      ? once(machine.child, 'exit')
+      : undefined
+  for (const pid of tree.toReversed()) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // It exited between the listing and the kill.
+    }
+  }
+  await exited
+}
+
 /** A random secret value. */
 export const secretValue = () => randomBytes(16).toString('hex')
 

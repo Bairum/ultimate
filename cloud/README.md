@@ -141,11 +141,26 @@ interface Transition {
 
 The replica keeps the latest transition, running or ended, accepting it only from its target's socket, and sends it in `role` (`transition`) to every socket, the writer's too, and in the project's Directory row. While the writer drains for a move, its `release-waiting { by, tasks }` sets the handover step's detail to `finishing N runs`. A failed or cancelled transition ends a writer's drain, and it keeps the project. A missing-secrets failure of `checks` (`error: 'Missing secrets: A, B'`) can be retried with `force`.
 
+A transition does not outlive the machines in it. When its target's last socket closes, or the target says hello naming another transition or none (`hello.transition`), the replica ends it as failed with `<target> disconnected`. So does a hello from the writer it waits for, while that writer still holds the lease, that does not name it: a releasing writer reconnects naming the transition, a restarted one does not. A transition whose claim won is never failed this way, even when its reply was lost. The target aborts when the cloud ends its transition, and a draining writer stops and keeps the project.
+
 The project API answers three routes itself, before any request goes to the machine, behind the same Access check as every `/p/*` path:
 
 - `GET /api/cloud`: `{ machines: [{ machine, role: 'writer' | 'standby', connected, root, lastSeen, missingSecrets }], lease: { machine, epoch, root, online, snapshot? } | null, transition: Transition | null }`. `missingSecrets` are the writer's secret names a standby lacks.
 - `POST /api/cloud/move { machine, force? }`: sends `{ type: 'move-to', id, force? }` to that machine's standby socket and answers 202 `{ id }`; 409 `{ error: 'not connected' }` without one, `runs there already` for the writer.
 - `POST /api/cloud/cancel`: sends `{ type: 'cancel', id }` to the running transition's target and answers 202 `{ id }`; 409 when nothing can be cancelled or the target is not connected.
+
+### Guarantees
+
+- **One authority.** The project's Durable Object is the single authority for who writes: a strongly consistent lease whose epoch changes only by compare-and-swap (`claim` names the epoch it takes over, `release` the one it frees), and the store of the latest transition. Only the lease holder's data is applied.
+- **Inside the writer** Pi Durable's guarantees hold: conversations, entries, tasks and documents are committed to its SQLite storage before anything is shown, and a crash resumes from the last checkpoint.
+- **The move** is a state machine of its own. Its durable points are the Durable Object's lease, and on the machines `standby.json` (storage stays closed), `cloud-lease.json` (the epoch held, and the snapshot and hash of the last release) and `cloud-claim.json` (a claim in flight: the epoch claimed, the snapshot, its download and the hash to open). The claim intent is written before `claim` is sent; a machine with one names the claimed epoch + 1 in its hello.
+- **What each crash recovers to:**
+  - a target crashed while preparing (fetching, installing, checking, waiting for the handover, downloading): its transition fails, the holder keeps the lease, and the restarted target is an ordinary standby. An owed install runs again, and a download without a claim is removed on start.
+  - a target crashed after sending `claim`: the restarted target finishes the claim when the cloud names it the writer at the claimed epoch + 1, installing its verified download (fetched again when gone), and otherwise drops the download and the intent and may claim again.
+  - a holder crashed during its release, before `release` reached the cloud: it still holds the lease and resumes as the writer of its own database. After it: the lease is free with the snapshot, and the holder, on standby, resumes with no download since its database is that snapshot.
+  - a standby named the writer without an intent opens its own database only when it is the writer's state at that epoch (its lease file's epoch, the last snapshot, or a project it just registered); otherwise it installs the last snapshot first.
+- **Never lost:** no step deletes a database; a replaced one is parked as `state.stale-<time>.sqlite`. Every step is safe to run again: fetch only fast-forwards, install is owed until it succeeds, downloads are verified before they are renamed into place, branches are never forced, and claims compare and swap.
+- **Not guaranteed:** taking the lease from an offline holder. A holder that crashed mid-release and never returns keeps the lease until it does.
 
 ## Live and offline API
 

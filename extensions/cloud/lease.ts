@@ -12,9 +12,9 @@
 //
 // Lifecycle switches never run inside a socket handler: roles are handled after a `setTimeout(0)`, one switch at a time.
 import { execFile } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { createReadStream, existsSync } from 'node:fs'
+import { readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
@@ -96,6 +96,17 @@ interface LeaseFile {
   snapshot?: string
   snapshotHash?: string
 }
+/**
+ * `cloud-claim.json`, written before `claim` is sent: the lease epoch claimed, the snapshot it takes over, its download
+ * (absent when the local database is that snapshot) and the hash of the database it opens as the writer.
+ */
+interface ClaimIntent {
+  key: string
+  epoch: number
+  snapshot: { id: string; epoch: number }
+  download?: string
+  hash: string
+}
 
 /** Move a SQLite database with its `-wal` and `-shm`; never deletes one. */
 async function moveDatabase(from: string, to: string) {
@@ -122,6 +133,7 @@ const runs = (count: number) => `${count} running ${count === 1 ? 'task' : 'task
 export function startLease(host: ExtensionHost, options: LeaseOptions, deps: LeaseDeps) {
   const { identity } = options
   const leasePath = join(host.home, 'cloud-lease.json')
+  const claimPath = join(host.home, 'cloud-claim.json')
   const standbyPath = join(host.home, 'standby.json')
   const database = join(host.home, 'state.sqlite')
   const execute = deps.exec ?? exec
@@ -142,6 +154,8 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   let moving: { transition: Transition; abort: AbortController } | undefined
   /** The last move this machine ran, ended or not; the cloud's copy may lag behind it. */
   let ran: Transition | undefined
+  /** The transition this writer releases for: its hellos name it, so the cloud keeps that transition alive. */
+  let releasingFor: string | undefined
   /** A move's handover waits for the free lease. */
   let freed: PromiseWithResolvers<SyncState> | undefined
   /** Roles seen by a draining writer, which stops when the move it drains for ends. */
@@ -176,6 +190,90 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       // No lease file yet: nothing is known about the local database.
       return {}
     }
+  }
+  const readIntent = async (): Promise<ClaimIntent | undefined> => {
+    try {
+      const intent = JSON.parse(await readFile(claimPath, 'utf8')) as ClaimIntent
+      return intent.key === identity.key ? intent : undefined
+    } catch {
+      // No claim in flight.
+      return undefined
+    }
+  }
+  /** Drop a claim that did not win, with its download. */
+  const dropIntent = async (intent: ClaimIntent) => {
+    if (intent.download) await rm(intent.download, { force: true })
+    await rm(claimPath, { force: true })
+  }
+  // A previous process may have died mid-snapshot or mid-download: only a claim in flight keeps its download.
+  const tidy = (async () => {
+    const intent = await readIntent()
+    for (const name of await readdir(host.home)) {
+      const path = join(host.home, name)
+      if (name.startsWith('.snapshot-')) await rm(path, { recursive: true, force: true })
+      else if (name.startsWith('snapshot-') && path !== intent?.download)
+        await rm(path, { force: true })
+    }
+  })().catch(report)
+  /** Open storage as the writer at `epoch`, installing `download` in place of any local database. */
+  const openAsWriter = async (epoch: number, download?: string) => {
+    await writeJson(leasePath, { key: identity.key, epoch } satisfies LeaseFile)
+    await host.activate(async (path) => {
+      if (!download) return
+      if (suffixes.some((suffix) => existsSync(path + suffix)))
+        await moveDatabase(path, staleName(path))
+      await rename(download, path)
+    })
+    await rm(claimPath, { force: true })
+  }
+  const fetchSnapshot = async (
+    id: string,
+    signal?: AbortSignal,
+    onProgress?: (done: number, total: number) => void,
+  ) => {
+    const key = await secret()
+    if (!key) throw new Error(missingKey)
+    return deps.snapshots.downloadSnapshot({
+      url: options.url,
+      token: options.token,
+      secret: key,
+      key: identity.key,
+      id,
+      dir: host.home,
+      repo: host.projectRoot,
+      signal,
+      progress: onProgress,
+    })
+  }
+  /**
+   * Finish or drop a claim a previous process left in flight. It won when the cloud names this machine the writer at
+   * the claimed epoch + 1: install its download (fetched again when it is gone or does not verify, unless the local
+   * database already is that snapshot), then open storage. Otherwise the download and the intent go. True: it opened.
+   */
+  /**
+   * `path` is the database hashing to `hash`: a download or its installed copy byte for byte (the manifest hashes the
+   * plaintext), or a database whose content `databaseHash` finds unchanged.
+   */
+  const holds = async (path: string, hash: string) => {
+    if (!existsSync(path)) return false
+    const bytes = createHash('sha256')
+    for await (const chunk of createReadStream(path)) bytes.update(chunk as Buffer)
+    return bytes.digest('hex') === hash || (await deps.snapshots.databaseHash(path)) === hash
+  }
+  const recover = async (intent: ClaimIntent, state: SyncState) => {
+    if (state.role !== 'writer' || state.epoch !== intent.epoch + 1) {
+      await dropIntent(intent)
+      return false
+    }
+    let download = intent.download
+    if (download && !(await holds(download, intent.hash))) {
+      await rm(download, { force: true })
+      download = undefined
+    }
+    if (!download && !(await holds(database, intent.hash)))
+      download = (await fetchSnapshot(intent.snapshot.id)).database
+    await openAsWriter(state.epoch, download)
+    return true
   }
   /** The local database is the snapshot `snapshot`: the last release recorded it and its content is unchanged. */
   const isSnapshot = async (snapshot: SyncState['snapshot']) => {
@@ -227,6 +325,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         cancel: (id) => {
           if (moving?.transition.id === id) cancel()
         },
+        transition: () => moving?.transition.id ?? releasingFor,
       },
     )
     sync = current
@@ -267,16 +366,25 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       else if (!state.free || state.epoch !== pendingClaim.epoch) pendingClaim.done.resolve(false)
       return
     }
-    // A preparing move decides for itself; it only waits for the lease to be freed.
+    // A preparing move decides for itself; it only waits for the lease to be freed, or ends when the cloud ended it.
     if (moving) {
-      if (state.free) freed?.resolve(state)
+      const reported = state.transition
+      if (reported?.id === moving.transition.id && reported.error)
+        moving.abort.abort(new Error(reported.error))
+      else if (state.free) freed?.resolve(state)
       return
     }
     if (closed) return
     void queue(() => decide(state, connection)).catch(report)
   }
   const decide = async (state: SyncState, connection: typeof sync) => {
+    await tidy
     if (sync !== connection) return
+    const intent = await readIntent()
+    // Serving after a claim means it won and opened; only its intent was left.
+    if (intent && mode === 'serving') await dropIntent(intent)
+    // A claim that did not win leaves this machine an ordinary standby, which may claim again.
+    if (intent && mode === 'standby' && (await recover(intent, state))) return
     if (mode === 'serving' && state.role === 'standby') {
       const { writer, free } = state
       await host.deactivate(
@@ -299,10 +407,26 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       return
     }
     if (mode !== 'standby') return
-    // The cloud names this machine the writer while it is on standby: a release that never happened.
+    // The cloud names this machine the writer while it is on standby: a release that never happened, or a project
+    // this machine just registered. It opens its own database only when that is the writer's state at this epoch.
     if (state.role === 'writer') {
-      await host.activate()
-      return
+      const lease = await readLeaseFile()
+      if (
+        (lease.key === identity.key && lease.epoch === state.epoch) ||
+        !state.snapshot ||
+        (await isSnapshot(state.snapshot))
+      )
+        return openAsWriter(state.epoch!)
+      // Otherwise the last snapshot is the best state there is, installed as a claim would.
+      const { database: download, manifest } = await fetchSnapshot(state.snapshot.id)
+      await writeJson(claimPath, {
+        key: identity.key,
+        epoch: state.epoch! - 1,
+        snapshot: state.snapshot,
+        download,
+        hash: manifest.database.sha256,
+      } satisfies ClaimIntent)
+      return openAsWriter(state.epoch!, download)
     }
     const claimNow = autoClaim && !!state.free
     autoClaim = false
@@ -480,25 +604,20 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       const snapshot = state.snapshot
       if (!snapshot) throw new Error('The project has no snapshot to move yet')
       let keptRefs: string[] = []
-      if (await isSnapshot(snapshot)) end('skipped', 'This machine has the snapshot')
-      else {
-        const result = await deps.snapshots.downloadSnapshot({
-          url: options.url,
-          token: options.token,
-          secret: key,
-          key: identity.key,
-          id: snapshot.id,
-          dir: host.home,
-          repo: host.projectRoot,
-          signal,
-          progress: (done, total) => {
-            download.done = done
-            download.total = total
-            publish(true)
-          },
+      // The database this machine opens as the writer: the local one, or the download.
+      let hash: string
+      if (await isSnapshot(snapshot)) {
+        hash = (await readLeaseFile()).snapshotHash!
+        end('skipped', 'This machine has the snapshot')
+      } else {
+        const result = await fetchSnapshot(snapshot.id, signal, (done, total) => {
+          download.done = done
+          download.total = total
+          publish(true)
         })
         downloaded = result.database
         keptRefs = result.keptRefs
+        hash = result.manifest.database.sha256
         end('done')
       }
 
@@ -511,6 +630,14 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       begin('claim')
       transition.cancellable = false
       publish()
+      // The intent outlives a crash from here on: a restart finishes the claim it won or drops the one it lost.
+      await writeJson(claimPath, {
+        key: identity.key,
+        epoch: state.epoch!,
+        snapshot,
+        ...(downloaded ? { download: downloaded } : {}),
+        hash,
+      } satisfies ClaimIntent)
       const done = Promise.withResolvers<boolean>()
       pendingClaim = { epoch: state.epoch!, done }
       const won = sync!.send({ type: 'claim', epoch: state.epoch! }) && (await done.promise)
@@ -519,22 +646,14 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       end('done', `Runs here from epoch ${state.epoch! + 1}`)
       lastError = undefined
       moving = undefined
-      const install = downloaded
-      await host.activate(async (path) => {
-        if (!install) return
-        if (suffixes.some((suffix) => existsSync(path + suffix)))
-          await moveDatabase(path, staleName(path))
-        await rename(install, path)
-      })
+      await openAsWriter(state.epoch! + 1, downloaded)
       return true
     } catch (error) {
-      const message = signal.aborted
-        ? 'Cancelled'
-        : error instanceof Error
-          ? error.message
-          : String(error)
-      // Only the download goes; the holder and the local database stay as they are.
+      const reason: unknown = signal.aborted ? signal.reason : error
+      const message = reason instanceof Error ? reason.message : String(reason)
+      // Only the download and the claim intent go; the holder and the local database stay as they are.
       if (downloaded) await rm(downloaded, { force: true })
+      await rm(claimPath, { force: true })
       if (current) {
         current.state = 'failed'
         current.detail = message
@@ -688,7 +807,12 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         host.notice(`The move to ${by} stopped; this machine keeps the project`)
         return false
       }
-      return release({ reason: `Moved to ${by}` })
+      releasingFor = id
+      try {
+        return await release({ reason: `Moved to ${by}` })
+      } finally {
+        releasingFor = undefined
+      }
     })
 
   /** The process stops: release within the supervisor's shutdown, or keep the lease and open normally next time. */

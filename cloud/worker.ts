@@ -264,7 +264,9 @@ function validHello(hello: Hello, { key, alias }: Attachment) {
     (hello.epoch === undefined || (Number.isSafeInteger(hello.epoch) && hello.epoch >= 1)) &&
     typeof hello.history === 'boolean' &&
     Array.isArray(hello.secrets) &&
-    hello.secrets.every((name) => typeof name === 'string')
+    hello.secrets.every((name) => typeof name === 'string') &&
+    (hello.transition === undefined ||
+      (typeof hello.transition === 'string' && /^[\w-]{1,64}$/.test(hello.transition)))
   )
 }
 
@@ -311,10 +313,11 @@ export class SharedReplica {
         socket.send(JSON.stringify(this.store.role('standby', online)))
   }
   /** Tell every machine, the writer too, its role again: the latest transition travels with it. */
-  broadcast() {
-    const online = this.sockets().length > 0
+  broadcast(closing?: MachineSocket) {
+    const online = this.sockets().some((socket) => socket !== closing)
     for (const socket of this.admitted())
-      socket.send(JSON.stringify(this.store.role(attachment(socket)!.role!, online)))
+      if (socket !== closing)
+        socket.send(JSON.stringify(this.store.role(attachment(socket)!.role!, online)))
   }
   /** The admitted standby socket of `machine`, if it is connected. */
   standby(machine: string) {
@@ -395,6 +398,8 @@ export class SharedReplica {
           socket.close(PROJECT_MISMATCH, 'invalid hello')
           return
         }
+        // A target that comes back without its transition stopped preparing it.
+        const abandoned = this.store.abandon(message.machine, message.transition)
         const replies = this.store.hello(
           { ...message, key: held.key },
           this.sockets().some((other) => other !== socket),
@@ -411,7 +416,8 @@ export class SharedReplica {
           for (const stream of this.streams) stream.close()
         }
         for (const reply of replies) socket.send(JSON.stringify(reply))
-        if (role === 'writer') this.announce()
+        if (abandoned) this.broadcast()
+        else if (role === 'writer') this.announce()
         this.presence()
         return
       }
@@ -493,7 +499,13 @@ export class SharedReplica {
     const held = attachment(socket)
     if (!held?.machine) return
     this.store.seen(held.machine)
-    if (held.role === 'writer' && !this.sockets().some((other) => other !== socket))
+    // The target's last socket closing ends its running transition, so nobody drains or waits for it.
+    const gone =
+      !this.admitted().some(
+        (other) => other !== socket && attachment(other)?.machine === held.machine,
+      ) && this.store.abandon(held.machine, undefined, true)
+    if (gone) this.broadcast(socket)
+    else if (held.role === 'writer' && !this.sockets().some((other) => other !== socket))
       this.announce(socket)
     this.presence(socket)
   }

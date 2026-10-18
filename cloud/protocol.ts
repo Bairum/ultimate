@@ -152,6 +152,8 @@ export type Hello = {
   history: boolean
   /** Names, never values, of the secrets in this machine's store. */
   secrets: string[]
+  /** The transition this machine is preparing, if any; another one targeting it has ended. */
+  transition?: string
 }
 
 export type MachineMessage =

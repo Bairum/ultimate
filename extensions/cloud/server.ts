@@ -93,6 +93,8 @@ export interface SyncHooks {
   moveTo?(id: string, force: boolean): void
   /** The cloud UI stops transition `id`. */
   cancel?(id: string): void
+  /** The transition this machine prepares, named in hello so the cloud keeps it. */
+  transition?(): string | undefined
 }
 
 /** One outbound connection; injected transport keeps sync tests entirely in process. */
@@ -124,6 +126,21 @@ export function startSync(
         : undefined
     } catch {
       // No lease yet, or an unreadable one: hello names no epoch, and the writer's role rewrites it.
+      return undefined
+    }
+  }
+  /** A claim in flight (`lease.ts`) names the epoch it wins, so the replica knows this machine as that writer. */
+  const claimEpoch = async () => {
+    try {
+      const intent = JSON.parse(await readFile(join(host.home, 'cloud-claim.json'), 'utf8')) as {
+        key?: unknown
+        epoch?: unknown
+      }
+      return intent.key === identity.key && Number.isSafeInteger(intent.epoch)
+        ? (intent.epoch as number) + 1
+        : undefined
+    } catch {
+      // No claim in flight.
       return undefined
     }
   }
@@ -525,9 +542,10 @@ export function startSync(
           build: host.build().id,
           uiBuild: builds?.current(),
           port: Number(new URL(host.system().process.url).port),
-          epoch: await readLease(),
+          epoch: (await claimEpoch()) ?? (await readLease()),
           history: await hasHistory(),
           secrets: await secretNames(),
+          ...(hooks.transition?.() ? { transition: hooks.transition() } : {}),
         }),
       ),
     )
@@ -537,7 +555,8 @@ export function startSync(
         if (message.type === 'role')
           enqueue(async () => {
             const { type: _, ...given } = message
-            if (message.role === 'writer') await writeLease(message.epoch)
+            // On standby the lease module records the epoch once it opens storage as the writer.
+            if (message.role === 'writer' && serving) await writeLease(message.epoch)
             state = { key: identity.key, connected: true, ...given }
             hooks.role?.(state)
             // On standby nothing was sent, so a changed role needs no fresh hello.
