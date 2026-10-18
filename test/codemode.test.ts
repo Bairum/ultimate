@@ -46,10 +46,9 @@ async function fixture() {
   // The copy reaches the definitions module in the checkout, as `ultimate.agents()` reads them through it.
   await writeFile(
     join(ultimateRoot, 'extensions/codemode/server.ts'),
-    (await readFile(resolve('extensions/codemode/server.ts'), 'utf8')).replace(
-      "'../../lib/agents.ts'",
-      JSON.stringify(resolve('lib/agents.ts')),
-    ),
+    (await readFile(resolve('extensions/codemode/server.ts'), 'utf8'))
+      .replace("'../../lib/agents.ts'", JSON.stringify(resolve('lib/agents.ts')))
+      .replace("'../../lib/api-files.ts'", JSON.stringify(resolve('lib/api-files.ts'))),
   )
   const options = {
     ultimateRoot,
@@ -78,6 +77,9 @@ it('keeps codemode guidance without repeating top-level tool schemas', async () 
   expect(text).toContain('Use edit/write outside codemode')
   expect(text).toContain('filter to concise findings')
   expect(text).toContain('top-level tool schemas and rules')
+  expect(text).toContain(
+    'Discover extension contracts with ultimate.apis() and read one with ultimate.api(name); act on them through ultimate.action.',
+  )
   expect(text).toContain('Available: read, write, edit, bash')
   expect(text).not.toContain('declare const tools')
   const withRestart = await section.render(
@@ -184,6 +186,45 @@ it('calls extension actions with caller context and rejects missing or disabled 
   const disabled = await run(server, `return await ultimate.action('action-test', 'echo');`)
   expect(disabled.data.isError).toBe(true)
   expect(disabled.text).toContain('Unknown extension action: action-test/echo')
+})
+
+it('discovers extension contracts: summaries first, then one api.ts by name', async () => {
+  const { server, options } = await fixture()
+  const folder = join(options.projectRoot, '.ultimate/extensions/contract-test')
+  await mkdir(folder, { recursive: true })
+  const source =
+    '/**\n * Contract test: a fixture with a documented contract. It offers nothing else.\n */\nexport type Service = { /** Says hi. */ hi(): string }\n'
+  await writeFile(join(folder, 'api.ts'), source)
+  await writeFile(
+    join(folder, 'server.ts'),
+    "import { defineExtension } from '@earendil-works/pi-durable'; export default defineExtension({ name: 'contract-test' })",
+  )
+  server.vite.watcher.emit('add', join(folder, 'server.ts'))
+  await until(() =>
+    server.extensions.info().some((entry) => entry.name === 'contract-test' && entry.enabled),
+  )
+  const result = await run(
+    server,
+    `const apis = await ultimate.apis();
+    let unknown;
+    try { await ultimate.api('coding-tools') } catch (error) { unknown = error.message }
+    return { apis, source: await ultimate.api('contract-test'), unknown };`,
+  )
+  const value = result.data.details.value as {
+    apis: { name: string; summary: string }[]
+    source: string
+    unknown: string
+  }
+  // The fixture's built-ins bring their own contracts; each has a summary.
+  expect(value.apis).toContainEqual({
+    name: 'contract-test',
+    summary: 'Contract test: a fixture with a documented contract.',
+  })
+  for (const api of value.apis) expect(api.summary).not.toBe('')
+  expect(value.source).toBe(source)
+  expect(value.unknown).toMatch(
+    /^No enabled extension "coding-tools" with an api\.ts; known: .*\bcontract-test\b/,
+  )
 })
 
 it('reserves trust and secret writes for the UI while allowing normal actions', async () => {
