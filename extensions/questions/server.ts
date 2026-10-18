@@ -52,6 +52,16 @@ export const docs = [BoardQuestions]
 export type QuestionsService = {
   request(tx: Tx, message: BoardMessage): Promise<void>
 }
+/**
+ * An input or reset after @ultimate's asking answer ends its card, as its transcript shows it; an answer that is
+ * extracted replaces or clears the card itself.
+ */
+async function endFollowed(tx: Tx, conversation: ConversationId) {
+  const state = await tx.doc(BoardQuestions, ROOT_CONVERSATION_ID)
+  const reply = state.reply
+  if (reply?.conversation !== conversation) return
+  if (!(await currentAnswer(tx, conversation, reply.entry as EntryId))) delete state.reply
+}
 const open = (message: BoardMessage) =>
   message.to === 'user' && message.reply && message.state === 'delivered'
 async function stateFor(tx: Tx) {
@@ -280,7 +290,10 @@ export default function questionsExtension(host: ExtensionHost) {
       observe: async (task, runtime, ctx) => {
         const settled = await runtime.waitForTask(task.input.generation, ctx)
         if (settled.state.outcome.status !== 'completed') {
-          await runtime.commit(() => terminal, ctx)
+          await runtime.commit(async (tx) => {
+            await endFollowed(tx, runtime.conversationId)
+            return terminal
+          }, ctx)
           return
         }
         const answer = settled.state.outcome.result.entryId
@@ -300,7 +313,10 @@ export default function questionsExtension(host: ExtensionHost) {
             model?.role === 'assistant'
               ? model.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
               : ''
-          if (!text.trim()) return terminal
+          if (!text.trim()) {
+            await endFollowed(tx, runtime.conversationId)
+            return terminal
+          }
           return { status: 'running', checkpoint: { phase: 'extract', answer, text } }
         }, ctx)
       },

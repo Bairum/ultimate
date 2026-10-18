@@ -26,8 +26,10 @@ The root's `questions.board` document (conversation scope, latest history, initi
   hook creates one `questions.reply-extract` task per generation, owned by @ultimate's conversation, in the commit
   that advances `yielded`, so a replayed hook creates nothing twice. The task waits for the generation, confirms its
   answer settled a `pi.user` input, extracts, and writes only if that answer is still current (`currentAnswer`: no
-  later input, queued input, run or reset): questions replace `reply`, an empty result clears it. One slot is enough
-  because only @ultimate's latest answer can be answered; it cannot grow.
+  later input, queued input, run or reset): questions replace `reply`, an empty result clears it. A generation it does
+  not extract (an answer to a Board message, or one that failed) clears a `reply` that is no longer current, so the
+  title bar's waiting count ends with the card. One slot is enough because only @ultimate's latest answer can be
+  answered; it cannot grow.
 
 Reopening resumes durable work without repeating a memoized response or creating duplicate cards.
 

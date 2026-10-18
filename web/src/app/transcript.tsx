@@ -60,7 +60,7 @@ import {
 import { entryRenderers, messageItems } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary } from './boundary.tsx'
-import { chatRows } from './chat.ts'
+import { chatRows, runOf } from './chat.ts'
 import type { ChatPart, WorkRun } from './chat.ts'
 import { column } from './layout.ts'
 import { indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
@@ -339,15 +339,32 @@ function TranscriptEntries() {
   }, [loading])
   const shown = whole ? visible : visible.slice(-firstRows)
   const chat = useChat()
+  const keeps = (call: ToolCall) => !!chat?.(call, results.get(call.id)?.message)
   const rows: (ChatPart | WorkRun)[] = chat
-    ? chatRows(shown, chat)
+    ? chatRows(shown, keeps)
     : shown.map((entry) => ({ entry }))
-  // Reveal a stored row without the auto-follow animation overriding the jump; an older row needs every row first.
+  // Folded runs the reader or a reveal opened, by the key of their first part.
+  const [opened, setOpened] = useState<ReadonlySet<string>>(new Set())
+  const open = (key: string, value: boolean) =>
+    setOpened((keys) => {
+      const next = new Set(keys)
+      if (value) next.add(key)
+      else next.delete(key)
+      return next
+    })
+  // Reveal a stored row without the auto-follow animation overriding the jump; an older row needs every row first, and
+  // one in a folded run needs the run open.
   useEvent('ultimate:reveal-entry', (value) => {
     const target = value as { conversationId?: number; entryId?: number } | undefined
-    if (target?.conversationId !== id || !Number.isSafeInteger(target?.entryId)) return
-    if (!whole) flushSync(() => setWhole(true))
-    const element = contentRef.current?.querySelector(`[data-entry-id="${target?.entryId}"]`)
+    const entryId = target?.entryId
+    if (target?.conversationId !== id || entryId === undefined || !Number.isSafeInteger(entryId))
+      return
+    const run = chat && runOf(chatRows(visible, keeps), entryId)
+    flushSync(() => {
+      setWhole(true)
+      if (run) open(partKey(run.work[0]), true)
+    })
+    const element = contentRef.current?.querySelector(`[data-entry-id="${entryId}"]`)
     if (element) {
       stopScroll()
       element.scrollIntoView({ block: 'start' })
@@ -388,6 +405,8 @@ function TranscriptEntries() {
           >
             <WorkRow
               busy={busy}
+              onOpenChange={(value) => open(partKey(row.work[0]), value)}
+              open={opened.has(partKey(row.work[0]))}
               results={results}
               run={row}
               slots={slots}
@@ -429,25 +448,29 @@ const partKey = (part: ChatPart) =>
 function WorkRow({
   run,
   working,
+  open,
+  onOpenChange,
   results,
   slots,
   busy,
 }: {
   run: WorkRun
   working: boolean
+  open: boolean
+  onOpenChange: (open: boolean) => void
   results: Map<string, ToolResult>
   slots: Map<string, ToolSlot>
   busy: boolean
 }) {
   return (
-    <Collapsible className="group/work">
+    <Collapsible className="group/work" onOpenChange={onOpenChange} open={open}>
       <CollapsibleTrigger className="flex cursor-pointer items-center gap-1.5 font-mono text-[11px] text-muted-foreground/70 hover:text-muted-foreground">
         {working ? 'working' : 'worked'} · {run.steps} step{run.steps === 1 ? '' : 's'}
         <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/work:rotate-90" />
       </CollapsibleTrigger>
       <CollapsibleContent className="mt-3 flex flex-col gap-3 border-l border-border/70 pl-3">
         {run.work.map((part) => (
-          <div className="empty:hidden" key={partKey(part)}>
+          <div className="empty:hidden" data-entry-id={part.entry.id} key={partKey(part)}>
             <EntryView
               blocks={part.blocks}
               busy={busy}
@@ -550,7 +573,7 @@ const EntryView = memo(function EntryView({ entry, blocks, results, slots, busy 
   return entryRenderers(useExtensions(), entry.kind).reduce<ReactNode>(
     (inner, { extension, version, component: Renderer }) => (
       <ExtensionBoundary extension={extension} fallback={inner} key={extension} version={version}>
-        <Renderer core={inner} entry={entry} />
+        <Renderer blocks={blocks} core={inner} entry={entry} />
       </ExtensionBoundary>
     ),
     coreEntry(entry, results, slots, busy, blocks),

@@ -3,6 +3,7 @@ import { api, cn, useDocOf, useStore, useTasks, useUltimate } from '@/sdk'
 import type { UltimateActions } from '@/sdk'
 import { emptyBoard, waitingOnUser } from '../board/data.tsx'
 import type { BoardData } from '../board/data.tsx'
+import type { QuestionsBoard } from '../questions/open.tsx'
 import { useOverview } from './feature.tsx'
 
 /** Show @ultimate's standing conversation on the Agent surface; it starts branches and keeps the tallies. */
@@ -14,8 +15,12 @@ export async function talkToUltimate(
   actions.showSurface('agent')
 }
 
-/** How many of @ultimate's questions wait on the user's answer. */
-export const useWaitingOnUser = () => waitingOnUser(useDocOf<BoardData>(1, 'board') ?? emptyBoard)
+/** How many of @ultimate's messages and final answers wait on the user's answer. */
+export const useWaitingOnUser = () =>
+  waitingOnUser(
+    useDocOf<BoardData>(1, 'board') ?? emptyBoard,
+    useDocOf<QuestionsBoard>(1, 'questions.board'),
+  )
 
 /** @ultimate's dot: pulsing while it works, amber while questions wait on you, else muted. */
 export function UltimateDot({ working, waiting }: { working: boolean; waiting: number }) {

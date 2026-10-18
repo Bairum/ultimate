@@ -377,6 +377,21 @@ it("extracts @ultimate's final answers to typed input only, once per answer", as
   expect((await f.state())!.reply).toBeUndefined()
 })
 
+it("ends @ultimate's final-answer card once it answers a Board message instead", async () => {
+  const f = await fixture()
+  const id = await f.ultimate()
+  await f.type(id, 'ASK Keep it running?')
+  await f.settled()
+  expect((await f.state())!.reply?.conversation).toBe(id)
+  const { id: posted } = await boardActions.post({ to: `#${id}`, text: 'Branch done' }, f.action())
+  await until(
+    async () => (await f.log())!.messages.find((m) => m.id === posted)?.state === 'answered',
+  )
+  await f.settled()
+  expect(f.extract).toHaveBeenCalledTimes(1)
+  expect((await f.state())!.reply).toBeUndefined()
+})
+
 it("resumes an @ultimate answer's extraction on reopen without asking again", async () => {
   const f = await fixture()
   const id = await f.ultimate()

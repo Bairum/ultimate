@@ -338,17 +338,59 @@ describe('web extension registry', () => {
     })
     const report = vi.fn<(extension: string, error: unknown) => void>()
     const records = registry.getSnapshot()
-    expect(chatTools(records, { id: 7, label: 'agent', busy: false }, report)).toEqual(
-      new Set(['message', 'branch', 'workspace']),
-    )
-    expect(chatTools(records, { id: 3, label: 'agent', busy: false }, report)).toEqual(
-      new Set(['message', 'branch']),
-    )
+    const kept = (conversation: { id: number; label?: string }) => {
+      const keeps = chatTools(records, { ...conversation, busy: false }, report)!
+      return ['message', 'branch', 'workspace', 'bash'].filter((name) =>
+        keeps({ type: 'toolCall', id: name, name, arguments: {} }),
+      )
+    }
+    expect(kept({ id: 7, label: 'agent' })).toEqual(['message', 'branch', 'workspace'])
+    expect(kept({ id: 3, label: 'agent' })).toEqual(['message', 'branch'])
     expect(chatTools(records, { id: 3, busy: false }, report)).toBeUndefined()
     expect(chatTools(records, undefined, report)).toBeUndefined()
     expect(report).toHaveBeenCalledWith('c', new Error('broken'))
     registry.replace('b', { default: { chat: { tools: ['workspace'] } } })
     expect(registry.getSnapshot()[1]?.error).toBe('chat must be a { when, tools? } object')
+  })
+
+  it('keeps a call its test keeps, from its result, and counts a throwing test as no', async () => {
+    const registry = createRegistry()
+    await registry.setLoaders({
+      [path('a')]: async () =>
+        module({
+          chat: {
+            when: () => true,
+            tools: ['message', (call, result) => call.name === 'codemode' && !!result?.details],
+          },
+        }),
+      [path('b')]: async () =>
+        module({
+          chat: {
+            when: () => true,
+            tools: [
+              () => {
+                throw new Error('broken')
+              },
+            ],
+          },
+        }),
+    })
+    const report = vi.fn<(extension: string, error: unknown) => void>()
+    const keeps = chatTools(registry.getSnapshot(), { id: 1, busy: false }, report)!
+    const script = { type: 'toolCall' as const, id: 's', name: 'codemode', arguments: {} }
+    const result = {
+      role: 'toolResult' as const,
+      toolCallId: 's',
+      toolName: 'codemode',
+      content: [],
+      isError: false,
+      timestamp: 0,
+    }
+    expect(keeps(script)).toBe(false)
+    expect(keeps(script, result)).toBe(false)
+    expect(keeps(script, { ...result, details: { calls: [] } })).toBe(true)
+    expect(keeps({ ...script, name: 'message' })).toBe(true)
+    expect(report).toHaveBeenCalledWith('b', new Error('broken'))
   })
 
   it('lists message actions in discovery and contribution order, validating their shape', async () => {

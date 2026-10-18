@@ -96,7 +96,6 @@ type BoardMessage = {
   at: number // Unix milliseconds
   reply: boolean
   re?: number
-  kind?: string
   state: 'sent' | 'delivered' | 'answered' | 'failed'
   entry?: EntryId
   answer?: EntryId
@@ -119,20 +118,9 @@ Agents use the `message` tool instead. The prompt section is stable and lists re
 
 ## Service
 
-`host.use<BoardService>('board')` exposes:
-
-```ts
-record(tx: Tx, input: {
-  from: number | 'user'
-  to: number | 'user'
-  text: string
-  kind?: string
-  entry?: EntryId
-}): Promise<number>
-```
-
-It appends a delivered, one-way log item in the caller's transaction, without submitting an input or starting a run.
-Workspaces uses this for submission admission; landing reports do not append log items. Import the service type from `server.ts`.
+`host.use<BoardService>('board')` exposes `send`, a one-way message from a conversation (the lander's deploy
+handoff), and `answer`, the user's reply to an open message (the questions answer card). Landings and submissions
+append no log items. Import the service type from `server.ts`.
 
 ## UI
 
@@ -148,5 +136,7 @@ destination; unrelated answers show no board label.
 @ultimate's own conversation reads as a chat (the `chat` contribution): each run of tool calls and thinking folds into
 one “worked · N steps” row, while messages, branch starts, workspace outcomes, onboarding setup cards and answers stay. Its messages to you
 are bubbles on the left in its accent, their footer saying awaiting your reply, answered or one-way; an answer card
-mounts beneath the text (`ChatBubble` children). An answer that went back to the branches that asked folds to
-“replied to #id”.
+mounts beneath the text (`ChatBubble` children). A message @ultimate sent from a `codemode` script is a bubble too,
+found in the log by sender and text, beneath a quiet “sent with codemode” line that opens the script; the script stays
+folded while it runs. Once the bounded log has dropped a message, its bubble shows no state. An answer that went back
+to the branches that asked folds to “replied to #id”.

@@ -1,3 +1,4 @@
+import type { ToolResultMessage } from '@earendil-works/pi-ai'
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import {
   CheckIcon,
@@ -20,6 +21,7 @@ import {
   useConversations,
   useDocOf,
   useNow,
+  useTranscript,
   useUltimate,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
@@ -28,7 +30,16 @@ import { MessageQuestions } from '../questions/card.tsx'
 import { openAgentSource } from '../subagents/messages.tsx'
 import { useWorkspaceIndex } from '../workspaces/data.tsx'
 import { accentOf } from './accent.tsx'
-import { answeredMessages, emptyBoard, messageStatus, relativeTime } from './data.tsx'
+import {
+  answeredMessages,
+  emptyBoard,
+  messageStatus,
+  outgoingState,
+  relativeTime,
+  scriptMessage,
+  scriptMessages,
+  sentStatus,
+} from './data.tsx'
 import type { BoardData, BoardMessage } from './data.tsx'
 
 export function Address({ id }: { id: number | 'user' }) {
@@ -88,33 +99,27 @@ function Status({ message, perspective }: { message: BoardMessage; perspective: 
   return <span className={status === 'failed' ? 'text-destructive' : ''}>{status}</span>
 }
 
-/** Where an outgoing message stands, in the sender's words. */
-function outgoingState(message: BoardMessage | undefined, toUser: boolean, sending: boolean) {
-  if (!message) return sending ? 'sending' : undefined
-  if (message.state === 'failed') return 'failed'
-  if (message.state === 'answered') return 'answered'
-  if (message.state === 'sent') return 'sending'
-  if (!message.reply) return 'delivered'
-  return toUser ? 'awaiting your reply' : 'awaiting reply'
-}
-
 /**
  * A message to you in a chat: a bubble on the left in the sender's accent, its text, and whether it waits on you.
- * `children` mount beneath the text; that is where the answer card of a question goes.
+ * `children` mount beneath the text; that is where the answer card of a question goes. `running` is whether the call
+ * that sends it is still running.
  */
 export function ChatBubble({
   from,
   message,
   text,
+  running,
   children,
 }: {
   from: number
   message: BoardMessage | undefined
   text: string
+  running: boolean
   children?: ReactNode
 }) {
   const now = useNow(60000)
   const accent = accentOf(from)
+  const status = sentStatus(message, running)
   return (
     <section
       data-board-outgoing={message?.id}
@@ -141,12 +146,14 @@ export function ChatBubble({
       </header>
       <Body text={text} />
       {children}
-      <footer className="flex flex-wrap items-center gap-3 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
-        {message ? <Status message={message} perspective="user" /> : <span>sending</span>}
-        {message?.error && (
-          <span className="min-w-0 break-words text-destructive">{message.error}</span>
-        )}
-      </footer>
+      {status && (
+        <footer className="flex flex-wrap items-center gap-3 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+          {message ? <Status message={message} perspective="user" /> : <span>{status}</span>}
+          {message?.error && (
+            <span className="min-w-0 break-words text-destructive">{message.error}</span>
+          )}
+        </footer>
+      )}
     </section>
   )
 }
@@ -173,7 +180,12 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
   const toUser = recipient === 'user'
   if (chat && toUser && sender !== undefined)
     return (
-      <ChatBubble from={sender} message={message} text={text ?? ''}>
+      <ChatBubble
+        from={sender}
+        message={message}
+        running={call.status !== 'done'}
+        text={text ?? ''}
+      >
         {message && <MessageQuestions message={message} />}
       </ChatBubble>
     )
@@ -352,12 +364,85 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
   )
 }
 
-/** In a chat, an answer that went back to the conversations that asked, not to you, folds to one line. */
-export function ChatAnswer({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
+/**
+ * In a chat, an answer that went back to the conversations that asked, not to you, folds to one line, and a `codemode`
+ * script that messaged you shows each message as a bubble.
+ */
+export function ChatAnswer({
+  entry,
+  core,
+  blocks,
+}: {
+  entry: EntryRecord
+  core: ReactNode
+  blocks?: readonly number[]
+}) {
   const chat = useChat()
   const message = entry.model?.[0]
-  if (!chat || message?.role !== 'assistant' || message.stopReason !== 'stop') return core
-  return <ReplyFold entry={entry} core={core} />
+  if (!chat || message?.role !== 'assistant') return core
+  if (message.stopReason === 'stop') return <ReplyFold entry={entry} core={core} />
+  const shown = (blocks ?? message.content.map((_, index) => index)).flatMap((index) => {
+    const block = message.content[index]
+    return block?.type === 'toolCall' ? [block] : []
+  })
+  if (!shown.some((block) => block.name === 'codemode')) return core
+  return <ScriptMessages core={core} entry={entry} shown={shown} />
+}
+
+/**
+ * The messages to you that the shown `codemode` calls sent, as bubbles beneath a quiet line that opens the calls; the
+ * calls stay open above them when the row also shows other tools.
+ */
+function ScriptMessages({
+  entry,
+  core,
+  shown,
+}: {
+  entry: EntryRecord
+  core: ReactNode
+  shown: readonly { id: string; name: string }[]
+}) {
+  const board = useDocOf<BoardData>(1, 'board') ?? emptyBoard
+  const transcript = useTranscript()
+  const sent = shown.flatMap((block) => {
+    if (block.name !== 'codemode') return []
+    const result = transcript
+      .map((item) => item.model?.[0])
+      .find(
+        (value): value is ToolResultMessage =>
+          value?.role === 'toolResult' && value.toolCallId === block.id,
+      )
+    return scriptMessages(result?.details).map((text, index) => ({
+      key: `${block.id}:${index}`,
+      text,
+      message: scriptMessage(board.messages, entry.conversationId, text, result?.timestamp),
+    }))
+  })
+  if (!sent.length) return core
+  const bubbles = sent.map(({ key, text, message }) => (
+    <ChatBubble from={entry.conversationId} key={key} message={message} running={false} text={text}>
+      {message && <MessageQuestions message={message} />}
+    </ChatBubble>
+  ))
+  if (shown.some((block) => block.name !== 'codemode'))
+    return (
+      <div className="flex min-w-0 flex-col gap-3">
+        {core}
+        {bubbles}
+      </div>
+    )
+  return (
+    <div className="flex min-w-0 flex-col gap-3">
+      <Collapsible className="group/script">
+        <CollapsibleTrigger className="flex cursor-pointer items-center gap-1.5 font-mono text-[11px] text-muted-foreground/70 hover:text-muted-foreground">
+          sent with codemode
+          <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/script:rotate-90" />
+        </CollapsibleTrigger>
+        <CollapsibleContent className="mt-3">{core}</CollapsibleContent>
+      </Collapsible>
+      {bubbles}
+    </div>
+  )
 }
 
 function ReplyFold({ entry, core }: { entry: EntryRecord; core: ReactNode }) {

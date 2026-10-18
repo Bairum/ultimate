@@ -669,11 +669,23 @@ it('loads existing version-1 logs with the unused read mark', async () => {
 it('bounds the log and declares only post as a user-only action', async () => {
   const f = await fixture()
   await f.opened.harness.commit(async (tx) => {
-    for (let i = 0; i < 310; i++)
-      await f.service().record(tx, { from: 1, to: 'user', text: String(i), kind: 'landing' })
+    const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
+    for (let id = 1; id <= 300; id++)
+      log.messages.push({
+        id,
+        from: 1,
+        to: 2,
+        text: String(id),
+        at: id,
+        reply: false,
+        state: 'delivered',
+      })
+    log.next = 301
   }, context)
+  await f.send('user', 'The newest')
   expect((await f.log())!.messages).toHaveLength(300)
-  expect((await f.log())!.messages[0].id).toBe(11)
+  expect((await f.log())!.messages[0].id).toBe(2)
+  expect((await f.log())!.messages.at(-1)).toMatchObject({ id: 301, text: 'The newest' })
   expect(userActions).toEqual(['post'])
   expect(actions).not.toHaveProperty('read')
 })

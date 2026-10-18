@@ -73,8 +73,15 @@ export interface ToolCallView {
 
 /** `core` is the rendering so far, starting with the generic tool card. */
 export type ToolRenderer = ComponentType<{ call: ToolCallView; core: ReactNode }>
-/** `core` is the core's rendering of the entry: return it for entries you leave alone, or wrap it. */
-export type EntryRenderer = ComponentType<{ entry: EntryRecord; core: ReactNode }>
+/**
+ * `core` is the core's rendering of the entry: return it for entries you leave alone, or wrap it. `blocks` are the
+ * content blocks of an assistant message a chat row shows, when it shows only some.
+ */
+export type EntryRenderer = ComponentType<{
+  entry: EntryRecord
+  core: ReactNode
+  blocks?: readonly number[]
+}>
 
 /**
  * A link in Markdown (messages, reports): `href` and the link's `children`, and `core`, the rendering so far, starting
@@ -157,9 +164,13 @@ export interface CommandContribution {
 export interface ChatContribution {
   /** Whether a conversation reads as a chat. */
   when: (conversation: ConversationSummary) => boolean
-  /** Tools whose calls stay visible between folded runs, such as the messages it sends. */
-  tools?: readonly string[]
+  /**
+   * Calls that stay visible between folded runs, such as the messages it sends: a tool name, or a test of a call and
+   * its result, once there is one, such as a script whose nested calls sent a message.
+   */
+  tools?: readonly (string | ChatCallTest)[]
 }
+export type ChatCallTest = (call: ToolCall, result?: ToolResultMessage) => boolean
 
 /** The browser facet of an extension: `extensions/<name>/web.tsx` default-exports one. */
 export interface WebExtension {

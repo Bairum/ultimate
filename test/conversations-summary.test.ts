@@ -61,6 +61,51 @@ it.concurrent.each(['agent', 'lander'])(
   },
 )
 
+it.concurrent.each(['agent', 'lander'])(
+  'ends a summary admitted before the conversation became a standing %s without writing it',
+  async (label) => {
+    const f = await launch()
+    let release!: () => void
+    const gate = new Promise<void>((done) => {
+      release = done
+    })
+    f.generated.mockImplementationOnce(async (_models, _input, signal) => {
+      await held(gate, signal)
+      return {
+        assessment: 'done' as const,
+        activity: 'Implemented the sidebar.',
+        title: 'A generated title',
+        summary: 'A generated summary.',
+        feature: 'Sidebar',
+      }
+    })
+    f.server.host.faux!.setResponses([fauxAssistantMessage('A finished answer.')])
+    const input = await f.server.root.submit({ type: 'input', content: 'Continue.' }, context)
+    expect((await input.wait(context)).status).toBe('done')
+    await until(async () => (await f.read())?.status === 'pending')
+    await f.server.harness.commit(async (tx) => {
+      Object.assign(await tx.doc(Metadata, f.server.root.id), { label, title: `@${label}` })
+    }, context)
+    release()
+    await until(
+      async () => Object.values((await f.server.harness.inspect(context)).tasks).length === 0,
+    )
+    expect(f.generated).toHaveBeenCalledTimes(1)
+    const state = await f.read()
+    expect(state).not.toHaveProperty('pending')
+    expect(state).not.toHaveProperty('status')
+    expect(state).not.toHaveProperty('assessmentStatus')
+    expect(state).not.toHaveProperty('summary')
+    expect(state).not.toHaveProperty('feature')
+    expect(state).not.toHaveProperty('assessment')
+    expect((await f.entries()).filter((entry) => AssessmentAccepted.is(entry))).toEqual([])
+    expect(await f.titleChanges()).toEqual([])
+    expect(await f.server.harness.snapshot(Metadata, f.server.root.id, context)).toMatchObject({
+      title: `@${label}`,
+    })
+  },
+)
+
 const luna = { provider: 'openai', id: 'gpt-6-luna', thinking: 'medium' } as const
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 afterAll(async () => {

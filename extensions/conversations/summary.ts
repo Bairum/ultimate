@@ -396,6 +396,13 @@ export type SummaryHost = Pick<ExtensionHost, 'harness' | 'metadata'> &
   Partial<Pick<ExtensionHost, 'use'>> &
   SummaryModelHost
 
+/** Standing agents and landers keep their `@name` and get no summary, title, feature or assessment. */
+async function standing(tx: Tx, host: SummaryHost, id: ConversationId) {
+  const own = await tx.conversation(id)
+  const { label } = await tx.doc(host.metadata, id)
+  return label === 'lander' || (label === 'agent' && !!own && !own.parent && !own.owner)
+}
+
 /**
  * Request inside the trigger's transaction; only durable documents decide deduplication. `model` is the summary model
  * the caller resolved before its transaction: without one, nothing is requested.
@@ -410,9 +417,7 @@ export async function requestSummary(
 ) {
   const own = await tx.conversation(id)
   if (!own || (request.reason !== 'reply' && own.owner)) return
-  const metadata = await tx.doc(host.metadata, id)
-  if (metadata.label === 'lander' || (metadata.label === 'agent' && !own.parent && !own.owner))
-    return
+  if (await standing(tx, host, id)) return
   const state = await tx.doc(Summaries, id)
   let intent: EntryId | undefined
   if (request.reason === 'intent') {
@@ -687,6 +692,12 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
               at: now,
             })
           delete state.pending
+          // A task admitted before the conversation became standing settles without writing its result.
+          if (await standing(tx, host, runtime.conversationId)) {
+            if (state.assessmentStatus === 'pending') delete state.assessmentStatus
+            if (state.status === 'pending') delete state.status
+            return terminal
+          }
           const usable =
             result &&
             (task.input.spawn || task.input.intent

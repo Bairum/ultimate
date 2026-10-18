@@ -249,7 +249,7 @@ function reportChat(extension: string, error: unknown) {
   // Predicates run while React renders the transcript; notify after that render.
   queueMicrotask(() => store.notify({ level: 'error', message }))
 }
-/** The tools that stay visible when the shown conversation reads as a chat (`chat` contributions), else `undefined`. */
+/** Which calls stay visible when the shown conversation reads as a chat (`chat` contributions), else `undefined`. */
 export function useChat() {
   const records = useExtensions()
   const conversation = useStore((state) =>

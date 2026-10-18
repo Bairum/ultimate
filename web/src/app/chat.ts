@@ -1,4 +1,4 @@
-import type { AssistantMessage } from '@earendil-works/pi-ai'
+import type { AssistantMessage, ToolCall } from '@earendil-works/pi-ai'
 import type { EntryRecord } from '@earendil-works/pi-durable'
 
 /** A transcript row: an entry, or only some content blocks of an assistant message. */
@@ -22,13 +22,13 @@ const stepsOf = (blocks: AssistantMessage['content']) =>
 
 /**
  * The rows of a conversation that reads as a chat. Each run of tool calls and thinking between inputs, messages and
- * answers folds into one `WorkRun`, without the calls of `visible` tools: those split a run and stay rows of their own.
+ * answers folds into one `WorkRun`, without the calls `visible` keeps: those split a run and stay rows of their own.
  * Only responses that go on to use tools are work; an answer shows whole, its thinking included. System prompt changes
  * join the run they fall in, and a run without a step shows as it is.
  */
 export function chatRows(
   entries: readonly EntryRecord[],
-  visible: ReadonlySet<string>,
+  visible: (call: ToolCall) => boolean,
 ): (ChatPart | WorkRun)[] {
   const rows: (ChatPart | WorkRun)[] = []
   let run: ChatPart[] = []
@@ -63,7 +63,7 @@ export function chatRows(
       continue
     }
     const { content } = message
-    const quiet = content.map((block) => block.type !== 'toolCall' || !visible.has(block.name))
+    const quiet = content.map((block) => block.type !== 'toolCall' || !visible(block))
     if (!quiet.includes(false)) {
       run.push({ entry })
       steps += stepsOf(content)
@@ -85,4 +85,12 @@ export function chatRows(
   }
   flush()
   return rows
+}
+
+/** The folded run where `entry` first shows, if it starts in one: revealing the entry opens it. */
+export function runOf(rows: readonly (ChatPart | WorkRun)[], entry: number) {
+  const first = rows.find((row) =>
+    ('work' in row ? row.work : [row]).some((part) => part.entry.id === entry),
+  )
+  return first && 'work' in first ? first : undefined
 }

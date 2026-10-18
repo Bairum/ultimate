@@ -8,7 +8,8 @@ feature, activity or reply assessment. This applies to intent, spawn and complet
 ## Sidebar
 
 @ultimate has its own section at the very top: its row shows its status dot and `working`, `idle` or an amber
-`N waiting on you` (reply-enabled board messages to you still waiting on your answer), and the age of its latest
+`N waiting on you` (reply-enabled board messages to you still waiting on your answer, plus one for its current final
+answer when that asks you questions), and the age of its latest
 message. Clicking it opens @ultimate on the Agent surface through `subagents.standing {name: 'ultimate'}`, also before
 its conversation exists. Below it, an Agents group lists the lander first, then the other ownerless top-level standing
 agents (label `agent`) by ID. These rows are never concluded or hidden and show no summary, feature or assessment:

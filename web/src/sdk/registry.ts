@@ -3,6 +3,7 @@ import type { ConversationSummary } from '../../../shared/protocol.ts'
 import { events } from './events.ts'
 import { errorMessage } from './format.ts'
 import type {
+  ChatCallTest,
   CommandContribution,
   ComposerRenderer,
   Contribution,
@@ -125,7 +126,10 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   messageDetails: [arrayOf(isComponent), 'an array of message detail components'],
   answerLabels: [arrayOf(isComponent), 'an array of answer label components'],
   chat: [
-    fields({ when: isFunction, tools: optional(arrayOf(isString)) }),
+    fields({
+      when: isFunction,
+      tools: optional(arrayOf((tool) => isString(tool) || isFunction(tool))),
+    }),
     'a { when, tools? } object',
   ],
   documents: [
@@ -467,23 +471,39 @@ export function messageItems(
 }
 
 /**
- * The tools that stay visible when `conversation` reads as a chat, or `undefined` when no facet makes it one. A `when`
- * that throws counts as no and goes to `report`, so one broken extension cannot take down the transcript.
+ * Which calls stay visible when `conversation` reads as a chat, or `undefined` when no facet makes it one. A `when` or a
+ * call test that throws counts as no and goes to `report`, so one broken extension cannot take down the transcript.
  */
 export function chatTools(
   records: readonly ExtensionRecord[],
   conversation: ConversationSummary | undefined,
   report: (extension: string, error: unknown) => void,
-): ReadonlySet<string> | undefined {
+): ChatCallTest | undefined {
   if (!conversation) return undefined
   const matching = records.flatMap(({ name, extension }) => {
     if (!extension?.chat) return []
     try {
-      return extension.chat.when(conversation) ? [extension.chat] : []
+      return extension.chat.when(conversation) ? [{ name, tools: extension.chat.tools ?? [] }] : []
     } catch (error) {
       report(name, error)
       return []
     }
   })
-  return matching.length ? new Set(matching.flatMap((chat) => chat.tools ?? [])) : undefined
+  if (!matching.length) return undefined
+  const names = new Set(
+    matching.flatMap(({ tools }) => tools.filter((tool) => typeof tool === 'string')),
+  )
+  const tests = matching.flatMap(({ name, tools }) =>
+    tools.flatMap((test) => (typeof test === 'function' ? [{ name, test }] : [])),
+  )
+  return (call, result) =>
+    names.has(call.name) ||
+    tests.some(({ name, test }) => {
+      try {
+        return test(call, result)
+      } catch (error) {
+        report(name, error)
+        return false
+      }
+    })
 }

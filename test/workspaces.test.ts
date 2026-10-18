@@ -964,6 +964,9 @@ it.concurrent('notes the root of the submitter’s tree and skips a conversation
   expect(await rootNotes(f)).toHaveLength(0)
 })
 
+const boardMessages = async (f: Awaited<ReturnType<typeof fixture>>) =>
+  (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))?.messages ?? []
+
 async function lander(
   settings: JsonObject,
   existing?: Awaited<ReturnType<typeof repository>>,
@@ -1003,23 +1006,16 @@ it.concurrent('lands and reports a submission without a lineage provider', async
   expect(await readFile(join(f.projectRoot, 'no-lineage.txt'), 'utf8')).toBe('no-lineage.txt')
   expect(await rootNotes(f)).toHaveLength(0)
 })
-it.concurrent('records only the submission on the board, not the landing report', async () => {
+it.concurrent('records neither the submission nor the landing report on the board', async () => {
   const f = await lander({}, undefined, true)
   const id = await f.create()
   await f.service.ready(id, context)
   const workspace = (await f.service.get(id, context))!
   await commit(workspace.path, 'first.txt')
-  const tip = await commit(workspace.path, 'second.txt')
+  await commit(workspace.path, 'second.txt')
   const result = await f.service.submit(id, 'None', context)
   await submitted(f, id)
-  const messages = (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!.messages
-  expect(messages).toHaveLength(1)
-  expect(messages[0]).toMatchObject({
-    from: id,
-    to: result.lander,
-    kind: 'landing',
-    text: `Submitted ${tip.slice(0, 7)} first.txt and 1 more`,
-  })
+  expect(await boardMessages(f)).toEqual([])
   const report = await f.opened.harness.commit(
     (tx) => tx.submissionByRequest(id, `lander:${result.id}`),
     context,
@@ -1079,7 +1075,7 @@ it.concurrent('hands matching landings to the deploy agent exactly once', async 
   const tip = await commit(workspace.path, 'cloud/change.txt')
   const result = await f.service.submit(id, 'None', context)
   const [report] = await submitted(f, id)
-  const messages = (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!.messages
+  const messages = await boardMessages(f)
   const deploy = messages.filter((message) => message.text.includes('Please deploy'))
   expect(crashes).toBe(1)
   expect(deploy).toHaveLength(1)
@@ -1162,8 +1158,7 @@ it.concurrent.each([
     await f.service.submit(id, 'None', context)
     const [report] = await submitted(f, id)
     expect(report).toContain('landed as')
-    const messages = (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!
-      .messages
+    const messages = await boardMessages(f)
     expect(messages.filter((message) => message.text.includes('Please deploy'))).toHaveLength(0)
     const steps = (await landerLog(f)).log.filter((line) => line.step?.startsWith('deploy'))
     expect(steps.map((line) => line.step)).toEqual(step ? [step] : [])
@@ -1179,9 +1174,7 @@ it.concurrent('does not record a failed landing on the board', async () => {
   await commit((await f.service.get(id, context))!.path)
   await f.service.submit(id, 'None', context)
   await submitted(f, id)
-  const messages = (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!.messages
-  expect(messages).toHaveLength(1)
-  expect(messages[0]).toMatchObject({ from: id, kind: 'landing' })
+  expect(await boardMessages(f)).toEqual([])
 })
 it.concurrent('lands two submissions in order onto a moved target and reports both', async () => {
   const f = await lander({ checks: ['test -f base.txt'] })
@@ -1531,10 +1524,7 @@ it.concurrent('resumes a landing interrupted before its push: pushes and reports
   // The resumed task merged and checked nothing again: it pushed what had landed.
   const steps = result.steps.map((row) => row.step)
   expect(steps.slice(steps.lastIndexOf('started'))).toEqual(['started', 'pushing to origin'])
-  const messages = (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!.messages
-  expect(messages.map((message) => message.text)).toEqual([
-    `Submitted ${landed.slice(0, 7)} landed.txt`,
-  ])
+  expect(await boardMessages(f)).toEqual([])
 })
 it.concurrent('reports a local landing whose push retry conflicts as landed locally', async () => {
   const { paths, bare } = await withRemote()

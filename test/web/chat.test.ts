@@ -1,6 +1,6 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
-import { chatRows } from '../../web/src/app/chat.ts'
+import { chatRows, runOf } from '../../web/src/app/chat.ts'
 import type { ChatPart, WorkRun } from '../../web/src/app/chat.ts'
 
 let nextId = 1
@@ -20,7 +20,8 @@ const call = (name: string) => ({ type: 'toolCall', id: `call-${nextId}-${name}`
 const assistant = (stopReason: string, ...content: object[]) =>
   entry('pi.assistant', { role: 'assistant', stopReason, content })
 const result = () => entry('pi.tool-result', { role: 'toolResult', toolCallId: 'orphan' })
-const visible = new Set(['message', 'branch'])
+const names = new Set(['message', 'branch'])
+const visible = (block: { name: string }) => names.has(block.name)
 
 /** Rows as ids: `n` a whole entry, `n:a,b` its blocks, `[…] ×steps` a folded run. */
 const shape = (rows: (ChatPart | WorkRun)[]) =>
@@ -92,5 +93,49 @@ describe('chat rows', () => {
     nextId = 1
     const rows = chatRows([user('go'), assistant('toolUse', call('bash'))], visible)
     expect(shape(rows)).toEqual(['1', '[2] ×1'])
+  })
+
+  it('keeps the calls its test keeps, by more than their name', () => {
+    nextId = 1
+    const script = { ...call('codemode'), arguments: { sent: true } }
+    const rows = chatRows(
+      [assistant('toolUse', call('codemode'), script), assistant('stop', text('Asked.'))],
+      (block) => block.name === 'codemode' && block.arguments?.sent === true,
+    )
+    expect(shape(rows)).toEqual(['[1:0] ×1', '1:1', '2'])
+  })
+})
+
+describe('revealing a chat entry', () => {
+  it('finds the folded run an entry first shows in, past its first entry and in split responses', () => {
+    nextId = 1
+    const rows = chatRows(
+      [
+        user('check'),
+        assistant('toolUse', call('bash')),
+        assistant('toolUse', call('read')),
+        assistant('toolUse', call('message'), call('bash')),
+        assistant('stop', text('Done.')),
+      ],
+      visible,
+    )
+    expect(shape(rows)).toEqual(['1', '[2 3] ×2', '4:0', '[4:1] ×1', '5'])
+    expect(runOf(rows, 2)).toBe(rows[1])
+    expect(runOf(rows, 3)).toBe(rows[1])
+    // A split response first shows as its visible call, so revealing it opens nothing.
+    expect(runOf(rows, 4)).toBeUndefined()
+    expect(runOf(rows, 1)).toBeUndefined()
+    expect(runOf(rows, 5)).toBeUndefined()
+    expect(runOf(rows, 99)).toBeUndefined()
+  })
+
+  it('opens the run when a split response starts with folded work', () => {
+    nextId = 1
+    const rows = chatRows(
+      [user('go'), assistant('toolUse', call('bash'), call('message'))],
+      visible,
+    )
+    expect(shape(rows)).toEqual(['1', '[2:0] ×1', '2:1'])
+    expect(runOf(rows, 2)).toBe(rows[1])
   })
 })

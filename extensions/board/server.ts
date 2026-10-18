@@ -36,7 +36,6 @@ export type BoardMessage = {
   at: number
   reply: boolean
   re?: number
-  kind?: string
   state: 'sent' | 'delivered' | 'answered' | 'failed'
   entry?: EntryId
   answer?: EntryId
@@ -93,10 +92,6 @@ export type BoardService = {
     input: { to: string; text: string; reply: false },
     requestId: string,
     ctx: Context,
-  ): Promise<number>
-  record(
-    tx: Tx,
-    input: Pick<BoardMessage, 'from' | 'to' | 'text' | 'kind' | 'entry'>,
   ): Promise<number>
 }
 function delivery(host: ExtensionHost) {
@@ -476,8 +471,6 @@ export default function board(host: ExtensionHost) {
     },
     send: (from, input, requestId, ctx) =>
       send(host, from, input, ctx, undefined, undefined, requestId),
-    record: async (tx, input) =>
-      (await append(tx, { ...input, reply: false, state: 'delivered' })).id,
   } satisfies BoardService)
   let stop: (() => void) | undefined
   const answering = new Set<Promise<void>>()

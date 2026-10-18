@@ -243,7 +243,11 @@ export default async function fauxExtension(host: ExtensionHost) {
           { stopReason: 'toolUse' },
         )
       }
-      if (last?.role === 'toolResult' && last.toolName === 'codemode') {
+      if (
+        last?.role === 'toolResult' &&
+        last.toolName === 'codemode' &&
+        transcript.messages[asked]?.content === 'codemode demo'
+      ) {
         return fauxAssistantMessage([fauxText('Codemode demo complete.')])
       }
       if (
@@ -326,10 +330,19 @@ export default async function fauxExtension(host: ExtensionHost) {
         'landing demo': [
           [fauxToolCall('bash', { command: 'echo pnpm check; sleep 0.3; echo passed' })],
         ],
+        // @ultimate often messages you from inside a script.
+        'script ask demo': [
+          [
+            fauxToolCall('codemode', {
+              code: `await tools.bash({ command: 'echo checking the preview' }); return await tools.message({ to: 'user', text: ${JSON.stringify(decisions)} });`,
+            }),
+          ],
+        ],
       }
       const chatAnswers: Record<string, string> = {
         'chat demo': 'Started a branch to land the work and asked you whether the preview stays.',
         'ask demo': 'Waiting for your answer on the layout.',
+        'script ask demo': 'Asked you about the preview and the layout.',
         'landing demo':
           'Landed `1a2b3c4` on `main` and pushed it to `origin`.\n\nDivergence: none.',
       }

@@ -3,7 +3,11 @@ import { accentIndex, accentOf } from '../../extensions/board/accent.tsx'
 import {
   answeredMessages,
   messageStatus,
+  outgoingState,
   relativeTime,
+  scriptMessage,
+  scriptMessages,
+  sentStatus,
   ultimateChat,
   waitingOnUser,
 } from '../../extensions/board/data.tsx'
@@ -74,7 +78,6 @@ describe('board chat', () => {
       'failed',
     ])
     expect(messageStatus({ ...messages[5], state: 'sent' })).toBe('sending')
-    expect(messageStatus({ ...messages[5], kind: 'landing' })).toBe('landing')
   })
   it('counts only open reply-enabled questions to the user', () => {
     // #1 is open; the one-way update, the answered and sending ones and those to others do not wait on the user.
@@ -89,6 +92,13 @@ describe('board chat', () => {
       }),
     ).toBe(1)
     expect(waitingOnUser({ messages: [], next: 1 })).toBe(0)
+  })
+  it("counts @ultimate's asking final answer as one more, whatever its number of questions", () => {
+    const reply = { conversation: 2, entry: 7, questions: [{}, {}] }
+    expect(waitingOnUser({ messages, next: 9 }, { reply })).toBe(2)
+    expect(waitingOnUser({ messages: [], next: 1 }, { reply })).toBe(1)
+    expect(waitingOnUser({ messages: [], next: 1 }, {})).toBe(0)
+    expect(waitingOnUser({ messages: [], next: 1 }, null)).toBe(0)
   })
   it('shows elapsed minutes, hours and days without future negative times', () => {
     expect(relativeTime(1000, 0)).toBe('now')
@@ -127,5 +137,60 @@ describe('the @ultimate chat', () => {
     expect(ultimateChat({ ...ultimate, parentConversationId: 4 })).toBe(false)
     expect(ultimateChat({ ...ultimate, ownerTaskId: 9 })).toBe(false)
     expect(ultimateChat({ ...ultimate, label: 'coordinator' })).toBe(false)
+  })
+})
+
+const nested = (name: string, args: object, status = 'ok') => ({ name, args, status, ms: 1 })
+describe('messages a codemode script sent', () => {
+  it('reads the texts of its finished message calls to you', () => {
+    expect(
+      scriptMessages({
+        calls: [
+          nested('read', { path: 'a' }),
+          nested('message', { to: 'user', text: 'Ship it?', reply: true }),
+          nested('message', { to: '#4', text: 'To a branch' }),
+          nested('message', { to: 'user', text: 'Refused' }, 'error'),
+          nested('message', { to: 'user', text: 'One-way', reply: false }),
+        ],
+      }),
+    ).toEqual(['Ship it?', 'One-way'])
+    expect(scriptMessages(undefined)).toEqual([])
+    expect(scriptMessages({ calls: 'streamed' })).toEqual([])
+  })
+  const base = { to: 'user' as const, reply: true, state: 'delivered' as const }
+  const log: BoardMessage[] = [
+    { ...base, id: 1, from: 2, text: 'Ship it?', at: 100 },
+    { ...base, id: 2, from: 3, text: 'Ship it?', at: 150 },
+    { ...base, id: 3, from: 2, text: 'Ship it?', at: 200 },
+    { ...base, id: 4, from: 2, to: 4, text: 'Other', at: 210 },
+  ]
+  it('finds the newest matching log message the script sent before its result', () => {
+    expect(scriptMessage(log, 2, 'Ship it?', 120)?.id).toBe(1)
+    expect(scriptMessage(log, 2, 'Ship it?', 250)?.id).toBe(3)
+    expect(scriptMessage(log, 2, 'Ship it?')?.id).toBe(3)
+    expect(scriptMessage(log, 2, 'Other')).toBeUndefined()
+    // The bounded log dropped it.
+    expect(scriptMessage(log, 2, 'Ship it?', 50)).toBeUndefined()
+  })
+})
+
+describe('a sent message the log no longer holds', () => {
+  const message: BoardMessage = {
+    id: 1,
+    from: 2,
+    to: 'user',
+    text: 'Ship it?',
+    at: 0,
+    reply: true,
+    state: 'delivered',
+  }
+  it('reads as sending only while its call runs, then shows no state', () => {
+    expect(sentStatus(undefined, true)).toBe('sending')
+    expect(sentStatus(undefined, false)).toBeUndefined()
+    expect(sentStatus(message, false)).toBe('yours')
+    expect(outgoingState(undefined, true, true)).toBe('sending')
+    expect(outgoingState(undefined, true, false)).toBeUndefined()
+    expect(outgoingState(message, true, false)).toBe('awaiting your reply')
+    expect(outgoingState({ ...message, reply: false }, true, false)).toBe('delivered')
   })
 })

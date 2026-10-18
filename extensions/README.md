@@ -323,10 +323,12 @@ answer was sent, or that a one-way message's answer was not sent.
 
 `chat` makes conversations read as a chat: `{ when(conversation), tools? }` decides from a conversation's summary
 (label, title, owner), and in a matching transcript each run of tool calls and thinking between inputs, messages and
-answers folds into one quiet "worked · N steps" row that expands to the usual rendering. Calls of the listed `tools`
-stay visible and split the run; the tools of every matching facet combine. Renderers check `useChat()`, the shown
-conversation's visible tools or `undefined`, to adapt to it. Board turns it on for @ultimate's conversation, keeping
-messages, branch starts and workspace outcomes, and shows its messages to you as bubbles.
+answers folds into one quiet "worked · N steps" row that expands to the usual rendering. Calls the listed `tools` keep
+stay visible and split the run: a tool name, or a test `(call, result?) => boolean` of a call and its result; the
+tools of every matching facet combine. Renderers check `useChat()`, that test for the shown conversation or
+`undefined`, to adapt to it. Board turns it on for @ultimate's conversation, keeping messages, branch starts,
+workspace outcomes and scripts that messaged you, and shows its messages to you as bubbles. Revealing an entry in a
+folded run opens the run.
 
 ### Entry renderers
 
@@ -338,7 +340,8 @@ entries: { 'notes.pinned': ({ entry }) => <div className="text-muted-foreground"
 ```
 
 A renderer also gets `core`, the rendering of the same entry so far: return it for the entries you leave alone, wrap
-it, or return `null` to hide the entry. Several extensions can render one kind: they compose in discovery order, each
+it, or return `null` to hide the entry. In a chat, a row can show only some content blocks of a response; `blocks`
+lists their indexes then. Several extensions can render one kind: they compose in discovery order, each
 receiving the rendering of the one before it as `core`, down to the core's own. Each runs in its own error boundary,
 which falls back to its `core` when it throws. `self` renders `pi.system` entries that change the build section as a
 reload marker and returns `core` for the rest; `subagents` and `workspaces` both render `pi.user`, each only the inputs
