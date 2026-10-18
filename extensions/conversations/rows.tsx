@@ -119,6 +119,8 @@ export function Row({
   const phase = usePhase(conversation.id)
   const displayPhase = working ? phase : undefined
   const hasActivity = !!(displayPhase || activity)
+  // One indicator per row: the phase line's pulsing dot, else the leading mark's while no phase is known yet.
+  const markWorking = displayPhase ? undefined : working
   const actions = useUltimate()
   const [editing, setEditing] = useState(false)
   const cancelled = useRef(false)
@@ -172,7 +174,7 @@ export function Row({
     >
       {editing ? (
         <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-1.5">
-          <Mark assessment={assessment} unseen={unseen} working={working} />
+          <Mark assessment={assessment} unseen={unseen} working={markWorking} />
           <input
             aria-label="Conversation title"
             autoFocus
@@ -208,7 +210,7 @@ export function Row({
           type="button"
         >
           <span className="flex w-full min-w-0 items-center gap-1.5">
-            <Mark assessment={assessment} unseen={unseen} working={working} />
+            <Mark assessment={assessment} unseen={unseen} working={markWorking} />
             {title}
           </span>
           {hasMetadata && (
