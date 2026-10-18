@@ -432,13 +432,13 @@ it('names the fast-forward and its commit count in the fetch step', async () => 
   })
 })
 
-it('tells the target which worktrees with uncommitted changes stay behind, even with no task running', async () => {
+it('holds a move for worktrees with uncommitted changes, naming them, and releases once they are committed', async () => {
   snapshotFetch()
   const project = cloud()
   const { root } = await checkout()
   const desk = await machine('desk', project, root)
   await writer(desk)
-  // The main checkout has an untracked file, one worktree an edit, another none: two stay behind.
+  // The main checkout has an untracked file, one worktree an edit, another none: two hold the move.
   const worktrees = await temp('ultimate-lease-worktrees-')
   const [edited, clean] = [join(worktrees, 'edited'), join(worktrees, 'clean')]
   await git(root, 'worktree', 'add', '-q', '-b', 'ultimate/edited', edited)
@@ -448,39 +448,96 @@ it('tells the target which worktrees with uncommitted changes stay behind, even 
   const laptop = await machine('laptop', project, root, { autoClaim: false })
   await standbyOn(laptop)
   // Both machines share this checkout here; its untracked file does not stop the laptop's fast-forward.
-  expect(await laptop.lease.move()).toBe(true)
+  const moving = laptop.lease.move()
+  const waiting = 'Move to laptop waits for 2 worktrees with uncommitted changes'
+  await until(() => desk.notices.includes(waiting) && laptop.notices.includes(waiting))
+  await until(() => project.replica.store.transition()?.left?.length === 2)
+  expect(project.replica.store.transition()).toMatchObject({
+    left: [root, edited],
+    steps: expect.arrayContaining([
+      {
+        name: 'handover',
+        state: 'running',
+        detail: 'waiting for 2 worktrees with uncommitted changes',
+      },
+    ]),
+  })
+  expect(desk.serving()).toBe(true)
+  expect(desk.snapshots.uploadSnapshot).not.toHaveBeenCalled()
+  // Committing them lets the next recheck release: here a task graph change wakes it.
+  await rm(join(root, 'notes.txt'))
+  await git(edited, 'commit', '-qam', 'edited')
+  const task = await sleep(desk.harness(), false)
+  await desk.harness().abortTask(task, context)
+  expect(await moving).toBe(true)
   const transition = project.replica.store.transition()!
-  expect(transition.left).toEqual([root, edited])
+  expect(transition.left).toBeUndefined()
   expect(transition.steps.find((step) => step.name === 'handover')).toMatchObject({
     state: 'done',
-    detail: '2 worktrees with uncommitted changes stay on desk',
+    detail: 'desk released the project',
   })
 })
 
-it('lists the worktrees left dirty by the runs it drained: the scan follows the drain', async () => {
+/** Runs due fake timers while a test polls with `until`. */
+const tick = () => vi.advanceTimersByTimeAsync(0)
+
+it('holds a move for the runs it drains past the old ten-minute cap, naming their conversations', async () => {
+  const project = cloud()
+  const { root } = await checkout()
+  const desk = await machine('desk', project, root)
+  await writer(desk)
+  await sleep(desk.harness(), false)
+  const laptop = await machine('laptop', project, root, { autoClaim: false })
+  await standbyOn(laptop)
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  try {
+    void laptop.lease.move()
+    await until(() => desk.notices.includes('Move to laptop waits for 1 running task'), 30000, tick)
+    await until(() => !!project.replica.store.transition()?.waiting, 30000, tick)
+    expect(project.replica.store.transition()).toMatchObject({
+      waiting: [`#${ROOT_CONVERSATION_ID}`],
+      steps: expect.arrayContaining([
+        { name: 'handover', state: 'running', detail: 'finishing 1 run' },
+      ]),
+    })
+    await vi.advanceTimersByTimeAsync(30 * MINUTE)
+    expect(desk.serving()).toBe(true)
+    expect(desk.snapshots.uploadSnapshot).not.toHaveBeenCalled()
+    expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+    expect((await laptop.transition())?.error).toBeUndefined()
+    laptop.lease.cancel()
+    await until(
+      () => desk.notices.includes('The move to laptop stopped; this machine keeps the project'),
+      30000,
+      tick,
+    )
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it('releases a forced move at once despite running tasks and uncommitted worktrees, naming those left behind', async () => {
   snapshotFetch()
   const project = cloud()
   const { root } = await checkout()
   const desk = await machine('desk', project, root)
   await writer(desk)
-  const worktrees = await temp('ultimate-lease-drained-')
+  const worktrees = await temp('ultimate-lease-forced-')
   const edited = join(worktrees, 'edited')
-  await git(root, 'worktree', 'add', '-q', '-b', 'ultimate/drained', edited)
-  const task = await sleep(desk.harness(), false)
-  const laptop = await machine('laptop', project, root)
+  await git(root, 'worktree', 'add', '-q', '-b', 'ultimate/forced', edited)
+  await writeFile(join(edited, 'README.md'), 'edited\n')
+  await sleep(desk.harness(), false)
+  const laptop = await machine('laptop', project, root, { autoClaim: false })
   await standbyOn(laptop)
-  expect((await project.api('/api/cloud/move', { machine: 'laptop' })).status).toBe(202)
-  await until(() => desk.notices.includes('Move to laptop waits for 1 running task'))
-  // The run still draining edits its worktree; the release must name it.
-  await writeFile(join(edited, 'README.md'), 'written while draining\n')
-  await desk.harness().abortTask(task, context)
-  await writer(laptop)
+  expect(await laptop.lease.move({ force: true })).toBe(true)
+  expect(desk.notices.some((notice) => notice.startsWith('Move to laptop waits'))).toBe(false)
   const transition = project.replica.store.transition()!
   expect(transition.left).toEqual([edited])
   expect(transition.steps.find((step) => step.name === 'handover')).toMatchObject({
     state: 'done',
     detail: '1 worktree with uncommitted changes stays on desk',
   })
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'laptop', epoch: 2 })
 })
 
 it('bounds a successful step detail too, so a long branch name never stalls the transition', async () => {

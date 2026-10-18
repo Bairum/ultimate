@@ -23,7 +23,8 @@
 //    at that epoch, the claimant becomes the writer at epoch + 1 and gets `role`, `cursor` and `outbox` as after a
 //    hello; otherwise it gets `role: 'standby'` again. A standby that wants the lease while the writer holds it sends
 //    `request-release`; the cloud forwards it to the writer as `release-requested`. The writer releases once its
-//    running tasks finish, telling the requester with `release-waiting` while it waits, and the requester claims.
+//    running tasks finish and its worktrees hold no uncommitted changes (unless the move is forced), telling the
+//    requester with `release-waiting` while it waits, and the requester claims.
 //    A machine taking the lease first prepares (`Transition`) and reports each step with `transition`; the cloud
 //    keeps the latest and sends it in every `role`, to every socket. The cloud UI starts a move with `move-to` and
 //    stops one with `cancel`, both sent to the target machine's standby socket.
@@ -88,19 +89,49 @@ export const HELLO_LIMITS = {
   secret: /^[A-Z][A-Z0-9_]{0,63}$/,
 }
 
-/** A releasing writer names at most this many worktrees with uncommitted changes, each path at most `path` long. */
+/**
+ * A releasing writer names at most this many worktrees with uncommitted changes, each path at most `path` long; the
+ * conversations it waits for are bounded alike.
+ */
 export const LEFT_LIMITS = { paths: 20, path: 500 }
+
+/** A list of at most `LEFT_LIMITS.paths` strings, each at most `LEFT_LIMITS.path` long, or nothing. */
+export const bounded = (value: unknown) =>
+  value === undefined ||
+  (Array.isArray(value) &&
+    value.length <= LEFT_LIMITS.paths &&
+    value.every((item) => typeof item === 'string' && item.length <= LEFT_LIMITS.path))
 
 /**
  * The handover step's detail while the writer `from` drains: `finishing 2 runs`, then the worktrees with uncommitted
- * changes that stay behind, `2 worktrees with uncommitted changes stay on haza-pc`.
+ * changes it waits for (`held`), `waiting for 2 worktrees with uncommitted changes`, or that stay behind on a forced
+ * move, `2 worktrees with uncommitted changes stay on haza-pc`.
  */
-export function handoverDetail(from: string, tasks: number, left = 0) {
+export function handoverDetail(from: string, tasks: number, left = 0, held = false) {
   const parts: string[] = []
+  const worktrees = `${left} ${left === 1 ? 'worktree' : 'worktrees'} with uncommitted changes`
   if (tasks > 0) parts.push(`finishing ${tasks} ${tasks === 1 ? 'run' : 'runs'}`)
-  if (left === 1) parts.push(`1 worktree with uncommitted changes stays on ${from}`)
-  if (left > 1) parts.push(`${left} worktrees with uncommitted changes stay on ${from}`)
+  if (left > 0)
+    parts.push(
+      held
+        ? `waiting for ${worktrees}`
+        : `${worktrees} ${left === 1 ? 'stays' : 'stay'} on ${from}`,
+    )
   return parts.join(' · ')
+}
+
+/**
+ * Record what a `release-waiting` says on the transition: the conversations still running (`waiting`, cleared once no
+ * run is left) and the dirty worktrees (`left`, cleared by an empty list).
+ */
+export function applyWaiting(
+  transition: Pick<Transition, 'left' | 'waiting'>,
+  { tasks, dirty, runs }: { tasks: number; dirty?: string[]; runs?: string[] },
+) {
+  if (runs?.length && tasks > 0) transition.waiting = runs
+  else if (tasks === 0) delete transition.waiting
+  if (dirty?.length) transition.left = dirty
+  else if (dirty) delete transition.left
 }
 
 /** One step of preparing a machine to take the lease, in the order they run. */
@@ -146,8 +177,13 @@ export interface Transition {
   /** Until the claim is sent. */
   cancellable: boolean
   startedAt: number
-  /** Worktrees of the writer's checkout with uncommitted changes, which stay on that machine. */
+  /**
+   * Worktrees of the writer's checkout with uncommitted changes: the handover waits for them, or on a forced move they
+   * stay on that machine.
+   */
   left?: string[]
+  /** The conversations whose runs the writer's release waits for, as `#12 title`. */
+  waiting?: string[]
 }
 
 /** `GET /p/<slug>/api/cloud`: every machine that said hello, the lease and the latest transition. */
@@ -226,15 +262,24 @@ export type MachineMessage =
   | { type: 'release'; epoch: number; snapshot: { id: string } }
   /** A standby takes the free lease, naming its epoch. */
   | { type: 'claim'; epoch: number }
-  /** A standby asks the writer to release the lease to it, for transition `id`. */
-  | { type: 'request-release'; id: string }
+  /** A standby asks the writer to release the lease to it, for transition `id`; `force` skips its holds. */
+  | { type: 'request-release'; id: string; force?: boolean }
   /** The preparing machine reports its transition; null clears it. */
   | { type: 'transition'; value: Transition | null }
   /**
-   * The writer tells the machine `by` that its release waits for `tasks` running tasks; once, before it releases, it
-   * names the worktrees with uncommitted changes that stay behind (`dirty`, bounded by `LEFT_LIMITS`).
+   * The writer tells the machine `by` that its release waits for `tasks` running tasks of the conversations `runs`,
+   * then for the worktrees with uncommitted changes `dirty` (`held`). Right before it releases it names the ones that
+   * stay behind on a forced move (`dirty` without `held`, empty once the held ones were committed). Lists are bounded
+   * by `LEFT_LIMITS`; `runs` and `held` are absent from writers and Workers that predate them.
    */
-  | { type: 'release-waiting'; by: string; tasks: number; dirty?: string[] }
+  | {
+      type: 'release-waiting'
+      by: string
+      tasks: number
+      dirty?: string[]
+      runs?: string[]
+      held?: boolean
+    }
   /** The user's secret names changed since hello; writer and standbys send it, bounded as in hello. */
   | { type: 'secrets'; secrets: string[]; secretsComplete: boolean }
   | { type: 'system'; value: SystemInfo }
@@ -265,14 +310,21 @@ export type CloudMessage =
     }
   | { type: 'ack'; batch: number }
   | { type: 'outbox'; items: OutboxItem[] }
-  /** To the writer: the standby `by` asked for the lease, for transition `id`. */
-  | { type: 'release-requested'; by: string; id: string }
+  /** To the writer: the standby `by` asked for the lease, for transition `id`; `force` skips the writer's holds. */
+  | { type: 'release-requested'; by: string; id: string; force?: boolean }
   /** To a standby, from the cloud UI or @sync's bearer route (`by`): prepare and take the lease as transition `id`. */
   | { type: 'move-to'; id: string; by: Extract<MoveBy, 'cloud' | 'sync'>; force?: boolean }
   /** To the target, from the cloud UI: stop transition `id` if it can still stop. */
   | { type: 'cancel'; id: string }
-  /** To the requester `by`: the writer's release waits for `tasks` running tasks, leaving `dirty` worktrees behind. */
-  | { type: 'release-waiting'; by: string; tasks: number; dirty?: string[] }
+  /** To the requester `by`: what the writer's release waits for, as the machine sent it. */
+  | {
+      type: 'release-waiting'
+      by: string
+      tasks: number
+      dirty?: string[]
+      runs?: string[]
+      held?: boolean
+    }
 
 /**
  * One model provider's health on one machine, from real calls and heartbeat pings (`extensions/health`). Times are

@@ -91,13 +91,13 @@ export interface SyncHooks {
   serving: boolean
   /** Each role, once the state holds it, from inside the message chain: defer any lifecycle switch. */
   role?(state: SyncState): void
-  /** The writer hears that the standby `by` asked for the lease, for transition `id`. */
-  releaseRequested?(by: string, id: string): void
+  /** The writer hears that the standby `by` asked for the lease, for transition `id`; `force` skips its holds. */
+  releaseRequested?(by: string, id: string, force: boolean): void
   /**
-   * The requester hears that the writer's release waits for `tasks` running tasks, and which of its worktrees with
-   * uncommitted changes stay behind (`dirty`).
+   * The requester hears what the writer's release waits for: `tasks` running tasks of the conversations `runs`, then
+   * its worktrees with uncommitted changes (`dirty` with `held`), or the ones that stay behind (`dirty` alone).
    */
-  releaseWaiting?(by: string, tasks: number, dirty?: string[]): void
+  releaseWaiting?(waiting: Omit<Extract<CloudMessage, { type: 'release-waiting' }>, 'type'>): void
   /** The cloud UI or @sync (`by`) asks this standby to take the lease as transition `id`. */
   moveTo?(id: string, force: boolean, by: 'cloud' | 'sync'): void
   /** The cloud UI stops transition `id`. */
@@ -647,9 +647,8 @@ export function startSync(
           capacity?.()
           capacity = undefined
         } else if (message.type === 'release-requested')
-          hooks.releaseRequested?.(message.by, message.id)
-        else if (message.type === 'release-waiting')
-          hooks.releaseWaiting?.(message.by, message.tasks, message.dirty)
+          hooks.releaseRequested?.(message.by, message.id, message.force === true)
+        else if (message.type === 'release-waiting') hooks.releaseWaiting?.(message)
         else if (message.type === 'move-to')
           hooks.moveTo?.(
             message.id,

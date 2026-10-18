@@ -1,5 +1,5 @@
 import type { ConversationRecord, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
-import { handoverDetail, LEFT_LIMITS, MOVE_BY } from './protocol.ts'
+import { applyWaiting, bounded, handoverDetail, MOVE_BY } from './protocol.ts'
 import type {
   CloudInfo,
   CloudMessage,
@@ -178,14 +178,29 @@ export class ReplicaStore {
   }
   /**
    * The writer `from`'s drain progress shows as the handover step's detail of the transition to `by`, with the
-   * worktrees it leaves behind uncommitted (`dirty`), which the transition keeps as `left`.
+   * conversations it waits for (`runs`, kept as `waiting`) and the worktrees with uncommitted changes it waits for
+   * (`held`) or leaves behind (`dirty`, kept as `left`).
    */
-  draining(by: string, tasks: number, from: string, dirty?: string[]): boolean {
+  draining({
+    by,
+    tasks,
+    from,
+    dirty,
+    runs,
+    held = false,
+  }: {
+    by: string
+    tasks: number
+    from: string
+    dirty?: string[]
+    runs?: string[]
+    held?: boolean
+  }): boolean {
     const transition = this.transition()
     const handover = transition?.steps.find((step) => step.name === 'handover')
     if (transition?.target !== by || !handover) return false
-    if (dirty) transition.left = dirty
-    handover.detail = handoverDetail(from, tasks, transition.left?.length)
+    applyWaiting(transition, { tasks, dirty, runs })
+    handover.detail = handoverDetail(from, tasks, transition.left?.length, held)
     this.put('metadata', 7, transition)
     return true
   }
@@ -565,10 +580,8 @@ function validTransition(value: Transition, machine: string) {
         count(step.commits),
     ) &&
     text(value.error) &&
-    (value.left === undefined ||
-      (Array.isArray(value.left) &&
-        value.left.length <= LEFT_LIMITS.paths &&
-        value.left.every((path) => typeof path === 'string' && path.length <= LEFT_LIMITS.path))) &&
+    bounded(value.left) &&
+    bounded(value.waiting) &&
     typeof value.cancellable === 'boolean' &&
     Number.isSafeInteger(value.startedAt)
   )

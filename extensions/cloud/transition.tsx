@@ -101,18 +101,21 @@ function StepIcon({ state }: { state: TransitionStep['state'] }) {
   return <CircleIcon className="size-2 shrink-0 text-muted-foreground/40" />
 }
 
-/** The worktrees the writer leaves behind with uncommitted changes, collapsed under the handover line. */
-function Left({ paths }: { paths: string[] }) {
+/**
+ * What the handover waits for or leaves behind, collapsed under its line: the conversations still running, or the
+ * worktrees with uncommitted changes.
+ */
+function Listed({ items, noun }: { items: string[]; noun: string }) {
   return (
     <details className="group ml-5 text-muted-foreground/60">
       <summary className="flex cursor-pointer list-none items-center gap-1 hover:text-muted-foreground [&::-webkit-details-marker]:hidden">
         <ChevronRightIcon className="size-3 shrink-0 transition-transform group-open:rotate-90" />
-        {paths.length === 1 ? 'show the worktree' : `show ${paths.length} worktrees`}
+        {items.length === 1 ? `show the ${noun}` : `show ${items.length} ${noun}s`}
       </summary>
       <ul className="mt-0.5 space-y-0.5 pl-4">
-        {paths.map((path) => (
-          <li className="truncate" key={path} title={path}>
-            {path}
+        {items.map((item) => (
+          <li className="truncate" key={item} title={item}>
+            {item}
           </li>
         ))}
       </ul>
@@ -120,7 +123,15 @@ function Left({ paths }: { paths: string[] }) {
   )
 }
 
-function Step({ step, left }: { step: TransitionStep; left?: string[] }) {
+function Step({
+  step,
+  left,
+  waiting,
+}: {
+  step: TransitionStep
+  left?: string[]
+  waiting?: string[]
+}) {
   const sized = step.name === 'download' && step.total !== undefined && step.total > 0
   // A fetch that fast-forwarded names its commit count up front; the detail keeps the range.
   const advanced = step.name === 'fetch' && !!step.commits && step.state === 'done'
@@ -165,7 +176,12 @@ function Step({ step, left }: { step: TransitionStep; left?: string[] }) {
           />
         </div>
       )}
-      {step.name === 'handover' && left && left.length > 0 && <Left paths={left} />}
+      {step.name === 'handover' && step.state === 'running' && waiting && waiting.length > 0 && (
+        <Listed items={waiting} noun="conversation" />
+      )}
+      {step.name === 'handover' && left && left.length > 0 && (
+        <Listed items={left} noun="worktree" />
+      )}
     </li>
   )
 }
@@ -264,7 +280,12 @@ export function TransitionCard({
           {transition.steps
             .filter((step) => !compact || step.name === transition.step)
             .map((step) => (
-              <Step key={step.name} left={transition.left} step={step} />
+              <Step
+                key={step.name}
+                left={transition.left}
+                step={step}
+                waiting={transition.waiting}
+              />
             ))}
         </ol>
         {transition.error && (

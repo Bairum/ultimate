@@ -69,6 +69,36 @@ const header = (transition: Transition) =>
     .replace(/<[^>]+>/g, '')
     .replaceAll('&#x27;', "'")
 
+it('lists what a held handover waits for: the running conversations, then the worktrees', () => {
+  const holding = (patch: Partial<Transition>) =>
+    renderToStaticMarkup(
+      createElement(TransitionCard, {
+        transition: moved({
+          step: 'handover',
+          steps: [{ name: 'handover', state: 'running', detail: 'finishing 2 runs' }],
+          ...patch,
+        }),
+      }),
+    ).replaceAll('&#x27;', "'")
+  const busy = holding({ waiting: ['#12 Review the lease', '#14'] })
+  expect(busy).toContain('show 2 conversations')
+  expect(busy).toContain('#12 Review the lease')
+  expect(busy).toContain('Handing over: rog finishing 2 runs')
+  const dirty = holding({
+    steps: [
+      {
+        name: 'handover',
+        state: 'running',
+        detail: 'waiting for 1 worktree with uncommitted changes',
+      },
+    ],
+    left: ['/w/feature'],
+  })
+  expect(dirty).toContain('show the worktree')
+  expect(dirty).toContain('/w/feature')
+  expect(dirty).not.toContain('conversation')
+})
+
 it('names who started the move in the card header', () => {
   const running = moved({ steps: [{ name: 'fetch', state: 'running' }], step: 'fetch' })
   expect(header({ ...running, by: 'cloud' })).toBe('Preparing haza-pc · started from the cloud UI')

@@ -20,7 +20,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { JsonObject } from '@earendil-works/pi-durable'
-import { handoverDetail, LEFT_LIMITS } from '../../cloud/protocol.ts'
+import { applyWaiting, handoverDetail, LEFT_LIMITS } from '../../cloud/protocol.ts'
 import type { MoveBy, Transition, TransitionStep } from '../../cloud/protocol.ts'
 import type { projectBuilds } from '../../cloud/ui-build.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -87,6 +87,8 @@ const SECRET = 'ULTIMATE_CLOUD_SNAPSHOT_KEY'
 /** Room for the snapshot and the release inside the supervisor's 10-second stop. */
 const STOP_BUDGET = 8000
 const MOVE_CAP = 10 * 60_000
+/** A held move rechecks its worktrees this often, besides on every task graph change. */
+export const HOLD_RECHECK = 30_000
 const suffixes = ['', '-wal', '-shm']
 const STEPS: TransitionStep['name'][] = [
   'fetch',
@@ -138,11 +140,15 @@ function tail(error: unknown) {
   return output ? output.split('\n').slice(-20).join('\n') : String(error)
 }
 // Conversation runs and lander runs are foreground tasks; schedulers and reporters wait in the background.
-const foreground = (graph: { value: { tasks: Record<string, { background: boolean }> } }) =>
-  Object.values(graph.value.tasks).filter((task) => !task.background).length
+const foregroundTasks = (graph: {
+  value: { tasks: Record<string, { background: boolean; conversationId: number }> }
+}) => Object.values(graph.value.tasks).filter((task) => !task.background)
+const foreground = (graph: Parameters<typeof foregroundTasks>[0]) => foregroundTasks(graph).length
 /** Transition text bounded well under the replica's limit, keeping the end, where errors say what failed. */
 const clip = (text: string) => (text.length > 500 ? `…${text.slice(-499)}` : text)
 const runs = (count: number) => `${count} running ${count === 1 ? 'task' : 'tasks'}`
+const changes = (paths: string[]) =>
+  `${paths.length} ${paths.length === 1 ? 'worktree' : 'worktrees'} with uncommitted changes`
 /**
  * The writer's secret names this machine lacks. A writer that could not name all of its secrets adds one entry for
  * the unnamed rest, so an ordinary move stops at checks rather than proceeding unverified.
@@ -186,6 +192,8 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   let ran: Transition | undefined
   /** The transition this writer releases for: its hellos name it, so the cloud keeps that transition alive. */
   let releasingFor: string | undefined
+  /** Wakes a release that holds for a move, set while it holds. */
+  let holding: (() => void) | undefined
   /** A move's handover waits for the free lease. */
   let freed: PromiseWithResolvers<SyncState> | undefined
   /** Roles seen by a draining writer, which stops when the move it drains for ends. */
@@ -344,17 +352,21 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         serving: next === 'serving',
         // A replaced connection's last roles no longer apply.
         role: (state) => setTimeout(() => sync === current && onRole(state, current), 0),
-        releaseRequested: (by, id) => setTimeout(() => void moveTo(by, id).catch(report), 0),
-        releaseWaiting: (by, tasks, dirty) => {
+        releaseRequested: (by, id, force) =>
+          setTimeout(() => void moveTo(by, id, force).catch(report), 0),
+        releaseWaiting: (waiting) => {
+          const { by, tasks, dirty, held = false } = waiting
           if (tasks > 0) host.notice(`Move to ${by} waits for ${runs(tasks)}`)
+          else if (held && dirty?.length) host.notice(`Move to ${by} waits for ${changes(dirty)}`)
           if (!moving) return
-          if (dirty) moving.transition.left = dirty
+          applyWaiting(moving.transition, waiting)
           const handover = moving.transition.steps.find((step) => step.name === 'handover')
           if (handover && moving.transition.from) {
             handover.detail = handoverDetail(
               moving.transition.from,
               tasks,
               moving.transition.left?.length,
+              held,
             )
             publish()
           }
@@ -383,6 +395,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     sync?.()
     clearInterval(idleTimer)
     mode = undefined
+    holding?.()
   }
 
   const onRole = (state: SyncState, connection: typeof sync) => {
@@ -665,7 +678,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         freed = Promise.withResolvers<SyncState>()
         const aborted = () => freed?.reject(signal.reason)
         signal.addEventListener('abort', aborted, { once: true })
-        sync!.send({ type: 'request-release', id })
+        sync!.send({ type: 'request-release', id, ...(force ? { force: true } : {}) })
         try {
           state = await freed.promise
         } finally {
@@ -845,71 +858,103 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     const due = await host.use<AutomationsService>('automations')?.nextDue()
     return due === undefined || due > now + options.idleRelease * 60_000
   }
+  // A move's hold occupies the queue; idle checks would only pile up behind it.
   const checkIdle = (now = Date.now()) =>
-    queue(async () => {
-      if (mode !== 'serving' || sync?.state().role !== 'writer' || !(await idle(now))) {
-        idleSince = undefined
-        return false
-      }
-      idleSince ??= now
-      if (now - idleSince < options.idleRelease * 60_000) return false
-      idleSince = undefined
-      return release({ reason: 'Released · resume here', released: true })
-    })
+    holding
+      ? Promise.resolve(false)
+      : queue(async () => {
+          if (mode !== 'serving' || sync?.state().role !== 'writer' || !(await idle(now))) {
+            idleSince = undefined
+            return false
+          }
+          idleSince ??= now
+          if (now - idleSince < options.idleRelease * 60_000) return false
+          idleSince = undefined
+          return release({ reason: 'Released · resume here', released: true })
+        })
+
+  /** `#12 Review the lease`: the conversations whose foreground runs a move waits for, bounded like worktrees. */
+  const runningIn = (graph: Parameters<typeof foregroundTasks>[0]) => {
+    const titles = new Map(
+      host.conversations().map((summary) => [summary.id, summary.label ?? summary.title]),
+    )
+    return [...new Set(foregroundTasks(graph).map((task) => task.conversationId))]
+      .toSorted((a, b) => a - b)
+      .slice(0, LEFT_LIMITS.paths)
+      .map((conversation) =>
+        `#${conversation} ${titles.get(conversation) ?? ''}`.trim().slice(0, LEFT_LIMITS.path),
+      )
+  }
 
   /**
-   * A standby asked for the lease for transition `id`: release once no foreground task runs, at the latest after ten
-   * minutes, reporting how many still run. A transition that ends meanwhile, failed or cancelled, stops the wait.
+   * A standby asked for the lease for transition `id`. The release holds while foreground tasks run, then while
+   * worktrees hold uncommitted changes, however long, reporting each with `release-waiting`: it rechecks on every task
+   * graph change and every `HOLD_RECHECK`. `force` skips both holds and releases at once, naming the dirty worktrees
+   * that stay behind. A transition that ends meanwhile, failed or cancelled, stops the wait. @sync, which may have
+   * asked, runs in the machine home's own process, so its run never counts here.
    */
-  const moveTo = (by: string, id: string) =>
+  const moveTo = (by: string, id: string, force = false) =>
     queue(async () => {
       if (mode !== 'serving' || sync?.state().role !== 'writer') return false
       // Only this transition's own end counts: roles sent before it was reported may still be on their way.
       const ended = (state: SyncState) => state.transition?.id === id && !!state.transition.error
-      const graph = await host.harness().taskGraph(context)
-      let outcome: 'drained' | 'cancelled' = 'drained'
-      try {
-        let tasks = foreground(graph)
-        if (tasks > 0) {
-          sync.send({ type: 'release-waiting', by, tasks })
-          host.notice(`Move to ${by} waits for ${runs(tasks)}`)
-          outcome = await new Promise((resolve) => {
-            const timer = setTimeout(() => finish('drained'), MOVE_CAP)
-            const unsubscribe = graph.subscribe(() => {
-              const now = foreground(graph)
-              if (now === 0) finish('drained')
-              else if (now !== tasks) {
-                tasks = now
-                sync?.send({ type: 'release-waiting', by, tasks })
-              }
-            })
-            const watch = (state: SyncState) => ended(state) && finish('cancelled')
-            watchers.add(watch)
-            function finish(result: 'drained' | 'cancelled') {
-              clearTimeout(timer)
-              unsubscribe()
-              watchers.delete(watch)
-              resolve(result)
-            }
-          })
-        }
-      } finally {
-        graph.dispose()
-      }
       const stopped = () => {
         host.notice(`The move to ${by} stopped; this machine keeps the project`)
         return false
       }
-      if (outcome === 'cancelled' || ended(sync.state())) return stopped()
-      // Uncommitted work stays on this machine: scanned once the drained runs have written theirs, right before the
-      // release, so the target hears which worktrees hold it.
-      const dirty = await dirtyWorktrees().catch((error: unknown) => {
-        host.notice(`Could not list worktrees with uncommitted changes: ${String(error)}`)
-        return []
-      })
-      // The move may have ended while the scan ran.
-      if (ended(sync.state())) return stopped()
-      if (dirty.length) sync.send({ type: 'release-waiting', by, tasks: 0, dirty })
+      const scan = () =>
+        dirtyWorktrees().catch((error: unknown) => {
+          host.notice(`Could not list worktrees with uncommitted changes: ${String(error)}`)
+          return []
+        })
+      const graph = await host.harness().taskGraph(context)
+      let wake = Promise.withResolvers<void>()
+      let cancelled = false
+      const unsubscribe = graph.subscribe(() => wake.resolve())
+      const watch = (state: SyncState) => {
+        if (!ended(state)) return
+        cancelled = true
+        wake.resolve()
+      }
+      watchers.add(watch)
+      const timer = setInterval(() => wake.resolve(), HOLD_RECHECK)
+      holding = () => wake.resolve()
+      // Each hold is reported once per change.
+      let reported = ''
+      let dirty: string[] = []
+      try {
+        for (;;) {
+          wake = Promise.withResolvers<void>()
+          if (closed || mode !== 'serving') return false
+          if (cancelled || ended(sync.state())) return stopped()
+          const tasks = force ? 0 : foreground(graph)
+          const waiting =
+            tasks > 0
+              ? { tasks, runs: runningIn(graph) }
+              : // Scanned once the drained runs have written theirs, so the target hears which worktrees hold it.
+                { tasks: 0, dirty: (dirty = await scan()), held: !force }
+          // The move may have ended while the scan ran.
+          if (cancelled || ended(sync.state())) return stopped()
+          if (waiting.tasks === 0 && (force || !waiting.dirty?.length)) break
+          const key = JSON.stringify(waiting)
+          if (key !== reported) {
+            reported = key
+            sync.send({ type: 'release-waiting', by, ...waiting })
+            host.notice(
+              `Move to ${by} waits for ${waiting.tasks > 0 ? runs(waiting.tasks) : changes(dirty)}`,
+            )
+          }
+          await wake.promise
+        }
+      } finally {
+        holding = undefined
+        clearInterval(timer)
+        unsubscribe()
+        watchers.delete(watch)
+        graph.dispose()
+      }
+      // A forced move names the worktrees that stay behind; a held one clears what it waited for.
+      if (dirty.length || reported) sync.send({ type: 'release-waiting', by, tasks: 0, dirty })
       releasingFor = id
       try {
         // The standby page's cloud facet explains the move, and that "Move here" pulls it back.

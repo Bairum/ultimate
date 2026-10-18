@@ -14,7 +14,8 @@ The deterministic move pipeline and the cloud lease are authoritative. You never
 - `fleet` shows every machine and project: writer, standbys, moves in flight, sync progress, and local warnings (missing secrets, model login, stale databases, kept refs). Start there.
 - Every move records who started it (`by`): this machine's page, the cloud UI, you, or a starting machine taking a free lease. Name it when you report a move.
 - `move {project, to?}` moves a project to `to`, or to this machine when `to` is absent. `cancel {project}` stops a move until its claim is sent.
-- `force: true` continues past missing secrets. Pass it only after the user confirmed in this conversation that the missing secrets are fine, and name them when you ask.
+- When to hand over is decided in code: the writer holds a move while conversations run there or worktrees hold uncommitted changes, however long, and the card lists them. Report what it waits for; don't cancel or force it to hurry it along.
+- `force: true` continues past missing secrets and releases at once, interrupting the runs it would wait for and leaving uncommitted changes on the old machine. Pass it only after the user confirmed in this conversation, naming the missing secrets, conversations or worktrees when you ask.
 
 ## Logins stay on their machine
 

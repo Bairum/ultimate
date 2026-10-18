@@ -11,7 +11,7 @@ import { admitsAccess } from './access.ts'
 import type { AccessConfig } from './access.ts'
 
 import type { Sql } from './replica.ts'
-import { HELLO_LIMITS, LEFT_LIMITS, PROJECT_KEY, PROJECT_MISMATCH } from './protocol.ts'
+import { bounded, HELLO_LIMITS, PROJECT_KEY, PROJECT_MISMATCH } from './protocol.ts'
 import type { CloudMessage, Hello, MachineMessage } from './protocol.ts'
 import { BUILD_ID, buildKey, contentType, uploadBuild, validName } from './builds.ts'
 import { DirectoryStore } from './directory.ts'
@@ -570,7 +570,12 @@ export class SharedReplica {
         if (held?.role !== 'standby' || !held.machine || typeof message.id !== 'string') return
         for (const writer of this.sockets())
           writer.send(
-            JSON.stringify({ type: 'release-requested', by: held.machine, id: message.id }),
+            JSON.stringify({
+              type: 'release-requested',
+              by: held.machine,
+              id: message.id,
+              ...(message.force === true ? { force: true } : {}),
+            }),
           )
         return
       }
@@ -598,20 +603,23 @@ export class SharedReplica {
       // Only the writer's data is applied: a standby is fenced off.
       if (held?.role !== 'writer') return
       if (message.type === 'release-waiting') {
-        const { by, tasks, dirty } = message
+        const { by, tasks, dirty, runs } = message
         if (
           typeof by !== 'string' ||
           !Number.isSafeInteger(tasks) ||
-          (dirty !== undefined &&
-            (!Array.isArray(dirty) ||
-              dirty.length > LEFT_LIMITS.paths ||
-              !dirty.every((path) => typeof path === 'string' && path.length <= LEFT_LIMITS.path)))
+          !bounded(dirty) ||
+          !bounded(runs)
         )
           return
-        this.standby(by)?.send(
-          JSON.stringify({ type: 'release-waiting', by, tasks, ...(dirty ? { dirty } : {}) }),
-        )
-        if (this.store.draining(by, tasks, held.machine!, dirty)) {
+        const waiting = {
+          by,
+          tasks,
+          ...(dirty ? { dirty } : {}),
+          ...(runs ? { runs } : {}),
+          ...(message.held === true ? { held: true } : {}),
+        }
+        this.standby(by)?.send(JSON.stringify({ type: 'release-waiting', ...waiting }))
+        if (this.store.draining({ ...waiting, from: held.machine! })) {
           this.broadcast()
           this.presence()
         }

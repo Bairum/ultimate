@@ -469,6 +469,26 @@ export const demoFleet = (userHome: string, now = Date.now()): Fleet => ({
       name: 'blog',
       writer: { machine: 'rog', online: true },
       standbys: [{ machine: 'haza-pc', connected: true, lastSeen: Date.now() }],
+      // A move the writer holds while two conversations still run.
+      transition: {
+        id: 'demo-held',
+        target: 'haza-pc',
+        from: 'rog',
+        by: 'sync',
+        step: 'handover',
+        steps: [
+          { name: 'fetch', state: 'done', detail: 'main already up to date' },
+          { name: 'install', state: 'skipped', detail: 'pnpm-lock.yaml is unchanged' },
+          { name: 'checks', state: 'done', detail: 'Ready' },
+          { name: 'handover', state: 'running', detail: 'finishing 2 runs' },
+          { name: 'download', state: 'pending' },
+          { name: 'branches', state: 'pending' },
+          { name: 'claim', state: 'pending' },
+        ],
+        cancellable: true,
+        startedAt: Date.now() - 4 * MINUTE,
+        waiting: ['#12 Review the drafts', '#14 Fix the feed'],
+      },
       local: {
         root: `${userHome}/Projects/blog`,
         home: `${userHome}/.ultimate/projects/blog-1a2b3c4d`,
@@ -589,12 +609,15 @@ export default function sync(host: ExtensionHost) {
         name: 'move',
         deferred: true,
         description:
-          'Move a project (key or name) to machine `to`, or to this machine when `to` is absent. Returns the move id; the card follows it. Pass force: true only after the user confirmed the missing secrets in this conversation.',
+          'Move a project (key or name) to machine `to`, or to this machine when `to` is absent. Returns the move id; the card follows it. Without force the writer holds the handover while it has running conversations or worktrees with uncommitted changes, and the card lists them. Pass force: true only after the user confirmed in this conversation: it continues past missing secrets and releases at once, interrupting those runs and leaving the uncommitted changes on the old machine.',
         parameters: Type.Object({
           project: Type.String({ minLength: 1 }),
           to: Type.Optional(Type.String({ minLength: 1 })),
           force: Type.Optional(
-            Type.Boolean({ description: 'Continue past missing secrets; only on the user’s OK.' }),
+            Type.Boolean({
+              description:
+                'Continue past missing secrets and release without waiting for running conversations or uncommitted worktrees; only on the user’s OK.',
+            }),
           ),
         }),
         async execute(input) {

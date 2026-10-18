@@ -915,6 +915,58 @@ describe('project replica sockets', () => {
     }
   })
 
+  it('forwards a forced request and keeps what a held release waits for on the transition', () => {
+    const { instance, connect } = shared()
+    const writer = connect()
+    writer.receive(hello())
+    const laptop = connect()
+    laptop.receive(hello({ machine: 'laptop' }))
+    laptop.receive({
+      type: 'transition',
+      value: {
+        ...running('move-1'),
+        step: 'handover',
+        steps: [{ name: 'handover', state: 'running' }],
+      },
+    })
+    laptop.receive({ type: 'request-release', id: 'move-1', force: true })
+    expect(writer.sent().at(-1)).toEqual({
+      type: 'release-requested',
+      by: 'laptop',
+      id: 'move-1',
+      force: true,
+    })
+    // The runs it waits for, by conversation.
+    const runs = ['#12 Review the lease', '#14']
+    writer.receive({ type: 'release-waiting', by: 'laptop', tasks: 3, runs })
+    expect(laptop.sent().at(-2)).toEqual({ type: 'release-waiting', by: 'laptop', tasks: 3, runs })
+    expect(instance.store.transition()).toMatchObject({
+      waiting: runs,
+      steps: [{ name: 'handover', detail: 'finishing 3 runs' }],
+    })
+    // Drained, it holds for the dirty worktrees: the runs go, the worktrees are what it waits for.
+    writer.receive({ type: 'release-waiting', by: 'laptop', tasks: 0, dirty: ['/w/a'], held: true })
+    expect(laptop.sent().at(-2)).toEqual({
+      type: 'release-waiting',
+      by: 'laptop',
+      tasks: 0,
+      dirty: ['/w/a'],
+      held: true,
+    })
+    expect(instance.store.transition()?.waiting).toBeUndefined()
+    expect(instance.store.transition()).toMatchObject({
+      left: ['/w/a'],
+      steps: [{ detail: 'waiting for 1 worktree with uncommitted changes' }],
+    })
+    // Committed: an empty list clears them before the release.
+    writer.receive({ type: 'release-waiting', by: 'laptop', tasks: 0, dirty: [] })
+    expect(instance.store.transition()?.left).toBeUndefined()
+    expect(instance.store.transition()?.steps[0].detail).toBe('')
+    // An unbounded run list is refused like an unbounded worktree list.
+    writer.receive({ type: 'release-waiting', by: 'laptop', tasks: 1, runs: ['x'.repeat(501)] })
+    expect(instance.store.transition()?.waiting).toBeUndefined()
+  })
+
   it('makes a second checkout on the writer machine, at another root, a standby that replaces nothing', () => {
     const { instance, connect } = shared()
     const writer = connect()
