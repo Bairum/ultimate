@@ -141,6 +141,8 @@ export default async function fauxExtension(host: ExtensionHost) {
         if (
           last?.role === 'user' &&
           !text.startsWith('Message from') &&
+          // A branch's report is no new task: branching on it would loop.
+          !text.startsWith('Reply from') &&
           since.some(
             (message) => message.role === 'toolResult' && message.toolName === 'seed_tally',
           )

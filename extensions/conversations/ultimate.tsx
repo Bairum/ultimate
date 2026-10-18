@@ -7,6 +7,7 @@ import type { BoardData } from '../board/data.tsx'
 import type { QuestionsBoard } from '../questions/open.tsx'
 import { phaseText, usePhase } from '../phase/chip.tsx'
 import { useOverview } from './feature.tsx'
+import { AgentMark } from './marks.tsx'
 
 /** The home's primary standing agent: @sync in the machine home, else @ultimate. */
 const primaryOf = (system: ReturnType<typeof useSystem>) =>
@@ -29,22 +30,6 @@ export const useWaitingOnUser = () =>
     useDocOf<BoardData>(1, 'board') ?? emptyBoard,
     useDocOf<QuestionsBoard>(1, 'questions.board'),
   )
-
-/** @ultimate's dot: pulsing while it works, amber while questions wait on you, else muted. */
-export function UltimateDot({ working, waiting }: { working: boolean; waiting: number }) {
-  return (
-    <span
-      className={cn(
-        'size-1.5 shrink-0 rounded-full',
-        working
-          ? 'animate-pulse-dot bg-brand'
-          : waiting
-            ? 'bg-amber-400'
-            : 'bg-muted-foreground/50',
-      )}
-    />
-  )
-}
 
 /** A busy standing agent's word: its classified phase, lower case like its idle line, else "working". */
 export function useWorkingWord(id: number | undefined, working: boolean) {
@@ -89,7 +74,12 @@ export function UltimateButton() {
           onClick={() => void talkToUltimate(actions)}
           type="button"
         >
-          <UltimateDot waiting={waiting} working={working} />@{name}
+          <AgentMark
+            name={name}
+            presence={working ? 'working' : waiting ? 'waiting' : undefined}
+            size="sm"
+          />
+          @{name}
           {working && word !== 'working' && <span className="text-brand">{word}</span>}
           {waiting > 0 && <span className="text-amber-700 dark:text-amber-300">{waiting}</span>}
         </button>

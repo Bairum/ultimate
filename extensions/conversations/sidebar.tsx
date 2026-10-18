@@ -1,4 +1,4 @@
-import { ChevronRightIcon, GitBranchIcon, GitMergeIcon } from 'lucide-react'
+import { ChevronRightIcon, GitBranchIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -26,13 +26,7 @@ import {
 import { currentAssessment, Row, ChildRow, RootRow, StandingRow } from './rows.tsx'
 import { useRoots } from '../lineage/roots.tsx'
 import { ago, LanderState } from './lander.tsx'
-import {
-  StandingPhase,
-  talkToUltimate,
-  UltimateDot,
-  usePrimaryAgent,
-  useWaitingOnUser,
-} from './ultimate.tsx'
+import { StandingPhase, talkToUltimate, usePrimaryAgent, useWaitingOnUser } from './ultimate.tsx'
 
 /** The shown conversation, also while its snapshot is still on the way. */
 const useShownId = () => useStore((state) => state.view?.conversation.id ?? state.requested)
@@ -111,7 +105,8 @@ export function Conversations() {
   // The primary agent (@ultimate, or @sync in the machine home) first, then the lander and other standing agents:
   // pinned above the rest and never concluded.
   const primary = usePrimaryAgent()
-  const ultimateId = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')?.[primary]
+  const standingIds = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')
+  const ultimateId = standingIds?.[primary]
   const ultimate = topLevel.find((conversation) => conversation.id === ultimateId)
   const agents = topLevel
     .filter((conversation) => pinned(conversation) && conversation.id !== ultimateId)
@@ -187,18 +182,27 @@ export function Conversations() {
     const lander = conversation?.label === 'lander'
     const isUltimate = conversation === undefined || conversation.id === ultimateId
     const shown = conversation !== undefined && conversation.id === shownTop?.id
+    // A lander lands without a model run: its dot pulses for the landing too.
+    const landing =
+      lander &&
+      workspaceIndex.queue.some(
+        (item) =>
+          item.state === 'landing' &&
+          workspaceIndex.landerConversations[item.source] === conversation.id,
+      )
+    const name = lander
+      ? 'lander'
+      : isUltimate
+        ? primary
+        : (Object.entries(standingIds ?? {}).find(([, id]) => id === conversation.id)?.[0] ??
+          conversation.title?.replace(/^@/, '') ??
+          `#${conversation.id}`)
     return (
       <StandingRow
         conversation={conversation}
         key={conversation?.id ?? 'ultimate'}
-        mark={
-          lander ? (
-            <GitMergeIcon aria-label="Lander" className="size-3 text-brand" strokeWidth={2.5} />
-          ) : (
-            <UltimateDot waiting={isUltimate ? waiting : 0} working={busy} />
-          )
-        }
-        name={conversation?.title ?? `@${primary}`}
+        name={name}
+        presence={busy || landing ? 'working' : isUltimate && waiting > 0 ? 'waiting' : 'idle'}
         onOpen={() =>
           conversation && !isUltimate
             ? actions.switchConversation(conversation.id)
@@ -221,7 +225,7 @@ export function Conversations() {
             )}
             {latest > 0 && (
               <span
-                className="shrink-0 text-muted-foreground/80"
+                className="ml-auto shrink-0 text-muted-foreground/80"
                 title={new Date(latest).toLocaleString()}
               >
                 {ago(latest, now)}

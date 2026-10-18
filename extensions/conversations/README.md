@@ -7,22 +7,29 @@ feature, activity or reply assessment. This applies to intent, spawn and complet
 
 ## Sidebar
 
-@ultimate has its own section at the very top: its row shows its status dot and `working`, `idle` or an amber
+Every standing agent's row leads with its mark (`marks.tsx` `AgentMark`): a small tinted tile with a glyph — a brand
+`U` for @ultimate (the title bar's wordmark), Cloudflare's orange cloud, a green merge for the lander, arrows for @sync,
+a bot for any other resident — with a presence dot in its corner (pulsing while it works or lands, amber while it
+waits on you). Then a fixed display name (`Ultimate`, `Lander`, `Cloudflare`, else the name capitalised) with
+`@name` small and muted. The same mark sits in the title bar's button and before standing senders in chat bubbles.
+
+@ultimate has its own section at the very top: its row shows `working`, `idle` or an amber
 `N waiting on you` (reply-enabled board messages to you still waiting on your answer, plus one for its current final
 answer when that asks you questions), and the age of its latest
 message. Clicking it opens @ultimate on the Agent surface through `subagents.standing {name: 'ultimate'}`, also before
 its conversation exists. Below it, an Agents group lists the lander first, then the other ownerless top-level standing
 agents (label `agent`) by ID. These rows are never concluded or hidden and show no summary, feature or assessment:
-@lander shows its state (`landing`, `fixing`, `diagnosing`, `working` or `idle`), its latest landing's feature, short
-sha and age, and `queue N` while submissions wait; other agents show `working` or `idle` and the age. Their menu only
+@lander shows its state (`landing`, `fixing`, `diagnosing`, `working` or `idle`), `queue N` while submissions wait,
+its latest landing's short sha (green) and feature as quiet text (title on hover), and its age; other agents show `working` or `idle` and the age. Their menu only
 compacts the context; they are never renamed, cleared or concluded.
 
 The title bar's `@ultimate` button (`titlebar.left`, beside the surfaces, also on phones) opens @ultimate the same way
-from every surface. Its dot pulses while @ultimate works and is amber while questions wait on you, with their count.
+from every surface. Its mark's dot pulses while @ultimate works and is amber while questions wait on you, with their count.
 
 The sidebar lists the roots below the agents (lineage's `useRoots()`); trees sort by their newest input anywhere in
-them. A root's row (`RootRow`) is the head of its tree, not one of its conversations: a scroll icon (a pulsing dot
-while it compacts), its title in semibold, the size of its context, and the last three things that happened in it from
+them. A root's row (`RootRow`) is the head of its tree, not one of its conversations: a scroll mark (with a pulsing dot
+while it compacts), the fixed name `Project context` with `#id` small (its summary title only on hover, since it
+described the root's history before it held a context), the size of its context, and the last three things that happened in it from
 lineage's `recent {id}` action (a landing's short sha and subject, a note with its sender, a new branch with its
 prompt, a compaction, or the context's start), each with its age; clicking one opens the root at that entry. It shows
 no feature, summary or assessment, and the summary below the tree is not shown for it. Its menu offers Compact context

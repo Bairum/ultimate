@@ -1,7 +1,6 @@
 import { cn } from '@/sdk'
 import { phaseText, usePhase } from '../phase/chip.tsx'
 import { useWorkspaceIndex } from '../workspaces/data.tsx'
-import { FeatureTag } from './feature.tsx'
 
 /** `now`, `5m`, `3h`, `2d`, then a short date. */
 export function ago(at: number, now: number) {
@@ -61,25 +60,36 @@ export function LanderState({
         <span className="shrink-0">idle</span>
       ) : (
         <span
-          className={cn('flex shrink-0 items-center gap-1', label !== 'diagnosing' && 'text-brand')}
+          className={cn(
+            'shrink-0',
+            label === 'fixing'
+              ? 'text-amber-700 dark:text-amber-300'
+              : label !== 'diagnosing' && 'text-brand',
+          )}
         >
-          <span
-            className={cn(
-              'size-1.5 animate-pulse-dot rounded-full',
-              label === 'diagnosing' ? 'bg-muted-foreground' : 'bg-brand',
-            )}
-          />
           {label}
         </span>
       )}
-      {last?.subject?.feature && <FeatureTag feature={last.subject.feature} />}
-      {last?.sha && <span className="shrink-0">{last.sha.slice(0, 7)}</span>}
+      {queued > 0 && <span className="shrink-0 text-foreground/80">queue {queued}</span>}
+      {last?.sha && (
+        <span
+          className="flex min-w-0 items-center gap-1"
+          title={[last.subject?.feature, last.subject?.title].filter(Boolean).join(' · ')}
+        >
+          <span className="shrink-0 text-success/90">{last.sha.slice(0, 7)}</span>
+          {last.subject?.feature && (
+            <span className="truncate font-sans text-[10.5px]">{last.subject.feature}</span>
+          )}
+        </span>
+      )}
       {at !== undefined && (
-        <span className="shrink-0 text-muted-foreground/80" title={new Date(at).toLocaleString()}>
+        <span
+          className="ml-auto shrink-0 text-muted-foreground/80"
+          title={new Date(at).toLocaleString()}
+        >
           {ago(at, now)}
         </span>
       )}
-      {queued > 0 && <span className="shrink-0">queue {queued}</span>}
     </>
   )
 }

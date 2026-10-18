@@ -28,6 +28,8 @@ import { PhaseLabel, usePhase } from '../phase/chip.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import type { Assessment, OverviewRow } from './types.ts'
 import { ago } from './lander.tsx'
+import { AgentMark, agentTitle } from './marks.tsx'
+import type { Presence } from './marks.tsx'
 
 export function currentAssessment(row: OverviewRow | undefined) {
   return row?.runState === 'answered' &&
@@ -301,15 +303,16 @@ export function StandingRow({
   conversation,
   name,
   shown,
-  mark,
+  presence,
   onOpen,
   children,
 }: {
   /** Missing until @ultimate's conversation is first opened. */
   conversation?: ConversationSummary
+  /** The agent's name without `@`: `ultimate`, `lander`, `cloudflare`, … */
   name: string
   shown: boolean
-  mark: ReactNode
+  presence: Presence
   onOpen: () => void
   children: ReactNode
 }) {
@@ -324,18 +327,21 @@ export function StandingRow({
     >
       <button
         aria-current={shown ? 'true' : undefined}
-        className="flex h-full min-w-0 flex-1 cursor-pointer flex-col justify-center rounded-md pr-2 pl-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+        className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md pr-2 pl-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
         onClick={onOpen}
         type="button"
       >
-        <span className="flex w-full min-w-0 items-center gap-1.5">
-          <span className="flex size-3 shrink-0 items-center justify-center">{mark}</span>
-          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-foreground">
-            {name}
+        <AgentMark name={name} presence={presence} />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <span className="truncate text-[13px] leading-5 font-semibold text-foreground">
+              {agentTitle(name)}
+            </span>
+            <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">@{name}</span>
           </span>
-        </span>
-        <span className="flex w-full min-w-0 items-center gap-2 pr-5 pl-[18px] font-mono text-[10px] leading-4 text-muted-foreground">
-          {children}
+          <span className="flex w-full min-w-0 items-center gap-2 pr-5 font-mono text-[10px] leading-4 text-muted-foreground">
+            {children}
+          </span>
         </span>
       </button>
       {conversation && (
@@ -452,7 +458,8 @@ export function RootRow({
     }
     void refetch()
   }, [tokens, refetch])
-  const name = conversation.title ?? `#${id}`
+  // A hardcoded name: the root's summary title described its pre-context history, not what it holds now.
+  const name = 'Project context'
   return (
     <div
       className={cn(
@@ -464,25 +471,22 @@ export function RootRow({
     >
       <button
         aria-current={shown ? 'true' : undefined}
-        className="flex h-7 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md pr-7 pl-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+        className="flex h-9 w-full min-w-0 cursor-pointer items-center gap-2.5 rounded-md pr-7 pl-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
         onClick={() => actions.switchConversation(id)}
+        title={conversation.title ? `${conversation.title} · #${id}` : `#${id}`}
         type="button"
       >
-        <span className="flex size-3 shrink-0 items-center justify-center">
-          {working ? (
-            <span className="size-1.5 animate-pulse-dot rounded-full bg-brand" />
-          ) : (
-            <ScrollTextIcon aria-label="Root" className="size-3 text-brand" />
-          )}
-        </span>
-        <span
-          className={cn(
-            'min-w-0 flex-1 truncate text-[13px] font-semibold',
-            shown ? 'text-foreground' : 'text-foreground/90',
-          )}
-          title={name}
-        >
-          {name}
+        <AgentMark name="root" presence={working ? 'working' : undefined} />
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span
+            className={cn(
+              'truncate text-[13px] font-semibold',
+              shown ? 'text-foreground' : 'text-foreground/90',
+            )}
+          >
+            {name}
+          </span>
+          <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">#{id}</span>
         </span>
         {tokens !== undefined && tally?.since !== undefined && (
           <span
@@ -500,7 +504,7 @@ export function RootRow({
             return (
               <li key={event.entry}>
                 <button
-                  className="flex h-5 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-sm pr-2 pl-[22px] text-left font-mono text-[10.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+                  className="flex h-5 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-sm pr-2 pl-[42px] text-left font-mono text-[10.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
                   data-root-event={event.type}
                   onClick={() => openEntry(actions, id, event.entry)}
                   title={`Open #${id}/${event.entry}`}

@@ -24,6 +24,7 @@ import {
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import { ConversationRef } from '../conversations/feature.tsx'
+import { AgentMark } from '../conversations/marks.tsx'
 import { MessageQuestions } from '../questions/card.tsx'
 import { openAgentSource } from '../subagents/messages.tsx'
 import { useWorkspaceIndex } from '../workspaces/data.tsx'
@@ -39,14 +40,20 @@ import {
 } from './data.tsx'
 import type { BoardData, BoardMessage } from './data.tsx'
 
-export function Address({ id }: { id: number | 'user' }) {
+/** Who `id` is: you, `@name` for a standing agent or the lander (with its mark when `mark`), else a conversation link. */
+export function Address({ id, mark = false }: { id: number | 'user'; mark?: boolean }) {
   const standing = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')
   const workspaces = useWorkspaceIndex()
   if (id === 'user') return <span>you</span>
-  const name = Object.entries(standing ?? {}).find(([, value]) => value === id)?.[0]
-  if (name) return <span>@{name}</span>
-  if (Object.values(workspaces.landerConversations).includes(id)) return <span>@lander</span>
-  return <ConversationRef id={id} />
+  const name =
+    Object.entries(standing ?? {}).find(([, value]) => value === id)?.[0] ??
+    (Object.values(workspaces.landerConversations).includes(id) ? 'lander' : undefined)
+  if (!name) return <ConversationRef id={id} />
+  return (
+    <span className="flex items-center gap-1.5">
+      {mark && <AgentMark name={name} size="sm" />}@{name}
+    </span>
+  )
 }
 
 function Body({ text }: { text: string }) {
@@ -132,7 +139,7 @@ export function ChatBubble({
     >
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <span className={cn('flex min-w-0 font-semibold', accent.name)}>
-          <Address id={from} />
+          <Address id={from} mark />
         </span>
         {at !== undefined && (
           <time
