@@ -35,10 +35,7 @@ function parse(output: string) {
 }
 
 function target(call: ToolCallView) {
-  const url = text(call.args.url)
-  const path = text(call.args.path)
-  if (!url && !path) return 'this UI'
-  return url ? `${url}${path}` : path
+  return text(call.args.url) || 'this UI'
 }
 
 function Errors({ errors }: { errors: readonly string[] }) {

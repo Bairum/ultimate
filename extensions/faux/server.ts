@@ -374,6 +374,17 @@ export default async function fauxExtension(host: ExtensionHost) {
       }
       if (last?.role === 'toolResult' && last.toolName === 'message')
         return fauxAssistantMessage([fauxText('Sent.')])
+      const shot =
+        last?.role === 'user' && typeof last.content === 'string'
+          ? /^screenshot (\S+\.png)$/.exec(last.content)
+          : null
+      if (shot) {
+        return fauxAssistantMessage([fauxToolCall('screenshot', { path: shot[1], waitMs: 0 })], {
+          stopReason: 'toolUse',
+        })
+      }
+      if (last?.role === 'toolResult' && last.toolName === 'screenshot')
+        return fauxAssistantMessage([fauxText('Saved.')])
       const notify =
         last?.role === 'user' && typeof last.content === 'string'
           ? /^notify (\d+)( quietly)?$/.exec(last.content)

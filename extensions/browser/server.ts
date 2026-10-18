@@ -1,6 +1,6 @@
 import { access, mkdir, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
 import { formatDimensionNote, resizeImage } from '@earendil-works/pi-coding-agent'
@@ -33,10 +33,18 @@ export async function browserBinary() {
   )
 }
 
-async function capture(page: Page, home: string, selector?: string, fullPage = false) {
-  const directory = join(home, 'screenshots')
-  await mkdir(directory, { recursive: true })
-  const file = join(directory, `${Date.now()}-${randomUUID()}.png`)
+/** The PNG's absolute path: `path` against the conversation's cwd, else a new file in the home's screenshots. */
+export function screenshotFile(home: string, cwd: string, path?: string) {
+  if (path === undefined) return join(home, 'screenshots', `${Date.now()}-${randomUUID()}.png`)
+  if (!path.endsWith('.png'))
+    throw new Error(
+      `path is where the PNG is saved and must end in .png, not ${JSON.stringify(path)}; pass the page to load as url, such as /?conversation=1.`,
+    )
+  return resolve(cwd, path)
+}
+
+async function capture(page: Page, file: string, selector?: string, fullPage = false) {
+  await mkdir(dirname(file), { recursive: true })
   const target = selector ? page.locator(selector) : page
   const png = await target.screenshot({
     path: file,
@@ -63,14 +71,24 @@ export default function browserExtension(host: ExtensionHost) {
     })
     return resource
   })
-  const base = { url: Type.Optional(Type.String()), path: Type.Optional(Type.String()) }
+  const base = {
+    url: Type.Optional(
+      Type.String({ description: 'Page to load; relative URLs resolve against this UI.' }),
+    ),
+    path: Type.Optional(
+      Type.String({
+        description:
+          'Where to save the PNG; relative to your cwd, parent directories are created. Default: a new file in the home.',
+      }),
+    ),
+  }
   return defineExtension({
     name: 'browser',
     sections: [
       section(
         'visual_verification',
         () =>
-          'After UI changes, use screenshot and look at the image before claiming success. Use browser to drive fresh pages and inspect errors. Omit url/path to see your own UI; do not guess its port. Pass an instance URL to test another server.',
+          'After UI changes, use screenshot and look at the image before claiming success. Use browser to drive fresh pages and inspect errors. Omit url to see your own UI, or pass a path such as /?conversation=1; do not guess its port. Pass an instance URL to test another server.',
       ),
     ],
     tools: [
@@ -78,7 +96,7 @@ export default function browserExtension(host: ExtensionHost) {
         name: 'screenshot',
         description:
           'Look at a browser page; save a full-resolution PNG and return a compact image with loading errors.',
-        // A fresh isolated page only observes the UI and saves a new screenshot; it performs no interactions.
+        // A fresh isolated page only observes the UI and writes the screenshot again; it performs no interactions.
         replay: 'safe',
         parameters: Type.Object({
           ...base,
@@ -90,9 +108,9 @@ export default function browserExtension(host: ExtensionHost) {
           theme: Type.Optional(Type.Union([Type.Literal('light'), Type.Literal('dark')])),
         }),
         async execute(args, api, context) {
-          return run(args, api, context, async (page) => {
+          return run(args, api, context, async (page, _outcomes, png) => {
             await page.waitForTimeout(args.waitMs ?? 1500)
-            return capture(page, host.home, args.selector, args.fullPage)
+            return capture(page, png, args.selector, args.fullPage)
           })
         },
       }),
@@ -120,7 +138,7 @@ export default function browserExtension(host: ExtensionHost) {
           screenshot: Type.Optional(Type.Boolean()),
         }),
         async execute(args, api, context) {
-          return run(args, api, context, async (page, outcomes) => {
+          return run(args, api, context, async (page, outcomes, png) => {
             for (const [index, step] of args.steps.entries()) {
               context.abortSignal?.throwIfAborted()
               api.output(`Step ${index + 1}: ${JSON.stringify(step)}\n`)
@@ -141,7 +159,7 @@ export default function browserExtension(host: ExtensionHost) {
                 throw error
               }
             }
-            return args.screenshot === false ? undefined : capture(page, host.home)
+            return args.screenshot === false ? undefined : capture(page, png)
           })
         },
       }),
@@ -155,11 +173,12 @@ export default function browserExtension(host: ExtensionHost) {
       height?: number
       theme?: 'light' | 'dark'
     },
-    api: { output(text: string): void },
+    api: { output(text: string): void; env?: { cwd: string } },
     context: { abortSignal?: AbortSignal },
     action: (
       page: Page,
       outcomes: string[],
+      png: string,
     ) => Promise<
       | {
           image?: { type: 'image'; mimeType: string; data: string }
@@ -175,6 +194,7 @@ export default function browserExtension(host: ExtensionHost) {
       void page?.context().close()
     }
     try {
+      const png = screenshotFile(host.home, api.env?.cwd ?? host.projectRoot, args.path)
       context.abortSignal?.throwIfAborted()
       state.launched ??= browserBinary()
         .then(async (executablePath) => {
@@ -201,7 +221,7 @@ export default function browserExtension(host: ExtensionHost) {
         if (message.type() === 'error') outcomes.push(`Console error: ${message.text()}`)
       })
       page.on('pageerror', (error) => outcomes.push(`Page error: ${error.message}`))
-      const url = new URL(args.path ?? '', args.url ?? host.system().process.url).href
+      const url = new URL(args.url ?? '', host.system().process.url).href
       if (args.theme && new URL(url).origin === new URL(host.system().process.url).origin) {
         await page.addInitScript(
           (theme) => localStorage.setItem('ultimate.theme', theme),
@@ -210,7 +230,7 @@ export default function browserExtension(host: ExtensionHost) {
       }
       api.output(`Loading ${url}\n`)
       await page.goto(url, { waitUntil: 'domcontentloaded' })
-      const result = await action(page, outcomes)
+      const result = await action(page, outcomes, png)
       const title = await page.title()
       context.abortSignal?.throwIfAborted()
       return {
