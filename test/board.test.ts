@@ -213,6 +213,8 @@ async function fixture(
       return fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
     if (last.role === 'user' && text.startsWith('Message from') && text.includes('NOANSWER'))
       return fauxAssistantMessage([])
+    if (last.role === 'user' && text.startsWith('Message from') && text.includes('\nASK'))
+      return fauxAssistantMessage([fauxText('Scope changed. Proceed?\n1. Yes\n2. No')])
     return fauxAssistantMessage([fauxText(last.role === 'toolResult' ? 'Done' : `Answer: ${text}`)])
   }
   prepared.faux!.setResponses([route])
@@ -992,16 +994,38 @@ it("routes a branch's later final answer to its starter once: a note, or a wake 
   await b.settled()
   expect(await b.from()).toHaveLength(3)
 })
-it("does not route an answer to the starter's own messages, reply-enabled or one-way", async () => {
+it("does not route an answer to the starter's reply-enabled message", async () => {
   const f = await fixture()
   const b = await branched(f)
   expect(await b.from()).toMatchObject([{ re: 1 }])
   await f.send(`#${b.id}`, 'Status?')
   await until(async () => (await replies(f)).length === 2)
-  await f.send(`#${b.id}`, 'FYI', { reply: false })
-  await until(async () => (await f.log())!.messages.at(-1)?.answer !== undefined)
   await b.settled()
   expect((await b.from()).map((m) => m.re)).toEqual([1, 3])
+})
+it("routes an answer to the starter's one-way message, waking it for a decision without a loop", async () => {
+  const f = await fixture()
+  const b = await branched(f)
+  await f.send(`#${b.id}`, 'New scope\nASK', { reply: false })
+  await until(async () => (await b.from()).length === 2)
+  await b.settled()
+  await f.opened.root.waitForIdle(context)
+  await b.settled()
+  const routed = (await b.from())[1]
+  expect(routed).toMatchObject({
+    to: 1,
+    reply: false,
+    text: 'Scope changed. Proceed?\n1. Yes\n2. No',
+  })
+  expect(routed.re).toBeUndefined()
+  // @ultimate woke and answered; that answer is to a one-way message, so nothing goes back to the branch.
+  const root = await f.opened.root.viewState(context)
+  const input = root.value.entries.find((e) => e.kind === 'board.message' && e.input === true)
+  expect(input?.data).toMatchObject({ id: routed.id, delivery: 'followUp' })
+  expect(root.value.entries.at(-1)?.kind).toBe('pi.assistant')
+  root.dispose()
+  expect((await f.log())!.messages.filter((m) => m.to === b.id)).toHaveLength(2)
+  expect(await b.from()).toHaveLength(2)
 })
 it('does not route the final answer of a run that messaged its starter', async () => {
   const f = await fixture()

@@ -300,7 +300,8 @@ function delivery(host: ExtensionHost) {
 const terminal = { status: 'terminal', outcome: { status: 'completed', result: null } } as const
 /**
  * After a branch's run, its final answer reaches the conversation that started it, unless that answer already does:
- * as the answer to one of the starter's messages, or because the run messaged the starter itself.
+ * as the answer to the starter's reply-enabled message, or because the run messaged the starter itself. Routing only
+ * goes from a branch to its starter, which existed first, and a routed message is one-way: it cannot ping-pong.
  */
 function route(host: ExtensionHost) {
   return defineTask<
@@ -336,8 +337,9 @@ function route(host: ExtensionHost) {
           let since = Number.POSITIVE_INFINITY
           for (const entryId of answered) {
             const entry = await tx.entry(entryId)
-            // board.delivery returns the answer to the starter's message, or the starter expects none (one-way).
-            if (entry?.kind === 'board.message' && (entry.data as { from?: unknown })?.from === by)
+            // board.delivery returns the answer to the starter's reply-enabled message; a one-way one gets none.
+            const data = entry?.data as { from?: unknown; reply?: unknown } | undefined
+            if (entry?.kind === 'board.message' && data?.from === by && data.reply === true)
               return undefined
             since = Math.min(since, entry?.model?.[0]?.timestamp ?? since)
           }
