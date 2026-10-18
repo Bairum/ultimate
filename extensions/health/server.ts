@@ -162,11 +162,11 @@ export const actions = {
 } satisfies Record<string, ExtensionAction>
 
 /** When the cloud last accepted a report, and whether a newer one is still owed (a failed attempt). */
-export type Reports = { reported: number; pending: boolean }
+export type Reports = { reported: number; pending?: boolean }
 
 /** Report after a tick that pinged, while an earlier report is still owed, or once `REPORT` has passed. */
 export const shouldReport = (reports: Reports, pinged: boolean, now: number) =>
-  pinged || reports.pending || now - reports.reported >= REPORT
+  pinged || !!reports.pending || now - reports.reported >= REPORT
 
 /** `POST /sync/health` with this machine's health; skipped while cloud sync is not configured. */
 async function report(host: ExtensionHost) {
@@ -205,19 +205,22 @@ export default function health(host: ExtensionHost) {
     return defineExtension({ name: 'health', hooks })
 
   // Shared across reloads: a reload installs the new facet before the old one closes, and only one tick may run.
+  // A resource keeps its first shape across reloads: add fields only as optional ones.
   const shared = host.resource('health.heartbeat', () => ({
     ticking: undefined as Promise<void> | undefined,
-    reports: { reported: 0, pending: false } as Reports,
+    reported: 0,
+    pending: false as boolean | undefined,
   }))
   const deps = hostDeps(host)
   const tick = () => {
     shared.ticking ??= (async () => {
       const pinged = await heartbeat(deps)
-      if (!shouldReport(shared.reports, pinged.length > 0, Date.now())) return
-      shared.reports.pending = true
+      if (!shouldReport(shared, pinged.length > 0, Date.now())) return
+      shared.pending = true
       await report(host).then(
         () => {
-          shared.reports = { reported: Date.now(), pending: false }
+          shared.reported = Date.now()
+          shared.pending = false
         },
         (error: unknown) => {
           // The cloud may be down or not deployed yet; `pending` stays set, so the next tick reports again.

@@ -57,11 +57,12 @@ it('merges each timestamp by its maximum and keeps the newest failure’s error'
 it('summarises errors to a status, error codes and known keywords', () => {
   expect(
     sanitize('400 {"error":"invalid_grant","error_description":"Refresh token revoked"}'),
-  ).toBe('400 invalid_grant error_description')
+  ).toBe('400 invalid_grant revoked')
   expect(sanitize('429 rate_limit_error: Too many requests')).toBe('429 rate_limit_error')
+  expect(sanitize('Request failed with status 401: Unauthorized')).toBe('401 unauthorized')
   expect(sanitize('fetch failed: ECONNREFUSED 127.0.0.1:443')).toBe('ECONNREFUSED')
   expect(sanitize('Something odd happened')).toBe('request failed')
-  expect(sanitize('a_b_c '.repeat(300)).length).toBeLessThan(60)
+  expect(sanitize('a_b_c '.repeat(300))).toBe('request failed')
 })
 
 it('sanitises every credential format it can recognise, keeping provider error codes', () => {
@@ -80,9 +81,13 @@ it('sanitises every credential format it can recognise, keeping provider error c
     'password: "my Secret pass phrase"',
     'Invalid key sk-ant-api03-SECRETsecret_42 with eyJhbGciOi.x.y',
     'token lower_case_secret_value',
+    // Review findings: a numeric password on its own line, a token whose parts look like snake_case.
+    'Login rejected\npassword:\n429\n',
+    'Bad credentials ghp_abcd_efgh',
+    'my_secret_pass_word leaked',
   ]
   const leaked = secrets.filter((text) =>
-    /secret|dXNlcjpwYXNz|4f9a8b7c6d5e|eyJ|pass/i.test(sanitize(text)),
+    /secret|dXNlcjpwYXNz|4f9a8b7c6d5e|eyJ|pass|ghp|abcd|429/i.test(sanitize(text)),
   )
   expect(leaked).toEqual([])
 })
@@ -153,6 +158,8 @@ it('reports after a ping, keeps retrying a failed report, and at least hourly', 
   // A report after a ping failed although an earlier one succeeded a minute ago: the next quiet tick retries.
   expect(shouldReport({ reported: NOW, pending: true }, false, NOW + 10 * MINUTE)).toBe(true)
   expect(shouldReport(fresh, false, NOW + REPORT)).toBe(true)
+  // A resource made by the previous facet has no `pending` yet: it reads as nothing owed.
+  expect(shouldReport({ reported: NOW }, false, NOW + MINUTE)).toBe(false)
 })
 
 it('picks the cheapest model by input plus output cost, the first on a tie', () => {

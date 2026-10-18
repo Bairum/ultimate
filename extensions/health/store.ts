@@ -20,30 +20,60 @@ export const healthPath = (userHome: string) => join(userHome, '.ultimate/health
 
 const STAMPS = ['lastOk', 'lastFail', 'lastChecked', 'lastUsed'] as const
 
-/** Words an error summary may keep besides the HTTP status and snake_case error codes. */
-const KEYWORDS =
-  /^(?:unauthorized|forbidden|expired|revoked|overloaded|timeout|aborted|quota|rate|limit|network|unavailable|E[A-Z]{3,15})$/
+/**
+ * The only words an error summary may contain: provider and OAuth error codes, network errors and a few plain words.
+ * A fixed list, so nothing from a credential can ever pass, whatever its shape.
+ */
+const KNOWN = new Set([
+  'invalid_grant',
+  'invalid_token',
+  'invalid_client',
+  'invalid_request',
+  'invalid_api_key',
+  'unauthorized_client',
+  'access_denied',
+  'authentication_error',
+  'permission_error',
+  'insufficient_quota',
+  'rate_limit_error',
+  'rate_limit_exceeded',
+  'usage_limit_reached',
+  'overloaded_error',
+  'api_error',
+  'server_error',
+  'not_found_error',
+  'model_not_found',
+  'invalid_request_error',
+  'context_length_exceeded',
+  'request_too_large',
+  'unauthorized',
+  'forbidden',
+  'expired',
+  'revoked',
+  'overloaded',
+  'timeout',
+  'aborted',
+  'quota',
+  'unavailable',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ENOTFOUND',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+])
 
 /**
  * A structured summary of a failure instead of its text, so no credential can reach `health.json` or the cloud: the
- * first HTTP status, provider error codes in snake_case (`invalid_grant`, `rate_limit_error`) and a few known
- * keywords, in order, without duplicates. Everything from a credential word (`token`, `cookie`, `password`, …) to the
- * end of its line goes first, so a value written there never counts as a code. Anything else is dropped; without a
- * recognisable part it is "request failed".
+ * HTTP status when the message starts with one or names it (`status 401`, `HTTP 429`), then the words of `KNOWN` it
+ * contains, in order, without duplicates. Anything else is dropped; without a recognisable part it is "request failed".
  */
 export function sanitize(error: string) {
-  const text = error.replace(
-    /(?:bearer|basic|token|cookie|authorization|password|passphrase|secret|api[-_ ]?key|credential)[^\n]*/gi,
-    ' ',
-  )
   const parts: string[] = []
-  // A status code, not a port (`:443`) or part of an address.
-  const status = /(?<![\d.:])\b([45]\d\d)\b(?![\d.:])/.exec(text)?.[1]
-  if (status) parts.push(status)
-  for (const word of text.split(/[^A-Za-z_]+/)) {
-    const code = /^[a-z]{2,20}(?:_[a-z]{2,20}){1,4}$/.test(word)
-    const keyword = KEYWORDS.test(word) || KEYWORDS.test(word.toLowerCase())
-    if ((code || keyword) && !parts.includes(word)) parts.push(word)
+  const status = /^\s*([45]\d\d)\b|\b(?:status|http)[\s:=]*([45]\d\d)\b/i.exec(error)
+  if (status) parts.push(status[1] ?? status[2])
+  for (const word of error.split(/[^A-Za-z_]+/)) {
+    const known = KNOWN.has(word) ? word : KNOWN.has(word.toLowerCase()) ? word.toLowerCase() : ''
+    if (known && !parts.includes(known)) parts.push(known)
     if (parts.length >= 5) break
   }
   return parts.length ? parts.join(' ') : 'request failed'
