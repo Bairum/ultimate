@@ -8,6 +8,7 @@ import { api, defineWebExtension, errorMessage, projectBase, useSystem } from '@
 import type { CloudInfo, Transition } from '../../cloud/protocol.ts'
 import type { CloudState } from './types.ts'
 import { phaseOf, TransitionCard } from './transition.tsx'
+import { AskSync } from '../sync/link.tsx'
 
 // Locally the facet asks its own server (`cloud.state`, `moveHere`, `cancel`); in the cloud, at `/p/<slug>/`, it asks
 // the project's replica (`/api/cloud`), which answers while the writer machine is off too.
@@ -281,6 +282,7 @@ function LocalStandby() {
         <p className="text-[12px] text-error/90">{state.lastError}</p>
       )}
       <LocalTransition className="w-full" state={state} />
+      <AskSync />
     </div>
   )
 }
@@ -346,6 +348,9 @@ function LocalPicker({ state }: { state: CloudState }) {
       )}
       {error && <p className="px-3 pb-2 font-sans text-[12px] text-error">{error}</p>}
       <LocalTransition className="m-2 shadow-none" state={state} />
+      <div className="flex justify-end border-t border-border/60 px-3 py-1.5 empty:hidden">
+        <AskSync />
+      </div>
     </>
   )
 }

@@ -14,7 +14,13 @@ import {
 import { Kbd } from '@/components/ui/kbd'
 import { api } from '../sdk/client.ts'
 import { errorMessage } from '../sdk/format.ts'
-import { TranscriptContext, useConversation, useExtensions, useModels } from '../sdk/hooks.ts'
+import {
+  TranscriptContext,
+  useConversation,
+  useExtensions,
+  useIntro,
+  useModels,
+} from '../sdk/hooks.ts'
 import { isMac } from '../sdk/keys.ts'
 import { touchKeyboard } from '../sdk/viewport.ts'
 import type { ModelsResponse } from '../../../shared/protocol.ts'
@@ -182,6 +188,7 @@ function clearDraft(
 
 function ConversationComposer({ dock }: { dock?: boolean }) {
   const { id, agent, busy, loading, inbox } = useConversation()
+  const intro = useIntro()
   const draft = getDraft(id)
   const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
   const setError = (message: string | undefined) => draft.set({ error: message })
@@ -255,7 +262,9 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
           onChange={(event) => update(event.target.value)}
           onKeyDown={onKeyDown}
           placeholder={
-            busy ? 'Steer the run, or queue a follow-up…' : 'Ask Ultimate to change something…'
+            busy
+              ? 'Steer the run, or queue a follow-up…'
+              : (intro?.placeholder ?? 'Ask Ultimate to change something…')
           }
           value={text}
         />

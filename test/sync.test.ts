@@ -10,7 +10,14 @@ import subagents from '../extensions/subagents/server.ts'
 import type { SubagentsService } from '../extensions/subagents/server.ts'
 import { machineRoot, primaryAgent, residentHere } from '../extensions/subagents/primary.ts'
 import { parseDefinition } from '../extensions/subagents/agents.ts'
-import { cancel, createWatcher, fleet, move, submitMove } from '../extensions/sync/server.ts'
+import {
+  cancel,
+  createWatcher,
+  fleet,
+  machineHome,
+  move,
+  submitMove,
+} from '../extensions/sync/server.ts'
 import type { Home, SyncDeps } from '../extensions/sync/server.ts'
 import type { MoveEnded } from '../extensions/sync/types.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
@@ -342,5 +349,45 @@ it('wakes @sync once per ended transition involving this machine, also across re
   expect(entries.filter((entry) => entry.kind === 'sync.move')).toHaveLength(1)
   expect(entries.find((entry) => entry.kind === 'sync.move')?.data).toMatchObject({
     transition: { id: 't1' },
+  })
+})
+
+/** Projects as `host.projects()` lists them, for `machineHome`. */
+const machineProject = (patch: object) => ({
+  name: 'machine',
+  home: '/u/.ultimate/projects/machine-1',
+  current: false,
+  conversations: [],
+  ...patch,
+})
+const machineHomeAt = (projects: object[]) =>
+  machineHome({
+    userHome: '/u',
+    projects: async () => projects as Awaited<ReturnType<ExtensionHost['projects']>>,
+  })
+
+it("links a project to this machine's running machine home, @sync's conversation when it has one", async () => {
+  expect(await machineHomeAt([])).toBeNull()
+  // A machine home that is not running, and a running project elsewhere, give no link.
+  expect(
+    await machineHomeAt([
+      machineProject({ root: '/u/.ultimate/machine' }),
+      machineProject({
+        root: '/u/Projects/app',
+        running: { pid: 2, url: 'http://127.0.0.1:4747' },
+      }),
+    ]),
+  ).toBeNull()
+  const running = {
+    root: '/u/.ultimate/machine',
+    running: { pid: 1, url: 'http://127.0.0.1:4700' },
+  }
+  expect(await machineHomeAt([machineProject(running)])).toEqual({ url: 'http://127.0.0.1:4700' })
+  expect(
+    await machineHomeAt([
+      machineProject({ ...running, conversations: [{ id: 18, title: '@sync' }] }),
+    ]),
+  ).toEqual({
+    url: 'http://127.0.0.1:4700/?conversation=18',
   })
 })

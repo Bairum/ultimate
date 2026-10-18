@@ -15,7 +15,7 @@ import { cloudConfig } from '../cloud/config.ts'
 import { projectIdentity } from '../cloud/identity.ts'
 import type { CloudState } from '../cloud/types.ts'
 import type { SubagentsService } from '../subagents/server.ts'
-import { isMachineHome } from '../subagents/primary.ts'
+import { isMachineHome, machineRoot } from '../subagents/primary.ts'
 import type { Fleet, FleetProject, LocalProject, MoveEnded, SyncReport } from './types.ts'
 
 const run = promisify(execFile)
@@ -144,7 +144,7 @@ async function local(deps: SyncDeps, home: Home): Promise<LocalProject & { key?:
     deps.stale(home.home),
     deps.keptRefs(home.root),
   ])
-  let state: (CloudState & { sync?: unknown }) | undefined
+  let state: CloudState | undefined
   if (home.url)
     state = await localAction<CloudState>(deps, home.url, 'cloud', 'state').catch(
       // A server that stops between the lock read and the call shows as not running.
@@ -359,7 +359,7 @@ export async function submitMove(host: ExtensionHost, input: MoveEnded) {
 }
 
 /** What `fleet` shows on a faux host, which never reads cloud settings: two machines, a move in flight, warnings. */
-export const demoFleet = (): Fleet => ({
+export const demoFleet = (userHome: string): Fleet => ({
   machine: 'rog',
   machines: [
     { machine: 'haza-pc', online: true, projects: 2 },
@@ -385,20 +385,26 @@ export const demoFleet = (): Fleet => ({
             name: 'fetch',
             state: 'done',
             detail: 'main fast-forwarded 2 commits, 3779f5b..34596c0',
+            commits: 2,
           },
           { name: 'install', state: 'skipped', detail: 'lockfile unchanged' },
           { name: 'checks', state: 'done' },
-          { name: 'handover', state: 'done', detail: 'released' },
+          {
+            name: 'handover',
+            state: 'done',
+            detail: '1 worktree with uncommitted changes stays on haza-pc',
+          },
           { name: 'download', state: 'running', done: 41943040, total: 99614720 },
           { name: 'branches', state: 'pending' },
           { name: 'claim', state: 'pending' },
         ],
         cancellable: true,
         startedAt: Date.now() - 40000,
+        left: [`${userHome}/.ultimate/projects/ultimate-80acb577/worktrees/141992`],
       },
       local: {
-        root: '/home/haza/Projects/ultimate',
-        home: '/home/haza/.ultimate/projects/ultimate-80acb577',
+        root: `${userHome}/Projects/ultimate`,
+        home: `${userHome}/.ultimate/projects/ultimate-80acb577`,
         url: 'http://127.0.0.1:4747',
         role: 'standby',
         status: 'on',
@@ -413,11 +419,17 @@ export const demoFleet = (): Fleet => ({
       writer: { machine: 'rog', online: true },
       standbys: [{ machine: 'haza-pc', connected: true, lastSeen: Date.now() }],
       local: {
-        root: '/home/haza/Projects/blog',
-        home: '/home/haza/.ultimate/projects/blog-1a2b3c4d',
+        root: `${userHome}/Projects/blog`,
+        home: `${userHome}/.ultimate/projects/blog-1a2b3c4d`,
         url: 'http://127.0.0.1:4748',
         role: 'writer',
         status: 'on',
+        sync: {
+          connected: true,
+          catchingUp: true,
+          backlog: 3,
+          conversations: { synced: 120, total: 537 },
+        },
         missing: [],
         stale: [],
         keptRefs: ['ultimate-moved/7f3e/ultimate/draft'],
@@ -428,7 +440,24 @@ export const demoFleet = (): Fleet => ({
 
 const json = (value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }]
 
+/** This machine's home while it runs: its URL, opening @sync's conversation when it has one. */
+export async function machineHome(
+  host: Pick<ExtensionHost, 'projects' | 'userHome'>,
+): Promise<{ url: string } | null> {
+  const home = (await host.projects()).find(
+    (project) => project.root === machineRoot(host.userHome) && project.running,
+  )
+  if (!home?.running) return null
+  const agent = home.conversations.find((conversation) => conversation.title === '@sync')
+  return { url: agent ? `${home.running.url}/?conversation=${agent.id}` : home.running.url }
+}
+
 export const actions = {
+  /** Project homes: `{url}` of this machine's running machine home, for "Ask @sync" links; null when it is not running. */
+  async home(_args: JsonValue, { host }: ActionContext) {
+    if (isMachineHome(host.projectRoot, host.userHome)) return null
+    return machineHome(host)
+  },
   /** Machine home: `{project}`, the project's current move for the move card. */
   async transition(args: JsonValue, { host }: ActionContext) {
     const project = (args as { project?: unknown } | null)?.project
@@ -500,7 +529,7 @@ export default function sync(host: ExtensionHost) {
           'Every machine and project: writer, standbys, the move in flight, and this machine’s local view of each project (role, sync progress, missing secrets, stale databases, kept ultimate-moved refs).',
         parameters: Type.Object({}),
         async execute() {
-          const value = host.faux ? demoFleet() : await fleet(deps)
+          const value = host.faux ? demoFleet(host.userHome) : await fleet(deps)
           return { output: json(value), details: value as unknown as JsonObject }
         },
       }),

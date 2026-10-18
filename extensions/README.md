@@ -198,7 +198,7 @@ No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, entries, link, messageActions, messageDetails, answerLabels, chat, documents, commands })`; every key is optional. Extensions load
+`defineWebExtension({ slots, panels, surfaces, tools, entries, link, messageActions, messageDetails, answerLabels, chat, intro, documents, commands })`; every key is optional. Extensions load
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
 
 ### Slots
@@ -336,6 +336,10 @@ and docs of every matching facet combine. Renderers check `useChat()`, that test
 `undefined`, to adapt to it. Board turns it on for @ultimate's conversation, keeping messages, branch starts,
 workspace outcomes and scripts its log says messaged you, and shows its messages to you as bubbles. Revealing an entry
 in a folded run opens the run.
+
+`intro` says what a matching conversation is before its first message: `{ when(conversation), title, hint?, placeholder? }`
+replaces the empty state's line under ULTIMATE, adds a hint below it, and sets the composer's placeholder while it is
+idle. The last matching facet wins. `sync` uses it for @sync in the machine home.
 
 ### Entry renderers
 

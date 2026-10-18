@@ -13,7 +13,13 @@ T=$(mktemp -d) && mkdir -p $T/.ultimate/machine
 HOME=$T ULTIMATE_PROJECT=$T/.ultimate/machine ULTIMATE_HOME=$T/state ULTIMATE_FAUX=1 ULTIMATE_PORT=4791 node server/main.ts
 ```
 
-Send `fleet demo` in @sync's conversation to see the fleet card with a move in flight.
+Send `fleet demo` in @sync's conversation to see the fleet card with a move in flight. `projects()` only lists homes started through the supervisor (`node bin/ultimate.ts <dir> --port <n>`), which writes the port into `ultimate.lock`; unset the inherited `ULTIMATE_*` variables of a running host first.
+
+In the machine home, @sync's empty conversation says what it does and its composer asks "Ask @sync about your machines…" (`intro`), and the status line drops the "set up git" nudge: the folder is not a repository on purpose.
+
+## Ask @sync
+
+`link.tsx` exports `AskSync`, a quiet link the cloud facet shows on a project's standby page and in its status-line popover while this machine's home runs. It calls the `home` action, which finds `~/.ultimate/machine` with a running URL in `host.projects()` (the supervisor's `ultimate.lock` port) and links to @sync's conversation there. In the cloud (`/p/<slug>/`) it shows nothing.
 
 ## Tools (machine home only)
 
@@ -28,5 +34,6 @@ Every 5 s the machine home reads `cloud.state` of the running local project home
 
 ## Actions
 
+- `home` (project homes): `{ url }` of this machine's running machine home, @sync's conversation when it exists, or null.
 - `transition { project }` (machine home): the project's current move, from its local server or the cloud, for the move card.
 - `report { from, text }` (project homes): a one-way `sync.report` input to the project's @ultimate. Refused on standby and in the machine home.

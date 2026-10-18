@@ -177,6 +177,17 @@ export interface ChatContribution {
 export type ChatDocs = Readonly<Record<string, Readonly<JsonObject> | null | undefined>>
 export type ChatCallTest = (call: ToolCall, docs: ChatDocs) => boolean
 
+/**
+ * What an empty conversation says it is, and its composer's placeholder, for matching conversations; the last matching
+ * facet wins. The core's own wording applies otherwise.
+ */
+export interface IntroContribution {
+  when: (conversation: ConversationSummary) => boolean
+  title: string
+  hint?: string
+  placeholder?: string
+}
+
 /** The browser facet of an extension: `extensions/<name>/web.tsx` default-exports one. */
 export interface WebExtension {
   slots?: Partial<Record<SlotName, Contribution | readonly Contribution[]>>
@@ -199,6 +210,8 @@ export interface WebExtension {
   answerLabels?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Shows matching conversations as a chat; the visible tools of every matching facet combine. */
   chat?: ChatContribution
+  /** The empty state's wording and the composer's placeholder for matching conversations. */
+  intro?: IntroContribution
   /** Document renderers; a later facet wins a kind. */
   documents?: readonly DocumentContribution[]
   commands?: readonly CommandContribution[]

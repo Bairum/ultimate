@@ -52,6 +52,7 @@ import {
   useChat,
   useConversation,
   useExtensions,
+  useIntro,
   useModels,
   useNow,
   useStore,
@@ -488,6 +489,7 @@ function WorkRow({
 /** What this Ultimate is and runs on, before the first message. */
 function EmptyState() {
   const system = useSystem()
+  const intro = useIntro()
   const { agent } = useConversation()
   const reasoning = useModels()?.models.find(
     (model) => model.provider === agent.model?.provider && model.id === agent.model.modelId,
@@ -531,10 +533,14 @@ function EmptyState() {
       <div className="w-full max-w-md font-mono text-[12px]">
         <div className="text-[13px] font-semibold tracking-[0.3em] text-brand">ULTIMATE</div>
         <div className="mt-1 font-sans text-[13px] text-muted-foreground">
-          {!system || system.project.root === system.code.ultimateRoot
-            ? 'A coding agent that edits this repository, itself included.'
-            : `A coding agent that edits ${system.project.name}, and can change itself too.`}
+          {intro?.title ??
+            (!system || system.project.root === system.code.ultimateRoot
+              ? 'A coding agent that edits this repository, itself included.'
+              : `A coding agent that edits ${system.project.name}, and can change itself too.`)}
         </div>
+        {intro?.hint && (
+          <div className="mt-1 font-sans text-[12.5px] text-muted-foreground/70">{intro.hint}</div>
+        )}
         <div className="mt-5 grid grid-cols-[4rem_1fr] gap-x-3 gap-y-1 border-t border-border/70 pt-4 text-left">
           {rows.map(([label, value]) => (
             <Fragment key={label}>

@@ -24,7 +24,7 @@ import type { Region } from './actions.ts'
 import { actionMessage, MachineOfflineError } from './api.ts'
 import type { ActionError } from './api.ts'
 import { api, registry, store, uiState } from './client.ts'
-import { HOME, chatTools, documentItems } from './registry.ts'
+import { HOME, chatTools, documentItems, introOf } from './registry.ts'
 import type { State } from './store.ts'
 import { errorMessage, formatDuration } from './format.ts'
 import type { ToolCallView, UltimateContext } from './types.ts'
@@ -263,6 +263,21 @@ export function useChat(): ((call: ToolCall) => boolean) | undefined {
   }, [kinds])
   const docs = useStore((state) => (kinds ? state.docsOf[1] : undefined)) ?? noDocs
   return useMemo(() => chat && ((call: ToolCall) => chat.keeps(call, docs)), [chat, docs])
+}
+const introFailures = new Set<string>()
+function reportIntro(extension: string, error: unknown) {
+  const message = `extension ${extension}: intro is off, its when() threw: ${errorMessage(error)}`
+  if (introFailures.has(message)) return
+  introFailures.add(message)
+  queueMicrotask(() => store.notify({ level: 'error', message }))
+}
+/** The shown conversation's `intro` contribution, if one matches. */
+export function useIntro() {
+  const records = useExtensions()
+  const conversation = useStore((state) =>
+    state.conversations.find((summary) => summary.id === state.view?.conversation.id),
+  )
+  return useMemo(() => introOf(records, conversation, reportIntro), [records, conversation])
 }
 /** Document renderers by kind (`documents` contributions); the Documents tab shows the rest as JSON. */
 export function useDocumentRenderers() {

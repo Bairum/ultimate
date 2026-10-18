@@ -1,7 +1,7 @@
 import { LoaderCircleIcon, MailIcon, ServerIcon, TriangleAlertIcon, TruckIcon } from 'lucide-react'
 import { useEffect } from 'react'
 import { MessageResponse } from '@/components/ai/message'
-import { cn, defineWebExtension, useAction } from '@/sdk'
+import { cn, defineWebExtension, shortenPath, useAction, useSystem } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import type { Transition } from '../../cloud/protocol.ts'
 import { phaseOf, TransitionCard } from '../cloud/transition.tsx'
@@ -17,11 +17,14 @@ function Dot({ on }: { on: boolean }) {
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 
-function Warning({ children }: { children: React.ReactNode }) {
+/** A small amber line, cut to one line; the full text shows on hover. */
+function Warning({ text }: { text: string }) {
   return (
     <div className="flex min-w-0 items-center gap-1.5 text-amber-700 dark:text-amber-300">
       <TriangleAlertIcon className="size-3 shrink-0" />
-      <span className="min-w-0 truncate">{children}</span>
+      <span className="min-w-0 truncate" title={text}>
+        {text}
+      </span>
     </div>
   )
 }
@@ -29,6 +32,7 @@ function Warning({ children }: { children: React.ReactNode }) {
 /** One project: its writer, standby chips and this machine's warnings; a move in flight embeds the move card. */
 function ProjectRow({ project, machine }: { project: FleetProject; machine: string }) {
   const local = project.local
+  const home = useSystem()?.machine.home
   const moving = project.transition && phaseOf(project.transition) === 'running'
   return (
     <li className="space-y-1 px-3 py-2" data-sync-project={project.key}>
@@ -56,18 +60,26 @@ function ProjectRow({ project, machine }: { project: FleetProject; machine: stri
           ))}
         </span>
       </div>
+      {local?.sync?.catchingUp && (
+        <div className="text-muted-foreground">
+          catching up
+          {local.sync.conversations
+            ? ` ${local.sync.conversations.synced}/${local.sync.conversations.total} conversations`
+            : ` · ${local.sync.backlog} behind`}
+        </div>
+      )}
       {local && local.missing.length > 0 && (
-        <Warning>missing secrets: {local.missing.join(', ')}</Warning>
+        <Warning text={`missing secrets: ${local.missing.join(', ')}`} />
       )}
       {local && local.stale.length > 0 && (
-        <Warning>
-          {plural(local.stale.length, 'stale database')} in {local.home}
-        </Warning>
+        <Warning
+          text={`${plural(local.stale.length, 'stale database')} in ${shortenPath(local.home, { home })}`}
+        />
       )}
       {local && local.keptRefs.length > 0 && (
-        <Warning>
-          {plural(local.keptRefs.length, 'kept ref')}: {local.keptRefs.join(', ')}
-        </Warning>
+        <Warning
+          text={`${plural(local.keptRefs.length, 'kept ref')}: ${local.keptRefs.join(', ')}`}
+        />
       )}
       {moving && <TransitionCard className="mt-1.5 shadow-none" transition={project.transition!} />}
     </li>
@@ -197,5 +209,11 @@ const syncChat = (conversation: {
 export default defineWebExtension({
   tools: { fleet: FleetCall, move: MoveCall },
   chat: { when: syncChat, tools: ['fleet', 'move', 'cancel', 'report'] },
+  intro: {
+    when: syncChat,
+    title: '@sync moves your projects between machines.',
+    hint: 'Ask for the fleet, or: move ultimate here.',
+    placeholder: 'Ask @sync about your machines…',
+  },
   entries: { 'sync.move': MoveEntry, 'sync.report': ReportEntry },
 })
