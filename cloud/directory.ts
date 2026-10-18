@@ -1,4 +1,4 @@
-import type { Transition } from './protocol.ts'
+import type { MachineHealth, ProviderHealth, Transition } from './protocol.ts'
 import type { Sql } from './replica.ts'
 
 /** A row of `/api/directory`: one project, wherever it runs. */
@@ -15,6 +15,51 @@ export interface Project {
   transition?: Transition
 }
 export type Presence = Omit<Project, 'slug'> & { hasEntries: boolean }
+/** What a machine may report: its name, at most 16 providers, names and errors bounded. */
+export const HEALTH_LIMITS = { machine: 64, providers: 16, provider: 64, error: 200 }
+const STATES: readonly unknown[] = ['ok', 'failing', 'unknown'] satisfies ProviderHealth['state'][]
+const TIMES = ['lastOk', 'lastFail', 'lastChecked', 'lastUsed'] as const
+const time = (value: unknown) => value === undefined || Number.isFinite(value)
+
+/**
+ * A machine's report reduced to the known fields, the error cut to its limit; undefined when it is malformed. Only
+ * these fields are stored, so nothing else a sender includes reaches the table.
+ */
+export function machineHealth(value: unknown): MachineHealth | undefined {
+  const { machine, at, providers } = (value ?? {}) as Partial<Record<keyof MachineHealth, unknown>>
+  if (
+    typeof machine !== 'string' ||
+    !machine.length ||
+    machine.length > HEALTH_LIMITS.machine ||
+    !Number.isFinite(at) ||
+    !Array.isArray(providers) ||
+    providers.length > HEALTH_LIMITS.providers
+  )
+    return undefined
+  const valid: ProviderHealth[] = []
+  for (const entry of providers as Partial<Record<keyof ProviderHealth, unknown>>[]) {
+    const { provider, state, error } = entry ?? {}
+    if (
+      typeof provider !== 'string' ||
+      !provider.length ||
+      provider.length > HEALTH_LIMITS.provider ||
+      !STATES.includes(state) ||
+      (error !== undefined && typeof error !== 'string') ||
+      !TIMES.every((key) => time(entry[key]))
+    )
+      return undefined
+    valid.push({
+      provider,
+      state: state as ProviderHealth['state'],
+      ...Object.fromEntries(
+        TIMES.filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]]),
+      ),
+      ...(error === undefined ? {} : { error: error.slice(0, HEALTH_LIMITS.error) }),
+    })
+  }
+  return { machine, at: at as number, providers: valid }
+}
+
 const safeSlug = (value: string) =>
   value
     .toLowerCase()
@@ -30,6 +75,24 @@ export class DirectoryStore {
       'CREATE TABLE IF NOT EXISTS projects (key TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, value TEXT)',
     )
     sql.exec('CREATE TABLE IF NOT EXISTS aliases (key TEXT PRIMARY KEY, target TEXT NOT NULL)')
+    sql.exec('CREATE TABLE IF NOT EXISTS machines (machine TEXT PRIMARY KEY, value TEXT)')
+  }
+  /** Store a machine's latest provider health, replacing its previous report. False: the report is malformed. */
+  health(value: unknown): boolean {
+    const health = machineHealth(value)
+    if (!health) return false
+    this.sql.exec(
+      'INSERT INTO machines (machine, value) VALUES (?, ?) ON CONFLICT(machine) DO UPDATE SET value=excluded.value',
+      health.machine,
+      JSON.stringify(health),
+    )
+    return true
+  }
+  /** Every machine's latest report, by name. */
+  healthList(): MachineHealth[] {
+    return [...this.sql.exec<{ value: string }>('SELECT value FROM machines ORDER BY machine')].map(
+      (row) => JSON.parse(row.value) as MachineHealth,
+    )
   }
   /** The project key whose replica `key` syncs to after a relink; undefined for an unaliased key. */
   target(key: string): string | undefined {

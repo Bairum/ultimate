@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
-import type { CloudInfo, Transition } from '../protocol.ts'
+import type { CloudInfo, MachineHealth, ProviderHealth, Transition } from '../protocol.ts'
 
 /** A row of `/api/directory` (`Project` in cloud/directory.ts, which runs in the Worker). */
 interface Project {
@@ -37,12 +37,25 @@ function ago(at: number, now: number) {
 
 type Directory = { state: 'loading' } | { state: 'failed' } | { state: 'loaded'; rows: Project[] }
 
-/** The directory from `/api/directory`, behind Access, refreshed every 10 s. A failed refresh keeps the last list. */
+/**
+ * The directory from `/api/directory` and each machine's provider health from `/api/health`, behind Access, refreshed
+ * every 10 s. A failed refresh keeps the last list; health is optional and keeps its last list on failure too.
+ */
 function useDirectory() {
   const [directory, setDirectory] = useState<Directory>({ state: 'loading' })
+  const [health, setHealth] = useState<MachineHealth[]>([])
   const [failing, setFailing] = useState(false)
   useEffect(() => {
+    async function refreshHealth() {
+      try {
+        const response = await fetch('/api/health')
+        if (response.ok) setHealth((await response.json()) as MachineHealth[])
+      } catch {
+        // The directory's own refresh reports an unreachable cloud; the machines keep their last report.
+      }
+    }
     async function refresh() {
+      void refreshHealth()
       try {
         const response = await fetch('/api/directory')
         if (!response.ok) throw new Error(`${response.status}`)
@@ -58,7 +71,104 @@ function useDirectory() {
     const timer = setInterval(() => void refresh(), 10000)
     return () => clearInterval(timer)
   }, [])
-  return { directory, failing }
+  return { directory, health, failing }
+}
+
+/** `12m`, `3h`: `ago()` without its suffix, for the compact provider row. */
+const age = (at: number, now: number) => ago(at, now).replace(' ago', '')
+/** A machine is online while a project lists it connected, or it reported within two hours. */
+const ONLINE = 2 * 60 * 60 * 1000
+/** A report older than this says when it came. */
+const STALE = 90 * 60 * 1000
+
+function Provider({ health, now }: { health: ProviderHealth; now: number }) {
+  const at =
+    health.state === 'ok' ? health.lastOk : health.state === 'failing' ? health.lastFail : undefined
+  const error = health.state === 'failing' ? health.error : undefined
+  return (
+    <span
+      className="inline-flex min-w-0 max-w-full items-baseline gap-1"
+      title={
+        health.state === 'ok'
+          ? `Last worked ${at === undefined ? '' : ago(at, now)}`
+          : health.state === 'failing'
+            ? `Failing${at === undefined ? '' : ` since ${ago(at, now)}`}${error ? `: ${error}` : ''}`
+            : 'Not used or checked yet'
+      }
+    >
+      <span className="text-foreground/85">{health.provider}</span>
+      {health.state === 'ok' && <span className="text-success">✓</span>}
+      {health.state === 'failing' && <span className="text-error">✗</span>}
+      {health.state === 'unknown' && <span className="text-muted-foreground/60">?</span>}
+      {error && <span className="max-w-40 truncate text-error/85">{error}</span>}
+      {at !== undefined && <span className="text-muted-foreground/70">{age(at, now)}</span>}
+    </span>
+  )
+}
+
+/** One line per machine: its online dot and name, then each provider's state, age and short error. */
+function Machines({
+  health,
+  connected,
+  now,
+}: {
+  health: MachineHealth[]
+  connected: Set<string>
+  now: number
+}) {
+  return (
+    <section className="flex flex-col gap-2">
+      <h2 className="text-[10.5px] font-normal tracking-wider text-muted-foreground uppercase">
+        Machines
+      </h2>
+      <ul className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70 bg-card/40">
+        {health.map((machine) => {
+          const online = connected.has(machine.machine) || now - machine.at < ONLINE
+          return (
+            <li
+              className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-3 py-2 font-mono text-[11px]"
+              key={machine.machine}
+            >
+              <span className="flex shrink-0 items-center gap-2">
+                <span
+                  className={cn(
+                    'size-1.5 shrink-0 self-center rounded-full',
+                    online ? 'bg-success' : 'bg-muted-foreground/40',
+                  )}
+                />
+                <span className="font-sans text-[13px] font-medium text-foreground">
+                  {machine.machine}
+                </span>
+              </span>
+              <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 gap-y-1 pl-3.5 sm:pl-1">
+                {machine.providers.length ? (
+                  machine.providers.map((provider, index) => (
+                    <span
+                      className="inline-flex min-w-0 items-baseline gap-1.5"
+                      key={provider.provider}
+                    >
+                      {index > 0 && <span className="text-muted-foreground/40">·</span>}
+                      <Provider health={provider} now={now} />
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-muted-foreground/70">no providers</span>
+                )}
+              </span>
+              {now - machine.at > STALE && (
+                <span
+                  className="shrink-0 text-[10.5px] text-muted-foreground/60"
+                  title={new Date(machine.at).toLocaleString()}
+                >
+                  reported {ago(machine.at, now)}
+                </span>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </section>
+  )
 }
 
 /** Up and down move between rows, as in a list; Tab still walks them in order. */
@@ -268,8 +378,15 @@ function Message({ children }: { children: ReactNode }) {
 }
 
 function Front() {
-  const { directory, failing } = useDirectory()
+  const { directory, health, failing } = useDirectory()
   const now = Date.now()
+  const connected = new Set(
+    directory.state === 'loaded'
+      ? directory.rows.flatMap((row) =>
+          row.machines.filter((machine) => machine.connected).map((machine) => machine.machine),
+        )
+      : [],
+  )
   return (
     <div className="flex min-h-dvh flex-col">
       <div className="flex h-7 shrink-0 items-center gap-3 border-b border-border/70 bg-sidebar px-3 font-mono text-[11.5px] text-muted-foreground">
@@ -338,6 +455,7 @@ function Front() {
             ))}
           </ul>
         )}
+        {health.length > 0 && <Machines connected={connected} health={health} now={now} />}
       </main>
     </div>
   )

@@ -46,6 +46,35 @@ async function discardBody(request: Request) {
   }
 }
 
+/** A machine's health report is a few providers' timestamps: 16 KiB is ample. */
+const HEALTH_BODY = 16 * 1024
+
+/** The body as text, or undefined once it exceeds `limit` bytes; reading stops there. */
+async function limitedText(request: Request, limit: number): Promise<string | undefined> {
+  if (Number(request.headers.get('Content-Length') ?? 0) > limit) {
+    await discardBody(request)
+    return undefined
+  }
+  if (!request.body) return ''
+  const reader = request.body.getReader()
+  const decoder = new TextDecoder()
+  let size = 0,
+    text = ''
+  try {
+    for (let read = await reader.read(); !read.done; read = await reader.read()) {
+      size += read.value.byteLength
+      if (size > limit) {
+        await reader.cancel()
+        return undefined
+      }
+      text += decoder.decode(read.value, { stream: true })
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return text + decoder.decode()
+}
+
 function matchesSyncToken(authorization: string | null, token: string): boolean {
   if (!authorization) return false
   const encoder = new TextEncoder()
@@ -108,6 +137,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   // The front page is a static shell built by cloud/build.ts; its data comes from /api/directory behind Access.
   if (url.pathname === '/') return env.ASSETS.fetch(new Request(new URL('/front/', url), request))
   if (url.pathname === '/api/directory') return directory(env).fetch('https://directory/list')
+  if (url.pathname === '/api/health') return directory(env).fetch('https://directory/health')
   if (url.pathname === '/sync/v2') {
     if (!env.SYNC_TOKEN || !matchesSyncToken(request.headers.get('Authorization'), env.SYNC_TOKEN))
       return Response.json({ error: 'Unauthorized' }, { status: 401 })
@@ -144,6 +174,26 @@ async function route(request: Request, env: Env): Promise<Response> {
         ...(agent.method === 'POST' ? { body: await request.text() } : {}),
       }),
     )
+  }
+  // Each machine reports its model providers' health; the front page and @sync list it. No project key: it is the
+  // machine's, like `/sync/directory`.
+  if (url.pathname === '/sync/health') {
+    if (
+      !env.SYNC_TOKEN ||
+      !matchesSyncToken(request.headers.get('Authorization'), env.SYNC_TOKEN)
+    ) {
+      await discardBody(request)
+      return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    if (request.method === 'GET') return directory(env).fetch('https://directory/health')
+    if (request.method !== 'POST') {
+      await discardBody(request)
+      return new Response('Method not allowed', { status: 405 })
+    }
+    const body = await limitedText(request, HEALTH_BODY)
+    if (body === undefined)
+      return Response.json({ error: 'At most 16 KiB of health' }, { status: 413 })
+    return directory(env).fetch('https://directory/health', { method: 'POST', body })
   }
   if (url.pathname === '/sync/relink') {
     if (!env.SYNC_TOKEN || !matchesSyncToken(request.headers.get('Authorization'), env.SYNC_TOKEN))
@@ -259,6 +309,18 @@ export class ProjectDirectory {
       return target
         ? Response.json({ target })
         : Response.json({ error: 'No alias' }, { status: 404 })
+    }
+    if (url.pathname === '/health') {
+      if (request.method !== 'POST') return Response.json(this.store.healthList())
+      let value: unknown
+      try {
+        value = await request.json()
+      } catch {
+        return Response.json({ error: 'Expected JSON' }, { status: 400 })
+      }
+      return this.store.health(value)
+        ? new Response(null, { status: 204 })
+        : Response.json({ error: 'Invalid machine health' }, { status: 400 })
     }
     if (request.method === 'POST') {
       const presence: Presence = await request.json()
