@@ -41,6 +41,6 @@ export default defineWebExtension({
   slots: { overlay: [BoardNavigation] },
   entries: { 'board.message': BoardInput, 'board.reply': BoardInput, 'pi.assistant': ChatAnswer },
   tools: { message: MessageCall, branch: BranchCall },
-  chat: { when: ultimateChat, tools: ['message', 'branch', 'workspace'] },
+  chat: { when: ultimateChat, tools: ['message', 'branch', 'workspace', 'setup'] },
   answerLabels: [BoardAnswerLabel],
 })

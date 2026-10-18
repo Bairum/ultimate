@@ -145,7 +145,7 @@ destination, or say “not sent” for a one-way message. Answers that cover sev
 destination; unrelated answers show no board label.
 
 @ultimate's own conversation reads as a chat (the `chat` contribution): each run of tool calls and thinking folds into
-one “worked · N steps” row, while messages, branch starts, workspace outcomes and answers stay. Its messages to you
+one “worked · N steps” row, while messages, branch starts, workspace outcomes, onboarding setup cards and answers stay. Its messages to you
 are bubbles on the left in its accent, their footer saying awaiting your reply, answered or one-way; an answer card
 mounts beneath the text (`ChatBubble` children). An answer that went back to the branches that asked folds to
 “replied to #id”.
