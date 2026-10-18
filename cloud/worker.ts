@@ -193,7 +193,9 @@ async function route(request: Request, env: Env): Promise<Response> {
     const body = await limitedText(request, HEALTH_BODY)
     if (body === undefined)
       return Response.json({ error: 'At most 16 KiB of health' }, { status: 413 })
-    return directory(env).fetch('https://directory/health', { method: 'POST', body })
+    // PUT, not POST: a directory object still on code from before this route treats any POST as a presence update and
+    // throws on it, while a PUT there falls through to a harmless 404 that the reporter retries.
+    return directory(env).fetch('https://directory/health', { method: 'PUT', body })
   }
   if (url.pathname === '/sync/relink') {
     if (!env.SYNC_TOKEN || !matchesSyncToken(request.headers.get('Authorization'), env.SYNC_TOKEN))
@@ -311,7 +313,7 @@ export class ProjectDirectory {
         : Response.json({ error: 'No alias' }, { status: 404 })
     }
     if (url.pathname === '/health') {
-      if (request.method !== 'POST') return Response.json(this.store.healthList())
+      if (request.method !== 'PUT') return Response.json(this.store.healthList())
       let value: unknown
       try {
         value = await request.json()
@@ -323,8 +325,10 @@ export class ProjectDirectory {
         : Response.json({ error: 'Invalid machine health' }, { status: 400 })
     }
     if (request.method === 'POST') {
-      const presence: Presence = await request.json()
-      this.store.update(presence)
+      const presence: Partial<Presence> | null = await request.json()
+      if (typeof presence?.key !== 'string' || typeof presence.name !== 'string')
+        return Response.json({ error: 'Expected a project presence' }, { status: 400 })
+      this.store.update(presence as Presence)
       return new Response(null, { status: 204 })
     }
     if (url.pathname === '/list') return Response.json(this.store.list())

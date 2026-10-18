@@ -131,6 +131,20 @@ it('stores health posted with the sync token and lists it on /sync/health and /a
   ).toBe(401)
 })
 
+it('stores health with a PUT the presence route never sees, and refuses a malformed presence with 400', async () => {
+  const directory = (init: { method: string; body: string }) =>
+    env.DIRECTORY.get(env.DIRECTORY.idFromName('directory')).fetch('https://directory/health', init)
+  // The production failure: a health report reaching the presence path threw on `name.toLowerCase()`.
+  const asPresence = await env.DIRECTORY.get(env.DIRECTORY.idFromName('directory')).fetch(
+    'https://directory/update',
+    { method: 'POST', body: JSON.stringify(desk) },
+  )
+  expect(asPresence.status).toBe(400)
+  expect(store.list()).toEqual([])
+  expect((await directory({ method: 'PUT', body: JSON.stringify(desk) })).status).toBe(204)
+  expect(store.healthList()).toEqual([desk])
+})
+
 it('refuses health bodies over 16 KiB, declared or streamed', async () => {
   const big = JSON.stringify({ ...desk, padding: 'x'.repeat(16 * 1024) })
   const declared = await worker.fetch(
