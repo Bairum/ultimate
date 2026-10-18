@@ -15,7 +15,7 @@ import type { JsonValue } from '@earendil-works/chord'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { docHash, PROJECT_KEY, PROJECT_MISMATCH } from '../../cloud/protocol.ts'
+import { docHash, HELLO_LIMITS, PROJECT_KEY, PROJECT_MISMATCH } from '../../cloud/protocol.ts'
 import type {
   CloudMessage,
   MachineMessage,
@@ -155,7 +155,11 @@ export function startSync(
   }
   const secretNames = async () => {
     try {
-      return (await secretMetadata(host.userHome)).map((secret) => secret.name)
+      // Only names the cloud accepts: a hello carrying any other is refused as malformed.
+      return (await secretMetadata(host.userHome))
+        .map((secret) => secret.name)
+        .filter((name) => HELLO_LIMITS.secret.test(name))
+        .slice(0, HELLO_LIMITS.secrets)
     } catch {
       // The Secrets panel reports an unreadable store; until it is repaired this machine advertises none.
       return []

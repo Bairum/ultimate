@@ -76,6 +76,17 @@ export const PROJECT_MISMATCH = 4009
 /** A project key: `github.com/<owner>/<repo>`, lowercased. */
 export const PROJECT_KEY = /^github\.com\/[a-z0-9_.-]+\/[a-z0-9_.-]+$/
 
+/**
+ * A hello's checkout (root, machine and secret names) lives in the replica's socket attachment, which the platform caps
+ * at 16 KiB; these bounds keep it far below that. Machines advertise only secret names that fit, never cutting one.
+ */
+export const HELLO_LIMITS = {
+  root: 1024,
+  machine: 128,
+  secrets: 64,
+  secret: /^[A-Z][A-Z0-9_]{0,63}$/,
+}
+
 /** One step of preparing a machine to take the lease, in the order they run. */
 export interface TransitionStep {
   name: 'fetch' | 'install' | 'checks' | 'handover' | 'download' | 'branches' | 'claim'

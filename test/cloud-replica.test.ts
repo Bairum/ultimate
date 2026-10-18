@@ -986,6 +986,49 @@ describe('project replica sockets', () => {
     expect(standby.socket.send).not.toHaveBeenCalled()
     writer.receive({ type: 'delivered', id: item.id, submissionId: 1 })
     expect(instance.store.outbox()).toEqual([])
+
+    // A standby's checkout survives hibernation: after a release its claim names its own root, not another's.
+    writer.receive({ type: 'release', epoch: 1, snapshot: { id: 'snap-1' } })
+    instance = new SharedReplica(ctx, env)
+    standby.receive({ type: 'claim', epoch: 1 })
+    expect(instance.store.lease()).toMatchObject({ machine: 'laptop', epoch: 2, root: '/test' })
+  })
+
+  it('ignores a claim from an admitted socket whose attachment has no checkout', () => {
+    const { instance, connect } = shared()
+    const writer = connect()
+    writer.receive(hello())
+    writer.receive({ type: 'release', epoch: 1, snapshot: { id: 'snap-1' } })
+    const old = connect()
+    old.socket.serializeAttachment({ key: KEY, machine: 'laptop', role: 'standby' })
+    old.receive({ type: 'claim', epoch: 1 })
+    expect(instance.store.lease()).toMatchObject({ machine: null, epoch: 1 })
+    expect(old.sent()).toEqual([])
+  })
+
+  it('refuses a hello whose checkout could outgrow the socket attachment, and keeps admitted ones small', () => {
+    const { connect } = shared()
+    for (const oversized of [
+      { root: `/${'r'.repeat(1024)}` },
+      { machine: 'm'.repeat(129) },
+      { secrets: Array.from({ length: 65 }, (_, index) => `SECRET_${index}`) },
+      { secrets: [`A${'B'.repeat(64)}`] },
+      { secrets: ['lower_case'] },
+    ]) {
+      const socket = connect()
+      socket.receive(hello(oversized))
+      expect(socket.socket.close).toHaveBeenCalledWith(PROJECT_MISMATCH, 'invalid hello')
+    }
+    const largest = connect()
+    largest.receive(
+      hello({
+        root: `/${'r'.repeat(1023)}`,
+        machine: 'm'.repeat(128),
+        secrets: Array.from({ length: 64 }, (_, index) => `S${index}`.padEnd(64, 'X')),
+      }),
+    )
+    expect(largest.socket.close).not.toHaveBeenCalled()
+    expect(JSON.stringify(largest.socket.deserializeAttachment()).length).toBeLessThan(16384 / 2)
   })
 })
 

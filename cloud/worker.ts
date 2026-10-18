@@ -11,7 +11,7 @@ import { admitsAccess } from './access.ts'
 import type { AccessConfig } from './access.ts'
 
 import type { Sql } from './replica.ts'
-import { PROJECT_KEY, PROJECT_MISMATCH } from './protocol.ts'
+import { HELLO_LIMITS, PROJECT_KEY, PROJECT_MISMATCH } from './protocol.ts'
 import type { CloudMessage, Hello, MachineMessage } from './protocol.ts'
 import { BUILD_ID, buildKey, contentType, uploadBuild, validName } from './builds.ts'
 import { DirectoryStore } from './directory.ts'
@@ -257,8 +257,10 @@ function validHello(hello: Hello, { key, alias }: Attachment) {
     /^[0-9a-f]{40,64}$/.test(hello.rootCommit) &&
     typeof hello.root === 'string' &&
     hello.root.startsWith('/') &&
+    hello.root.length <= HELLO_LIMITS.root &&
     typeof hello.machine === 'string' &&
     hello.machine.length > 0 &&
+    hello.machine.length <= HELLO_LIMITS.machine &&
     Number.isInteger(hello.port) &&
     hello.port >= 1 &&
     hello.port <= 65535 &&
@@ -266,7 +268,8 @@ function validHello(hello: Hello, { key, alias }: Attachment) {
     (hello.epoch === undefined || (Number.isSafeInteger(hello.epoch) && hello.epoch >= 1)) &&
     typeof hello.history === 'boolean' &&
     Array.isArray(hello.secrets) &&
-    hello.secrets.every((name) => typeof name === 'string') &&
+    hello.secrets.length <= HELLO_LIMITS.secrets &&
+    hello.secrets.every((name) => typeof name === 'string' && HELLO_LIMITS.secret.test(name)) &&
     (hello.transition === undefined ||
       (typeof hello.transition === 'string' && /^[\w-]{1,64}$/.test(hello.transition)))
   )
