@@ -88,7 +88,7 @@ export default function browserExtension(host: ExtensionHost) {
       section(
         'visual_verification',
         () =>
-          'After UI changes, use screenshot and look at the image before claiming success. Use browser to drive fresh pages and inspect errors. Omit url to see your own UI, or pass a path such as /?conversation=1; do not guess its port. Pass an instance URL to test another server.',
+          'After UI changes, use screenshot and look at the image before claiming success. Use browser to drive fresh pages and inspect errors. Omit url to see your own UI, or pass a relative url such as /?conversation=1; do not guess its port. Pass path: `<file>.png` to choose where the PNG is saved. Pass an instance URL to test another server.',
       ),
     ],
     tools: [
