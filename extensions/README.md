@@ -26,8 +26,7 @@ An optional `inbox` renderer wraps each queued composer input with `{ item, core
 An optional `composer` renderer receives `{ core, dock? }` for the shown conversation's composer (`dock` marks a
 narrow side region). Render `core` to preserve the existing composer, optionally wrapping it. Facets compose in
 discovery order: each receives the previous rendering as `core`, behind its own extension boundary with that rendering
-as fallback. These renderers can use `useTranscript()` for the shown conversation's current entries and
-`useComposer()` for draft access.
+as fallback. These renderers can use `useTranscript()` for the shown conversation's current entries.
 Lineage uses this to show a root's read-only context footer, or an empty root's Start here card, instead of a composer.
 `switchConversation(id, { replace: true })` takes the current history entry instead of adding one, as a redirect does.
 
@@ -214,12 +213,8 @@ title bar the host shows above every surface.
 slots: { 'header.right': [Badge], sidebar: { component: Conversations, order: -1 } }
 ```
 
-`useComposer()` returns `{ draft? }` inside composer slots and the shown conversation's composer renderers. `draft.read()` returns a text-only `{ text, revision }` snapshot;
-`draft.clear(snapshot)` clears it only if no edits were made since that snapshot (and preserves newer stored text).
-Use it after a successful submission; images are not included or cleared. The draft shares the normal composer's
-storage and submission-clear path, not separate state. `draft` is absent outside a composer. The Agent and dock
-composers target the shown conversation. Contextual commands can receive an `entryId` alongside `conversationId`
-through `useCommands()`; a message-action component can pass its entry's id to a command.
+Contextual commands can receive an `entryId` alongside `conversationId` through `useCommands()`; a message-action
+component can pass its entry's id to a command.
 
 ### Panels
 

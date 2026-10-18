@@ -61,8 +61,7 @@ The Workspaces panel shows checkouts read-only.
 
 On hover or focus, a row's `…` menu offers Rename (inline; also on double-click; Enter or leaving the field saves,
 Escape cancels, and after either key focus returns to the row), Compact context (keeps the gist and frees context;
-disabled while the conversation works), and Conclude. There is no Clear context: it would drop what a branch inherited
-from its root along with everything else. Before concluding, the UI calls workspaces `pending {ids}`.
+disabled while the conversation works), and Conclude. Before concluding, the UI calls workspaces `pending {ids}`.
 When a conversation or its subagents have uncommitted files or unlanded commits, a confirmation dialog names the
 work and explains that its checkout is kept until the work lands or is discarded. Otherwise it concludes at once.
 Concluded rows and their branches/subagents sit in a collapsed "Concluded · N" group at the bottom.
@@ -112,15 +111,11 @@ The single-conversation actions below reject bad args, unknown conversations, an
   trimmed, and cut to at most 160 characters; a blank title removes it, so the first message names the conversation
   again and re-enables automatic titles on the next scheduled summary. Nonblank renames take manual ownership, even
   during generation. Returns `{ ok: true }`.
-- `reset {id}`: clears the conversation with a Durable reset (a `pi.reset` entry starts a new, empty context). It
-  refuses while the conversation works, and for listed roots and standing agents (@ultimate, the lander, residents).
-  The UI no longer offers it. A conversation named by its first message keeps that name as its title.
-  Returns `{ ok: true }`.
 
 ## Automatic summaries and reply assessments
 
 Title/summary requests also classify a 1–3 word product feature label for top-level conversations.
-The label is kept unless the work clearly moves to another feature, exposed in the overview, and cleared by Clear context.
+The label is exposed in the overview and kept unless the work clearly moves to another feature.
 
 All three triggers request work through the typed, transaction-scoped `requestSummary(tx, host, id, request)`
 helper in `summary.ts`: `intent`, `spawn`, and `reply`. The existing version-1 task inputs/checkpoints are preserved;
@@ -130,7 +125,7 @@ initial intent adds an optional input field, so live reply and spawn tasks remai
 It inspects the conversation's own stored entries since the current head marker (not inherited fork history):
 exactly one user input and no assistant reply, only in top-level conversations. A durable `intentRequested` flag prevents tools, request retries and recovery
 from requesting it again. Established conversations are not backfilled on later inputs, including when the summary
-model becomes available later. Clear context removes the flag so a new context can request its own intent.
+model becomes available later.
 Intent describes the requested goal, not completed work; it can publish while the main agent is busy.
 It does not assess a reply, increment exchanges, or consume the 1/4/7 cadence. New input (including queued input),
 a reset, or a superseding spawn/reply request makes a held result stale; compaction does not.
@@ -174,7 +169,6 @@ Each accepted automatic title change appends a `conversations.title-changed` ent
 agent-triggered tool or model message. Unchanged titles, protected manual titles, stale results, failures and
 an unavailable summary model produce no action. Entries survive reload/restart without duplication; old changes are not
 backfilled and manual renames are not logged.
-Clear context keeps the title, clears summary and assessment, and restarts the cadence.
 The task saves the provider response before parsing it and adds reported usage even for stale or invalid results.
 Replaying a saved response does not count it again. Crashing before it is saved can repeat the request.
 State survives reloads and restarts. Failed requests preserve the last summary and retry on the next reply.

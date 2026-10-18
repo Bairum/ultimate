@@ -178,5 +178,5 @@ of the current code's own task waits for the next submit or open, so a determini
 
 Top-level mains use `workspace status`, `workspace submit` and `workspace land` for their own checkout.
 Landing reports commits and changed paths, with a restart hint for core changes to the running clone.
-Conclude releases only idle checkouts with no uncommitted or unlanded work; clear context never removes one.
+Conclude releases only idle checkouts with no uncommitted or unlanded work.
 Landing never removes a checkout or restarts Ultimate.

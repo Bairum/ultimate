@@ -66,7 +66,7 @@ describe('durable UI state', () => {
     const { state, requests, commit, ack, other, start } = setup()
     const listener = vi.fn<() => void>()
     state.subscribe(listener)
-    start({ 'shell.panelOpen': false, 'shell.surface': 'board' })
+    start({ 'shell.panelOpen': false, 'shell.surface': 'example' })
 
     state.set('shell.panelOpen', true)
     state.set('shell.panel', 'info')
@@ -83,7 +83,7 @@ describe('durable UI state', () => {
       },
     ])
     // A stream update from before the write does not undo it.
-    state.receive({ 'shell.panelOpen': false, 'shell.surface': 'board', other: 1 })
+    state.receive({ 'shell.panelOpen': false, 'shell.surface': 'example', other: 1 })
     expect(state.get('shell.panelOpen')).toBe(true)
     expect(state.get('other')).toBe(1)
 
@@ -181,7 +181,7 @@ describe('durable UI state', () => {
     const { state, requests, errors, start } = setup()
     start({ panel: 'start' })
     state.set('panel', 'first')
-    state.set('view', 'board')
+    state.set('view', 'example')
     await wait()
     state.set('panel', 'second')
     requests[0].fail(new Error('offline'))

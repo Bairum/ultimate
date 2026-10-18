@@ -7,7 +7,9 @@ the choices live in `ext.sounds.muted` and `ext.sounds.off`.
 The sounds follow the conversations extension's overview on the root (`ultimate.conversation-overview`). A reply
 waits for its assessment by the summary model, which tells a question (`needs_input`) from a finished task; a reply
 without an assessment in flight sounds as finished after two seconds. A run that ended in an error sounds as failed;
-a stop or a reset does not. Subagents and the lander stay quiet: their owner hears about them.
+a stop or a reset does not. Subagents stay quiet: their owner hears about them. Standing agents (@ultimate, @lander,
+and other residents) stay quiet for extension-authored inputs, including other agents' messages. Replies to plain
+user messages still sound, including the finished cue after two seconds without an assessment.
 
 Each event sounds once. Whatever the overview shows when a tab opens has been heard already, and of several open tabs
 the first that may play claims the event under a Web Lock in local storage. Browsers let a page play only after

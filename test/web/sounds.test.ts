@@ -51,10 +51,28 @@ it('takes what is there at first as heard, and sounds later news once', () => {
   ])
 })
 
-it('leaves subagents and landers out', () => {
+it('leaves parented conversations out', () => {
   const hear = listener()
   hear({}, new Set([1]), 0)
   expect(hear({ 5: assessed(10, 'done') }, new Set([1]), 1).due).toEqual([])
+})
+
+it('keeps standing agents quiet for internal replies but sounds their replies to the user', () => {
+  const hear = listener()
+  const top = new Set([1, 2, 3])
+  const standing = new Set([1, 2])
+  hear({}, top, 0, standing)
+  const rows = {
+    1: answered(10, { internalInput: true }),
+    2: answered(20),
+    3: answered(30, { internalInput: true }),
+  }
+  expect(hear(rows, top, 100, standing)).toEqual({ due: [], waiting: true })
+  expect(hear(rows, top, 100 + settle, standing).due.map((cue) => cue.key)).toEqual([
+    '2:20',
+    '3:30',
+  ])
+  expect(hear(rows, top, 200 + settle, standing)).toEqual({ due: [], waiting: false })
 })
 
 it('waits for a reply to settle, and lets a starting assessment decide', () => {
