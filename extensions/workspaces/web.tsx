@@ -1,5 +1,6 @@
 import { ChevronRightIcon, CopyIcon, GitBranchIcon, RefreshCwIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { MentionText } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { defineWebExtension, formatBytes, useAction, useConversation, useUltimate } from '@/sdk'
@@ -84,7 +85,7 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
               </span>
             </CollapsibleTrigger>
             <CollapsibleContent className="pt-1 pl-4 font-sans text-[12.5px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
-              {abstract.text}
+              <MentionText text={abstract.text} />
             </CollapsibleContent>
           </Collapsible>
         )}

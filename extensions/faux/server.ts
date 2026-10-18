@@ -277,6 +277,9 @@ export default async function fauxExtension(host: ExtensionHost) {
         )
       }
       if (last?.role === 'user' && last.content === 'fleet demo') return tool('fleet', {})
+      // Answers with the given Markdown verbatim, to preview how answers render it (such as `#id` mentions).
+      const say = /^say ([\s\S]+)$/.exec(messageText(last?.role === 'user' ? last.content : ''))
+      if (say) return fauxAssistantMessage([fauxText(say[1])])
       if (
         last?.role === 'toolResult' &&
         last.toolName === 'fleet' &&

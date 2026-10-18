@@ -3,8 +3,10 @@ import { Conversations, Seen } from './sidebar.tsx'
 import { SummaryModelDialog, summaryModelDialog } from './dialogs.tsx'
 import { SummaryAction } from './summary-entry.tsx'
 import { UltimateButton } from './ultimate.tsx'
+import { MentionLink } from './mention.tsx'
 
 export default defineWebExtension({
+  link: MentionLink,
   entries: {
     'conversations.title-changed': SummaryAction,
     'conversations.intent-summarized': SummaryAction,

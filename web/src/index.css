@@ -242,7 +242,7 @@
   & :is(p, ul, ol, blockquote) {
     @apply my-2.5;
   }
-  & :is(a, [data-streamdown='link']) {
+  & :is(a, [data-streamdown='link']):not([data-conversation-mention]) {
     @apply font-normal text-brand underline decoration-brand/40 underline-offset-2 hover:decoration-brand;
   }
   & [data-streamdown='list-item'] {

@@ -1,6 +1,7 @@
 import { cn } from 'cn'
 import { CheckIcon, SquareArrowOutUpRightIcon, TriangleAlertIcon, XIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { MentionText } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
 import { useConversations, useUltimate } from '@/sdk'
 import { FeatureTag } from '../conversations/feature.tsx'
@@ -127,7 +128,9 @@ export function LandingCard({
         {divergence && (
           <p className="flex items-baseline gap-2 text-muted-foreground">
             <span className="shrink-0 text-[11px]">Diverged</span>
-            <span className="min-w-0 font-sans text-[12.5px] break-words">{divergence}</span>
+            <span className="min-w-0 font-sans text-[12.5px] break-words">
+              <MentionText text={divergence} />
+            </span>
           </p>
         )}
         {children}
