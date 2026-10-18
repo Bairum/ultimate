@@ -2,6 +2,8 @@ import path from 'node:path'
 
 interface ImportNode {
   source?: { value?: unknown }
+  importKind?: string
+  exportKind?: string
 }
 
 interface Node {
@@ -22,6 +24,18 @@ interface Node {
   properties?: Node[]
   arguments?: Node[]
   parent?: Node | null
+  importKind?: string
+  exportKind?: string
+  kind?: string
+  declaration?: Node | null
+  declarations?: Node[]
+  init?: Node | null
+  typeArguments?: Node | null
+  params?: Node[]
+  typeName?: Node
+  typeAnnotation?: Node | null
+  members?: Node[]
+  types?: Node[]
 }
 
 interface Context {
@@ -39,6 +53,34 @@ const extensionOf = (filename: string) => {
   const [directory, extension] = path.relative(process.cwd(), filename).split(path.sep)
   return directory === 'extensions' ? extension : undefined
 }
+/** The repository-relative path segments an import `source` of `filename` resolves to. */
+const resolved = (filename: string, source: string) =>
+  path.relative(process.cwd(), path.resolve(path.dirname(filename), source)).split(path.sep)
+/** `extensions/<name>/api.ts` of its own extension. */
+const apiFile = (filename: string) => {
+  const parts = path.relative(process.cwd(), filename).split(path.sep)
+  return parts.length === 3 && parts[0] === 'extensions' && parts[2] === 'api.ts'
+    ? parts[1]
+    : undefined
+}
+/** Whether a JSDoc comment with text sits directly before `node`. */
+const documented = (context: Context, node: Node) =>
+  (context.sourceCode.getCommentsBefore(node) as { type: string; value: string }[]).some(
+    (comment) => comment.type === 'Block' && /^\*\s*\S/.test(comment.value),
+  )
+/** The members of a type literal, or of the literals of an intersection. */
+const literals = (type: Node | null | undefined): Node[] =>
+  type?.type === 'TSTypeLiteral'
+    ? (type.members ?? [])
+    : type?.type === 'TSIntersectionType'
+      ? (type.types ?? []).flatMap(literals)
+      : []
+/** The members of an exported service type: an interface, a type literal, or the literals of an intersection. */
+const membersOf = (declaration: Node): Node[] =>
+  declaration.type === 'TSInterfaceDeclaration'
+    ? (((declaration.body as Node | undefined)?.body as Node[] | undefined) ?? [])
+    : literals(declaration.typeAnnotation)
+const definers = new Set(['defineApi', 'defineEvent', 'defineDoc', 'defineEntry'])
 
 const propertyName = (node: Node | undefined) =>
   node?.computed ? node.property?.value : (node?.property?.name ?? node?.property?.value)
@@ -281,6 +323,171 @@ export default {
           CatchClause(node: Node) {
             const block = node.body as Node
             if (Array.isArray(block.body) && block.body.length === 0) check(node)
+          },
+        }
+      },
+    },
+    'api-only-imports': {
+      meta: { schema: [] },
+      create(context: Context) {
+        const own = extensionOf(context.filename)
+        if (!own) return {}
+        const check = (node: ImportNode) => {
+          const source = node.source?.value
+          if (typeof source !== 'string' || !source.startsWith('.')) return
+          if (node.importKind === 'type' || node.exportKind === 'type') return
+          const [directory, extension, ...file] = resolved(context.filename, source)
+          if (directory === 'extensions' && extension !== own && file.join('/') !== 'api.ts')
+            context.report({
+              node,
+              message: `${own} imports ${extension}/${file.join('/')} at runtime; reach ${extension} through its api.ts (a service, document or event token), import types with \`import type\`, or move a pure helper to lib/.`,
+            })
+        }
+        return {
+          ImportDeclaration: check,
+          ImportExpression: check,
+          ExportNamedDeclaration: check,
+          ExportAllDeclaration: check,
+        }
+      },
+    },
+    'no-raw-services': {
+      meta: { schema: [] },
+      create(context: Context) {
+        return {
+          MemberExpression(node: Node) {
+            const name = propertyName(node)
+            const object = node.object
+            if (
+              ['provide', 'use', 'events'].includes(String(name)) &&
+              (object?.type === 'Identifier'
+                ? object.name === 'host'
+                : object?.type === 'MemberExpression' && propertyName(object) === 'host')
+            )
+              context.report({
+                node,
+                message: `host.${String(name)} is untyped: declare a token in api.ts and use host.implement, host.need or host.want for services, host.emit and host.react for events.`,
+              })
+          },
+        }
+      },
+    },
+    'api-file-shape': {
+      meta: { schema: [] },
+      create(context: Context) {
+        if (!apiFile(context.filename)) return {}
+        const report = (node: Node, message: string) => context.report({ node, message })
+        const checkImport = (node: Node) => {
+          const source = String(node.source?.value)
+          if (source.startsWith('node:'))
+            return report(node, 'api.ts is browser-safe: it imports no node:* module.')
+          if (node.importKind === 'type' || !source.startsWith('.')) return
+          const target = resolved(context.filename, source)
+          if (
+            target[0] !== 'shared' &&
+            !(target.length === 3 && target[0] === 'extensions' && target[2] === 'api.ts')
+          )
+            report(
+              node,
+              "api.ts imports at runtime only shared/, packages and other extensions' api.ts; use `import type` for the rest.",
+            )
+        }
+        return {
+          Program(node: Node) {
+            const header = /^\/\*\*([\s\S]*?)\*\//
+              .exec(context.sourceCode.text.trimStart())?.[1]
+              .replace(/^\s*\*\s?/gm, ' ')
+              .trim()
+            if (!header || !/[.!?](\s|$)/.test(header))
+              report(
+                node,
+                "Start api.ts with a doc comment on the extension's intent; its first sentence is the one-line summary.",
+              )
+            const services = new Set<string>()
+            const body = (node.body as Node[] | undefined) ?? []
+            for (const statement of body) {
+              if (statement.type === 'ImportDeclaration') checkImport(statement)
+              else if (
+                statement.type === 'TSTypeAliasDeclaration' ||
+                statement.type === 'TSInterfaceDeclaration'
+              )
+                continue
+              else if (
+                statement.type === 'ExportNamedDeclaration' &&
+                !statement.source &&
+                (statement.declaration?.type === 'TSTypeAliasDeclaration' ||
+                  statement.declaration?.type === 'TSInterfaceDeclaration')
+              )
+                continue
+              else if (
+                statement.type === 'ExportNamedDeclaration' &&
+                statement.declaration?.type === 'VariableDeclaration' &&
+                statement.declaration.kind === 'const' &&
+                statement.declaration.declarations?.every((declarator) =>
+                  definers.has(root(declarator.init ?? undefined)?.name ?? ''),
+                )
+              ) {
+                if (!documented(context, statement))
+                  report(statement, 'Document each exported token: what it is and when to use it.')
+                for (const declarator of statement.declaration.declarations) {
+                  const inner = declarator.init?.callee
+                  const service = inner?.typeArguments?.params?.[0]?.typeName?.name
+                  if (inner?.callee?.name === 'defineApi' && service) services.add(service)
+                }
+              } else
+                report(
+                  statement,
+                  'api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)` and types.',
+                )
+            }
+            for (const statement of body) {
+              const declaration =
+                statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
+              const name = declaration?.id?.name
+              if (!declaration || !name || !services.has(name)) continue
+              for (const member of membersOf(declaration))
+                if (!documented(context, member))
+                  report(
+                    member,
+                    `Document ${name}.${String(member.key?.name ?? member.key?.value)}: what it does and when to call it.`,
+                  )
+            }
+          },
+        }
+      },
+    },
+    'api-naming': {
+      meta: { schema: [] },
+      create(context: Context) {
+        const own = apiFile(context.filename)
+        if (!own) return {}
+        return {
+          CallExpression(node: Node) {
+            const callee = node.callee
+            const name = node.arguments?.[0]?.value
+            if (
+              callee?.type === 'CallExpression' &&
+              callee.callee?.type === 'Identifier' &&
+              callee.callee.name === 'defineApi' &&
+              name !== own
+            )
+              context.report({
+                node,
+                message: `The API of extensions/${own} is named '${own}'.`,
+              })
+            if (
+              callee?.type === 'Identifier' &&
+              callee.name === 'defineEvent' &&
+              !(
+                typeof name === 'string' &&
+                name.startsWith(`${own}.`) &&
+                name.length > own.length + 1
+              )
+            )
+              context.report({
+                node,
+                message: `Events of extensions/${own} are named '${own}.<event>'.`,
+              })
           },
         }
       },
