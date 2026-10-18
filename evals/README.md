@@ -5,7 +5,7 @@ The default suite is a landing gate and includes the question-extraction evals.
 
 Run `pnpm eval:behaviour` on demand when agent prompts change. Its separate suite,
 `current-behaviour.eval.ts`, measures model tendencies: routing, sizing, preview discipline,
-and reporting once. These cases are not a landing gate: individual model turns can choose a
+reporting once, and filling optional plan fields such as task dependencies. These cases are not a landing gate: individual model turns can choose a
 different workflow or stall in their first generation. Failures remain visible; neither suite
 uses retries or pass-rate thresholds. To isolate routing, run `pnpm eval:behaviour -t tiny`.
 
