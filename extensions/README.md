@@ -85,16 +85,9 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 - `implement(api, value)`, `need(api)`, `want(api)`, `catalogue()`: the typed successors of `provide`/`use`; see [Extension APIs](#extension-apis).
 - `metadata`: the core's `ultimate.metadata` conversation document, `{ title?, label? }`; the shell names a conversation
   by them, so set them on conversations you create (`subagents` labels each child with its definition).
-- `events`: Pi's ephemeral process-local event bus; see [Events](#events).
+- `emit(tx, event, data)`, `react(name, events, handler)`, `eventLog`: durable events; see [Events](#events).
+- `trace`: the recorded calls (services, actions, reactor runs, tools); see [docs/extensions.md](../docs/extensions.md#tracing).
 - `access.allow({ origin, verify })`: register an HTTP origin with an identity verifier; returns a disposer and is automatically removed when the facet unloads or reloads. HTTP, API, and websocket upgrades use the same admission rules.
-- `service(name, { state, detail? })`: register ephemeral terminal status (`starting`, `ready`, `busy`, or `error`);
-  returns `{ update(status), dispose() }`. Names must be non-empty and unique within the facet. Registrations are
-  staged until installation succeeds, then removed automatically on replacement, disable, removal or shutdown.
-  Failed installation leaves the previous facet's rows intact; stale handles cannot update/remove replacement rows.
-  Handles are always facet-scoped, even inside `resource()`; do not save them in reload-stable resources. Reports
-  are hidden while the harness is released, and the supervisor ignores status from inactive cores. This API only
-  describes services: it does not start processes, schedule work, poll, or persist state. Example:
-  `const status = host.service('worker', { state: 'starting' }); host.onOpen(async () => { status.update({ state: 'ready' }) })`.
 - `notice(message)`: publish a warning notice and retain it in this facet's system diagnostics for later clients, until unload/reload.
 - `resource(key, create)`, `onOpen(callback)`, `onRelease(callback)`, `onClose(cleanup)`: shared reload-stable resources, async work each
   time the harness opens (at once if it is open; the server serves once it settles), async work each time before it closes while the process stays (deactivate, a core swap; drop commit subscriptions there), and async cleanup. Facet-level callbacks are removed on unload/reload, with cleanup run before the replacement opens. Callbacks registered inside a shared resource's creation belong to that reload-stable resource and survive until server shutdown.
@@ -199,8 +192,8 @@ providers and dependency cycles, each a sorted group of extensions that depend o
 
 Which channel to use: services for calls between extensions; documents for durable state; durable events for "this
 happened" (`host.emit` in your commit, `host.react` to act on it; see
-[docs/extensions.md](../docs/extensions.md#durable-events)); actions for the UI and user boundary. `host.provide`,
-`host.use` and the `host.events` bus are not used by extensions (`ultimate/no-raw-services`).
+[docs/extensions.md](../docs/extensions.md#durable-events)); actions for the UI and user boundary. Extensions never call the untyped `host.provide` and `host.use`
+(`ultimate/no-raw-services`).
 
 ## Lifecycle
 

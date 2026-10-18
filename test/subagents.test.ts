@@ -23,7 +23,7 @@ import type { ConversationId, Extension, Task, ToolRegistration } from '@earendi
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
-import { createEventBus, ModelRuntime } from '@earendil-works/pi-coding-agent'
+import { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { afterEach, describe, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
@@ -167,11 +167,9 @@ async function fixture(
   prepared.registry.install(
     codemode({
       ...prepared,
-      events: createEventBus(),
       access: { allow: () => () => {} },
       notice: () => {},
       provide: () => {},
-      service: () => ({ update: () => {}, dispose: () => {} }),
       use: () => undefined,
       implement: () => {},
       need: () => {

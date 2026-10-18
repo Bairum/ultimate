@@ -102,28 +102,20 @@ it.concurrent('orders facets by source so a project bash tool and renderer win r
 
 const serviceFacet = (detail: string, fail = false) => `
 import { defineExtension } from '@earendil-works/pi-durable'
-export const actions = { lookup: async (_args, { host }) => host.use('service-test'), stale: async (_args, { host }) => {
-  const saved = host.resource('service-test:handles', () => [])
-  saved[0].update({ state: 'error', detail: 'stale update' })
-  saved[0].dispose()
-} }
+export const actions = { lookup: async (_args, { host }) => host.use('service-test') }
 export default (host) => {
   host.provide('service-test', { detail: '${detail}' })
-  const status = host.service('worker', { state: 'starting', detail: '${detail}' })
-  host.resource('service-test:handles', () => []).push(status)
   ${fail ? "throw new Error('failed service installation')" : ''}
-  host.onOpen(async () => status.update({ state: 'ready', detail: '${detail}' }))
+  host.onOpen(async () => {})
   return defineExtension({ name: 'service-test' })
 }`
-it.concurrent('stages service rows, preserves them on failed reload and removes stale handles on replacement and disable', async () => {
+it.concurrent('keeps the provider on a failed reload, replaces it on reload and drops it on disable', async () => {
   const { home, projectRoot, server } = await fixture()
   const folder = join(projectRoot, '.ultimate/extensions/service-test')
   await mkdir(folder, { recursive: true })
   const file = join(folder, 'server.ts')
   await writeFile(file, serviceFacet('first'))
-  await until(() =>
-    server.extensions.services().some((s) => s.detail === 'first' && s.state === 'ready'),
-  )
+  await until(() => !!server.extensions.action('service-test', 'lookup'))
   const lookup = () =>
     server.extensions.invoke('service-test', 'lookup', {}, new AbortController().signal)
   expect(await lookup()).toEqual({ detail: 'first' })
@@ -136,20 +128,10 @@ it.concurrent('stages service rows, preserves them on failed reload and removes 
         .find((e) => e.name === 'service-test')
         ?.server?.error?.includes('failed service installation') === true,
   )
-  expect(server.extensions.services().filter((s) => s.extension === 'service-test')).toEqual([
-    { extension: 'service-test', name: 'worker', state: 'ready', detail: 'first' },
-  ])
   expect(await lookup()).toEqual({ detail: 'first' })
   await writeFile(file, serviceFacet('replacement'))
   server.vite.watcher.emit('change', file)
-  await until(() =>
-    server.extensions.services().some((s) => s.detail === 'replacement' && s.state === 'ready'),
-  )
-  expect(await lookup()).toEqual({ detail: 'replacement' })
-  await server.extensions.invoke('service-test', 'stale', {}, new AbortController().signal)
-  expect(server.extensions.services().filter((s) => s.extension === 'service-test')).toEqual([
-    { extension: 'service-test', name: 'worker', state: 'ready', detail: 'replacement' },
-  ])
+  await until(async () => ((await lookup()) as { detail?: string })?.detail === 'replacement')
   const consumer = join(projectRoot, '.ultimate/extensions/service-consumer')
   await mkdir(consumer, { recursive: true })
   await writeFile(
@@ -168,7 +150,6 @@ it.concurrent('stages service rows, preserves them on failed reload and removes 
   await until(
     () => server.extensions.info().find((e) => e.name === 'service-test')?.enabled === false,
   )
-  expect(server.extensions.services().some((s) => s.extension === 'service-test')).toBe(false)
   expect(
     await server.extensions.invoke('service-consumer', 'lookup', {}, new AbortController().signal),
   ).toBeNull()
@@ -209,9 +190,6 @@ it.concurrent('keeps the replacement provider available while the old cleanup is
   } finally {
     cleanup.resolve()
   }
-  await until(() =>
-    server.extensions.services().some((s) => s.detail === 'replacement' && s.state === 'ready'),
-  )
   expect(await lookup()).toEqual({ detail: 'replacement' })
 })
 
