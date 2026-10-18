@@ -3,7 +3,6 @@ import {
   CircleCheckIcon,
   GitBranchIcon,
   GitForkIcon,
-  MessagesSquareIcon,
   ScrollTextIcon,
   StickyNoteIcon,
 } from 'lucide-react'
@@ -26,7 +25,7 @@ import { ConversationRef } from '../conversations/feature.tsx'
 import { talkToUltimate } from '../conversations/ultimate.tsx'
 import { Open } from '../workspaces/landing.tsx'
 import { useRoots } from './roots.tsx'
-import { column, Familiarize, Survey } from './survey.tsx'
+import { column, Familiarize } from './survey.tsx'
 
 type Tally = { tokens: number; since?: number }
 const tallyKind = 'lineage.tally'
@@ -64,13 +63,12 @@ function Branched({ entry }: { entry: EntryRecord }) {
 /** The tally's prompt node: which branch started, from where, with what prompt (three lines until opened). */
 function Started({ entry }: { entry: EntryRecord }) {
   const { switchConversation } = useUltimate()
-  const { branch, at, intent, images, from, side } = entry.data as {
+  const { branch, at, intent, images, from } = entry.data as {
     branch: number
     at: number
     intent: string
     images?: number
     from?: number
-    side?: number
   }
   const [open, setOpen] = useState(false)
   const timestamp = entry.model?.[0]?.timestamp
@@ -98,16 +96,6 @@ function Started({ entry }: { entry: EntryRecord }) {
             type="button"
           >
             from #{from}/{at}
-          </button>
-        )}
-        {side !== undefined && (
-          <button
-            className="shrink-0 cursor-pointer hover:text-foreground hover:underline"
-            onClick={() => switchConversation(side)}
-            title={`Open side chat #${side}`}
-            type="button"
-          >
-            after side chat #{side}
           </button>
         )}
         {timestamp !== undefined && (
@@ -262,10 +250,9 @@ function Note({ entry, core }: { entry: EntryRecord; core: React.ReactNode }) {
   const { from, text, source } = entry.data as {
     from?: number
     text: string
-    source?: 'lander' | 'finished' | 'main' | 'side'
+    source?: 'lander' | 'finished' | 'main'
   }
   if (source === 'lander') return core
-  if (source === 'side') return <SideNote entry={entry} />
   if (source === 'finished') return <Finished entry={entry} />
   if (source !== 'main') return <NoteCard id={from} label="Note from" note="received" text={text} />
   return (
@@ -299,46 +286,7 @@ function NoteCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
   )
 }
 
-/** A branch's brief, which starts its context: collapsible like a compaction. */
-function Brief({ entry, lineage }: { entry: EntryRecord; lineage: { from: number; at: number } }) {
-  const { switchConversation } = useUltimate()
-  const brief = userText(entry)
-    .replace(/^<brief[^>]*>\n/, '')
-    .replace(/\n<\/brief>$/, '')
-  return (
-    <Collapsible
-      className="group/brief rounded-lg border border-brand/30 bg-brand/5"
-      data-lineage-brief={lineage.from}
-    >
-      <CollapsibleTrigger className="flex w-full cursor-pointer flex-col gap-1 px-3.5 py-2.5 text-left">
-        <span className="flex items-center gap-1.5 font-mono text-[11px] text-brand">
-          <ChevronRightIcon className="size-3.5 transition-transform group-data-[state=open]/brief:rotate-90" />
-          Branched from
-          <span
-            className="cursor-pointer hover:underline"
-            onClick={(event) => {
-              event.stopPropagation()
-              switchConversation(lineage.from)
-            }}
-            role="link"
-          >
-            <ConversationRef id={lineage.from} />
-          </span>
-          · brief
-        </span>
-        <span className="text-xs text-muted-foreground">
-          This conversation starts from a brief of #{lineage.from} up to entry {lineage.at}. Earlier
-          messages remain available above.
-        </span>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="border-t border-brand/20 px-3.5 py-2.5 text-[13px]">
-        <MessageResponse>{brief}</MessageResponse>
-      </CollapsibleContent>
-    </Collapsible>
-  )
-}
-
-/** A conversation's history distilled into the start of its tally: collapsible like a brief. */
+/** A conversation's history distilled into the start of its tally. */
 function Genesis({ entry }: { entry: EntryRecord }) {
   const text = userText(entry)
   const from = /^<tally from="#(\d+)\/(\d+)">/.exec(text)
@@ -368,18 +316,11 @@ function Genesis({ entry }: { entry: EntryRecord }) {
   )
 }
 
-/**
- * Lineage's resets: a tally's genesis, an old branch's brief, and the empty reset a new tally starts with, which shows
- * nothing.
- */
+/** A tally's genesis, or the empty reset a new tally starts with, which shows nothing. */
 function Reset({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   const roots = useRoots()
-  const lineage = (
-    entry.data as { lineage?: { tally?: true; from?: number; at?: number } } | undefined
-  )?.lineage
+  const lineage = (entry.data as { lineage?: { tally?: true } } | undefined)?.lineage
   if (lineage?.tally) return <Genesis entry={entry} />
-  if (lineage?.from !== undefined && lineage.at !== undefined)
-    return <Brief entry={entry} lineage={{ from: lineage.from, at: lineage.at }} />
   if (!entry.model && entry.data === undefined && roots?.includes(entry.conversationId)) return null
   return core
 }
@@ -436,51 +377,6 @@ function TallyFooter({ id, tokens, dock }: { id: number; tokens?: number; dock?:
   )
 }
 
-/** What a side chat with a tally, from before tallies were read-only, left in it: its note, and the branch it ended in. */
-function SideNote({ entry }: { entry: EntryRecord }) {
-  const { switchConversation } = useUltimate()
-  const transcript = useTranscript()
-  const { from, text } = entry.data as { from: number; text: string }
-  const started = transcript.find(
-    (other) =>
-      other.id > entry.id &&
-      other.kind === 'lineage.branched' &&
-      (other.data as { side?: number }).side === from,
-  )
-  const branch = (started?.data as { branch: number } | undefined)?.branch
-  const open = (to: number) => (
-    <button
-      className="flex min-w-0 cursor-pointer text-foreground hover:underline"
-      onClick={() => switchConversation(to)}
-      title={`Open #${to}`}
-      type="button"
-    >
-      <ConversationRef id={to} />
-    </button>
-  )
-  return (
-    <section
-      className="min-w-0 rounded-md border border-border bg-muted/20"
-      data-lineage-side-note={from}
-    >
-      <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
-        <MessagesSquareIcon className="size-3.5 shrink-0" />
-        <span className="shrink-0">Side chat ·</span>
-        {open(from)}
-        {branch !== undefined && (
-          <>
-            <span className="shrink-0">→</span>
-            {open(branch)}
-          </>
-        )}
-      </header>
-      <p className="min-w-0 px-3 py-2.5 text-[12.5px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
-        {text}
-      </p>
-    </section>
-  )
-}
-
 /** Keeps the roots streaming for synchronous readers, such as the `when` of the agent's Compact command. */
 function Roots() {
   useRoots()
@@ -494,7 +390,6 @@ export default defineWebExtension({
     'lineage.note': Note,
     'lineage.finished': Finished,
     'lineage.abstract': Abstract,
-    'lineage.survey': ({ entry }) => <Survey entry={entry} text={userText(entry)} />,
     'pi.reset': Reset,
   },
   composer: RootComposer,

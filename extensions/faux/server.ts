@@ -140,14 +140,14 @@ export default async function fauxExtension(host: ExtensionHost) {
           ])
         if (
           last?.role === 'user' &&
-          text.startsWith('Message from user:') &&
+          !text.startsWith('Message from') &&
           since.some(
             (message) => message.role === 'toolResult' && message.toolName === 'seed_tally',
           )
         )
           return tool('branch', {
             root,
-            prompt: text.split('\n').slice(1).join('\n').split('\nAnswer here;')[0],
+            prompt: text,
             isolated: false,
           })
         if (last?.role === 'toolResult' && last.toolName === 'branch')

@@ -10,7 +10,7 @@ import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { ActionContext } from '../server/actions.ts'
-import boardExtension, { Board, actions as boardActions } from '../extensions/board/server.ts'
+import boardExtension, { Board } from '../extensions/board/server.ts'
 import questionsExtension, {
   actions,
   BoardQuestions,
@@ -219,7 +219,6 @@ it('extracts once only for reply-expected agent messages to the user', async () 
     to: `#${(await f.opened.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)).id}`,
     reply: true,
   })
-  await boardActions.post({ to: '#1', text: 'User post' }, f.action())
   await f.settled()
   expect(f.extract).not.toHaveBeenCalled()
   const id = await f.send()
@@ -239,11 +238,6 @@ it('extracts once only for reply-expected agent messages to the user', async () 
   )
   await f.settled()
   expect(f.extract).toHaveBeenCalledTimes(1)
-  const entries = await f.opened.harness.commit(
-    (tx) => tx.scanEntries({ conversationId: f.opened.root.id }, 1000),
-    context,
-  )
-  expect(entries.items.some((entry) => entry.kind === 'questions.asked')).toBe(false)
 })
 
 it('posts exactly one Board reply atomically, wakes the sender, and rejects unknown or duplicate answers', async () => {
@@ -278,18 +272,18 @@ it('posts exactly one Board reply atomically, wakes the sender, and rejects unkn
   await expect(f.answer(id)).rejects.toThrow('These questions are no longer open')
 })
 
-it('refuses answers after a typed Reply or new post and discards a stale in-flight extraction', async () => {
+it('refuses answers after typed input and discards a stale in-flight extraction', async () => {
   const f = await fixture()
   const id = await f.send()
   await f.settled()
-  await boardActions.post({ to: '#1', text: 'Typed reply', re: id }, f.action())
+  await f.type(f.opened.root.id, 'Typed reply')
   await expect(f.answer(id)).rejects.toThrow('These questions are no longer open')
   await f.settled()
   const hold = gate()
   f.hold(hold)
   const stale = await f.send()
   await until(() => f.extract.mock.calls.length === 2)
-  await boardActions.post({ to: '#1', text: 'A new post' }, f.action())
+  await f.type(f.opened.root.id, 'A new input')
   hold.release()
   await f.settled()
   expect((await f.state())!.asked[String(stale)]).toBeUndefined()
@@ -347,7 +341,10 @@ it("extracts @ultimate's final answers to typed input only, once per answer", as
   const id = await f.ultimate()
   // Another conversation's answer, a Board message and a Board reply to @ultimate ask nothing.
   await f.type(f.opened.root.id, 'ASK Keep it running?')
-  await boardActions.post({ to: `#${id}`, text: 'ASK Keep it running?' }, f.action())
+  await f.type(
+    f.opened.root.id,
+    `SEND ${JSON.stringify({ to: `#${id}`, text: 'ASK Keep it running?' })}`,
+  )
   await f.settled()
   await (
     await (await f.opened.harness.conversation(id, context))!.submit(
@@ -384,10 +381,7 @@ it("ends @ultimate's final-answer card once it answers a Board message instead",
   await f.type(id, 'ASK Keep it running?')
   await f.settled()
   expect((await f.state())!.reply?.conversation).toBe(id)
-  const { id: posted } = await boardActions.post({ to: `#${id}`, text: 'Branch done' }, f.action())
-  await until(
-    async () => (await f.log())!.messages.find((m) => m.id === posted)?.state === 'answered',
-  )
+  await f.type(f.opened.root.id, `SEND ${JSON.stringify({ to: `#${id}`, text: 'Branch done' })}`)
   await f.settled()
   expect(f.extract).toHaveBeenCalledTimes(1)
   expect((await f.state())!.reply).toBeUndefined()
@@ -455,13 +449,7 @@ it('stores nothing for an answer that newer input superseded', async () => {
   f.hold(hold)
   await f.type(id, 'ASK Keep it running?')
   await until(() => f.extract.mock.calls.length === 1)
-  const { id: posted } = await boardActions.post(
-    { to: `#${id}`, text: 'Something else' },
-    f.action(),
-  )
-  await until(
-    async () => (await f.log())!.messages.find((m) => m.id === posted)?.state === 'answered',
-  )
+  await f.type(id, 'Something else')
   hold.release()
   await f.settled()
   expect((await f.state())!.reply).toBeUndefined()

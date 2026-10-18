@@ -62,8 +62,8 @@ formatted as `Q: …\nA: …` blocks separated by blank lines.
   can still land between the claim and the submit; we accept that window of milliseconds because the Q/A text is
   self-contained and the user's own words.
 
-Stored transcript `questions.asked` entries from older builds are hidden and never answerable. Stored
-`questions.answers` entries retain their read-only “Your answers” card.
+Retired transcript question and answer entries are hidden rather than exposing their raw JSON; only current
+@ultimate answers get interactive cards.
 
 ## Faux
 

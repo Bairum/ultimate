@@ -24,20 +24,18 @@ answer is not sent. The log records its answering assistant entry in `answer` wh
 no reply is appended. A subagent's one-way update to its parent is instead a `board.message` write with
 `delivery: 'note'` and no `input` flag. It starts no run; the parent reads it with its next model request.
 The note's delivery decision is saved in the task input for replay. Sending to `user` writes a message
-shown in @ultimate's transcript; it starts no run. Replies to a user post also appear there without starting a run.
+shown in @ultimate's transcript; it starts no run.
 A reply-enabled message to `user` stays open, and its sender shows as awaiting reply, until the user answers it:
-a Reply, any new post to the sender, an answer card, or a plain input typed in the sender's conversation
-marks it answered. Posts commit the change with the message; typed inputs close it through a commit
-subscription, only for questions asked before that input.
+an answer card or a plain input typed in the sender's conversation marks it answered. Answer cards commit the
+change with the reply; typed inputs close it through a commit subscription, only for questions asked before that input.
 
 Reply-expected agent messages to `user` also request question extraction in the append transaction through the
 optional questions service. The sender's outgoing `message` card in its transcript shows extracted decisions
 under the message body while it is open: Yes/No or choice buttons with a recommended marker, plus Something
 else. The user-only questions `answer` action posts
 a normal user Board reply with `re` and Q/A text, waking the sender. Its admission atomically checks that the
-original message is still open, preventing duplicate replies. A Reply, a new post or typing in the sender's
-conversation closes the card too.
-One-way messages and user posts never request extraction; see [Questions](../questions/README.md).
+original message is still open, preventing duplicate replies. Typing in the sender's conversation closes the card too.
+One-way messages and user replies never request extraction; see [Questions](../questions/README.md).
 
 In the sender's transcript a `message` call renders as an outgoing card: recipient, one-way or expects reply, and
 the message's live state from the board log (sending, delivered, awaiting reply, awaiting your reply, answered,
@@ -58,7 +56,7 @@ Note deliveries complete after placement, without waiting for an answer.
 
 Talk to `@ultimate` in its own conversation to start and steer work, using the top-bar @ultimate button or first sidebar row. It is the built-in standing orchestrator, not a coding worker.
 Model-facing messages identify standing senders as `#12 (@ultimate)` and the lander as `#40 (@lander)`; ordinary
-conversations stay `#id`, and user posts say `user`. Before delivery, standing recipients are refreshed from their
+conversations stay `#id`, and user replies say `user`. Before delivery, standing recipients are refreshed from their
 current definitions, including numeric-address messages and automatic replies.
 
 The deferred `branch { prompt, root?, isolated?: true }` tool is offered only to definitions that name it.
@@ -110,12 +108,11 @@ The reply's `answer` links to the recipient's assistant entry; the original also
 
 ## Actions
 
-- `post({ to: string, text: string, re?: number }) → { id: number }`: posts as `user`, with replies enabled.
 - `addresses({}) → { agents, lander?, conversations }`: resident names/descriptions with an id if already created,
   the existing project lander id, and up to 50 recent top-level conversation summaries (including title and label).
 
-`post` is a user-only action: codemode cannot impersonate the user.
-Agents use the `message` tool instead. The prompt section is stable and lists resident names and descriptions.
+Users type in @ultimate's conversation or answer a question card; there is no user posting action.
+Agents use the `message` tool. The prompt section is stable and lists resident names and descriptions.
 
 ## Service
 

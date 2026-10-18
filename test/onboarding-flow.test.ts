@@ -86,9 +86,10 @@ it('onboards once per root with facts, choices, reading, a seeded tally and a co
       ),
     ).toBe(true)
     expect((await start()).data.result).toEqual({ id })
-    await post(server, '/api/extensions/board/actions/post', {
-      args: { to: '@ultimate', text: 'Explore a first feature' },
-    })
+    await (await server.harness.conversation(id, context))!.submit(
+      { type: 'input', content: 'Explore a first feature' },
+      context,
+    )
     await server.harness.waitForIdle(context)
     await until(async () => {
       const board = await server.harness.snapshot(Board, ROOT_CONVERSATION_ID, context)
