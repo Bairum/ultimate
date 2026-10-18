@@ -11,8 +11,9 @@ document, tools and model-facing text, where agents and stored entries already u
   activity. The fork happens before the tree root receives a model-visible `lineage.branched` prompt node
   `{ branch, at, intent, images?, from? }`, so the branch does not inherit its own prompt twice. `from` is present
   when the source is not the root; that source also gets a display-only marker. The forking commit emits the durable
-  event `lineage.branched` `{ id, from, at, intent }` (`Branched` in `api.ts`); conversations marks the intent title
-  as generated and plan empties the inherited plan in reactors.
+  event `lineage.branched` `{ id, from, at, intent }` (`Branched` in `api.ts`); conversations reacts to it by marking
+  the intent title as generated. Plan reads `Branch` (also in `api.ts`) and empties the inherited plan in the commit
+  that places the branch's first input.
 - **Roots**: doc `lineage.roots` on conversation 1 (`{ roots }`, initially `[1]`) lists the roots. Clients stream it
   (`useRoots()` in `roots.tsx`). Root lookup walks owners and fork sources to a listed root; conversations outside
   those trees have none. Deferred tool `new_root` `{ title }` → `{ id }` creates an empty, ownerless root in the

@@ -34,23 +34,13 @@ import type { ActionContext } from '../../server/actions.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
-import { Branched, LineageApi, Rooted, Roots } from './api.ts'
+import { Branch, Branched, LineageApi, Rooted, Roots } from './api.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 import type { Tree } from './catchup.ts'
 import type { RootEvent } from './types.ts'
 import { projectKey } from '../../lib/project-identity.ts'
 
 export type BranchImage = { data: string; mimeType: string }
-export type BranchState = { from: number; at: number; intent: string }
-/** A branch's origin and prompt; absent on roots and on conversations made otherwise. */
-export const Branch = defineDoc<{ branch?: BranchState }>({
-  kind: 'lineage.branch',
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({}),
-})
 
 /** A conversation's liquid abstract: its `anchor` entry keeps its place in the tally and shows the latest text. */
 export type OpenAbstract = {

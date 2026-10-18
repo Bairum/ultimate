@@ -26,6 +26,20 @@ export const Roots = defineDoc<{ roots: number[] }>({
   initial: () => ({ roots: [ROOT_CONVERSATION_ID] }),
 })
 
+export type BranchState = { from: number; at: number; intent: string }
+/**
+ * A branch's origin and prompt, written in its forking commit; absent on roots and on conversations made otherwise.
+ * Read it to tell a lineage branch from other conversations, before its first run.
+ */
+export const Branch = defineDoc<{ branch?: BranchState }>({
+  kind: 'lineage.branch',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({}),
+})
+
 export type LineageService = {
   /** Start a branch from conversation `input.from` with its prompt as first input; returns the new conversation id. */
   branch: (input: BranchInput, ctx: Context) => ReturnType<typeof startBranch>
