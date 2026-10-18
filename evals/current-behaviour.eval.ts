@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises'
-import { expect, test } from 'vitest'
+import { assert, expect, test } from 'vitest'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { assistant, start, toolResult, user } from './fixture.ts'
+import { routingInstructions } from './routing-instructions.ts'
 
 async function standing(ultimate: Awaited<ReturnType<typeof start>>, name = 'ultimate') {
   const { result: id } = await ultimate.action('subagents', 'standing', { name })
@@ -46,52 +47,46 @@ test.for([
   {
     size: 'tiny',
     request: 'Fix the typo "teh" to "the" in README.md.',
-    requirements: [/fix|correct|edit/i],
-    forbidden: /(?:create|write|start) (?:an? )?epic|delegate (?:to )?workers/i,
+    expected: { direct: true, plan: false, workers: false, reviewer: false },
   },
   {
     size: 'feature',
     request:
       'Build persistent multi-user notifications: database schema and migrations, server subscriptions, a notification inbox UI, and integration tests. Implement it, using the normal project workflow.',
-    requirements: [/plan|epic/i, /worker|delegat/i, /review/i],
-    forbidden: /no (?:epic|workers|review)/i,
+    expected: { plan: true, workers: true, review: true },
   },
-])(
-  'standing agent sizes a $size request before routing',
-  async ({ request, requirements, forbidden }) => {
-    const ultimate = await start({
-      project: { files: { 'README.md': 'teh example\n' } },
-      extensions: routedExtensions,
-      toolResults: { branch: branchResult },
+])('standing agent sizes a $size request before routing', async ({ request, expected }) => {
+  const ultimate = await start({
+    project: { files: { 'README.md': 'teh example\n' } },
+    extensions: routedExtensions,
+    toolResults: { branch: branchResult },
+  })
+  try {
+    await ultimate.conversation({
+      id: 1 as ConversationId,
+      history: [
+        assistant(
+          'Example project. Root #1 is the only line of work. Use the normal plan, workers, verification, review and workspace submit flow for substantial changes.',
+        ),
+      ],
     })
-    try {
-      await ultimate.conversation({
-        id: 1 as ConversationId,
-        history: [
-          assistant(
-            'Example project. Root #1 is the only line of work. Use the normal plan, workers, verification, review and workspace submit flow for substantial changes.',
-          ),
-        ],
-      })
-      const c = await ultimate.conversation({ id: await standing(ultimate) })
-      const before = (await ultimate.conversations()).map((entry) => entry.id)
-      const turn = await c.run(
-        `${request}\nRoot #1 is the existing project root; route the work there.`,
-      )
-      const branches = turn.toolCalls.filter((call) => call.name === 'branch')
-      expect(branches).toHaveLength(1)
-      expect(branches[0].isError).toBe(false)
-      expect(branches[0].arguments.prompt).toBeTypeOf('string')
-      const prompt = branches[0].arguments.prompt as string
-      for (const requirement of requirements) expect(prompt).toMatch(requirement)
-      expect(prompt).not.toMatch(forbidden)
-      // The wrapper must prevent real child creation, not just hide its cost.
-      expect((await ultimate.conversations()).map((entry) => entry.id)).toEqual(before)
-    } finally {
-      await ultimate.stop()
-    }
-  },
-)
+    const c = await ultimate.conversation({ id: await standing(ultimate) })
+    const before = (await ultimate.conversations()).map((entry) => entry.id)
+    const turn = await c.run(
+      `${request}\nRoot #1 is the existing project root; route the work there.`,
+    )
+    const branches = turn.toolCalls.filter((call) => call.name === 'branch')
+    expect(branches).toHaveLength(1)
+    expect(branches[0].isError).toBe(false)
+    expect(branches[0].arguments.prompt).toBeTypeOf('string')
+    const prompt = branches[0].arguments.prompt as string
+    assert.include(routingInstructions(prompt), expected, prompt)
+    // The wrapper must prevent real child creation, not just hide its cost.
+    expect((await ultimate.conversations()).map((entry) => entry.id)).toEqual(before)
+  } finally {
+    await ultimate.stop()
+  }
+})
 
 test('UI polish opens a preview and waits for approval before submitting', async () => {
   const ultimate = await start({

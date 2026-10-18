@@ -11,7 +11,7 @@ import type {
   UserMessage,
 } from '@earendil-works/pi-ai'
 import { ModelRuntime, ProjectTrustStore } from '@earendil-works/pi-coding-agent'
-import { AssistantEntry, ToolResultEntry, UserEntry } from '@earendil-works/pi-durable'
+import { AssistantEntry, LiveDoc, ToolResultEntry, UserEntry } from '@earendil-works/pi-durable'
 import type { ConversationDocToken, ConversationId, JsonObject } from '@earendil-works/pi-durable'
 import { inject } from 'vitest'
 import type { TurnUsage } from './reporter.ts'
@@ -267,10 +267,20 @@ export async function start(
                   await conversation.waitForIdle(context)
                 })(),
                 new Promise<never>((_, reject) => {
-                  timer = setTimeout(
-                    () => reject(new Error(`Conversation ${id} did not become idle within 240s`)),
-                    240_000,
-                  )
+                  timer = setTimeout(() => {
+                    void (async () => {
+                      const inspection = await running.harness.inspect(context)
+                      const live = await running.harness.snapshot(LiveDoc, id, context)
+                      const turn = (await messages())
+                        .slice(before)
+                        .filter((message) => message.role !== 'system')
+                      reject(
+                        new Error(
+                          `Conversation ${id} did not become idle within 240s\n${JSON.stringify({ inspection, live, turn }, null, 2)}`,
+                        ),
+                      )
+                    })().catch(reject)
+                  }, 240_000)
                 }),
               ])
             } finally {

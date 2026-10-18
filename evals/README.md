@@ -1,6 +1,14 @@
 # Agent evals
 
 Run `pnpm eval` explicitly; `pnpm test` does not discover these files.
+The default suite is a landing gate and includes the question-extraction evals.
+
+Run `pnpm eval:behaviour` on demand when agent prompts change. Its separate suite,
+`current-behaviour.eval.ts`, measures model tendencies: routing, sizing, preview discipline,
+and reporting once. These cases are not a landing gate: individual model turns can choose a
+different workflow or stall in their first generation. Failures remain visible; neither suite
+uses retries or pass-rate thresholds. To isolate routing, run `pnpm eval:behaviour -t tiny`.
+
 Pi's normal shared auth supplies OpenAI; no credentials are copied into fixtures.
 The default is `openai/gpt-6-luna` with `high` thinking.
 Override with `ULTIMATE_EVAL_MODEL` and `ULTIMATE_EVAL_THINKING`.
