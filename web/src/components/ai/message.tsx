@@ -4,12 +4,13 @@
 import { cn } from 'cn'
 import type { ComponentProps, HTMLAttributes, ReactNode } from 'react'
 import { memo } from 'react'
-import { defaultComponents, Streamdown } from 'streamdown'
+import { defaultComponents, defaultRemarkPlugins, Streamdown } from 'streamdown'
 import type { ExtraProps } from 'streamdown'
 import { ExtensionBoundary } from '../../app/boundary.tsx'
 import { useExtensions } from '../../sdk/hooks.ts'
 import { linkRenderers } from '../../sdk/registry.ts'
 import { codePlugin } from './code-block.tsx'
+import { mentionHref, parseMention, remarkMentions, splitMentions } from './mentions.ts'
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & { from: 'user' | 'assistant' }
 
@@ -40,8 +41,9 @@ const CoreLink = defaultComponents.a
 /** A link as the `link` renderers compose it, starting with Streamdown's, which asks before opening a new tab. */
 function Link(props: ComponentProps<'a'> & ExtraProps) {
   const renderers = linkRenderers(useExtensions())
-  const core = <CoreLink {...props} />
   const { href, children } = props
+  // A `#id` mention stays its text unless a renderer knows the conversation.
+  const core = href && parseMention(href) ? <>{children}</> : <CoreLink {...props} />
   // Streamdown marks a link whose Markdown is still streaming.
   if (!href || href === 'streamdown:incomplete-link') return core
   return renderers.reduce<ReactNode>(
@@ -62,7 +64,25 @@ function Link(props: ComponentProps<'a'> & ExtraProps) {
   )
 }
 
+/**
+ * Plain text with its `#id` mentions rendered as Markdown mentions are (conversation chips), for text shown verbatim
+ * rather than as Markdown: prompts, abstracts, divergences.
+ */
+export function MentionText({ text }: { text: string }) {
+  return splitMentions(text).map((part, index) =>
+    typeof part === 'string' ? (
+      part
+    ) : (
+      <Link href={mentionHref(part.conversation, part.entry)} key={index}>
+        {part.text}
+      </Link>
+    ),
+  )
+}
+
 const components = { a: Link }
+// After GFM, so autolinked URLs are links already and keep their `#fragment`.
+const remarkPlugins = [...Object.values(defaultRemarkPlugins), remarkMentions]
 const plugins = { code: codePlugin }
 const controls = { code: { copy: true, download: false }, table: false, mermaid: false } as const
 
@@ -75,6 +95,7 @@ export const MessageResponse = memo(
       controls={controls}
       lineNumbers={false}
       plugins={plugins}
+      remarkPlugins={remarkPlugins}
       shikiTheme={codePlugin.getThemes()}
       {...props}
     />

@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import { MessageResponse } from '@/components/ai/message'
+import { MentionText, MessageResponse } from '@/components/ai/message'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   cn,
@@ -116,7 +116,7 @@ function Started({ entry }: { entry: EntryRecord }) {
         type="button"
       >
         <span className={cn('block break-words whitespace-pre-wrap', !open && 'line-clamp-3')}>
-          {intent}
+          <MentionText text={intent} />
         </span>
         {!!images && (
           <span className="mt-1.5 block font-mono text-[11px] text-muted-foreground">
@@ -170,7 +170,7 @@ function Abstract({ entry }: { entry: EntryRecord }) {
         <Open className="ml-auto" entry={at} id={conversation} />
       </header>
       <p className="min-w-0 px-3 py-2.5 text-[12.5px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
-        {text}
+        <MentionText text={text} />
       </p>
     </section>
   )

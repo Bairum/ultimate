@@ -41,7 +41,7 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from '@/components/ai/conversation'
-import { Message, MessageContent, MessageResponse } from '@/components/ai/message'
+import { MentionText, Message, MessageContent, MessageResponse } from '@/components/ai/message'
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai/reasoning'
 import { Shimmer } from '@/components/ai/shimmer'
 import { ToolImage } from '@/components/ai/tool'
@@ -744,7 +744,9 @@ function UserView({ entry, message }: { entry: EntryRecord; message: UserMessage
   return (
     <Message className="group/message mt-3 first:mt-0" from="user">
       <MessageContent>
-        <p className="break-words whitespace-pre-wrap">{text}</p>
+        <p className="break-words whitespace-pre-wrap">
+          <MentionText text={text} />
+        </p>
         {images.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {images.map((image, index) => (

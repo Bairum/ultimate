@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
+import { MentionText } from '@/components/ai/message'
 import { Tool, ToolContent, ToolHeader, ToolOutput, ToolSection } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
@@ -94,7 +95,7 @@ function OutcomeBody({ outcome }: { outcome: LanderOutcome }) {
             lander's diagnosis
           </p>
           <p className="font-sans text-[12.5px] leading-relaxed whitespace-pre-wrap text-foreground/90">
-            {outcome.diagnosis}
+            <MentionText text={outcome.diagnosis} />
           </p>
         </div>
       )}

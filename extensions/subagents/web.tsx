@@ -6,7 +6,7 @@ import {
   Trash2Icon,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { Message, MessageResponse } from '@/components/ai/message'
+import { MentionText, Message, MessageResponse } from '@/components/ai/message'
 import { Shimmer } from '@/components/ai/shimmer'
 import {
   Tool,
@@ -148,7 +148,7 @@ function SubagentCall({ call }: { call: ToolCallView }) {
         {instruction && (
           <ToolSection label={action === 'start' ? 'Task' : 'Message'}>
             <p className="font-sans text-[13px] leading-relaxed whitespace-pre-wrap text-foreground/90">
-              {instruction}
+              <MentionText text={instruction} />
             </p>
           </ToolSection>
         )}
