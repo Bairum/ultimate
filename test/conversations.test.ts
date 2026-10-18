@@ -364,7 +364,7 @@ it.concurrent('conclude merges concurrent additions, deduplicates ids and return
     harness: () => server.harness,
     doc: () => undefined,
     metadata: Metadata,
-    use: () => ({
+    want: () => ({
       release: async (ids: number[]) => {
         released.push(ids)
         return kept

@@ -12,11 +12,11 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { startedBy } from '../../cloud/protocol.ts'
 import type { MachineHealth, ProviderHealth, Transition } from '../../cloud/protocol.ts'
 import type { Project } from '../../cloud/directory.ts'
-import { cloudConfig } from '../cloud/config.ts'
-import { projectIdentity } from '../cloud/identity.ts'
+import { cloudConfig, httpBase } from '../../lib/cloud.ts'
+import { projectIdentity } from '../../lib/project-identity.ts'
 import type { CloudState } from '../cloud/types.ts'
-import { readHealth } from '../health/store.ts'
-import type { SubagentsService } from '../subagents/server.ts'
+import { HealthApi } from '../health/api.ts'
+import { SubagentsApi } from '../subagents/api.ts'
 import { ended } from './moves.ts'
 import type { Fleet, FleetProject, LocalProject, MoveEnded, SyncReport } from './types.ts'
 
@@ -39,13 +39,6 @@ export interface SyncDeps {
   keptRefs(root: string): Promise<string[]>
   /** This machine's provider health, from `~/.ultimate/health.json`. */
   health(): Promise<ProviderHealth[]>
-}
-
-/** `https://host` for the user's `wss://host/...` `cloud.url`. */
-export function httpBase(url: string) {
-  const endpoint = new URL(url)
-  endpoint.protocol = endpoint.protocol === 'ws:' ? 'http:' : 'https:'
-  return endpoint.origin
 }
 
 export function syncDeps(host: ExtensionHost): SyncDeps {
@@ -92,7 +85,8 @@ export function syncDeps(host: ExtensionHost): SyncDeps {
         return []
       }
     },
-    health: () => readHealth(host.userHome),
+    // Without the health extension nothing is recorded here.
+    health: async () => (await host.want(HealthApi)?.providers()) ?? [],
   }
 }
 
@@ -364,7 +358,7 @@ export const moveText = ({ project, machine, transition: moved }: MoveEnded) => 
 
 /** Submit an ended move to @sync's conversation, once per transition. */
 export async function submitMove(host: ExtensionHost, input: MoveEnded) {
-  const service = host.use<SubagentsService>('subagents')
+  const service = host.want(SubagentsApi)
   if (!service) throw new Error('Subagents are required for @sync')
   const id = await service.standing('sync', BACKGROUND_CONTEXT)
   const conversation = (await host.harness().conversation(id, BACKGROUND_CONTEXT))!
@@ -545,7 +539,7 @@ export const actions = {
     if (host.standby()) throw new Error('This project is on standby here; report on its writer')
     if (isMachineHome(host.projectRoot, host.userHome))
       throw new Error('The machine home takes no reports')
-    const service = host.use<SubagentsService>('subagents')
+    const service = host.want(SubagentsApi)
     if (!service) throw new Error('Subagents are required for reports')
     const id = await service.standing('ultimate', BACKGROUND_CONTEXT)
     const conversation = (await host.harness().conversation(id, BACKGROUND_CONTEXT))!

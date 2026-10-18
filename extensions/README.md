@@ -864,12 +864,15 @@ Keep UI state that should survive a reload in `useExtensionUiState`; keep throwa
 ## Conventions
 
 - One feature per folder; the folder name is the extension name; a README is required. Keep it small.
-- Prefer documents, commands, events, or the SDK. Imports from another extension's files are dependencies:
-  declare them in `vite.config.ts` `ultimate/extension-imports`. Lint enforces declarations and forbids cycles.
+- Prefer documents, commands, events, or the SDK. On the server, another extension's runtime code is reached only
+  through its `api.ts` (see "Extension APIs"); type imports are free. Browser imports of another extension's files
+  are dependencies: declare them in `vite.config.ts` `ultimate/extension-imports`. Lint enforces both.
 - Shared pure helpers live in the top-level `lib/`, not in another extension: `exec.ts` (run a program), `git.ts`
   (git and isolation checks), `json-file.ts` (read, atomic write, serialised update), `settings.ts`, `secrets.ts`
-  (read-only) and `machine.ts` (machine-home checks, browser-safe). Import them freely; they hot reload with the
-  extensions that import them. `lib/` holds no state and imports no extension, `web/` or server runtime code.
+  (read-only), `machine.ts` (machine-home checks, browser-safe), `cloud.ts` (the user's cloud settings),
+  `project-identity.ts` (a project's GitHub key), `entries.ts` (`isInput`) and `agents.ts` (agent definitions and
+  their discovery). Import them freely; they hot reload with the extensions that import them. `lib/` holds no state
+  and imports no extension or `web/` code; only `agents.ts` reads the core project trust decision at runtime.
 - Server facets: see `prompt/` for prompt sections and `coding-tools/server.ts` for tools; the root `AGENTS.md` explains
   reloads and durability. Server facets may `export const order = -100`: lower values come first, with the default 0
   keeping discovery order (built-in → user → project, then folder name); changing it reorders the server prompt and tools once.

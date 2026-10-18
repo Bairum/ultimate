@@ -1,4 +1,4 @@
-import { temp, until } from './helpers.ts'
+import { apis, temp, until } from './helpers.ts'
 import { afterEach, expect, it, vi } from 'vitest'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -10,7 +10,12 @@ import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { ActionContext } from '../server/actions.ts'
-import boardExtension, { Board } from '../extensions/board/server.ts'
+import type { ConversationsService } from '../extensions/conversations/api.ts'
+import { QuestionsApi } from '../extensions/questions/api.ts'
+import { accountResponse, askSummaryModel } from '../extensions/conversations/summary.ts'
+import { summaryModel } from '../extensions/conversations/summary-model.ts'
+import boardExtension from '../extensions/board/server.ts'
+import { Board } from '../extensions/board/api.ts'
 import questionsExtension, {
   actions,
   BoardQuestions,
@@ -19,7 +24,7 @@ import questionsExtension, {
   QUESTIONS_SYSTEM,
   userActions,
 } from '../extensions/questions/server.ts'
-import { Standing } from '../extensions/subagents/server.ts'
+import { Standing } from '../extensions/subagents/api.ts'
 
 const hosts: OpenHost[] = []
 afterEach(async () => {
@@ -41,8 +46,7 @@ async function fixture() {
     userHome: home,
     projectSettings: async () => ({}),
     harness: () => opened.harness,
-    provide: (name: string, value: unknown) => services.set(name, value),
-    use: (name: string) => services.get(name),
+    ...apis(services),
     doc: () => undefined,
     onOpen: (fn: () => Promise<void>) => openers.push(fn),
     onClose: (fn: () => Promise<void>) => closers.push(fn),
@@ -50,6 +54,11 @@ async function fixture() {
       throw new Error(message)
     },
   } as unknown as ExtensionHost
+  services.set('conversations', {
+    summaryModel: () => summaryModel(host),
+    askSummaryModel,
+    accountResponse,
+  } satisfies Partial<ConversationsService>)
   prepared.registry.install(boardExtension(host))
   const extension = questionsExtension(host)
   let beforeCommit: ReturnType<typeof gate> | undefined
@@ -234,13 +243,7 @@ it('extracts once only for reply-expected agent messages to the user', async () 
     asked: { [id]: [{ text: 'Keep it running?', kind: 'confirm' }] },
   })
   const message = (await f.log())!.messages.find((m) => m.id === id)!
-  await f.opened.harness.commit(
-    (tx) =>
-      f.host
-        .use<import('../extensions/questions/server.ts').QuestionsService>('questions')!
-        .request(tx, message),
-    context,
-  )
+  await f.opened.harness.commit((tx) => f.host.want(QuestionsApi)!.request(tx, message), context)
   await f.settled()
   expect(f.extract).toHaveBeenCalledTimes(1)
 })

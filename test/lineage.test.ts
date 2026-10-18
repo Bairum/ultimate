@@ -3,14 +3,8 @@ import { join } from 'node:path'
 import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
-import {
-  Branch,
-  compareLinks,
-  leaveNote,
-  rootOf,
-  Roots,
-  Tally,
-} from '../extensions/lineage/server.ts'
+import { Branch, compareLinks, leaveNote, rootOf, Tally } from '../extensions/lineage/server.ts'
+import { Roots } from '../extensions/lineage/api.ts'
 import { Plan } from '../extensions/plan/server.ts'
 import { Summaries } from '../extensions/conversations/summary.ts'
 import { defineExtension } from '@earendil-works/pi-durable'

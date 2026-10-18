@@ -9,8 +9,8 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { definitionAgent } from './agents.ts'
-import type { AgentDefinition } from './agents.ts'
+import { definitionAgent } from '../../lib/agents.ts'
+import type { AgentDefinition } from '../../lib/agents.ts'
 
 /** A conversation configured from a definition (or as a copy of the parent's agent), new or forked at `fork.at`. */
 export async function createChild(

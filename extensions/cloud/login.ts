@@ -1,6 +1,5 @@
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { confirm, hostDeps } from '../health/server.ts'
-import { readHealth } from '../health/store.ts'
+import { HealthApi } from '../health/api.ts'
 import type { ModelLogin } from './types.ts'
 
 /**
@@ -12,7 +11,7 @@ import type { ModelLogin } from './types.ts'
  * one-off failure never blocks a move by itself.
  */
 export async function modelLogin(
-  host: Pick<ExtensionHost, 'faux' | 'settings' | 'modelRuntime' | 'userHome'>,
+  host: Pick<ExtensionHost, 'faux' | 'settings' | 'modelRuntime' | 'want'>,
   options: { confirm?: boolean } = {},
 ): Promise<ModelLogin> {
   if (host.faux) return { provider: 'faux', ok: true }
@@ -21,12 +20,14 @@ export async function modelLogin(
   if (!provider) return { provider: 'a model provider', ok: false }
   if (chosen && !host.modelRuntime.getProviderAuthStatus(chosen).configured)
     return { provider, ok: false }
+  // Without the health extension nothing is recorded, so no failure blocks a move.
+  const service = host.want(HealthApi)
   const failing = async () =>
-    (await readHealth(host.userHome)).find(
+    (await service?.providers())?.find(
       (entry) => entry.provider === provider && entry.state === 'failing',
     )
   let health = await failing()
-  if (health && options.confirm && (await confirm(hostDeps(host), provider))) health = undefined
+  if (health && options.confirm && (await service?.confirm(provider))) health = undefined
   else if (health && options.confirm) health = (await failing()) ?? health
   return health
     ? { provider, ok: false, error: health.error ?? 'its last call failed' }

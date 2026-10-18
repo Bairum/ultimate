@@ -1,4 +1,4 @@
-import { git } from '../../lib/git.ts'
+import { git } from './git.ts'
 
 /** `github.com/<owner>/<repo>`, lowercased, for a GitHub SSH or HTTPS remote URL; undefined for any other. */
 export function projectKey(remote: string): string | undefined {

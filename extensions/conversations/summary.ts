@@ -27,9 +27,9 @@ import type {
   Usage,
 } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { LineageService } from '../lineage/server.ts'
+import { LineageApi } from '../lineage/api.ts'
 import { summaryModel } from './summary-model.ts'
-import { isInput } from './activity.ts'
+import { isInput } from '../../lib/entries.ts'
 import type { SummaryModel, SummaryModelHost } from './summary-model.ts'
 import type {
   Assessed,
@@ -393,7 +393,7 @@ export type SummaryRequest =
   | { reason: 'reply'; generation: TaskId<GenerationResult> }
 
 export type SummaryHost = Pick<ExtensionHost, 'harness' | 'metadata'> &
-  Partial<Pick<ExtensionHost, 'use'>> &
+  Partial<Pick<ExtensionHost, 'want'>> &
   SummaryModelHost
 
 /** Standing agents and landers keep their `@name` and get no summary, title, feature or assessment. */
@@ -568,10 +568,10 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
               ))
         // A root's feature names what its whole tree builds, not the part its latest exchange touched.
         const root =
-          (await host.use?.<LineageService>('lineage')?.rootOf(runtime.conversationId, context)) ===
+          (await host.want?.(LineageApi)?.rootOf(runtime.conversationId, context)) ===
           runtime.conversationId
         const branch = task.input.generation
-          ? await host.use?.<LineageService>('lineage')?.branchOf(runtime.conversationId, context)
+          ? await host.want?.(LineageApi)?.branchOf(runtime.conversationId, context)
           : undefined
         await runtime.commit(async (tx) => {
           const state = await tx.doc(Summaries, runtime.conversationId)
@@ -717,7 +717,7 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
             })
           // Lineage reads conversation records, so the abstract goes before this transaction's first entry.
           if (checkpoint.abstract && result.abstract && completed !== undefined) {
-            await host.use?.<LineageService>('lineage')?.abstract(tx, runtime.conversationId, {
+            await host.want?.(LineageApi)?.abstract(tx, runtime.conversationId, {
               text: result.abstract,
               at: checkpoint.answer,
               title: result.title ?? state.generatedTitle,

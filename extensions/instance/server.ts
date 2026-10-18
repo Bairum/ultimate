@@ -19,9 +19,9 @@ import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { Subagents } from '../subagents/server.ts'
-import type { TailscaleService } from '../tailscale/server.ts'
-import type { WorkspaceService } from '../workspaces/server.ts'
+import { Subagents } from '../subagents/api.ts'
+import { TailscaleApi } from '../tailscale/api.ts'
+import { WorkspacesApi } from '../workspaces/api.ts'
 import { cleanPreview, sweepPreviews } from './cleanup.ts'
 
 /** A preview keeps ordinary parent variables, but gets its own host identity and no inherited cloud sync. */
@@ -152,8 +152,8 @@ async function stop(instances: Map<string, Instance>, id: string) {
  * Where the tailnet reaches each preview, by pid. A preview's own `tailscale` extension records its HTTPS port in
  * the user's registry under an owner token that starts with its pid; the host's tailscale status knows the DNS name.
  */
-async function tailnet(host: Pick<ExtensionHost, 'use' | 'userHome'>) {
-  const published = host.use<TailscaleService>('tailscale')?.status().url
+async function tailnet(host: Pick<ExtensionHost, 'want' | 'userHome'>) {
+  const published = host.want(TailscaleApi)?.status().url
   if (!published) return new Map<number, string>()
   let registry: { ports?: Record<string, { port: number; owner: string }> }
   try {
@@ -196,7 +196,7 @@ export const actions: Record<string, ExtensionAction> = {
 export default function instanceExtension(
   host: Pick<
     ExtensionHost,
-    | 'use'
+    | 'want'
     | 'resource'
     | 'onClose'
     | 'onOpen'
@@ -212,7 +212,7 @@ export default function instanceExtension(
     | 'metadata'
   >,
 ) {
-  const service = () => host.use<WorkspaceService>('workspaces')
+  const service = () => host.want(WorkspacesApi)
   const instances = running(host)
   const starts = host.resource('instance.starts', () => ({ pending: 0 }))
   const ownSource = host.projectRoot === host.ultimateRoot

@@ -99,7 +99,7 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   merging superseded detail. Every top-level conversation's summary source is its model view with edits applied, so
   abstracts read as last updated and frozen ones stay out. Branch compaction focuses on intent and progress; subagents keep Pi's default.
 
-Other extensions use `host.use<LineageService>('lineage')` (`server.ts`): `rootOf(id, ctx)` resolves tree membership,
+Other extensions use `host.want(LineageApi)` (`api.ts`, with the `Roots` document): `rootOf(id, ctx)` resolves tree membership,
 `leaveNote(to, text, source?)` writes without waking, and `branchOf(id, ctx)` returns `{ root, intent? }` for top-level
 non-root conversations in a tree (undefined for roots, owned conversations and outsiders).
 `abstract(tx, id, { text, at, title?, feature? })` opens or updates `id`'s abstract in that root in the caller's

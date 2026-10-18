@@ -6,6 +6,7 @@ import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import {
+  copyApis,
   fauxServer as createServer,
   until,
   temp,
@@ -34,6 +35,7 @@ async function fixture() {
     recursive: true,
   })
   await cp(resolve('extensions/faux'), join(ultimateRoot, 'extensions/faux'), { recursive: true })
+  await copyApis(ultimateRoot)
   await mkdir(join(ultimateRoot, 'web'), { recursive: true })
   await linkDependencies(ultimateRoot)
   await writeFile(
@@ -45,8 +47,8 @@ async function fixture() {
   await writeFile(
     join(ultimateRoot, 'extensions/codemode/server.ts'),
     (await readFile(resolve('extensions/codemode/server.ts'), 'utf8')).replace(
-      "'../subagents/agents.ts'",
-      JSON.stringify(resolve('extensions/subagents/agents.ts')),
+      "'../../lib/agents.ts'",
+      JSON.stringify(resolve('lib/agents.ts')),
     ),
   )
   const options = {

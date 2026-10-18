@@ -1,6 +1,6 @@
 import { relative } from 'node:path'
 import type { EntryRecord } from '@earendil-works/pi-durable'
-import { isInput } from '../conversations/activity.ts'
+import { isInput } from '../../lib/entries.ts'
 
 const clip = (text: string, size: number) => text.replace(/\s+/g, ' ').trim().slice(0, size)
 function textOf(entry: EntryRecord | undefined) {

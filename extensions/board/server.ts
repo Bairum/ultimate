@@ -17,7 +17,6 @@ import {
 } from '@earendil-works/pi-durable'
 import type {
   ConversationId,
-  EntryId,
   GenerationResult,
   SubmissionId,
   TaskId,
@@ -25,39 +24,16 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { QuestionsService } from '../questions/server.ts'
-import type { WorkspaceService } from '../workspaces/server.ts'
+import { QuestionsApi } from '../questions/api.ts'
+import { WorkspacesApi } from '../workspaces/api.ts'
 import { isolatable } from '../../lib/git.ts'
 
-import type { SubagentsService } from '../subagents/server.ts'
-import { Standing, Subagents } from '../subagents/server.ts'
-import { discoverAgents } from '../subagents/agents.ts'
+import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import { primaryAgent } from '../../lib/machine.ts'
-import { Roots } from '../lineage/server.ts'
-import type { LineageService } from '../lineage/server.ts'
-export type BoardMessage = {
-  id: number
-  from: number | 'user'
-  to: number | 'user'
-  text: string
-  at: number
-  reply: boolean
-  re?: number
-  state: 'sent' | 'delivered' | 'answered' | 'failed'
-  entry?: EntryId
-  answer?: EntryId
-  error?: string
-  /** The tool call that sent it: `message`'s or `branch`'s own id, `<script>/<n>` for a nested codemode call. */
-  call?: string
-}
-export const Board = defineDoc<{ messages: BoardMessage[]; next: number }>({
-  kind: 'board',
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({ messages: [], next: 1 }),
-})
+import { discoverAgents } from '../../lib/agents.ts'
+import { LineageApi, Roots } from '../lineage/api.ts'
+import { Board, BoardApi } from './api.ts'
+import type { BoardMessage } from './api.ts'
 export const docs = [Board]
 // The receipt commits with the message, closing the gap before api.memo records its id.
 const Sent = defineDoc<{ ids: Record<string, number> }>({
@@ -116,20 +92,11 @@ async function append(tx: Tx, input: Omit<BoardMessage, 'id' | 'at'>) {
   if (log.messages.length > 300) log.messages.splice(0, log.messages.length - 300)
   return message
 }
-export type BoardService = {
-  answer(messageId: number, text: string, ctx: Context): Promise<number>
-  send(
-    from: number,
-    input: { to: string; text: string; reply: false },
-    requestId: string,
-    ctx: Context,
-  ): Promise<number>
-}
 function delivery(host: ExtensionHost) {
   const refresh = async (id: number, ctx: Context) => {
     const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
     const name = Object.keys(index ?? {}).find((candidate) => index![candidate] === id)
-    if (name !== undefined) await host.use<SubagentsService>('subagents')?.standing(name, ctx)
+    if (name !== undefined) await host.want(SubagentsApi)?.standing(name, ctx)
   }
   return defineTask<
     { message: BoardMessage; steer: boolean; note: boolean; fromLabel: string; toLabel: string },
@@ -393,7 +360,7 @@ async function parentOf(host: ExtensionHost, id: number, ctx: Context) {
     : undefined
 }
 async function lander(host: ExtensionHost, ctx: Context) {
-  const service = host.use<WorkspaceService>('workspaces')
+  const service = host.want(WorkspacesApi)
   if (!service) return undefined
   const checkout = await isolatable(host.projectRoot)
   if ('reason' in checkout) return undefined
@@ -404,7 +371,7 @@ async function senderName(host: ExtensionHost, id: number | 'user', ctx: Context
   if (id === 'user') return 'user'
   const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
   const name = Object.keys(index ?? {}).find((candidate) => index?.[candidate] === id)
-  const workspaces = host.use<WorkspaceService>('workspaces')
+  const workspaces = host.want(WorkspacesApi)
   const workspace = workspaces
     ? await host.harness().snapshot(workspaces.doc, ROOT_CONVERSATION_ID, ctx)
     : undefined
@@ -418,7 +385,7 @@ async function resolve(host: ExtensionHost, to: string, from: number | 'user', c
   let id: number | undefined
   if (to === '@lander') id = await lander(host, ctx)
   else if (to.startsWith('@')) {
-    const service = host.use<SubagentsService>('subagents')
+    const service = host.want(SubagentsApi)
     const valid = (await service?.residents(ctx)) ?? []
     if (!valid.some((item) => `@${item.name}` === to))
       throw new Error(
@@ -528,7 +495,7 @@ async function send(
       ...(callId === undefined ? {} : { call: callId }),
     })
     if (to === 'user' && message.reply && from !== 'user')
-      await host.use<QuestionsService>('questions')?.request(tx, message)
+      await host.want(QuestionsApi)?.request(tx, message)
     if (to !== 'user')
       await tx.createTask(
         delivery(host),
@@ -552,8 +519,7 @@ async function send(
 }
 export const actions = {
   async addresses(_args: unknown, { host }: ActionContext) {
-    const agents =
-      (await host.use<SubagentsService>('subagents')?.residents(BACKGROUND_CONTEXT)) ?? []
+    const agents = (await host.want(SubagentsApi)?.residents(BACKGROUND_CONTEXT)) ?? []
     const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)
     const conversations = host
       .conversations()
@@ -571,7 +537,7 @@ export const actions = {
   },
 }
 export default function board(host: ExtensionHost) {
-  host.provide('board', {
+  host.implement(BoardApi, {
     answer: async (messageId, text, ctx) => {
       const log = await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, ctx)
       const message = log?.messages.find((m) => m.id === messageId)
@@ -589,7 +555,7 @@ export default function board(host: ExtensionHost) {
     },
     send: (from, input, requestId, ctx) =>
       send(host, from, input, ctx, undefined, undefined, requestId),
-  } satisfies BoardService)
+  })
   let stop: (() => void) | undefined
   const answering = new Set<Promise<void>>()
   host.onOpen(async () => {
@@ -649,7 +615,7 @@ export default function board(host: ExtensionHost) {
         const parent = await parentOf(host, input.conversationId, ctx)
         if (parent !== undefined)
           return `Use message only to update #${parent}, the conversation that started you, while you work; your final answer reaches it anyway. One-way updates (reply: false) reach #${parent} as notes it reads with its next input; ask with reply: true when you need its answer to continue.`
-        const agents = (await host.use<SubagentsService>('subagents')?.residents(ctx)) ?? []
+        const agents = (await host.want(SubagentsApi)?.residents(ctx)) ?? []
         const primary = primaryAgent(host.projectRoot, host.userHome)
         return `Use message to contact #id or @name. Only @${primary} messages user; send it updates with reply: false to relay. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
       }),
@@ -669,7 +635,7 @@ export default function board(host: ExtensionHost) {
         async execute(input, api, ctx) {
           let id = await api.memo<number>('branch-id', ctx)
           if (id === undefined) {
-            const lineage = host.use<LineageService>('lineage')
+            const lineage = host.want(LineageApi)
             if (!lineage) throw new Error('Branches require lineage')
             const roots =
               (await host.harness().snapshot(Roots, ROOT_CONVERSATION_ID, ctx))?.roots ?? []

@@ -9,8 +9,9 @@ import {
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, EntryRecord, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { ClassifyService, ClassifyQuestion, ClassifyAnswer } from '../classify/server.ts'
-import { isInput } from '../conversations/activity.ts'
+import { ClassifyApi } from '../classify/api.ts'
+import type { ClassifyQuestion, ClassifyAnswer } from '../classify/api.ts'
+import { isInput } from '../../lib/entries.ts'
 import { phaseState } from './state.ts'
 import type { Phase, PhaseState } from './types.ts'
 
@@ -57,7 +58,7 @@ const terminal = {
 }
 
 export default function phase(
-  host: Pick<ExtensionHost, 'use' | 'harness' | 'projectRoot' | 'conversations'>,
+  host: Pick<ExtensionHost, 'want' | 'harness' | 'projectRoot' | 'conversations'>,
 ) {
   const ClassifyTask = defineTask<{ run: number }, { phase: 'classify' }, null>({
     name: 'phase.classify',
@@ -80,7 +81,7 @@ export default function phase(
         try {
           answer = await runtime.memo<ClassifyAnswer>('answer', context)
           if (!answer) {
-            const service = host.use<ClassifyService>('classify')
+            const service = host.want(ClassifyApi)
             if (!service) throw new Error('Classify unavailable')
             const conversation = await host.harness().conversation(runtime.conversationId, context)
             if (!conversation) throw new Error('Conversation unavailable')
@@ -155,7 +156,7 @@ export default function phase(
           }, context)
         },
         afterTools: async (_assistant, _results, api, context) => {
-          if (!host.use<ClassifyService>('classify')) return
+          if (!host.want(ClassifyApi)) return
           await host.harness().commit(async (tx) => {
             const run = await runOf(tx, api.conversationId)
             const state = await tx.doc(Phases, ROOT_CONVERSATION_ID)

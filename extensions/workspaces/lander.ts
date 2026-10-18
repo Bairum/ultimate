@@ -21,9 +21,9 @@ import type {
 } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { LineageService } from '../lineage/server.ts'
-import type { BoardService } from '../board/server.ts'
-import { definitionAgent, discoverAgents } from '../subagents/agents.ts'
+import { LineageApi } from '../lineage/api.ts'
+import { BoardApi } from '../board/api.ts'
+import { definitionAgent, discoverAgents } from '../../lib/agents.ts'
 import { setup } from './setup.ts'
 import type {
   Landed,
@@ -120,7 +120,7 @@ type Host = Pick<
   | 'modelRuntime'
   | 'harness'
   | 'projectSettings'
-  | 'use'
+  | 'want'
   | 'resource'
   | 'extensions'
   | 'metadata'
@@ -973,7 +973,7 @@ export function createLander(
               deploy?.paths.some((prefix) => path.startsWith(prefix)),
             )
             if (deploy && result && paths.length) {
-              const board = host.use<BoardService>('board')
+              const board = host.want(BoardApi)
               const definitions = await discoverAgents(
                 host.ultimateRoot,
                 host.projectRoot,
@@ -1033,7 +1033,7 @@ export function createLander(
         if (deployText)
           outcome = (await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context))
             ?.results[id]
-        const lineage = host.use<LineageService>('lineage')
+        const lineage = host.want(LineageApi)
         if (lineage && !(await runtime.memo<boolean>(`root-note:${id}`, context))) {
           const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
           const result = index?.results[id]

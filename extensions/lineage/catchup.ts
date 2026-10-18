@@ -11,7 +11,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { WorkspaceService } from '../workspaces/server.ts'
+import { WorkspacesApi } from '../workspaces/api.ts'
 import type { OpenAbstract } from './server.ts'
 
 /**
@@ -34,7 +34,7 @@ async function mainOf(
   ctx: Context,
   tx?: Tx,
 ): Promise<Main | undefined> {
-  const service = host.use<WorkspaceService>('workspaces')
+  const service = host.want(WorkspacesApi)
   const workspace = service
     ? tx
       ? (await tx.doc(service.doc, ROOT_CONVERSATION_ID)).items[String(id)]

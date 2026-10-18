@@ -4,10 +4,10 @@ import { Type } from '@earendil-works/pi-ai'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { WorkspaceService } from '../workspaces/server.ts'
+import { WorkspacesApi } from '../workspaces/api.ts'
 
 export default function self(host: ExtensionHost) {
-  const service = () => host.use<WorkspaceService>('workspaces')
+  const service = () => host.want(WorkspacesApi)
   return defineExtension({
     name: 'self',
     sections: [

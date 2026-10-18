@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
-import { Board } from '../extensions/board/server.ts'
-import { Standing } from '../extensions/subagents/server.ts'
+import { Board } from '../extensions/board/api.ts'
+import { Standing } from '../extensions/subagents/api.ts'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { context } from '../server/harness.ts'
 import { fauxServer, post, sourceCopy, temp } from './helpers.ts'

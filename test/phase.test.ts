@@ -12,7 +12,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import phase, { Phases } from '../extensions/phase/server.ts'
 import { phaseState } from '../extensions/phase/state.ts'
-import type { ClassifyService } from '../extensions/classify/server.ts'
+import type { ClassifyService } from '../extensions/classify/api.ts'
 import { until } from './helpers.ts'
 
 const cleanups: (() => Promise<void>)[] = []
@@ -83,7 +83,7 @@ async function fixture(service?: ClassifyService) {
     harness: () => harness,
     projectRoot: '/project',
     conversations: () => [],
-    use: (() => service) as Parameters<typeof phase>[0]['use'],
+    want: (() => service) as Parameters<typeof phase>[0]['want'],
   })
   registry.install(extension)
   const storage = new MemoryStorage()

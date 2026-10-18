@@ -7,14 +7,15 @@ import { expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../../server/harness.ts'
 import { Metadata } from '../../server/metadata.ts'
 import instance, { actions } from '../../extensions/instance/server.ts'
-import subagents, { Subagents } from '../../extensions/subagents/server.ts'
+import subagents from '../../extensions/subagents/server.ts'
+import { Subagents } from '../../extensions/subagents/api.ts'
 import workspaceExtension from '../../extensions/workspaces/server.ts'
 import { workspaces } from '../../extensions/workspaces/workspaces.ts'
 import { git } from '../../lib/git.ts'
 import { projectSettings } from '../../server/project-setup.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { attach, temp, removeTemp, until } from '../helpers.ts'
+import { apis, attach, temp, removeTemp, until } from '../helpers.ts'
 
 type Preview = { id: string; url: string; home: string; pid: number }
 async function assertProject(
@@ -88,10 +89,7 @@ async function fixture({ foreign = false } = {}) {
     projectSettings: () => projectSettings(project, root),
     harness: () => opened.harness,
     metadata: Metadata,
-    provide: (name: string, value: unknown) => {
-      services.set(name, value)
-    },
-    use: (name: string) => services.get(name),
+    ...apis(services),
     extensions: () => [{ name: 'workspaces', enabled: true }],
     resource<T>(key: string, create: () => T): T {
       if (!resources.has(key)) resources.set(key, create())

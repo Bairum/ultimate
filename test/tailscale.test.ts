@@ -2,12 +2,12 @@ import { chmod, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import tailscale, { actions } from '../extensions/tailscale/server.ts'
-import type { Status } from '../extensions/tailscale/server.ts'
+import type { Status } from '../extensions/tailscale/api.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { createAccess } from '../server/request-security.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { createServer } from '../server/main.ts'
-import { fauxServer, linkDependencies, post, temp, until } from './helpers.ts'
+import { copyApis, fauxServer, linkDependencies, post, temp, until } from './helpers.ts'
 
 const closes: (() => Promise<void>)[] = []
 afterEach(async () => {
@@ -85,7 +85,7 @@ else if (args[0] === 'serve') {
       system: () => ({ process: { url: `http://127.0.0.1:${localPort}` } }),
       onOpen: (fn: () => Promise<void>) => openers.push(fn),
       onClose: (fn: () => Promise<void>) => cleanups.push(fn),
-      provide: () => {},
+      implement: () => {},
     } as unknown as ExtensionHost
     tailscale(host)
     let closed = false
@@ -115,6 +115,7 @@ async function repo(home: string) {
   await mkdir(join(root, '.ultimate'), { recursive: true })
   await cp(resolve('extensions/tailscale'), join(root, 'extensions/tailscale'), { recursive: true })
   await cp(resolve('lib'), join(root, 'lib'), { recursive: true })
+  await copyApis(root)
   await mkdir(join(root, 'server'))
   await cp(resolve('server/lock.ts'), join(root, 'server/lock.ts'))
   await linkDependencies(root)

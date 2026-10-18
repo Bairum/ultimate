@@ -15,10 +15,11 @@ import {
 import { CodingTools } from '@earendil-works/pi-durable/tools'
 import { prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
-import subagents, { Standing } from '../extensions/subagents/server.ts'
-import type { SubagentsService } from '../extensions/subagents/server.ts'
+import subagents from '../extensions/subagents/server.ts'
+import { Standing } from '../extensions/subagents/api.ts'
+import type { SubagentsService } from '../extensions/subagents/api.ts'
 import { Metadata } from '../server/metadata.ts'
-import { parseDefinition, saveDefinition } from '../extensions/subagents/agents.ts'
+import { parseDefinition, saveDefinition } from '../lib/agents.ts'
 
 const ctx = BACKGROUND_CONTEXT
 const directories: string[] = []
@@ -54,10 +55,13 @@ async function fixture() {
     harness: () => host.harness,
     metadata: Metadata,
     projectSettings: async () => ({}),
-    provide: (_name, value) => {
+    implement: (_api, value) => {
       service = value as SubagentsService
     },
-    use: () => undefined,
+    need: () => {
+      throw new Error('Not used')
+    },
+    want: () => undefined,
     resource: (_key, create) => create(),
     extensions: () => [],
     notice: () => {},

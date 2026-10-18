@@ -27,12 +27,13 @@ import { createEventBus, ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { afterEach, describe, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
-import subagents, { actions, Subagents } from '../extensions/subagents/server.ts'
+import subagents, { actions } from '../extensions/subagents/server.ts'
+import { Subagents } from '../extensions/subagents/api.ts'
 import type { ActionContext } from '../server/actions.ts'
 import codemode from '../extensions/codemode/server.ts'
 import { Metadata } from '../server/metadata.ts'
 import { UiState } from '../server/ui-state.ts'
-import { discoverAgents, parseDefinition } from '../extensions/subagents/agents.ts'
+import { discoverAgents, parseDefinition } from '../lib/agents.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 
 const directories: string[] = []
@@ -83,8 +84,11 @@ async function fixture(
     ...prepared,
     harness: () => opened!.harness,
     metadata: Metadata,
-    provide: () => {},
-    use: () => undefined,
+    implement: () => {},
+    need: () => {
+      throw new Error('Not used')
+    },
+    want: () => undefined,
     resource: (_key, create) => create(),
     extensions: () => [],
     notice: () => {},

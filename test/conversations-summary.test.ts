@@ -2,7 +2,7 @@
 import { fauxServer, post, prepareFauxServer, sourceCopy, temp, until } from './helpers.ts'
 import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import { awaitWithContext } from '@earendil-works/chord/context'
-import { Subagents } from '../extensions/subagents/server.ts'
+import { Subagents } from '../extensions/subagents/api.ts'
 import { join } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
 import type { Models, JsonObject } from '@earendil-works/pi-ai'
@@ -22,7 +22,7 @@ import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import { Overview } from '../extensions/conversations/overview.ts'
-import type { LineageService } from '../extensions/lineage/server.ts'
+import type { LineageService } from '../extensions/lineage/api.ts'
 import {
   generateSummary,
   summaryInput,
@@ -206,10 +206,10 @@ async function launch(subagents = false, initialIntent = false, root = false, br
                   ),
             },
             // Lineage stays off here; a rooted fixture stands in for it with every conversation its own root.
-            use: ((name: string) =>
-              name === 'questions'
+            want: ((api: { name: string }) =>
+              api.name === 'questions'
                 ? { request: questionsRequested }
-                : name === 'lineage' && (root || branch)
+                : api.name === 'lineage' && (root || branch)
                   ? ({
                       rootOf: async (id: number) => (root ? (id as ConversationId) : undefined),
                       branchOf: async () =>
@@ -219,7 +219,7 @@ async function launch(subagents = false, initialIntent = false, root = false, br
                       branchOf: unknown
                       abstract: unknown
                     })
-                  : undefined) as NonNullable<SummaryHost['use']>,
+                  : undefined) as NonNullable<SummaryHost['want']>,
           },
           generated,
         ),

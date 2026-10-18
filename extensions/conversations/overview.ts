@@ -3,7 +3,7 @@ import { defineDoc, InboxDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-wo
 import type { ConversationId, Cursor, SubmissionRecord } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { currentAnswer, resetAfter, Summaries } from './summary.ts'
-import { isInput } from './activity.ts'
+import { isInput } from '../../lib/entries.ts'
 import type { OverviewRow, OverviewState } from './types.ts'
 
 export const Overview = defineDoc<OverviewState>({

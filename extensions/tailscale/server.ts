@@ -10,22 +10,8 @@ import { readJson } from '../../lib/json-file.ts'
 import { userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ExtensionAction } from '../../server/actions.ts'
-
-export type Status = {
-  state:
-    | 'disabled'
-    | 'starting'
-    | 'ready'
-    | 'not-installed'
-    | 'not-running'
-    | 'not-operator'
-    | 'https-disabled'
-    | 'port-conflict'
-    | 'error'
-  url?: string
-  allow: string[]
-  hint?: string
-}
+import { TailscaleApi } from './api.ts'
+import type { Status } from './api.ts'
 interface Serve {
   TCP?: Record<string, unknown>
   Web?: Record<string, { Handlers?: Record<string, { Proxy?: string }> }>
@@ -44,10 +30,6 @@ function target(serve: Serve, dns: string, port: number) {
   )
     return undefined
   return proxy && /^http:\/\/127\.0\.0\.1:\d+$/.test(proxy) ? proxy : undefined
-}
-/** What the `tailscale` service gives other extensions: this server's status, `url` once it is published. */
-export interface TailscaleService {
-  status(): Status
 }
 /** A claimed HTTPS port. A project's entry outlives its server so the project keeps its address; a preview's does not. */
 type Entry = { port: number; owner: string; temporary?: true }
@@ -304,7 +286,7 @@ export default function tailscale(host: ExtensionHost) {
   if (host.faux && !preview) return defineExtension({ name: 'tailscale' })
   host.onOpen(begin)
   retries.set(host, begin)
-  host.provide('tailscale', { status: () => status } satisfies TailscaleService)
+  host.implement(TailscaleApi, { status: () => status })
   host.onClose(async () => {
     closed = true
     await opening

@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import cloudflare, { secrets } from '../extensions/cloudflare/server.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
-import { parseDefinition, definitionAgent } from '../extensions/subagents/agents.ts'
+import { parseDefinition, definitionAgent } from '../lib/agents.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { removeTemp, temp } from './helpers.ts'
 

@@ -14,7 +14,7 @@ import type { ConversationId, Cursor, TaskId, Tx } from '@earendil-works/pi-dura
 import { exec } from '../../lib/exec.ts'
 import { git, isolatable } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { ConversationsService } from '../conversations/server.ts'
+import { ConversationsApi } from '../conversations/api.ts'
 import { setup } from './setup.ts'
 import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
 import type {
@@ -77,7 +77,7 @@ type Host = Pick<
   | 'userHome'
   | 'modelRuntime'
   | 'projectSettings'
-  | 'use'
+  | 'want'
   | 'resource'
   | 'extensions'
   | 'metadata'
@@ -631,7 +631,7 @@ export function workspaces(host: Host) {
     const tip = await git(workspace.path, 'rev-parse', 'HEAD')
     const path = await landerPath(host.home, workspace.source)
     const { change } = await landerAgent(host, context)
-    const subject = await host.use<ConversationsService>('conversations')?.subject(id, context)
+    const subject = await host.want(ConversationsApi)?.subject(id, context)
     const result = await host.harness().commit(async (tx) => {
       const row = await tx.conversation(id)
       if (!row || row.owner)

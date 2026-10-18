@@ -2,7 +2,7 @@ import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
 import { abstract, branchOf, leaveNote, rootOf, Tally } from '../extensions/lineage/server.ts'
-import type { LineageService } from '../extensions/lineage/server.ts'
+import type { LineageService } from '../extensions/lineage/api.ts'
 import { Summaries, summaryBehavior } from '../extensions/conversations/summary.ts'
 import type { SummaryHost } from '../extensions/conversations/summary.ts'
 import { defineExtension } from '@earendil-works/pi-durable'
@@ -220,8 +220,8 @@ it.concurrent('summarizes a branch into its title and its abstract in the tree r
                 .getModels()
                 .filter((model) => model.provider === 'openai-codex' && model.id === 'gpt-6-luna'),
           },
-          use: ((name: string) =>
-            name === 'lineage'
+          want: ((api: { name: string }) =>
+            api.name === 'lineage'
               ? ({
                   rootOf: (id: number, ctx: typeof context) =>
                     rootOf({ harness: () => server.harness }, id, ctx),
@@ -229,7 +229,7 @@ it.concurrent('summarizes a branch into its title and its abstract in the tree r
                     branchOf({ harness: () => server.harness }, id, ctx),
                   abstract,
                 } satisfies Pick<LineageService, 'rootOf' | 'branchOf' | 'abstract'>)
-              : undefined) as NonNullable<SummaryHost['use']>,
+              : undefined) as NonNullable<SummaryHost['want']>,
         },
         async () => ({
           assessment: 'done',

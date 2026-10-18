@@ -100,7 +100,7 @@ compaction cut the active title source but preserve activity times from earlier 
 projection reconciles every conversation, including inherited fork history, and only commits metadata
 when the derived fields change.
 
-All input detection uses `isInput` in `activity.ts`: Pi Durable marks entries placed from input
+All input detection uses `isInput` in `lib/entries.ts`: Pi Durable marks entries placed from input
 submissions with `input: true` (a small upstream patch). Pi's own `pi.user` input kind also counts,
 keeping existing history usable. Typed inputs count without an extension kind list; user-role writes
 such as lineage notes do not.

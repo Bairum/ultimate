@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import classify, { secrets } from '../extensions/classify/server.ts'
-import type { ClassifyService } from '../extensions/classify/server.ts'
+import { ClassifyApi } from '../extensions/classify/api.ts'
+import type { ClassifyService } from '../extensions/classify/api.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { removeTemp, temp } from './helpers.ts'
@@ -15,11 +16,11 @@ async function fixture(key = true) {
   const root = await temp()
   cleanup.push(root)
   if (key) await writeSecret(root, 'TYPESAFE_API_KEY', 'test-sentinel')
-  const provide = vi.fn<(name: string, service: ClassifyService) => void>()
-  const extension = classify({ userHome: root, provide } as unknown as ExtensionHost)
+  const implement = vi.fn<(api: typeof ClassifyApi, service: ClassifyService) => void>()
+  const extension = classify({ userHome: root, implement } as unknown as ExtensionHost)
   expect(extension.name).toBe('classify')
-  expect(provide.mock.calls[0][0]).toBe('classify')
-  return { root, service: provide.mock.calls[0][1] }
+  expect(implement.mock.calls[0][0]).toBe(ClassifyApi)
+  return { root, service: implement.mock.calls[0][1] }
 }
 
 const request = {

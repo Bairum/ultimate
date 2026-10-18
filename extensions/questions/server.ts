@@ -25,14 +25,15 @@ import type { JsonValue } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import { BACKGROUND_CONTEXT as context, withAbortSignal } from '@earendil-works/chord/context'
-import { accountResponse, askSummaryModel } from '../conversations/summary.ts'
+import { ConversationsApi } from '../conversations/api.ts'
+import type { ConversationsService } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
-import { summaryModel } from '../conversations/summary-model.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
-import type { BoardMessage, BoardService } from '../board/server.ts'
-import { Board } from '../board/server.ts'
-import { Standing } from '../subagents/server.ts'
+import { Board, BoardApi } from '../board/api.ts'
+import type { BoardMessage } from '../board/api.ts'
+import { Standing } from '../subagents/api.ts'
 import { primaryAgent } from '../../lib/machine.ts'
+import { QuestionsApi } from './api.ts'
 
 import type { Question } from './types.ts'
 export const BoardQuestions = defineDoc<{
@@ -51,9 +52,6 @@ export const BoardQuestions = defineDoc<{
   initial: () => ({ requested: [], asked: {} }),
 })
 export const docs = [BoardQuestions]
-export type QuestionsService = {
-  request(tx: Tx, message: BoardMessage): Promise<void>
-}
 /** Board deliveries have their own entry kinds; only pi.user and reset supersede a question. */
 async function answerOpen(tx: Tx, conversation: ConversationId, answer: EntryId) {
   let cursor: Cursor | undefined
@@ -147,7 +145,7 @@ export function questionContext(reply: string, userInput: string): string {
 
 /** Ask the summary model for the questions in `text`, memoizing model and response; any failure asks nothing. */
 async function extract(
-  host: ExtensionHost,
+  conversations: ConversationsService,
   text: string,
   runtime: Pick<TaskRuntime<unknown, unknown, unknown, object>, 'memo' | 'models' | 'signal'>,
   ctx: Context,
@@ -157,11 +155,11 @@ async function extract(
   let questions: Question[] = []
   try {
     if (!model) {
-      const chosen = await summaryModel(host)
+      const chosen = await conversations.summaryModel()
       if (chosen) model = await runtime.memo('model', chosen, ctx)
     }
     if (model) {
-      response = await askSummaryModel(
+      response = await conversations.askSummaryModel(
         runtime.models,
         QUESTIONS_SYSTEM,
         text,
@@ -177,17 +175,19 @@ async function extract(
   return { questions, response }
 }
 /** An aborted extraction still accounts the response it received. */
-async function abort<I, S, R, H extends object>(
-  _task: unknown,
-  runtime: TaskRuntime<I, S, R, H>,
-  ctx: Context,
-) {
-  const response = await runtime.memo<ResponseReceipt>('response', ctx)
-  await runtime.commit(async (tx) => {
-    await accountResponse(tx, runtime.conversationId, response)
-    return { status: 'terminal', outcome: { status: 'aborted' } } as const
-  }, ctx)
-}
+const aborted =
+  (conversations: ConversationsService) =>
+  async <I, S, R, H extends object>(
+    _task: unknown,
+    runtime: TaskRuntime<I, S, R, H>,
+    ctx: Context,
+  ) => {
+    const response = await runtime.memo<ResponseReceipt>('response', ctx)
+    await runtime.commit(async (tx) => {
+      await conversations.accountResponse(tx, runtime.conversationId, response)
+      return { status: 'terminal', outcome: { status: 'aborted' } } as const
+    }, ctx)
+  }
 export const QUESTIONS_SYSTEM = `List the decisions a coding agent's final reply leaves open for the user, so they can be answered with buttons. Return only JSON {"questions":[{"text":"...","kind":"confirm"|"choice","options":[{"label":"...","detail":"...","recommended":true}]}]}.
 Include a question only when the reply waits for the user to answer it before going on; these usually close the reply. Leave out:
 - questions the reply answers itself, including question-shaped headings followed by their answer ("Is it running on X? Yes, ...") and the user's own questions restated;
@@ -250,7 +250,7 @@ export const actions = {
       if (!message || !open(message) || !questions?.length) throw new Error(NOT_OPEN)
       checkAnswers(data.answers, questions)
     }, context)
-    const board = host.use<BoardService>('board')
+    const board = host.want(BoardApi)
     if (!board) throw new Error('Board is unavailable')
     return {
       id: await board.answer(
@@ -311,15 +311,17 @@ export const actions = {
 }
 
 export default function questionsExtension(host: ExtensionHost) {
+  const conversations = host.need(ConversationsApi)
+  const abort = aborted(conversations)
   const Extract = defineTask<{ messageId: number; text: string }, { phase: 'extract' }, null>({
     name: 'questions.board-extract',
     version: 1,
     initial: () => ({ phase: 'extract' }),
     phases: {
       extract: async (task, runtime, ctx) => {
-        const { questions, response } = await extract(host, task.input.text, runtime, ctx)
+        const { questions, response } = await extract(conversations, task.input.text, runtime, ctx)
         await runtime.commit(async (tx) => {
-          await accountResponse(tx, runtime.conversationId, response)
+          await conversations.accountResponse(tx, runtime.conversationId, response)
           const { log, state } = await stateFor(tx)
           const message = log.messages.find((m) => m.id === task.input.messageId)
           if (questions.length && message && open(message))
@@ -389,13 +391,13 @@ export default function questionsExtension(host: ExtensionHost) {
       extract: async (task, runtime, ctx) => {
         const { answer, text, userInput } = task.state.checkpoint
         const { questions, response } = await extract(
-          host,
+          conversations,
           questionContext(text, userInput),
           runtime,
           ctx,
         )
         await runtime.commit(async (tx) => {
-          await accountResponse(tx, runtime.conversationId, response)
+          await conversations.accountResponse(tx, runtime.conversationId, response)
           // A newer input supersedes this answer; its own extraction decides the card.
           if (!(await answerOpen(tx, runtime.conversationId, answer))) return terminal
           const state = await tx.doc(BoardQuestions, ROOT_CONVERSATION_ID)
@@ -433,7 +435,7 @@ export default function questionsExtension(host: ExtensionHost) {
     stop = undefined
     await Promise.all(ending)
   })
-  host.provide('questions', {
+  host.implement(QuestionsApi, {
     async request(tx, message) {
       const { state } = await stateFor(tx)
       if (state.requested.includes(message.id)) return
@@ -448,7 +450,7 @@ export default function questionsExtension(host: ExtensionHost) {
         },
       )
     },
-  } satisfies QuestionsService)
+  })
   return defineExtension({
     name: 'questions',
     tasks: [Extract, Reply],

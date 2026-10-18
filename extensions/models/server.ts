@@ -6,7 +6,7 @@ import { defineDoc, defineExtension, ROOT_CONVERSATION_ID } from '@earendil-work
 import type { ConversationId, Cursor } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { HealthService } from '../health/server.ts'
+import { HealthApi } from '../health/api.ts'
 
 /** A Pi type as a document holds it: plain JSON, arrays mutable. */
 type Json<T> = T extends readonly (infer U)[]
@@ -103,7 +103,7 @@ export const userActions = ['login', 'answer', 'cancel', 'logout']
  */
 const forgetHealth = async (host: ActionContext['host'], provider: string) =>
   host
-    .use<HealthService>('health')
+    .want(HealthApi)
     ?.forget(provider)
     .catch((error: unknown) => {
       // Health is advisory: the login itself succeeded, and the next call or ping corrects the record.

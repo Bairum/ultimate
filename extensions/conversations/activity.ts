@@ -1,9 +1,7 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import type { ConversationId, Cursor, EntryRecord } from '@earendil-works/pi-durable'
+import type { ConversationId, Cursor } from '@earendil-works/pi-durable'
+import { isInput } from '../../lib/entries.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-
-/** Pi inputs and harness-marked typed inputs count; user-role writes are context, not requests. */
-export const isInput = (entry: EntryRecord) => entry.kind === 'pi.user' || entry.input === true
 
 /** Publish sidebar naming and activity in metadata; core reads the projection without interpreting history. */
 export function activityBehavior(

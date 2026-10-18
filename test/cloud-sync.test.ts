@@ -128,8 +128,8 @@ async function fixture(hooks?: SyncHooks) {
   const tailscale: { url?: string } = {}
   const host = {
     ...prepared,
-    use: (name: string) =>
-      name === 'tailscale'
+    want: (api: { name: string }) =>
+      api.name === 'tailscale'
         ? { status: () => ({ state: 'ready', allow: [], ...tailscale }) }
         : undefined,
     projectRoot: home,
