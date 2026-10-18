@@ -5,12 +5,14 @@ import {
   defineDoc,
   defineExtension,
   defineTool,
+  GenerationTask,
+  hook,
   ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, Cursor, Tx } from '@earendil-works/pi-durable'
+import type { ConversationId, Cursor, EntryId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { BranchedEvent } from '../lineage/server.ts'
+import { Branch } from '../lineage/api.ts'
 
 export type Task = {
   key: string
@@ -135,18 +137,51 @@ async function backfill(host: Pick<ExtensionHost, 'harness' | 'metadata'>) {
   }
 }
 
-export default (host: ExtensionHost) => {
-  host.events.on('lineage:branched', (data) => {
-    const { tx, id, waitUntil } = data as BranchedEvent
-    waitUntil(
-      (async () => {
-        Object.assign(await tx.doc(Plan, id), Plan.definition.initial())
-      })(),
+/** Set by a conversation's first run; a fork starts without it. */
+export const Started = defineDoc<{ started?: true }>({
+  kind: 'plan.started',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({}),
+})
+
+/** Whether branch `id` has answered since it forked at entry `at`. */
+async function answered(tx: Tx, id: ConversationId, at: number) {
+  let cursor: Cursor | undefined
+  do {
+    const page = await tx.scanEntries(
+      { conversationId: id, minEntryId: (at + 1) as EntryId, order: 'ascending' },
+      64,
+      cursor,
     )
-  })
+    if (page.items.some((entry) => entry.kind === 'pi.assistant')) return true
+    cursor = page.next
+  } while (cursor !== undefined)
+  return false
+}
+
+export default (host: ExtensionHost) => {
   host.onOpen(() => backfill(host))
   return defineExtension({
     name: 'plan',
+    hooks: [
+      // Pi upstream: @earendil-works/pi-durable@1.3.0 — patched transactional beforeInput hook.
+      // A lineage branch starts with an empty plan, not the one it forked with: emptied in the commit that places its
+      // first input, so its first request never sees the inherited plan. A branch that answered before it was marked
+      // started (one made before this hook) keeps its own.
+      hook(GenerationTask, {
+        beforeInput: async (_input, { tx, conversationId }) => {
+          if ((await tx.doc(Started, conversationId)).started) return undefined
+          const branch = (await tx.doc(Branch, conversationId)).branch
+          const reset = !!branch && !(await answered(tx, conversationId, branch.at))
+          ;(await tx.doc(Started, conversationId)).started = true
+          if (reset) Object.assign(await tx.doc(Plan, conversationId), Plan.definition.initial())
+          return undefined
+        },
+      }),
+    ],
     sections: [
       section('plan', async ({ read, conversationId }, context) => {
         const plan = await read.snapshot(Plan, conversationId, context)

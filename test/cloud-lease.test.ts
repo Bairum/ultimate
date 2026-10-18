@@ -196,6 +196,7 @@ it('waits on standby with no database while the cloud is unreachable, however lo
       resource: <T>(_key: string, create: () => T) => create(),
       onOpen: () => {},
       onRelease: () => {},
+      want: () => undefined,
       onClose: (close: () => Promise<void>) => closers.push(close),
       harness: () => {
         throw new Error('Harness is not open')
@@ -325,8 +326,8 @@ it('fails the checks without a model login, also when forced, leaving the lease 
 const loginOf = (provider: string | undefined, configured: string[], available: string[]) =>
   modelLogin({
     faux: undefined,
-    // No health file: every configured provider counts as working.
-    userHome: '/nonexistent',
+    // No health extension: every configured provider counts as working.
+    want: () => undefined,
     settings: { getDefaultProvider: () => provider } as unknown as ExtensionHost['settings'],
     modelRuntime: {
       getProviderAuthStatus: (id: string) => ({ configured: configured.includes(id) }),

@@ -4,7 +4,7 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import { assistant, start, toolResult, user } from './fixture.ts'
 import { routingInstructions } from './routing-instructions.ts'
 import { Plan } from '../extensions/plan/server.ts'
-import { parseDefinition } from '../extensions/subagents/agents.ts'
+import { parseDefinition } from '../lib/agents.ts'
 
 async function standing(ultimate: Awaited<ReturnType<typeof start>>, name = 'ultimate') {
   const { result: id } = await ultimate.action('subagents', 'standing', { name })

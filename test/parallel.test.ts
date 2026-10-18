@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { afterEach, expect, it, vi } from 'vitest'
 import parallel from '../extensions/parallel/server.ts'
-import { parallelRequest } from '../extensions/parallel/api.ts'
+import { parallelRequest } from '../extensions/parallel/client.ts'
 import { truncateToolOutput } from '../extensions/parallel/output.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
 import type { ExtensionHost } from '../server/extensions.ts'

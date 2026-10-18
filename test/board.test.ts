@@ -20,18 +20,14 @@ import type { OpenHost } from '../server/harness.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { ActionContext } from '../server/actions.ts'
 import { Metadata } from '../server/metadata.ts'
-import board, { Board, actions } from '../extensions/board/server.ts'
-import type { BoardService } from '../extensions/board/server.ts'
-import {
-  Branch,
-  BranchReceipts,
-  Roots,
-  Tally,
-  rootOf,
-  startBranch,
-} from '../extensions/lineage/server.ts'
+import { emit } from '../server/events.ts'
+import board, { actions } from '../extensions/board/server.ts'
+import { Board } from '../extensions/board/api.ts'
+import type { BoardService } from '../extensions/board/api.ts'
+import { BranchReceipts, Tally, rootOf, startBranch } from '../extensions/lineage/server.ts'
 import type { BranchInput } from '../extensions/lineage/server.ts'
-import { Standing, Subagents } from '../extensions/subagents/server.ts'
+import { Branch, Roots } from '../extensions/lineage/api.ts'
+import { Standing, Subagents } from '../extensions/subagents/api.ts'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 
 const homes: string[] = []
@@ -86,28 +82,30 @@ async function fixture(
   let holding = false
   const openers: (() => Promise<void>)[] = []
   const closers: (() => Promise<void>)[] = []
+  const provider = ({ name }: { name: string }) =>
+    name === 'subagents'
+      ? {
+          residents: async () => [{ name: 'scout', description: 'Search' }],
+          standing: async () => recipient.id,
+        }
+      : name === 'workspaces'
+        ? { doc: Workspaces, git: async () => '' }
+        : name === 'lineage'
+          ? {
+              rootOf: (id: number, ctx: Context) => rootOf(host, id, ctx),
+              branch: (input: BranchInput, ctx: Context) => startBranch(host, input, ctx),
+            }
+          : undefined
   const host = {
     ...prepared,
     metadata: Metadata,
-    events: { emit: () => {} },
+    emit,
     harness: () => opened.harness,
-    provide: (_name: string, value: BoardService) => {
+    implement: (_api: unknown, value: BoardService) => {
       service = value
     },
-    use: (name: string) =>
-      name === 'subagents'
-        ? {
-            residents: async () => [{ name: 'scout', description: 'Search' }],
-            standing: async () => recipient.id,
-          }
-        : name === 'workspaces'
-          ? { doc: Workspaces, git: async () => '' }
-          : name === 'lineage'
-            ? {
-                rootOf: (id: number, ctx: Context) => rootOf(host, id, ctx),
-                branch: (input: BranchInput, ctx: Context) => startBranch(host, input, ctx),
-              }
-            : undefined,
+    want: provider,
+    need: provider,
     onOpen: (callback: () => Promise<void>) => openers.push(callback),
     onClose: (cleanup: () => Promise<void>) => closers.push(cleanup),
     notice: (message: string) => {

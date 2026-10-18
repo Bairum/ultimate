@@ -9,10 +9,10 @@ import type { JsonValue } from '@earendil-works/chord'
 import type { MachineHealth, ProviderHealth } from '../../cloud/protocol.ts'
 import type { ActionContext, ExtensionAction } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { cloudConfig } from '../cloud/config.ts'
+import { cloudConfig, httpBase } from '../../lib/cloud.ts'
 import { isMachineHome } from '../../lib/machine.ts'
-import { httpBase } from '../sync/server.ts'
-import { readFileHealth, record, reset, toHealth } from './store.ts'
+import { readFileHealth, readHealth, record, reset, toHealth } from './store.ts'
+import { HealthApi } from './api.ts'
 import type { HealthEntry } from './store.ts'
 
 const MINUTE = 60_000
@@ -258,16 +258,12 @@ async function report(host: ExtensionHost) {
   if (!response.ok) throw new Error(`POST /sync/health: ${response.status}`)
 }
 
-/** What `host.use('health')` offers other extensions. */
-export interface HealthService {
-  /** Reset `provider` to unknown after its login was added, replaced or removed. */
-  forget(provider: string): Promise<unknown>
-}
-
 export default function health(host: ExtensionHost) {
-  host.provide('health', {
+  host.implement(HealthApi, {
     forget: (provider) => reset(host.userHome, [provider]),
-  } satisfies HealthService)
+    providers: () => readHealth(host.userHome),
+    confirm: (provider) => confirm(hostDeps(host), provider),
+  })
   const hooks = host.faux
     ? []
     : [

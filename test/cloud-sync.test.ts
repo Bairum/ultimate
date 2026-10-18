@@ -128,8 +128,8 @@ async function fixture(hooks?: SyncHooks) {
   const tailscale: { url?: string } = {}
   const host = {
     ...prepared,
-    use: (name: string) =>
-      name === 'tailscale'
+    want: (api: { name: string }) =>
+      api.name === 'tailscale'
         ? { status: () => ({ state: 'ready', allow: [], ...tailscale }) }
         : undefined,
     projectRoot: home,
@@ -1146,6 +1146,7 @@ it('stays off with one notice for a project without a GitHub origin', async () =
     onOpen,
     onClose: () => {},
     onRelease: () => {},
+    want: () => undefined,
     resource: <T>(_key: string, create: () => T) => create(),
     faux: true,
     notice,
@@ -1166,6 +1167,7 @@ it('opens and closes a faux host without cloud work when no URL is explicit', as
     onOpen,
     onClose,
     onRelease: () => {},
+    want: () => undefined,
     resource: <T>(_key: string, create: () => T) => create(),
     faux: true,
     notice,

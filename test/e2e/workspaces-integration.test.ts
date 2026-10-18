@@ -24,6 +24,7 @@ import type { ConversationId, JsonObject, TaskId, Tx } from '@earendil-works/pi-
 import { afterAll, expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../../server/harness.ts'
 import { Metadata } from '../../server/metadata.ts'
+import { emit } from '../../server/events.ts'
 import { UiState } from '../../server/ui-state.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ActionContext } from '../../server/actions.ts'
@@ -36,16 +37,22 @@ import { git } from '../../lib/git.ts'
 import { setup } from '../../extensions/workspaces/setup.ts'
 import type { LanderEntry, WorkspaceIndex } from '../../extensions/workspaces/types.ts'
 import { createLander, landerCheckout, landerPath } from '../../extensions/workspaces/lander.ts'
-import lineage, { leaveNote, rootOf, Roots, startBranch } from '../../extensions/lineage/server.ts'
+import lineage, { leaveNote, rootOf, startBranch } from '../../extensions/lineage/server.ts'
+import { LineageApi, Roots } from '../../extensions/lineage/api.ts'
 import { subject } from '../../extensions/conversations/server.ts'
-import type { ConversationsService } from '../../extensions/conversations/server.ts'
+import { ConversationsApi } from '../../extensions/conversations/api.ts'
+import type { ConversationsService } from '../../extensions/conversations/api.ts'
 import { Summaries } from '../../extensions/conversations/summary.ts'
 import self from '../../extensions/self/server.ts'
-import board, { Board } from '../../extensions/board/server.ts'
-import type { BoardService } from '../../extensions/board/server.ts'
+import board from '../../extensions/board/server.ts'
+import { Board, BoardApi } from '../../extensions/board/api.ts'
 import promptExtension, { order as promptOrder } from '../../extensions/prompt/server.ts'
-import subagents, { Subagents } from '../../extensions/subagents/server.ts'
+import subagents from '../../extensions/subagents/server.ts'
+import { Subagents } from '../../extensions/subagents/api.ts'
 import { seedTally, temp, until } from '../helpers.ts'
+
+/** The part of the conversations service a test stands in for. */
+const conversations = (service: Partial<ConversationsService>) => service as ConversationsService
 
 // Every test has its own repository and harness, so they all run concurrently; fixtures close when the file ends.
 vi.setConfig({ maxConcurrency: 16 })
@@ -98,25 +105,25 @@ async function fixture(
   // As the server: openers run each time the harness opens, cleanups each time it closes.
   const openers: (() => Promise<void>)[] = []
   const closers: (() => Promise<void>)[] = []
+  const lookup = ({ name }: { name: string }) =>
+    services.get(name) ??
+    (name === 'lineage' && host.extensions().some((e) => e.name === 'lineage' && e.enabled)
+      ? {
+          rootOf: (id: number, ctx: typeof context) => rootOf(host, id, ctx),
+          leaveNote: (to: number | 'root', text: string, source: Parameters<typeof leaveNote>[3]) =>
+            leaveNote(host, to, text, source),
+        }
+      : undefined)
   const host = {
     ...prepared,
     harness: () => opened.harness,
     metadata: Metadata,
-    provide: (name: string, value: unknown) => {
-      services.set(name, value)
+    implement: (api: { name: string }, value: unknown) => {
+      services.set(api.name, value)
     },
-    use: (name: string) =>
-      services.get(name) ??
-      (name === 'lineage' && host.extensions().some((e) => e.name === 'lineage' && e.enabled)
-        ? {
-            rootOf: (id: number, ctx: typeof context) => rootOf(host, id, ctx),
-            leaveNote: (
-              to: number | 'root',
-              text: string,
-              source: Parameters<typeof leaveNote>[3],
-            ) => leaveNote(host, to, text, source),
-          }
-        : undefined),
+    want: lookup,
+    need: (api: { name: string }) =>
+      new Proxy({}, { get: (_, key) => (lookup(api) as Record<string | symbol, unknown>)?.[key] }),
     projectSettings: async () => ({ isolates: { worktree: { setup: commands } } }),
     extensions: () => [{ name: 'workspaces', enabled: true }],
     resource<T>(key: string, create: () => T): T {
@@ -833,10 +840,13 @@ it.concurrent('notes the root once for a landing even when its report phase is r
   await f.opened.harness.commit((tx) => f.service.create(tx, id, f.projectRoot), context)
   await f.service.ready(id, context)
   const sha = await commit((await f.service.get(id, context))!.path, 'landed.txt')
-  f.host.provide('conversations', {
-    concluded: async () => new Set<ConversationId>(),
-    subject: (conversation, ctx) => subject(f.host, conversation, ctx),
-  } satisfies ConversationsService)
+  f.host.implement(
+    ConversationsApi,
+    conversations({
+      concluded: async () => new Set<ConversationId>(),
+      subject: (conversation, ctx) => subject(f.host, conversation, ctx),
+    }),
+  )
   await f.opened.harness.commit(async (tx) => {
     ;(await tx.doc(Metadata, id)).title = 'Write the feature'
     Object.assign(await tx.doc(Summaries, id), {
@@ -1065,8 +1075,8 @@ it.concurrent('lets an ownerless history fork submit its own workspace', async (
 })
 it.concurrent('lands and reports a submission without a lineage provider', async () => {
   const f = await lander({ checks: ['test -f base.txt'] })
-  expect(f.host.use('lineage')).toBeUndefined()
-  expect(f.host.use('board')).toBeUndefined()
+  expect(f.host.want(LineageApi)).toBeUndefined()
+  expect(f.host.want(BoardApi)).toBeUndefined()
   const id = await f.create()
   await f.service.ready(id, context)
   const workspace = (await f.service.get(id, context))!
@@ -1173,7 +1183,7 @@ it.concurrent('reports a landing with a deploy warning when the handoff itself f
     '---\nname: deploy-test\ndescription: Deploys\nresident: true\n---\nDeploy.\n',
   )
   // The board is there and the agent is resident, but delivery fails, as without a subagents service.
-  const service = f.host.use<BoardService>('board')!
+  const service = f.host.want(BoardApi)!
   service.send = async () => {
     throw new Error('subagents service unavailable')
   }
@@ -1782,8 +1792,8 @@ it.concurrent('fix: a fix that still fails the check is not landed and leaves th
 })
 it.concurrent('starts an isolated branch of a tally whose first request sees its ready checkout', async () => {
   const f = await fixture()
-  // This fixture's host has no event bus, so no extension labels the branch.
-  f.host.events = { emit: () => {} } as unknown as ExtensionHost['events']
+  // The branch's event goes to the real log; no extension here reacts to it.
+  f.host.emit = emit
   // Its prompt task delivers the first input.
   f.prepared.registry.install(lineage(f.host))
   await seedTally(f.opened.harness)
@@ -2276,7 +2286,12 @@ it.concurrent('open reconciles concluded checkouts in the background', async () 
   await f.opened.harness.commit(async (tx) => {
     ;(await tx.doc(UiState, ROOT_CONVERSATION_ID))['ext.conversations.concluded'] = [concluded]
   }, context)
-  f.host.provide('conversations', { concluded: async () => new Set([concluded]) })
+  f.host.implement(
+    ConversationsApi,
+    conversations({
+      concluded: async () => new Set([concluded]),
+    }),
+  )
   await f.reopen()
   await until(async () =>
     access((await f.service.get(concluded, context))!.path).then(
@@ -2421,7 +2436,12 @@ it.concurrent.each([false, true])(
         ? 'ready'
         : 'removed'
     }, context)
-    f.host.provide('conversations', { concluded: async () => new Set([id]) })
+    f.host.implement(
+      ConversationsApi,
+      conversations({
+        concluded: async () => new Set([id]),
+      }),
+    )
     await f.reopen()
     await until(async () => !(await git(f.projectRoot, 'branch', '--list', workspace.branch)))
     expect((await f.service.get(id, context))!.state).toBe('removed')

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { setImmediate as yieldIO } from 'node:timers/promises'
@@ -12,6 +13,7 @@ import { context } from '../server/harness.ts'
 import { createServer, prepareServer } from '../server/main.ts'
 import type { ServerOptions } from '../server/main.ts'
 import type { ServerEvents, SystemInfo } from '../shared/protocol.ts'
+import type { Api } from '../shared/extension-api.ts'
 
 vi.mock('@earendil-works/pi-ai/providers/faux', async (importOriginal) => {
   const original = await importOriginal<typeof import('@earendil-works/pi-ai/providers/faux')>()
@@ -21,6 +23,25 @@ vi.mock('@earendil-works/pi-ai/providers/faux', async (importOriginal) => {
       original.fauxProvider({ ...options, tokensPerSecond: 0 }),
   }
 })
+
+/**
+ * `implement`, `need` and `want` over a plain map, for extension hosts built by hand. `need` resolves the provider on
+ * each member access like the real handle, so a fixture may implement an API after its consumer took the handle.
+ */
+export function apis(provided = new Map<string, unknown>()) {
+  return {
+    provided,
+    implement: <S>(api: Api<string, S>, value: S) => void provided.set(api.name, value),
+    want: <S>(api: Api<string, S>) => provided.get(api.name) as S | undefined,
+    need: <S>(api: Api<string, S>) =>
+      new Proxy(
+        {},
+        {
+          get: (_, key) => (provided.get(api.name) as Record<string | symbol, unknown>)?.[key],
+        },
+      ) as S,
+  }
+}
 
 export function cleanEnv(extra: NodeJS.ProcessEnv = {}) {
   return {
@@ -61,6 +82,16 @@ export async function linkDependencies(root: string) {
   for (const name of await readdir(resolve('node_modules'))) {
     if (name.startsWith('.vite')) continue
     await symlink(resolve('node_modules', name), join(target, name))
+  }
+}
+/** Copy `shared/` and every extension's `api.ts` into `root`, so partially copied extensions find their contracts. */
+export async function copyApis(root: string) {
+  await cp(resolve('shared'), join(root, 'shared'), { recursive: true })
+  for (const name of await readdir(resolve('extensions'))) {
+    const api = resolve('extensions', name, 'api.ts')
+    if (!existsSync(api)) continue
+    await mkdir(join(root, 'extensions', name), { recursive: true })
+    await cp(api, join(root, 'extensions', name, 'api.ts'))
   }
 }
 export async function sourceCopy(parent: string) {

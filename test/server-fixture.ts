@@ -1,7 +1,13 @@
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve as resolvePath } from 'node:path'
 import { afterEach, vi } from 'vitest'
-import { fauxServer as createServer, temp, removeTemp, linkDependencies } from './helpers.ts'
+import {
+  copyApis,
+  fauxServer as createServer,
+  temp,
+  removeTemp,
+  linkDependencies,
+} from './helpers.ts'
 
 export const servers: Awaited<ReturnType<typeof createServer>>[] = []
 const directories: string[] = []
@@ -39,7 +45,7 @@ export async function fixture(extra = false, sources?: Record<string, string>, e
     await readFile(resolvePath('extensions/prompt/server.ts'), 'utf8'),
   )
   await cp(resolvePath('server'), join(ultimateRoot, 'server'), { recursive: true })
-  await cp(resolvePath('shared'), join(ultimateRoot, 'shared'), { recursive: true })
+  await copyApis(ultimateRoot)
   if (extra) {
     await mkdir(join(ultimateRoot, 'extensions', 'counter'), { recursive: true })
     await writeFile(

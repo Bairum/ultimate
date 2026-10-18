@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
-import { Board } from '../../extensions/board/server.ts'
+import { Board } from '../../extensions/board/api.ts'
 import { BoardQuestions } from '../../extensions/questions/server.ts'
 import { Workspaces } from '../../extensions/workspaces/workspaces.ts'
 import { createModels } from '@earendil-works/pi-ai/models'
@@ -23,7 +23,11 @@ afterEach(async () => {
 
 it('derives neutral faux summaries from the latest prompt and only flags the questions reply', async () => {
   const faux = fauxProvider()
-  await fauxExtension({ faux, home: await temp('ultimate-faux-summary-demo-') } as ExtensionHost)
+  await fauxExtension({
+    faux,
+    home: await temp('ultimate-faux-summary-demo-'),
+    want: () => undefined,
+  } as unknown as ExtensionHost)
   const models = createModels()
   models.setProvider(faux.provider)
   const summarize = (source: string) =>

@@ -16,8 +16,9 @@ import {
 import type { TaskId, ConversationId, Cursor, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ActionContext } from '../../server/actions.ts'
-import { discoverAgents } from '../subagents/agents.ts'
-import { createChild } from '../subagents/children.ts'
+import { discoverAgents } from '../../lib/agents.ts'
+import { SubagentsApi } from '../subagents/api.ts'
+import { AutomationsApi } from './api.ts'
 import { describeSchedule, nextAt, parseSchedule } from './schedule.ts'
 import type { Schedule } from './schedule.ts'
 
@@ -76,6 +77,7 @@ type Host = Pick<
   | 'userHome'
   | 'modelRuntime'
   | 'extensions'
+  | 'need'
 >
 const owner = {
   ownership: { kind: 'conversation' as const },
@@ -115,7 +117,7 @@ function backend(host: Host) {
           const parent = await runtime.agent(context)
           const profile = a.agent ? await definition(host, a.agent) : undefined
           await runtime.commit(async (tx) => {
-            const child = await createChild(tx, {
+            const child = await host.need(SubagentsApi).createChild(tx, {
               owner: { kind: 'task', taskId: task.id },
               definition: profile,
               parentAgent: parent,
@@ -419,20 +421,16 @@ export const actions = Object.fromEntries(
   ]),
 )
 
-/** What other extensions may ask of the scheduler. */
-export interface AutomationsService {
-  /** When the next enabled automation fires, as epoch milliseconds; undefined when none is planned. */
-  nextDue(): Promise<number | undefined>
-}
-
 export default function automations(
-  host: Host & Pick<ExtensionHost, 'onOpen' | 'service' | 'provide'>,
+  host: Host & Pick<ExtensionHost, 'onOpen' | 'service' | 'implement' | 'want'>,
 ) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(SubagentsApi)
   const status = host.service('scheduler', { state: 'starting', detail: 'durable scheduler' })
   host.onOpen(async () => {
     status.update({ state: 'ready', detail: 'durable scheduler' })
   })
-  host.provide('automations', {
+  host.implement(AutomationsApi, {
     async nextDue() {
       const state = await host.harness().snapshot(Automations, BACKGROUND_CONTEXT)
       const due = Object.values(state?.automations ?? {}).flatMap((a) =>
@@ -440,7 +438,7 @@ export default function automations(
       )
       return due.length ? Math.min(...due) : undefined
     },
-  } satisfies AutomationsService)
+  })
   const api = backend(host)
   return defineExtension({
     name: 'automations',

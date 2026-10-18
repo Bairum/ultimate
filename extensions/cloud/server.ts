@@ -31,9 +31,11 @@ import type {
 } from '../../cloud/protocol.ts'
 import { projectBuilds } from '../../cloud/ui-build.ts'
 import { secretMetadata } from '../../lib/secrets.ts'
-import type { TailscaleService } from '../tailscale/server.ts'
-import { cloudConfig, leaseSettings } from './config.ts'
-import { projectIdentity } from './identity.ts'
+import { AutomationsApi } from '../automations/api.ts'
+import { HealthApi } from '../health/api.ts'
+import { TailscaleApi } from '../tailscale/api.ts'
+import { cloudConfig, leaseSettings } from '../../lib/cloud.ts'
+import { projectIdentity } from '../../lib/project-identity.ts'
 import { startLease } from './lease.ts'
 import type { Lease, LeaseDeps } from './lease.ts'
 import type { CloudState, SyncProgress } from './types.ts'
@@ -185,7 +187,7 @@ export function startSync(
   }
   /** Where this checkout answers on the tailnet, once the `tailscale` extension published it. */
   const tailnet = () => {
-    const published = host.use<TailscaleService>('tailscale')?.status().url
+    const published = host.want(TailscaleApi)?.status().url
     return validTailnet(published) ? published : undefined
   }
   /** Secret names the cloud accepts, and whether that is every one in the store. */
@@ -870,6 +872,10 @@ export async function joinOnStandby(home: string, key: string) {
 }
 
 export default async function cloud(host: ExtensionHost, deps: Partial<LeaseDeps> = {}) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(AutomationsApi)
+  host.want(HealthApi)
+  host.want(TailscaleApi)
   // The process stopping, not a reload of this facet, releases the lease.
   const stopping = host.resource('cloud.process', () => {
     const current: { lease?: Lease } = {}

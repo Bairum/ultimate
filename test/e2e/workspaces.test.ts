@@ -43,8 +43,9 @@ async function reopen(paths: Awaited<ReturnType<typeof repository>>, commands: s
     ...prepared,
     harness: () => opened.harness,
     metadata: Metadata,
-    provide: () => {},
-    use: () => undefined,
+    implement: () => {},
+    need: () => ({}),
+    want: () => undefined,
     projectSettings: async () => ({ isolates: { worktree: { setup: commands } } }),
     extensions: () => [{ name: 'workspaces', enabled: true }],
     resource<T>(key: string, create: () => T): T {
@@ -84,7 +85,7 @@ it.each(['symlinked home mid-setup', 'branch creation before registration'])(
     const host = { ...prepared, harness: () => opened.harness, metadata: (await import('./server/metadata.ts')).Metadata,
       projectSettings: async () => ({ isolates: { worktree: { setup: ${JSON.stringify(commands)} } } }),
       extensions: () => [{ name: 'workspaces', enabled: true }],
-      provide: () => {}, use: () => undefined,
+      implement: () => {}, need: () => ({}), want: () => undefined,
       resource: (key, create) => { if (!resources.has(key)) resources.set(key, create()); return resources.get(key) },
       onOpen: () => {}, onClose: () => {} };
     prepared.registry.install(extension(host));

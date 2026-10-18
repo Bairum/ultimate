@@ -1,7 +1,6 @@
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { defineExtension } from '@earendil-works/pi-durable'
-import { createEventBus } from '@earendil-works/pi-coding-agent'
 import type { ConversationId, JsonObject } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
 import type { ExtensionHost } from '../server/extensions.ts'
@@ -19,7 +18,7 @@ it('shares the root ledger read-only with descendants, saves verdicts, and repla
     faux: true,
   })
   const plan = planExtension({
-    events: createEventBus(),
+    react: () => {},
     metadata: Metadata,
     onOpen: () => {},
   } as unknown as ExtensionHost)
@@ -266,7 +265,7 @@ it('indexes linked children with their task, renames them after it, and backfill
   const openers: (() => Promise<void>)[] = []
   prepared.registry.install(
     planExtension({
-      events: createEventBus(),
+      react: () => {},
       metadata: Metadata,
       harness: () => opened.harness,
       onOpen: (callback: () => Promise<void>) => openers.push(callback),

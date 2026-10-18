@@ -18,14 +18,12 @@ import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- workspace discovery shares the core root watcher
 import { watchRoots } from '../../server/watch-roots.ts'
-import type { ConversationsService } from '../conversations/server.ts'
-import { agentRoots } from '../subagents/agents.ts'
+import { BoardApi } from '../board/api.ts'
+import { ConversationsApi } from '../conversations/api.ts'
+import { LineageApi } from '../lineage/api.ts'
+import { agentRoots } from '../../lib/agents.ts'
+import { WorkspacesApi } from './api.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
-export type WorkspaceService = ReturnType<typeof workspaces> & {
-  git: typeof git
-  doc: typeof Workspaces
-  setupGit(): Promise<void>
-}
 export const order = -200
 export const docs = [Workspaces]
 export const userActions = ['setupGit']
@@ -144,13 +142,17 @@ function watchDefinitions(
   }
 }
 export default function workspaceExtension(host: ExtensionHost) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(BoardApi)
+  host.want(ConversationsApi)
+  host.want(LineageApi)
   const service = workspaces(host)
-  host.provide('workspaces', {
+  host.implement(WorkspacesApi, {
     ...service,
     git,
     doc: Workspaces,
     setupGit: () => setupGit(host),
-  } satisfies WorkspaceService)
+  })
   const resume = () =>
     service.resume(context).catch((error: unknown) => {
       host.notice(`Lander resume failed: ${String(error)}`)
@@ -172,8 +174,7 @@ export default function workspaceExtension(host: ExtensionHost) {
     releaseController = new AbortController()
     const { signal } = releaseController
     releasing = (
-      host.use<ConversationsService>('conversations')?.concluded(context) ??
-      Promise.resolve(new Set<ConversationId>())
+      host.want(ConversationsApi)?.concluded(context) ?? Promise.resolve(new Set<ConversationId>())
     )
       .then((ids) => service.release([...ids], context, signal))
       .catch((error: unknown) => {

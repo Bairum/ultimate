@@ -11,17 +11,24 @@ import {
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { BranchedEvent } from '../lineage/server.ts'
+import { Branched, LineageApi, Rooted } from '../lineage/api.ts'
 import type { LandingSubject } from '../workspaces/types.ts'
-import type { WorkspaceService } from '../workspaces/server.ts'
+import { WorkspacesApi } from '../workspaces/api.ts'
 // oxlint-disable-next-line no-restricted-imports -- conversations publishes the core UI state document
 import { UiState } from '../../server/ui-state.ts'
-import { Summaries, summaryBehavior } from './summary.ts'
-import { summaryModelSetting } from './summary-model.ts'
+import {
+  accountResponse,
+  askSummaryModel,
+  requestSummary,
+  Summaries,
+  summaryBehavior,
+} from './summary.ts'
+import { summaryModel, summaryModelSetting } from './summary-model.ts'
 import { parseSummaryModel } from './summary-model-ref.ts'
 import { updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import { Overview, overviewBehavior } from './overview.ts'
 import { activityBehavior } from './activity.ts'
+import { ConversationsApi } from './api.ts'
 
 export const docs = [Summaries, Overview]
 
@@ -84,7 +91,7 @@ export const actions = {
         ...new Set([...(Array.isArray(previous) ? previous : []), ...ids]),
       ]
     }, context)
-    const kept = (await host.use<WorkspaceService>('workspaces')?.release(ids, context)) ?? []
+    const kept = (await host.want(WorkspacesApi)?.release(ids, context)) ?? []
     return { concluded: ids, kept }
   },
   async resume(args: JsonValue, { host }: ActionContext) {
@@ -172,12 +179,6 @@ async function resumeIn(tx: Tx, ids: ConversationId[]) {
   return removed
 }
 
-export type ConversationsService = {
-  /** What conversation `id` is about now: its title, summary and feature, for a record that outlives a retitle. */
-  subject: (id: ConversationId, caller: Context) => Promise<LandingSubject>
-  concluded: (caller: Context) => Promise<Set<ConversationId>>
-}
-
 export async function subject(
   host: Pick<ExtensionHost, 'harness' | 'metadata'>,
   id: ConversationId,
@@ -196,26 +197,30 @@ export async function subject(
 
 /** Tells each top-level conversation which other conversations work in this project. */
 export default (host: ExtensionHost) => {
-  host.provide('conversations', {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(LineageApi)
+  host.want(WorkspacesApi)
+  host.implement(ConversationsApi, {
     subject: (id, caller) => subject(host, id, caller),
+    summaryModel: () => summaryModel(host),
+    requestSummary: (tx, id, request, model) => requestSummary(tx, host, id, request, model),
+    askSummaryModel,
+    accountResponse,
     concluded: async (caller) => {
       const ids = (await host.uiState(caller))['ext.conversations.concluded']
       return new Set(Array.isArray(ids) ? (ids as ConversationId[]) : [])
     },
-  } satisfies ConversationsService)
-  // A new branch or root is called by its intent until its summary names it.
-  const named = (data: unknown) => {
-    const { tx, id, intent, waitUntil } = data as BranchedEvent
-    waitUntil(
-      (async () => {
-        const title = intent.replace(/\s+/g, ' ').slice(0, 80)
-        ;(await tx.doc(Summaries, id)).generatedTitle = title
-        ;(await tx.doc(host.metadata, id)).title = title
-      })(),
-    )
-  }
-  host.events.on('lineage:branched', named)
-  host.events.on('lineage:rooted', named)
+  })
+  // A new branch or root is called by its intent until its summary names it: lineage titles it so, and marking that
+  // title generated lets the summary replace it. A rename or summary since then chose the title; it stays.
+  host.react('named', [Branched, Rooted], async (tx, { data }) => {
+    const id = data.id as ConversationId
+    if (!(await tx.conversation(id))) return
+    const title = data.intent.replace(/\s+/g, ' ').slice(0, 80)
+    const state = await tx.doc(Summaries, id)
+    if (state.generatedTitle === undefined && (await tx.doc(host.metadata, id)).title === title)
+      state.generatedTitle = title
+  })
   activityBehavior(host)
   overviewBehavior(host)
   /** Whether each conversation is top-level, read once: `owner` and `parent` never change after creation. */

@@ -33,33 +33,14 @@ import { git } from '../../lib/git.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { WorkspaceService } from '../workspaces/server.ts'
+import { WorkspacesApi } from '../workspaces/api.ts'
+import { Branch, Branched, LineageApi, Rooted, Roots } from './api.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 import type { Tree } from './catchup.ts'
 import type { RootEvent } from './types.ts'
-import { projectKey } from '../cloud/identity.ts'
-
-/** The project's roots, each the top of one conversation tree; a fresh project's first conversation is its first. */
-export const Roots = defineDoc<{ roots: number[] }>({
-  kind: 'lineage.roots',
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({ roots: [ROOT_CONVERSATION_ID] }),
-})
+import { projectKey } from '../../lib/project-identity.ts'
 
 export type BranchImage = { data: string; mimeType: string }
-export type BranchState = { from: number; at: number; intent: string }
-/** A branch's origin and prompt; absent on roots and on conversations made otherwise. */
-export const Branch = defineDoc<{ branch?: BranchState }>({
-  kind: 'lineage.branch',
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({}),
-})
 
 /** A conversation's liquid abstract: its `anchor` entry keeps its place in the tally and shows the latest text. */
 export type OpenAbstract = {
@@ -91,17 +72,6 @@ export const Tally = defineDoc<TallyState>({
 })
 
 export const docs = [Roots, Branch, Tally, Seen]
-
-/**
- * `lineage:branched` (a new branch) and `lineage:rooted` carry it: subscribers enlist their own document
- * writes in the new conversation's creation transaction.
- */
-export type BranchedEvent = {
-  tx: Tx
-  id: ConversationId
-  intent: string
-  waitUntil: (write: Promise<void>) => void
-}
 
 const ASK_TOKENS = 8192
 
@@ -562,7 +532,7 @@ export const BranchReceipts = defineDoc<{ branches: Record<string, number> }>({
 /** The project checkout's tip, where new branches start, shared or isolated. */
 function head(host: ExtensionHost) {
   return host
-    .use<WorkspaceService>('workspaces')
+    .want(WorkspacesApi)
     ?.git(host.projectRoot, 'rev-parse', 'HEAD')
     .catch(
       // A project without a Git HEAD can start conversations without a commit baseline.
@@ -659,7 +629,7 @@ async function forkBranch(
   delete agent.tools
   delete agent.modelTools
   if (input.isolated) {
-    const workspaces = host.use<WorkspaceService>('workspaces')
+    const workspaces = host.want(WorkspacesApi)
     if (!workspaces) throw new Error('Isolated branches require workspaces')
     await workspaces.create(tx, fork.id, host.projectRoot)
   }
@@ -673,14 +643,7 @@ async function forkBranch(
   metadata.title = title
   // The prompt is its first input, placed right after this commit: it sorts as asked for now.
   metadata.inputAt = Date.now()
-  const writes: Promise<void>[] = []
-  host.events.emit('lineage:branched', {
-    tx,
-    id: fork.id,
-    intent: prompt,
-    waitUntil: (write) => writes.push(write),
-  } satisfies BranchedEvent)
-  await Promise.all(writes)
+  await host.emit(tx, Branched, { id: fork.id, from, at, intent: prompt })
   const images = input.images?.length ?? 0
   const marker = { branch: fork.id, at, intent: prompt, ...(images ? { images } : {}) }
   if (root !== undefined)
@@ -1086,25 +1049,16 @@ async function refuseTally(tx: Tx, id: ConversationId) {
     throw new Error(`#${id} is a tally and runs no turns; ask @ultimate to start a branch`)
 }
 
-export type LineageService = {
-  branch: (input: BranchInput, ctx: Context) => ReturnType<typeof startBranch>
-  rootOf: (id: number, ctx: Context) => ReturnType<typeof rootOf>
-  leaveNote: (
-    to: number | 'root',
-    text: string,
-    source?: Parameters<typeof leaveNote>[3],
-  ) => ReturnType<typeof leaveNote>
-  branchOf: (id: number, ctx: Context) => ReturnType<typeof branchOf>
-  abstract: (tx: Tx, id: number, input: AbstractInput) => Promise<void>
-}
 export default function lineageExtension(host: ExtensionHost) {
-  host.provide('lineage', {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(WorkspacesApi)
+  host.implement(LineageApi, {
     branch: (input, ctx) => startBranch(host, input, ctx),
     rootOf: (id, ctx) => rootOf(host, id, ctx),
     leaveNote: (to, text, source) => leaveNote(host, to, text, source),
     branchOf: (id, ctx) => branchOf(host, id, ctx),
     abstract,
-  } satisfies LineageService)
+  })
   const { Notify, Prompt } = lineage(host)
   watchSeen(host, context)
   watchTally(host, context)
@@ -1252,15 +1206,11 @@ export default function lineageExtension(host: ExtensionHost) {
                 ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}),
               })
               roots.roots.push(root.id)
+              // Called by its title until its summary names it, like a branch by its intent.
               ;(await tx.doc(host.metadata, root.id)).title = title
-              const writes: Promise<void>[] = []
-              host.events.emit('lineage:rooted', {
-                tx,
-                id: root.id,
-                intent: title,
-                waitUntil: (write) => writes.push(write),
-              } satisfies BranchedEvent)
-              await Promise.all(writes)
+                .replace(/\s+/g, ' ')
+                .slice(0, 80)
+              await host.emit(tx, Rooted, { id: root.id, intent: title })
               receipt.roots[api.callId] = root.id
               return root.id
             }, ctx)

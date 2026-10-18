@@ -127,9 +127,9 @@ Agents use the `message` tool. The prompt section is stable and lists resident n
 
 ## Service
 
-`host.use<BoardService>('board')` exposes `send`, a one-way message from a conversation (the lander's deploy
+`host.want(BoardApi)` exposes `send`, a one-way message from a conversation (the lander's deploy
 handoff), and `answer`, the user's reply to an open message (the questions answer card). Landings and submissions
-append no log items. Import the service type from `server.ts`.
+append no log items. `BoardApi`, `BoardMessage` and the `Board` document live in `api.ts`.
 
 ## UI
 

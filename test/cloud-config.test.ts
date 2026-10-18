@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../server/extensions.ts'
 import cloud from '../extensions/cloud/server.ts'
-import { cloudConfig, leaseSettings } from '../extensions/cloud/config.ts'
+import { cloudConfig, leaseSettings } from '../lib/cloud.ts'
 import { writeJson } from '../lib/json-file.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
 import { temp } from './helpers.ts'
@@ -121,6 +121,7 @@ it('reports a missing token once at host open and never opens a connection', asy
         close = callback
       },
       onRelease: () => {},
+      want: () => undefined,
       resource: <T>(_key: string, create: () => T) => create(),
     } as unknown as ExtensionHost)
     await open!()

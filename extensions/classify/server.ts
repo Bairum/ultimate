@@ -1,7 +1,8 @@
-import type { JsonValue } from '@earendil-works/chord'
 import { defineExtension } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { readSecret } from '../../lib/secrets.ts'
+import { ClassifyApi } from './api.ts'
+import type { ClassifyAnswer, ClassifyService } from './api.ts'
 
 export const secrets = [
   {
@@ -10,35 +11,6 @@ export const secrets = [
     url: 'https://console.typesafe.ai/keys',
   },
 ]
-
-export type ClassifyQuestion =
-  | { type: 'choice'; instructions: JsonValue; criteria: Record<string, JsonValue> }
-  | { type: 'noul'; instructions: JsonValue; criteria?: { true?: JsonValue; false?: JsonValue } }
-  | { type: 'score'; instructions: JsonValue; criteria: JsonValue[] }
-
-export type ClassifyAnswer =
-  | { type: 'choice'; choice: string; confidence: number; probabilities: Record<string, number> }
-  | { type: 'noul'; noul: number }
-  | {
-      type: 'score'
-      score: number
-      confidence: number
-      probabilities: Record<string, number>
-      legend: Record<string, JsonValue>
-    }
-
-export type ClassifyResult = {
-  model: string
-  answers: Record<string, ClassifyAnswer>
-  usage: { inputTokens: number }
-}
-
-export type ClassifyService = {
-  ask(
-    request: { state: JsonValue; questions: Record<string, ClassifyQuestion> },
-    signal: AbortSignal,
-  ): Promise<ClassifyResult>
-}
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -87,6 +59,6 @@ export default function classify(host: ExtensionHost) {
       }
     },
   }
-  host.provide('classify', service)
+  host.implement(ClassifyApi, service)
   return defineExtension({ name: 'classify' })
 }

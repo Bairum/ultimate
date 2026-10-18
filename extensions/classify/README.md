@@ -4,7 +4,7 @@ The service pins `jev-1.14.0`; aliases move and confidence thresholds are tuned 
 
 ## Service contract
 
-Import `ClassifyService` as a type from `server.ts`, then look up `host.use<ClassifyService>('classify')` at call time. A disabled provider returns `undefined`.
+Import `ClassifyApi` from `api.ts`, then call `host.want(ClassifyApi)` at call time. A disabled provider returns `undefined`.
 
 `ask({ state, questions }, signal)` accepts JSON state and a map of typed questions:
 

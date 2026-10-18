@@ -7,9 +7,9 @@ import { prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import subagents from '../extensions/subagents/server.ts'
-import type { SubagentsService } from '../extensions/subagents/server.ts'
+import type { SubagentsService } from '../extensions/subagents/api.ts'
 import { machineRoot, primaryAgent, residentHere } from '../lib/machine.ts'
-import { parseDefinition } from '../extensions/subagents/agents.ts'
+import { parseDefinition } from '../lib/agents.ts'
 import {
   cancel,
   createWatcher,
@@ -56,10 +56,13 @@ async function host(project: (userHome: string) => string) {
       harness: () => open.harness,
       metadata: Metadata,
       projectSettings: async () => ({}),
-      provide: (_name, value) => {
+      implement: (_api, value) => {
         service = value as SubagentsService
       },
-      use: () => undefined,
+      need: () => {
+        throw new Error('Not used')
+      },
+      want: () => undefined,
       resource: (_key, create) => create(),
       extensions: () => [],
       notice: () => {},
@@ -382,7 +385,7 @@ it('wakes @sync once per ended transition involving this machine, also across re
   // A restart forgets the watcher's memory; Pi's requestId keeps @sync's input single.
   const machine = await host((home) => machineRoot(home))
   const extensionHost = {
-    use: () => machine.service,
+    want: () => machine.service,
     harness: () => machine.open.harness,
   } as unknown as ExtensionHost
   const restarted = createWatcher(deps, (input) => submitMove(extensionHost, input))

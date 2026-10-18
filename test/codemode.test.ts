@@ -6,6 +6,7 @@ import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import {
+  copyApis,
   fauxServer as createServer,
   until,
   temp,
@@ -34,6 +35,7 @@ async function fixture() {
     recursive: true,
   })
   await cp(resolve('extensions/faux'), join(ultimateRoot, 'extensions/faux'), { recursive: true })
+  await copyApis(ultimateRoot)
   await mkdir(join(ultimateRoot, 'web'), { recursive: true })
   await linkDependencies(ultimateRoot)
   await writeFile(
@@ -45,10 +47,7 @@ async function fixture() {
   await writeFile(
     join(ultimateRoot, 'extensions/codemode/server.ts'),
     (await readFile(resolve('extensions/codemode/server.ts'), 'utf8'))
-      .replace(
-        "'../subagents/agents.ts'",
-        JSON.stringify(resolve('extensions/subagents/agents.ts')),
-      )
+      .replace("'../../lib/agents.ts'", JSON.stringify(resolve('lib/agents.ts')))
       .replace("'../../lib/api-files.ts'", JSON.stringify(resolve('lib/api-files.ts'))),
   )
   const options = {
@@ -211,13 +210,21 @@ it('discovers extension contracts: summaries first, then one api.ts by name', as
     try { await ultimate.api('coding-tools') } catch (error) { unknown = error.message }
     return { apis, source: await ultimate.api('contract-test'), unknown };`,
   )
-  expect(result.data.details.value).toEqual({
-    apis: [
-      { name: 'contract-test', summary: 'Contract test: a fixture with a documented contract.' },
-    ],
-    source,
-    unknown: 'No enabled extension "coding-tools" with an api.ts; known: contract-test',
+  const value = result.data.details.value as {
+    apis: { name: string; summary: string }[]
+    source: string
+    unknown: string
+  }
+  // The fixture's built-ins bring their own contracts; each has a summary.
+  expect(value.apis).toContainEqual({
+    name: 'contract-test',
+    summary: 'Contract test: a fixture with a documented contract.',
   })
+  for (const api of value.apis) expect(api.summary).not.toBe('')
+  expect(value.source).toBe(source)
+  expect(value.unknown).toMatch(
+    /^No enabled extension "coding-tools" with an api\.ts; known: .*\bcontract-test\b/,
+  )
 })
 
 it('reserves trust and secret writes for the UI while allowing normal actions', async () => {

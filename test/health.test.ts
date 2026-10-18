@@ -27,7 +27,7 @@ import {
 } from '../extensions/health/store.ts'
 import type { HealthEntry } from '../extensions/health/store.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
-import { removeTemps, temp, until } from './helpers.ts'
+import { apis, removeTemps, temp, until } from './helpers.ts'
 
 afterEach(removeTemps)
 
@@ -235,18 +235,25 @@ it('heartbeat forgets providers without a login here, so their old failures stop
   expect(await heartbeat(deps)).toEqual({ pruned: [], pinged: [] })
 })
 
+/** A login host whose `want` finds the health extension installed on the same user home and models. */
+function withHealth<T extends Pick<ExtensionHost, 'userHome' | 'modelRuntime'>>(host: T) {
+  const services = apis()
+  healthExtension({ ...host, ...services, faux: true } as unknown as ExtensionHost)
+  return { ...host, want: services.want }
+}
+
 it('a failing default provider is no model login for a move', async () => {
   const home = await temp()
-  const login = () =>
-    modelLogin({
-      faux: undefined,
-      userHome: home,
-      settings: { getDefaultProvider: () => 'anthropic' } as unknown as ExtensionHost['settings'],
-      modelRuntime: {
-        getProviderAuthStatus: () => ({ configured: true }),
-        getAvailable: async () => [],
-      } as unknown as ExtensionHost['modelRuntime'],
-    })
+  const host = withHealth({
+    faux: undefined,
+    userHome: home,
+    settings: { getDefaultProvider: () => 'anthropic' } as unknown as ExtensionHost['settings'],
+    modelRuntime: {
+      getProviderAuthStatus: () => ({ configured: true }),
+      getAvailable: async () => [],
+    } as unknown as ExtensionHost['modelRuntime'],
+  })
+  const login = () => modelLogin(host)
   expect(await login()).toEqual({ provider: 'anthropic', ok: true })
   await record(home, 'anthropic', { lastOk: NOW, lastFail: NOW + 1, error: 'invalid_grant' })
   const failing = await login()
@@ -262,7 +269,7 @@ it('a move confirms a recorded failure with a ping, so a stale one never blocks 
   const home = await temp()
   let answers: 'stop' | 'error' = 'stop'
   const pinged: string[] = []
-  const host = {
+  const host = withHealth({
     faux: undefined,
     userHome: home,
     settings: { getDefaultProvider: () => 'anthropic' } as unknown as ExtensionHost['settings'],
@@ -277,7 +284,7 @@ it('a move confirms a recorded failure with a ping, so a stale one never blocks 
         }
       },
     } as unknown as ExtensionHost['modelRuntime'],
-  }
+  })
   // A failure long ago, no heartbeat since: the move's ping finds the provider working and clears it.
   await record(home, 'anthropic', { lastFail: NOW, error: 'overloaded' })
   expect(await modelLogin(host)).toMatchObject({ ok: false, error: 'overloaded' })
@@ -357,8 +364,7 @@ it("Ultimate's logout resets the provider's health", async () => {
   const host = {
     userHome: home,
     faux: true,
-    provide: (name: string, value: unknown) => services.set(name, value),
-    use: (name: string) => services.get(name),
+    ...apis(services),
     modelRuntime: { logout: async (provider: string) => void logouts.push(provider) },
   } as unknown as ExtensionHost
   healthExtension(host)

@@ -24,7 +24,7 @@ The Tailscale panel (palette: `Tailscale…`) shows the `status` action, read wh
 
 While ready, the title bar shows `● tailnet`; hover for the URL, click to open the panel.
 
-Other extensions read the status through the `tailscale` service, `host.use<TailscaleService>('tailscale')?.status()`; `instance` takes the DNS name of its `url` for its previews' tailnet addresses.
+Other extensions read the status through `TailscaleApi` (`api.ts`), `host.want(TailscaleApi)?.status()`; `instance` takes the DNS name of its `url` for its previews' tailnet addresses.
 
 ## Stable ports, handoff, and recovery
 

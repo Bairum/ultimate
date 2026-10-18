@@ -25,7 +25,7 @@ import type { projectBuilds } from '../../cloud/ui-build.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- a stop release holds storage's lock, which a swapped-in core owns
 import { acquireLock } from '../../server/lock.ts'
-import type { AutomationsService } from '../automations/server.ts'
+import { AutomationsApi } from '../automations/api.ts'
 import { readSecret, secretMetadata } from '../../lib/secrets.ts'
 import { modelLogin, noLogin } from './login.ts'
 import type { ModelLogin } from './types.ts'
@@ -860,7 +860,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   /** No foreground task runs and no automation is due within the idle threshold. */
   const idle = async (now: number) => {
     if ((await busyTasks()) > 0) return false
-    const due = await host.use<AutomationsService>('automations')?.nextDue()
+    const due = await host.want(AutomationsApi)?.nextDue()
     return due === undefined || due > now + options.idleRelease * 60_000
   }
   // A move's hold occupies the queue; idle checks would only pile up behind it.

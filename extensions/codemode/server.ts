@@ -29,7 +29,7 @@ import type {
   ToolExecutionResult,
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { discoverAgents } from '../subagents/agents.ts'
+import { discoverAgents } from '../../lib/agents.ts'
 import { apiSource, apiSummaries } from '../../lib/api-files.ts'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 

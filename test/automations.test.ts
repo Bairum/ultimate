@@ -11,9 +11,12 @@ import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import automations, { actions, Automations } from '../extensions/automations/server.ts'
-import type { Automation, AutomationsService } from '../extensions/automations/server.ts'
+import type { Automation } from '../extensions/automations/server.ts'
+import type { AutomationsService } from '../extensions/automations/api.ts'
 import type { ActionContext } from '../server/actions.ts'
-import { temp, until as waitFor } from './helpers.ts'
+import type { SubagentsService } from '../extensions/subagents/api.ts'
+import { createChild } from '../extensions/subagents/children.ts'
+import { apis, temp, until as waitFor } from './helpers.ts'
 
 // Advance scheduler time while the shared helper measures IO against a real deadline.
 const until = (test: () => boolean | Promise<boolean>, timeout = 7000) =>
@@ -25,6 +28,7 @@ afterEach(async () => {
   vi.useRealTimers()
 })
 async function fixture() {
+  const provided = new Map<string, unknown>()
   const root = await temp('ultimate-automations-')
   const userHome = await temp()
   await mkdir(join(root, 'agents'))
@@ -71,9 +75,11 @@ async function fixture() {
     harness: () => opened.harness,
     metadata: Metadata,
     extensions: () => [{ name: 'subagents', enabled }],
-    provide: (name: string, value: unknown) => provided.set(name, value),
+    ...apis(provided),
   }
-  const provided = new Map<string, unknown>()
+  provided.set('subagents', {
+    createChild,
+  } satisfies Partial<SubagentsService>)
   const extension = automations(host as unknown as Parameters<typeof automations>[0])
   prepared.registry.install(extension)
   const route: FauxResponseFactory = (transcript) => {

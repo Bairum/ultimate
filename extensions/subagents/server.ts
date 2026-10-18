@@ -11,7 +11,6 @@ import {
   AssistantEntry,
   configure,
   ToolResultEntry,
-  defineDoc,
   defineExtension,
   defineTask,
   defineTool,
@@ -40,54 +39,14 @@ import {
   deleteDefinition,
   discoverAgents,
   saveDefinition,
-} from './agents.ts'
+} from '../../lib/agents.ts'
 import { createChild } from './children.ts'
 import { exec } from '../../lib/exec.ts'
 import { residentHere } from '../../lib/machine.ts'
-import type { WorkspaceService } from '../workspaces/server.ts'
-import { requestSummary } from '../conversations/summary.ts'
-import { summaryModel } from '../conversations/summary-model.ts'
+import { WorkspacesApi } from '../workspaces/api.ts'
+import { ConversationsApi } from '../conversations/api.ts'
+import { Standing, Subagents, SubagentsApi } from './api.ts'
 
-export const Subagents = defineDoc<{
-  agents: Record<
-    string,
-    {
-      conversationId: ConversationId
-      agent: string
-      background: boolean
-      reported: EntryId[]
-    }
-  >
-  actions: Record<
-    string,
-    {
-      conversationId: ConversationId
-      reporter: TaskId
-      answer?: EntryId
-      status?: string
-      retryRequest?: string
-    }
-  >
-}>({
-  kind: 'ultimate.subagents',
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({ agents: {}, actions: {} }),
-})
-export const Standing = defineDoc<Record<string, ConversationId>>({
-  kind: 'ultimate.standing-agents',
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({}),
-})
-export type SubagentsService = {
-  residents(ctx: Context): Promise<{ name: string; description: string }[]>
-  standing(name: string, ctx: Context): Promise<ConversationId>
-}
 export const docs = [Subagents, Standing]
 const Anchor = defineTask<null, { phase: 'done' }, null>({
   name: 'ultimate.subagent-anchor',
@@ -455,9 +414,7 @@ export const actions = {
   async standing(args: JsonValue, { host }: ActionContext) {
     const { name } = (args ?? {}) as Record<string, JsonValue>
     if (typeof name !== 'string') throw new Error('name is required')
-    const service = host.use<SubagentsService>('subagents')
-    if (!service) throw new Error('Subagents service is unavailable')
-    return service.standing(name, BACKGROUND_CONTEXT)
+    return host.need(SubagentsApi).standing(name, BACKGROUND_CONTEXT)
   },
   /**
    * The definitions without their instructions and the files that failed to parse, and for the config view the main
@@ -595,8 +552,9 @@ export default function subagents(
     | 'modelRuntime'
     | 'home'
     | 'projectSettings'
-    | 'use'
-    | 'provide'
+    | 'need'
+    | 'want'
+    | 'implement'
     | 'resource'
     | 'extensions'
     | 'notice'
@@ -605,13 +563,17 @@ export default function subagents(
     | 'scanSubmissions'
   >,
 ) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(ConversationsApi)
+  host.want(WorkspacesApi)
   const residentDefinitions = async () =>
     (
       await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
     ).definitions.filter((definition) =>
       residentHere(definition.resident, host.projectRoot, host.userHome),
     )
-  host.provide('subagents', {
+  host.implement(SubagentsApi, {
+    createChild,
     async residents(_ctx) {
       return (await residentDefinitions()).map(({ name, description }) => ({ name, description }))
     },
@@ -647,8 +609,8 @@ export default function subagents(
         return id
       }, ctx)
     },
-  } satisfies SubagentsService)
-  const service = () => host.use<WorkspaceService>('workspaces')
+  })
+  const service = () => host.want(WorkspacesApi)
   const Reporter = createReporter()
   let unsubscribe: (() => void) | undefined
   let recovery = Promise.resolve()
@@ -1008,25 +970,16 @@ Available definitions:
                 view.dispose()
               }
             }
-            const summaries =
-              definition &&
-              host
-                .extensions()
-                .some(
-                  (extension) =>
-                    extension.enabled &&
-                    extension.server?.docs.includes('ultimate.conversation-summaries'),
-                )
-            const model = summaries ? await summaryModel(host) : undefined
+            const summaries = definition ? host.want(ConversationsApi) : undefined
+            const model = await summaries?.summaryModel()
             const action = await api.commit(async (tx) => {
               const state = await tx.doc(Subagents, api.conversationId)
               if (state.actions[api.callId]) return { ...state.actions[api.callId] }
               let conversationId = args.id as ConversationId
               if (definition) {
                 if (summaries)
-                  await requestSummary(
+                  await summaries.requestSummary(
                     tx,
-                    host,
                     api.conversationId,
                     { reason: 'spawn', answer: assistant!, agent: definition.name, task: text },
                     model,

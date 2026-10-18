@@ -19,9 +19,9 @@ import { isMachineHome } from '../../lib/machine.ts'
 import { updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
-import type { SubagentsService } from '../subagents/server.ts'
-import type { LineageService } from '../lineage/server.ts'
-import type { WorkspaceService } from '../workspaces/server.ts'
+import { SubagentsApi } from '../subagents/api.ts'
+import { LineageApi } from '../lineage/api.ts'
+import { WorkspacesApi } from '../workspaces/api.ts'
 
 export const Starts = defineDoc<{ roots: Record<string, number> }>({
   kind: 'onboarding.starts',
@@ -150,7 +150,7 @@ export const actions: Record<string, ExtensionAction> = {
     const card = args && typeof args === 'object' && !Array.isArray(args) ? args.card : undefined
     if (card !== 'project' && card !== 'git') throw new Error('Expected project or git card')
     refuseMachineHome(host)
-    const service = host.use<SubagentsService>('subagents')
+    const service = host.want(SubagentsApi)
     if (!service) throw new Error('Subagents are required for onboarding')
     const id = await service.standing('ultimate', context)
     const conversation = (await host.harness().conversation(id, context))!
@@ -178,7 +178,7 @@ export const actions: Record<string, ExtensionAction> = {
     )
       throw new Error('Expected root id and optional instructions')
     refuseMachineHome(host)
-    const lineage = host.use<LineageService>('lineage')
+    const lineage = host.want(LineageApi)
     const root =
       input?.root ??
       (conversationId === undefined ? undefined : await lineage?.rootOf(conversationId, context)) ??
@@ -190,7 +190,7 @@ export const actions: Record<string, ExtensionAction> = {
     if (existing !== undefined) return { id: existing }
     if (!lineage || (await lineage.rootOf(root, context)) !== root)
       throw new Error('Expected a project root')
-    const service = host.use<SubagentsService>('subagents')
+    const service = host.want(SubagentsApi)
     if (!service) throw new Error('Subagents are required for onboarding')
     const id = await service.standing('ultimate', context)
     const project = await host.projectSetup()
@@ -298,7 +298,7 @@ export const actions: Record<string, ExtensionAction> = {
           await actions.applyFirstRun({ extensions: payload.extensions! }, actionContext)
         else if (card === 'project') await actions.decide({ local: payload.local! }, actionContext)
         else if (payload.initialize) {
-          const workspaces = host.use<WorkspaceService>('workspaces')
+          const workspaces = host.want(WorkspacesApi)
           if (!workspaces) throw new Error('Git setup requires workspaces')
           await workspaces.setupGit()
         }
@@ -466,6 +466,10 @@ export const ChoiceEntry = defineEntry<{ card: string; summary: string; toolCall
 )
 
 export default function onboarding(host: ExtensionHost) {
+  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  host.want(LineageApi)
+  host.want(SubagentsApi)
+  host.want(WorkspacesApi)
   return defineExtension({
     name: 'onboarding',
     tools: [

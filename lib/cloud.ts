@@ -1,7 +1,15 @@
+/** The user's cloud sync settings: the replica to sync with and when a lease is let go. */
 import { hostname } from 'node:os'
-import { readSecret } from '../../lib/secrets.ts'
-import { readSettings, userSettingsPath } from '../../lib/settings.ts'
-import type { ExtensionHost } from '../../server/extensions.ts'
+import { readSecret } from './secrets.ts'
+import { readSettings, userSettingsPath } from './settings.ts'
+import type { ExtensionHost } from '../server/extensions.ts'
+
+/** `https://host` for the user's `wss://host/...` `cloud.url`. */
+export function httpBase(url: string) {
+  const endpoint = new URL(url)
+  endpoint.protocol = endpoint.protocol === 'ws:' ? 'http:' : 'https:'
+  return endpoint.origin
+}
 
 /** The user's `cloud` settings object; project settings are never read. */
 async function userCloudSettings(host: Pick<ExtensionHost, 'userHome'>) {

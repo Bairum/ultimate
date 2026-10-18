@@ -7,9 +7,10 @@ subscribe with `/api/events?conversation=<id>&docs=<kind>,<kind>` for `doc` snap
 The Documents tab shows each exported kind through the renderer a web facet registers (`documents: [{ kind, title, component }]`), or as JSON.
 Local imported modules reload with the facet. Failed loads leave the previous version installed.
 
-Extensions coordinate ephemeral happenings with `host.events` (Pi's process-local bus) or browser `events`/`useEvent`
-from `@/sdk`; these are separate, unbridged buses. Use `<extension>:<event>` channels, reserve `ultimate:*` for core,
-and keep durable state in documents. `useReady()` becomes true once the initial facets settle and a system snapshot
+Server extensions coordinate through typed contracts in each provider's `api.ts`: services, documents and durable
+events (below); lint rejects `host.provide`, `host.use` and `host.events` in `extensions/`. The browser has its own
+ephemeral `events`/`useEvent` bus from `@/sdk`. Use `<extension>:<event>` channels there, reserve `ultimate:*` for
+core, and keep durable state in documents. `useReady()` becomes true once the initial facets settle and a system snapshot
 arrives, stays true across hot reloads, and exposes failed facet names. Overlays render as facets install, even while
 others load; see [Events](../extensions/README.md#events).
 
@@ -43,8 +44,22 @@ setup survives provider reloads. Every method call goes through one internal `ca
 the dependency instead, since the provider may load later, and the missing provider becomes an extension diagnostic);
 `want` returns undefined. `host.catalogue()` and codemode's `ultimate.catalogue()` list each API's provider, needs
 and wants, the missing providers and the dependency cycles (each a sorted group of extensions that depend on each
-other in a cycle). `host.provide`/`host.use` are the untyped predecessors and
-share the provider table.
+other in a cycle).
+
+An extension's `api.ts` is its whole server-side surface for others, and agents discover APIs by reading these files,
+so lint (`lint/ultimate.ts`) keeps them small and documented:
+
+- `api-file-shape`: the file starts with a doc comment on the extension's intent, its first sentence the one-line
+  summary. It holds only imports (runtime ones of `shared/`, packages and other extensions' `api.ts`; anything else
+  with `import type`; no `node:*`), types, and `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)`.
+  Every exported token and every member of a service type passed to `defineApi` has a doc comment saying what it does
+  and when to use it.
+- `api-naming`: `defineApi<…>()('<folder>')` and `defineEvent('<folder>.<event>')`.
+- `api-only-imports`: a server-side `.ts` file imports another extension's runtime code only from its `api.ts`; types
+  come with `import type`, pure helpers from `lib/`.
+- `no-raw-services`: no `host.provide`, `host.use` or `host.events` in `extensions/`.
+
+Browser `.tsx` files still declare their imports of other extensions in `ultimate/extension-imports`.
 
 Pick the channel by what crosses it: services for calls between extensions, documents for durable state, durable
 events (above) for "this happened", actions for the UI and user boundary.

@@ -418,7 +418,7 @@ export async function machine(
     },
     onOpen: (callback) => openers.add(callback),
     onRelease: (callback) => releasers.add(callback),
-    use: () => undefined,
+    want: () => undefined,
     conversations: () => [],
     system: () =>
       ({ process: { url: 'http://127.0.0.1:4800' } }) as unknown as ReturnType<
