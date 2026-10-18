@@ -64,6 +64,9 @@ document, tools and model-facing text, where agents and stored entries already u
   source answer. `wake` (default true) submits a follow-up placed as `lineage.finished`; `wake: false` leaves a note
   with `source: 'finished'`. Request id
   `lineage:notify:<target>:<task>` deduplicates delivery; calling again for the same id aborts the pending task.
+  The caller's `lineage.notified` `{ answers: { [target]: entryId } }` records the answer entry each delivery carried;
+  when the idle target's newest own answer is that one, the task watches commits for the target's next entry and
+  waits for its next idle instead of repeating it.
 - **Catch-up on resume**: `lineage.seen` `{ main?, at?, tally? }` tracks the target commit and last accounted-for root
   entry. Branch creation seeds `tally` to the position its fork inherits: the newest root entry in its history up to
   the fork point, or the `data.tally` of the newest catch-up note there, which every catch-up records. Without either

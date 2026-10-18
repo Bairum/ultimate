@@ -1,5 +1,5 @@
 import type { Context, JsonValue } from '@earendil-works/chord'
-import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
+import { awaitWithContext, BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import type { Message, Models, ModelThinkingLevel } from '@earendil-works/pi-ai'
 import { estimateMessageTokens, estimateTextTokens } from '@earendil-works/pi-ai/utils/estimate'
@@ -387,7 +387,7 @@ function lineage(host: ExtensionHost) {
   })
   const Notify = defineTask<
     { target: ConversationId; wake: boolean },
-    { phase: 'wait' } | { phase: 'deliver'; title?: string; text: string },
+    { phase: 'wait' } | { phase: 'deliver'; title?: string; text: string; answer: number },
     null
   >({
     name: 'lineage.notify',
@@ -396,16 +396,43 @@ function lineage(host: ExtensionHost) {
     phases: {
       wait: async (task, runtime, ctx) => {
         const { target } = task.input
-        await (await runtime.conversation(target, ctx))?.waitForIdle(ctx)
-        // A fork inherits its source's entries; only an answer written in the target itself counts as its own.
-        const view = await runtime.context(target, ctx)
         let said = ''
-        for (let index = view.entries.length - 1; index >= 0 && !said; index--) {
-          if (view.entries[index].conversationId !== target) continue
-          const answer = view.contributions[index].findLast(
-            (message) => message.role === 'assistant' && contentText(message.content).trim(),
-          )
-          if (answer) said = contentText(answer.content).trim()
+        let answerId = 0
+        for (;;) {
+          // Subscribed before reading, so an entry the target writes after the read still ends the wait below.
+          const written = Promise.withResolvers<void>()
+          const unsubscribe = host.harness().subscribeCommits((publication) => {
+            if (
+              publication.changes.some(
+                (change) => change.type === 'entry' && change.value.conversationId === target,
+              )
+            )
+              written.resolve()
+          })
+          try {
+            await (await runtime.conversation(target, ctx))?.waitForIdle(ctx)
+            // A fork inherits its source's entries; only an answer written in the target itself counts as its own.
+            const view = await runtime.context(target, ctx)
+            said = ''
+            answerId = 0
+            for (let index = view.entries.length - 1; index >= 0 && !said; index--) {
+              if (view.entries[index].conversationId !== target) continue
+              const answer = view.contributions[index].findLast(
+                (message) => message.role === 'assistant' && contentText(message.content).trim(),
+              )
+              if (answer) {
+                said = contentText(answer.content).trim()
+                answerId = view.entries[index].id
+              }
+            }
+            const delivered = (await host.harness().snapshot(Notified, runtime.conversationId, ctx))
+              ?.answers[target]
+            // This caller already has that answer: wait for the target to write again, then for its next idle.
+            if (delivered === undefined || answerId > delivered) break
+            await awaitWithContext(written.promise, ctx)
+          } finally {
+            unsubscribe()
+          }
         }
         const title = host.conversations().find((summary) => summary.id === target)?.title
         await runtime.commit(
@@ -419,6 +446,7 @@ function lineage(host: ExtensionHost) {
                   ? `${said.slice(0, FINISHED_CHARS)}…`
                   : said
                 : 'It gave no answer.',
+              answer: answerId,
             },
           }),
           ctx,
@@ -426,7 +454,11 @@ function lineage(host: ExtensionHost) {
       },
       deliver: async (task, runtime, ctx) => {
         const { target, wake } = task.input
-        const { title, text } = task.state.checkpoint as { title?: string; text: string }
+        const { title, text, answer } = task.state.checkpoint as {
+          title?: string
+          text: string
+          answer: number
+        }
         const requestId = `lineage:notify:${target}:${task.id}`
         if (wake)
           await (await runtime.conversation(runtime.conversationId, ctx))!.submit(
@@ -449,10 +481,10 @@ function lineage(host: ExtensionHost) {
             ...(title ? { data: { title } } : {}),
             requestId,
           })
-        await runtime.commit(
-          () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
-          ctx,
-        )
+        await runtime.commit(async (tx) => {
+          ;(await tx.doc(Notified, runtime.conversationId)).answers[target] = answer
+          return { status: 'terminal', outcome: { status: 'completed', result: null } }
+        }, ctx)
       },
     },
     abort: (_task, runtime, ctx) =>
@@ -460,6 +492,19 @@ function lineage(host: ExtensionHost) {
   })
   return { Notify, Prompt }
 }
+
+/**
+ * Per target, the answer entry a notify last delivered to this conversation (`0`: it had none), so a re-armed notify
+ * waits for a newer one instead of repeating it. A fork keeps it with the deliveries it inherits.
+ */
+const Notified = defineDoc<{ answers: Record<string, number> }>({
+  kind: 'lineage.notified',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'current',
+  initial: () => ({ answers: {} }),
+})
 
 /** How much of the finished conversation's last answer a notify delivers. */
 const FINISHED_CHARS = 1500
@@ -1054,7 +1099,7 @@ export default function lineageExtension(host: ExtensionHost) {
       defineTool({
         name: 'notify',
         description:
-          'Get told when conversation `id` finishes: once it and its subagents are idle (at once if it already is), you receive "#id finished" with its title and last answer. `wake` (default true) starts your next run with it; `wake: false` leaves it as a note you read with your next input. Calling it again for the same id replaces the earlier request.',
+          'Get told when conversation `id` finishes: once it and its subagents are idle (at once if it already is), you receive "#id finished" with its title and last answer. An answer you already received is not sent again: you are told when it next finishes. `wake` (default true) starts your next run with it; `wake: false` leaves it as a note you read with your next input. Calling it again for the same id replaces the earlier request.',
         parameters: Type.Object({
           id: Type.Integer({ minimum: 1 }),
           wake: Type.Optional(Type.Boolean()),

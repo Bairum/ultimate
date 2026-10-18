@@ -63,6 +63,38 @@ it.concurrent('leaves a note without waking the caller when wake is false', asyn
   ).toBeUndefined()
 })
 
+it.concurrent('re-armed on an idle target, waits for its next answer instead of repeating one', async () => {
+  const { server } = await notifyFixture()
+  const other = await second(server)
+  await ask(server, other.id, 'First')
+  const finished = async () =>
+    (await server.root.context(context)).entries.filter(
+      (entry) => entry.kind === 'lineage.finished' || entry.kind === 'lineage.note',
+    )
+  await ask(server, ROOT_CONVERSATION_ID, `NOTIFY ${JSON.stringify({ id: other.id })}`)
+  await until(async () => (await pendingNotifies(server)).length === 0)
+  await server.root.waitForIdle(context)
+  expect((await finished()).map((entry) => entry.data)).toEqual([
+    { from: other.id, title: 'First', text: 'echo First' },
+  ])
+
+  // Both modes stay pending while the target is idle with the answer already delivered.
+  await ask(server, ROOT_CONVERSATION_ID, `NOTIFY ${JSON.stringify({ id: other.id })}`)
+  await server.root.waitForIdle(context)
+  expect(await pendingNotifies(server)).toHaveLength(1)
+  await ask(server, ROOT_CONVERSATION_ID, `NOTIFY ${JSON.stringify({ id: other.id, wake: false })}`)
+  await server.root.waitForIdle(context)
+  expect(await pendingNotifies(server)).toHaveLength(1)
+  expect(await finished()).toHaveLength(1)
+
+  await ask(server, other.id, 'Second')
+  await until(async () => (await pendingNotifies(server)).length === 0)
+  const delivered = await finished()
+  expect(delivered).toHaveLength(2)
+  expect(delivered[1].kind).toBe('lineage.note')
+  expect(delivered[1].data).toMatchObject({ from: other.id, text: 'echo Second' })
+})
+
 it.concurrent('keeps one pending notify per target and delivers it once across a reopen', async () => {
   const { server, home } = await notifyFixture()
   const other = await second(server)

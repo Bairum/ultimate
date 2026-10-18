@@ -115,7 +115,8 @@ export async function notifyFixture(reopen?: string) {
   const hold = Promise.withResolvers<void>()
   const route: FauxResponseFactory = async (transcript, options) => {
     server.host.faux!.appendResponses([route])
-    const last = transcript.messages.at(-1)!
+    // A system prompt that changed since the last run follows the history.
+    const last = transcript.messages.findLast((message) => message.role !== 'system')!
     const text = textOf(last.content)
     if (last.role === 'toolResult') return fauxAssistantMessage(`Tool: ${text}`)
     if (text.startsWith('NOTIFY '))
