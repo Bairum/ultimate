@@ -11,6 +11,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type {
   ConversationId,
+  Cursor,
   EntryId,
   GenerationResult,
   SubmissionId,
@@ -24,12 +25,7 @@ import type { JsonValue } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import { BACKGROUND_CONTEXT as context, withAbortSignal } from '@earendil-works/chord/context'
-import {
-  accountResponse,
-  askSummaryModel,
-  currentAnswer,
-  resetAfter,
-} from '../conversations/summary.ts'
+import { accountResponse, askSummaryModel } from '../conversations/summary.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import { summaryModel } from '../conversations/summary-model.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
@@ -43,7 +39,7 @@ export const BoardQuestions = defineDoc<{
   asked: Record<string, Question[]>
   /** The newest @ultimate generation whose final answer was handed to extraction. */
   yielded?: number
-  /** Questions in @ultimate's latest final answer to a typed input; a newer answer replaces or clears them. */
+  /** Questions stay open until typed user input, reset, or a card answer. */
   reply?: { conversation: number; entry: number; questions: Question[] }
 }>({
   kind: 'questions.board',
@@ -57,18 +53,36 @@ export const docs = [BoardQuestions]
 export type QuestionsService = {
   request(tx: Tx, message: BoardMessage): Promise<void>
 }
-/**
- * An input or reset after @ultimate's asking answer ends its card, as its transcript shows it; an answer that is
- * extracted replaces or clears the card itself.
- */
+/** Board deliveries have their own entry kinds; only pi.user and reset supersede a question. */
+async function answerOpen(tx: Tx, conversation: ConversationId, answer: EntryId) {
+  let cursor: Cursor | undefined
+  do {
+    const page = await tx.scanEntries(
+      { conversationId: conversation, minEntryId: (answer + 1) as EntryId },
+      64,
+      cursor,
+    )
+    if (
+      page.items.some(
+        (entry) =>
+          entry.conversationId === conversation &&
+          (entry.kind === 'pi.user' || entry.kind === 'pi.reset'),
+      )
+    )
+      return false
+    cursor = page.next
+  } while (cursor !== undefined)
+  return true
+}
+/** End the stored card only when the user superseded it. */
 async function endFollowed(tx: Tx, conversation: ConversationId) {
   const state = await tx.doc(BoardQuestions, ROOT_CONVERSATION_ID)
   const reply = state.reply
   if (reply?.conversation !== conversation) return
-  if (!(await currentAnswer(tx, conversation, reply.entry as EntryId))) delete state.reply
+  if (!(await answerOpen(tx, conversation, reply.entry as EntryId))) delete state.reply
 }
-/** A reset after @ultimate's asking answer ends its card: no generation follows an idle reset to end it. */
-async function endReset(host: ExtensionHost) {
+/** Typed input and idle resets end the card without waiting for a generation. */
+async function endSuperseded(host: ExtensionHost) {
   const reply = (await host.harness().snapshot(BoardQuestions, ROOT_CONVERSATION_ID, context))
     ?.reply
   if (!reply) return
@@ -77,7 +91,7 @@ async function endReset(host: ExtensionHost) {
     const current = state.reply
     if (
       current &&
-      (await resetAfter(tx, current.conversation as ConversationId, current.entry as EntryId))
+      !(await answerOpen(tx, current.conversation as ConversationId, current.entry as EntryId))
     )
       delete state.reply
   }, context)
@@ -259,7 +273,7 @@ export const actions = {
       const reply = state.reply
       if (
         reply?.entry !== data.entryId ||
-        !(await currentAnswer(tx, reply.conversation as ConversationId, reply.entry as EntryId))
+        !(await answerOpen(tx, reply.conversation as ConversationId, reply.entry as EntryId))
       )
         throw new Error(NOT_OPEN)
       checkAnswers(data.answers, reply.questions)
@@ -382,7 +396,7 @@ export default function questionsExtension(host: ExtensionHost) {
         await runtime.commit(async (tx) => {
           await accountResponse(tx, runtime.conversationId, response)
           // A newer input supersedes this answer; its own extraction decides the card.
-          if (!(await currentAnswer(tx, runtime.conversationId, answer))) return terminal
+          if (!(await answerOpen(tx, runtime.conversationId, answer))) return terminal
           const state = await tx.doc(BoardQuestions, ROOT_CONVERSATION_ID)
           if (questions.length)
             state.reply = { conversation: runtime.conversationId, entry: answer, questions }
@@ -396,16 +410,21 @@ export default function questionsExtension(host: ExtensionHost) {
   let stop: (() => void) | undefined
   const ending = new Set<Promise<void>>()
   const end = () => {
-    const done: Promise<void> = endReset(host)
+    const done: Promise<void> = endSuperseded(host)
       .catch((error: unknown) => host.notice(`Questions: ${String(error)}`))
       .finally(() => ending.delete(done))
     ending.add(done)
   }
   host.onOpen(async () => {
     stop = host.harness().subscribeCommits((publication) => {
-      if (publication.changes.some((c) => c.type === 'entry' && c.value.kind === 'pi.reset')) end()
+      if (
+        publication.changes.some(
+          (c) => c.type === 'entry' && (c.value.kind === 'pi.reset' || c.value.kind === 'pi.user'),
+        )
+      )
+        end()
     })
-    // A reset committed while no subscription listened, such as just before a crash.
+    // User input or a reset committed while no subscription listened, such as before a crash.
     end()
   })
   host.onClose(async () => {

@@ -384,15 +384,20 @@ it("extracts @ultimate's final answers to typed input only, once per answer", as
   expect((await f.state())!.reply).toBeUndefined()
 })
 
-it("ends @ultimate's final-answer card once it answers a Board message instead", async () => {
+it("keeps @ultimate's final-answer card across a Board delivery and its answer, then answers with the question quoted", async () => {
   const f = await fixture()
   const id = await f.ultimate()
   await f.type(id, 'ASK Keep it running?')
   await f.settled()
-  expect((await f.state())!.reply?.conversation).toBe(id)
+  const card = (await f.state())!.reply!
+  expect(card.conversation).toBe(id)
   await f.type(f.opened.root.id, `SEND ${JSON.stringify({ to: `#${id}`, text: 'Branch done' })}`)
   await f.settled()
   expect(f.extract).toHaveBeenCalledTimes(1)
+  expect((await f.state())!.reply).toEqual(card)
+  await f.reply(card.entry)
+  await f.settled()
+  expect((await f.inputs(id)).at(-1)?.model?.[0]?.content).toBe('Q: Keep it running?\nA: Yes')
   expect((await f.state())!.reply).toBeUndefined()
 })
 
@@ -448,6 +453,21 @@ it("resumes an @ultimate answer's extraction on reopen without asking again", as
   await f.close()
   await f.open()
   await f.settled()
+  expect(f.extract).toHaveBeenCalledTimes(1)
+})
+
+it('keeps delayed extraction after an agent delivery and its no-question answer', async () => {
+  const f = await fixture()
+  const id = await f.ultimate()
+  const hold = gate()
+  f.hold(hold)
+  const asked = await f.type(id, 'ASK Keep it running?')
+  await until(() => f.extract.mock.calls.length === 1)
+  await f.type(f.opened.root.id, `SEND ${JSON.stringify({ to: `#${id}`, text: 'Branch done' })}`)
+  await until(() => f.observed.some((text) => text.includes('Branch done')))
+  hold.release()
+  await f.settled()
+  expect((await f.state())!.reply?.entry).toBe(asked.answer)
   expect(f.extract).toHaveBeenCalledTimes(1)
 })
 
@@ -509,6 +529,13 @@ it("closes @ultimate's open message to the user when the user types in its conve
   await f.settled()
   const message = (await f.log())!.messages.at(-1)!
   expect(message).toMatchObject({ from: id, state: 'delivered' })
+  expect((await f.state())!.asked[String(message.id)]).toHaveLength(1)
+  await f.type(
+    f.opened.root.id,
+    `SEND ${JSON.stringify({ to: `#${id}`, text: 'Unrelated update' })}`,
+  )
+  await f.settled()
+  expect((await f.log())!.messages.find((m) => m.id === message.id)?.state).toBe('delivered')
   expect((await f.state())!.asked[String(message.id)]).toHaveLength(1)
   await f.type(id, 'Yes, keep it')
   await until(
