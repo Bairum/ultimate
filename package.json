@@ -16,6 +16,7 @@
     "cloud:build": "node cloud/build.ts",
     "cloud:dev": "wrangler dev --config cloud/wrangler.json",
     "cloud:deploy": "pnpm cloud:build && node cloud/deploy.ts",
+    "setup:machine": "node scripts/setup-machine.ts",
     "fmt": "vp fmt",
     "lint": "vp lint"
   },

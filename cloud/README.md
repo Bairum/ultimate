@@ -16,10 +16,11 @@ To add a machine to the projects a deployed cloud already holds (see [Deploy](#d
          machine), add it to `cloud.tunnels` on the deploying machine, and deploy again (step 6 of
          [Deploy](#deploy)). Without it the project shows in the cloud only read-only, as if offline, while that
          machine runs it.
-   - [ ] Run the tunnel and Ultimate as enabled user units, `ultimate-tunnel.service` (step 2 of [Deploy](#deploy);
-         Wrangler must be logged in on this machine) and an `ultimate.service` running `node bin/ultimate.ts` in the
-         clone, then `loginctl enable-linger $USER` so both start at boot without a login. A transient
-         `systemd-run` unit disappears when it stops.
+   - [ ] Run `pnpm setup:machine` in the clone (Linux; `--dry-run` shows the units and commands first). It installs and
+         enables the user units `ultimate.service` (`--project <dir>`, default the clone),
+         `ultimate-tunnel.service` (Wrangler must be logged in on this machine; skipped until `cloud.tunnels` has
+         the machine) and `ultimate-machine.service` (the machine home on port 4700), and enables linger so all
+         three start at boot without a login. Run it again after changing node.
 3. Run `ultimate` in a checkout at the same path as on the other machines (a move to a checkout at another path is
    refused). Where the project ends up depends on the checkout's `origin`:
    - **A GitHub origin the cloud knows:** the machine joins as a standby. Until the cloud answers it waits on standby
