@@ -10,11 +10,13 @@ document, tools and model-facing text, where agents and stored entries already u
   input. Doc `lineage.branch` holds `{ from, at, intent }`; `inputAt` is when the branch was asked for, not inherited
   activity. The fork happens before the tree root receives a model-visible `lineage.branched` prompt node
   `{ branch, at, intent, images?, from? }`, so the branch does not inherit its own prompt twice. `from` is present
-  when the source is not the root; that source also gets a display-only marker.
+  when the source is not the root; that source also gets a display-only marker. The forking commit emits the durable
+  event `lineage.branched` `{ id, from, at, intent }` (`Branched` in `api.ts`); conversations marks the intent title
+  as generated and plan empties the inherited plan in reactors.
 - **Roots**: doc `lineage.roots` on conversation 1 (`{ roots }`, initially `[1]`) lists the roots. Clients stream it
   (`useRoots()` in `roots.tsx`). Root lookup walks owners and fork sources to a listed root; conversations outside
   those trees have none. Deferred tool `new_root` `{ title }` → `{ id }` creates an empty, ownerless root in the
-  project checkout, using conversation 1's model and thinking level. It stores the title and emits `lineage:rooted`.
+  project checkout, using conversation 1's model and thinking level. It stores the title and emits `lineage.rooted` (`Rooted` in `api.ts`) in that commit.
   A task receipt commits with creation and a memo records the id, so replay creates only one root.
   Deferred tool `seed_tally` `{ root, text }` seeds an empty listed root from the caller's project reading. It
   atomically writes a genesis `pi.reset` with `head: 'self'`, `data.lineage = { tally: true }`, and

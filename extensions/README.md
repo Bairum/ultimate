@@ -107,16 +107,31 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 
 ## Extension APIs
 
-Declare a service as a token in the provider's `api.ts`, typed by its contract and browser-safe:
+Everything an extension offers other extensions on the server lives in its `api.ts`: the service token, the documents
+others read and the events it emits. It is browser-safe, holds only contracts and is documented, because agents
+discover APIs by reading these files:
 
 ```ts
+/** Echo: says text back. Other extensions use it to test a round trip. */
 import { defineApi } from '../../shared/extension-api.ts'
-export type EchoService = { echo(text: string): string }
+import { defineEvent } from '../../shared/events.ts'
+
+export type EchoService = {
+  /** Return `text` unchanged; use it to check that echo is reachable. */
+  echo(text: string): string
+}
+/** The echo service; `want` it, echo is optional. */
 export const Echo = defineApi<EchoService>()('echo')
+/** Text was echoed; react to it to count echoes. */
+export const Echoed = defineEvent<{ text: string }>('echo.echoed')
 ```
 
+Lint holds every `extensions/*/api.ts` to that shape (`ultimate/api-file-shape`, `ultimate/api-naming`; see
+[docs/extensions.md](../docs/extensions.md#extension-apis)), and a server-side `.ts` file may import another
+extension's runtime code only from its `api.ts` (`ultimate/api-only-imports`); type imports are free.
+
 The provider calls `host.implement(Echo, { echo: (text) => text })` in its factory; it is staged, replaced and
-removed exactly like `provide`. A consumer calls `host.need(Echo)` for a hard dependency or `host.want(Echo)` for an
+removed with its facet. A consumer calls `host.need(Echo)` for a hard dependency or `host.want(Echo)` for an
 optional one. Both return a handle typed by the token that resolves the current provider on every member access, so
 holding it from setup is fine. `need` throws `<ext> needs echo, which no enabled extension provides` while nothing
 provides it; called during setup it records the dependency instead (the provider may load later) and a still-missing
@@ -124,8 +139,10 @@ provider becomes an extension diagnostic. `want` returns undefined while missing
 `host.catalogue()` (codemode: `ultimate.catalogue()`) lists each API's provider, needs and wants, plus missing
 providers and dependency cycles, each a sorted group of extensions that depend on each other in a cycle.
 
-Which channel to use: services for calls between extensions; documents for durable state; durable events (coming)
-for "this happened"; actions for the UI and user boundary.
+Which channel to use: services for calls between extensions; documents for durable state; durable events for "this
+happened" (`host.emit` in your commit, `host.react` to act on it; see
+[docs/extensions.md](../docs/extensions.md#durable-events)); actions for the UI and user boundary. `host.provide`,
+`host.use` and the `host.events` bus are not used by extensions (`ultimate/no-raw-services`).
 
 ## Lifecycle
 
@@ -137,14 +154,10 @@ Type imports from `server/` are fine. Runtime imports need a host capability or 
 
 ## Events
 
-Use events for “something happened” and Pi Durable documents for durable state. Server factories share
-`host.events`, Pi's process-local bus, across extension reloads. The browser has a separate `events` bus from
-`@/sdk`; neither bus bridges to the other, queues messages, nor replays them. Both catch and log handler errors
-with the channel while other handlers continue. `on(channel, handler)` returns an unsubscribe; clean it up when
-its owner is removed. Each server facet receives a scoped view: call `host.events.on` directly in the factory;
-subscriptions are automatically removed when that facet is successfully reinstalled, disabled, removed, or the
-server closes. A failed reload discards its new subscriptions and keeps the previous facet's handlers. Do not pin
-handlers in `host.resource`, which would keep stale code across saves.
+On the server, "something happened" is a durable event in the emitter's `api.ts` (see Extension APIs). The browser
+has an ephemeral `events` bus from `@/sdk`: it queues and replays nothing, catches and logs handler errors with the
+channel while other handlers continue, and `on(channel, handler)` returns an unsubscribe; clean it up when its owner
+is removed.
 
 Name channels `<extension>:<event>`; `ultimate:*` is reserved for the core. In a web component, use
 `useEvent(channel, handler)` to subscribe for its mount and always call the latest handler:
