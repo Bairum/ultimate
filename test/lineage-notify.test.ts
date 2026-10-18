@@ -4,7 +4,7 @@ import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { expect, it } from 'vitest'
-import { Notified } from '../extensions/lineage/server.ts'
+import { leaveNote, Notified } from '../extensions/lineage/server.ts'
 import { context } from '../server/harness.ts'
 import { until } from './helpers.ts'
 import {
@@ -159,6 +159,47 @@ it.concurrent('delivers a deliver checkpoint stored before answers were tracked'
       (await reopened.harness.snapshot(Notified, ROOT_CONVERSATION_ID, context))?.answers ?? {},
     ),
   ).toEqual([])
+})
+
+it.concurrent('a deliver resumed after a restart finds the note it left under its task id', async () => {
+  const { server, home } = await notifyFixture()
+  const other = await second(server)
+  await (await server.harness.conversation(other.id, context))!.submit(
+    { type: 'input', content: 'HOLD' },
+    context,
+  )
+  await ask(server, ROOT_CONVERSATION_ID, `NOTIFY ${JSON.stringify({ id: other.id, wake: false })}`)
+  const [task] = await pendingNotifies(server)
+  // The code before answer-keyed ids left its note under the task id, then the process stopped.
+  await leaveNote({ harness: () => server.harness }, ROOT_CONVERSATION_ID, 'Old answer', {
+    from: other.id,
+    source: 'finished',
+    requestId: `lineage:notify:${other.id}:${task.id}`,
+  })
+  await server.close()
+  servers.splice(servers.indexOf(server), 1)
+  const database = new DatabaseSync(join(home, 'state.sqlite'))
+  const record = JSON.parse(
+    (database.prepare('SELECT record FROM tasks WHERE id = ?').get(task.id) as { record: string })
+      .record,
+  )
+  record.state = {
+    status: 'pending',
+    checkpoint: { phase: 'deliver', text: 'Old answer', answer: 1 },
+  }
+  database
+    .prepare("UPDATE tasks SET status = 'pending', record = ? WHERE id = ?")
+    .run(JSON.stringify(record), task.id)
+  database.close()
+
+  const { server: reopened, release } = await notifyFixture(home)
+  release()
+  await until(async () => (await pendingNotifies(reopened)).length === 0)
+  const entries = await kinds(reopened, ROOT_CONVERSATION_ID)
+  expect(entries.filter((kind) => kind === 'lineage.note')).toHaveLength(1)
+  expect(
+    (await reopened.harness.snapshot(Notified, ROOT_CONVERSATION_ID, context))?.answers[other.id],
+  ).toBe(1)
 })
 
 it.concurrent('keeps one pending notify per target and delivers it once across a reopen', async () => {
