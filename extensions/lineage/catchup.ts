@@ -77,6 +77,7 @@ export function watchSeen(host: ExtensionHost, ctx: Context) {
   }
   host.onOpen(async () => {
     const harness = host.harness()
+    // Not a reactor: it seeds every new top-level conversation, a Pi record, not only lineage's branches and roots.
     unsubscribe = harness.subscribeCommits((publication) => {
       for (const change of publication.changes)
         if (change.type === 'conversation' && !change.value.owner)

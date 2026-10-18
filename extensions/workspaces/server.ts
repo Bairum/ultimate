@@ -181,6 +181,7 @@ export default function workspaceExtension(host: ExtensionHost) {
         host.notice(`Workspace release failed: ${String(error)}`)
       })
     unsubscribe?.()
+    // Not a reactor: a lander task's fault is a Pi task record, not a domain event.
     unsubscribe = host.harness().subscribeCommits((publication) => {
       for (const change of publication.changes) {
         if (

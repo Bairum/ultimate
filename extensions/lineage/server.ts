@@ -308,6 +308,7 @@ function watchTally(host: ExtensionHost, ctx: Context) {
   }
   host.onOpen(async () => {
     roots = new Set(await rootsOf(host, ctx))
+    // Not a reactor: any entry a root gets (Pi's own resets and compactions too) changes its count, no domain event.
     unsubscribe = host.harness().subscribeCommits((publication) => {
       for (const change of publication.changes)
         if (change.type === 'document' && change.record.kind === Roots.definition.kind)
@@ -373,6 +374,7 @@ function lineage(host: ExtensionHost) {
         for (;;) {
           // Subscribed before reading, so an entry the target writes after the read still ends the wait below.
           const written = Promise.withResolvers<void>()
+          // Not a reactor: a short wait inside this task for any entry of the target, a Pi record.
           const unsubscribe = host.harness().subscribeCommits((publication) => {
             if (
               publication.changes.some(
