@@ -67,13 +67,14 @@ The first host to connect registers the project and becomes its writer (`cloud-l
 - `/p/<slug>/` serves the SPA. Selecting conversations changes only `?conversation=N`, preserving the project path.
 - `/p/<slug>/api/*` goes to that project's replica with the prefix removed: proxied to the writer while it is online, from the synced copy otherwise. Assets stay absolute.
 - `/p/<machine>/<name>/…`, the URLs from before projects were shared, answer 308 to `/p/<name>/…` when `<machine>` is no project slug and `<name>` is one.
-- `/sync/v2?project=<key>` routes to `REPLICA.idFromName(key)`. Any other `/sync` path but builds and snapshots answers 404, so an old sender keeps retrying instead of syncing.
+- `/sync/v2?project=<key>` routes to `REPLICA.idFromName(key)`, or to the replica of the key it was relinked to. Any other `/sync` path but builds, snapshots and relink answers 404, so an old sender keeps retrying instead of syncing.
+- `POST /sync/relink` with `{ key, from }` and the bearer token records in the Directory that `key` syncs to `from`'s replica from now on (a renamed repository keeps its replica and lease). The replica then admits hellos naming either key, its root commit still checked; the relinked key's own row leaves the directory. An alias that would point back at itself is refused.
 
 ### Project identity and the writer lease
 
 The key is the checkout's `origin` remote normalised to `github.com/<owner>/<repo>`, lowercased; SSH and HTTPS forms, with or without `.git` or credentials, give the same key, and a worktree reads its main checkout's origin. The repository's oldest root commit travels with it as a sanity check. A project without a GitHub origin does not sync and says so once. Neither the machine nor the path is part of the key.
 
-The replica holds the lease `{ machine, epoch }`. The first hello for an unknown key registers its project and makes that machine the writer at epoch 1. The writer stores its epoch in `<home>/cloud-lease.json` and names it in each hello; the writer machine without a lease file (after a reinstall) is the writer again and rewrites the file from the `role` it gets. Every other machine, and any hello naming another epoch, is a standby: it gets `role: 'standby'` with the writer's machine, root, epoch, online state and secret names, keeps its socket for updates, and sends nothing else. Anything but hello and claim from a standby socket is ignored, which fences a stale writer off. A disconnect never moves the lease: an offline writer stays the writer. The writer frees the lease with `release` after uploading a snapshot, keeping epoch and snapshot; a standby then takes it with `claim` at that epoch and becomes the writer at epoch + 1 ("Move here" builds on this). A hello whose root commit differs from the registered one closes with `PROJECT_MISMATCH` (`4009`, "root commit differs") and the sender stops retrying.
+The replica holds the lease `{ machine, epoch }`. The first hello for an unknown key registers its project and makes that machine the writer at epoch 1. The writer stores its epoch in `<home>/cloud-lease.json` and names it in each hello; the writer machine without a lease file (after a reinstall) is the writer again and rewrites the file from the `role` it gets. Every other machine, and any hello naming another epoch, is a standby: it gets `role: 'standby'` with the writer's machine, root, epoch, online state and secret names, keeps its socket for updates, and sends nothing else. Anything but hello and claim from a standby socket is ignored, which fences a stale writer off. A disconnect never moves the lease: an offline writer stays the writer. The writer frees the lease with `release` after uploading a snapshot, keeping epoch and snapshot; a standby then takes it with `claim` at that epoch and becomes the writer at epoch + 1 ("Move here" builds on this). A standby that wants a held lease sends `request-release`; the replica forwards it to the writer's socket as `release-requested { by }`, and the writer's `release-waiting { by, tasks }` goes back to that standby's sockets only. `extensions/cloud/README.md` describes the machine side. A hello whose root commit differs from the registered one closes with `PROJECT_MISMATCH` (`4009`, "root commit differs") and the sender stops retrying.
 
 The replica records each machine that says hello, with its root, port, secret names and last-seen time. Accepted hellos, releases, claims, socket closes, conversation-count changes and the first synced entries update the Directory: per project its key, name, slug, writer `{ machine, online, lastSeen }`, machines `[{ machine, role, connected, lastSeen }]`, conversation count and UI build. Slugs are the lowercased repository name (`ultimate`, `poe2-rust`), with `-2`, `-3`… for collisions. Projects with a connected machine always appear. An offline project with zero synced entries is forgotten; summaries are not the forgetting signal. Slug assignments stay reserved, so a returning project keeps its URL. Presence means a connected sync socket, not tunnel health.
 
@@ -84,6 +85,37 @@ Every `/api` request, including `/api/directory` and project-prefixed APIs, and 
 The sync route attaches the URL's key to the socket before accepting it, and hello must repeat it. A malformed hello (a key other than the URL's, an invalid root commit, relative root, port outside 1–65535, epoch or secret list) closes with `PROJECT_MISMATCH` too. Each socket's attachment keeps its machine and role, so hibernated sockets keep working.
 
 On each connection the writer sends a full summary list once, followed by changed summaries and removed IDs. The replica stores them per conversation. Batches are applied atomically and acknowledged; reconnects use entry cursors and document hashes. Retired documents are deleted.
+
+### Moves and transitions
+
+A machine taking the lease first prepares (see `extensions/cloud/README.md`) and reports each step with `{ type: 'transition', value: Transition | null }`:
+
+```ts
+interface Transition {
+  id: string
+  target: string // the machine taking the lease
+  from: string | null // the writer it takes it from; null while the lease is free
+  step: 'fetch' | 'install' | 'checks' | 'handover' | 'download' | 'branches' | 'claim' // running now, or the last one
+  steps: {
+    name: Transition['step'] // in the order they run, as listed above
+    state: 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+    detail?: string // what it did, or why it failed or was skipped
+    done?: number // bytes, for download
+    total?: number
+  }[]
+  error?: string // set once it failed or was cancelled; the holder is untouched
+  cancellable: boolean // until the claim is sent
+  startedAt: number
+}
+```
+
+The replica keeps the latest transition, running or ended, accepting it only from its target's socket, and sends it in `role` (`transition`) to every socket, the writer's too, and in the project's Directory row. While the writer drains for a move, its `release-waiting { by, tasks }` sets the handover step's detail to `finishing N runs`. A failed or cancelled transition ends a writer's drain, and it keeps the project. A missing-secrets failure of `checks` (`error: 'Missing secrets: A, B'`) can be retried with `force`.
+
+The project API answers three routes itself, before any request goes to the machine, behind the same Access check as every `/p/*` path:
+
+- `GET /api/cloud`: `{ machines: [{ machine, role: 'writer' | 'standby', connected, root, lastSeen, missingSecrets }], lease: { machine, epoch, root, online, snapshot? } | null, transition: Transition | null }`. `missingSecrets` are the writer's secret names a standby lacks.
+- `POST /api/cloud/move { machine, force? }`: sends `{ type: 'move-to', id, force? }` to that machine's standby socket and answers 202 `{ id }`; 409 `{ error: 'not connected' }` without one, `runs there already` for the writer.
+- `POST /api/cloud/cancel`: sends `{ type: 'cancel', id }` to the running transition's target and answers 202 `{ id }`; 409 when nothing can be cancelled or the target is not connected.
 
 ## Live and offline API
 

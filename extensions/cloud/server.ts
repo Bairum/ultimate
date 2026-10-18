@@ -1,4 +1,5 @@
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { defineExtension, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type {
@@ -10,14 +11,25 @@ import type {
   EntryId,
   JsonObject,
 } from '@earendil-works/pi-durable'
+import type { JsonValue } from '@earendil-works/chord'
+import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { docHash, PROJECT_MISMATCH } from '../../cloud/protocol.ts'
-import type { CloudMessage, MachineMessage, ReplicaDoc, Writer } from '../../cloud/protocol.ts'
+import { docHash, PROJECT_KEY, PROJECT_MISMATCH } from '../../cloud/protocol.ts'
+import type {
+  CloudMessage,
+  MachineMessage,
+  ReplicaDoc,
+  Transition,
+  Writer,
+} from '../../cloud/protocol.ts'
 import { projectBuilds } from '../../cloud/ui-build.ts'
 import { secretMetadata } from '../secrets/store.ts'
-import { cloudConfig } from './config.ts'
+import { cloudConfig, leaseSettings } from './config.ts'
 import { projectIdentity } from './identity.ts'
+import { startLease } from './lease.ts'
+import type { Lease, LeaseDeps, LeaseState } from './lease.ts'
+import * as snapshot from './snapshot.ts'
 
 export const secrets = [
   { name: 'ULTIMATE_CLOUD_TOKEN', description: 'Bearer token for the cloud sync endpoint' },
@@ -52,6 +64,8 @@ export interface SyncState {
   free?: boolean
   snapshot?: { id: string; epoch: number }
   writer?: Writer
+  /** The latest move the cloud reported, running or ended. */
+  transition?: Transition
 }
 
 export interface SyncOptions {
@@ -61,13 +75,35 @@ export interface SyncOptions {
   identity: { key: string; rootCommit: string }
 }
 
+/** How a connection serves the lease lifecycle (`lease.ts`). */
+export interface SyncHooks {
+  /**
+   * The harness is open, so this connection syncs as the writer. Without it the machine is on standby: it never sends
+   * data and ignores `cursor` and `outbox`, whatever its role.
+   */
+  serving: boolean
+  /** Each role, once the state holds it, from inside the message chain: defer any lifecycle switch. */
+  role?(state: SyncState): void
+  /** The writer hears that the standby `by` asked for the lease, for transition `id`. */
+  releaseRequested?(by: string, id: string): void
+  /** The requester hears that the writer's release waits for `tasks` running tasks. */
+  releaseWaiting?(by: string, tasks: number): void
+  /** The cloud UI asks this standby to take the lease as transition `id`. */
+  moveTo?(id: string, force: boolean): void
+  /** The cloud UI stops transition `id`. */
+  cancel?(id: string): void
+}
+
 /** One outbound connection; injected transport keeps sync tests entirely in process. */
 export function startSync(
   host: ExtensionHost,
   { url, token, machine, identity }: SyncOptions,
   dial = connect,
   builds?: ReturnType<typeof projectBuilds>,
+  hooks: SyncHooks = { serving: true },
 ) {
+  const { serving } = hooks
+  let socketSend: ((message: MachineMessage) => boolean) | undefined
   let stopped = false
   let retry = 1000
   let reconnect: ReturnType<typeof setTimeout> | undefined
@@ -103,15 +139,18 @@ export function startSync(
       return []
     }
   }
-  const hasHistory = () =>
-    host
-      .harness()
-      .commit(
-        async (tx) =>
-          (await tx.scanConversations({}, 2)).items.length > 1 ||
-          (await tx.scanEntries({ conversationId: ROOT_CONVERSATION_ID }, 1)).items.length > 0,
-        context,
-      )
+  const hasHistory = async () =>
+    // A standby's storage is closed; any database it kept is its own history.
+    !serving
+      ? existsSync(join(host.home, 'state.sqlite'))
+      : host
+          .harness()
+          .commit(
+            async (tx) =>
+              (await tx.scanConversations({}, 2)).items.length > 1 ||
+              (await tx.scanEntries({ conversationId: ROOT_CONVERSATION_ID }, 1)).items.length > 0,
+            context,
+          )
   const open = () => {
     if (stopped) return
     let socket: SyncSocket
@@ -172,6 +211,11 @@ export function startSync(
     let lastSystemAt = 0
     const send = (message: MachineMessage) => {
       if (!closed) socket.send(JSON.stringify(message))
+    }
+    socketSend = (message) => {
+      if (closed || !role) return false
+      send(message)
+      return true
     }
     const fail = (error: unknown) => {
       host.notice(`Cloud sync failed: ${String(error)}`)
@@ -494,6 +538,13 @@ export function startSync(
             const { type: _, ...given } = message
             if (message.role === 'writer') await writeLease(message.epoch)
             state = { key: identity.key, connected: true, ...given }
+            hooks.role?.(state)
+            // On standby nothing was sent, so a changed role needs no fresh hello.
+            if (!serving) {
+              role = message.role
+              retry = 1000
+              return
+            }
             // A role that changes on an open socket starts over with a fresh hello.
             if (role && role !== message.role) return close()
             if (role) return
@@ -513,7 +564,15 @@ export function startSync(
           flush()
           capacity?.()
           capacity = undefined
-        } else if (message.type === 'cursor')
+        } else if (message.type === 'release-requested')
+          hooks.releaseRequested?.(message.by, message.id)
+        else if (message.type === 'release-waiting')
+          hooks.releaseWaiting?.(message.by, message.tasks)
+        else if (message.type === 'move-to') hooks.moveTo?.(message.id, message.force === true)
+        else if (message.type === 'cancel') hooks.cancel?.(message.id)
+        // A claim on standby gets `cursor` and `outbox` too; the reopened, serving connection catches up.
+        else if (!serving) return
+        else if (message.type === 'cursor')
           enqueue(async () => {
             await catchUp(message)
             retry = 1000
@@ -568,21 +627,81 @@ export function startSync(
       },
       retainedBytes: () => retainedBytes?.() ?? 0,
       state: () => state,
+      /** Send a lease message on the admitted socket; false while none is. */
+      send: (message: MachineMessage) => socketSend?.(message) ?? false,
     },
   )
 }
 
-let active: ReturnType<typeof startSync> | undefined
+let active: Lease | undefined
 
 /** This process's sync role, or undefined while sync is off. */
 export function syncState(): SyncState | undefined {
-  return active?.state()
+  return active?.sync()?.state()
 }
 
-export default function cloud(host: ExtensionHost) {
-  let stop: ReturnType<typeof startSync> | undefined
+const off: LeaseState = { free: false, missing: [] }
+export const actions = {
+  /** `{role, free, writer, missing, blocked, progress, lastError}` for the standby page. */
+  state: async () => (await active?.state()) ?? off,
+  /**
+   * `{force?}`: prepare this machine and take the project, from a free lease or from the online writer. Resolves the
+   * transition ID at once; `state` follows its steps. `force` continues although the writer has secrets this machine
+   * lacks.
+   */
+  moveHere: async (args: JsonValue) => {
+    if (!active) throw new Error('Cloud sync is off')
+    return active.moveHere({ force: (args as { force?: unknown } | null)?.force === true })
+  },
+  /** Stop the preparing move, until its claim is sent. */
+  cancel: async () => {
+    if (!active) throw new Error('Cloud sync is off')
+    active.cancel()
+    return { ok: true }
+  },
+  /**
+   * `{from}`: sync this project's key to the replica of `from` from now on, after a repository rename or a root-commit
+   * mismatch. The cloud names the epoch again on the next hello.
+   */
+  relink: async (args: JsonValue, { host }: ActionContext) => {
+    const from = (args as { from?: unknown } | null)?.from
+    if (typeof from !== 'string' || !PROJECT_KEY.test(from))
+      throw new Error('Expected {from: "github.com/<owner>/<repo>"}')
+    const config = await cloudConfig(host)
+    const identity = await projectIdentity(host.projectRoot)
+    if (!config || !identity) throw new Error('Cloud sync is off')
+    if (from === identity.key) throw new Error(`${from} is this project's own key`)
+    const endpoint = new URL(config.url)
+    endpoint.protocol = endpoint.protocol === 'ws:' ? 'http:' : 'https:'
+    endpoint.pathname = '/sync/relink'
+    endpoint.search = ''
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: identity.key, from }),
+    })
+    if (!response.ok) throw new Error(`Relink failed: ${response.status} ${await response.text()}`)
+    // The epoch was another replica's; without one the writer machine is the writer again.
+    const lease = join(host.home, 'cloud-lease.json')
+    const held = JSON.parse(await readFile(lease, 'utf8').catch(() => '{}')) as { key?: string }
+    if (held.key === identity.key) await rm(lease)
+    active?.restart()
+    return { key: identity.key, from }
+  },
+}
+export const userActions = ['moveHere', 'cancel', 'relink']
+
+export default function cloud(host: ExtensionHost, deps: Partial<LeaseDeps> = {}) {
+  // The process stopping, not a reload of this facet, releases the lease.
+  const stopping = host.resource('cloud.process', () => {
+    const current: { lease?: Lease } = {}
+    host.onClose(async () => current.lease?.stopRelease())
+    return current
+  })
+  let lease: Lease | undefined
   let builds: ReturnType<typeof projectBuilds> | undefined
-  host.onOpen(async () => {
+  let closed = false
+  const ready = (async () => {
     const config = await cloudConfig(host)
     if (!config) return
     const identity = await projectIdentity(host.projectRoot)
@@ -590,14 +709,30 @@ export default function cloud(host: ExtensionHost) {
       host.notice(`Cloud sync is off: ${host.projectRoot} has no GitHub origin remote.`)
       return
     }
-    builds = projectBuilds(host, config.url, config.token)
-    stop = active = startSync(host, { ...config, identity }, connect, builds)
+    if (closed) return
+    builds = deps.builds ?? projectBuilds(host, config.url, config.token)
+    lease = startLease(
+      host,
+      { ...config, identity, ...(await leaseSettings(host)) },
+      { sync: startSync, dial: connect, snapshots: snapshot, builds, ...deps },
+    )
+    stopping.lease = active = lease
+  })()
+  host.onOpen(async () => {
+    await ready
+    lease?.opened()
+  })
+  host.onRelease(async () => {
+    await ready
+    lease?.released()
   })
   host.onClose(async () => {
-    stop?.()
-    if (active === stop) active = undefined
+    closed = true
+    await ready
+    lease?.close()
+    if (active === lease) active = undefined
     await builds?.stop()
-    await stop?.idle()
+    await lease?.sync()?.idle()
   })
   return defineExtension({ name: 'cloud' })
 }

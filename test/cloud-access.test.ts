@@ -105,7 +105,14 @@ it('passes valid JWTs and sync requests to the replica, but not assets through a
     ...config,
     SYNC_TOKEN: 'synthetic-test-value',
     REPLICA: { idFromName: vi.fn<() => void>(), get: () => ({ fetch: forward }) },
-    DIRECTORY: { idFromName: vi.fn<() => void>(), get: () => ({ fetch: forward }) },
+    DIRECTORY: {
+      idFromName: vi.fn<() => void>(),
+      // The sync route looks for a relink alias first; this project has none.
+      get: () => ({
+        fetch: (url: string) =>
+          url.includes('/alias') ? new Response(null, { status: 404 }) : forward(),
+      }),
+    },
     ASSETS: { fetch: forward },
   } as unknown as Parameters<typeof worker.fetch>[1]
   expect(

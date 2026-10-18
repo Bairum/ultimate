@@ -1,3 +1,4 @@
+import type { Transition } from './protocol.ts'
 import type { Sql } from './replica.ts'
 
 /** A row of `/api/directory`: one project, wherever it runs. */
@@ -10,6 +11,8 @@ export interface Project {
   machines: { machine: string; role: 'writer' | 'standby'; connected: boolean; lastSeen: number }[]
   count: number
   uiBuild?: string
+  /** The latest move, running or ended. */
+  transition?: Transition
 }
 export type Presence = Omit<Project, 'slug'> & { hasEntries: boolean }
 const safeSlug = (value: string) =>
@@ -26,6 +29,29 @@ export class DirectoryStore {
     sql.exec(
       'CREATE TABLE IF NOT EXISTS projects (key TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, value TEXT)',
     )
+    sql.exec('CREATE TABLE IF NOT EXISTS aliases (key TEXT PRIMARY KEY, target TEXT NOT NULL)')
+  }
+  /** The project key whose replica `key` syncs to after a relink; undefined for an unaliased key. */
+  target(key: string): string | undefined {
+    return [...this.sql.exec<{ target: string }>('SELECT target FROM aliases WHERE key=?', key)][0]
+      ?.target
+  }
+  /**
+   * Sync `key` to `from`'s replica from now on, as after a repository rename. The replica `key` had of its own
+   * leaves the list. False: the alias would point at itself.
+   */
+  alias(key: string, from: string): boolean {
+    return this.sql.transaction(() => {
+      const target = this.target(from) ?? from
+      if (target === key) return false
+      this.sql.exec(
+        'INSERT INTO aliases (key, target) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET target=excluded.target',
+        key,
+        target,
+      )
+      this.sql.exec('UPDATE projects SET value=NULL WHERE key=?', key)
+      return true
+    })
   }
   list(): Project[] {
     return [
@@ -43,6 +69,8 @@ export class DirectoryStore {
   /** Projects with a connected machine always appear; an offline one with zero synced entries is forgotten. */
   update({ hasEntries, ...value }: Presence) {
     this.sql.transaction(() => {
+      // A relinked key's own replica may still report as its last sockets close.
+      if (this.target(value.key)) return
       let slug = [
         ...this.sql.exec<{ slug: string }>('SELECT slug FROM projects WHERE key=?', value.key),
       ][0]?.slug

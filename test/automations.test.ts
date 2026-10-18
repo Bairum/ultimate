@@ -11,7 +11,7 @@ import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import automations, { actions, Automations } from '../extensions/automations/server.ts'
-import type { Automation } from '../extensions/automations/server.ts'
+import type { Automation, AutomationsService } from '../extensions/automations/server.ts'
 import type { ActionContext } from '../server/actions.ts'
 import { temp, until as waitFor } from './helpers.ts'
 
@@ -71,7 +71,9 @@ async function fixture() {
     harness: () => opened.harness,
     metadata: Metadata,
     extensions: () => [{ name: 'subagents', enabled }],
+    provide: (name: string, value: unknown) => provided.set(name, value),
   }
+  const provided = new Map<string, unknown>()
   const extension = automations(host as unknown as Parameters<typeof automations>[0])
   prepared.registry.install(extension)
   const route: FauxResponseFactory = (transcript) => {
@@ -104,6 +106,7 @@ async function fixture() {
     },
     action,
     records,
+    service: () => provided.get('automations') as AutomationsService,
     held: () => !!release,
     release: () => release!(),
     async reopen() {
@@ -264,5 +267,7 @@ it('preserves the next interval fire on rename, even when the same schedule is s
   expect(reordered.nextAt).toBe(a.nextAt)
   const changed = (await f.action('update', { id: a.id, schedule: 'every 2d' })) as Automation
   expect(changed.nextAt).toBeGreaterThan(a.nextAt!)
+  expect(await f.service().nextDue()).toBe(changed.nextAt)
   await f.action('pause', { id: a.id })
+  expect(await f.service().nextDue()).toBeUndefined()
 })

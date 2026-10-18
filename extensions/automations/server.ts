@@ -419,11 +419,28 @@ export const actions = Object.fromEntries(
   ]),
 )
 
-export default function automations(host: Host & Pick<ExtensionHost, 'onOpen' | 'service'>) {
+/** What other extensions may ask of the scheduler. */
+export interface AutomationsService {
+  /** When the next enabled automation fires, as epoch milliseconds; undefined when none is planned. */
+  nextDue(): Promise<number | undefined>
+}
+
+export default function automations(
+  host: Host & Pick<ExtensionHost, 'onOpen' | 'service' | 'provide'>,
+) {
   const status = host.service('scheduler', { state: 'starting', detail: 'durable scheduler' })
   host.onOpen(async () => {
     status.update({ state: 'ready', detail: 'durable scheduler' })
   })
+  host.provide('automations', {
+    async nextDue() {
+      const state = await host.harness().snapshot(Automations, BACKGROUND_CONTEXT)
+      const due = Object.values(state?.automations ?? {}).flatMap((a) =>
+        a.enabled && a.nextAt !== undefined ? [a.nextAt] : [],
+      )
+      return due.length ? Math.min(...due) : undefined
+    },
+  } satisfies AutomationsService)
   const api = backend(host)
   return defineExtension({
     name: 'automations',

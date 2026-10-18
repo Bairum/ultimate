@@ -1,0 +1,780 @@
+// The writer lease lifecycle: a machine serves a project only while it holds the lease (`cloud/protocol.ts`), and the
+// lease moves between machines with a snapshot of the closed database.
+//
+// - Serving, a `standby` role closes storage (`host.deactivate`), parking the database as `state.stale-<time>.sqlite`
+//   unless it is the lease's last snapshot.
+// - The writer releases on a clean stop, after `cloud.idleRelease` idle minutes, or when a standby asks: it closes
+//   storage, uploads a snapshot, records its hash in `cloud-lease.json`, sends `release` and waits for the free lease.
+// - A standby takes the lease on start (`cloud.autoClaim`, a free lease only), with "Move here", or when the cloud UI
+//   sends `move-to`. It first prepares, reporting each step as a `Transition`: it fast-forwards the checkout, installs
+//   when the lockfile changed, checks secrets and the project root, asks a holding writer to release, downloads the
+//   snapshot unless its database is that snapshot, and only then claims and opens storage with the snapshot installed.
+//
+// Lifecycle switches never run inside a socket handler: roles are handled after a `setTimeout(0)`, one switch at a time.
+import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
+import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
+import type { JsonObject } from '@earendil-works/pi-durable'
+import type { Transition, TransitionStep } from '../../cloud/protocol.ts'
+import type { projectBuilds } from '../../cloud/ui-build.ts'
+import type { ExtensionHost } from '../../server/extensions.ts'
+// oxlint-disable-next-line no-restricted-imports -- a stop release holds storage's lock, which a swapped-in core owns
+import { acquireLock } from '../../server/lock.ts'
+import type { AutomationsService } from '../automations/server.ts'
+import { readSecret, secretMetadata } from '../secrets/store.ts'
+import type { Connect, startSync, SyncOptions, SyncState } from './server.ts'
+import type { databaseHash, downloadSnapshot, uploadSnapshot } from './snapshot.ts'
+
+export interface LeaseOptions extends SyncOptions {
+  /** Idle minutes before the writer releases; 0 never. */
+  idleRelease: number
+  /** Claim a free lease when the process starts. */
+  autoClaim: boolean
+}
+/** Run a program without a shell, as `execFile` does: resolves its output, rejects with `stdout`/`stderr` attached. */
+export type Exec = (
+  command: string,
+  args: string[],
+  options: { cwd: string; signal: AbortSignal; timeout?: number },
+) => Promise<{ stdout: string; stderr: string }>
+export interface LeaseDeps {
+  sync: typeof startSync
+  dial: Connect
+  snapshots: {
+    uploadSnapshot: typeof uploadSnapshot
+    downloadSnapshot: typeof downloadSnapshot
+    databaseHash: typeof databaseHash
+  }
+  builds?: ReturnType<typeof projectBuilds>
+  /** The snapshot key, read from Secrets unless injected. */
+  secret?: () => Promise<string | undefined>
+  /** Runs git and pnpm for the prepare steps. */
+  exec?: Exec
+}
+/** `cloud.state`: everything the standby page shows. */
+export interface LeaseState {
+  role?: 'writer' | 'standby'
+  free: boolean
+  writer?: SyncState['writer']
+  /** Secret names the writer has and this machine lacks. */
+  missing: string[]
+  /** Why "Move here" cannot work right now. */
+  blocked?: string
+  /** The upload of a release. A move's download shows in its transition. */
+  progress?: { kind: 'upload'; done: number; total: number }
+  /** The move this machine runs, or else the latest one the cloud reported. */
+  transition?: Transition
+  lastError?: string
+}
+
+const SECRET = 'ULTIMATE_CLOUD_SNAPSHOT_KEY'
+/** Room for the snapshot and the release inside the supervisor's 10-second stop. */
+const STOP_BUDGET = 8000
+const MOVE_CAP = 10 * 60_000
+const suffixes = ['', '-wal', '-shm']
+const STEPS: TransitionStep['name'][] = [
+  'fetch',
+  'install',
+  'checks',
+  'handover',
+  'download',
+  'branches',
+  'claim',
+]
+const run = promisify(execFile)
+const exec: Exec = (command, args, options) =>
+  run(command, args, { ...options, maxBuffer: 16 * 1024 * 1024 })
+
+/** What `cloud-lease.json` holds beyond the epoch: the snapshot the last release uploaded and its database hash. */
+interface LeaseFile {
+  key?: string
+  epoch?: number
+  snapshot?: string
+  snapshotHash?: string
+}
+
+/** Move a SQLite database with its `-wal` and `-shm`; never deletes one. */
+async function moveDatabase(from: string, to: string) {
+  for (const suffix of suffixes)
+    if (existsSync(from + suffix)) await rename(from + suffix, to + suffix)
+}
+async function writeJson(path: string, value: unknown) {
+  await writeFile(`${path}.tmp`, JSON.stringify(value))
+  await rename(`${path}.tmp`, path)
+}
+const staleName = (database: string) =>
+  database.replace(/state\.sqlite$/, `state.stale-${new Date().toISOString()}.sqlite`)
+/** The last lines of a failed command's output. */
+function tail(error: unknown) {
+  const { stdout = '', stderr = '' } = error as { stdout?: string; stderr?: string }
+  const output = `${stdout}${stderr}`.trim()
+  return output ? output.split('\n').slice(-20).join('\n') : String(error)
+}
+// Conversation runs and lander runs are foreground tasks; schedulers and reporters wait in the background.
+const foreground = (graph: { value: { tasks: Record<string, { background: boolean }> } }) =>
+  Object.values(graph.value.tasks).filter((task) => !task.background).length
+const runs = (count: number) => `${count} running ${count === 1 ? 'task' : 'tasks'}`
+
+export function startLease(host: ExtensionHost, options: LeaseOptions, deps: LeaseDeps) {
+  const { identity } = options
+  const leasePath = join(host.home, 'cloud-lease.json')
+  const standbyPath = join(host.home, 'standby.json')
+  const database = join(host.home, 'state.sqlite')
+  const execute = deps.exec ?? exec
+  let sync: ReturnType<typeof startSync> | undefined
+  let mode: 'serving' | 'standby' | undefined
+  let closed = false
+  // Only the first standby role after this process starts may claim by itself.
+  let autoClaim = options.autoClaim
+  let progress: LeaseState['progress']
+  let lastError: string | undefined
+  let idleSince: number | undefined
+  let idleTimer: ReturnType<typeof setInterval> | undefined
+  let pendingRelease:
+    | { epoch: number; id: string; sent: boolean; done: PromiseWithResolvers<void> }
+    | undefined
+  let pendingClaim: { epoch: number; done: PromiseWithResolvers<boolean> } | undefined
+  /** The move this machine prepares, and how to stop it before its claim. */
+  let moving: { transition: Transition; abort: AbortController } | undefined
+  /** The last move this machine ran, ended or not; the cloud's copy may lag behind it. */
+  let ran: Transition | undefined
+  /** A move's handover waits for the free lease. */
+  let freed: PromiseWithResolvers<SyncState> | undefined
+  /** Roles seen by a draining writer, which stops when the move it drains for ends. */
+  const watchers = new Set<(state: SyncState) => void>()
+  // Lifecycle work runs one task at a time, outside every socket handler.
+  let chain: Promise<unknown> = Promise.resolve()
+  const queue = <T>(work: () => Promise<T>): Promise<T> => {
+    const next = chain.then(work)
+    // The caller gets the failure; the chain only waits for the work to settle.
+    chain = next.catch(() => undefined)
+    return next
+  }
+  const fail = (message: string) => {
+    lastError = message
+    host.notice(message)
+  }
+  const report = (error: unknown) => fail(`Cloud lease: ${String(error)}`)
+  const serving = () => {
+    try {
+      host.harness()
+      return true
+    } catch {
+      // The harness is closed: on standby, or between switches.
+      return false
+    }
+  }
+
+  const readLeaseFile = async (): Promise<LeaseFile> => {
+    try {
+      return JSON.parse(await readFile(leasePath, 'utf8')) as LeaseFile
+    } catch {
+      // No lease file yet: nothing is known about the local database.
+      return {}
+    }
+  }
+  /** The local database is the snapshot `snapshot`: the last release recorded it and its content is unchanged. */
+  const isSnapshot = async (snapshot: SyncState['snapshot']) => {
+    const lease = await readLeaseFile()
+    return (
+      !!snapshot &&
+      lease.key === identity.key &&
+      lease.snapshot === snapshot.id &&
+      lease.epoch === snapshot.epoch &&
+      !!lease.snapshotHash &&
+      existsSync(database) &&
+      (await deps.snapshots.databaseHash(database)) === lease.snapshotHash
+    )
+  }
+  const secret = async () =>
+    (await deps.secret?.()) ?? process.env[SECRET] ?? (await readSecret(host.userHome, SECRET))
+  const missingKey = `Missing ${SECRET}. Add it in the Secrets panel (⌘K → Secrets) to move this project.`
+  const localSecrets = async () =>
+    new Set(
+      await secretMetadata(host.userHome).then(
+        (secrets) => secrets.map((item) => item.name),
+        // The Secrets panel reports an unreadable store; until then every writer secret counts as missing.
+        () => [],
+      ),
+    )
+
+  const connect = (next: 'serving' | 'standby') => {
+    sync?.()
+    mode = next
+    const current = deps.sync(
+      host,
+      options,
+      deps.dial,
+      next === 'serving' ? deps.builds : undefined,
+      {
+        serving: next === 'serving',
+        // A replaced connection's last roles no longer apply.
+        role: (state) => setTimeout(() => sync === current && onRole(state, current), 0),
+        releaseRequested: (by, id) => setTimeout(() => void moveTo(by, id).catch(report), 0),
+        releaseWaiting: (by, tasks) => {
+          host.notice(`Move to ${by} waits for ${runs(tasks)}`)
+          const handover = moving?.transition.steps.find((step) => step.name === 'handover')
+          if (handover) {
+            handover.detail = `finishing ${tasks} ${tasks === 1 ? 'run' : 'runs'}`
+            publish()
+          }
+        },
+        moveTo: (id, force) => setTimeout(() => void move({ id, force }).catch(report), 0),
+        cancel: (id) => {
+          if (moving?.transition.id === id) cancel()
+        },
+      },
+    )
+    sync = current
+    clearInterval(idleTimer)
+    idleSince = undefined
+    if (next === 'serving' && options.idleRelease > 0)
+      idleTimer = setInterval(() => void checkIdle().catch(report), 60_000)
+  }
+  const disconnect = () => {
+    sync?.()
+    clearInterval(idleTimer)
+    mode = undefined
+  }
+
+  const onRole = (state: SyncState, connection: typeof sync) => {
+    for (const watch of watchers) watch(state)
+    if (pendingRelease) {
+      if (state.role === 'writer' && !pendingRelease.sent)
+        pendingRelease.sent = sync!.send({
+          type: 'release',
+          epoch: pendingRelease.epoch,
+          snapshot: { id: pendingRelease.id },
+        })
+      else if (state.role === 'standby') {
+        if (pendingRelease.sent) pendingRelease.done.resolve()
+        else pendingRelease.done.reject(new Error('this machine no longer holds the lease'))
+        pendingRelease = undefined
+      }
+      return
+    }
+    if (pendingClaim) {
+      if (state.role === 'writer') pendingClaim.done.resolve(true)
+      // A free lease at the claimed epoch is an announcement sent before the claim arrived.
+      else if (!state.free || state.epoch !== pendingClaim.epoch) pendingClaim.done.resolve(false)
+      return
+    }
+    // A preparing move decides for itself; it only waits for the lease to be freed.
+    if (moving) {
+      if (state.free) freed?.resolve(state)
+      return
+    }
+    if (closed) return
+    void queue(() => decide(state, connection)).catch(report)
+  }
+  const decide = async (state: SyncState, connection: typeof sync) => {
+    if (sync !== connection) return
+    if (mode === 'serving' && state.role === 'standby') {
+      const { writer, free } = state
+      await host.deactivate(
+        {
+          reason: writer?.machine ? `Runs on ${writer.machine}` : 'Released · resume here',
+          ...(writer ? { writer: { ...writer } } : {}),
+          free: !!free,
+          cloud: true,
+        },
+        // The released snapshot stays in place; anything else is history of its own, kept aside.
+        async (path) => {
+          if (
+            suffixes.some((suffix) => existsSync(path + suffix)) &&
+            !(await isSnapshot(state.snapshot))
+          )
+            await moveDatabase(path, staleName(path))
+        },
+      )
+      connect('standby')
+      return
+    }
+    if (mode !== 'standby') return
+    // The cloud names this machine the writer while it is on standby: a release that never happened.
+    if (state.role === 'writer') {
+      await host.activate()
+      return
+    }
+    const claimNow = autoClaim && !!state.free
+    autoClaim = false
+    if (claimNow) await prepare(randomUUID(), false)
+  }
+
+  /** Why "Move here" cannot work right now, if it cannot. */
+  const blocked = (state: SyncState | undefined) => {
+    const writer = state?.writer
+    if (!state?.connected || !writer) return 'The cloud is not connected'
+    if (state.role === 'writer') return 'This machine runs the project'
+    if (writer.root !== host.projectRoot)
+      return `The project runs at ${writer.root}; this checkout is ${host.projectRoot}`
+    if (state.free && !state.snapshot) return 'The project has no snapshot to move yet'
+    if (!state.free && !writer.online) return `${writer.machine} is offline`
+    return undefined
+  }
+
+  // The latest transition goes to the cloud at once on a step change, and at most every half second for progress.
+  let published = 0
+  const publish = (throttled = false) => {
+    if (!moving || (throttled && Date.now() - published < 500)) return
+    published = Date.now()
+    sync?.send({ type: 'transition', value: structuredClone(moving.transition) })
+  }
+  const cancel = () => {
+    if (moving?.transition.cancellable) moving.abort.abort(new Error('Cancelled'))
+  }
+
+  /** Fast-forward the checkout's default branch to origin's; true when `pnpm-lock.yaml` changed with it. */
+  const fastForward = async (step: TransitionStep, signal: AbortSignal) => {
+    const git = async (...args: string[]) => {
+      try {
+        return (await execute('git', args, { cwd: host.projectRoot, signal })).stdout.trim()
+      } catch (error) {
+        if (signal.aborted) throw signal.reason
+        throw new Error(`git ${args[0]} failed: ${tail(error)}`, { cause: error })
+      }
+    }
+    if (await git('status', '--porcelain', '--untracked-files=no'))
+      throw new Error('The checkout has uncommitted changes')
+    await git('fetch', '--quiet', 'origin')
+    const remote = await git('symbolic-ref', '--short', 'refs/remotes/origin/HEAD').catch(() => {
+      throw new Error('origin has no default branch; run git remote set-head origin --auto')
+    })
+    const branch = remote.replace(/^origin\//, '')
+    const current = await git('symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => '')
+    if (current !== branch)
+      throw new Error(`The checkout is on ${current || 'a detached HEAD'}, not ${branch}`)
+    const [ahead, behind] = (await git('rev-list', '--left-right', '--count', `HEAD...${remote}`))
+      .split(/\s+/)
+      .map(Number)
+    if (ahead && behind) throw new Error(`${branch} has diverged from ${remote}`)
+    const before = await git('rev-parse', 'HEAD')
+    if (behind) await git('merge', '--ff-only', '--quiet', remote)
+    const after = await git('rev-parse', 'HEAD')
+    step.detail =
+      before === after
+        ? `${branch} is up to date`
+        : `${branch} fast-forwarded ${before.slice(0, 7)}..${after.slice(0, 7)}`
+    return (
+      before !== after &&
+      !!(await git('diff', '--name-only', before, after, '--', 'pnpm-lock.yaml'))
+    )
+  }
+
+  /**
+   * Prepare to take the lease and take it, reporting each step. A failure or a cancel before the claim leaves the
+   * holder untouched and deletes only the download. Resolves whether this machine runs the project now.
+   */
+  const prepare = async (id: string, force: boolean) => {
+    const start = sync?.state()
+    const refused = moving
+      ? 'Another move is preparing'
+      : mode !== 'standby'
+        ? 'This machine is not on standby'
+        : blocked(start)
+    if (refused) {
+      fail(`Move here refused: ${refused}`)
+      return false
+    }
+    const transition: Transition = {
+      id,
+      target: options.machine,
+      from: start!.free ? null : (start!.writer?.machine ?? null),
+      step: 'fetch',
+      steps: STEPS.map((name) => ({ name, state: 'pending' })),
+      cancellable: true,
+      startedAt: Date.now(),
+    }
+    const abort = new AbortController()
+    const { signal } = abort
+    moving = { transition, abort }
+    ran = transition
+    let downloaded: string | undefined
+    let current: TransitionStep | undefined
+    const begin = (name: TransitionStep['name']) => {
+      signal.throwIfAborted()
+      current = transition.steps.find((step) => step.name === name)!
+      current.state = 'running'
+      transition.step = name
+      publish()
+      return current
+    }
+    const end = (state: 'done' | 'skipped', detail?: string) => {
+      current!.state = state
+      if (detail !== undefined) current!.detail = detail
+      publish()
+    }
+    try {
+      const fetched = begin('fetch')
+      const lockChanged = await fastForward(fetched, signal)
+      end('done')
+
+      begin('install')
+      // A failed install stays owed: the next attempt finds the checkout fast-forwarded already.
+      const owed = join(host.home, 'cloud-install-pending')
+      if (!lockChanged && !existsSync(owed)) end('skipped', 'pnpm-lock.yaml is unchanged')
+      else {
+        await writeFile(owed, '')
+        try {
+          await execute('pnpm', ['install', '--frozen-lockfile'], {
+            cwd: host.projectRoot,
+            signal,
+            timeout: MOVE_CAP,
+          })
+        } catch (error) {
+          if (signal.aborted) throw signal.reason
+          throw new Error(`pnpm install failed:\n${tail(error)}`, { cause: error })
+        }
+        await rm(owed)
+        end('done', 'pnpm install --frozen-lockfile')
+      }
+
+      begin('checks')
+      let state = sync!.state()
+      const reason = blocked(state)
+      if (reason) throw new Error(reason)
+      const key = await secret()
+      if (!key) throw new Error(missingKey)
+      const local = await localSecrets()
+      const missing = (state.writer?.secrets ?? []).filter((name) => !local.has(name))
+      if (missing.length && !force) throw new Error(`Missing secrets: ${missing.join(', ')}`)
+      end('done', missing.length ? `Continuing without ${missing.join(', ')}` : 'Ready')
+
+      begin('handover')
+      if (state.free) end('skipped', 'The lease is free')
+      else {
+        freed = Promise.withResolvers<SyncState>()
+        const aborted = () => freed?.reject(signal.reason)
+        signal.addEventListener('abort', aborted, { once: true })
+        sync!.send({ type: 'request-release', id })
+        try {
+          state = await freed.promise
+        } finally {
+          signal.removeEventListener('abort', aborted)
+          freed = undefined
+        }
+        end('done', `${transition.from} released the project`)
+      }
+
+      const download = begin('download')
+      const snapshot = state.snapshot
+      if (!snapshot) throw new Error('The project has no snapshot to move yet')
+      let keptRefs: string[] = []
+      if (await isSnapshot(snapshot)) end('skipped', 'This machine has the snapshot')
+      else {
+        const result = await deps.snapshots.downloadSnapshot({
+          url: options.url,
+          token: options.token,
+          secret: key,
+          key: identity.key,
+          id: snapshot.id,
+          dir: host.home,
+          repo: host.projectRoot,
+          signal,
+          progress: (done, total) => {
+            download.done = done
+            download.total = total
+            publish(true)
+          },
+        })
+        downloaded = result.database
+        keptRefs = result.keptRefs
+        end('done')
+      }
+
+      begin('branches')
+      if (!downloaded) end('skipped')
+      else if (keptRefs.length)
+        end('done', `Kept local branches; the moved ones are ${keptRefs.join(', ')}`)
+      else end('done', 'ultimate/* branches restored')
+
+      begin('claim')
+      transition.cancellable = false
+      publish()
+      const done = Promise.withResolvers<boolean>()
+      pendingClaim = { epoch: state.epoch!, done }
+      const won = sync!.send({ type: 'claim', epoch: state.epoch! }) && (await done.promise)
+      pendingClaim = undefined
+      if (!won) throw new Error('Another machine took the project first')
+      end('done', `Runs here from epoch ${state.epoch! + 1}`)
+      lastError = undefined
+      moving = undefined
+      const install = downloaded
+      await host.activate(async (path) => {
+        if (!install) return
+        if (suffixes.some((suffix) => existsSync(path + suffix)))
+          await moveDatabase(path, staleName(path))
+        await rename(install, path)
+      })
+      return true
+    } catch (error) {
+      const message = signal.aborted
+        ? 'Cancelled'
+        : error instanceof Error
+          ? error.message
+          : String(error)
+      // Only the download goes; the holder and the local database stay as they are.
+      if (downloaded) await rm(downloaded, { force: true })
+      if (current) {
+        current.state = 'failed'
+        current.detail = message
+      }
+      transition.error = message
+      transition.cancellable = false
+      publish()
+      moving = undefined
+      fail(`Move here failed: ${message}`)
+      return false
+    }
+  }
+  const move = ({ id = randomUUID(), force = false }: { id?: string; force?: boolean } = {}) =>
+    queue(() => prepare(id, force))
+
+  /**
+   * With storage closed: upload the snapshot, record it, release and wait for the free lease. Resolves whether the
+   * release was sent, so a failure before it keeps the lease.
+   */
+  const releaseClosed = async (epoch: number, key: string, signal?: AbortSignal) => {
+    let pending: NonNullable<typeof pendingRelease> | undefined
+    try {
+      progress = { kind: 'upload', done: 0, total: 0 }
+      const manifest = await deps.snapshots.uploadSnapshot({
+        url: options.url,
+        token: options.token,
+        secret: key,
+        key: identity.key,
+        epoch,
+        machine: options.machine,
+        database,
+        repo: host.projectRoot,
+        signal,
+        progress: (done, total) => {
+          progress = { kind: 'upload', done, total }
+        },
+      })
+      progress = undefined
+      // The manifest hashes the same consistent copy `databaseHash` does.
+      const lease: LeaseFile = {
+        key: identity.key,
+        epoch,
+        snapshot: manifest.id,
+        snapshotHash: manifest.database.sha256,
+      }
+      await writeJson(leasePath, lease)
+      const done = Promise.withResolvers<void>()
+      pending = { epoch, id: manifest.id, sent: false, done }
+      pendingRelease = pending
+      connect('standby')
+      const aborted = () => done.reject(signal!.reason)
+      signal?.addEventListener('abort', aborted, { once: true })
+      try {
+        await done.promise
+      } finally {
+        signal?.removeEventListener('abort', aborted)
+        if (pendingRelease === pending) pendingRelease = undefined
+      }
+      lastError = undefined
+      return { released: true, sent: true }
+    } catch (error) {
+      progress = undefined
+      fail(`Releasing the lease failed; this machine keeps it: ${String(error)}`)
+      return { released: false, sent: pending?.sent ?? false }
+    }
+  }
+
+  /** Release from a serving writer: storage closes, the snapshot goes up, the lease is freed. */
+  const release = async (info: JsonObject) => {
+    const state = sync?.state()
+    if (mode !== 'serving' || state?.role !== 'writer' || state.epoch === undefined) return false
+    const key = await secret()
+    if (!key) {
+      fail(missingKey)
+      return false
+    }
+    autoClaim = false
+    await host.deactivate({ ...info, cloud: true }, async () => {})
+    const result = await releaseClosed(state.epoch, key, AbortSignal.timeout(MOVE_CAP))
+    // Nothing was released: serve again. A release sent but unconfirmed waits for the cloud's next role.
+    if (!result.sent) await host.activate()
+    return result.released
+  }
+
+  const busyTasks = async () => {
+    const graph = await host.harness().taskGraph(context)
+    try {
+      return foreground(graph)
+    } finally {
+      graph.dispose()
+    }
+  }
+  /** No foreground task runs and no automation is due within the idle threshold. */
+  const idle = async (now: number) => {
+    if ((await busyTasks()) > 0) return false
+    const due = await host.use<AutomationsService>('automations')?.nextDue()
+    return due === undefined || due > now + options.idleRelease * 60_000
+  }
+  const checkIdle = (now = Date.now()) =>
+    queue(async () => {
+      if (mode !== 'serving' || sync?.state().role !== 'writer' || !(await idle(now))) {
+        idleSince = undefined
+        return false
+      }
+      idleSince ??= now
+      if (now - idleSince < options.idleRelease * 60_000) return false
+      idleSince = undefined
+      return release({ reason: 'Released · resume here', released: true })
+    })
+
+  /**
+   * A standby asked for the lease for transition `id`: release once no foreground task runs, at the latest after ten
+   * minutes, reporting how many still run. A transition that ends meanwhile, failed or cancelled, stops the wait.
+   */
+  const moveTo = (by: string, id: string) =>
+    queue(async () => {
+      if (mode !== 'serving' || sync?.state().role !== 'writer') return false
+      // Only this transition's own end counts: roles sent before it was reported may still be on their way.
+      const ended = (state: SyncState) => state.transition?.id === id && !!state.transition.error
+      const graph = await host.harness().taskGraph(context)
+      let outcome: 'drained' | 'cancelled' = 'drained'
+      try {
+        let tasks = foreground(graph)
+        if (tasks > 0) {
+          host.notice(`Move to ${by} waits for ${runs(tasks)}`)
+          sync.send({ type: 'release-waiting', by, tasks })
+          outcome = await new Promise((resolve) => {
+            const timer = setTimeout(() => finish('drained'), MOVE_CAP)
+            const unsubscribe = graph.subscribe(() => {
+              const now = foreground(graph)
+              if (now === 0) finish('drained')
+              else if (now !== tasks) {
+                tasks = now
+                sync?.send({ type: 'release-waiting', by, tasks })
+              }
+            })
+            const watch = (state: SyncState) => ended(state) && finish('cancelled')
+            watchers.add(watch)
+            function finish(result: 'drained' | 'cancelled') {
+              clearTimeout(timer)
+              unsubscribe()
+              watchers.delete(watch)
+              resolve(result)
+            }
+          })
+        }
+      } finally {
+        graph.dispose()
+      }
+      if (outcome === 'cancelled' || ended(sync.state())) {
+        host.notice(`The move to ${by} stopped; this machine keeps the project`)
+        return false
+      }
+      return release({ reason: `Moved to ${by}` })
+    })
+
+  /** The process stops: release within the supervisor's shutdown, or keep the lease and open normally next time. */
+  const stopRelease = async () => {
+    const state = sync?.state()
+    disconnect()
+    if (state?.role !== 'writer' || state.epoch === undefined || host.standby()) return
+    const key = await secret()
+    if (!key) {
+      host.notice(`Kept the lease on stop: ${SECRET} is missing.`)
+      return
+    }
+    const signal = AbortSignal.timeout(STOP_BUDGET)
+    const info = { reason: 'Released when Ultimate stopped', released: true, cloud: true }
+    if (serving()) await host.deactivate(info, async () => {})
+    let lock: Awaited<ReturnType<typeof acquireLock>>
+    try {
+      lock = await acquireLock(join(host.home, 'storage.lock'), { pid: process.pid })
+    } catch {
+      // A core swap: the next process owns storage and the lease.
+      return
+    }
+    try {
+      if (!existsSync(standbyPath)) await writeJson(standbyPath, info)
+      const result = await releaseClosed(state.epoch, key, signal)
+      // Nothing was released, so the next start opens normally and still holds the lease.
+      if (!result.sent) await rm(standbyPath, { force: true })
+    } finally {
+      disconnect()
+      await lock.close()
+    }
+  }
+
+  // A process starting on standby opens no harness; it is on standby once the server read `standby.json`.
+  const onStandby = () => {
+    if (closed || mode) return true
+    if (!host.standby()) return false
+    connect('standby')
+    return true
+  }
+  const wait = setInterval(() => onStandby() && clearInterval(wait), 100)
+  if (onStandby()) clearInterval(wait)
+
+  return {
+    /** The harness opened (at start or after a claim): sync as the writer. */
+    opened() {
+      if (!closed) connect('serving')
+    },
+    /** The harness is about to close: stop syncing before it does. */
+    released: disconnect,
+    sync: () => sync,
+    async state(): Promise<LeaseState> {
+      const state = sync?.state()
+      const local = await localSecrets()
+      const reported = state?.transition
+      const transition =
+        ran && (!reported || reported.id === ran.id || reported.startedAt < ran.startedAt)
+          ? ran
+          : reported
+      return {
+        role: state?.role,
+        free: !!state?.free,
+        writer: state?.writer,
+        missing: (state?.writer?.secrets ?? []).filter((name) => !local.has(name)),
+        blocked: blocked(state),
+        progress,
+        ...(transition ? { transition: structuredClone(transition) } : {}),
+        lastError,
+      }
+    },
+    /**
+     * Start taking the project here: prepare, then claim a free lease or have the online writer release it first.
+     * `force` continues although secrets are missing. Resolves the transition ID at once; `move` resolves at its end.
+     */
+    moveHere({ force = false }: { force?: boolean } = {}) {
+      const reason = moving ? 'Another move is preparing' : blocked(sync?.state())
+      if (reason) throw new Error(reason)
+      const id = randomUUID()
+      void move({ id, force }).catch(report)
+      return { id }
+    },
+    move,
+    /** Stop the preparing move, until its claim is sent. */
+    cancel() {
+      if (!moving?.transition.cancellable) throw new Error('No move to cancel')
+      cancel()
+    },
+    checkIdle,
+    /** Reconnect with a fresh hello, as after a relink. */
+    restart() {
+      if (mode) connect(mode)
+    },
+    /** The facet closes; `stopRelease` may still follow for the process. */
+    close() {
+      closed = true
+      clearInterval(wait)
+      cancel()
+      disconnect()
+    },
+    /** Lifecycle work queued so far has settled. */
+    settled: () => chain,
+    stopRelease,
+  }
+}
+export type Lease = ReturnType<typeof startLease>

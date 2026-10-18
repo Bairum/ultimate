@@ -1,5 +1,12 @@
 import type { ConversationRecord, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
-import type { CloudMessage, Hello, MachineMessage, OutboxItem } from './protocol.ts'
+import type {
+  CloudMessage,
+  Hello,
+  MachineMessage,
+  OutboxItem,
+  Transition,
+  TransitionStep,
+} from './protocol.ts'
 
 type Role = Extract<CloudMessage, { type: 'role' }>
 /** A machine that said hello: how to reach it should it claim the lease, and when it was last seen. */
@@ -99,6 +106,7 @@ export class ReplicaStore {
   }
   role(role: Role['role'], online: boolean): Role {
     const { machine, root, epoch, secrets, snapshot } = this.lease()!
+    const transition = this.transition()
     return {
       type: 'role',
       role,
@@ -106,6 +114,58 @@ export class ReplicaStore {
       free: machine === null,
       ...(snapshot ? { snapshot } : {}),
       writer: { machine, root, epoch, online: machine !== null && online, secrets },
+      ...(transition ? { transition } : {}),
+    }
+  }
+  /** The latest transition a machine reported, running or ended. */
+  transition(): Transition | undefined {
+    return (this.metadata(7) as Transition | null | undefined) ?? undefined
+  }
+  /**
+   * Store the transition `machine` reports; only its target reports it, and only the target of the stored one clears
+   * it. False: refused.
+   */
+  report(machine: string, value: Transition | null): boolean {
+    if (value === null ? this.transition()?.target !== machine : !validTransition(value, machine))
+      return false
+    this.put('metadata', 7, value)
+    return true
+  }
+  /** The writer's drain progress shows as the handover step's detail of the transition to `by`. */
+  draining(by: string, tasks: number): boolean {
+    const transition = this.transition()
+    const handover = transition?.steps.find((step) => step.name === 'handover')
+    if (transition?.target !== by || !handover) return false
+    handover.detail = `finishing ${tasks} ${tasks === 1 ? 'run' : 'runs'}`
+    this.put('metadata', 7, transition)
+    return true
+  }
+  /** `GET /api/cloud`: every machine, the lease and the latest transition. */
+  cloud(connected: Set<string>, online: boolean) {
+    const lease = this.lease()
+    const writer = lease?.machine ?? null
+    return {
+      machines: Object.entries(this.machines()).map(([machine, known]) => ({
+        machine,
+        role: machine === writer ? ('writer' as const) : ('standby' as const),
+        connected: connected.has(machine),
+        root: known.root,
+        lastSeen: known.lastSeen,
+        missingSecrets:
+          machine === writer
+            ? []
+            : (lease?.secrets ?? []).filter((name) => !known.secrets.includes(name)),
+      })),
+      lease: lease
+        ? {
+            machine: writer,
+            epoch: lease.epoch,
+            root: lease.root,
+            online: writer !== null && online,
+            ...(lease.snapshot ? { snapshot: lease.snapshot } : {}),
+          }
+        : null,
+      transition: this.transition() ?? null,
     }
   }
   private admitted(): CloudMessage[] {
@@ -245,9 +305,17 @@ export class ReplicaStore {
     // Negative IDs distinguish cloud queue items from the machine's positive Pi submission IDs.
     return { item, submissionId: -row.submissionId }
   }
-  /** Apply data from the writer's socket; the lease changes through `hello`, `release` and `claim`. */
+  /**
+   * Apply data from the writer's socket. The lease changes through `hello`, `release` and `claim`; the socket layer
+   * forwards `request-release` and `release-waiting` between machines.
+   */
   receive(
-    message: Exclude<MachineMessage, { type: 'hello' | 'release' | 'claim' }>,
+    message: Exclude<
+      MachineMessage,
+      {
+        type: 'hello' | 'release' | 'claim' | 'request-release' | 'release-waiting' | 'transition'
+      }
+    >,
   ): CloudMessage[] {
     switch (message.type) {
       case 'uiBuild':
@@ -374,6 +442,45 @@ export class ReplicaStore {
     const entries = all.slice(0, 64)
     return { entries, ...(all.length > 64 ? { before: entries.at(-1)!.id } : {}) }
   }
+}
+
+const STEPS: TransitionStep['name'][] = [
+  'fetch',
+  'install',
+  'checks',
+  'handover',
+  'download',
+  'branches',
+  'claim',
+]
+const STATES: TransitionStep['state'][] = ['pending', 'running', 'done', 'failed', 'skipped']
+const text = (value: unknown, max = 2000) =>
+  value === undefined || (typeof value === 'string' && value.length <= max)
+const count = (value: unknown) =>
+  value === undefined || (Number.isSafeInteger(value) && (value as number) >= 0)
+/** A transition `machine` may report: its own, well formed and bounded. */
+function validTransition(value: Transition, machine: string) {
+  return (
+    !!value &&
+    typeof value.id === 'string' &&
+    /^[\w-]{1,64}$/.test(value.id) &&
+    value.target === machine &&
+    (value.from === null || typeof value.from === 'string') &&
+    STEPS.includes(value.step) &&
+    Array.isArray(value.steps) &&
+    value.steps.length <= STEPS.length &&
+    value.steps.every(
+      (step) =>
+        STEPS.includes(step?.name) &&
+        STATES.includes(step.state) &&
+        text(step.detail) &&
+        count(step.done) &&
+        count(step.total),
+    ) &&
+    text(value.error) &&
+    typeof value.cancellable === 'boolean' &&
+    Number.isSafeInteger(value.startedAt)
+  )
 }
 
 /** Check the browser's original authority before rewriting headers for the machine's loopback gate. */

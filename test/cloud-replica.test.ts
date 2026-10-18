@@ -7,7 +7,13 @@ import type { Sql } from '../cloud/replica.ts'
 import { DirectoryStore } from '../cloud/directory.ts'
 import type { Presence } from '../cloud/directory.ts'
 import { PROJECT_MISMATCH } from '../cloud/protocol.ts'
-import type { CloudMessage, Hello, MachineMessage, ReplicaDoc } from '../cloud/protocol.ts'
+import type {
+  CloudMessage,
+  Hello,
+  MachineMessage,
+  ReplicaDoc,
+  Transition,
+} from '../cloud/protocol.ts'
 
 const databases: DatabaseSync[] = []
 afterEach(() => {
@@ -504,6 +510,150 @@ describe('project replica sockets', () => {
       ['laptop', 'writer'],
       ['test', 'standby'],
     ])
+  })
+
+  it('keeps the target transition, sends it to every machine and patches the writer drain into its handover', () => {
+    const { instance, connect, updates } = shared()
+    const writer = connect()
+    writer.receive(hello())
+    const laptop = connect()
+    laptop.receive(hello({ machine: 'laptop' }))
+    const desk = connect()
+    desk.receive(hello({ machine: 'desk' }))
+    const transition: Transition = {
+      id: 'move-1',
+      target: 'laptop',
+      from: 'test',
+      step: 'handover',
+      steps: [
+        { name: 'fetch', state: 'done', detail: 'main is up to date' },
+        { name: 'handover', state: 'running' },
+      ],
+      cancellable: true,
+      startedAt: 1,
+    }
+    // Only the target reports its transition.
+    desk.receive({ type: 'transition', value: transition })
+    expect(instance.store.transition()).toBeUndefined()
+    laptop.receive({
+      type: 'transition',
+      value: { ...transition, steps: [{ name: 'x' }] } as never,
+    })
+    expect(instance.store.transition()).toBeUndefined()
+    laptop.receive({ type: 'transition', value: transition })
+    for (const machine of [writer, laptop, desk])
+      expect(machine.sent().at(-1)).toMatchObject({ type: 'role', transition })
+    expect(writer.sent().at(-1)).toMatchObject({ role: 'writer' })
+    expect(updates.at(-1)?.transition).toEqual(transition)
+
+    laptop.receive({ type: 'request-release', id: 'move-1' })
+    expect(writer.sent().at(-1)).toEqual({ type: 'release-requested', by: 'laptop', id: 'move-1' })
+    const before = desk.sent().length
+    writer.receive({ type: 'release-waiting', by: 'laptop', tasks: 2 })
+    expect(laptop.sent().at(-2)).toEqual({ type: 'release-waiting', by: 'laptop', tasks: 2 })
+    expect(instance.store.transition()?.steps[1]).toEqual({
+      name: 'handover',
+      state: 'running',
+      detail: 'finishing 2 runs',
+    })
+    expect(desk.sent().at(-1)).toMatchObject({
+      type: 'role',
+      transition: { steps: [{ name: 'fetch' }, { detail: 'finishing 2 runs' }] },
+    })
+    // Only a standby asks, and only the writer answers.
+    const writes = writer.sent().length
+    writer.receive({ type: 'request-release', id: 'move-1' })
+    laptop.receive({ type: 'release-waiting', by: 'desk', tasks: 1 })
+    expect(writer.sent()).toHaveLength(writes)
+    expect(desk.sent()).toHaveLength(before + 1)
+    // Only the target clears it.
+    desk.receive({ type: 'transition', value: null })
+    expect(instance.store.transition()).toBeDefined()
+    laptop.receive({ type: 'transition', value: null })
+    expect(instance.store.transition()).toBeUndefined()
+  })
+
+  it('answers /api/cloud itself while the writer is online, and forwards moves and cancels to the target', async () => {
+    const { instance, connect } = shared()
+    Object.assign(instance.env, { MACHINE_ORIGIN: 'http://127.0.0.1' })
+    const machine = vi.fn<typeof fetch>(async () => new Response('from the machine'))
+    vi.stubGlobal('fetch', machine)
+    const writer = connect()
+    writer.receive(hello({ secrets: ['A', 'B'] }))
+    const laptop = connect()
+    laptop.receive(hello({ machine: 'laptop', root: '/laptop', secrets: ['A'] }))
+    const api = (path: string, body?: unknown) =>
+      instance.fetch(
+        new Request(`https://cloud.example${path}`, {
+          method: body === undefined ? 'GET' : 'POST',
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        }),
+      )
+    expect(await (await api('/api/models')).text()).toBe('from the machine')
+    machine.mockClear()
+    expect(await (await api('/api/cloud')).json()).toEqual({
+      machines: [
+        expect.objectContaining({
+          machine: 'test',
+          role: 'writer',
+          connected: true,
+          root: '/test',
+          missingSecrets: [],
+        }),
+        expect.objectContaining({
+          machine: 'laptop',
+          role: 'standby',
+          connected: true,
+          root: '/laptop',
+          missingSecrets: ['B'],
+        }),
+      ],
+      lease: { machine: 'test', epoch: 1, root: '/test', online: true },
+      transition: null,
+    })
+    const moved = await api('/api/cloud/move', { machine: 'laptop', force: true })
+    expect(moved.status).toBe(202)
+    const { id } = (await moved.json()) as { id: string }
+    expect(laptop.sent().at(-1)).toEqual({ type: 'move-to', id, force: true })
+    for (const [body, error] of [
+      [{ machine: 'test' }, 'runs there already'],
+      [{ machine: 'desk' }, 'not connected'],
+    ] as const) {
+      const refused = await api('/api/cloud/move', body)
+      expect({ status: refused.status, body: await refused.json() }).toEqual({
+        status: 409,
+        body: { error },
+      })
+    }
+    expect((await api('/api/cloud/cancel', {})).status).toBe(409)
+    laptop.receive({
+      type: 'transition',
+      value: {
+        id,
+        target: 'laptop',
+        from: 'test',
+        step: 'fetch',
+        steps: [],
+        cancellable: true,
+        startedAt: 1,
+      },
+    })
+    expect((await api('/api/cloud/cancel', {})).status).toBe(202)
+    expect(laptop.sent().at(-1)).toEqual({ type: 'cancel', id })
+    expect(machine).not.toHaveBeenCalled()
+  })
+
+  it('admits a hello naming the relinked key on the replica it was relinked to', () => {
+    const { instance, connect } = shared()
+    connect().receive(hello())
+    const renamed = connect()
+    renamed.socket.serializeAttachment({ key: KEY, alias: 'github.com/hazat/renamed' })
+    renamed.receive(hello({ key: 'github.com/hazat/renamed', machine: 'laptop' }))
+    expect(renamed.sent()[0]).toMatchObject({ type: 'role', role: 'standby' })
+    expect(instance.store.project()?.key).toBe(KEY)
+    const other = connect()
+    other.receive(hello({ key: 'github.com/hazat/renamed', machine: 'desk' }))
+    expect(other.socket.close).toHaveBeenCalledWith(PROJECT_MISMATCH, 'invalid hello')
   })
 
   it('refuses a claim with the wrong epoch, on a held lease, or from an unadmitted socket', () => {

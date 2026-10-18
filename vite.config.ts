@@ -98,7 +98,7 @@ export default defineConfig({
                 cloudflare: ['secrets'],
                 phase: ['classify', 'conversations'],
                 codemode: ['subagents'],
-                cloud: ['onboarding', 'secrets'],
+                cloud: ['automations', 'onboarding', 'secrets'],
                 fast: ['onboarding'],
                 conversations: [
                   'board',

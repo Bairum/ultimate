@@ -114,7 +114,34 @@ async function route(request: Request, env: Env): Promise<Response> {
     const key = url.searchParams.get('project')
     if (!key || !PROJECT_KEY.test(key))
       return Response.json({ error: 'Expected a project key' }, { status: 400 })
-    return env.REPLICA.get(env.REPLICA.idFromName(key)).fetch(request)
+    // A relinked key syncs to its target's replica, which admits hellos naming either key.
+    const alias = await directory(env).fetch(
+      `https://directory/alias?key=${encodeURIComponent(key)}`,
+    )
+    if (!alias.ok) return env.REPLICA.get(env.REPLICA.idFromName(key)).fetch(request)
+    const { target }: { target: string } = await alias.json()
+    url.searchParams.set('project', target)
+    url.searchParams.set('alias', key)
+    return env.REPLICA.get(env.REPLICA.idFromName(target)).fetch(new Request(url, request))
+  }
+  if (url.pathname === '/sync/relink') {
+    if (!env.SYNC_TOKEN || !matchesSyncToken(request.headers.get('Authorization'), env.SYNC_TOKEN))
+      return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 })
+    const body = (await request.json().catch(() => ({}))) as { key?: unknown; from?: unknown }
+    const { key, from } = body ?? {}
+    if (
+      typeof key !== 'string' ||
+      typeof from !== 'string' ||
+      !PROJECT_KEY.test(key) ||
+      !PROJECT_KEY.test(from) ||
+      key === from
+    )
+      return Response.json({ error: 'Expected two different project keys' }, { status: 400 })
+    return directory(env).fetch('https://directory/alias', {
+      method: 'POST',
+      body: JSON.stringify({ key, from }),
+    })
   }
   if (url.pathname === '/sync' || url.pathname.startsWith('/sync/'))
     return Response.json({ error: 'Unknown sync endpoint' }, { status: 404 })
@@ -183,6 +210,18 @@ export class ProjectDirectory {
   }
   async fetch(request: Request) {
     const url = new URL(request.url)
+    if (url.pathname === '/alias') {
+      if (request.method === 'POST') {
+        const { key, from }: { key: string; from: string } = await request.json()
+        return this.store.alias(key, from)
+          ? new Response(null, { status: 204 })
+          : Response.json({ error: 'A project cannot alias itself' }, { status: 400 })
+      }
+      const target = this.store.target(url.searchParams.get('key') ?? '')
+      return target
+        ? Response.json({ target })
+        : Response.json({ error: 'No alias' }, { status: 404 })
+    }
     if (request.method === 'POST') {
       const presence: Presence = await request.json()
       this.store.update(presence)
@@ -196,18 +235,22 @@ export class ProjectDirectory {
   }
 }
 
-/** A socket's attachment: its project key from the URL, then the machine and role its hello earned. */
+/**
+ * A socket's attachment: its project key from the URL (with the relinked key it connected with, if any), then the
+ * machine and role its hello earned.
+ */
 interface Attachment {
   key: string
+  alias?: string
   machine?: string
   role?: 'writer' | 'standby'
 }
 const attachment = (socket: MachineSocket) =>
   socket.deserializeAttachment() as Attachment | null | undefined
 
-function validHello(hello: Hello, key: string) {
+function validHello(hello: Hello, { key, alias }: Attachment) {
   return (
-    hello.key === key &&
+    (hello.key === key || hello.key === alias) &&
     typeof hello.rootCommit === 'string' &&
     /^[0-9a-f]{40,64}$/.test(hello.rootCommit) &&
     typeof hello.root === 'string' &&
@@ -267,6 +310,18 @@ export class SharedReplica {
       if (socket !== closing && attachment(socket)?.role === 'standby')
         socket.send(JSON.stringify(this.store.role('standby', online)))
   }
+  /** Tell every machine, the writer too, its role again: the latest transition travels with it. */
+  broadcast() {
+    const online = this.sockets().length > 0
+    for (const socket of this.admitted())
+      socket.send(JSON.stringify(this.store.role(attachment(socket)!.role!, online)))
+  }
+  /** The admitted standby socket of `machine`, if it is connected. */
+  standby(machine: string) {
+    return this.admitted().find(
+      (socket) => attachment(socket)?.machine === machine && attachment(socket)?.role === 'standby',
+    )
+  }
   presence(closing?: MachineSocket) {
     const project = this.store.project(),
       lease = this.store.lease()
@@ -297,6 +352,7 @@ export class SharedReplica {
       machines,
       count: this.store.summaryCount(),
       uiBuild: lease.uiBuild,
+      ...(this.store.transition() ? { transition: this.store.transition() } : {}),
       hasEntries: this.store.hasEntries(),
     }
     this.ctx.waitUntil(
@@ -327,17 +383,20 @@ export class SharedReplica {
           'delivered',
           'release',
           'claim',
+          'request-release',
+          'release-waiting',
+          'transition',
         ].includes(message?.type)
       )
         type = message.type
       const held = attachment(socket)
       if (message.type === 'hello') {
-        if (!held || !validHello(message, held.key)) {
+        if (!held || !validHello(message, held)) {
           socket.close(PROJECT_MISMATCH, 'invalid hello')
           return
         }
         const replies = this.store.hello(
-          message,
+          { ...message, key: held.key },
           this.sockets().some((other) => other !== socket),
         )
         if (!replies) {
@@ -345,7 +404,7 @@ export class SharedReplica {
           return
         }
         const { role } = replies[0] as Extract<CloudMessage, { type: 'role' }>
-        socket.serializeAttachment({ key: held.key, machine: message.machine, role })
+        socket.serializeAttachment({ ...held, machine: message.machine, role })
         if (role === 'writer') {
           for (const previous of this.sockets())
             if (previous !== socket) previous.close(1000, 'Replaced by new machine connection')
@@ -371,8 +430,33 @@ export class SharedReplica {
         this.presence()
         return
       }
+      if (message.type === 'request-release') {
+        if (held?.role !== 'standby' || !held.machine || typeof message.id !== 'string') return
+        for (const writer of this.sockets())
+          writer.send(
+            JSON.stringify({ type: 'release-requested', by: held.machine, id: message.id }),
+          )
+        return
+      }
+      if (message.type === 'transition') {
+        if (!held?.role || !held.machine || !this.store.report(held.machine, message.value)) return
+        this.broadcast()
+        this.presence()
+        return
+      }
       // Only the writer's data is applied: a standby is fenced off.
       if (held?.role !== 'writer') return
+      if (message.type === 'release-waiting') {
+        if (typeof message.by !== 'string' || !Number.isSafeInteger(message.tasks)) return
+        this.standby(message.by)?.send(
+          JSON.stringify({ type: 'release-waiting', by: message.by, tasks: message.tasks }),
+        )
+        if (this.store.draining(message.by, message.tasks)) {
+          this.broadcast()
+          this.presence()
+        }
+        return
+      }
       if (message.type === 'release') {
         if (
           !Number.isSafeInteger(message.epoch) ||
@@ -428,11 +512,12 @@ export class SharedReplica {
       if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket')
         return new Response('Expected WebSocket', { status: 426 })
       const key = url.searchParams.get('project')
-      if (!key || !PROJECT_KEY.test(key))
+      const alias = url.searchParams.get('alias') ?? undefined
+      if (!key || !PROJECT_KEY.test(key) || (alias !== undefined && !PROJECT_KEY.test(alias)))
         return Response.json({ error: 'Expected a project key' }, { status: 400 })
       const [client, server] = Object.values(new WebSocketPair())
       this.ctx.acceptWebSocket(server)
-      server.serializeAttachment({ key } satisfies Attachment)
+      server.serializeAttachment({ key, ...(alias ? { alias } : {}) } satisfies Attachment)
       const upgrade = { status: 101, webSocket: client }
       return new Response(null, upgrade)
     }
@@ -440,6 +525,9 @@ export class SharedReplica {
       await discardBody(request)
       return Response.json({ error: 'Forbidden' }, { status: 403 })
     }
+    // The replica answers its own API before any request goes to the machine.
+    if (url.pathname === '/api/cloud' || url.pathname.startsWith('/api/cloud/'))
+      return this.cloud(request, url)
     const writer = this.store.lease()
     const bindings = JSON.parse(this.env.TUNNELS ?? '{}') as Record<string, `TUNNEL_${number}`>
     const binding = writer?.machine && this.env[bindings[writer.machine]]
@@ -515,6 +603,46 @@ export class SharedReplica {
     // Wrangler's forwarding stream reading after the response, which can turn an expected 503 into a 500.
     await discardBody(request)
     return Response.json({ error: 'The machine is offline', offline: true }, { status: 503 })
+  }
+  /**
+   * `GET /api/cloud` lists machines, lease and transition; `POST /api/cloud/move {machine, force?}` asks that standby
+   * to prepare and take the lease, `POST /api/cloud/cancel` stops the running transition.
+   */
+  async cloud(request: Request, url: URL) {
+    const connected = new Set(this.admitted().map((socket) => attachment(socket)!.machine!))
+    if (request.method === 'GET' && url.pathname === '/api/cloud')
+      return Response.json(this.store.cloud(connected, this.sockets().length > 0))
+    if (request.method !== 'POST') {
+      await discardBody(request)
+      return Response.json({ error: 'Unknown cloud route' }, { status: 404 })
+    }
+    const body = (await request.json().catch(() => ({}))) as {
+      machine?: unknown
+      force?: unknown
+    }
+    if (url.pathname === '/api/cloud/move') {
+      if (typeof body.machine !== 'string')
+        return Response.json({ error: 'Expected {machine}' }, { status: 400 })
+      if (body.machine === this.store.lease()?.machine)
+        return Response.json({ error: 'runs there already' }, { status: 409 })
+      const target = this.standby(body.machine)
+      if (!target) return Response.json({ error: 'not connected' }, { status: 409 })
+      const id = crypto.randomUUID()
+      target.send(
+        JSON.stringify({ type: 'move-to', id, ...(body.force === true ? { force: true } : {}) }),
+      )
+      return Response.json({ id }, { status: 202 })
+    }
+    if (url.pathname === '/api/cloud/cancel') {
+      const transition = this.store.transition()
+      if (!transition?.cancellable || transition.error)
+        return Response.json({ error: 'nothing to cancel' }, { status: 409 })
+      const target = this.standby(transition.target)
+      if (!target) return Response.json({ error: 'not connected' }, { status: 409 })
+      target.send(JSON.stringify({ type: 'cancel', id: transition.id }))
+      return Response.json({ id: transition.id }, { status: 202 })
+    }
+    return Response.json({ error: 'Unknown cloud route' }, { status: 404 })
   }
   events(request: Request, url: URL) {
     const id = Number(url.searchParams.get('conversation') ?? this.store.root())

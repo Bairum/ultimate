@@ -1,6 +1,8 @@
 import { timingSafeEqual } from 'node:crypto'
 import { expect, it, vi } from 'vitest'
-import worker from '../cloud/worker.ts'
+import { DatabaseSync } from 'node:sqlite'
+import worker, { ProjectDirectory } from '../cloud/worker.ts'
+import { DirectoryStore } from '../cloud/directory.ts'
 import { createApi, projectBase } from '../web/src/sdk/api.ts'
 import { createStore } from '../web/src/sdk/store.ts'
 
@@ -10,6 +12,10 @@ it('routes sync by project key and refuses other keys and the retired endpoint',
   const env = {
     SYNC_TOKEN: 'dev',
     REPLICA: { idFromName, get: () => ({ fetch }) },
+    DIRECTORY: {
+      idFromName: () => 'directory',
+      get: () => ({ fetch: async () => new Response(null, { status: 404 }) }),
+    },
   } as unknown as Parameters<typeof worker.fetch>[1]
   Object.defineProperty(crypto.subtle, 'timingSafeEqual', {
     configurable: true,
@@ -31,6 +37,98 @@ it('routes sync by project key and refuses other keys and the retired endpoint',
     expect(idFromName).toHaveBeenCalledTimes(2)
   } finally {
     Reflect.deleteProperty(crypto.subtle, 'timingSafeEqual')
+  }
+})
+
+it('relinks a renamed key to its old replica, and follows the alias on sync', async () => {
+  const forward = vi.fn<(request: Request) => Promise<Response>>(async () => new Response('sync'))
+  const idFromName = vi.fn<(name: string) => string>((name) => name)
+  const db = new DatabaseSync(':memory:')
+  const store = new DirectoryStore({
+    exec: <T extends Record<string, unknown>>(
+      query: string,
+      ...bindings: (string | number | null)[]
+    ) => {
+      const statement = db.prepare(query)
+      if (statement.columns().length) return statement.all(...bindings) as T[]
+      statement.run(...bindings)
+      return []
+    },
+    transaction: (run) => run(),
+  })
+  const directory = Object.assign(Object.create(ProjectDirectory.prototype) as ProjectDirectory, {
+    store,
+  })
+  const env = {
+    SYNC_TOKEN: 'dev',
+    REPLICA: { idFromName, get: () => ({ fetch: forward }) },
+    DIRECTORY: {
+      idFromName: () => 'directory',
+      get: () => ({
+        fetch: (input: string, init?: RequestInit) => directory.fetch(new Request(input, init)),
+      }),
+    },
+  } as unknown as Parameters<typeof worker.fetch>[1]
+  Object.defineProperty(crypto.subtle, 'timingSafeEqual', {
+    configurable: true,
+    value: timingSafeEqual,
+  })
+  const relink = (body: unknown, token = 'dev') =>
+    worker.fetch(
+      new Request('https://cloud.example/sync/relink', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      }),
+      env,
+    )
+  try {
+    store.update({
+      key: 'github.com/o/new',
+      name: 'new',
+      writer: { machine: 'desk', online: false },
+      machines: [],
+      count: 1,
+      hasEntries: true,
+    })
+    expect((await relink({ key: 'github.com/o/new', from: 'github.com/o/old' }, 'x')).status).toBe(
+      401,
+    )
+    for (const body of [
+      { key: 'github.com/o/new' },
+      { key: 'github.com/o/a', from: 'github.com/o/a' },
+    ])
+      expect((await relink(body)).status).toBe(400)
+    expect((await relink({ key: 'github.com/o/new', from: 'github.com/o/old' })).status).toBe(204)
+    // The renamed key's own replica leaves the directory, even when it reports again.
+    expect(store.list().map((project) => project.key)).toEqual([])
+    store.update({
+      key: 'github.com/o/new',
+      name: 'new',
+      writer: { machine: 'desk', online: false },
+      machines: [],
+      count: 1,
+      hasEntries: true,
+    })
+    expect(store.list()).toEqual([])
+    // An alias back to itself is refused, even through another alias.
+    expect((await relink({ key: 'github.com/o/old', from: 'github.com/o/new' })).status).toBe(400)
+    await worker.fetch(
+      new Request(
+        `https://cloud.example/sync/v2?project=${encodeURIComponent('github.com/o/new')}`,
+        {
+          headers: { Authorization: 'Bearer dev' },
+        },
+      ),
+      env,
+    )
+    expect(idFromName).toHaveBeenLastCalledWith('github.com/o/old')
+    const forwarded = new URL(forward.mock.calls[0][0].url)
+    expect(forwarded.searchParams.get('project')).toBe('github.com/o/old')
+    expect(forwarded.searchParams.get('alias')).toBe('github.com/o/new')
+  } finally {
+    Reflect.deleteProperty(crypto.subtle, 'timingSafeEqual')
+    db.close()
   }
 })
 

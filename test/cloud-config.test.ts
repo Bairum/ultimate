@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../server/extensions.ts'
 import cloud from '../extensions/cloud/server.ts'
-import { cloudConfig } from '../extensions/cloud/config.ts'
+import { cloudConfig, leaseSettings } from '../extensions/cloud/config.ts'
 import { save } from '../extensions/onboarding/settings.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
 import { temp } from './helpers.ts'
@@ -86,6 +86,15 @@ it('defaults the machine name to the OS hostname', async () => {
   expect((await cloudConfig(host, {}))?.machine).toBe(hostname())
 })
 
+it('reads the lease timing from user settings, with defaults for missing or invalid values', async () => {
+  const { host, settings } = await fixture()
+  expect(await leaseSettings(host)).toEqual({ idleRelease: 10, autoClaim: true })
+  await settings({ idleRelease: 0, autoClaim: false })
+  expect(await leaseSettings(host)).toEqual({ idleRelease: 0, autoClaim: false })
+  await settings({ idleRelease: -1, autoClaim: 'no' })
+  expect(await leaseSettings(host)).toEqual({ idleRelease: 10, autoClaim: true })
+})
+
 it('reports a missing token once at host open and never opens a connection', async () => {
   const userHome = await temp()
   await save(join(userHome, '.ultimate/settings.json'), { cloud: { url: 'wss://user/sync' } })
@@ -111,6 +120,8 @@ it('reports a missing token once at host open and never opens a connection', asy
       onClose: (callback: () => Promise<void>) => {
         close = callback
       },
+      onRelease: () => {},
+      resource: <T>(_key: string, create: () => T) => create(),
     } as unknown as ExtensionHost)
     await open!()
     expect(notice.mock.calls).toEqual([
