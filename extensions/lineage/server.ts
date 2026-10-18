@@ -34,7 +34,7 @@ import type { ActionContext } from '../../server/actions.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
-import { LineageApi, Roots } from './api.ts'
+import { Branched, LineageApi, Rooted, Roots } from './api.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 import type { Tree } from './catchup.ts'
 import type { RootEvent } from './types.ts'
@@ -82,17 +82,6 @@ export const Tally = defineDoc<TallyState>({
 })
 
 export const docs = [Roots, Branch, Tally, Seen]
-
-/**
- * `lineage:branched` (a new branch) and `lineage:rooted` carry it: subscribers enlist their own document
- * writes in the new conversation's creation transaction.
- */
-export type BranchedEvent = {
-  tx: Tx
-  id: ConversationId
-  intent: string
-  waitUntil: (write: Promise<void>) => void
-}
 
 const ASK_TOKENS = 8192
 
@@ -664,14 +653,7 @@ async function forkBranch(
   metadata.title = title
   // The prompt is its first input, placed right after this commit: it sorts as asked for now.
   metadata.inputAt = Date.now()
-  const writes: Promise<void>[] = []
-  host.events.emit('lineage:branched', {
-    tx,
-    id: fork.id,
-    intent: prompt,
-    waitUntil: (write) => writes.push(write),
-  } satisfies BranchedEvent)
-  await Promise.all(writes)
+  await host.emit(tx, Branched, { id: fork.id, from, at, intent: prompt })
   const images = input.images?.length ?? 0
   const marker = { branch: fork.id, at, intent: prompt, ...(images ? { images } : {}) }
   if (root !== undefined)
@@ -1232,15 +1214,11 @@ export default function lineageExtension(host: ExtensionHost) {
                 ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}),
               })
               roots.roots.push(root.id)
+              // Called by its title until its summary names it, like a branch by its intent.
               ;(await tx.doc(host.metadata, root.id)).title = title
-              const writes: Promise<void>[] = []
-              host.events.emit('lineage:rooted', {
-                tx,
-                id: root.id,
-                intent: title,
-                waitUntil: (write) => writes.push(write),
-              } satisfies BranchedEvent)
-              await Promise.all(writes)
+                .replace(/\s+/g, ' ')
+                .slice(0, 80)
+              await host.emit(tx, Rooted, { id: root.id, intent: title })
               receipt.roots[api.callId] = root.id
               return root.id
             }, ctx)

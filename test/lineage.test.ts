@@ -4,12 +4,13 @@ import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
 import { Branch, compareLinks, leaveNote, rootOf, Tally } from '../extensions/lineage/server.ts'
-import { Roots } from '../extensions/lineage/api.ts'
+import { Branched, Roots } from '../extensions/lineage/api.ts'
 import { Plan } from '../extensions/plan/server.ts'
 import { Summaries } from '../extensions/conversations/summary.ts'
 import { defineExtension } from '@earendil-works/pi-durable'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
+import { emit, EventLog } from '../server/events.ts'
 import type { HistoryResponse } from '../shared/protocol.ts'
 import { fauxServer, post, seedTally, sourceCopy, temp, until } from './helpers.ts'
 import {
@@ -186,13 +187,19 @@ it.concurrent('branches from a tally: the root gets the prompt node, the branch 
   expect(initialized(Metadata.definition.kind)).toMatchObject({
     value: { title: 'Add notes between conversations' },
   })
-  expect(initialized(Summaries.definition.kind)).toMatchObject({
-    value: { generatedTitle: 'Add notes between conversations' },
-  })
-  expect(initialized(Plan.definition.kind)).toMatchObject({ value: { next: 1, epics: {} } })
+  // The creation commit carries the `lineage.branched` event; conversations and plan react to it.
+  expect(
+    creation.changes.some(
+      (change) => change.type === 'entry' && change.value.kind === Branched.kind,
+    ),
+  ).toBe(true)
   await settled(server, first)
-  // A branch starts with an empty plan; the root keeps its own.
+  expect((await server.harness.snapshot(Summaries, first, context))?.generatedTitle).toBe(
+    'Add notes between conversations',
+  )
+  // A branch starts with an empty plan, already in its first request; the root keeps its own.
   expect((await server.harness.snapshot(Plan, first, context))?.epics).toEqual({})
+  expect(JSON.stringify(requests[0])).not.toContain('Root work')
   expect(
     Object.keys((await server.harness.snapshot(Plan, server.root.id, context))!.epics),
   ).toEqual(['E1'])
@@ -290,6 +297,36 @@ it.concurrent('branches from a tally: the root gets the prompt node, the branch 
     root: 1,
     branch: { from: 1, intent: 'Add notes between conversations' },
   })
+})
+
+it.concurrent('a late branched reaction leaves the plan and title a branch chose since', async () => {
+  const { server } = await fixture()
+  const id = await branchFrom(server, { from: 1, prompt: 'Polish the sidebar' })
+  await settled(server, id)
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(Plan, id)).epics.E1 = {
+      key: 'E1',
+      title: 'Own work',
+      body: 'Body',
+      status: 'in_progress',
+      tasks: {},
+    }
+    delete (await tx.doc(Summaries, id)).generatedTitle
+    ;(await tx.doc(Metadata, id)).title = 'Renamed sidebar'
+  }, context)
+  // As if plan and conversations were off when it branched: they react now, after the branch answered.
+  const at = (await server.harness.snapshot(Branch, id, context))!.branch!.at
+  const late = await server.harness.commit(
+    (tx) => emit(tx, Branched, { id, from: 1, at, intent: 'Polish the sidebar' }),
+    context,
+  )
+  await until(async () => {
+    const { cursors } = (await server.harness.snapshot(EventLog, ROOT_CONVERSATION_ID, context))!
+    return ['plan/branch-plan', 'conversations/named'].every((name) => cursors[name] >= late.id)
+  })
+  expect(Object.keys((await server.harness.snapshot(Plan, id, context))!.epics)).toEqual(['E1'])
+  expect((await server.harness.snapshot(Summaries, id, context))?.generatedTitle).toBeUndefined()
+  expect((await server.harness.snapshot(Metadata, id, context))?.title).toBe('Renamed sidebar')
 })
 
 it.concurrent('writes the prompt node of a branch of a branch into the tree root and marks its source', async () => {

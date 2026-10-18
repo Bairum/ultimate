@@ -8,9 +8,9 @@ import {
   ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, Cursor, Tx } from '@earendil-works/pi-durable'
+import type { ConversationId, Cursor, EntryId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { BranchedEvent } from '../lineage/server.ts'
+import { Branched } from '../lineage/api.ts'
 
 export type Task = {
   key: string
@@ -135,14 +135,28 @@ async function backfill(host: Pick<ExtensionHost, 'harness' | 'metadata'>) {
   }
 }
 
-export default (host: ExtensionHost) => {
-  host.events.on('lineage:branched', (data) => {
-    const { tx, id, waitUntil } = data as BranchedEvent
-    waitUntil(
-      (async () => {
-        Object.assign(await tx.doc(Plan, id), Plan.definition.initial())
-      })(),
+/** Whether branch `id` has answered since it forked at entry `at`. */
+async function answered(tx: Tx, id: ConversationId, at: number) {
+  let cursor: Cursor | undefined
+  do {
+    const page = await tx.scanEntries(
+      { conversationId: id, minEntryId: (at + 1) as EntryId, order: 'ascending' },
+      64,
+      cursor,
     )
+    if (page.items.some((entry) => entry.kind === 'pi.assistant')) return true
+    cursor = page.next
+  } while (cursor !== undefined)
+  return false
+}
+
+export default (host: ExtensionHost) => {
+  // A branch starts with an empty plan, not the one it forked with. Once it has answered, its plan is its own: a late
+  // reaction (plan was off when it branched) leaves it alone.
+  host.react('branch-plan', [Branched], async (tx, { data }) => {
+    const id = data.id as ConversationId
+    if (!(await tx.conversation(id)) || (await answered(tx, id, data.at))) return
+    Object.assign(await tx.doc(Plan, id), Plan.definition.initial())
   })
   host.onOpen(() => backfill(host))
   return defineExtension({

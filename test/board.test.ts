@@ -20,6 +20,7 @@ import type { OpenHost } from '../server/harness.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { ActionContext } from '../server/actions.ts'
 import { Metadata } from '../server/metadata.ts'
+import { emit } from '../server/events.ts'
 import board, { actions } from '../extensions/board/server.ts'
 import { Board } from '../extensions/board/api.ts'
 import type { BoardService } from '../extensions/board/api.ts'
@@ -98,7 +99,7 @@ async function fixture(
   const host = {
     ...prepared,
     metadata: Metadata,
-    events: { emit: () => {} },
+    emit,
     harness: () => opened.harness,
     implement: (_api: unknown, value: BoardService) => {
       service = value

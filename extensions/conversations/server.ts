@@ -11,7 +11,7 @@ import {
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { BranchedEvent } from '../lineage/server.ts'
+import { Branched, Rooted } from '../lineage/api.ts'
 import type { LandingSubject } from '../workspaces/types.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 // oxlint-disable-next-line no-restricted-imports -- conversations publishes the core UI state document
@@ -208,19 +208,16 @@ export default (host: ExtensionHost) => {
       return new Set(Array.isArray(ids) ? (ids as ConversationId[]) : [])
     },
   })
-  // A new branch or root is called by its intent until its summary names it.
-  const named = (data: unknown) => {
-    const { tx, id, intent, waitUntil } = data as BranchedEvent
-    waitUntil(
-      (async () => {
-        const title = intent.replace(/\s+/g, ' ').slice(0, 80)
-        ;(await tx.doc(Summaries, id)).generatedTitle = title
-        ;(await tx.doc(host.metadata, id)).title = title
-      })(),
-    )
-  }
-  host.events.on('lineage:branched', named)
-  host.events.on('lineage:rooted', named)
+  // A new branch or root is called by its intent until its summary names it: lineage titles it so, and marking that
+  // title generated lets the summary replace it. A rename or summary since then chose the title; it stays.
+  host.react('named', [Branched, Rooted], async (tx, { data }) => {
+    const id = data.id as ConversationId
+    if (!(await tx.conversation(id))) return
+    const title = data.intent.replace(/\s+/g, ' ').slice(0, 80)
+    const state = await tx.doc(Summaries, id)
+    if (state.generatedTitle === undefined && (await tx.doc(host.metadata, id)).title === title)
+      state.generatedTitle = title
+  })
   activityBehavior(host)
   overviewBehavior(host)
   /** Whether each conversation is top-level, read once: `owner` and `parent` never change after creation. */

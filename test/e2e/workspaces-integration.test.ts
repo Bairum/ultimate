@@ -24,6 +24,7 @@ import type { ConversationId, JsonObject, TaskId, Tx } from '@earendil-works/pi-
 import { afterAll, expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../../server/harness.ts'
 import { Metadata } from '../../server/metadata.ts'
+import { emit } from '../../server/events.ts'
 import { UiState } from '../../server/ui-state.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ActionContext } from '../../server/actions.ts'
@@ -1791,8 +1792,8 @@ it.concurrent('fix: a fix that still fails the check is not landed and leaves th
 })
 it.concurrent('starts an isolated branch of a tally whose first request sees its ready checkout', async () => {
   const f = await fixture()
-  // This fixture's host has no event bus, so no extension labels the branch.
-  f.host.events = { emit: () => {} } as unknown as ExtensionHost['events']
+  // The branch's event goes to the real log; no extension here reacts to it.
+  f.host.emit = emit
   // Its prompt task delivers the first input.
   f.prepared.registry.install(lineage(f.host))
   await seedTally(f.opened.harness)

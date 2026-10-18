@@ -6,6 +6,7 @@ import type { Context } from '@earendil-works/chord'
 import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { Tx } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
+import { defineEvent } from '../../shared/events.ts'
 import type {
   AbstractInput,
   BranchInput,
@@ -41,5 +42,15 @@ export type LineageService = {
   /** Write the abstract of conversation `id` into its tree root's tally inside `tx`; a no-op outside a tree. */
   abstract: (tx: Tx, id: number, input: AbstractInput) => Promise<void>
 }
+/**
+ * A branch started: conversation `id` forked from `from` at entry `at`, its prompt `intent`. Emitted in the forking
+ * commit, before the branch's first run; react to it to set up a new branch's own state.
+ */
+export const Branched = defineEvent<{ id: number; from: number; at: number; intent: string }>(
+  'lineage.branched',
+)
+/** A root was created: conversation `id`, titled `intent`. Emitted in the creating commit. */
+export const Rooted = defineEvent<{ id: number; intent: string }>('lineage.rooted')
+
 /** Trees, branches and notes; core, so `need` it. */
 export const LineageApi = defineApi<LineageService>()('lineage')
