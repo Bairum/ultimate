@@ -881,16 +881,19 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       } finally {
         graph.dispose()
       }
-      if (outcome === 'cancelled' || ended(sync.state())) {
+      const stopped = () => {
         host.notice(`The move to ${by} stopped; this machine keeps the project`)
         return false
       }
+      if (outcome === 'cancelled' || ended(sync.state())) return stopped()
       // Uncommitted work stays on this machine: scanned once the drained runs have written theirs, right before the
       // release, so the target hears which worktrees hold it.
       const dirty = await dirtyWorktrees().catch((error: unknown) => {
         host.notice(`Could not list worktrees with uncommitted changes: ${String(error)}`)
         return []
       })
+      // The move may have ended while the scan ran.
+      if (ended(sync.state())) return stopped()
       if (dirty.length) sync.send({ type: 'release-waiting', by, tasks: 0, dirty })
       releasingFor = id
       try {

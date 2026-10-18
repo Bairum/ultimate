@@ -337,6 +337,8 @@ export async function machine(
     offline?: boolean
     /** The first activation that installs fails: parking the local database, renaming the download, or opening. */
     fail?: 'park' | 'rename' | 'open'
+    /** Runs before each git command, which waits for it: a test can hold one. */
+    git?: (args: readonly string[]) => Promise<void>
   } = {},
 ) {
   const home = options.home ?? (await temp('ultimate-lease-'))
@@ -438,6 +440,7 @@ export async function machine(
   const exec: Exec = async (command, args, execOptions) => {
     if (killed) return never()
     if (command === 'git') {
+      await options.git?.(args)
       const stdout = await git(execOptions.cwd, ...args)
       if (args[0] === 'merge') await at('merged')
       return { stdout, stderr: '' }

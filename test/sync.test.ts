@@ -398,16 +398,19 @@ it('keeps the move card polling until the started transition ends, past an older
     id: 'new',
     steps: [step('fetch', 'running'), step('claim', 'pending')],
   })
-  expect(polling(undefined, undefined)).toBe(false)
+  // The call started at 10; the fixture's transitions started at 1.
+  expect(polling(undefined, undefined, 10)).toBe(false)
   // Nothing fetched yet, or the previous move still shown before the target publishes the new one's first step.
-  expect(polling('new', undefined)).toBe(true)
-  expect(polling('new', null)).toBe(true)
-  expect(polling('new', transition({ id: 'old' }))).toBe(true)
-  expect(polling('new', transition({ id: 'old', error: 'Cancelled' }))).toBe(true)
-  expect(polling('new', running)).toBe(true)
+  expect(polling('new', undefined, 10)).toBe(true)
+  expect(polling('new', null, 10)).toBe(true)
+  expect(polling('new', transition({ id: 'old' }), 10)).toBe(true)
+  expect(polling('new', transition({ id: 'old', error: 'Cancelled' }), 10)).toBe(true)
+  expect(polling('new', running, 10)).toBe(true)
   // Done or failed: the card holds still.
-  expect(polling('new', transition({ id: 'new' }))).toBe(false)
-  expect(polling('new', transition({ id: 'new', error: 'Missing secrets: X' }))).toBe(false)
+  expect(polling('new', transition({ id: 'new' }), 10)).toBe(false)
+  expect(polling('new', transition({ id: 'new', error: 'Missing secrets: X' }), 10)).toBe(false)
+  // A move started after this call replaced it: an old card stops polling for good.
+  expect(polling('new', transition({ id: 'later', startedAt: 20 }), 10)).toBe(false)
 })
 
 it('matches a relinked checkout by the key the cloud admitted, and resolves it by either key', async () => {

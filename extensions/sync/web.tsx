@@ -152,7 +152,7 @@ function MoveCall({ call, core }: { call: ToolCallView; core: React.ReactNode })
     { enabled: !!project && !!started, onError: () => {} },
   )
   const transition = state.data?.transition
-  const live = polling(started, transition)
+  const live = polling(started, transition, call.startedAt ?? 0)
   const { refetch } = state
   useEffect(() => {
     if (!live) return undefined
@@ -161,6 +161,8 @@ function MoveCall({ call, core }: { call: ToolCallView; core: React.ReactNode })
   }, [live, refetch])
   if (call.status === 'error' || call.status === 'interrupted') return core
   if (!started) return <Pending name="move" title={`${project ?? ''}…`} />
+  if (transition && transition.id !== started && !live)
+    return <Pending name="move" title={`${project ?? ''} · replaced by a later move`} />
   if (!transition || transition.id !== started)
     return <Pending name="move" title={`${project ?? ''} · waiting for its first step`} />
   return <TransitionCard transition={transition} />
