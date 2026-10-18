@@ -49,6 +49,15 @@ export function Address({ id, mark = false }: { id: number | 'user'; mark?: bool
     Object.entries(standing ?? {}).find(([, value]) => value === id)?.[0] ??
     (Object.values(workspaces.landerConversations).includes(id) ? 'lander' : undefined)
   if (!name) return <ConversationRef id={id} />
+  if (mark && name === 'ultimate')
+    return (
+      <span className="flex items-center gap-1.5" title="@ultimate">
+        <AgentMark name={name} size="sm" />
+        <span className="font-sans text-[10.5px] font-semibold tracking-[0.28em] text-brand">
+          ULTIMATE
+        </span>
+      </span>
+    )
   return (
     <span className="flex items-center gap-1.5">
       {mark && <AgentMark name={name} size="sm" />}@{name}
