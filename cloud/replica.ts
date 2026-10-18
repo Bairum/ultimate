@@ -111,6 +111,8 @@ export class ReplicaStore {
     return {
       type: 'role',
       role,
+      // The key the project registered with, which a relinked machine does not connect with.
+      project: { key: this.project()!.key },
       epoch,
       free: machine === null,
       ...(snapshot ? { snapshot } : {}),
@@ -239,13 +241,15 @@ export class ReplicaStore {
           root: message.root,
           name,
         })
-        this.put('metadata', 5, { machine: message.machine, epoch: 1 })
+        this.put('metadata', 5, { machine: message.machine, epoch: 1, root: message.root })
       } else if (project.key !== message.key || project.rootCommit !== message.rootCommit)
         return undefined
       this.seen(message.machine, message)
       const lease = this.lease()!
+      // The writer is one checkout: another one on the same machine (its own home, another root) is a standby.
       if (
         lease.machine !== message.machine ||
+        lease.root !== message.root ||
         (message.epoch !== undefined && message.epoch !== lease.epoch)
       )
         return [this.role('standby', writerOnline)]

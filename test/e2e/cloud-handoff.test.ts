@@ -119,6 +119,7 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
     expect(await serving(b)).toBe(false)
     expect(await files(b.home)).not.toContain('state.sqlite')
     expect(JSON.parse(await readFile(join(b.home, 'standby.json'), 'utf8'))).toEqual({
+      reason: 'Waiting for the cloud',
       joining: true,
       cloud: true,
     })

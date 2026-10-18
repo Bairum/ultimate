@@ -12,8 +12,9 @@
 //    A different root commit, or a malformed hello, closes with `PROJECT_MISMATCH`.
 //    The machine then stops reconnecting and tells the user, since retrying cannot succeed.
 // 2. The cloud answers `role`. The first hello for an unknown key registers that machine as the writer at epoch 1.
-//    The writer machine is the writer again when it names the stored epoch, or no epoch at all (a lost lease file);
-//    it stores the epoch it is told. Any other machine, or one naming another epoch, is a standby: it sends nothing
+//    The writer machine is the writer again, at the writer's root, when it names the stored epoch, or no epoch at all
+//    (a lost lease file); it stores the epoch it is told. Any other machine or checkout, or one naming another epoch,
+//    is a standby: it sends nothing
 //    but its hello and `claim`, and the cloud ignores anything else it sends. Standbys get `role` again whenever the
 //    writer, its online state or the lease changes. Steps 3 to 6 are the writer's alone.
 //    The lease only changes hands explicitly. A disconnect never frees it: an offline writer stays the writer. The
@@ -186,6 +187,8 @@ export type CloudMessage =
   | {
       type: 'role'
       role: 'writer' | 'standby'
+      /** The replica's own project key: snapshots are stored and sealed under it, whatever key a machine relinked. */
+      project: { key: string }
       epoch: number
       /** The lease is free: a standby may claim it at `epoch`. */
       free: boolean

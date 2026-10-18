@@ -40,6 +40,7 @@ const role = (
 ): Extract<CloudMessage, { type: 'role' }> => ({
   type: 'role',
   role: value,
+  project: { key: KEY },
   epoch,
   free: false,
   writer: { machine: 'writer-machine', root: '/writer', epoch, online, secrets: [] },
@@ -895,6 +896,7 @@ it('sends nothing but its hello as a standby, keeps the socket and follows role 
       key: KEY,
       connected: true,
       role: 'standby',
+      project: { key: KEY },
       epoch: 2,
       free: false,
       writer: { machine: 'writer-machine', root: '/writer', epoch: 2, online: true, secrets: [] },

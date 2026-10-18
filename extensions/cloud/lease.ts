@@ -128,12 +128,16 @@ function tail(error: unknown) {
 // Conversation runs and lander runs are foreground tasks; schedulers and reporters wait in the background.
 const foreground = (graph: { value: { tasks: Record<string, { background: boolean }> } }) =>
   Object.values(graph.value.tasks).filter((task) => !task.background).length
+/** Transition text bounded well under the replica's limit, keeping the end, where errors say what failed. */
+const clip = (text: string) => (text.length > 500 ? `…${text.slice(-499)}` : text)
 const runs = (count: number) => `${count} running ${count === 1 ? 'task' : 'tasks'}`
 
 export function startLease(host: ExtensionHost, options: LeaseOptions, deps: LeaseDeps) {
   const { identity } = options
   const leasePath = join(host.home, 'cloud-lease.json')
   const claimPath = join(host.home, 'cloud-claim.json')
+  /** An install the checkout owes: its lockfile changed and no install succeeded since. */
+  const owed = join(host.home, 'cloud-install-pending')
   const standbyPath = join(host.home, 'standby.json')
   const database = join(host.home, 'state.sqlite')
   const execute = deps.exec ?? exec
@@ -149,7 +153,10 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   let pendingRelease:
     | { epoch: number; id: string; sent: boolean; done: PromiseWithResolvers<void> }
     | undefined
-  let pendingClaim: { epoch: number; done: PromiseWithResolvers<boolean> } | undefined
+  /** A claim sent and its answer; after a reconnect the new connection's first role is that answer. */
+  let pendingClaim:
+    | { epoch: number; done: PromiseWithResolvers<boolean>; reconnected: boolean }
+    | undefined
   /** The move this machine prepares, and how to stop it before its claim. */
   let moving: { transition: Transition; abort: AbortController } | undefined
   /** The last move this machine ran, ended or not; the cloud's copy may lag behind it. */
@@ -215,6 +222,8 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         await rm(path, { force: true })
     }
   })().catch(report)
+  // Snapshots live under the replica's own key: after a relink, machines connect with different keys to one replica.
+  const snapshotKey = () => sync?.state().project?.key ?? identity.key
   /** Open storage as the writer at `epoch`, installing `download` in place of any local database. */
   const openAsWriter = async (epoch: number, download?: string) => {
     await writeJson(leasePath, { key: identity.key, epoch } satisfies LeaseFile)
@@ -237,7 +246,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       url: options.url,
       token: options.token,
       secret: key,
-      key: identity.key,
+      key: snapshotKey(),
       id,
       dir: host.home,
       repo: host.projectRoot,
@@ -326,6 +335,9 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
           if (moving?.transition.id === id) cancel()
         },
         transition: () => moving?.transition.id ?? releasingFor,
+        hello: () => {
+          if (pendingClaim) pendingClaim.reconnected = true
+        },
       },
     )
     sync = current
@@ -362,8 +374,10 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     }
     if (pendingClaim) {
       if (state.role === 'writer') pendingClaim.done.resolve(true)
-      // A free lease at the claimed epoch is an announcement sent before the claim arrived.
-      else if (!state.free || state.epoch !== pendingClaim.epoch) pendingClaim.done.resolve(false)
+      // A free lease at the claimed epoch is an announcement sent before the claim arrived, unless it answers the
+      // hello of a new connection, which named the claimed epoch + 1: then the claim was lost.
+      else if (pendingClaim.reconnected || !state.free || state.epoch !== pendingClaim.epoch)
+        pendingClaim.done.resolve(false)
       return
     }
     // A preparing move decides for itself; it only waits for the lease to be freed, or ends when the cloud ended it.
@@ -493,16 +507,15 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       .map(Number)
     if (ahead && behind) throw new Error(`${branch} has diverged from ${remote}`)
     const before = await git('rev-parse', 'HEAD')
+    // The install is owed before the lockfile changes, so a crash between the two still installs on the next try.
+    if (behind && (await git('diff', '--name-only', 'HEAD', remote, '--', 'pnpm-lock.yaml')))
+      await writeFile(owed, '')
     if (behind) await git('merge', '--ff-only', '--quiet', remote)
     const after = await git('rev-parse', 'HEAD')
     step.detail =
       before === after
         ? `${branch} is up to date`
         : `${branch} fast-forwarded ${before.slice(0, 7)}..${after.slice(0, 7)}`
-    return (
-      before !== after &&
-      !!(await git('diff', '--name-only', before, after, '--', 'pnpm-lock.yaml'))
-    )
   }
 
   /**
@@ -534,6 +547,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     moving = { transition, abort }
     ran = transition
     let downloaded: string | undefined
+    let claimed = 0
     let current: TransitionStep | undefined
     const begin = (name: TransitionStep['name']) => {
       signal.throwIfAborted()
@@ -545,20 +559,18 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     }
     const end = (state: 'done' | 'skipped', detail?: string) => {
       current!.state = state
-      if (detail !== undefined) current!.detail = detail
+      if (detail !== undefined) current!.detail = clip(detail)
       publish()
     }
     try {
       const fetched = begin('fetch')
-      const lockChanged = await fastForward(fetched, signal)
+      await fastForward(fetched, signal)
       end('done')
 
       begin('install')
-      // A failed install stays owed: the next attempt finds the checkout fast-forwarded already.
-      const owed = join(host.home, 'cloud-install-pending')
-      if (!lockChanged && !existsSync(owed)) end('skipped', 'pnpm-lock.yaml is unchanged')
+      // Owed since the fast-forward changed the lockfile, and until an install succeeds.
+      if (!existsSync(owed)) end('skipped', 'pnpm-lock.yaml is unchanged')
       else {
-        await writeFile(owed, '')
         try {
           await execute('pnpm', ['install', '--frozen-lockfile'], {
             cwd: host.projectRoot,
@@ -639,18 +651,17 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         hash,
       } satisfies ClaimIntent)
       const done = Promise.withResolvers<boolean>()
-      pendingClaim = { epoch: state.epoch!, done }
+      pendingClaim = { epoch: state.epoch!, done, reconnected: false }
       const won = sync!.send({ type: 'claim', epoch: state.epoch! }) && (await done.promise)
       pendingClaim = undefined
       if (!won) throw new Error('Another machine took the project first')
       end('done', `Runs here from epoch ${state.epoch! + 1}`)
       lastError = undefined
       moving = undefined
-      await openAsWriter(state.epoch! + 1, downloaded)
-      return true
+      claimed = state.epoch! + 1
     } catch (error) {
       const reason: unknown = signal.aborted ? signal.reason : error
-      const message = reason instanceof Error ? reason.message : String(reason)
+      const message = clip(reason instanceof Error ? reason.message : String(reason))
       // Only the download and the claim intent go; the holder and the local database stay as they are.
       if (downloaded) await rm(downloaded, { force: true })
       await rm(claimPath, { force: true })
@@ -663,6 +674,16 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       publish()
       moving = undefined
       fail(`Move here failed: ${message}`)
+      return false
+    }
+    // The claim won. A failure from here keeps the download and the intent: the next start finishes opening storage.
+    try {
+      await openAsWriter(claimed, downloaded)
+      return true
+    } catch (error) {
+      fail(
+        `Opening storage as the writer failed; restart Ultimate to finish the move: ${String(error)}`,
+      )
       return false
     }
   }
@@ -681,7 +702,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         url: options.url,
         token: options.token,
         secret: key,
-        key: identity.key,
+        key: snapshotKey(),
         epoch,
         machine: options.machine,
         database,

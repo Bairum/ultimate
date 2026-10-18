@@ -318,6 +318,7 @@ describe('project replica sockets', () => {
       {
         type: 'role',
         role: 'writer',
+        project: { key: KEY },
         epoch: 1,
         free: false,
         writer: {
@@ -366,6 +367,7 @@ describe('project replica sockets', () => {
       {
         type: 'role',
         role: 'standby',
+        project: { key: KEY },
         epoch: 1,
         free: false,
         writer: {
@@ -480,6 +482,7 @@ describe('project replica sockets', () => {
     const free = {
       type: 'role',
       role: 'standby',
+      project: { key: KEY },
       epoch: 1,
       free: true,
       snapshot: { id: 'snap-1', epoch: 1 },
@@ -701,6 +704,25 @@ describe('project replica sockets', () => {
     expect((await api('/api/cloud/cancel', {})).status).toBe(202)
     expect(laptop.sent().at(-1)).toEqual({ type: 'cancel', id })
     expect(machine).not.toHaveBeenCalled()
+  })
+
+  it('makes a second checkout on the writer machine, at another root, a standby that replaces nothing', () => {
+    const { instance, connect } = shared()
+    const writer = connect()
+    writer.receive(hello())
+    const other = connect()
+    other.receive(hello({ root: '/elsewhere/test', port: 4900 }))
+    expect(other.sent()).toEqual([
+      expect.objectContaining({
+        role: 'standby',
+        writer: expect.objectContaining({ machine: 'test', root: '/test', online: true }),
+      }),
+    ])
+    expect(writer.socket.close).not.toHaveBeenCalled()
+    expect(instance.sockets()).toEqual([writer.machine])
+    expect(instance.store.lease()).toMatchObject({ machine: 'test', root: '/test', port: 4800 })
+    other.receive({ type: 'batch', batch: 1, conversations: [], entries: [entry(1)], docs: [] })
+    expect(instance.store.hasEntries()).toBe(false)
   })
 
   it('admits a hello naming the relinked key on the replica it was relinked to', () => {

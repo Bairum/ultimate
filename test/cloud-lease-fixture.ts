@@ -2,7 +2,7 @@
 // over in-process sockets, and kill points that freeze a machine mid-step as a crash would.
 import { timingSafeEqual } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { R2Bucket } from '@cloudflare/workers-types'
@@ -84,7 +84,7 @@ type Server = ReturnType<SharedReplica['sockets']>[number]
 const machineOf = (socket: { deserializeAttachment(): unknown }) =>
   (socket.deserializeAttachment() as { machine?: string } | null)?.machine
 /** The project's replica, reached over in-process sockets that deliver each message on a later microtask. */
-export function cloud() {
+export function cloud({ aliases = {} }: { aliases?: Record<string, string> } = {}) {
   const sockets: Server[] = []
   /** How a machine's next message of a type is delivered: not at all, or with every later reply lost. */
   const holds: {
@@ -107,7 +107,11 @@ export function cloud() {
   })
   const dial: Connect = (url) => {
     const client = new EventTarget() as EventTarget & SyncSocket
-    let attachment: unknown = { key: new URL(url).searchParams.get('project') }
+    // A relinked key reaches its target's replica, as the Worker's sync route sends it.
+    const requested = new URL(url).searchParams.get('project')!
+    let attachment: unknown = aliases[requested]
+      ? { key: aliases[requested], alias: requested }
+      : { key: requested }
     let muted = false
     const server = {
       readyState: WebSocket.OPEN as number,
@@ -240,6 +244,17 @@ export const seed = (harness: Harness) =>
       await tx.appendEntry(id, { kind: 'lease-test.entry', data: { id } })
   }, context)
 
+/** A home with a database of its own, written before this machine knew the cloud, and no lease file. */
+export async function ownHistory() {
+  const home = await temp('ultimate-lease-own-')
+  const prepared = await prepareHarness({ ultimateRoot: home, userHome: home, home, faux: true })
+  const opened = await prepared.open(false)
+  await seed(opened.harness)
+  const before = await inventory(opened.harness)
+  await opened.close()
+  return { home, before }
+}
+
 export const author = ['-c', 'user.name=T', '-c', 'user.email=t@example.com']
 /** A GitHub-like origin with one commit on main, a clone of it as the project checkout, and a way to push to it. */
 export async function checkout() {
@@ -292,10 +307,11 @@ export const toWorker = (input: string | URL, init?: RequestInit) =>
 export const snapshotFetch = () => vi.stubGlobal('fetch', toWorker)
 
 /**
- * Where a machine freezes, as a crash would, until `crash()` takes it down: running pnpm (after fetch), in the checks
+ * Where a machine freezes, as a crash would, until `crash()` takes it down: right after the fast-forward, running pnpm
+ * (after fetch), in the checks
  * (after install), with a download finished, at the start of a release's upload, or opening storage after a claim.
  */
-export type KillPoint = 'pnpm' | 'checks' | 'download' | 'upload' | 'activate'
+export type KillPoint = 'merged' | 'pnpm' | 'checks' | 'download' | 'upload' | 'activate'
 const never = () => new Promise<never>(() => {})
 /** A dead socket for a crashed machine: it never opens. */
 const dead = () =>
@@ -315,6 +331,12 @@ export async function machine(
     autoClaim?: boolean
     pnpm?: () => Promise<void>
     kill?: KillPoint
+    /** The project key this checkout connects with. */
+    key?: string
+    /** The cloud never answers. */
+    offline?: boolean
+    /** The first activation that installs fails: parking the local database, renaming the download, or opening. */
+    fail?: 'park' | 'rename' | 'open'
   } = {},
 ) {
   const home = options.home ?? (await temp('ultimate-lease-'))
@@ -330,6 +352,7 @@ export async function machine(
   const installs: string[][] = []
   // A crashed machine does nothing more: its sockets stay dead and its switches never finish.
   let killed = false
+  let failed = false
   const reached = Promise.withResolvers<void>()
   const at = async (point: KillPoint) => {
     if (options.kill !== point && !killed) return
@@ -366,6 +389,20 @@ export async function machine(
       await at('activate')
       return serial(async () => {
         if (!standby) return
+        if (options.fail && install && !failed) {
+          failed = true
+          if (options.fail === 'open') {
+            await install(prepared.database)
+            throw new Error('Opening storage failed')
+          }
+          // A read-only home: parking renames the local database, installing renames the download into place.
+          await chmod(home, 0o555)
+          try {
+            await install(prepared.database)
+          } finally {
+            await chmod(home, 0o755)
+          }
+        }
         await install?.(prepared.database)
         await rm(standbyFile)
         opened = await prepared.open()
@@ -400,7 +437,11 @@ export async function machine(
   }
   const exec: Exec = async (command, args, execOptions) => {
     if (killed) return never()
-    if (command === 'git') return { stdout: await git(execOptions.cwd, ...args), stderr: '' }
+    if (command === 'git') {
+      const stdout = await git(execOptions.cwd, ...args)
+      if (args[0] === 'merge') await at('merged')
+      return { stdout, stderr: '' }
+    }
     installs.push([command, ...args])
     await at('pnpm')
     await options.pnpm?.()
@@ -412,7 +453,7 @@ export async function machine(
       url: 'ws://127.0.0.1:8787',
       token: 'dev',
       machine: name,
-      identity: { key: KEY, rootCommit: ROOT_COMMIT },
+      identity: { key: options.key ?? KEY, rootCommit: ROOT_COMMIT },
       idleRelease: 10,
       autoClaim: options.autoClaim ?? true,
     },
@@ -426,7 +467,7 @@ export async function machine(
             hooks!.role?.(state)
           },
         }),
-      dial: (url, token) => (killed ? dead() : project.dial(url, token)),
+      dial: (url, token) => (killed || options.offline ? dead() : project.dial(url, token)),
       snapshots,
       exec,
       secret: async () => {

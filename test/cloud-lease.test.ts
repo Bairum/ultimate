@@ -1,16 +1,19 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { copyFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import type { JsonObject } from '@earendil-works/pi-durable'
 import { expect, it, vi } from 'vitest'
 import { ProjectDirectory } from '../cloud/worker.ts'
 import worker from '../cloud/worker.ts'
 import { DirectoryStore } from '../cloud/directory.ts'
 import type { Transition } from '../cloud/protocol.ts'
-import { actions, joinOnStandby } from '../extensions/cloud/server.ts'
+import cloudExtension, { actions, joinOnStandby } from '../extensions/cloud/server.ts'
+import type { SyncSocket } from '../extensions/cloud/server.ts'
 import * as snapshot from '../extensions/cloud/snapshot.ts'
 import { git } from '../extensions/workspaces/git.ts'
 import type { ActionContext } from '../server/actions.ts'
+import type { ExtensionHost } from '../server/extensions.ts'
 import { context, prepareHarness } from '../server/harness.ts'
 import {
   author,
@@ -21,6 +24,7 @@ import {
   KEY,
   machine,
   MINUTE,
+  ownHistory,
   sleep,
   snapshotFetch,
   sql,
@@ -100,27 +104,109 @@ it('releases an idle writer, and another machine prepares and takes over the sam
   expect(await desk.files()).toEqual(['state.sqlite'])
 })
 
+const joining = { reason: 'Waiting for the cloud', joining: true, cloud: true }
+/** A socket to a cloud that never answers. */
+const unanswered = () =>
+  Object.assign(new EventTarget(), { send: () => {}, close: () => {} }) as unknown as SyncSocket
 it('joins on standby: a new project activates its first machine, a known one creates no database', async () => {
   const project = cloud()
   const { root } = await checkout()
   const deskHome = await temp('ultimate-lease-')
-  expect(await joinOnStandby(deskHome)).toBe(true)
+  expect(await joinOnStandby(deskHome, KEY)).toBe(true)
   const desk = await machine('desk', project, root, { home: deskHome })
   // Nobody knew the project: the cloud registers the joining machine as its writer, which opens a fresh database.
   await writer(desk)
   expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
   expect(await desk.leaseFile()).toEqual({ key: KEY, epoch: 1 })
   expect(await desk.files()).toEqual(['state.sqlite'])
-  // A serving machine's home is no new one.
-  expect(await joinOnStandby(deskHome)).toBe(false)
+  // Its lease file names the project: it opens storage by itself from now on, the cloud reachable or not.
+  expect(await joinOnStandby(deskHome, KEY)).toBe(false)
+  expect(await joinOnStandby(deskHome, 'github.com/o/other')).toBe(true)
 
   const laptopHome = await temp('ultimate-lease-')
-  expect(await joinOnStandby(laptopHome)).toBe(true)
+  expect(await joinOnStandby(laptopHome, KEY)).toBe(true)
   const laptop = await machine('laptop', project, root, { home: laptopHome })
   await standbyOn(laptop)
-  expect(laptop.host.standby()).toEqual({ joining: true, cloud: true })
+  expect(laptop.host.standby()).toEqual(joining)
   expect(laptop.serving()).toBe(false)
   expect(await readdir(laptopHome)).toEqual(['standby.json'])
+})
+
+it('keeps an existing database without a lease file on standby, untouched, while another machine writes', async () => {
+  const project = cloud()
+  const { root } = await checkout()
+  const desk = await machine('desk', project, root)
+  await writer(desk)
+  const { home, before } = await ownHistory()
+  expect(await joinOnStandby(home, KEY)).toBe(true)
+  const laptop = await machine('laptop', project, root, { home })
+  await standbyOn(laptop)
+  expect(laptop.host.standby()).toMatchObject({ reason: 'Waiting for the cloud' })
+  expect(laptop.serving()).toBe(false)
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+  // Its own history stays where it is, unopened: no stale copy, nothing synced.
+  expect(await laptop.files()).toEqual(['state.sqlite'])
+  await laptop.close()
+  const reopened = await (
+    await prepareHarness({ ultimateRoot: home, userHome: home, home, faux: true })
+  ).open(false)
+  expect(await inventory(reopened.harness)).toEqual(before)
+  await reopened.close()
+})
+
+it('registers a new project with an existing database and writes that database in place', async () => {
+  const project = cloud()
+  const { root } = await checkout()
+  const { home, before } = await ownHistory()
+  expect(await joinOnStandby(home, KEY)).toBe(true)
+  const desk = await machine('desk', project, root, { home })
+  await writer(desk)
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+  expect(await desk.files()).toEqual(['state.sqlite'])
+  expect(await inventory(desk.harness())).toEqual(before)
+})
+
+it('waits on standby with no database while the cloud is unreachable, however long', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  try {
+    const repo = await checkout()
+    await git(repo.root, 'remote', 'set-url', 'origin', 'git@github.com:o/project.git')
+    const home = await temp('ultimate-lease-offline-')
+    vi.stubEnv('ULTIMATE_CLOUD_URL', 'ws://127.0.0.1:9')
+    vi.stubEnv('ULTIMATE_CLOUD_TOKEN', 'dev')
+    vi.stubEnv('ULTIMATE_CLOUD_MACHINE', 'laptop')
+    const closers: (() => Promise<void>)[] = []
+    const activate = vi.fn<ExtensionHost['activate']>()
+    const host = {
+      userHome: home,
+      home,
+      projectRoot: repo.root,
+      notice: () => {},
+      resource: <T>(_key: string, create: () => T) => create(),
+      onOpen: () => {},
+      onRelease: () => {},
+      onClose: (close: () => Promise<void>) => closers.push(close),
+      harness: () => {
+        throw new Error('Harness is not open')
+      },
+      standby: () =>
+        existsSync(join(home, 'standby.json'))
+          ? (JSON.parse(readFileSync(join(home, 'standby.json'), 'utf8')) as JsonObject)
+          : undefined,
+      activate,
+    } as unknown as ExtensionHost
+    await cloudExtension(host, {
+      dial: unanswered,
+      builds: { connect: () => {}, stop: async () => {}, current: () => undefined },
+    })
+    expect(host.standby()).toEqual(joining)
+    await vi.advanceTimersByTimeAsync(10 * MINUTE)
+    expect(activate).not.toHaveBeenCalled()
+    expect(await readdir(home)).toEqual(['standby.json'])
+    for (const close of closers) await close()
+  } finally {
+    vi.useRealTimers()
+  }
 })
 
 it('fast-forwards the checkout and installs when the lockfile changed, rerunning a failed install', async () => {
@@ -160,6 +246,33 @@ it('fast-forwards the checkout and installs when the lockfile changed, rerunning
   expect(states(await laptop.transition())).toMatchObject({ fetch: 'done', install: 'done' })
   await writer(laptop)
   expect(existsSync(join(laptop.home, 'cloud-install-pending'))).toBe(false)
+})
+
+it('reports an oversized install failure by its last 500 characters, which the cloud keeps', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const repo = await checkout()
+  const desk = await machine('desk', project, repo.root)
+  await writer(desk)
+  await idleRelease(desk)
+  const lines = Array.from({ length: 20 }, (_, index) => `${index}`.padEnd(200, '.'))
+  const laptop = await machine('laptop', project, repo.root, {
+    autoClaim: false,
+    pnpm: async () => {
+      throw Object.assign(new Error('exit 1'), { stdout: lines.join('\n'), stderr: '' })
+    },
+  })
+  await standbyOn(laptop)
+  await repo.push({ 'pnpm-lock.yaml': 'lockfileVersion: 9\npackages: {}\n' })
+  expect(await laptop.lease.move()).toBe(false)
+  const failed = project.replica.store.transition()!
+  expect(failed.error).toHaveLength(500)
+  expect(failed.error!.startsWith('…')).toBe(true)
+  expect(failed.error!.endsWith(lines.at(-1)!)).toBe(true)
+  expect(failed.steps.find((step) => step.name === 'install')).toMatchObject({
+    state: 'failed',
+    detail: failed.error,
+  })
 })
 
 it('refuses a dirty checkout before asking the writer, leaving the holder untouched', async () => {

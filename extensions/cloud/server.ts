@@ -67,6 +67,8 @@ export interface SyncState {
   writer?: Writer
   /** The latest move the cloud reported, running or ended. */
   transition?: Transition
+  /** The replica's project key, under which its snapshots live. */
+  project?: { key: string }
 }
 
 export interface SyncOptions {
@@ -95,6 +97,8 @@ export interface SyncHooks {
   cancel?(id: string): void
   /** The transition this machine prepares, named in hello so the cloud keeps it. */
   transition?(): string | undefined
+  /** A connection after the first said hello: its first role answers what an earlier one left unanswered. */
+  hello?(): void
 }
 
 /** One outbound connection; injected transport keeps sync tests entirely in process. */
@@ -532,7 +536,8 @@ export function startSync(
     }
     dispose = close
     socket.addEventListener('open', () =>
-      enqueue(async () =>
+      enqueue(async () => {
+        hooks.hello?.()
         send({
           type: 'hello',
           key: identity.key,
@@ -546,8 +551,8 @@ export function startSync(
           history: await hasHistory(),
           secrets: await secretNames(),
           ...(hooks.transition?.() ? { transition: hooks.transition() } : {}),
-        }),
-      ),
+        })
+      }),
     )
     socket.addEventListener('message', (event) => {
       try {
@@ -656,6 +661,15 @@ export function startSync(
 let active: Lease | undefined
 /** Sync is configured, but the project has no GitHub origin: it runs here only. */
 let localOnly = false
+const serving = (host: ExtensionHost) => {
+  try {
+    host.harness()
+    return true
+  } catch {
+    // Not open yet, or on standby.
+    return false
+  }
+}
 /** This machine's name, while sync runs. */
 let machine: string | undefined
 
@@ -717,23 +731,28 @@ export const actions = {
 }
 export const userActions = ['moveHere', 'cancel', 'relink']
 
-/** How long a joining machine waits for its first role before it opens its own storage, as one offline would. */
-export const JOIN_FALLBACK = 10_000
-
 /**
- * A machine new to the project, with no database, lease or standby file in its home, starts on standby until the cloud
- * names its role: as a standby it never creates a database, and as the first machine of a new project the lease
- * activates it as the writer. Runs before the server opens storage. True when this machine joins.
+ * With cloud sync on, a home opens storage only as this project's writer: one whose `cloud-lease.json` names `key`.
+ * Any other home, new or holding a database the cloud never admitted, starts on standby until the cloud names its
+ * role, however long that takes, so a machine the cloud did not admit never writes. As the first machine of a new
+ * project the lease activates it as the writer, with its own database. Runs before the server opens storage. True
+ * when this home starts on standby.
  */
-export async function joinOnStandby(home: string) {
-  if (
-    ['state.sqlite', 'cloud-lease.json', 'standby.json'].some((file) =>
-      existsSync(join(home, file)),
-    )
-  )
-    return false
+export async function joinOnStandby(home: string, key: string) {
   const path = join(home, 'standby.json')
-  await writeFile(`${path}.tmp`, JSON.stringify({ joining: true, cloud: true }))
+  if (existsSync(path)) return false
+  try {
+    const lease = JSON.parse(await readFile(join(home, 'cloud-lease.json'), 'utf8')) as {
+      key?: unknown
+    }
+    if (lease.key === key) return false
+  } catch {
+    // No lease file: this home never held the project's lease.
+  }
+  await writeFile(
+    `${path}.tmp`,
+    JSON.stringify({ reason: 'Waiting for the cloud', joining: true, cloud: true }),
+  )
   await rename(`${path}.tmp`, path)
   return true
 }
@@ -748,7 +767,6 @@ export default async function cloud(host: ExtensionHost, deps: Partial<LeaseDeps
   let lease: Lease | undefined
   let builds: ReturnType<typeof projectBuilds> | undefined
   let closed = false
-  let fallback: ReturnType<typeof setTimeout> | undefined
   const ready = (async () => {
     const config = await cloudConfig(host)
     if (!config) return
@@ -759,24 +777,16 @@ export default async function cloud(host: ExtensionHost, deps: Partial<LeaseDeps
       return
     }
     if (closed) return
-    const joining = await joinOnStandby(host.home)
+    // A reload of this facet while storage is open changes nothing.
+    if (!serving(host)) await joinOnStandby(host.home, identity.key)
     machine = config.machine
     builds = deps.builds ?? projectBuilds(host, config.url, config.token)
-    const started = startLease(
+    lease = startLease(
       host,
       { ...config, identity, ...(await leaseSettings(host)) },
       { sync: startSync, dial: connect, snapshots: snapshot, builds, ...deps },
     )
-    lease = started
     stopping.lease = active = lease
-    // Without a role from the cloud, the machine serves its own new database, as before it knew the cloud.
-    if (joining)
-      fallback = setTimeout(() => {
-        if (!started.sync()?.state().role && host.standby()?.joining === true)
-          void host
-            .activate()
-            .catch((error: unknown) => host.notice(`Cloud lease: ${String(error)}`))
-      }, JOIN_FALLBACK)
   })()
   host.onOpen(async () => {
     await ready
@@ -789,7 +799,6 @@ export default async function cloud(host: ExtensionHost, deps: Partial<LeaseDeps
   host.onClose(async () => {
     closed = true
     await ready
-    clearTimeout(fallback)
     lease?.close()
     if (active === lease) active = machine = undefined
     localOnly = false

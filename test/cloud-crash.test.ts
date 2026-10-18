@@ -13,6 +13,7 @@ import {
   KEY,
   machine,
   MINUTE,
+  ownHistory,
   seed,
   sleep,
   snapshotFetch,
@@ -20,6 +21,7 @@ import {
   writer,
 } from './cloud-lease-fixture.ts'
 import type { KillPoint, Machine } from './cloud-lease-fixture.ts'
+import { joinOnStandby } from '../extensions/cloud/server.ts'
 import { temp, until } from './helpers.ts'
 
 /** The desk wrote some history and released it idle: the lease is free at epoch 1 with the desk's snapshot. */
@@ -57,6 +59,8 @@ const intent = (m: Machine) => existsSync(join(m.home, 'cloud-claim.json'))
 const install = [['pnpm', 'install', '--frozen-lockfile']]
 it.each<[string, KillPoint, string[][], boolean]>([
   // The owed install runs again on restart.
+  // The lockfile changed with the fast-forward: the install is owed before it, so it still runs after a crash here.
+  ['after the fast-forward, before the install', 'merged', install, false],
   ['after fetch, while installing', 'pnpm', install, false],
   ['after install, in the checks', 'checks', [], false],
   // A download left without a claim is removed on start and fetched afresh.
@@ -80,6 +84,78 @@ it.each<[string, KillPoint, string[][], boolean]>([
   await recovered(project, restarted, before)
   expect(restarted.installs).toEqual(installs)
   expect(restarted.snapshots.downloadSnapshot).toHaveBeenCalledOnce()
+})
+
+it.each(['park', 'rename', 'open'] as const)(
+  'keeps a won claim whose storage failed to open (%s) and finishes it on restart',
+  async (fail) => {
+    const { project, repo, before } = await released()
+    // Parking needs a local database in the way; renaming fails with none there.
+    const home = fail === 'park' ? (await ownHistory()).home : await temp('ultimate-lease-')
+    await joinOnStandby(home, KEY)
+    const laptop = await machine('laptop', project, repo.root, { home, fail })
+    await until(() =>
+      laptop.notices.some((notice) => notice.startsWith('Opening storage as the writer failed')),
+    )
+    expect(project.replica.store.lease()).toMatchObject({ machine: 'laptop', epoch: 2 })
+    expect(intent(laptop)).toBe(true)
+    expect(laptop.serving()).toBe(false)
+    await laptop.crash()
+    const restarted = await machine('laptop', project, repo.root, { home })
+    await recovered(project, restarted, before)
+    // The download from before the crash was installed; a database in its way was kept aside.
+    expect(restarted.snapshots.downloadSnapshot).not.toHaveBeenCalled()
+    expect(
+      (await restarted.files()).filter((file) => file.startsWith('state.stale-')),
+    ).toHaveLength(fail === 'park' ? 1 : 0)
+  },
+)
+
+it('takes over after a relink, sealing and finding snapshots under the replica key', async () => {
+  const renamed = 'github.com/o/renamed'
+  snapshotFetch()
+  const project = cloud({ aliases: { [renamed]: KEY } })
+  const repo = await checkout()
+  const desk = await machine('desk', project, repo.root)
+  await writer(desk)
+  await seed(desk.harness())
+  const before = await inventory(desk.harness())
+  await idleRelease(desk)
+  const laptop = await machine('laptop', project, repo.root, { key: renamed })
+  await writer(laptop)
+  expect(project.settled()).toBe(true)
+  expect(await inventory(laptop.harness())).toEqual(before)
+  expect(await laptop.leaseFile()).toEqual({ key: renamed, epoch: 2 })
+  expect(laptop.role()?.project).toEqual({ key: KEY })
+  expect(laptop.snapshots.downloadSnapshot).toHaveBeenCalledWith(
+    expect.objectContaining({ key: KEY }),
+  )
+  // Its own release goes under the replica key too, so the desk takes the project back.
+  await idleRelease(laptop)
+  expect(await desk.lease.move()).toBe(true)
+  await recovered(project, desk, before)
+})
+
+it('answers a claim lost on a dropped connection from the reconnected one', async () => {
+  const { project, repo } = await released()
+  const laptop = await machine('laptop', project, repo.root, { autoClaim: false })
+  await standbyOn(laptop)
+  const dropped = project.hold('laptop', 'claim', 'drop')
+  const moving = laptop.lease.move()
+  await dropped
+  project.drop('laptop')
+  // The reconnected hello names the claimed epoch + 1; the free lease it hears means the claim was lost.
+  expect(await moving).toBe(false)
+  expect(intent(laptop)).toBe(false)
+  expect(project.replica.store.lease()).toMatchObject({ machine: null, epoch: 1 })
+  const granted = project.hold('laptop', 'claim', 'mute')
+  const again = laptop.lease.move()
+  await granted
+  project.drop('laptop')
+  // Granted, with its reply lost: the reconnected hello is the writer's.
+  expect(await again).toBe(true)
+  await writer(laptop)
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'laptop', epoch: 2 })
 })
 
 it('drops a claim that never reached the cloud, then claims again', async () => {
