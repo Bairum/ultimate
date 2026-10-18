@@ -24,7 +24,7 @@ import type { ConversationId, JsonObject, TaskId, Tx } from '@earendil-works/pi-
 import { afterAll, expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../../server/harness.ts'
 import { Metadata } from '../../server/metadata.ts'
-import { emit } from '../../server/events.ts'
+import { eventLog } from '../../server/events.ts'
 import { UiState } from '../../server/ui-state.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ActionContext } from '../../server/actions.ts'
@@ -37,7 +37,8 @@ import { git } from '../../lib/git.ts'
 import { setup } from '../../extensions/workspaces/setup.ts'
 import type { LanderEntry, WorkspaceIndex } from '../../extensions/workspaces/types.ts'
 import { createLander, landerCheckout, landerPath } from '../../extensions/workspaces/lander.ts'
-import lineage, { leaveNote, rootOf, startBranch } from '../../extensions/lineage/server.ts'
+import { SubmissionLanded } from '../../extensions/workspaces/api.ts'
+import lineage, { leaveNote, startBranch } from '../../extensions/lineage/server.ts'
 import { LineageApi, Roots } from '../../extensions/lineage/api.ts'
 import { subject } from '../../extensions/conversations/server.ts'
 import { ConversationsApi } from '../../extensions/conversations/api.ts'
@@ -105,19 +106,25 @@ async function fixture(
   // As the server: openers run each time the harness opens, cleanups each time it closes.
   const openers: (() => Promise<void>)[] = []
   const closers: (() => Promise<void>)[] = []
-  const lookup = ({ name }: { name: string }) =>
-    services.get(name) ??
-    (name === 'lineage' && host.extensions().some((e) => e.name === 'lineage' && e.enabled)
-      ? {
-          rootOf: (id: number, ctx: typeof context) => rootOf(host, id, ctx),
-          leaveNote: (to: number | 'root', text: string, source: Parameters<typeof leaveNote>[3]) =>
-            leaveNote(host, to, text, source),
-        }
-      : undefined)
+  const lookup = ({ name }: { name: string }) => services.get(name)
+  // As the server: the real event log, and reactors that run while the harness is open.
+  const events = eventLog(
+    () => opened.harness,
+    (_call, work) => work(),
+  )
+  let started = false
   const host = {
     ...prepared,
     harness: () => opened.harness,
     metadata: Metadata,
+    emit: events.emit,
+    eventLog: events.eventLog,
+    react: (...[name, tokens, handler]: Parameters<typeof events.reactor>) => {
+      const reactor = events.reactor(name, tokens, handler)
+      openers.push(reactor.start)
+      closers.push(reactor.stop)
+      if (started) void reactor.start()
+    },
     implement: (api: { name: string }, value: unknown) => {
       services.set(api.name, value)
     },
@@ -200,6 +207,7 @@ async function fixture(
   prepared.faux!.setResponses([route])
   opened = await prepared.open()
   for (const open of openers) await open()
+  started = true
   cleanup.push(async () => {
     for (const close of closers) await close()
     await opened.close()
@@ -781,6 +789,9 @@ async function landerLog(f: Awaited<ReturnType<typeof fixture>>) {
     view.dispose()
   }
 }
+/** Wait until every reactor has handled every event so far. */
+const reacted = (f: Awaited<ReturnType<typeof fixture>>) =>
+  until(async () => (await f.host.eventLog.reactors()).every((reactor) => reactor.lag === 0))
 async function rootNotes(f: Awaited<ReturnType<typeof fixture>>) {
   const root = (await f.opened.harness.conversation(ROOT_CONVERSATION_ID, context))!
   const view = await root.viewState(context)
@@ -791,13 +802,9 @@ async function rootNotes(f: Awaited<ReturnType<typeof fixture>>) {
   }
 }
 
-it.concurrent('notes the root once for a landing even when its report phase is replayed', async () => {
+it.concurrent('emits one landed event and notes the root once, across a replayed report and a reopen', async () => {
   const f = await lander({})
-  f.host.extensions = () =>
-    [
-      { name: 'workspaces', enabled: true },
-      { name: 'lineage', enabled: true },
-    ] as ReturnType<ExtensionHost['extensions']>
+  f.prepared.registry.install(lineage(f.host))
   const task = createLander(f.host, Workspaces, (_source, operation) => operation())
   const report = task.definition.phases.report
   let replays = 0
@@ -886,7 +893,29 @@ it.concurrent('notes the root once for a landing even when its report phase is r
     expect.objectContaining({ subject: featureOf }),
   ])
   expect(replays).toBe(1)
-  // A crash after admitting the note but before memoizing it reuses the same write request.
+  const landings = await f.host.eventLog.recent({ events: [SubmissionLanded] })
+  expect(landings.map((event) => event.data)).toEqual([
+    {
+      submission,
+      conversationId: id,
+      at: submittedAt,
+      sha,
+      base: expect.any(String),
+      target: 'main',
+      lander: (await landerLog(f)).id,
+      divergence: 'Added a landing file instead of changing the UI.',
+      title: 'Write the feature',
+      summary: 'Adds the landed file.',
+      feature: 'Landing',
+      commits: [{ sha: sha.slice(0, 7), subject: 'landed.txt' }],
+      commitCount: 1,
+      paths: ['landed.txt'],
+    },
+  ])
+  // Lineage's reactor notes the root; it is no tally, so a delivery task writes the note.
+  await reacted(f)
+  await until(async () => (await rootNotes(f)).length > 0)
+  // A rerun of that delivery reuses the same write request.
   await leaveNote(f.host, 'root', 'duplicate delivery', {
     source: 'lander',
     from: id,
@@ -911,7 +940,10 @@ it.concurrent('notes the root once for a landing even when its report phase is r
     `Landed ${sha.slice(0, 7)} on main from #${id}/${submittedAt} Write the feature (Landing):\nDiverged: Added a landing file instead of changing the UI.`,
   )
   await f.reopen()
+  await reacted(f)
+  await (await f.opened.harness.conversation(ROOT_CONVERSATION_ID, context))!.waitForIdle(context)
   expect(await rootNotes(f)).toHaveLength(1)
+  expect(await f.host.eventLog.recent({ events: [SubmissionLanded] })).toHaveLength(1)
 })
 
 it.concurrent('delivers a persisted version-one report without outcome as plain input once', async () => {
@@ -985,11 +1017,7 @@ it.concurrent('delivers a persisted version-one report without outcome as plain 
 
 it.concurrent('does not note the root about its own submission', async () => {
   const f = await lander({})
-  f.host.extensions = () =>
-    [
-      { name: 'lineage', enabled: true },
-      { name: 'workspaces', enabled: true },
-    ] as ReturnType<ExtensionHost['extensions']>
+  f.prepared.registry.install(lineage(f.host))
   const id = await f.create()
   await f.service.ready(id, context)
   await commit((await f.service.get(id, context))!.path)
@@ -998,6 +1026,7 @@ it.concurrent('does not note the root about its own submission', async () => {
   }, context)
   await f.service.submit(id, 'None', context)
   expect((await submitted(f, id))[0]).toContain('landed as')
+  await reacted(f)
   const view = await (await f.opened.harness.conversation(id, context))!.viewState(context)
   expect(view.value.entries.filter((entry) => entry.kind === 'lineage.note')).toHaveLength(0)
   view.dispose()
@@ -1006,11 +1035,7 @@ it.concurrent('does not note the root about its own submission', async () => {
 
 it.concurrent('notes the root of the submitter’s tree and skips a conversation outside any tree', async () => {
   const f = await lander({})
-  f.host.extensions = () =>
-    [
-      { name: 'lineage', enabled: true },
-      { name: 'workspaces', enabled: true },
-    ] as ReturnType<ExtensionHost['extensions']>
+  f.prepared.registry.install(lineage(f.host))
   // A second root, and a branch of it that lands; an unrooted conversation lands too.
   const other = await f.opened.harness.createConversation(
     { ownership: { kind: 'ownerless' } },
@@ -1031,6 +1056,7 @@ it.concurrent('notes the root of the submitter’s tree and skips a conversation
   await commit((await f.service.get(unrooted, context))!.path, 'unrooted.txt')
   await f.service.submit(unrooted, 'None', context)
   expect((await submitted(f, unrooted))[0]).toContain('landed as')
+  await reacted(f)
   const notes = async (id: ConversationId) => {
     const view = await (await f.opened.harness.conversation(id, context))!.viewState(context)
     try {
@@ -1039,6 +1065,7 @@ it.concurrent('notes the root of the submitter’s tree and skips a conversation
       view.dispose()
     }
   }
+  await until(async () => (await notes(other.id)).length > 0)
   expect((await notes(other.id)).map((note) => (note.data as { from: number }).from)).toEqual([
     branch.id,
   ])
@@ -1377,11 +1404,6 @@ it.concurrent('reruns only the failing command of a group, reports its output tw
   const f = await lander({
     checks: [['echo PASSING_SUMMARY', 'echo CHECK_OUTPUT_TAIL; test ! -f fail.txt']],
   })
-  f.host.extensions = () =>
-    [
-      { name: 'lineage', enabled: true },
-      { name: 'workspaces', enabled: true },
-    ] as ReturnType<ExtensionHost['extensions']>
   const id = await f.create()
   await f.service.ready(id, context)
   const workspace = (await f.service.get(id, context))!
@@ -1792,8 +1814,6 @@ it.concurrent('fix: a fix that still fails the check is not landed and leaves th
 })
 it.concurrent('starts an isolated branch of a tally whose first request sees its ready checkout', async () => {
   const f = await fixture()
-  // The branch's event goes to the real log; no extension here reacts to it.
-  f.host.emit = emit
   // Its prompt task delivers the first input.
   f.prepared.registry.install(lineage(f.host))
   await seedTally(f.opened.harness)

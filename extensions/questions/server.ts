@@ -421,6 +421,7 @@ export default function questionsExtension(host: ExtensionHost) {
     ending.add(done)
   }
   host.onOpen(async () => {
+    // Not a reactor: user input and resets are Pi entries, not domain events.
     stop = host.harness().subscribeCommits((publication) => {
       if (
         publication.changes.some(

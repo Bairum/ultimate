@@ -485,6 +485,7 @@ export function startSync(
       catchingUp = true
       synced = 0
       total = host.conversations().length
+      // Not a reactor: sync replicates every committed change (entries, documents, records), not domain events.
       unsubscribe = host.harness().subscribeCommits((publication) => {
         buffer(publication)
         if (ready && !closed && !changesQueued) {

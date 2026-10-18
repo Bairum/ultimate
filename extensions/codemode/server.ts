@@ -30,6 +30,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { discoverAgents } from '../../lib/agents.ts'
+import { apiSource, apiSummaries } from '../../lib/api-files.ts'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 
 export const Store = defineDoc({
@@ -151,6 +152,23 @@ function globals(
       signature:
         '(): Promise<{ apis: { name: string; provider?: string; needs: string[]; wants: string[] }[]; missing: string[]; cycles: string[][] }>',
       execute: () => host.catalogue(),
+    },
+    {
+      name: 'apis',
+      description:
+        'Extension contracts: each enabled extension with an api.ts and the one-line summary of what it offers.',
+      signature: '(): Promise<{ name: string; summary: string }[]>',
+      execute: () => apiSummaries(host.extensions()),
+    },
+    {
+      name: 'api',
+      description:
+        "The api.ts source of one extension: its documented services, events, documents and actions. Read it before calling the extension's actions.",
+      signature: '(name: string): Promise<string>',
+      execute: ([name]) => {
+        if (typeof name !== 'string' || !name) throw new Error('name must be nonempty')
+        return apiSource(host.extensions(), name)
+      },
     },
     {
       name: 'trace',
@@ -512,7 +530,8 @@ export default function codemode(host: ExtensionHost) {
             (agent.tools.some((tool) => tool.name === 'restart')
               ? ' Call restart only at top level.'
               : '') +
-            ' Only text(), images and return values enter context; filter to concise findings. ' +
+            ' Only text(), images and return values enter context; filter to concise findings.' +
+            ' Discover extension contracts with ultimate.apis() and read one with ultimate.api(name); act on them through ultimate.action. ' +
             'tools.<name>(args) uses the top-level tool schemas and rules (same arguments and results). Available: ' +
             declarations(agent.tools)
               .map((tool) => tool.name)

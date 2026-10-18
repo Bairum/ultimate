@@ -692,6 +692,7 @@ export default function subagents(
   })
   host.onOpen(async () => {
     unsubscribe?.()
+    // Not a reactor: subagent answers settle as Pi submission records, not domain events.
     unsubscribe = host.harness().subscribeCommits((publication) => {
       for (const change of publication.changes) {
         if (change.type !== 'submission') continue

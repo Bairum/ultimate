@@ -89,6 +89,7 @@ export default function statusLine(host: Host) {
         sample(performance.now(), total)
         // Subscribe while this atomic seed still holds the commit boundary. Its own publication
         // is safe to adopt again (absolute counters); no following commit can slip past the seed.
+        // Not a reactor: token rates follow Pi's usage and live documents, not domain events.
         unsubscribe = harness.subscribeCommits((publication) => {
           for (const change of publication.changes) {
             if (change.type !== 'document' || change.conversationId === undefined) continue

@@ -564,6 +564,7 @@ export default function board(host: ExtensionHost) {
   let stop: (() => void) | undefined
   const answering = new Set<Promise<void>>()
   host.onOpen(async () => {
+    // Not a reactor: a user's input answering a message is a Pi entry, not a domain event.
     stop = host.harness().subscribeCommits((publication) => {
       for (const change of publication.changes)
         if (change.type === 'entry' && change.value.kind === 'pi.user') {

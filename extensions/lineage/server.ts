@@ -33,7 +33,8 @@ import { git } from '../../lib/git.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { WorkspacesApi } from '../workspaces/api.ts'
+import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
+import type { LandedData } from '../workspaces/api.ts'
 import { Branch, Branched, LineageApi, Rooted, Roots } from './api.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 import type { Tree } from './catchup.ts'
@@ -308,6 +309,7 @@ function watchTally(host: ExtensionHost, ctx: Context) {
   }
   host.onOpen(async () => {
     roots = new Set(await rootsOf(host, ctx))
+    // Not a reactor: any entry a root gets (Pi's own resets and compactions too) changes its count, no domain event.
     unsubscribe = host.harness().subscribeCommits((publication) => {
       for (const change of publication.changes)
         if (change.type === 'document' && change.record.kind === Roots.definition.kind)
@@ -373,6 +375,7 @@ function lineage(host: ExtensionHost) {
         for (;;) {
           // Subscribed before reading, so an entry the target writes after the read still ends the wait below.
           const written = Promise.withResolvers<void>()
+          // Not a reactor: a short wait inside this task for any entry of the target, a Pi record.
           const unsubscribe = host.harness().subscribeCommits((publication) => {
             if (
               publication.changes.some(
@@ -478,7 +481,57 @@ function lineage(host: ExtensionHost) {
     abort: (_task, runtime, ctx) =>
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
-  return { Notify, Prompt }
+  /** Delivers a landing note to a root that is no tally, which may be running a turn; its request id writes it once. */
+  const LandingNote = defineTask<
+    { to: ConversationId; text: string; source: NoteSource },
+    { phase: 'deliver' },
+    null
+  >({
+    name: 'lineage.landing-note',
+    version: 1,
+    initial: () => ({ phase: 'deliver' }),
+    phases: {
+      deliver: async (task, runtime, ctx) => {
+        await leaveNote(host, task.input.to, task.input.text, task.input.source)
+        await runtime.commit(
+          () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
+          ctx,
+        )
+      },
+    },
+    abort: (_task, runtime, ctx) =>
+      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+  })
+  return { Notify, Prompt, LandingNote }
+}
+
+/** The note a landing leaves in its submitter's tree root: what landed, how it diverged, and the card's data. */
+function landingNote(landing: LandedData) {
+  const more = landing.commitCount - landing.commits.length
+  const text = [
+    // The submit-time summary is often stale and the tally carries the abstract: the card shows it, the model does not.
+    `Landed ${landing.sha.slice(0, 7)} on ${landing.target} from #${landing.conversationId}/${landing.at} ${landing.title}${landing.feature ? ` (${landing.feature})` : ''}:`,
+    `Diverged: ${landing.divergence}`,
+    ...landing.commits.map((commit) => commit.subject),
+    ...(more ? [`and ${more} more`] : []),
+    `Changed: ${landing.paths.join(', ')}`,
+  ].join('\n')
+  const data = {
+    at: landing.at,
+    divergence: landing.divergence,
+    sha: landing.sha,
+    base: landing.base,
+    target: landing.target,
+    commits: landing.commits,
+    paths: landing.paths,
+    title: landing.title,
+    more,
+    lander: landing.lander,
+    ...(landing.summary ? { summary: landing.summary } : {}),
+    ...(landing.feature ? { feature: landing.feature } : {}),
+    ...(landing.pushed ? { pushed: landing.pushed } : {}),
+  }
+  return { text, data }
 }
 
 /**
@@ -673,32 +726,16 @@ async function forkBranch(
   return fork.id
 }
 
-/**
- * Leave a note in `to` (a conversation id, or the root of `source.from`'s tree) without waking it. A landing in a tally
- * freezes its submitter's open abstract: the note carries that state, and the anchor leaves the context with it.
- */
-export async function leaveNote(
-  host: Pick<ExtensionHost, 'harness'>,
-  to: number | 'root',
-  text: string,
-  source?: {
-    from?: number
-    source?: 'lander' | 'finished'
-    data?: JsonObject
-    requestId?: string
-  },
-) {
-  let target = to as ConversationId
-  if (to === 'root') {
-    if (source?.from === undefined) throw new Error('A note to the root needs its source')
-    const root = await rootOf(host, source.from, context)
-    if (root === undefined) throw new Error(`#${source.from} has no root`)
-    target = root
-  }
-  const conversation = await host.harness().conversation(target, context)
-  if (!conversation) throw new Error(`No conversation #${target}`)
+type NoteSource = {
+  from?: number
+  source?: 'lander' | 'finished'
+  data?: JsonObject
+  requestId?: string
+}
+
+/** A note's entry data and the text its reader's model sees. */
+function note(text: string, source?: NoteSource) {
   const from = source?.from
-  const requestId = source?.requestId
   const data = {
     ...source?.data,
     text,
@@ -711,45 +748,85 @@ export async function leaveNote(
       : source?.source === 'finished'
         ? finishedText(from!, source.data?.title as string | undefined, text)
         : `Note from #${from ?? '?'}: ${text}`
-  // A landing in a tally is placed with the check for an open abstract in one transaction: none can open in between.
+  return { data, content }
+}
+
+/**
+ * Place landing note `text` from submitter `source.from` in `target` inside `tx`, when `target` is a tally; false when it
+ * is none. Placed with the check for an open abstract in one transaction, so none can open in between: the submitter's
+ * open abstract freezes into the note, and its anchor leaves the context. A note placed for `requestId` before counts.
+ */
+async function placeLanding(
+  tx: Tx,
+  target: ConversationId,
+  text: string,
+  source: NoteSource & { from: number },
+) {
+  const tally = await tx.doc(Tally, target)
+  if (tally.since === undefined) return false
+  const { from, requestId } = source
+  // A rerun after a crash finds the landing it wrote; a newer anchor stays open.
+  if (requestId && (await tx.submissionByRequest(target, requestId))) return true
+  const { data, content } = note(text, source)
+  // A tally runs no turns, so the write is placed at once, as an idle conversation's would be.
+  const open = tally.abstracts[String(from)] as OpenAbstract | undefined
+  const model = { role: 'user' as const, content, timestamp: Date.now() }
+  let entry
+  if (open) {
+    const { anchor, ...state } = open
+    entry = await tx.appendEntry(target, {
+      kind: 'lineage.note',
+      data: { ...data, abstract: state },
+      model: [
+        {
+          ...model,
+          content: `${content}\n\nState at landing (abstract as of #${from}/${state.at}):\n${state.text}`,
+        },
+      ],
+      edits: [{ target: anchor as EntryId, action: 'omit' }],
+    })
+    delete tally.abstracts[String(from)]
+  } else entry = await tx.appendEntry(target, { kind: 'lineage.note', data, model: [model] })
+  await tx.createSubmission({
+    conversationId: target,
+    ...(requestId ? { requestId } : {}),
+    type: 'write',
+    status: 'done',
+    entry: entry.id,
+  })
+  return true
+}
+
+/**
+ * Leave a note in `to` (a conversation id, or the root of `source.from`'s tree) without waking it. A landing in a tally
+ * freezes its submitter's open abstract: the note carries that state, and the anchor leaves the context with it.
+ */
+export async function leaveNote(
+  host: Pick<ExtensionHost, 'harness'>,
+  to: number | 'root',
+  text: string,
+  source?: NoteSource,
+) {
+  let target = to as ConversationId
+  if (to === 'root') {
+    if (source?.from === undefined) throw new Error('A note to the root needs its source')
+    const root = await rootOf(host, source.from, context)
+    if (root === undefined) throw new Error(`#${source.from} has no root`)
+    target = root
+  }
+  const conversation = await host.harness().conversation(target, context)
+  if (!conversation) throw new Error(`No conversation #${target}`)
+  const from = source?.from
   if (
     source?.source === 'lander' &&
     from !== undefined &&
-    (await host.harness().commit(async (tx) => {
-      const tally = await tx.doc(Tally, target)
-      if (tally.since === undefined) return false
-      // A rerun after a crash finds the landing it wrote; a newer anchor stays open.
-      if (requestId && (await tx.submissionByRequest(target, requestId))) return true
-      // A tally runs no turns, so the write is placed at once, as an idle conversation's would be.
-      const open = tally.abstracts[String(from)] as OpenAbstract | undefined
-      const model = { role: 'user' as const, content, timestamp: Date.now() }
-      let entry
-      if (open) {
-        const { anchor, ...state } = open
-        entry = await tx.appendEntry(target, {
-          kind: 'lineage.note',
-          data: { ...data, abstract: state },
-          model: [
-            {
-              ...model,
-              content: `${content}\n\nState at landing (abstract as of #${from}/${state.at}):\n${state.text}`,
-            },
-          ],
-          edits: [{ target: anchor as EntryId, action: 'omit' }],
-        })
-        delete tally.abstracts[String(from)]
-      } else entry = await tx.appendEntry(target, { kind: 'lineage.note', data, model: [model] })
-      await tx.createSubmission({
-        conversationId: target,
-        ...(requestId ? { requestId } : {}),
-        type: 'write',
-        status: 'done',
-        entry: entry.id,
-      })
-      return true
-    }, context))
+    (await host
+      .harness()
+      .commit((tx) => placeLanding(tx, target, text, { ...source, from }), context))
   )
     return target
+  const { data, content } = note(text, source)
+  const requestId = source?.requestId
   await conversation.submit(
     {
       type: 'write',
@@ -1059,12 +1136,33 @@ export default function lineageExtension(host: ExtensionHost) {
     branchOf: (id, ctx) => branchOf(host, id, ctx),
     abstract,
   })
-  const { Notify, Prompt } = lineage(host)
+  const { Notify, Prompt, LandingNote } = lineage(host)
+  // Every landing notes its submitter's tree root once: a tally in this reactor's transaction, any other root through
+  // a delivery task created in it. The submitter's own root and conversations outside any tree get none.
+  host.react('landing-notes', [SubmissionLanded], async (tx, { data: landing }) => {
+    const from = landing.conversationId
+    const roots = (await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots
+    const root = await climb(tx, await tx.conversation(from as ConversationId), roots)
+    if (root === undefined || root === from) return
+    const { text, data } = landingNote(landing)
+    const source = {
+      from,
+      source: 'lander' as const,
+      requestId: `lander-root:${landing.submission}`,
+      data,
+    }
+    if (await placeLanding(tx, root, text, source)) return
+    await tx.createTask(
+      LandingNote,
+      { to: root, text, source },
+      { conversationId: root, ownership: { kind: 'conversation' }, background: true },
+    )
+  })
   watchSeen(host, context)
   watchTally(host, context)
   return defineExtension({
     name: 'lineage',
-    tasks: [Notify, Prompt],
+    tasks: [Notify, Prompt, LandingNote],
     sections: [section('lineage', (input, ctx) => lineageSection(host, input.conversationId, ctx))],
     hooks: [
       hook(GenerationTask, {

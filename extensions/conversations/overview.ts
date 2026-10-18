@@ -132,6 +132,7 @@ export function overviewBehavior(
   }
   host.onOpen(async () => {
     closed = false
+    // Not a reactor: the overview follows Pi's records, entries and live documents, not domain events.
     stop = host.harness().subscribeCommits((publication) => {
       for (const change of publication.changes) {
         if (change.type === 'conversation') pending.add(change.value.id)

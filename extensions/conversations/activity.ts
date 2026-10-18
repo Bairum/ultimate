@@ -87,6 +87,7 @@ export function activityBehavior(
   }
   host.onOpen(async () => {
     closed = false
+    // Not a reactor: activity follows Pi's conversation records and entries, not domain events.
     stop = host.harness().subscribeCommits((publication) => {
       for (const change of publication.changes) {
         if (change.type === 'conversation') pending.add(change.value.id)

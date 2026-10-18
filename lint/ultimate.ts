@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { apiSummary } from '../lib/api-files.ts'
 
 interface ImportNode {
   source?: { value?: unknown }
@@ -433,11 +434,7 @@ export default {
         }
         return {
           Program(node: Node) {
-            const header = /^\/\*\*([\s\S]*?)\*\//
-              .exec(context.sourceCode.text.trimStart())?.[1]
-              .replace(/^\s*\*\s?/gm, ' ')
-              .trim()
-            if (!header || !/[.!?](\s|$)/.test(header))
+            if (!apiSummary(context.sourceCode.text))
               report(
                 node,
                 `Start ${file} with a doc comment on what it offers; its first sentence is the one-line summary.`,
