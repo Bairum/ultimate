@@ -19,7 +19,7 @@ In the machine home, @sync's empty conversation says what it does and its compos
 
 ## Ask @sync
 
-`link.tsx` exports `AskSync`, a quiet link the cloud facet shows on a project's standby page and in its status-line popover while this machine's home runs. It calls the `home` action, which finds `~/.ultimate/machine` with a running URL in `host.projects()` (the supervisor's `ultimate.lock` port) and links to @sync's conversation there. In the cloud (`/p/<slug>/`) it shows nothing.
+`ui.tsx` has `AskSync`, a quiet link sync provides for cloud's `MoveHelp` point, which the cloud facet shows on a project's standby page and in its status-line popover while this machine's home runs. It calls the `home` action, which finds `~/.ultimate/machine` with a running URL in `host.projects()` (the supervisor's `ultimate.lock` port) and links to @sync's conversation there. In the cloud (`/p/<slug>/`) it shows nothing.
 
 ## Tools (machine home only)
 
