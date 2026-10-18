@@ -666,23 +666,36 @@ export default function subagents(
       const state = await tx.doc(Subagents, parent)
       const agent = state.agents[String(submission.conversationId)]
       if (!agent || agent.reported.includes(submission.answer)) return
-      const action = Object.values(state.actions).findLast(
+      const childActions = Object.values(state.actions).filter(
         (candidate) => candidate.conversationId === submission.conversationId,
       )
-      const interrupted = action?.status === 'interrupted'
-      if (action?.status !== 'unanswered' && action?.status !== 'failed' && !interrupted) return
-      const failed = await tx.submissionByRequest(
-        submission.conversationId,
-        action.retryRequest ?? `subagent:${action.reporter}`,
-      )
-      // IDs share one allocation order; an input withdrawn before placement has no entry.
-      if (
-        failed?.status !== 'unanswered' ||
-        (failed.reason === 'aborted') !== interrupted ||
-        (failed.entry === undefined && !interrupted) ||
-        submission.entry <= (failed.entry ?? failed.id)
-      )
-        return
+      // A one-way Board message from the parent has no reporter and no Board reply: without this,
+      // the answer it starts never reaches the parent, which stays idle. A pending reporter
+      // whose input shares the run delivers that answer itself.
+      const input = await tx.entry(submission.entry)
+      const message = input?.data as { from?: unknown; reply?: unknown } | undefined
+      const messaged =
+        input?.kind === 'board.message' &&
+        message?.from === parent &&
+        message.reply === false &&
+        childActions.every((action) => action.status !== undefined)
+      if (!messaged) {
+        const action = childActions.at(-1)
+        const interrupted = action?.status === 'interrupted'
+        if (action?.status !== 'unanswered' && action?.status !== 'failed' && !interrupted) return
+        const failed = await tx.submissionByRequest(
+          submission.conversationId,
+          action.retryRequest ?? `subagent:${action.reporter}`,
+        )
+        // IDs share one allocation order; an input withdrawn before placement has no entry.
+        if (
+          failed?.status !== 'unanswered' ||
+          (failed.reason === 'aborted') !== interrupted ||
+          (failed.entry === undefined && !interrupted) ||
+          submission.entry <= (failed.entry ?? failed.id)
+        )
+          return
+      }
       const answer = (await tx.entry(AssistantEntry, submission.answer))?.model?.[0] as
         | AssistantMessage
         | undefined
@@ -850,6 +863,8 @@ An epic means the full flow: tasks, isolated workers, land, and review before it
    Parallel by default: start independent tasks as background children in the same tool round.
    Wait for their answers instead of polling; children touching the same files run sequentially.
    Link each child to its task with plan; record dependencies and status.
+   Before ending a turn with children still running, name the ones you wait for; their answers
+   wake you. Never conclude while they run.
 5. Workers verify their chunk with checks, tests, and screenshots where needed, and report evidence.
    Read each report and inspect its commit diff. Rerun checks only for missing or thin evidence,
    reported failures, changes crossing workers, server/shared changes, or surprises in the diff.
@@ -882,7 +897,7 @@ Available definitions:
       defineTool({
         name: 'subagent',
         description:
-          'Delegate to a named agent. start returns its answer (foreground) or id (background). Foreground start/message and wait yield on queued steering with details.yielded:true; work continues independently. Stop children explicitly; stopping the parent does not stop them. message steers a busy child (steer false queues a follow-up instead); wait returns the latest answer; stop stops current work; list shows your children; land verifies and fast-forwards a finished worktree child; discard removes its worktree but keeps its branch. start accepts isolate none or worktree, and fork true to inherit parent history before this call (more context cost; prompt caching usually covers the shared prefix). Background answers join the current run after its tool round.',
+          'Delegate to a named agent. start returns its answer (foreground) or id (background). Foreground start/message and wait yield on queued steering with details.yielded:true; work continues independently. Stop children explicitly; stopping the parent does not stop them; stop lists files left uncommitted in the child worktree. message steers a busy child (steer false queues a follow-up instead); wait returns the latest answer; stop stops current work; list shows your children; land verifies and fast-forwards a finished worktree child; discard removes its worktree but keeps its branch. start accepts isolate none or worktree, and fork true to inherit parent history before this call (more context cost; prompt caching usually covers the shared prefix). Background answers join the current run after its tool round, or wake you when idle.',
         // Call-id receipts deduplicate starts/messages; memoized targets and guards protect stop/workspace replays.
         replay: 'safe',
         parameters: Type.Object({
@@ -1166,7 +1181,19 @@ Available definitions:
               await host.harness().abortTask(run.taskId, context)
               await api.waitForTask(run.taskId, context)
             }
-            return finish(`Stopped ${id}.`, info)
+            // Report, never commit or delete: the coordinator decides what happens to the work.
+            const workspace = await service()?.get(id, context)
+            const uncommitted =
+              workspace?.state === 'ready'
+                ? (await service()!.git(workspace.path, 'status', '--porcelain'))
+                    .split('\n')
+                    .filter(Boolean)
+                    .map((line) => line.slice(3))
+                : []
+            return finish(
+              `Stopped ${id}.${uncommitted.length ? `\nLeft uncommitted in ${workspace!.path}: ${uncommitted.join(', ')}` : ''}`,
+              info,
+            )
           }
           const reporters = Object.values(index.actions).flatMap((action) =>
             action.conversationId === id ? [action.reporter] : [],

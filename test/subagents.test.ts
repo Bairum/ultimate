@@ -1108,6 +1108,44 @@ describe('turns without an answer', () => {
       `Subagent ${other} ended its turn without an answer. Message it to continue.`,
     )
   })
+  it('wakes an idle parent with the answer to its one-way message, never to a reply-expecting one', async () => {
+    const f = await fixture()
+    await call(f.opened, { action: 'start', agent: 'scout', task: 'Ready', background: true })
+    await until(async () => (await reports(f.opened)).length === 1)
+    await f.opened.harness.waitForIdle(context)
+    const [child] = await children(f.opened)
+    const handle = (await f.opened.harness.conversation(child.conversationId, context))!
+    // What the Board's delivery submits: a two-way message gets a Board reply, a one-way one nothing.
+    const deliver = async (id: number, reply: boolean, content: string) =>
+      (
+        await handle.submit(
+          {
+            type: 'input',
+            content,
+            entry: {
+              kind: 'board.message',
+              data: { id, from: f.opened.root.id, text: content, reply, delivery: 'followUp' },
+            },
+          },
+          context,
+        )
+      ).wait(context)
+    await deliver(1, true, 'Question')
+    await f.opened.harness.waitForIdle(context)
+    expect(await reports(f.opened)).toHaveLength(1)
+    await deliver(2, false, 'Rebase and report')
+    await until(async () => (await reports(f.opened)).length === 2)
+    expect((await reports(f.opened))[1].model?.[0]).toMatchObject({
+      content: `[subagent ${child.conversationId} (scout) answered] Returned model: faux/faux-1\nChild: Rebase and report`,
+    })
+    // The report started a parent run, which answered it.
+    await f.opened.harness.waitForIdle(context)
+    const view = await f.opened.root.viewState(context)
+    const last = view.value.entries.at(-1)!
+    view.dispose()
+    expect(last.model?.[0]).toMatchObject({ role: 'assistant' })
+    expect(JSON.stringify(last.model)).toContain('Report received')
+  })
   it('delivers the answer that follows a child-side stop exactly once, across reopen', async () => {
     const f = await gatedFixture()
     await call(f.opened, { action: 'start', agent: 'scout', task: 'HOLD', background: true })

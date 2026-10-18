@@ -695,6 +695,28 @@ it.concurrent('starts a worker isolate, commits in the child and lands it throug
     await git(workspace.path, 'rev-parse', 'HEAD'),
   )
 })
+it.concurrent('stop lists what a worker left uncommitted and keeps it', async () => {
+  const f = await fixture()
+  await f.call(f.opened.root.id, 'subagent', {
+    action: 'start',
+    agent: 'worker',
+    task: 'finish',
+    isolate: 'worktree',
+  })
+  const child = Object.values(
+    (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!.agents,
+  )[0].conversationId
+  const workspace = (await f.service.get(child, context))!
+  const stopped = async () =>
+    JSON.stringify((await f.call(f.opened.root.id, 'subagent', { action: 'stop', id: child }))!)
+  expect(await stopped()).toContain(`Stopped ${child}."`)
+  await writeFile(join(workspace.path, 'draft.txt'), 'draft')
+  await writeFile(join(workspace.path, 'README.md'), 'edited')
+  expect(await stopped()).toContain(
+    `Stopped ${child}.\\nLeft uncommitted in ${workspace.path}: README.md, draft.txt`,
+  )
+  expect(await readFile(join(workspace.path, 'draft.txt'), 'utf8')).toBe('draft')
+})
 async function submitted(f: Awaited<ReturnType<typeof fixture>>, id: ConversationId) {
   await until(async () => {
     const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
