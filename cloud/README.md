@@ -8,9 +8,14 @@ To add a machine to the projects a deployed cloud already holds (see [Deploy](#d
 
 1. Clone Ultimate, then in the clone run `pnpm install` and `pnpm link --global`.
 2. Set up by hand:
-   - [ ] Log in to a model provider with `pi` (or copy `~/.pi/agent/auth.json` from another machine).
+   - [ ] Log in to every model provider on this machine itself: ⌘K → Log in to a provider, or `/login` in `pi`. Never
+         copy `~/.pi/agent/auth.json` (or `~/.claude/.credentials.json`) from another machine: OAuth logins rotate
+         their refresh token, so the first refresh on one machine revokes the other's copy (`invalid_grant`). Moves
+         and snapshots never carry logins.
    - [ ] Add `ULTIMATE_CLOUD_TOKEN` and `ULTIMATE_CLOUD_SNAPSHOT_KEY` in Secrets (⌘K → Secrets), the same values as on
-         the other machines. Or copy `~/.ultimate/secrets.json` and `chmod 600` it; never print it.
+         the other machines. These are static values you chose at deploy time, not rotating logins, so the same value
+         works on every machine: read them in the Secrets panel of a machine that has them and enter them here, or copy
+         `~/.ultimate/secrets.json` and `chmod 600` it; never print it.
    - [ ] Set `cloud.url` and `cloud.machine` in `~/.ultimate/settings.json` (step 5 of [Deploy](#deploy)).
    - [ ] Create the machine's tunnel (`pnpm exec wrangler tunnel create ultimate-<machine>` from any logged-in
          machine), add it to `cloud.tunnels` on the deploying machine, and deploy again (step 6 of
@@ -182,6 +187,7 @@ The project API answers three routes itself, before any request goes to the mach
   - a target crashed after sending `claim`: the restarted target finishes the claim when the cloud names it the writer at the claimed epoch + 1, installing its verified download (fetched again when gone), and otherwise drops the download and the intent and may claim again. A claim whose storage failed to open (parking, installing or opening) keeps both the same way. A claim whose connection dropped is answered by the reconnected hello's role, without a restart.
   - a holder crashed during its release, before `release` reached the cloud: it still holds the lease and resumes as the writer of its own database. After it: the lease is free with the snapshot, and the holder, on standby, resumes with no download since its database is that snapshot.
   - a standby named the writer without an intent opens its own database only when it is the writer's state at that epoch (its lease file's epoch, the last snapshot, or a project it just registered); otherwise it installs the last snapshot first.
+- **Logins stay put:** a snapshot holds only the project's database and a bundle of its `ultimate/*` branches. Model provider logins (`~/.pi/agent/auth.json`), `~/.claude`, Secrets and settings never leave the machine; each machine logs in on its own.
 - **Never lost:** no step deletes a database; a replaced one is parked as `state.stale-<time>.sqlite`. Every step is safe to run again: fetch only fast-forwards, install is owed from before the fast-forward that changed the lockfile until an install succeeds, downloads are verified before they are renamed into place, branches are never forced, and claims compare and swap.
 - **Not guaranteed:** taking the lease from an offline holder. A holder that crashed mid-release and never returns keeps the lease until it does.
 

@@ -16,6 +16,10 @@ The deterministic move pipeline and the cloud lease are authoritative. You never
 - `move {project, to?}` moves a project to `to`, or to this machine when `to` is absent. `cancel {project}` stops a move until its claim is sent.
 - `force: true` continues past missing secrets. Pass it only after the user confirmed in this conversation that the missing secrets are fine, and name them when you ask.
 
+## Logins stay on their machine
+
+Every machine keeps its own model provider logins. Never copy, move or sync provider credentials (`~/.pi/agent/auth.json`, `~/.claude/.credentials.json`) between machines, and never offer to: OAuth logins rotate their refresh token, so a refresh on one machine revokes the other's copy. When a login is missing or failing on a machine (`local.login`, or a provider failing in a machine's health line), tell the user to log in on that machine: ⌘K → Log in to a provider, or `/login` in `pi`. The static cloud secrets `ULTIMATE_CLOUD_TOKEN` and `ULTIMATE_CLOUD_SNAPSHOT_KEY` are different: the same values go into Secrets on every machine.
+
 ## Destructive actions need the user's OK
 
 Discarding changes, deleting stale databases or `ultimate-moved/*` refs, and forcing a move each need the user's explicit OK in this conversation first. Ask with the exact paths or names and numbered options.
@@ -28,7 +32,7 @@ A move involving this machine wakes you with its transition (a `sync.move` input
 2. `ultimate/*` branches and any `refs/heads/ultimate-moved/*` refs (`git for-each-ref`). Explain kept refs; offer to remove them.
 3. Stale databases (`state.stale-*.sqlite` in the project home): list them and offer removal.
 4. Worktrees are recreated on use: nothing to do.
-5. Missing secrets and the model login, from `fleet` (`local.login`). Without a login the project's agents cannot run on this machine, and a move here fails its checks even with `force`: ask the user to log in with ⌘K → Log in.
+5. Missing secrets and the model login, from `fleet` (`local.login`). Without a login the project's agents cannot run on this machine, and a move here fails its checks even with `force`: ask the user to log in on this machine with ⌘K → Log in to a provider.
 6. Services: `systemctl --user is-active ultimate ultimate-tunnel ultimate-machine`, and `loginctl show-user $USER -p Linger`.
 7. The fast-forward and the worktrees with uncommitted changes named in the transition's steps.
 

@@ -56,7 +56,8 @@ cd ~/Projects/app && ultimate
 ```
 
 - No `pi` login yet? Open the command palette (`Ctrl+K`, `⌘K` on macOS) → "Log in to a provider". Logins are shared
-  with `pi`, and so is logging out.
+  with `pi`, and so is logging out. Log in on each machine; never copy `~/.pi/agent/auth.json` between machines, since
+  a token refresh on one revokes the other's copy.
 - **First start** on a machine shows Get ready: log in to a provider and choose a model. Continue opens @ultimate,
   which offers inline setup cards, reads the project and writes the root's first context.
 - **A folder with its own `.ultimate/`** asks once: its setup or your global one. Its extensions, agents, and skills

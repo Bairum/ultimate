@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { readdir } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { R2Bucket } from '@cloudflare/workers-types'
@@ -300,6 +300,36 @@ it('skips the bundle when the repository has no ultimate branches', async () => 
   const result = await downloadSnapshot({ ...remote, id: small.id, dir, repo })
   expect(result.keptRefs).toEqual([])
   expect(count(result.database, 't')).toBe(3)
+})
+
+it('never carries provider logins or secrets that sit next to the database', async () => {
+  // Logins rotate their refresh tokens: a copy on another machine dies on the first refresh, so moves must leave them.
+  const home = await temp('ultimate-snapshot-logins-')
+  const marker = 'refresh-token-marker-7f3a'
+  await mkdir(join(home, '.pi/agent'), { recursive: true })
+  await writeFile(
+    join(home, '.pi/agent/auth.json'),
+    JSON.stringify({ anthropic: { refresh: marker } }),
+  )
+  await writeFile(join(home, 'secrets.json'), JSON.stringify({ ULTIMATE_CLOUD_TOKEN: marker }))
+  const path = join(home, 'state.sqlite')
+  const db = new DatabaseSync(path)
+  db.exec("CREATE TABLE t (x); INSERT INTO t VALUES ('history')")
+  db.close()
+  const repo = await temp('ultimate-snapshot-logins-repo-')
+  await git(repo, 'init', '-b', 'main')
+  const uploaded = await uploadSnapshot({
+    ...remote,
+    epoch: 1,
+    machine: 'desk',
+    database: path,
+    repo,
+  })
+  const downloads = await temp('ultimate-snapshot-logins-target-')
+  const result = await downloadSnapshot({ ...remote, id: uploaded.id, dir: downloads, repo })
+  expect(await readdir(downloads)).toEqual([`snapshot-${uploaded.id}.sqlite`])
+  expect((await readFile(result.database)).includes(marker)).toBe(false)
+  expect(count(result.database, 't')).toBe(1)
 })
 
 it('carries a branch checked out in a source worktree, with commits of its own, to a fresh clone', async () => {
