@@ -10,6 +10,8 @@ export type BoardMessage = {
   entry?: number
   answer?: number
   error?: string
+  /** The tool call that sent it: `message`'s own id, or `<script>/<n>` for a nested codemode call. */
+  call?: string
 }
 
 /** Only incoming requests belong to an answer, never the outgoing reply log item. */
@@ -41,35 +43,23 @@ export const ultimateChat = (conversation: Conversation) =>
   conversation.parentConversationId === undefined &&
   conversation.ownerTaskId === undefined
 
-/** The texts a `codemode` script sent you with nested `message` calls, from its result's details. */
-export function scriptMessages(details: unknown): string[] {
-  const calls = (details as { calls?: unknown } | undefined)?.calls
-  if (!Array.isArray(calls)) return []
-  return calls.flatMap((call: { name?: unknown; status?: unknown; args?: unknown }) => {
-    const args = call.args as { to?: unknown; text?: unknown } | undefined
-    return call.name === 'message' &&
-      call.status === 'ok' &&
-      args?.to === 'user' &&
-      typeof args.text === 'string'
-      ? [args.text]
-      : []
-  })
-}
-
-/** The log message a script's call sent: the newest from `from` to you with this text, sent by `at` when known. */
-export const scriptMessage = (
-  messages: readonly BoardMessage[],
-  from: number,
-  text: string,
-  at?: number,
-) =>
-  messages.findLast(
+/**
+ * The messages to you that tool call `call` sent, itself or through a script's nested calls, in the order sent (the log
+ * keeps id order). Messages from before the log recorded calls match nothing.
+ */
+export const sentBy = (messages: readonly BoardMessage[], call: string) =>
+  messages.filter(
     (message) =>
-      message.from === from &&
       message.to === 'user' &&
-      message.text === text &&
-      (at === undefined || message.at <= at),
+      message.call !== undefined &&
+      (message.call === call || message.call.startsWith(`${call}/`)),
   )
+
+/** Whether a `codemode` call messaged you, from the log alone: a script interrupted before its result counts too. */
+export const scriptMessaged = (
+  call: { id: string; name: string },
+  board: Readonly<BoardData> | null | undefined,
+) => call.name === 'codemode' && sentBy(board?.messages ?? [], call.id).length > 0
 
 /** A reply-enabled message still waiting for its answer. */
 export const isOpen = (message: BoardMessage) =>

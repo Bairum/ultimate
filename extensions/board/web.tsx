@@ -2,7 +2,7 @@ import type { EntryRecord } from '@earendil-works/pi-durable'
 import { useEffect, useState } from 'react'
 import { defineWebExtension, events, useConversation, useDocOf, useEvent, useUltimate } from '@/sdk'
 import { Address, BoardInput, BranchCall, ChatAnswer, MessageCall } from './cards.tsx'
-import { emptyBoard, answeredMessages, scriptMessages, ultimateChat } from './data.tsx'
+import { emptyBoard, answeredMessages, scriptMessaged, ultimateChat } from './data.tsx'
 import type { BoardData } from './data.tsx'
 
 function BoardAnswerLabel({ entry }: { entry: EntryRecord }) {
@@ -48,9 +48,10 @@ export default defineWebExtension({
       'branch',
       'workspace',
       'setup',
-      // A script that messaged you stays visible, so its messages show as bubbles.
-      (call, result) => call.name === 'codemode' && scriptMessages(result?.details).length > 0,
+      // A script that messaged you stays visible, so its messages show as bubbles, even when it was interrupted.
+      (call, docs) => scriptMessaged(call, docs.board as BoardData | null | undefined),
     ],
+    docs: ['board'],
   },
   answerLabels: [BoardAnswerLabel],
 })

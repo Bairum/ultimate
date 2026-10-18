@@ -339,7 +339,7 @@ function TranscriptEntries() {
   }, [loading])
   const shown = whole ? visible : visible.slice(-firstRows)
   const chat = useChat()
-  const keeps = (call: ToolCall) => !!chat?.(call, results.get(call.id)?.message)
+  const keeps = (call: ToolCall) => !!chat?.(call)
   const rows: (ChatPart | WorkRun)[] = chat
     ? chatRows(shown, keeps)
     : shown.map((entry) => ({ entry }))

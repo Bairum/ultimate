@@ -165,12 +165,16 @@ export interface ChatContribution {
   /** Whether a conversation reads as a chat. */
   when: (conversation: ConversationSummary) => boolean
   /**
-   * Calls that stay visible between folded runs, such as the messages it sends: a tool name, or a test of a call and
-   * its result, once there is one, such as a script whose nested calls sent a message.
+   * Calls that stay visible between folded runs, such as the messages it sends: a tool name, or a test of a call, such
+   * as a script whose nested calls sent a message.
    */
   tools?: readonly (string | ChatCallTest)[]
+  /** Kinds of the root conversation's documents the tests read; the transcript follows them and passes them in. */
+  docs?: readonly string[]
 }
-export type ChatCallTest = (call: ToolCall, result?: ToolResultMessage) => boolean
+/** The root conversation's documents of the contributions' `docs` kinds, by kind, as `useDocOf(1, kind)` reads them. */
+export type ChatDocs = Readonly<Record<string, Readonly<JsonObject> | null | undefined>>
+export type ChatCallTest = (call: ToolCall, docs: ChatDocs) => boolean
 
 /** The browser facet of an extension: `extensions/<name>/web.tsx` default-exports one. */
 export interface WebExtension {

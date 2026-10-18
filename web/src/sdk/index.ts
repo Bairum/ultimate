@@ -8,6 +8,7 @@ export { resumed } from './resume.ts'
 export type {
   ChatCallTest,
   ChatContribution,
+  ChatDocs,
   CommandContribution,
   ComposerRenderer,
   Contribution,

@@ -1,4 +1,3 @@
-import type { ToolResultMessage } from '@earendil-works/pi-ai'
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import {
   CheckIcon,
@@ -21,7 +20,6 @@ import {
   useConversations,
   useDocOf,
   useNow,
-  useTranscript,
   useUltimate,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
@@ -36,8 +34,7 @@ import {
   messageStatus,
   outgoingState,
   relativeTime,
-  scriptMessage,
-  scriptMessages,
+  sentBy,
   sentStatus,
 } from './data.tsx'
 import type { BoardData, BoardMessage } from './data.tsx'
@@ -403,25 +400,19 @@ function ScriptMessages({
   shown: readonly { id: string; name: string }[]
 }) {
   const board = useDocOf<BoardData>(1, 'board') ?? emptyBoard
-  const transcript = useTranscript()
-  const sent = shown.flatMap((block) => {
-    if (block.name !== 'codemode') return []
-    const result = transcript
-      .map((item) => item.model?.[0])
-      .find(
-        (value): value is ToolResultMessage =>
-          value?.role === 'toolResult' && value.toolCallId === block.id,
-      )
-    return scriptMessages(result?.details).map((text, index) => ({
-      key: `${block.id}:${index}`,
-      text,
-      message: scriptMessage(board.messages, entry.conversationId, text, result?.timestamp),
-    }))
-  })
+  const sent = shown.flatMap((block) =>
+    block.name === 'codemode' ? sentBy(board.messages, block.id) : [],
+  )
   if (!sent.length) return core
-  const bubbles = sent.map(({ key, text, message }) => (
-    <ChatBubble from={entry.conversationId} key={key} message={message} running={false} text={text}>
-      {message && <MessageQuestions message={message} />}
+  const bubbles = sent.map((message) => (
+    <ChatBubble
+      from={entry.conversationId}
+      key={message.id}
+      message={message}
+      running={false}
+      text={message.text}
+    >
+      <MessageQuestions message={message} />
     </ChatBubble>
   ))
   if (shown.some((block) => block.name !== 'codemode'))

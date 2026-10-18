@@ -28,8 +28,9 @@ The root's `questions.board` document (conversation scope, latest history, initi
   answer settled a `pi.user` input, extracts, and writes only if that answer is still current (`currentAnswer`: no
   later input, queued input, run or reset): questions replace `reply`, an empty result clears it. A generation it does
   not extract (an answer to a Board message, or one that failed) clears a `reply` that is no longer current, so the
-  title bar's waiting count ends with the card. One slot is enough because only @ultimate's latest answer can be
-  answered; it cannot grow.
+  title bar's waiting count ends with the card. A reset starts no generation, so the extension also clears `reply` when
+  a committed `pi.reset` follows its answer, and checks once on open for a reset it missed. One slot is enough because
+  only @ultimate's latest answer can be answered; it cannot grow.
 
 Reopening resumes durable work without repeating a memoized response or creating duplicate cards.
 

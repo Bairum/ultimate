@@ -5,8 +5,8 @@ import {
   messageStatus,
   outgoingState,
   relativeTime,
-  scriptMessage,
-  scriptMessages,
+  scriptMessaged,
+  sentBy,
   sentStatus,
   ultimateChat,
   waitingOnUser,
@@ -140,37 +140,34 @@ describe('the @ultimate chat', () => {
   })
 })
 
-const nested = (name: string, args: object, status = 'ok') => ({ name, args, status, ms: 1 })
+const script = (id: string) => ({ id, name: 'codemode' })
 describe('messages a codemode script sent', () => {
-  it('reads the texts of its finished message calls to you', () => {
-    expect(
-      scriptMessages({
-        calls: [
-          nested('read', { path: 'a' }),
-          nested('message', { to: 'user', text: 'Ship it?', reply: true }),
-          nested('message', { to: '#4', text: 'To a branch' }),
-          nested('message', { to: 'user', text: 'Refused' }, 'error'),
-          nested('message', { to: 'user', text: 'One-way', reply: false }),
-        ],
-      }),
-    ).toEqual(['Ship it?', 'One-way'])
-    expect(scriptMessages(undefined)).toEqual([])
-    expect(scriptMessages({ calls: 'streamed' })).toEqual([])
-  })
-  const base = { to: 'user' as const, reply: true, state: 'delivered' as const }
+  const base = { from: 2, to: 'user' as const, text: 'Ship it?', at: 100, reply: true }
+  // Identical texts from two scripts and a direct call, in different states, plus a message to a branch and one from
+  // before the log recorded calls.
   const log: BoardMessage[] = [
-    { ...base, id: 1, from: 2, text: 'Ship it?', at: 100 },
-    { ...base, id: 2, from: 3, text: 'Ship it?', at: 150 },
-    { ...base, id: 3, from: 2, text: 'Ship it?', at: 200 },
-    { ...base, id: 4, from: 2, to: 4, text: 'Other', at: 210 },
+    { ...base, id: 1, state: 'answered', call: 'a/1' },
+    { ...base, id: 2, state: 'delivered', call: 'b/1' },
+    { ...base, id: 3, state: 'delivered', call: 'a/3', reply: false },
+    { ...base, id: 4, state: 'delivered', call: 'a' },
+    { ...base, id: 5, state: 'sent', to: 4, call: 'a/4' },
+    { ...base, id: 6, state: 'delivered', call: 'ab/1' },
+    { ...base, id: 7, state: 'delivered' },
   ]
-  it('finds the newest matching log message the script sent before its result', () => {
-    expect(scriptMessage(log, 2, 'Ship it?', 120)?.id).toBe(1)
-    expect(scriptMessage(log, 2, 'Ship it?', 250)?.id).toBe(3)
-    expect(scriptMessage(log, 2, 'Ship it?')?.id).toBe(3)
-    expect(scriptMessage(log, 2, 'Other')).toBeUndefined()
-    // The bounded log dropped it.
-    expect(scriptMessage(log, 2, 'Ship it?', 50)).toBeUndefined()
+  it('binds each identical text to the call that sent it, in the order sent', () => {
+    expect(sentBy(log, 'a').map((m) => [m.id, messageStatus(m)])).toEqual([
+      [1, 'answered'],
+      [3, 'one-way'],
+      [4, 'yours'],
+    ])
+    expect(sentBy(log, 'b').map((m) => [m.id, messageStatus(m)])).toEqual([[2, 'yours']])
+    expect(sentBy(log, 'c')).toEqual([])
+  })
+  it('keeps a script visible from the log alone, with or without a result', () => {
+    expect(scriptMessaged(script('b'), { messages: log, next: 8 })).toBe(true)
+    expect(scriptMessaged(script('c'), { messages: log, next: 8 })).toBe(false)
+    expect(scriptMessaged({ id: 'b', name: 'bash' }, { messages: log, next: 8 })).toBe(false)
+    expect(scriptMessaged(script('b'), undefined)).toBe(false)
   })
 })
 

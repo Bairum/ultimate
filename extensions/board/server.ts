@@ -40,6 +40,8 @@ export type BoardMessage = {
   entry?: EntryId
   answer?: EntryId
   error?: string
+  /** The tool call that sent it: `message`'s or `branch`'s own id, `<script>/<n>` for a nested codemode call. */
+  call?: string
 }
 export const Board = defineDoc<{ messages: BoardMessage[]; next: number }>({
   kind: 'board',
@@ -404,6 +406,7 @@ async function send(
       reply: input.reply ?? true,
       state: to === 'user' ? 'delivered' : 'sent',
       ...(input.re === undefined ? {} : { re: input.re }),
+      ...(callId === undefined ? {} : { call: callId }),
     })
     if (to === 'user' && message.reply && from !== 'user')
       await host.use<QuestionsService>('questions')?.request(tx, message)

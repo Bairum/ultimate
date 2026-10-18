@@ -9,6 +9,7 @@ import {
   useSyncExternalStore,
 } from 'react'
 import type { JsonValue } from '@earendil-works/chord'
+import type { ToolCall } from '@earendil-works/pi-ai'
 import type {
   AgentState,
   ConversationView,
@@ -249,13 +250,24 @@ function reportChat(extension: string, error: unknown) {
   // Predicates run while React renders the transcript; notify after that render.
   queueMicrotask(() => store.notify({ level: 'error', message }))
 }
-/** Which calls stay visible when the shown conversation reads as a chat (`chat` contributions), else `undefined`. */
-export function useChat() {
+const noDocs = {}
+/**
+ * Which calls stay visible when the shown conversation reads as a chat (`chat` contributions), else `undefined`; it
+ * follows the root documents the contributions' tests read.
+ */
+export function useChat(): ((call: ToolCall) => boolean) | undefined {
   const records = useExtensions()
   const conversation = useStore((state) =>
     state.conversations.find((summary) => summary.id === state.view?.conversation.id),
   )
-  return useMemo(() => chatTools(records, conversation, reportChat), [records, conversation])
+  const chat = useMemo(() => chatTools(records, conversation, reportChat), [records, conversation])
+  const kinds = chat?.docs.join(',') ?? ''
+  useEffect(() => {
+    const releases = kinds ? kinds.split(',').map((kind) => store.watchDocOf(1, kind)) : []
+    return () => releases.forEach((release) => release())
+  }, [kinds])
+  const docs = useStore((state) => (kinds ? state.docsOf[1] : undefined)) ?? noDocs
+  return useMemo(() => chat && ((call: ToolCall) => chat.keeps(call, docs)), [chat, docs])
 }
 /** Document renderers by kind (`documents` contributions); the Documents tab shows the rest as JSON. */
 export function useDocumentRenderers() {

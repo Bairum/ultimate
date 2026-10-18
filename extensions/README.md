@@ -324,11 +324,12 @@ answer was sent, or that a one-way message's answer was not sent.
 `chat` makes conversations read as a chat: `{ when(conversation), tools? }` decides from a conversation's summary
 (label, title, owner), and in a matching transcript each run of tool calls and thinking between inputs, messages and
 answers folds into one quiet "worked · N steps" row that expands to the usual rendering. Calls the listed `tools` keep
-stay visible and split the run: a tool name, or a test `(call, result?) => boolean` of a call and its result; the
-tools of every matching facet combine. Renderers check `useChat()`, that test for the shown conversation or
+stay visible and split the run: a tool name, or a test `(call, docs) => boolean` of a call; `docs` lists the kinds of
+the root conversation's documents the tests read, which the transcript follows and passes to them by kind. The tools
+and docs of every matching facet combine. Renderers check `useChat()`, that test for the shown conversation or
 `undefined`, to adapt to it. Board turns it on for @ultimate's conversation, keeping messages, branch starts,
-workspace outcomes and scripts that messaged you, and shows its messages to you as bubbles. Revealing an entry in a
-folded run opens the run.
+workspace outcomes and scripts its log says messaged you, and shows its messages to you as bubbles. Revealing an entry
+in a folded run opens the run.
 
 ### Entry renderers
 

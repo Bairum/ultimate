@@ -791,8 +791,10 @@ it('keeps sequential and parallel message calls distinct within one codemode scr
     server.host.faux!.setResponses([
       fauxAssistantMessage(
         [
-          fauxToolCall('codemode', {
-            code: `
+          fauxToolCall(
+            'codemode',
+            {
+              code: `
           await tools.message({to: 'user', text: 'Sequential 1'});
           await tools.message({to: 'user', text: 'Sequential 2'});
           await Promise.all([
@@ -800,10 +802,15 @@ it('keeps sequential and parallel message calls distinct within one codemode scr
             tools.message({to: 'user', text: 'Parallel 2'})
           ]);
         `,
-          }),
+            },
+            { id: 'script' },
+          ),
         ],
         { stopReason: 'toolUse' },
       ),
+      fauxAssistantMessage([fauxToolCall('message', { to: 'user', text: 'Direct' }, { id: 'm' })], {
+        stopReason: 'toolUse',
+      }),
       fauxAssistantMessage('Complete'),
     ])
     await (
@@ -811,12 +818,25 @@ it('keeps sequential and parallel message calls distinct within one codemode scr
     ).wait(context)
     const log = await server.harness.snapshot(Board, ROOT_CONVERSATION_ID, context)
     expect(log?.messages.map((m) => m.text).toSorted()).toEqual([
+      'Direct',
       'Parallel 1',
       'Parallel 2',
       'Sequential 1',
       'Sequential 2',
     ])
-    expect(new Set(log?.messages.map((m) => m.id)).size).toBe(4)
+    expect(new Set(log?.messages.map((m) => m.id)).size).toBe(5)
+    // Each message records the call that sent it: the script's nested call, or the direct call's own id.
+    expect(log?.messages.slice(0, 2).map((m) => [m.text, m.call])).toEqual([
+      ['Sequential 1', 'script/1'],
+      ['Sequential 2', 'script/2'],
+    ])
+    expect(
+      log?.messages
+        .slice(2, 4)
+        .map((m) => m.call)
+        .toSorted(),
+    ).toEqual(['script/3', 'script/4'])
+    expect(log?.messages.at(-1)).toMatchObject({ text: 'Direct', call: 'm' })
   } finally {
     await server.vite.watcher.close()
     await server.close()

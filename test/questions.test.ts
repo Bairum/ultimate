@@ -188,6 +188,7 @@ async function fixture() {
       return opened
     },
     host,
+    prepared,
     send,
     log,
     state,
@@ -389,6 +390,44 @@ it("ends @ultimate's final-answer card once it answers a Board message instead",
   )
   await f.settled()
   expect(f.extract).toHaveBeenCalledTimes(1)
+  expect((await f.state())!.reply).toBeUndefined()
+})
+
+it("ends @ultimate's final-answer card when its idle conversation is reset", async () => {
+  const f = await fixture()
+  const id = await f.ultimate()
+  await f.type(id, 'ASK Keep it running?')
+  await f.settled()
+  // The title bar counts this card as the one thing waiting on the user.
+  expect((await f.state())!.reply?.conversation).toBe(id)
+  await (await f.opened.harness.conversation(id, context))!.reset(undefined, context)
+  await until(async () => (await f.state())!.reply === undefined)
+  await f.settled()
+  expect((await f.state())!.reply).toBeUndefined()
+  // No open message to the user counts either.
+  expect((await f.log())?.messages ?? []).toEqual([])
+})
+
+it('ends a card whose reset landed while nobody listened, on open', async () => {
+  const f = await fixture()
+  const id = await f.ultimate()
+  await f.type(id, 'ASK Keep it running?')
+  await f.settled()
+  const reply = (await f.state())!.reply
+  await (await f.opened.harness.conversation(id, context))!.reset(undefined, context)
+  await until(async () => (await f.state())!.reply === undefined)
+  await f.close()
+  // Restore the card as if the process stopped before the reset was seen.
+  const opened = await f.prepared.open()
+  await opened.harness.commit(async (tx) => {
+    ;(await tx.doc(BoardQuestions, ROOT_CONVERSATION_ID)).reply = reply
+  }, context)
+  expect(
+    (await opened.harness.snapshot(BoardQuestions, ROOT_CONVERSATION_ID, context))!.reply,
+  ).toEqual(reply)
+  await opened.close()
+  await f.open()
+  await until(async () => (await f.state())!.reply === undefined)
   expect((await f.state())!.reply).toBeUndefined()
 })
 

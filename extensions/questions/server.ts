@@ -24,7 +24,12 @@ import type { JsonValue } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import { BACKGROUND_CONTEXT as context, withAbortSignal } from '@earendil-works/chord/context'
-import { accountResponse, askSummaryModel, currentAnswer } from '../conversations/summary.ts'
+import {
+  accountResponse,
+  askSummaryModel,
+  currentAnswer,
+  resetAfter,
+} from '../conversations/summary.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import { summaryModel } from '../conversations/summary-model.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
@@ -61,6 +66,21 @@ async function endFollowed(tx: Tx, conversation: ConversationId) {
   const reply = state.reply
   if (reply?.conversation !== conversation) return
   if (!(await currentAnswer(tx, conversation, reply.entry as EntryId))) delete state.reply
+}
+/** A reset after @ultimate's asking answer ends its card: no generation follows an idle reset to end it. */
+async function endReset(host: ExtensionHost) {
+  const reply = (await host.harness().snapshot(BoardQuestions, ROOT_CONVERSATION_ID, context))
+    ?.reply
+  if (!reply) return
+  await host.harness().commit(async (tx) => {
+    const state = await tx.doc(BoardQuestions, ROOT_CONVERSATION_ID)
+    const current = state.reply
+    if (
+      current &&
+      (await resetAfter(tx, current.conversation as ConversationId, current.entry as EntryId))
+    )
+      delete state.reply
+  }, context)
 }
 const open = (message: BoardMessage) =>
   message.to === 'user' && message.reply && message.state === 'delivered'
@@ -336,6 +356,26 @@ export default function questionsExtension(host: ExtensionHost) {
       },
     },
     abort,
+  })
+  let stop: (() => void) | undefined
+  const ending = new Set<Promise<void>>()
+  const end = () => {
+    const done: Promise<void> = endReset(host)
+      .catch((error: unknown) => host.notice(`Questions: ${String(error)}`))
+      .finally(() => ending.delete(done))
+    ending.add(done)
+  }
+  host.onOpen(async () => {
+    stop = host.harness().subscribeCommits((publication) => {
+      if (publication.changes.some((c) => c.type === 'entry' && c.value.kind === 'pi.reset')) end()
+    })
+    // A reset committed while no subscription listened, such as just before a crash.
+    end()
+  })
+  host.onClose(async () => {
+    stop?.()
+    stop = undefined
+    await Promise.all(ending)
   })
   host.provide('questions', {
     async request(tx, message) {

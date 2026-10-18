@@ -136,7 +136,10 @@ destination; unrelated answers show no board label.
 @ultimate's own conversation reads as a chat (the `chat` contribution): each run of tool calls and thinking folds into
 one “worked · N steps” row, while messages, branch starts, workspace outcomes, onboarding setup cards and answers stay. Its messages to you
 are bubbles on the left in its accent, their footer saying awaiting your reply, answered or one-way; an answer card
-mounts beneath the text (`ChatBubble` children). A message @ultimate sent from a `codemode` script is a bubble too,
-found in the log by sender and text, beneath a quiet “sent with codemode” line that opens the script; the script stays
-folded while it runs. Once the bounded log has dropped a message, its bubble shows no state. An answer that went back
-to the branches that asked folds to “replied to #id”.
+mounts beneath the text (`ChatBubble` children). Each log message records the tool call that sent it (`call`: the
+`message` call's id, or `<script>/<n>` for a nested codemode call), so a message @ultimate sent from a `codemode`
+script is a bubble too, bound to that exact message, beneath a quiet “sent with codemode” line that opens the script.
+The script shows as soon as the log holds a message it sent, while it runs or after it was interrupted; messages from
+before the log recorded calls, or that the bounded log dropped, leave it folded. Once the bounded log has dropped a
+direct message, its bubble shows no state. An answer that went back to the branches that asked folds to “replied to
+#id”.
