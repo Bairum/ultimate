@@ -230,6 +230,20 @@ it.concurrent('starts a lineage branch with a board input and caller attribution
   expect(overridden.tools.map((tool) => tool.name)).toEqual(
     configured.tools.map((tool) => tool.name),
   )
+  // The branch's later run (woken by its child's reply) routes its answer to its starter as a note.
+  await until(async () =>
+    (await log(f.server)).some(
+      (m) =>
+        m.from === branch &&
+        m.to === ultimate &&
+        m.text === `Tool result: Branch #${sameTree.to} started; message ${sameTree.id} sent.`,
+    ),
+  )
+  await until(async () =>
+    (await entries(f.server, ultimate)).some((entry) =>
+      JSON.stringify(entry).includes(`Branch #${sameTree.to} started`),
+    ),
+  )
   await f.server.harness.commit(async (tx) => {
     ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = []
   }, context)
