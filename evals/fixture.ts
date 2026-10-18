@@ -12,7 +12,7 @@ import type {
 } from '@earendil-works/pi-ai'
 import { ModelRuntime, ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { AssistantEntry, ToolResultEntry, UserEntry } from '@earendil-works/pi-durable'
-import type { ConversationId } from '@earendil-works/pi-durable'
+import type { ConversationDocToken, ConversationId, JsonObject } from '@earendil-works/pi-durable'
 import { inject } from 'vitest'
 import type { TurnUsage } from './reporter.ts'
 import { createServer } from '../server/main.ts'
@@ -227,6 +227,11 @@ export async function start(
         }
         return {
           id,
+          async document<T extends JsonObject>(token: ConversationDocToken<T>) {
+            return running.harness.commit(async (tx) => {
+              return JSON.parse(JSON.stringify(await tx.doc(token, id))) as T
+            }, context)
+          },
           async run(input: string) {
             const before = (await messages()).length
             const started = performance.now()
@@ -238,7 +243,9 @@ export async function start(
               await Promise.race([
                 (async () => {
                   await submission.wait(context)
-                  await running.harness.waitForIdle(context)
+                  // A reminder's scheduler stays live until its due time in another conversation.
+                  // Wait for this turn's owned work, not every task in the harness.
+                  await conversation.waitForIdle(context)
                 })(),
                 new Promise<never>((_, reject) => {
                   timer = setTimeout(

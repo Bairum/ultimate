@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { afterEach, expect, it, vi } from 'vitest'
-import { setImmediate as yieldToIO } from 'node:timers/promises'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import type { TaskId } from '@earendil-works/pi-durable'
@@ -17,12 +17,13 @@ import type { ActionContext } from '../server/actions.ts'
 import { temp } from './helpers.ts'
 
 async function until(test: () => boolean | Promise<boolean>, timeout = 7000) {
-  for (let elapsed = 0; elapsed <= timeout; elapsed += 50) {
-    if (await test()) return
+  // Date and scheduler timers are fake here; measure the IO deadline with the real clock.
+  const deadline = performance.now() + timeout
+  while (!(await test())) {
+    if (performance.now() > deadline) throw new Error('Timed out')
     await vi.advanceTimersByTimeAsync(50)
-    await yieldToIO()
+    await sleep(10)
   }
-  throw new Error('Timed out')
 }
 
 const hosts: OpenHost[] = []
