@@ -66,7 +66,8 @@ process.on('message', (message: { type: string; ok?: boolean; requestId?: string
     return (
       log.includes('Core 2 exited unexpectedly') &&
       log.trim().endsWith('"text":"ready"}') &&
-      (await fetch(url)).status === 200
+      // The proxy may still close a connection to the crashed core; the next poll asks again.
+      (await fetch(url).catch(() => undefined))?.status === 200
     )
   })
   const records = (await readFile(join(home, 'supervisor.log'), 'utf8'))
