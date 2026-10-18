@@ -1,7 +1,7 @@
 import { removeTemp } from './helpers.ts'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { afterEach, expect, it } from 'vitest'
+import { afterAll, expect, it } from 'vitest'
 import { fauxServer, sourceCopy, temp, until, attach } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { compareExtensions, discoverExtensions } from '../server/discovery.ts'
@@ -9,8 +9,9 @@ import { createRegistry, toolRenderers } from '../web/src/sdk/registry.ts'
 
 const homes: string[] = []
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
-afterEach(async () => {
-  for (const server of servers.splice(0)) await server.close()
+// Tests run concurrently, each on its own server; close them all once the file is done.
+afterAll(async () => {
+  await Promise.all(servers.splice(0).map((server) => server.close()))
   for (const home of homes.splice(0)) await removeTemp(home)
 })
 async function fixture(settings?: string) {
@@ -31,7 +32,7 @@ async function fixture(settings?: string) {
   servers.push(server)
   return { home, projectRoot, server }
 }
-it('orders facets by source so a project bash tool and renderer win regardless of folder name', async () => {
+it.concurrent('orders facets by source so a project bash tool and renderer win regardless of folder name', async () => {
   const home = await temp()
   homes.push(home)
   const projectRoot = join(home, 'project')
@@ -114,7 +115,7 @@ export default (host) => {
   host.onOpen(async () => status.update({ state: 'ready', detail: '${detail}' }))
   return defineExtension({ name: 'service-test' })
 }`
-it('stages service rows, preserves them on failed reload and removes stale handles on replacement and disable', async () => {
+it.concurrent('stages service rows, preserves them on failed reload and removes stale handles on replacement and disable', async () => {
   const { home, projectRoot, server } = await fixture()
   const folder = join(projectRoot, '.ultimate/extensions/service-test')
   await mkdir(folder, { recursive: true })
@@ -173,7 +174,7 @@ it('stages service rows, preserves them on failed reload and removes stale handl
   ).toBeNull()
 })
 
-it('keeps the replacement provider available while the old cleanup is pending', async () => {
+it.concurrent('keeps the replacement provider available while the old cleanup is pending', async () => {
   const { projectRoot, server } = await fixture()
   const folder = join(projectRoot, '.ultimate/extensions/service-test')
   await mkdir(folder, { recursive: true })
@@ -219,7 +220,7 @@ const tools = async (server: Awaited<ReturnType<typeof fauxServer>>) =>
 const web = async (server: Awaited<ReturnType<typeof fauxServer>>) =>
   Object.keys((await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders)
 
-it('layers settings live, installs and uninstalls tools and web facets, and notices unknown names once', async () => {
+it.concurrent('layers settings live, installs and uninstalls tools and web facets, and notices unknown names once', async () => {
   const { home, projectRoot, server } = await fixture()
   const config = join(projectRoot, '.ultimate')
   const settings = join(config, 'settings.json')
@@ -298,7 +299,7 @@ it('layers settings live, installs and uninstalls tools and web facets, and noti
   }
 })
 
-it('retains valid enablement through invalid edits and delivers startup diagnostics to later clients', async () => {
+it.concurrent('retains valid enablement through invalid edits and delivers startup diagnostics to later clients', async () => {
   const valid = { extensions: { enable: ['unknown-startup'], disable: ['subagents'] } }
   const { home, server } = await fixture(JSON.stringify(valid))
   const settings = join(home, '.ultimate/settings.json')
@@ -356,7 +357,7 @@ it('retains valid enablement through invalid edits and delivers startup diagnost
   }
 })
 
-it('enables every built-in by default', async () => {
+it.concurrent('enables every built-in by default', async () => {
   const home = await temp()
   homes.push(home)
   const root = await sourceCopy(home)
