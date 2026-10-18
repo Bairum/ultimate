@@ -20,7 +20,7 @@ message. Clicking it opens @ultimate on the Agent surface through `subagents.sta
 its conversation exists. Below it, an Agents group lists the lander first, then the other ownerless top-level standing
 agents (label `agent`) by ID. These rows are never concluded or hidden and show no summary, feature or assessment:
 @lander shows its state (`landing`, `fixing`, `diagnosing`, `working` or `idle`), `queue N` while submissions wait,
-its latest landing's short sha (green) and feature as quiet text (title on hover), and its age; other agents show `working` or `idle` and the age. Their menu only
+its latest landing's short sha (green) and feature tag (truncated, title on hover), and its age; other agents show `working` or `idle` and the age. Their menu only
 compacts the context; they are never renamed, cleared or concluded.
 
 The title bar's `@ultimate` button (`titlebar.left`, beside the surfaces, also on phones) opens @ultimate the same way

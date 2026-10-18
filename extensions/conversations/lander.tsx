@@ -1,6 +1,7 @@
 import { cn } from '@/sdk'
 import { phaseText, usePhase } from '../phase/chip.tsx'
 import { useWorkspaceIndex } from '../workspaces/data.tsx'
+import { FeatureTag } from './feature.tsx'
 
 /** `now`, `5m`, `3h`, `2d`, then a short date. */
 export function ago(at: number, now: number) {
@@ -77,9 +78,7 @@ export function LanderState({
           title={[last.subject?.feature, last.subject?.title].filter(Boolean).join(' · ')}
         >
           <span className="shrink-0 text-success/90">{last.sha.slice(0, 7)}</span>
-          {last.subject?.feature && (
-            <span className="truncate font-sans text-[10.5px]">{last.subject.feature}</span>
-          )}
+          {last.subject?.feature && <FeatureTag feature={last.subject.feature} />}
         </span>
       )}
       {at !== undefined && (
