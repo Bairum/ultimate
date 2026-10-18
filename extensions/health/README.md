@@ -1,0 +1,46 @@
+Tracks whether each model provider works on this machine, from every real response and an hourly heartbeat in the machine home, and shows an amber `<provider> failing` item in the status line while one does not.
+
+## What is stored
+
+One file per machine, `~/.ultimate/health.json`, written by every Ultimate home of the user:
+
+```json
+{
+  "providers": {
+    "anthropic": {
+      "lastOk": 0,
+      "lastFail": 0,
+      "error": "invalid_grant",
+      "lastChecked": 0,
+      "lastUsed": 0
+    }
+  }
+}
+```
+
+Times are epoch milliseconds. `lastOk` and `lastFail` come from real calls and pings, `lastChecked` from pings only, `lastUsed` from real calls only. A provider is `failing` when `lastFail` is newer than `lastOk`, `ok` once it has a `lastOk`, otherwise `unknown`. Writes read, merge each field by its maximum (the `error` stays with the newest `lastFail`) and rename a temporary file into place; two homes writing at once lose at most one event. Errors are shortened to 120 characters with anything that looks like a key or bearer token (`sk-…`, `Bearer …`, `eyJ…`) removed; no request or auth contents are stored.
+
+## Real usage
+
+A `GenerationTask` `afterResponse` hook records every terminal provider message at no cost: `stopReason: 'error'` records a failure with `errorMessage`, `aborted` nothing, anything else a success. The write never blocks or fails the generation. A faux server records nothing.
+
+## Heartbeat
+
+Only the machine home (`~/.ultimate/machine`) pings, never on faux. Every 10 minutes (and 30 s after start) a single-flight tick picks each provider with configured credentials and an available model, and pings those due:
+
+- the interval follows the machine's activity, the time since the last real call on any provider: under 4 h idle every hour, under 12 h every 4 hours, beyond (or never used) every 8 hours;
+- a provider is due when its last success or ping is older than the interval, or when it is failing and its last ping is older than 15 minutes, so a one-off error clears quickly.
+
+A ping asks the provider's cheapest available model (lowest `cost.input + cost.output`) `ping` with `maxTokens: 16`, one provider after another, and records `lastChecked` plus a success or failure. That is at most 24 pings per provider per day of about 20 tokens each. A `claude-code` ping starts the Claude Code CLI on its subscription.
+
+## Cloud report
+
+With cloud sync configured (`cloud.url` and `ULTIMATE_CLOUD_TOKEN`, see `cloud/README.md`), the machine home posts `MachineHealth` (`cloud/protocol.ts`: `{ machine, at, providers }`) to `POST /sync/health` after a tick that pinged and at least once an hour. A failed report is retried on the next tick.
+
+## Actions
+
+`state` returns `{ machine, providers: ProviderHealth[] }` for this machine (machine from cloud settings, else the hostname). A faux server answers a fixed demo: `openai-codex` ok, `anthropic` failing with `invalid_grant` 3 hours ago, `claude-code` unknown.
+
+## Status line
+
+In every home the status line polls `state` every minute and shows an amber `<provider> failing` (or `2 providers failing`) only while a provider fails; its popover lists each failing provider's error and age. A move's checks step also refuses a failing default provider (`cloud/login.ts`).

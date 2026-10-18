@@ -653,7 +653,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       if (!key) throw new Error(missingKey)
       // Without a model login nothing runs here once it moved: `force` only skips missing secrets.
       const login = await loginHere()
-      if (!login.ok) throw new Error(noLogin(login.provider))
+      if (!login.ok) throw new Error(noLogin(login.provider, login.error))
       const local = await localSecrets()
       const missing = missingSecrets(state, local)
       if (missing.length && !force) throw new Error(`Missing secrets: ${missing.join(', ')}`)
