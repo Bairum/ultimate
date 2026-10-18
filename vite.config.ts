@@ -147,6 +147,7 @@ export default defineConfig({
             'error',
             {
               allow: {
+                activity: ['conversations', 'workspaces'],
                 agent: ['lineage'],
                 board: ['conversations', 'questions', 'subagents', 'workspaces'],
                 cloud: ['sync'],

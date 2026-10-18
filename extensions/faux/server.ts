@@ -8,11 +8,14 @@ import {
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxContentBlock, FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import type { JsonObject } from '@earendil-works/pi-durable'
+import type { ConversationId, EntryId, JsonObject } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { LineageApi } from '../lineage/api.ts'
+import { NoticeEvent } from '../../shared/events.ts'
+import { Branched, LineageApi, Rooted } from '../lineage/api.ts'
+import { SubmissionLanded } from '../workspaces/api.ts'
 
 const messageText = (content: unknown) =>
   typeof content === 'string'
@@ -504,5 +507,55 @@ export const actions = {
       })
     }
     return { seeded: demoLandings.length }
+  },
+  /**
+   * Faux only: `{from}` emits a realistic mix of durable events about conversation `from` and its root (the root, the
+   * branch, five landings with features and commit counts, two notices), to preview the Activity panel. The landings
+   * also reach the root as landing notes, as real ones do.
+   */
+  async seedEvents(args: JsonValue, { host }: ActionContext) {
+    if (!host.faux) throw new Error('seedEvents runs only under faux')
+    const from = (args as { from?: unknown } | null)?.from
+    if (typeof from !== 'number') throw new Error('from must be a conversation id')
+    const root = (await host.want(LineageApi)?.rootOf(from, BACKGROUND_CONTEXT)) ?? 1
+    const notices = [
+      ['tailscale', 'tailscale serve failed: tailscaled is not running on this machine'],
+      ['cloud', 'Sync paused: the lease is held by rog until 21:40'],
+    ] as const
+    await host.harness().commit(async (tx) => {
+      const latest = await tx.scanEntries(
+        { conversationId: from as ConversationId, order: 'descending' },
+        1,
+      )
+      const at = latest.items[0]?.id ?? (0 as EntryId)
+      await host.emit(tx, Rooted, { id: root, intent: 'Project context' })
+      await host.emit(tx, Branched, { id: from, from: root, at: 1, intent: 'landing demo' })
+      for (const [index, [sha, base, feature, title, count]] of demoLandings.entries()) {
+        if (index === 2 || index === 4) {
+          const [extension, message] = notices[index === 2 ? 0 : 1]
+          await host.emit(tx, NoticeEvent, { extension, message, level: 'warning' })
+        }
+        await host.emit(tx, SubmissionLanded, {
+          submission: `faux-event:${from}:${sha}`,
+          conversationId: from,
+          at,
+          sha,
+          base,
+          target: 'main',
+          lander: from,
+          divergence: 'None.',
+          title,
+          feature,
+          commits: Array.from({ length: Math.min(count, 10) }, (_, n) => ({
+            sha: `${sha.slice(0, 5)}${n}0`,
+            subject: `feat: ${title.toLowerCase()} (${n + 1})`,
+          })),
+          commitCount: count,
+          paths: ['extensions/conversations/root.tsx'],
+          pushed: 'origin/main',
+        })
+      }
+    }, BACKGROUND_CONTEXT)
+    return { seeded: 2 + demoLandings.length + notices.length }
   },
 }
