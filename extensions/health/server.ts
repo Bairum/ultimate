@@ -67,6 +67,7 @@ export interface HeartbeatDeps {
   }
   read(): Promise<Record<string, HealthEntry>>
   record(provider: string, entry: HealthEntry): Promise<unknown>
+  forget(providers: string[]): Promise<unknown>
 }
 
 /** The configured providers' available models, by provider. */
@@ -103,12 +104,18 @@ async function ping(deps: HeartbeatDeps, provider: string, models: readonly Mode
   return error === undefined
 }
 
-/** Ping each due provider once, in sequence, with its cheapest model; returns the providers it pinged. */
+/**
+ * Forget the entries of providers without a login here (one removed, or a provider nothing logs in to any more), then
+ * ping each due provider once, in sequence, with its cheapest model. Returns the providers it forgot and pinged.
+ */
 export async function heartbeat(deps: HeartbeatDeps) {
   const byProvider = await configured(deps.models)
-  const pinged = due(await deps.read(), deps.now(), [...byProvider.keys()])
+  const entries = await deps.read()
+  const pruned = Object.keys(entries).filter((provider) => !byProvider.has(provider))
+  if (pruned.length) await deps.forget(pruned)
+  const pinged = due(entries, deps.now(), [...byProvider.keys()])
   for (const provider of pinged) await ping(deps, provider, byProvider.get(provider)!)
-  return pinged
+  return { pruned, pinged }
 }
 
 /**
@@ -128,6 +135,7 @@ export const hostDeps = (
   models: host.modelRuntime,
   read: async () => (await readFileHealth(host.userHome)).providers,
   record: (provider, entry) => record(host.userHome, provider, entry),
+  forget: (providers) => reset(host.userHome, providers),
 })
 
 /** Pi's credential store, shared with `pi`: one entry per logged-in provider. */
@@ -266,7 +274,9 @@ export default function health(host: ExtensionHost) {
         hook(GenerationTask, {
           afterResponse(message) {
             const entry = responseEntry(message, Date.now())
-            if (!entry) return
+            // Only providers with a login here: a stray model reference to another fails, which is not its health.
+            if (!entry || !host.modelRuntime.getProviderAuthStatus(message.provider).configured)
+              return
             record(host.userHome, message.provider, entry).catch((error: unknown) => {
               // Health is advisory: a failed write must never fail or delay the agent's generation.
               console.error('health: recording a response failed:', error)
@@ -287,8 +297,8 @@ export default function health(host: ExtensionHost) {
   const deps = hostDeps(host)
   const tick = () => {
     shared.ticking ??= (async () => {
-      const pinged = await heartbeat(deps)
-      if (!shouldReport(shared, pinged.length > 0, Date.now())) return
+      const { pruned, pinged } = await heartbeat(deps)
+      if (!shouldReport(shared, pruned.length + pinged.length > 0, Date.now())) return
       shared.pending = true
       await report(host).then(
         () => {

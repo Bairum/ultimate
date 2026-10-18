@@ -7,6 +7,7 @@ import {
   cheapest,
   due,
   heartbeat,
+  hostDeps,
   REPORT,
   responseEntry,
   shouldReport,
@@ -198,13 +199,40 @@ it('heartbeat pings each configured, due provider once with its cheapest model',
     // Active machine (hourly); anthropic's last success is 2 h old, openai was never seen.
     read: async () => ({ anthropic: { lastOk: NOW - 2 * HOUR, lastUsed: NOW - 2 * HOUR } }),
     record: async (provider: string, entry: HealthEntry) => recorded.push([provider, entry]),
+    forget: async () => {},
   } as unknown as HeartbeatDeps
-  expect(await heartbeat(deps)).toEqual(['anthropic', 'openai'])
+  expect(await heartbeat(deps)).toEqual({ pruned: [], pinged: ['anthropic', 'openai'] })
   expect(calls).toEqual(['anthropic/haiku', 'openai/mini'])
   expect(recorded).toEqual([
     ['anthropic', { lastChecked: NOW, lastOk: NOW }],
     ['openai', { lastChecked: NOW, lastFail: NOW, error: '401 Bearer abc.def' }],
   ])
+})
+
+it('heartbeat forgets providers without a login here, so their old failures stop warning', async () => {
+  const home = await temp()
+  await record(home, 'openai', { lastFail: NOW, lastChecked: NOW, error: 'invalid_grant' })
+  await record(home, 'openai-codex', { lastOk: NOW, lastUsed: NOW })
+  const pinged: string[] = []
+  const deps: HeartbeatDeps = {
+    ...hostDeps({ userHome: home } as unknown as ExtensionHost),
+    now: () => NOW,
+    models: {
+      getAvailable: async () => [model('openai', 'mini', 1), model('openai-codex', 'mini', 1)],
+      getProviderAuthStatus: (provider: string) => ({ configured: provider === 'openai-codex' }),
+      completeSimple: async (used: { provider: string }) => {
+        pinged.push(used.provider)
+        return { stopReason: 'stop' }
+      },
+    } as unknown as HeartbeatDeps['models'],
+  }
+  expect(await heartbeat(deps)).toEqual({ pruned: ['openai'], pinged: [] })
+  expect(pinged).toEqual([])
+  expect((await readHealth(home)).map((entry) => [entry.provider, entry.state])).toEqual([
+    ['openai-codex', 'ok'],
+  ])
+  // Nothing left to forget: the next tick changes nothing and owes no report.
+  expect(await heartbeat(deps)).toEqual({ pruned: [], pinged: [] })
 })
 
 it('a failing default provider is no model login for a move', async () => {
