@@ -161,6 +161,13 @@ export const actions = {
   },
 } satisfies Record<string, ExtensionAction>
 
+/** When the cloud last accepted a report, and whether a newer one is still owed (a failed attempt). */
+export type Reports = { reported: number; pending: boolean }
+
+/** Report after a tick that pinged, while an earlier report is still owed, or once `REPORT` has passed. */
+export const shouldReport = (reports: Reports, pinged: boolean, now: number) =>
+  pinged || reports.pending || now - reports.reported >= REPORT
+
 /** `POST /sync/health` with this machine's health; skipped while cloud sync is not configured. */
 async function report(host: ExtensionHost) {
   const cloud = await cloudConfig(host)
@@ -200,19 +207,20 @@ export default function health(host: ExtensionHost) {
   // Shared across reloads: a reload installs the new facet before the old one closes, and only one tick may run.
   const shared = host.resource('health.heartbeat', () => ({
     ticking: undefined as Promise<void> | undefined,
-    reported: 0,
+    reports: { reported: 0, pending: false } as Reports,
   }))
   const deps = hostDeps(host)
   const tick = () => {
     shared.ticking ??= (async () => {
       const pinged = await heartbeat(deps)
-      if (!pinged.length && Date.now() - shared.reported < REPORT) return
+      if (!shouldReport(shared.reports, pinged.length > 0, Date.now())) return
+      shared.reports.pending = true
       await report(host).then(
         () => {
-          shared.reported = Date.now()
+          shared.reports = { reported: Date.now(), pending: false }
         },
         (error: unknown) => {
-          // The cloud may be down or not deployed yet; `reported` stays, so the next tick reports again.
+          // The cloud may be down or not deployed yet; `pending` stays set, so the next tick reports again.
           console.error('health: report failed:', error instanceof Error ? error.message : error)
         },
       )

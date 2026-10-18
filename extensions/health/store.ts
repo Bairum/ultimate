@@ -20,24 +20,33 @@ export const healthPath = (userHome: string) => join(userHome, '.ultimate/health
 
 const STAMPS = ['lastOk', 'lastFail', 'lastChecked', 'lastUsed'] as const
 
+/** Words an error summary may keep besides the HTTP status and snake_case error codes. */
+const KEYWORDS =
+  /^(?:unauthorized|forbidden|expired|revoked|overloaded|timeout|aborted|quota|rate|limit|network|unavailable|E[A-Z]{3,15})$/
+
 /**
- * Drop anything that looks like a credential, collapse whitespace and cap at 120 characters: auth schemes and their
- * value, `token=…`-style pairs, JWTs, prefixed keys (`sk-…`, `ghp_…`) and any opaque run of 24+ key characters.
- * Provider error codes such as `invalid_grant` stay.
+ * A structured summary of a failure instead of its text, so no credential can reach `health.json` or the cloud: the
+ * first HTTP status, provider error codes in snake_case (`invalid_grant`, `rate_limit_error`) and a few known
+ * keywords, in order, without duplicates. Everything from a credential word (`token`, `cookie`, `password`, …) to the
+ * end of its line goes first, so a value written there never counts as a code. Anything else is dropped; without a
+ * recognisable part it is "request failed".
  */
 export function sanitize(error: string) {
-  const text = error
-    .replace(/\b(bearer|basic|token)\s+\S+/gi, '$1 …')
-    .replace(
-      /\b([\w-]*(?:token|key|secret|password|authorization|cookie)[\w-]*["']?\s*[:=]\s*)["']?[^\s"',;}]+/gi,
-      '$1…',
-    )
-    .replace(/\beyJ[\w.-]+/g, '…')
-    .replace(/\b(?:sk|rk|pk|ghp|gho|ghs|xox[a-z])[-_][\w-]+/gi, '…')
-    .replace(/[\w+/=.-]{24,}/g, '…')
-    .replace(/\s+/g, ' ')
-    .trim()
-  return text.length > 120 ? `${text.slice(0, 119)}…` : text
+  const text = error.replace(
+    /(?:bearer|basic|token|cookie|authorization|password|passphrase|secret|api[-_ ]?key|credential)[^\n]*/gi,
+    ' ',
+  )
+  const parts: string[] = []
+  // A status code, not a port (`:443`) or part of an address.
+  const status = /(?<![\d.:])\b([45]\d\d)\b(?![\d.:])/.exec(text)?.[1]
+  if (status) parts.push(status)
+  for (const word of text.split(/[^A-Za-z_]+/)) {
+    const code = /^[a-z]{2,20}(?:_[a-z]{2,20}){1,4}$/.test(word)
+    const keyword = KEYWORDS.test(word) || KEYWORDS.test(word.toLowerCase())
+    if ((code || keyword) && !parts.includes(word)) parts.push(word)
+    if (parts.length >= 5) break
+  }
+  return parts.length ? parts.join(' ') : 'request failed'
 }
 
 export function state(entry: HealthEntry): ProviderHealth['state'] {

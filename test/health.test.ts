@@ -2,7 +2,14 @@ import { readFile } from 'node:fs/promises'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import { afterEach, expect, it } from 'vitest'
 import { modelLogin, noLogin } from '../extensions/cloud/login.ts'
-import { cheapest, due, heartbeat, responseEntry } from '../extensions/health/server.ts'
+import {
+  cheapest,
+  due,
+  heartbeat,
+  REPORT,
+  responseEntry,
+  shouldReport,
+} from '../extensions/health/server.ts'
 import type { HeartbeatDeps } from '../extensions/health/server.ts'
 import {
   healthPath,
@@ -47,13 +54,14 @@ it('merges each timestamp by its maximum and keeps the newest failure’s error'
   })
 })
 
-it('sanitises errors: no token survives, whitespace collapses, 120 characters at most', () => {
-  const error = sanitize(
-    'Invalid key sk-ant-api03-SECRETsecret_42 sent\n\n  with Bearer abc.def-ghi and eyJhbGciOi.x.y',
-  )
-  expect(error).toBe('Invalid key … sent with Bearer … and …')
-  expect(error).not.toContain('SECRET')
-  expect(sanitize('x '.repeat(300))).toHaveLength(120)
+it('summarises errors to a status, error codes and known keywords', () => {
+  expect(
+    sanitize('400 {"error":"invalid_grant","error_description":"Refresh token revoked"}'),
+  ).toBe('400 invalid_grant error_description')
+  expect(sanitize('429 rate_limit_error: Too many requests')).toBe('429 rate_limit_error')
+  expect(sanitize('fetch failed: ECONNREFUSED 127.0.0.1:443')).toBe('ECONNREFUSED')
+  expect(sanitize('Something odd happened')).toBe('request failed')
+  expect(sanitize('a_b_c '.repeat(300)).length).toBeLessThan(60)
 })
 
 it('sanitises every credential format it can recognise, keeping provider error codes', () => {
@@ -68,15 +76,15 @@ it('sanitises every credential format it can recognise, keeping provider error c
     'xoxb-slackSecret-2',
     'opaque 4f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c',
     'cookie=sessionSecret3',
+    'Cookie: session=cookieSecret4; other=val_secret_x',
+    'password: "my Secret pass phrase"',
+    'Invalid key sk-ant-api03-SECRETsecret_42 with eyJhbGciOi.x.y',
+    'token lower_case_secret_value',
   ]
-  const leaked = secrets.filter((text) => /Secret|dXNlcjpwYXNz|4f9a8b7c6d5e/.test(sanitize(text)))
+  const leaked = secrets.filter((text) =>
+    /secret|dXNlcjpwYXNz|4f9a8b7c6d5e|eyJ|pass/i.test(sanitize(text)),
+  )
   expect(leaked).toEqual([])
-  expect(sanitize('400 invalid_grant: refresh token expired')).toBe(
-    '400 invalid_grant: refresh token …',
-  )
-  expect(sanitize('429 rate_limit_error: Too many requests')).toBe(
-    '429 rate_limit_error: Too many requests',
-  )
 })
 
 it('records real responses in the machine’s health file, merging concurrent writes', async () => {
@@ -99,7 +107,7 @@ it('records real responses in the machine’s health file, merging concurrent wr
       lastOk: NOW,
       lastFail: NOW + 1,
       lastUsed: NOW + 1,
-      error: '401 invalid_grant for …',
+      error: '401 invalid_grant',
     },
     { provider: 'openai', state: 'ok', lastOk: NOW },
   ])
@@ -136,6 +144,15 @@ const model = (provider: string, id: string, input: number, output = input) => (
   provider,
   id,
   cost: { input, output, cacheRead: 0, cacheWrite: 0 },
+})
+
+it('reports after a ping, keeps retrying a failed report, and at least hourly', () => {
+  const fresh = { reported: NOW, pending: false }
+  expect(shouldReport(fresh, false, NOW + MINUTE)).toBe(false)
+  expect(shouldReport(fresh, true, NOW + MINUTE)).toBe(true)
+  // A report after a ping failed although an earlier one succeeded a minute ago: the next quiet tick retries.
+  expect(shouldReport({ reported: NOW, pending: true }, false, NOW + 10 * MINUTE)).toBe(true)
+  expect(shouldReport(fresh, false, NOW + REPORT)).toBe(true)
 })
 
 it('picks the cheapest model by input plus output cost, the first on a tie', () => {
@@ -229,10 +246,10 @@ it('a move confirms a recorded failure with a ping, so a stale one never blocks 
   expect(await modelLogin(host)).toEqual({ provider: 'anthropic', ok: true })
   // A real revocation: the confirming ping fails too and its error blocks the move.
   answers = 'error'
-  await record(home, 'anthropic', { lastFail: Date.now() + HOUR, error: 'old' })
+  await record(home, 'anthropic', { lastFail: Date.now() + HOUR, error: 'overloaded' })
   expect(await modelLogin(host, { confirm: true })).toMatchObject({
     ok: false,
-    error: expect.stringMatching(/invalid_grant|old/),
+    error: expect.stringMatching(/invalid_grant|overloaded/),
   })
   expect(pinged).toEqual(['haiku', 'haiku'])
 })

@@ -18,7 +18,7 @@ One file per machine, `~/.ultimate/health.json`, written by every Ultimate home 
 }
 ```
 
-Times are epoch milliseconds. `lastOk` and `lastFail` come from real calls and pings, `lastChecked` from pings only, `lastUsed` from real calls only. A provider is `failing` when `lastFail` is newer than `lastOk`, `ok` once it has a `lastOk`, otherwise `unknown`. Writes read, merge each field by its maximum (the `error` stays with the newest `lastFail`) and rename a temporary file into place; two homes writing at once lose at most one event. Errors are shortened to 120 characters with anything that looks like a key or bearer token (`sk-…`, `Bearer …`, `eyJ…`) removed; no request or auth contents are stored.
+Times are epoch milliseconds. `lastOk` and `lastFail` come from real calls and pings, `lastChecked` from pings only, `lastUsed` from real calls only. A provider is `failing` when `lastFail` is newer than `lastOk`, `ok` once it has a `lastOk`, otherwise `unknown`. Writes read, merge each field by its maximum (the `error` stays with the newest `lastFail`) and rename a temporary file into place; two homes writing at once lose at most one event. An error is stored only as a structured summary: the HTTP status, snake_case provider error codes (`invalid_grant`, `rate_limit_error`) and a few known keywords (`overloaded`, `ECONNREFUSED`, …), or "request failed". Its free text never is, and everything after a credential word (`token`, `cookie`, `password`, …) is dropped first, so no request or auth contents reach the file or the cloud. The cloud report goes out after every tick that pinged, at least hourly, and after a failed attempt on the next tick. A move's checks ping a provider marked failing before they block (`cloud/login.ts`).
 
 ## Real usage
 
