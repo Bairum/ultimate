@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
-import { afterEach, expect, it } from 'vitest'
+import { afterAll, expect, it } from 'vitest'
 import { attach, fauxServer, post, prepareFauxServer, temp, until } from './helpers.ts'
 import type { ConversationSummary } from '../shared/protocol.ts'
 import { context } from '../server/harness.ts'
@@ -16,8 +16,9 @@ import { Overview } from '../extensions/conversations/overview.ts'
 
 type Server = Awaited<ReturnType<typeof fauxServer>>
 const servers: Server[] = []
-afterEach(async () => {
-  for (const server of servers.splice(0)) await server.close()
+// Tests run concurrently, each on its own server; close them all once the file is done.
+afterAll(async () => {
+  await Promise.all(servers.splice(0).map((server) => server.close()))
 })
 
 /** A faux server whose project also enables subagents (for an owned child) and surfaces. */
@@ -76,7 +77,7 @@ async function launch() {
 const listed = (text: string | undefined) =>
   [...(text ?? '').matchAll(/^- #(\d+) /gm)].map((match) => Number(match[1]))
 
-it('tells each top-level conversation about the others, and the surface on screen', async () => {
+it.concurrent('tells each top-level conversation about the others, and the surface on screen', async () => {
   const { server, home, summary, create, message, render } = await launch()
   const root = ROOT_CONVERSATION_ID
   expect(await render('conversations', root)).toBeUndefined()
@@ -171,7 +172,7 @@ it('tells each top-level conversation about the others, and the surface on scree
     expect(await render('surfaces', id)).toBe('The user is looking at the Agent surface (agent).')
 })
 
-it('renames top-level conversations', async () => {
+it.concurrent('renames top-level conversations', async () => {
   const { server, summary, create, message, action } = await launch()
   const id = await create()
   await message(id, 'Fix the parser', 2000)
@@ -214,7 +215,7 @@ it('renames top-level conversations', async () => {
     expect(await action(name, args)).toEqual({ status: 500, data: { error } })
 })
 
-it('projects arbitrary typed inputs, ignores user-role writes, and preserves activity across heads and reopen', async () => {
+it.concurrent('projects arbitrary typed inputs, ignores user-role writes, and preserves activity across heads and reopen', async () => {
   const { server, summary, create, action } = await launch()
   const id = await create()
   const conversation = (await server.harness.conversation(id, context))!
@@ -302,7 +303,7 @@ it('projects arbitrary typed inputs, ignores user-role writes, and preserves act
   })
 })
 
-it('keeps unmarked Pi input history and makes no metadata writes on an unchanged reopen', async () => {
+it.concurrent('keeps unmarked Pi input history and makes no metadata writes on an unchanged reopen', async () => {
   const { server, create, message, summary } = await launch()
   const id = await create()
   await message(id, 'Existing parser work', 1000)
@@ -353,7 +354,7 @@ it('keeps unmarked Pi input history and makes no metadata writes on an unchanged
   stop?.()
 })
 
-it('conclude merges concurrent additions, deduplicates ids and returns kept checkouts', async () => {
+it.concurrent('conclude merges concurrent additions, deduplicates ids and returns kept checkouts', async () => {
   const { server, create, action } = await launch()
   const first = await create()
   const second = await create()
@@ -400,7 +401,7 @@ it('conclude merges concurrent additions, deduplicates ids and returns kept chec
   })
 })
 
-it('refuses to conclude a root or a standing agent', async () => {
+it.concurrent('refuses to conclude a root or a standing agent', async () => {
   const { server, create, action } = await launch()
   const ultimate = (
     await post(server, '/api/extensions/subagents/actions/standing', { args: { name: 'ultimate' } })
@@ -425,7 +426,7 @@ it('refuses to conclude a root or a standing agent', async () => {
   expect(await action('conclude', { ids: [branch] })).toMatchObject({ status: 200 })
 })
 
-it('resume removes concluded ancestors and leaves unrelated ids alone', async () => {
+it.concurrent('resume removes concluded ancestors and leaves unrelated ids alone', async () => {
   const { server, create, action } = await launch()
   const parent = await create()
   const unrelated = await create()

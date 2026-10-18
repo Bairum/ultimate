@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { afterEach, expect, it } from 'vitest'
+import { afterAll, expect, it } from 'vitest'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
@@ -16,8 +16,9 @@ import { fauxServer, seedTally, sourceCopy, temp, removeTemp, until, post } from
 type Server = Awaited<ReturnType<typeof fauxServer>>
 const servers: Server[] = []
 const homes: string[] = []
-afterEach(async () => {
-  for (const server of servers.splice(0)) await server.close()
+// Tests run concurrently, each on its own server; close them all once the file is done.
+afterAll(async () => {
+  await Promise.all(servers.splice(0).map((server) => server.close()))
   for (const home of homes.splice(0)) await removeTemp(home)
 })
 function textOf(content: unknown): string {
@@ -95,7 +96,7 @@ async function ask(server: Server, id: ConversationId, text: string) {
   await (await conversation.submit({ type: 'input', content: text }, context)).wait(context)
 }
 
-it('ships a resident Ultimate definition with valid tools; standing addresses create recipients and name both sides', async () => {
+it.concurrent('ships a resident Ultimate definition with valid tools; standing addresses create recipients and name both sides', async () => {
   const f = await fixture()
   const definition = parseDefinition(
     await readFile(resolve('agents/ultimate.md'), 'utf8'),
@@ -130,7 +131,7 @@ it('ships a resident Ultimate definition with valid tools; standing addresses cr
   ).not.toContain('branch')
 })
 
-it('starts a lineage branch with a board input and caller attribution, returns its answer, and selects roots', async () => {
+it.concurrent('starts a lineage branch with a board input and caller attribution, returns its answer, and selects roots', async () => {
   const f = await fixture()
   await seedTally(f.server.harness)
   const ultimate = await f.subagents.standing('ultimate', context)
@@ -236,7 +237,7 @@ it('starts a lineage branch with a board input and caller attribution, returns i
   expect(f.requests.some((text) => text.includes('Choose a root. Roots: (none)'))).toBe(true)
 })
 
-it('refreshes standing definitions for numeric-address deliveries', async () => {
+it.concurrent('refreshes standing definitions for numeric-address deliveries', async () => {
   const f = await fixture()
   const dice = await f.subagents.standing('dice', context)
   await writeFile(
@@ -257,7 +258,7 @@ it('refreshes standing definitions for numeric-address deliveries', async () => 
   await f.server.harness.waitForIdle(context)
 })
 
-it('refreshes standing definitions before delivering automatic replies', async () => {
+it.concurrent('refreshes standing definitions before delivering automatic replies', async () => {
   const f = await fixture(async (text, home) => {
     if (text.startsWith('Message from') && text.includes('\nRoll after edit\n'))
       await writeFile(
@@ -275,7 +276,7 @@ it('refreshes standing definitions before delivering automatic replies', async (
   await f.server.harness.waitForIdle(context)
 })
 
-it('keeps Ultimate answers to board replies out of the log, including after reopen', async () => {
+it.concurrent('keeps Ultimate answers to board replies out of the log, including after reopen', async () => {
   const f = await fixture()
   const ultimate = await f.subagents.standing('ultimate', context)
   const resident = (await f.server.harness.conversation(ultimate, context))!
