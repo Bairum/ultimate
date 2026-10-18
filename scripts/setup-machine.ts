@@ -18,7 +18,7 @@ export interface UnitOptions {
   home: string
   node: string
   machine: string
-  /** The invoking user's PATH, kept after node so the agent finds the same tools. */
+  /** The user's PATH (`loginPath`), kept after node so the agent finds the same tools as in a terminal. */
   path: string
   /** Whether cloud.tunnels has an entry for the machine. */
   tunnel: boolean
@@ -84,15 +84,54 @@ export function selfUnits(
   )
 }
 
+const marker = '__ULTIMATE_PATH__'
+
+/**
+ * The PATH of the user's interactive login shell, where `~/.local/bin`, version managers' shims (mise, asdf) and
+ * `PNPM_HOME` are added, followed by `current`'s entries. The script's own PATH alone is not enough: run from a
+ * service, over ssh or by an agent it can be the bare `/usr/bin:/bin`, and the agent's `claude`, `gh` and `pnpm` would
+ * be missing from the units. A shell that fails or prints no PATH leaves `current`.
+ */
+export function loginPath(
+  current: string,
+  shell = process.env.SHELL || userInfo().shell || '/bin/sh',
+  run: (shell: string, args: string[]) => string = (command, args) =>
+    execFileSync(command, args, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10_000,
+    }),
+) {
+  let login = ''
+  try {
+    // Interactive too: many setups (mise activate, PNPM_HOME) extend PATH only in the rc file.
+    login =
+      run(shell, ['-lic', `printf '\n${marker}%s\n' "$PATH"`])
+        .split('\n')
+        .find((line) => line.startsWith(marker))
+        ?.slice(marker.length) ?? ''
+  } catch {
+    // A broken rc file must not stop the setup: the script's own PATH still goes into the units.
+  }
+  return [login, current].filter(Boolean).join(':')
+}
+
 /** Renders the unit files; pure, so the side effects stay in main. Throws for a path systemd would misread. */
 export function renderUnits(options: UnitOptions): Unit[] {
   const { clone, project, home, node, machine } = options
   checkPaths({ clone, project, home, node })
   // pnpm run prepends node_modules/.bin folders and its own version-pinned folder (.tools/@pnpm+exe/<version>),
-  // which disappears when pnpm updates itself; a unit must depend on neither.
+  // which disappears when pnpm updates itself; a unit must depend on neither. An entry systemd would misread is left
+  // out rather than escaped.
   const user = options.path
     .split(':')
-    .filter((entry) => entry && !entry.includes('/node_modules/') && !entry.includes('/.tools/'))
+    .filter(
+      (entry) =>
+        entry.startsWith('/') &&
+        !entry.includes('/node_modules/') &&
+        !entry.includes('/.tools/') &&
+        !special.test(entry),
+    )
   const path = [...new Set([dirname(node), ...user, '/usr/local/bin', '/usr/bin', '/bin'])].join(
     ':',
   )
@@ -164,7 +203,7 @@ function main() {
     home,
     node: process.execPath,
     machine,
-    path: process.env.PATH ?? '',
+    path: loginPath(process.env.PATH ?? ''),
     tunnel,
   })
   if (values['no-tunnel']) console.log('Skipping the tunnel (--no-tunnel).')

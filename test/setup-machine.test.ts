@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { renderUnits, selfUnits } from '../scripts/setup-machine.ts'
+import { loginPath, renderUnits, selfUnits } from '../scripts/setup-machine.ts'
 
 const options = {
   clone: '/home/u/ultimate',
@@ -9,6 +9,10 @@ const options = {
   machine: 'rog',
   path: '/home/u/app/node_modules/.bin:/home/u/.local/share/pnpm/.tools/@pnpm+exe/11.8.0/bin:/opt/mise/shims:/home/u/.local/bin:/usr/bin',
   tunnel: true,
+}
+
+function brokenShell(): never {
+  throw new Error('rc failed')
 }
 
 function line(content: string, key: string) {
@@ -47,6 +51,35 @@ it('renders ultimate, the machine home and the tunnel with absolute paths', () =
     ])
     expect(line(content, 'WantedBy')).toEqual(['WantedBy=default.target'])
   }
+})
+
+it("puts the login shell's PATH first, so a bare service PATH still finds claude, gh and pnpm", () => {
+  const calls: [string, string[]][] = []
+  const login =
+    '/home/u/.local/share/pnpm:/home/u/.local/share/mise/shims:/home/u/.local/bin:/usr/bin'
+  // An rc file that prints a greeting must not leak into PATH.
+  const path = loginPath('/usr/bin:/usr/local/bin:/bin', '/bin/bash', (shell, args) => {
+    calls.push([shell, args])
+    return `Welcome!\n__ULTIMATE_PATH__${login}\n`
+  })
+  expect(calls[0][0]).toBe('/bin/bash')
+  expect(calls[0][1][0]).toBe('-lic')
+  const [unit] = renderUnits({ ...options, path })
+  expect(line(unit.content, 'Environment').find((entry) => entry.includes('PATH='))).toBe(
+    'Environment=PATH=/opt/node/bin:/home/u/.local/share/pnpm:/home/u/.local/share/mise/shims:/home/u/.local/bin:/usr/bin:/usr/local/bin:/bin',
+  )
+  // A failing shell keeps the script's own PATH.
+  expect(loginPath('/usr/bin:/bin', '/bin/zsh', brokenShell)).toBe('/usr/bin:/bin')
+})
+
+it('drops PATH entries that are relative or that systemd would misread', () => {
+  const [unit] = renderUnits({
+    ...options,
+    path: '/home/u/My Tools/bin:relative/bin:/home/u/$X/bin::/home/u/.local/bin',
+  })
+  expect(line(unit.content, 'Environment').find((entry) => entry.includes('PATH='))).toBe(
+    'Environment=PATH=/opt/node/bin:/home/u/.local/bin:/usr/local/bin:/usr/bin:/bin',
+  )
 })
 
 it('leaves the tunnel out when the machine has none', () => {
