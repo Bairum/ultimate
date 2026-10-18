@@ -110,7 +110,7 @@ it('reports a missing token once at host open and never opens a connection', asy
   let close: (() => Promise<void>) | undefined
   vi.useFakeTimers()
   try {
-    cloud({
+    await cloud({
       userHome,
       faux: false,
       notice,

@@ -2,6 +2,34 @@
 
 The Worker serves Ultimate's static UI, a directory, and one SQLite-backed Durable Object replica per project. A project is its GitHub repository, so every checkout of it on every machine shares one replica, and exactly one machine, the writer, runs it. The agent loop and credentials stay on the machines. `protocol.ts` is the sync contract; `extensions/cloud/` is the sender.
 
+## New machine
+
+To add a machine to the projects a deployed cloud already holds (see [Deploy](#deploy) for the first one):
+
+1. Clone Ultimate, then in the clone run `pnpm install` and `pnpm link --global`.
+2. Set up by hand:
+   - [ ] Log in to a model provider with `pi` (or copy `~/.pi/agent/auth.json` from another machine).
+   - [ ] Add `ULTIMATE_CLOUD_TOKEN` and `ULTIMATE_CLOUD_SNAPSHOT_KEY` in Secrets (⌘K → Secrets), the same values as on
+         the other machines. Or copy `~/.ultimate/secrets.json` and `chmod 600` it; never print it.
+   - [ ] Set `cloud.url` and `cloud.machine` in `~/.ultimate/settings.json` (step 5 of [Deploy](#deploy)).
+   - [ ] Create and run the machine's tunnel, add it to `cloud.tunnels` on the deploying machine, and deploy again
+         (step 6 of [Deploy](#deploy)). Without it the cloud reaches the project only while it is offline.
+3. Run `ultimate` in a checkout at the same path as on the other machines (a move to a checkout at another path is
+   refused). Where the project ends up depends on the checkout's `origin`:
+   - **A GitHub origin the cloud knows:** the machine joins as a standby. A machine with no state for the project yet
+     waits on standby without creating a database (or, with no answer from the cloud within 10 seconds, starts on its
+     own as before); one that has its own history keeps it aside and goes to standby too.
+   - **A GitHub origin the cloud does not know:** the project is registered with a fresh state and this machine as its
+     writer.
+   - **No GitHub origin:** the project stays local only; the status line says `local only`.
+4. Move a project with **Move here** on a standby's page or in the status line's `on <machine>` popover, or pick the
+   machine under **Run on…** in the cloud: the project page's status line, its offline banner, or a row of the front
+   page. The machine fast-forwards its checkout, installs when the lockfile changed, checks secrets, has the writer
+   finish its running tasks and release, downloads the snapshot and takes over; every step shows in the move's card on
+   both machines and in the cloud. An idle writer releases the project by itself after `cloud.idleRelease` minutes
+   (default 10) and when Ultimate stops, so the next machine takes it without waiting for the first; **Resume here**
+   takes it back.
+
 ## Run locally
 
 No Cloudflare account is needed:
@@ -60,6 +88,8 @@ ULTIMATE_PROJECT=/tmp/demo/a ULTIMATE_SUPERVISED=0 ULTIMATE_GENERATION=1 \
 Use `/tmp/demo/b`, port 4802, a different `DEMO_HOME` and `ULTIMATE_CLOUD_MACHINE=demo-laptop` for the second host. Explicit `ULTIMATE_PROJECT` and supervised mode avoid inheriting the agent terminal's host environment. Never reuse the running host's port or state home.
 
 The first host to connect registers the project and becomes its writer (`cloud-lease.json` appears in its home); the second is a standby. The front page shows one row, `demo-project`, running on `demo-desk` with `demo-laptop` as a standby chip. Start coordinator branches through @ultimate in the writer's local UI and submit prompts; the faux provider answers without model tokens, and `/p/demo-project/` shows them. Nothing from the standby reaches the replica. Stop the writer: the row says `demo-desk · offline since …`, its history stays readable, and the standby is told. Restart it with the same state home: it is the writer again, and queued prompts deliver exactly once. Stop all three terminals after testing.
+
+The two checkouts sit at different paths, so moving between them is refused. `test/e2e/cloud-handoff.test.ts` runs the whole handoff (register, join, move, idle release, a cancelled move) with two faux hosts whose clones share one path through Linux mount namespaces; `test/e2e/cloud-helpers.ts` holds that scaffolding.
 
 ## URLs, presence and sync
 

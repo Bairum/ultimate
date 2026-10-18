@@ -13,7 +13,7 @@ import { DirectoryStore } from '../cloud/directory.ts'
 import type { Transition } from '../cloud/protocol.ts'
 import { ReplicaStore } from '../cloud/replica.ts'
 import type { Sql } from '../cloud/replica.ts'
-import { actions, startSync } from '../extensions/cloud/server.ts'
+import { actions, joinOnStandby, startSync } from '../extensions/cloud/server.ts'
 import type { Connect, SyncSocket, SyncState } from '../extensions/cloud/server.ts'
 import { startLease } from '../extensions/cloud/lease.ts'
 import type { Exec } from '../extensions/cloud/lease.ts'
@@ -474,6 +474,29 @@ it('releases an idle writer, and another machine prepares and takes over the sam
   await until(() => desk.role()?.writer?.machine === 'laptop')
   expect(desk.serving()).toBe(false)
   expect(await desk.files()).toEqual(['state.sqlite'])
+})
+
+it('joins on standby: a new project activates its first machine, a known one creates no database', async () => {
+  const project = cloud()
+  const { root } = await checkout()
+  const deskHome = await temp('ultimate-lease-')
+  expect(await joinOnStandby(deskHome)).toBe(true)
+  const desk = await machine('desk', project, root, { home: deskHome })
+  // Nobody knew the project: the cloud registers the joining machine as its writer, which opens a fresh database.
+  await writer(desk)
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+  expect(await desk.leaseFile()).toEqual({ key: KEY, epoch: 1 })
+  expect(await desk.files()).toEqual(['state.sqlite'])
+  // A serving machine's home is no new one.
+  expect(await joinOnStandby(deskHome)).toBe(false)
+
+  const laptopHome = await temp('ultimate-lease-')
+  expect(await joinOnStandby(laptopHome)).toBe(true)
+  const laptop = await machine('laptop', project, root, { home: laptopHome })
+  await standbyOn(laptop)
+  expect(laptop.host.standby()).toEqual({ joining: true, cloud: true })
+  expect(laptop.serving()).toBe(false)
+  expect(await readdir(laptopHome)).toEqual(['standby.json'])
 })
 
 it('fast-forwards the checkout and installs when the lockfile changed, rerunning a failed install', async () => {

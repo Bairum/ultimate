@@ -39,7 +39,7 @@ export {
 /** Isolates another extension's component you render, such as a document renderer: it throws into an error card. */
 export { ExtensionBoundary } from '../app/boundary.tsx'
 export { api } from './client.ts'
-export { ActionError } from './api.ts'
+export { ActionError, projectBase } from './api.ts'
 export type { Api } from './api.ts'
 export {
   getConversation,

@@ -65,6 +65,8 @@ cd ~/Projects/app && ultimate
   live, for this project or everywhere, and can change the project choice.
 - On another machine: `ssh -L 4747:127.0.0.1:4747 <host>`, then open `http://127.0.0.1:4747`. Ultimate only listens on
   loopback.
+- **Several machines, one project:** set up cloud sync on each, and a project runs on one of them at a time and moves
+  between them; see [New machine](cloud/README.md#new-machine).
 
 ### Terminal status
 

@@ -1,5 +1,6 @@
 import type { ConversationRecord, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
 import type {
+  CloudInfo,
   CloudMessage,
   Hello,
   MachineMessage,
@@ -141,7 +142,7 @@ export class ReplicaStore {
     return true
   }
   /** `GET /api/cloud`: every machine, the lease and the latest transition. */
-  cloud(connected: Set<string>, online: boolean) {
+  cloud(connected: Set<string>, online: boolean): CloudInfo {
     const lease = this.lease()
     const writer = lease?.machine ?? null
     return {

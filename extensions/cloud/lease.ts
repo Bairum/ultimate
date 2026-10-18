@@ -232,8 +232,12 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     sync = current
     clearInterval(idleTimer)
     idleSince = undefined
+    // Checked every minute, or four times within a shorter threshold.
     if (next === 'serving' && options.idleRelease > 0)
-      idleTimer = setInterval(() => void checkIdle().catch(report), 60_000)
+      idleTimer = setInterval(
+        () => void checkIdle().catch(report),
+        Math.min(60_000, Math.max(1000, options.idleRelease * 15_000)),
+      )
   }
   const disconnect = () => {
     sync?.()
@@ -319,8 +323,20 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
 
   // The latest transition goes to the cloud at once on a step change, and at most every half second for progress.
   let published = 0
+  // A throttled update is sent once the half second is up, so the latest progress is never lost.
+  let trailing: ReturnType<typeof setTimeout> | undefined
   const publish = (throttled = false) => {
-    if (!moving || (throttled && Date.now() - published < 500)) return
+    if (!moving) return
+    const wait = published + 500 - Date.now()
+    if (throttled && wait > 0) {
+      trailing ??= setTimeout(() => {
+        trailing = undefined
+        publish()
+      }, wait)
+      return
+    }
+    clearTimeout(trailing)
+    trailing = undefined
     published = Date.now()
     sync?.send({ type: 'transition', value: structuredClone(moving.transition) })
   }

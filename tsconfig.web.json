@@ -22,6 +22,8 @@
     "extensions/**/*.tsx",
     ".ultimate/extensions/**/*.tsx",
     "shared/protocol.ts",
+    "cloud/protocol.ts",
+    "extensions/cloud/types.ts",
     "extensions/conversations/types.ts",
     "extensions/lineage/types.ts",
     "extensions/phase/types.ts",

@@ -966,7 +966,7 @@ it('stays off with one notice for a project without a GitHub origin', async () =
   vi.stubEnv('ULTIMATE_CLOUD_TOKEN', 'token')
   const onOpen = vi.fn<ExtensionHost['onOpen']>()
   const notice = vi.fn<ExtensionHost['notice']>()
-  cloud({
+  await cloud({
     onOpen,
     onClose: () => {},
     onRelease: () => {},
@@ -994,7 +994,7 @@ it('opens and closes a faux host without cloud work when no URL is explicit', as
     faux: true,
     notice,
   }
-  expect(cloud(host as unknown as ExtensionHost).name).toBe('cloud')
+  expect((await cloud(host as unknown as ExtensionHost)).name).toBe('cloud')
   await onOpen.mock.calls[0][0]()
   for (const [close] of onClose.mock.calls) await close()
   expect(notice).not.toHaveBeenCalled()

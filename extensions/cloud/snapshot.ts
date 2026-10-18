@@ -102,6 +102,8 @@ export async function downloadSnapshot(o: {
   const total = manifest.database.bytes + (manifest.bundle?.bytes ?? 0)
   const database = join(o.dir, `snapshot-${o.id}.sqlite`)
   const bundle = join(o.dir, `snapshot-${o.id}.bundle`)
+  // The size is known from the manifest, before the first chunk arrives.
+  o.progress?.(0, total)
   try {
     await open(o, manifest.database, o.id, 'db', `${database}.part`, (done) =>
       o.progress?.(done, total),

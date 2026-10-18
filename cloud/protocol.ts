@@ -100,6 +100,28 @@ export interface Transition {
   startedAt: number
 }
 
+/** `GET /p/<slug>/api/cloud`: every machine that said hello, the lease and the latest transition. */
+export interface CloudInfo {
+  machines: {
+    machine: string
+    role: 'writer' | 'standby'
+    /** Has a sync socket open. */
+    connected: boolean
+    root: string
+    lastSeen: number
+    /** The writer's secret names this machine lacks. */
+    missingSecrets: string[]
+  }[]
+  lease: {
+    machine: string | null
+    epoch: number
+    root: string
+    online: boolean
+    snapshot?: { id: string; epoch: number }
+  } | null
+  transition: Transition | null
+}
+
 /** The machine that writes a project's replica, as standbys see it. */
 export interface Writer {
   /** Null while the lease is free. */
