@@ -150,7 +150,10 @@ export default function debug(host: ExtensionHost) {
       }
       case 'apis': {
         const apis = await apiSummaries(host.extensions())
-        return apis.map((api) => `${api.name}  ${api.summary}`).join('\n') || 'No api.ts files.'
+        return (
+          apis.map((api) => `${api.name}  ${api.summary}`).join('\n') ||
+          'No api.ts or refs.ts files.'
+        )
       }
       case 'api':
       default: {
@@ -166,7 +169,7 @@ export default function debug(host: ExtensionHost) {
       defineTool({
         name: 'debug',
         deferred: true,
-        // Reads events, reactor status, the catalogue, traces and api.ts files; changes nothing.
+        // Reads events, reactor status, the catalogue, traces and contract files; changes nothing.
         replay: 'safe',
         description:
           "Inspect Ultimate's running system to find out why something did or did not happen, and to follow one chain of work across extensions. " +
@@ -174,7 +177,7 @@ export default function debug(host: ExtensionHost) {
           '`reactors` shows each reactor with its cursor, lag (pending events), whether it runs, and its last failure; ' +
           '`catalogue` lists each extension API with its provider, needs and wants, plus missing providers and cycles; ' +
           '`trace` lists recorded service, action, reactor and tool calls newest first (filter by `conversation` or ISO `since`), or with `trace` set the whole call tree of that trace id, indented; ' +
-          '`apis` lists extension contracts (api.ts) with summaries and `api` returns one by `name`. ' +
+          "`apis` lists extension contracts (api.ts, refs.ts) with summaries and `api` returns one extension's by `name`, each file under a header. " +
           'Start from an event or a call, take its trace id and read the tree. Read-only; one line per row, ages relative; `limit` defaults to 20 events or 50 rows.',
         parameters: Type.Object({
           call: Type.Union([

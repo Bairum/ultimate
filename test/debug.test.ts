@@ -135,9 +135,11 @@ it('shows events, reactor failures, the catalogue and a trace tree, within limit
 it('lists extension contracts with summaries and returns one by name', async () => {
   const { debug } = await start()
   expect(await debug({ call: 'apis' })).toBe('beta  Beta: answers pings and says so with an event.')
-  expect(await debug({ call: 'api', name: 'beta' })).toContain('export type Beta')
+  const beta = await debug({ call: 'api', name: 'beta' })
+  expect(beta.startsWith('// beta/api.ts: the server contract')).toBe(true)
+  expect(beta).toContain('export type Beta')
   await expect(debug({ call: 'api', name: 'alpha' })).rejects.toThrow(
-    'No enabled extension "alpha" with an api.ts; known: beta',
+    'No enabled extension "alpha" with an api.ts or refs.ts; known: beta',
   )
 })
 

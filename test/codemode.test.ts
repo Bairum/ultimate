@@ -188,20 +188,32 @@ it('calls extension actions with caller context and rejects missing or disabled 
   expect(disabled.text).toContain('Unknown extension action: action-test/echo')
 })
 
-it('discovers extension contracts: summaries first, then one api.ts by name', async () => {
+it('discovers extension contracts: summaries first, then one api.ts and refs.ts by name', async () => {
   const { server, options } = await fixture()
   const folder = join(options.projectRoot, '.ultimate/extensions/contract-test')
+  const browserOnly = join(options.projectRoot, '.ultimate/extensions/refs-only')
   await mkdir(folder, { recursive: true })
+  await mkdir(browserOnly, { recursive: true })
   const source =
     '/**\n * Contract test: a fixture with a documented contract. It offers nothing else.\n */\nexport type Service = { /** Says hi. */ hi(): string }\n'
+  const refs = '/** Contract test in the browser: one constant. */\nexport const Hi = 1\n'
   await writeFile(join(folder, 'api.ts'), source)
-  await writeFile(
-    join(folder, 'server.ts'),
-    "import { defineExtension } from '@earendil-works/pi-durable'; export default defineExtension({ name: 'contract-test' })",
-  )
+  await writeFile(join(folder, 'refs.ts'), refs)
+  await writeFile(join(browserOnly, 'refs.ts'), '/** Refs only: a browser contract. */\n')
+  for (const [path, name] of [
+    [folder, 'contract-test'],
+    [browserOnly, 'refs-only'],
+  ])
+    await writeFile(
+      join(path, 'server.ts'),
+      `import { defineExtension } from '@earendil-works/pi-durable'; export default defineExtension({ name: '${name}' })`,
+    )
   server.vite.watcher.emit('add', join(folder, 'server.ts'))
+  server.vite.watcher.emit('add', join(browserOnly, 'server.ts'))
   await until(() =>
-    server.extensions.info().some((entry) => entry.name === 'contract-test' && entry.enabled),
+    ['contract-test', 'refs-only'].every((name) =>
+      server.extensions.info().some((entry) => entry.name === name && entry.enabled),
+    ),
   )
   const result = await run(
     server,
@@ -220,11 +232,42 @@ it('discovers extension contracts: summaries first, then one api.ts by name', as
     name: 'contract-test',
     summary: 'Contract test: a fixture with a documented contract.',
   })
+  // An extension with only a browser contract is listed by it.
+  expect(value.apis).toContainEqual({
+    name: 'refs-only',
+    summary: 'Refs only: a browser contract.',
+  })
   for (const api of value.apis) expect(api.summary).not.toBe('')
-  expect(value.source).toBe(source)
-  expect(value.unknown).toMatch(
-    /^No enabled extension "codemode" with an api\.ts; known: .*\bcontract-test\b/,
+  expect(value.source).toBe(
+    `// contract-test/api.ts: the server contract: services, extension points, documents\n${source}\n` +
+      `// contract-test/refs.ts: the browser contract: documents, actions (call them with ultimate.action) and events\n${refs}`,
   )
+  expect(value.unknown).toMatch(
+    /^No enabled extension "codemode" with an api\.ts or refs\.ts; known: .*\bcontract-test\b/,
+  )
+})
+
+it("returns workspaces' refs.ts with its api.ts, so agents see its actions and events", async () => {
+  const home = await temp('ultimate-codemode-workspaces-')
+  directories.push(home)
+  await mkdir(join(home, 'project'))
+  const server = await createServer({
+    ultimateRoot: resolve('.'),
+    projectRoot: join(home, 'project'),
+    userHome: home,
+    home: join(home, 'state'),
+  })
+  servers.push(server)
+  const result = await run(server, `return await ultimate.api('workspaces')`)
+  const source = result.data.details.value as string
+  expect(source).toContain(
+    `// workspaces/api.ts: the server contract: services, extension points, documents\n${await readFile(resolve('extensions/workspaces/api.ts'), 'utf8')}`,
+  )
+  expect(source).toContain('// workspaces/refs.ts: the browser contract')
+  expect(source).toContain(
+    "export const SubmissionLanded = defineEvent<LandedData>('workspaces.landed')",
+  )
+  expect(source).toContain("actionRef<{ id: number }, WorkspaceInfo | null>('workspaces', 'info')")
 })
 
 it('reserves trust and secret writes for the UI while allowing normal actions', async () => {
