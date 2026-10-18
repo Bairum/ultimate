@@ -86,7 +86,9 @@ See [integration details](docs/worktrees.md#standing-permission-to-push-this-rep
 - Commits made through Ultimate's bash tool carry `Ultimate-Conversation: <id>`; find the conversation behind a commit with `git log --format=%(trailers:key=Ultimate-Conversation)`.
 - Pi is the role model: minimal, readable, malleable. Prefer platform features and existing dependencies; justify every
   new dependency in its commit message.
-- `pnpm check` enforces import boundaries; see `lint/ultimate.ts` and `vite.config.ts`.
+- `pnpm check` enforces import boundaries; see `lint/ultimate.ts` and `vite.config.ts`. It also runs `pnpm deps`,
+  which prints the dependency graph between extensions (imports plus `need`/`want`) and fails on a cycle or on a
+  core-tier extension that depends on an optional one.
 - Plain TypeScript, ESM, Node 26 runs `.ts` directly: erasable syntax only (no enums, namespaces, or parameter
   properties), relative imports end in `.ts`.
 - Core server/web contracts live in `shared/protocol.ts`; extension-local types live with their extension.

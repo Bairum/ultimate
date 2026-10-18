@@ -7,17 +7,19 @@ subscribe with `/api/events?conversation=<id>&docs=<kind>,<kind>` for `doc` snap
 The Documents tab shows each exported kind through the renderer a web facet registers (`documents: [{ kind, title, component }]`), or as JSON.
 Local imported modules reload with the facet. Failed loads leave the previous version installed.
 
-Server extensions coordinate through typed contracts in each provider's `api.ts`: services, documents and durable
-events (below); lint rejects `host.provide`, `host.use` and `host.events` in `extensions/`. The browser has its own
-ephemeral `events`/`useEvent` bus from `@/sdk`. Use `<extension>:<event>` channels there, reserve `ultimate:*` for
-core, and keep durable state in documents. `useReady()` becomes true once the initial facets settle and a system snapshot
+Server extensions coordinate through typed contracts in each provider's `api.ts`: services, extension points,
+documents and durable events (below); lint rejects the untyped `host.provide` and `host.use` in `extensions/`. The
+browser has its own ephemeral `events`/`useEvent` bus from `@/sdk`. Use `<extension>:<event>` channels there, reserve
+`ultimate:*` for core, and keep durable state in documents. `useReady()` becomes true once the initial facets settle and a system snapshot
 arrives, stays true across hot reloads, and exposes failed facet names. Overlays render as facets install, even while
 others load; see [Events](../extensions/README.md#events).
 
 ## Durable events
 
-For "this happened" that other extensions act on or people read later, use durable events instead of the bus. Define
-a token once with `defineEvent<Data>('<extension>.<event>', { version? })` from `shared/events.ts` (browser-safe) and:
+For "this happened" that other extensions act on or people read later, use a durable event. Define its token once
+with `defineEvent<Data>('<extension>.<event>', { version? })` from `shared/events.ts` in the emitter's `refs.ts`, so
+the browser can use it too, and re-export it from `api.ts` (for server code) and `ui.tsx` (for other extensions'
+browser code). Then:
 
 - `host.emit(tx, Event, data)` appends it inside your commit, so it exists exactly when your state change does.
 - `host.react(name, [Event, …], (tx, event) => …)` runs the handler once per event, oldest first: those emitted before
@@ -47,14 +49,20 @@ not invent an event only to replace one.
 The core tier is the fixed heart of Ultimate that every other extension may rely on. An extension joins it with one
 line in its `api.ts`, `export const tier = 'core'` (`coreTier` in `shared/extension-api.ts`); nothing in `server/`
 names them. Discovery reads the line: a core-tier extension stays enabled whatever `extensions.disable` says (the
-ignored entry becomes an extension diagnostic), and `ExtensionInfo.core` marks it, so onboarding locks its switch.
+ignored entry becomes an extension diagnostic), and `ExtensionInfo.core` marks it, so the first-run choices and the
+Extensions panel show it as `core` with a locked switch. Being always on, a core-tier service is there for every
+extension: consumers `need` it. `want` is for optional extensions' services and for extension points, which another
+extension fills. `test/e2e/disable-each.test.ts` boots with each optional extension disabled in turn and expects a
+clean catalogue.
 
 Today's core tier: agent, prompt, coding-tools, conversations, models, documents, notices, secrets, theme, surfaces,
 workspaces, subagents, lineage, board, onboarding (the first run and @ultimate's setup cards need it) and sidebar.
 
 Dependencies point one way. A core-tier extension imports (runtime or type), needs and wants only core-tier
-extensions; lint's `core-tier-deps` enforces the imports, and the import graph and the catalogue have no cycles. The
-core layers, lowest first, each depending only on layers below it:
+extensions; lint's `core-tier-deps` enforces the imports, and the catalogue has no cycles. `pnpm deps`
+(`scripts/deps.ts`, part of `pnpm check`) prints the graph between built-in extensions, from every import (runtime,
+type, re-export, dynamic) and every `need`/`want` of another extension's token, and fails on a cycle or a core-tier
+extension depending on an optional one. The core layers, lowest first, each depending only on layers below it:
 
 1. prompt, coding-tools, documents, notices, secrets, theme, surfaces: stand alone.
 2. models.
@@ -100,20 +108,20 @@ so lint (`lint/ultimate.ts`) keeps them small and documented:
 
 - `api-file-shape`: the file starts with a doc comment on what it offers, its first sentence the one-line summary.
   It holds only imports (runtime ones of `shared/`, packages, its own `refs.ts` and other extensions' `api.ts`;
-  anything else with `import type`; no `node:*`), types, and
-  `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)`. Every exported token and every member of a
-  service type passed to `defineApi` has a doc comment saying what it does and when to use it.
+  anything else with `import type`; no `node:*`), types, `export const X = defineApi/defineDoc/defineEntry(...)`,
+  re-exports of its own `refs.ts` (where event tokens live) and `export const tier = 'core'`. Every exported token
+  and every member of a service type passed to `defineApi` has a doc comment saying what it does and when to use it.
 - `api-naming`: `defineApi<…>()('<folder>')` or an extension point `('<folder>.<point>')`,
   `defineEvent('<folder>.<event>')` and `actionRef('<folder>', name)`.
 - `api-only-imports`: a server-side `.ts` file imports another extension's runtime code only from its `api.ts`, a
   browser `.tsx` file only from its `ui.tsx`; types come with `import type`, pure helpers from `lib/`.
-- `no-raw-services`: no `host.provide`, `host.use` or `host.events` in `extensions/`.
+- `no-raw-services`: no `host.provide` or `host.use` in `extensions/`.
 
 `api.ts` type-imports server code, so the browser never imports it. The browser's contract is two more files:
 
 - `refs.ts`: `docRef<T>(kind)` for each document and `actionRef<Args, Result>(extension, name)` for each action the
-  browser reads or calls, from `shared/extension-api.ts`. The SDK takes them typed: `useDoc(ref)`,
-  `useDocOf(conversation, ref)`, `useAction(ref, args)`, `api.action(ref, args)`; `useDocKind(kind)` is the untyped
+  browser reads or calls, from `shared/extension-api.ts`, and the extension's event tokens (`defineEvent`). The SDK
+  takes them typed: `useDoc(ref)`, `useDocOf(conversation, ref)`, `useAction(ref, args)`, `api.action(ref, args)`; `useDocKind(kind)` is the untyped
   escape for views of every kind (the Documents tab). `api-file-shape` holds it to the same documentation as `api.ts`
   (an action ref documents its arguments and result, which agents read before `ultimate.action`) and keeps it
   browser-safe: runtime imports of `shared/` only, types from packages, `shared/` and extensions' `refs.ts` or
@@ -149,4 +157,4 @@ first) and `host.trace.tree(traceId)` (calls nested under `children`), or codemo
 
 ## Inspecting yourself
 
-Use `codemode` to compose dependent or parallel `tools.*` calls and filter results before they enter your context. Its `ultimate.*` API is the way to inspect yourself: system/build, extension facets and load errors, conversations, stored entries and search (including before compactions/resets), the extension API catalogue, the call trace, task graph, models, and exported documents. `ultimate.action(extension, action, args?)` is its one write: call an extension action on behalf of this conversation. Use ordinary tools for other writes and single simple calls. `store`/`load` persist conversation-scoped values; see `extensions/codemode/README.md` for interruption semantics.
+Use `codemode` to compose dependent or parallel `tools.*` calls and filter results before they enter your context. Its `ultimate.*` API is the way to inspect yourself: system/build, extension facets and load errors, conversations, stored entries and search (including before compactions/resets), the extension API catalogue, the extension contracts (`ultimate.apis()` lists them, `ultimate.api(name)` returns an extension's `api.ts` and `refs.ts`), the call trace, task graph, models, and exported documents. @ultimate has the same reads as its `debug` tool (`extensions/debug/README.md`). `ultimate.action(extension, action, args?)` is its one write: call an extension action on behalf of this conversation. Use ordinary tools for other writes and single simple calls. `store`/`load` persist conversation-scoped values; see `extensions/codemode/README.md` for interruption semantics.

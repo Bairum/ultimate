@@ -105,13 +105,12 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 ## Extension APIs
 
 Everything an extension offers other extensions on the server lives in its `api.ts`: the service token, the documents
-others read and the events it emits. It holds only contracts and is documented, because agents discover APIs by
-reading these files:
+others read and the events it emits (defined in its `refs.ts`, below, and re-exported). It holds only contracts and is
+documented, because agents discover APIs by reading these files:
 
 ```ts
 /** Echo: says text back. Other extensions use it to test a round trip. */
 import { defineApi } from '../../shared/extension-api.ts'
-import { defineEvent } from '../../shared/events.ts'
 
 export type EchoService = {
   /** Return `text` unchanged; use it to check that echo is reachable. */
@@ -119,8 +118,7 @@ export type EchoService = {
 }
 /** The echo service; `want` it, echo is optional. */
 export const Echo = defineApi<EchoService>()('echo')
-/** Text was echoed; react to it to count echoes. */
-export const Echoed = defineEvent<{ text: string }>('echo.echoed')
+export { Echoed } from './refs.ts'
 ```
 
 Lint holds every `extensions/*/api.ts` to that shape (`ultimate/api-file-shape`, `ultimate/api-naming`; see
@@ -134,13 +132,16 @@ whose documents or actions the browser uses describes them in `refs.ts`, browser
 every action ref names its arguments and result, since agents read it to call the action with `ultimate.action`.
 
 ```ts
-/** Echo in the browser: the echo log and the action that echoes. Browser-safe. */
+/** Echo in the browser: the echo log, the action that echoes and its event. Browser-safe. */
 import { actionRef, docRef } from '../../shared/extension-api.ts'
+import { defineEvent } from '../../shared/events.ts'
 
 /** The echo log on conversation 1. */
 export const LogDoc = docRef<{ texts: string[] }>('echo.log')
 /** `{ text }` → `{ at }`: echo `text` and log it. */
 export const EchoAction = actionRef<{ text: string }, { at: number }>('echo', 'echo')
+/** Text was echoed; react to it to count echoes. */
+export const Echoed = defineEvent<{ text: string }>('echo.echoed')
 ```
 
 The web reads and calls through the refs, typed: `useDoc(LogDoc)`, `useDocOf(1, LogDoc)`, `useAction(EchoAction,
@@ -186,7 +187,8 @@ removed with its facet. A consumer calls `host.need(Echo)` for a hard dependency
 optional one. Both return a handle typed by the token that resolves the current provider on every member access, so
 holding it from setup is fine. `need` throws `<ext> needs echo, which no enabled extension provides` while nothing
 provides it; called during setup it records the dependency instead (the provider may load later) and a still-missing
-provider becomes an extension diagnostic. `want` returns undefined while missing, so call it where you use it.
+provider becomes an extension diagnostic. `want` returns undefined while missing, so call it where you use it. The core
+tier is always on, so its services are always `need`ed; `want` is for optional extensions and extension points.
 `host.catalogue()` (codemode: `ultimate.catalogue()`) lists each API's provider, needs and wants, plus missing
 providers and dependency cycles, each a sorted group of extensions that depend on each other in a cycle.
 
@@ -205,7 +207,8 @@ Type imports from `server/` are fine. Runtime imports need a host capability or 
 
 ## Events
 
-On the server, "something happened" is a durable event in the emitter's `api.ts` (see Extension APIs). The browser
+On the server, "something happened" is a durable event whose token the emitter defines in its `refs.ts` and
+re-exports from `api.ts` and `ui.tsx` (see Extension APIs). The browser
 has an ephemeral `events` bus from `@/sdk`: it queues and replays nothing, catches and logs handler errors with the
 channel while other handlers continue, and `on(channel, handler)` returns an unsubscribe; clean it up when its owner
 is removed.

@@ -425,7 +425,7 @@ export default {
             const name = propertyName(node)
             const object = node.object
             if (
-              ['provide', 'use', 'events'].includes(String(name)) &&
+              ['provide', 'use'].includes(String(name)) &&
               (object?.type === 'Identifier'
                 ? object.name === 'host'
                 : object?.type === 'MemberExpression' && propertyName(object) === 'host')
