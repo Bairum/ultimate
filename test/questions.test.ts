@@ -14,6 +14,7 @@ import boardExtension, { Board } from '../extensions/board/server.ts'
 import questionsExtension, {
   actions,
   BoardQuestions,
+  asksUser,
   parseQuestions,
   QUESTIONS_SYSTEM,
   userActions,
@@ -88,6 +89,7 @@ async function fixture() {
   let hold: ReturnType<typeof gate> | undefined
   const extract = vi.fn<() => void>()
   const observed: string[] = []
+  const extractionInputs: string[] = []
   const route: FauxResponseFactory = async (transcript) => {
     prepared.faux!.appendResponses([route])
     const first = transcript.messages[0]
@@ -95,6 +97,8 @@ async function fixture() {
       // The root stands in for @ultimate while sending, so its final answer to the typed SEND is read too; it asks nothing.
       if (transcript.messages.at(-1)?.content === 'Sent.')
         return fauxAssistantMessage([fauxText('{"questions":[]}')])
+      const content = transcript.messages.at(-1)?.content
+      if (typeof content === 'string') extractionInputs.push(content)
       extract()
       if (hold) await hold.promise
       return fauxAssistantMessage([fauxText(JSON.stringify(extraction))])
@@ -194,6 +198,7 @@ async function fixture() {
     state,
     extract,
     observed,
+    extractionInputs,
     settled,
     action,
     answer,
@@ -371,7 +376,11 @@ it("extracts @ultimate's final answers to typed input only, once per answer", as
   f.result({ questions: [] })
   await f.type(id, 'ASK All done.')
   await f.settled()
-  expect(f.extract).toHaveBeenCalledTimes(2)
+  expect(f.extract).toHaveBeenCalledTimes(1)
+  expect(JSON.parse(f.extractionInputs[0])).toEqual({
+    untrustedUserInput: 'ASK Keep it running?',
+    untrustedReply: 'Keep it running?',
+  })
   expect((await f.state())!.reply).toBeUndefined()
 })
 
@@ -506,6 +515,31 @@ it("closes @ultimate's open message to the user when the user types in its conve
     async () => (await f.log())!.messages.find((m) => m.id === message.id)?.state === 'answered',
   )
   await expect(f.answer(message.id)).rejects.toThrow('These questions are no longer open')
+})
+
+it.each([
+  ['Should I land it? 1. Yes 2. Change something first', true],
+  ['Done.\n\n1. Land it\n2. Change something first', true],
+  ['Choose:\n\na) Land it\nb) Wait', true],
+  ['Choose:\n\nA. Land it\nB. Wait', true],
+  ['Choose:\n\n1) Land it\n2) Wait', true],
+  ['Is it running? Yes.\n\nEverything is done.', false],
+  ['1. Built it\n2. Tested it\n\nLanded and pushed.', false],
+  ['Waiting for #130966 to report back. I will bring you its proposal then.', false],
+  ['', false],
+  [
+    "Yes, I get the intent. Right now it doesn't work that way: state is stored per folder path on each machine, and each machine syncs to its own cloud copy. So starting Ultimate on ROG, or in another folder, begins with an empty state and its own separate URL.\n\nI started #130966 to design what you describe:\n- one global state per project;\n- a new machine downloads it and keeps syncing;\n- you choose where code runs, with only one machine writing at a time.\n\nIt changes nothing until you pick from its proposal.",
+    false,
+  ],
+])('gates the closing paragraph of %j: %s', (text, expected) => {
+  expect(asksUser(text)).toBe(expected)
+})
+
+it('does not gate explicit reply-expected Board asks without question punctuation', async () => {
+  const f = await fixture()
+  await f.send({ text: 'Please confirm whether to keep it running.' })
+  await f.settled()
+  expect(f.extract).toHaveBeenCalledTimes(1)
 })
 
 it('validates extracted choices and ignores fields outside the schema', () => {

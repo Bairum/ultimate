@@ -4,13 +4,19 @@ Optional answer cards for @ultimate's questions to the user, in its own transcri
 
 - **A reply-expected Board message to the user.** @ultimate's `message { to: 'user', text, reply: true }` (the
   default) triggers extraction in the same transaction that appends the message. One-way messages, user posts and
-  messages to conversations never do. The card shows under the outgoing `message` tool card in the sender's
+  messages to conversations never do. These explicit asks bypass the final-answer punctuation gate, so requests such
+  as “Please confirm whether to proceed” still extract. The card shows under the outgoing `message` tool card in the sender's
   transcript.
 - **@ultimate's final answer to a typed input.** Only in the standing `ultimate` conversation (the `Standing` index
   of `subagents`), and only when the answer settles a plain `pi.user` input: answers to Board messages, Board
   replies, and every other conversation's answers never trigger it. The card shows under that final answer.
 
+Final answers pass a deterministic gate before any model call: their last blank-line-delimited paragraph must contain
+`?` or a line starting with a numbered/lettered option (`1.`, `1)`, `a)`, `A.`). Earlier questions or lists alone do not
+qualify. The extractor receives the latest settled typed user input with the reply, both labelled as untrusted data.
+
 The configured summary model extracts only decisions and options present in the text, using `QUESTIONS_SYSTEM`;
+only decisions available now count, not pending work or a future branch proposal. This rule also covers Board asks;
 rhetorical closers, offers, empty results and model failures produce no card. Extraction memoizes its model and
 response and accounts usage on the task's conversation.
 
