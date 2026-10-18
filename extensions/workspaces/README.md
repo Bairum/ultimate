@@ -90,8 +90,12 @@ The submitter follows the lander in its own transcript, from that document. The 
 rows and ends in a quiet "full log in #<lander>" link. The lander's report message renders as an outcome card with
 a success, warning (landed, push failed) or error accent and the same collapsed steps. Nobody has to open the lander
 conversation; it keeps the full log, grouped by submission, and shows in the Agents tab.
-With lineage enabled, the report phase also leaves a replay-safe landing note in the submitter's tree root, unless
-the submitter is that root or has none. Its data includes `divergence` and `at` alongside `from`, `sha`, `target`,
+The commit that records a landed outcome (also when only its push failed) emits the durable event
+`workspaces.landed` (`SubmissionLanded` in `api.ts`): submission, submitter and its `at`, `sha`, `base`, `target`,
+lander, divergence, the submit-time title, summary and feature, the first ten commits with `commitCount`, the first
+eight paths and `pushed`. Failures emit nothing. Lineage reacts to it with a landing note in the submitter's tree
+root, exactly once, unless the submitter is that root or has none; the lander itself calls no lineage service. Its
+data includes `divergence` and `at` alongside `from`, `sha`, `target`,
 `commits` and `paths`; model text cites `#<from>/<at>` and always includes `Diverged: …`, even for "None". The
 submit-time summary stays in the data and on the card but not in the model text: it is often stale, and the tally's
 abstract of the submitter tells its story. In a tally, the note freezes that abstract: it carries it as `abstract`
@@ -124,14 +128,15 @@ lander's sidebar row shows the feature it lands or landed last.
 4. Fast-forwards the target branch in the source checkout (`merge --ff-only` when it is checked out). If the target
    moved meanwhile it starts again, at most three attempts.
 5. With `lander.push`, pushes the target branch (never forced); a rejection integrates again once, then is reported.
-6. Records `landed` and reports to the submitter as a follow-up input: the landed commit and commits, flaky checks,
+6. Records `landed`, emitting `workspaces.landed` in the same commit, and reports to the submitter as a follow-up input: the landed commit and commits, flaky checks,
    whether it pushed, "Needs restart." for `server/` or `shared/` changes to the running clone, and the lander
    conversation id for the full log (changed paths and output tails live there).
 
 7. With `lander.deploy`, if any landed changed path starts with a configured prefix, sends one one-way board
    message from the lander to the named standing agent. It asks the agent to deploy the landed SHA and report to
    the submitter, with the commit subjects, matching paths and push status. This is a handoff, not a deployment:
-   the lander does not wait. `deploy → @<agent>` appears in the submit card's steps, full log and report.
+   the lander does not wait. `deploy → @<agent>` appears in the submit card's steps, full log and report, which is
+   why the handoff stays in the lander's report phase rather than reacting to `workspaces.landed`.
    Board admission and a sender-scoped receipt (`lander-deploy:<submission>`) commit atomically, so replaying
    after a crash cannot send twice, even when a new lander task resumes the report. An unknown or non-resident
    agent records a warning step and notice; the landing stays landed. Invalid deploy settings give a notice and

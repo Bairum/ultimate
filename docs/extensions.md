@@ -33,6 +33,13 @@ a token once with `defineEvent<Data>('<extension>.<event>', { version? })` from 
 Each distinct `host.notice` message of a facet is also recorded as an `ultimate.notice` event while storage is open.
 Keep events few and small: they are history.
 
+The events today: `lineage.branched` and `lineage.rooted` (conversations titles the new conversation) and
+`workspaces.landed` (lineage notes the submitter's tree root). Something the user must see exactly once and that
+feeds the result the owner reports, like the lander's deploy handoff, stays with its owner, idempotent by request id.
+`host.harness().subscribeCommits` remains for watching Pi's own records (entries, tasks, submissions, conversation
+records, usage and live documents), which are no domain events; each such watcher says so in a comment above it. Do
+not invent an event only to replace one.
+
 ## Extension APIs
 
 A service one extension offers another is a typed token, `defineApi<Service>()('name')` from

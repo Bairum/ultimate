@@ -3,6 +3,7 @@
  * Other extensions create, look up, land and discard a conversation's worktree through this service.
  */
 import { defineApi } from '../../shared/extension-api.ts'
+import { defineEvent } from '../../shared/events.ts'
 import type { git } from '../../lib/git.ts'
 import type { Workspaces, workspaces } from './workspaces.ts'
 
@@ -28,3 +29,33 @@ export type WorkspaceService = {
 }
 /** Worktrees and landing; `want` it where isolation is optional, as workspaces may be disabled. */
 export const WorkspacesApi = defineApi<WorkspaceService>()('workspaces')
+
+export type LandedData = {
+  /** The submission's id in the lander's queue. */
+  submission: string
+  /** The submitting conversation, and its latest entry when it submitted. */
+  conversationId: number
+  at: number
+  /** The target's new tip, the tip it moved from, and the branch. */
+  sha: string
+  base: string
+  target: string
+  /** The lander conversation that landed it. */
+  lander: number
+  divergence: string
+  /** The submitter's title and summary as they were at submit time. */
+  title: string
+  summary?: string
+  feature?: string
+  /** The first ten commits it brought, newest first, out of `commitCount`; the first eight changed paths. */
+  commits: { sha: string; subject: string }[]
+  commitCount: number
+  paths: string[]
+  /** `<remote>/<target>` it was pushed to; absent when not pushed or the push failed. */
+  pushed?: string
+}
+/**
+ * The lander landed a submission: the target moved to `sha`. Emitted in the commit that records the outcome, also when
+ * only the push failed afterwards; react to it for anything that must follow every landing exactly once.
+ */
+export const SubmissionLanded = defineEvent<LandedData>('workspaces.landed')

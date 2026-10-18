@@ -21,9 +21,9 @@ import type {
 } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { LineageApi } from '../lineage/api.ts'
 import { BoardApi } from '../board/api.ts'
 import { definitionAgent, discoverAgents } from '../../lib/agents.ts'
+import { SubmissionLanded } from './api.ts'
 import { setup } from './setup.ts'
 import type {
   Landed,
@@ -125,6 +125,7 @@ type Host = Pick<
   | 'extensions'
   | 'metadata'
   | 'notice'
+  | 'emit'
 >
 /**
  * The lander conversation's agent from the effective `lander` definition (model, thinking, tools, instructions) over
@@ -439,6 +440,33 @@ export function createLander(
             }
             for (const old of Object.keys(draft.results).slice(0, -kept)) delete draft.results[old]
             await log(tx, runtime.conversationId, entry, outcome)
+            if (outcome.outcome === 'landed') {
+              const subject = entry.subject ?? {}
+              const commits = (outcome.commits ?? []).map((commit) => {
+                const space = commit.indexOf(' ')
+                return { sha: commit.slice(0, space), subject: commit.slice(space + 1) }
+              })
+              await host.emit(tx, SubmissionLanded, {
+                submission: id,
+                conversationId: entry.conversationId,
+                at: entry.at,
+                sha: outcome.sha!,
+                base: outcome.base!,
+                target: entry.target,
+                lander: runtime.conversationId,
+                divergence: entry.divergence,
+                title:
+                  subject.title ??
+                  (await tx.doc(host.metadata, entry.conversationId as ConversationId)).title ??
+                  '',
+                ...(subject.summary ? { summary: subject.summary } : {}),
+                ...(subject.feature ? { feature: subject.feature } : {}),
+                commits: commits.slice(0, 10),
+                commitCount: commits.length,
+                paths: (outcome.paths ?? []).slice(0, 8),
+                ...(outcome.pushed ? { pushed: outcome.pushed } : {}),
+              })
+            }
             return {
               status: 'running',
               checkpoint: {
@@ -1033,57 +1061,6 @@ export function createLander(
         if (deployText)
           outcome = (await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context))
             ?.results[id]
-        const lineage = host.want(LineageApi)
-        if (lineage && !(await runtime.memo<boolean>(`root-note:${id}`, context))) {
-          const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
-          const result = index?.results[id]
-          const root = await lineage.rootOf(conversationId, context)
-          if (result?.outcome === 'landed' && root !== undefined && root !== conversationId) {
-            const metadata = await host
-              .harness()
-              .snapshot(host.metadata, conversationId as ConversationId, context)
-            const subject = result.subject ?? {}
-            const title = subject.title ?? metadata?.title ?? ''
-            const commits = (result.commits ?? []).slice(0, 10).map((commit) => {
-              const space = commit.indexOf(' ')
-              return { sha: commit.slice(0, space), subject: commit.slice(space + 1) }
-            })
-            const more = (result.commits?.length ?? 0) - commits.length
-            const paths = (result.paths ?? []).slice(0, 8)
-            await lineage.leaveNote(
-              root,
-              [
-                // The submit-time summary is often stale and the tally carries the abstract: the card shows it, the model does not.
-                `Landed ${result.sha!.slice(0, 7)} on ${result.target} from #${conversationId}/${result.at} ${title}${subject.feature ? ` (${subject.feature})` : ''}:`,
-                `Diverged: ${result.divergence}`,
-                ...commits.map((commit) => commit.subject),
-                ...(more ? [`and ${more} more`] : []),
-                `Changed: ${paths.join(', ')}`,
-              ].join('\n'),
-              {
-                source: 'lander',
-                from: conversationId,
-                requestId: `lander-root:${id}`,
-                data: {
-                  at: result.at,
-                  divergence: result.divergence,
-                  sha: result.sha!,
-                  ...(result.base ? { base: result.base } : {}),
-                  target: result.target,
-                  commits,
-                  paths,
-                  title,
-                  more,
-                  lander: result.lander,
-                  ...(subject.summary ? { summary: subject.summary } : {}),
-                  ...(subject.feature ? { feature: subject.feature } : {}),
-                  ...(result.pushed ? { pushed: result.pushed } : {}),
-                },
-              },
-            )
-          }
-          await runtime.memo(`root-note:${id}`, true, context)
-        }
         await (
           await runtime.conversation(conversationId as ConversationId, context)
         )?.submit(
