@@ -274,6 +274,32 @@ export type CloudMessage =
   /** To the requester `by`: the writer's release waits for `tasks` running tasks, leaving `dirty` worktrees behind. */
   | { type: 'release-waiting'; by: string; tasks: number; dirty?: string[] }
 
+/**
+ * One model provider's health on one machine, from real calls and heartbeat pings (`extensions/health`). Times are
+ * epoch milliseconds; `error` is the latest failure's short, token-free message.
+ */
+export interface ProviderHealth {
+  provider: string
+  state: 'ok' | 'failing' | 'unknown'
+  /** The last successful call, real or heartbeat. */
+  lastOk?: number
+  /** The last failed call, real or heartbeat. */
+  lastFail?: number
+  error?: string
+  /** The last heartbeat ping. */
+  lastChecked?: number
+  /** The last real (non-heartbeat) call. */
+  lastUsed?: number
+}
+
+/** A machine's provider health as it reports it to the cloud (`POST /sync/health`) and the cloud lists it. */
+export interface MachineHealth {
+  machine: string
+  /** When the machine sent it. */
+  at: number
+  providers: ProviderHealth[]
+}
+
 /** SHA-256 hex of the JSON text; works in Node and in Workers. */
 export async function docHash(value: JsonObject | null): Promise<string> {
   const bytes = new TextEncoder().encode(JSON.stringify(value))
