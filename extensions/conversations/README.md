@@ -46,7 +46,8 @@ There is no third red blocked/unfinished assessment. Assessments never trigger q
 cards; [questions](../questions/README.md) extracts only from reply-expected Board messages to the user and from
 @ultimate's final answers to typed input.
 
-A conversation with genuinely owned children has an expandable Sub-agents group. Rows show the recorded agent role/name,
+A conversation with genuinely owned children has an expandable Sub-agents group; a listed root shows none, since a
+root runs no turns and its children predate its tally (they stay reachable by link and search). Rows show the recorded agent role/name,
 actual Working/Queued/Idle/Replied/Run failed state, and a brief what-it-did description from its latest assessed reply.
 Replied means a run answered, not that its goal is fulfilled. During new work, an old activity is labeled Last reply.
 A child linked to a plan task leads with the plan's `TaskChip` and shows the task title instead of its activity.

@@ -279,13 +279,13 @@ export function Conversations() {
     childrenByParent.set(parent, children)
   }
   const tree = (conversation: ConversationSummary, nested = false, concluded = false) => {
-    const children = childrenByParent.get(conversation.id) ?? []
+    // A listed root runs no turns, so anything it owns predates its tally: leftovers stay readable by link and search.
+    const children = roots.has(conversation.id) ? [] : (childrenByParent.get(conversation.id) ?? [])
     const open = expanded.includes(conversation.id)
     const ownBranches = (branchesBySource.get(conversation.id) ?? []).filter(
       (branch) => hiddenIds.has(branch.id) === concluded,
     )
-    // A root's tree folds away completely, its sub-agents with its branches; its row then stands for the shown branch.
-    // Without branches its sub-agents are all of the tree, and their own disclosure folds it.
+    // A root's tree folds away completely with its branches; its row then stands for the shown branch.
     const treeBranches =
       !nested && roots.has(conversation.id) ? branchesBelow(conversation.id, concluded) : []
     const folded = treeBranches.length > 0 && collapsedRoots.includes(conversation.id)
