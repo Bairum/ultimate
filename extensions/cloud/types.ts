@@ -4,6 +4,8 @@ import type { Transition, Writer } from '../../cloud/protocol.ts'
 export interface ModelLogin {
   provider: string
   ok: boolean
+  /** Why a configured provider does not count: its latest call on this machine failed with this error. */
+  error?: string
 }
 
 /** The sync connection as operators watch it: catch-up and the acknowledgement window. */
