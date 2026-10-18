@@ -23,7 +23,8 @@ import {
   useWorkspaceConversations as useConversations,
   useWorkspaceIndex,
 } from '../workspaces/data.tsx'
-import { currentAssessment, Row, ChildRow, RootRow, StandingRow } from './rows.tsx'
+import { currentAssessment, Row, ChildRow, StandingRow } from './rows.tsx'
+import { inFlight, RootRow } from './root.tsx'
 import { useRoots } from '../lineage/roots.tsx'
 import { ago, LanderState } from './lander.tsx'
 import { StandingPhase, talkToUltimate, usePrimaryAgent, useWaitingOnUser } from './ultimate.tsx'
@@ -97,7 +98,7 @@ export function Conversations() {
       ? overview[shownTop.id]
       : undefined
   const [expanded, setExpanded] = useExtensionUiState<number[]>('expanded', [])
-  const [collapsedRoots, setCollapsedRoots] = useExtensionUiState<number[]>('collapsedRoots', [])
+  const [expandedRoots, setExpandedRoots] = useExtensionUiState<number[]>('expandedRoots', [])
   const working = workingByTop(conversations)
   const topLevel = conversations.filter(
     (conversation) => conversation.parentConversationId === undefined,
@@ -242,8 +243,12 @@ export function Conversations() {
       return (
         <RootRow
           conversation={conversation}
+          flights={branchesBelow(conversation.id)
+            .filter((branch) => inFlight(branch, workspaceIndex))
+            .map((branch) => ({ conversation: branch, working: working.has(branch.id) }))}
           key={conversation.id}
           now={now}
+          shownId={shownTop?.id}
           onTalk={() => void talkToUltimate(actions)}
           shown={shown}
           working={working.get(conversation.id)}
@@ -289,10 +294,11 @@ export function Conversations() {
     const ownBranches = (branchesBySource.get(conversation.id) ?? []).filter(
       (branch) => hiddenIds.has(branch.id) === concluded,
     )
-    // A root's tree folds away completely with its branches; its row then stands for the shown branch.
+    // A root's tree folds away completely with its branches, which its row's In flight already lists: folded by
+    // default (`expandedRoots`), the full tree one click away.
     const treeBranches =
       !nested && roots.has(conversation.id) ? branchesBelow(conversation.id, concluded) : []
-    const folded = treeBranches.length > 0 && collapsedRoots.includes(conversation.id)
+    const folded = treeBranches.length > 0 && !concluded && !expandedRoots.includes(conversation.id)
     const subagents = children.length > 0 && (
       <Collapsible
         open={open}
@@ -339,9 +345,9 @@ export function Conversations() {
           <Collapsible
             open={!folded}
             onOpenChange={(next) =>
-              setCollapsedRoots((previous) => [
+              setExpandedRoots((previous) => [
                 ...previous.filter((id) => id !== conversation.id),
-                ...(next ? [] : [conversation.id]),
+                ...(next ? [conversation.id] : []),
               ])
             }
           >
@@ -350,7 +356,7 @@ export function Conversations() {
               className="group/branches ml-5 flex cursor-pointer items-center gap-1 py-1 text-[10.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
             >
               <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/branches:rotate-90" />
-              Branches · {treeBranches.length}
+              All branches · {treeBranches.length}
             </CollapsibleTrigger>
             <CollapsibleContent>
               {subagents}

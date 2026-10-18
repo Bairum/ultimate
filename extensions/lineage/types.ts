@@ -4,7 +4,20 @@ export type RootEvent = {
   entry: number
   at?: number
 } & (
-  | { type: 'landed'; sha: string; subject?: string; from?: number }
+  | {
+      type: 'landed'
+      /** The full landed sha. */
+      sha: string
+      /** The target's tip it moved from, recorded since landings carry it. */
+      base?: string
+      /** How many commits it brought, merges included. */
+      commits: number
+      feature?: string
+      title?: string
+      from?: number
+      /** `https://github.com/<owner>/<repo>/compare/<base>...<sha>`, when `origin` is on GitHub. */
+      compare?: string
+    }
   | { type: 'note'; from?: number; text: string }
   | { type: 'branched'; branch: number; intent: string }
   | { type: 'compacted' }

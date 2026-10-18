@@ -1,8 +1,15 @@
 import { cn } from 'cn'
-import { CheckIcon, SquareArrowOutUpRightIcon, TriangleAlertIcon, XIcon } from 'lucide-react'
+import {
+  ArrowUpRightIcon,
+  CheckIcon,
+  SquareArrowOutUpRightIcon,
+  TriangleAlertIcon,
+  XIcon,
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { useConversations, useUltimate } from '@/sdk'
+import { api, useConversations, useUltimate } from '@/sdk'
 import { FeatureTag } from '../conversations/feature.tsx'
 import type { LandingSubject } from './types.ts'
 
@@ -36,6 +43,53 @@ export function Open({
       open {label ? `${label} ` : ''}#{id}
       {entry !== undefined ? `/${entry}` : ''}
     </Button>
+  )
+}
+
+let repo: Promise<string | null> | undefined
+/** The project's GitHub repository URL, or null off GitHub; asked once per page. */
+export function useGithubRepo() {
+  const [url, setUrl] = useState<string | null>()
+  useEffect(() => {
+    repo ??= api.action<string | null>('lineage', 'github').catch(
+      // No lineage or no repository: landings show their count without a link.
+      () => null,
+    )
+    let live = true
+    void repo.then((value) => live && setUrl(value))
+    return () => {
+      live = false
+    }
+  }, [])
+  return url
+}
+
+/** "3 commits", linking to the landing's compare range on GitHub when there is one. */
+export function CommitCount({
+  count,
+  href,
+  className,
+}: {
+  count: number
+  href?: string
+  className?: string
+}) {
+  const label = `${count} commit${count === 1 ? '' : 's'}`
+  if (!href) return <span className={cn('shrink-0', className)}>{label}</span>
+  return (
+    <a
+      className={cn(
+        'inline-flex shrink-0 items-center gap-0.5 hover:text-foreground hover:underline',
+        className,
+      )}
+      href={href}
+      rel="noreferrer"
+      target="_blank"
+      title={`Compare on GitHub: ${href.replace(/^https:\/\/github\.com\//, '')}`}
+    >
+      {label}
+      <ArrowUpRightIcon className="size-2.5 opacity-60" />
+    </a>
   )
 }
 

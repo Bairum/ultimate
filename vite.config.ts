@@ -114,7 +114,7 @@ export default defineConfig({
                 ],
                 instance: ['subagents', 'tailscale', 'workspaces'],
                 models: ['health'],
-                lineage: ['conversations', 'workspaces'],
+                lineage: ['cloud', 'conversations', 'workspaces'],
                 parallel: ['secrets'],
                 questions: ['conversations', 'lineage', 'board', 'subagents'],
                 onboarding: ['workspaces', 'subagents', 'lineage'],

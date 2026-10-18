@@ -10,7 +10,7 @@ import {
   useWorkspaces,
 } from './data.tsx'
 import type { WorkspaceConversation as ConversationSummary } from './data.tsx'
-import { LandingCard } from './landing.tsx'
+import { CommitCount, LandingCard, useGithubRepo } from './landing.tsx'
 import { LanderAskEntry, LanderLogEntry, LanderReport, WorkspaceCall } from './log.tsx'
 import type { WorkspaceDisk, WorkspaceInfo, WorkspaceStats } from './types.ts'
 import type { EntryRecord } from '@earendil-works/pi-durable'
@@ -24,6 +24,7 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
     at,
     divergence,
     sha,
+    base,
     target,
     title,
     summary,
@@ -38,6 +39,7 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
     at?: number
     divergence?: string
     sha: string
+    base?: string
     target: string
     title?: string
     summary?: string
@@ -48,13 +50,41 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
     pushed?: string
     abstract?: { at: number; text: string }
   }
+  const github = useGithubRepo()
+  // A note from before landings recorded their base: the landing before it, where the lander's serial queue left the
+  // target.
+  const previous = useConversation((conversation) =>
+    base
+      ? undefined
+      : (
+          conversation.entries.findLast(
+            (other) =>
+              other.kind === 'lineage.note' &&
+              other.id < entry.id &&
+              (other.data as { source?: string })?.source === 'lander',
+          )?.data as { sha?: string } | undefined
+        )?.sha,
+  )
+  const rangeBase = base ?? previous
   return (
     <div data-lineage-note="lander">
       <LandingCard
         from={from}
         sourceEntry={at}
         divergence={divergence}
-        headline={`Landed ${sha.slice(0, 7)} on ${target}${pushed ? ` · pushed to ${pushed}` : ''}`}
+        headline={
+          <span className="flex flex-wrap items-center gap-x-2">
+            <span>
+              Landed {sha.slice(0, 7)} on {target}
+              {pushed ? ` · pushed to ${pushed}` : ''}
+            </span>
+            <CommitCount
+              className="text-muted-foreground"
+              count={commits.length + more}
+              href={github && rangeBase ? `${github}/compare/${rangeBase}...${sha}` : undefined}
+            />
+          </span>
+        }
         subject={{
           ...(title ? { title } : {}),
           ...(summary ? { summary } : {}),
@@ -62,15 +92,6 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
         }}
         tone="landed"
       >
-        <ul className="space-y-0.5">
-          {commits.map((commit) => (
-            <li className="truncate" key={commit.sha} title={commit.subject}>
-              <span className="text-muted-foreground">{commit.sha.slice(0, 7)}</span>{' '}
-              {commit.subject}
-            </li>
-          ))}
-          {more > 0 && <li className="text-muted-foreground">and {more} more</li>}
-        </ul>
         {paths.length > 0 && (
           <p className="break-words text-muted-foreground">Changed: {paths.join(', ')}</p>
         )}

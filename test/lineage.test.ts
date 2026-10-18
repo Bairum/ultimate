@@ -3,7 +3,14 @@ import { join } from 'node:path'
 import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
-import { Branch, leaveNote, rootOf, Roots, Tally } from '../extensions/lineage/server.ts'
+import {
+  Branch,
+  compareLinks,
+  leaveNote,
+  rootOf,
+  Roots,
+  Tally,
+} from '../extensions/lineage/server.ts'
 import { Plan } from '../extensions/plan/server.ts'
 import { Summaries } from '../extensions/conversations/summary.ts'
 import { defineExtension } from '@earendil-works/pi-durable'
@@ -85,29 +92,74 @@ it.concurrent("lists a root's newest landings, notes, branches and compactions, 
     source: 'lander',
     data: {
       sha: 'abc1234def',
+      base: '0123456789',
+      feature: 'Sidebar',
+      title: 'Root row',
       commits: [
         { sha: 'abc1234', subject: 'Merge def5678 from #2 into main' },
         { sha: 'def5678', subject: 'feat(lineage): give the root its own row' },
       ],
+      more: 3,
     },
   })
-  expect((await call('recent', { id: 1 })).result).toMatchObject([
-    {
-      type: 'landed',
-      sha: 'abc1234',
-      subject: 'feat(lineage): give the root its own row',
-      from: branch,
-    },
+  const landing = {
+    type: 'landed',
+    sha: 'abc1234def',
+    base: '0123456789',
+    commits: 5,
+    feature: 'Sidebar',
+    title: 'Root row',
+    from: branch,
+  }
+  // The fixture's project has no GitHub origin: landings carry no compare link.
+  const recent = (await call('recent', { id: 1 })).result
+  expect(recent).toMatchObject([
+    landing,
     { type: 'note', from: branch, text: 'Keep it quiet.' },
     { type: 'branched', branch, intent: 'Polish the sidebar' },
   ])
+  expect(recent[0].compare).toBeUndefined()
   expect((await call('recent', { id: 1, limit: 1 })).result).toHaveLength(1)
+  expect((await call('recent', { id: 1, types: ['landed'] })).result).toMatchObject([landing])
+  expect((await call('recent', { id: 1, types: 'landed' })).error).toBe(
+    'types must be a list of event types',
+  )
 
   const { taskId } = (await call('compact', { id: 1 })).result
   expect(typeof taskId).toBe('number')
   await until(
     async () => (await call('recent', { id: 1, limit: 1 })).result[0]?.type === 'compacted',
   )
+})
+
+const landed = (entry: number, sha: string, base?: string) =>
+  ({ entry, type: 'landed', sha, commits: 1, ...(base ? { base } : {}) }) as const
+
+it('links each landing to its GitHub compare range, from its base or the landing before it', () => {
+  const links = compareLinks(
+    'github.com/hazat/ultimate',
+    [
+      landed(9, 'ccc', 'bbb'),
+      { entry: 8, type: 'compacted' },
+      landed(7, 'bbb'),
+      landed(5, 'aaa'),
+      landed(3, 'zzz'),
+    ],
+    undefined,
+  ).map((event) => (event.type === 'landed' ? event.compare : event.type))
+  expect(links).toEqual([
+    'https://github.com/hazat/ultimate/compare/bbb...ccc',
+    'compacted',
+    'https://github.com/hazat/ultimate/compare/aaa...bbb',
+    'https://github.com/hazat/ultimate/compare/zzz...aaa',
+    // The oldest listed landing without a base and no older one known: a count without a link.
+    undefined,
+  ])
+  expect(
+    compareLinks('github.com/hazat/ultimate', [landed(3, 'zzz')], 'yyy').map(
+      (event) => event.type === 'landed' && event.compare,
+    ),
+  ).toEqual(['https://github.com/hazat/ultimate/compare/yyy...zzz'])
 })
 
 it.concurrent('branches from a tally: the root gets the prompt node, the branch starts from the tally and its prompt', async () => {

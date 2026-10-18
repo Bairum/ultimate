@@ -296,6 +296,7 @@ type Prepared = {
 const landedOutcome = (landed: Landed): LanderOutcome => ({
   outcome: 'landed',
   sha: landed.sha,
+  base: landed.base,
   commits: landed.commits,
   paths: landed.paths,
   flaky: landed.flaky,
@@ -1031,6 +1032,7 @@ export function createLander(
                   at: result.at,
                   divergence: result.divergence,
                   sha: result.sha!,
+                  ...(result.base ? { base: result.base } : {}),
                   target: result.target,
                   commits,
                   paths,
