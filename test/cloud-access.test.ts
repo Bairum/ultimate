@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { afterEach, beforeAll, expect, it, vi } from 'vitest'
 import { admitsAccess } from '../cloud/access.ts'
-import worker, { ProjectReplica } from '../cloud/worker.ts'
+import worker, { SharedReplica } from '../cloud/worker.ts'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -126,7 +126,7 @@ it('passes valid JWTs and sync requests to the replica, but not assets through a
     expect(
       (
         await worker.fetch(
-          new Request('https://cloud.example/sync?machine=test&project=/test', {
+          new Request('https://cloud.example/sync/v2?project=github.com/o/test', {
             headers: { Authorization: 'Bearer synthetic-test-value' },
           }),
           env,
@@ -151,9 +151,9 @@ it('authenticates sync before validating parameters or touching a replica namesp
   })
   try {
     for (const token of [undefined, '', 'wrong-token']) {
-      for (const query of ['?machine=scanner&project=/arbitrary', '']) {
+      for (const query of ['?project=github.com/scanner/arbitrary', '']) {
         const response = await worker.fetch(
-          new Request(`https://cloud.example/sync${query}`, {
+          new Request(`https://cloud.example/sync/v2${query}`, {
             headers: token === undefined ? {} : { Authorization: `Bearer ${token}` },
           }),
           {
@@ -168,7 +168,7 @@ it('authenticates sync before validating parameters or touching a replica namesp
       }
     }
     const response = await worker.fetch(
-      new Request('https://cloud.example/sync?machine=scanner&project=/arbitrary', {
+      new Request('https://cloud.example/sync/v2?project=github.com/scanner/arbitrary', {
         headers: { Authorization: 'Bearer synthetic-test-value' },
       }),
       { REPLICA: { idFromName, get } } as unknown as Parameters<typeof worker.fetch>[1],
@@ -182,7 +182,7 @@ it('authenticates sync before validating parameters or touching a replica namesp
 })
 
 it('refuses wrong, prefix-matching, empty and missing sync credentials', async () => {
-  const replica = Object.assign(Object.create(ProjectReplica.prototype) as ProjectReplica, {
+  const replica = Object.assign(Object.create(SharedReplica.prototype) as SharedReplica, {
     env: { SYNC_TOKEN: 'synthetic-test-value' },
   })
   // Node WebCrypto lacks the Workers extension; use Node's equivalent constant-time primitive.
@@ -195,14 +195,14 @@ it('refuses wrong, prefix-matching, empty and missing sync credentials', async (
       expect(
         (
           await replica.fetch(
-            new Request('https://cloud.example/sync', { headers: { Authorization: value } }),
+            new Request('https://cloud.example/sync/v2', { headers: { Authorization: value } }),
           )
         ).status,
       ).toBe(401)
     expect(
       (
         await replica.fetch(
-          new Request('https://cloud.example/sync', {
+          new Request('https://cloud.example/sync/v2', {
             headers: { Authorization: 'Bearer synthetic-test-value' },
           }),
         )

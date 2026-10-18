@@ -17,7 +17,7 @@ import type { Store } from './store.ts'
 
 /** Cloud project URLs keep all API traffic within the selected replica. */
 export function projectBase(path = typeof location === 'undefined' ? '/' : location.pathname) {
-  return /^\/p\/[^/]+\/[^/]+(?=\/|$)/.exec(path)?.[0] ?? ''
+  return /^\/p\/[^/]+(?=\/|$)/.exec(path)?.[0] ?? ''
 }
 
 /** The root conversation's id (`ROOT_CONVERSATION_ID` in Pi Durable): Ultimate's one ongoing conversation. */

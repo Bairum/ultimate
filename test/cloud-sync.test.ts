@@ -1,5 +1,7 @@
 import { defineDoc } from '@earendil-works/pi-durable'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
+import { readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import cloud, { MAX_RETAINED_BYTES, startSync } from '../extensions/cloud/server.ts'
 import type { SyncSocket } from '../extensions/cloud/server.ts'
@@ -29,7 +31,26 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
+const KEY = 'github.com/hazat/test'
+const ROOT_COMMIT = 'a'.repeat(40)
+const role = (
+  value: 'writer' | 'standby',
+  epoch = 1,
+  online = true,
+): Extract<CloudMessage, { type: 'role' }> => ({
+  type: 'role',
+  role: value,
+  epoch,
+  free: false,
+  writer: { machine: 'writer-machine', root: '/writer', epoch, online, secrets: [] },
+})
+
 class FakeCloud extends EventTarget implements SyncSocket {
+  url: string
+  constructor(url: string) {
+    super()
+    this.url = url
+  }
   messages: MachineMessage[] = []
   closed = false
   autoAck = true
@@ -55,10 +76,13 @@ class FakeCloud extends EventTarget implements SyncSocket {
   receive(message: CloudMessage) {
     this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(message) }))
   }
+  /** Connect as the writer: the role, then the cursor. */
   open(
     cursor: Extract<CloudMessage, { type: 'cursor' }> = { type: 'cursor', entries: {}, docs: {} },
+    epoch = 1,
   ) {
     this.dispatchEvent(new Event('open'))
+    this.receive(role('writer', epoch))
     this.receive(cursor)
   }
   batches() {
@@ -100,11 +124,20 @@ async function fixture() {
   } as unknown as ExtensionHost
   const sockets: FakeCloud[] = []
   vi.useFakeTimers()
-  const stop = startSync(host, 'ws://fake/sync', 'token', 'test-machine', () => {
-    const socket = new FakeCloud()
-    sockets.push(socket)
-    return socket
-  })
+  const stop = startSync(
+    host,
+    {
+      url: 'wss://fake/sync',
+      token: 'token',
+      machine: 'test-machine',
+      identity: { key: KEY, rootCommit: ROOT_COMMIT },
+    },
+    (url) => {
+      const socket = new FakeCloud(url)
+      sockets.push(socket)
+      return socket
+    },
+  )
   return {
     prepared,
     opened,
@@ -228,12 +261,17 @@ it('sends every conversation, only its own entries in ID order, and conversation
     f.sockets[0].open()
     await f.drain()
     const socket = f.sockets[0]
+    expect(socket.url).toBe('wss://fake/sync/v2?project=github.com%2Fhazat%2Ftest')
     expect(socket.messages[0]).toEqual({
       type: 'hello',
+      key: KEY,
+      rootCommit: ROOT_COMMIT,
+      root: f.host.projectRoot,
       machine: 'test-machine',
       port: 4800,
       build: 'test-build',
-      project: f.host.projectRoot,
+      history: true,
+      secrets: [],
     })
     expect(
       socket
@@ -777,14 +815,14 @@ it('stops reconnecting after a project mismatch and reports it only once', async
     await f.drain()
     const event = Object.assign(new Event('close'), {
       code: PROJECT_MISMATCH,
-      reason: '/other-project',
+      reason: 'root commit differs',
     })
     socket.dispatchEvent(event)
     socket.dispatchEvent(event)
     await vi.advanceTimersByTimeAsync(60_000)
     expect(f.sockets).toHaveLength(1)
     expect(f.notices).toEqual([
-      'Cloud sync stopped: the replica at ws://fake/sync belongs to another project (/other-project).',
+      `Cloud sync stopped: the cloud refused ${KEY} (root commit differs); use cloud.relink if the repository was renamed.`,
     ])
     expect(vi.getTimerCount()).toBe(0)
   } finally {
@@ -811,6 +849,133 @@ it('keeps exponential reconnect backoff for ordinary close codes', async () => {
   } finally {
     await f.close()
   }
+})
+
+it('stores the lease epoch it is given as writer and names it in the next hello', async () => {
+  const f = await fixture()
+  try {
+    const lease = join(f.host.home, 'cloud-lease.json')
+    await writeFile(lease, JSON.stringify({ key: 'github.com/other/project', epoch: 7 }))
+    const socket = f.sockets[0]
+    socket.open(undefined, 3)
+    await f.drain()
+    expect(socket.messages[0]).not.toHaveProperty('epoch')
+    expect(JSON.parse(await readFile(lease, 'utf8'))).toEqual({ key: KEY, epoch: 3 })
+    expect(f.stop.state()).toMatchObject({ key: KEY, connected: true, role: 'writer', epoch: 3 })
+    socket.dispatchEvent(new Event('close'))
+    expect(f.stop.state()).toMatchObject({ connected: false, role: 'writer' })
+    await vi.advanceTimersByTimeAsync(1000)
+    f.sockets[1].dispatchEvent(new Event('open'))
+    await f.drain()
+    expect(f.sockets[1].messages[0]).toMatchObject({ type: 'hello', epoch: 3 })
+  } finally {
+    await f.close()
+  }
+})
+
+it('sends nothing but its hello as a standby, keeps the socket and follows role updates', async () => {
+  const f = await fixture()
+  try {
+    await f.opened.harness.commit(async (tx) => {
+      await tx.doc(Note, f.opened.root.id)
+    }, context)
+    const socket = f.sockets[0]
+    socket.dispatchEvent(new Event('open'))
+    socket.receive(role('standby', 2))
+    await f.drain()
+    await f.opened.harness.commit(
+      (tx) => tx.appendEntry(f.opened.root.id, { kind: 'cloud-test.live', data: {} }),
+      context,
+    )
+    await vi.advanceTimersByTimeAsync(120_000)
+    await f.drain()
+    expect(socket.messages.map((message) => message.type)).toEqual(['hello'])
+    expect(socket.closed).toBe(false)
+    expect(f.stop.state()).toEqual({
+      key: KEY,
+      connected: true,
+      role: 'standby',
+      epoch: 2,
+      free: false,
+      writer: { machine: 'writer-machine', root: '/writer', epoch: 2, online: true, secrets: [] },
+    })
+    await expect(readFile(join(f.host.home, 'cloud-lease.json'))).rejects.toThrow('ENOENT')
+    socket.receive(role('standby', 2, false))
+    await f.drain()
+    expect(f.stop.state()?.writer?.online).toBe(false)
+    // A released lease reaches the state, so the machine can offer to claim it.
+    socket.receive({
+      ...role('standby', 2, false),
+      free: true,
+      snapshot: { id: 'snap-1', epoch: 2 },
+      writer: { machine: null, root: '/writer', epoch: 2, online: false, secrets: [] },
+    })
+    await f.drain()
+    expect(f.stop.state()).toMatchObject({
+      role: 'standby',
+      free: true,
+      snapshot: { id: 'snap-1', epoch: 2 },
+      writer: { machine: null },
+    })
+    expect(socket.closed).toBe(false)
+    expect(f.sockets).toHaveLength(1)
+    expect(f.notices).toEqual([])
+  } finally {
+    await f.close()
+  }
+})
+
+it('starts over with a fresh hello when its role changes on an open socket', async () => {
+  const f = await fixture()
+  try {
+    const socket = f.sockets[0]
+    socket.open()
+    await f.drain()
+    socket.receive(role('standby', 2))
+    await f.drain()
+    expect(socket.closed).toBe(true)
+    expect(f.stop.state()).toMatchObject({ connected: false, role: 'standby', epoch: 2 })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(f.sockets).toHaveLength(2)
+  } finally {
+    await f.close()
+  }
+})
+
+it('keeps retrying with backoff when the endpoint refuses the upgrade', async () => {
+  const f = await fixture()
+  try {
+    // A Worker without /sync/v2 answers 404: the socket errors, then closes abnormally.
+    for (const [index, wait] of [1000, 2000, 4000, 8000, 16_000, 30_000, 30_000].entries()) {
+      f.sockets[index].dispatchEvent(new Event('error'))
+      f.sockets[index].dispatchEvent(Object.assign(new Event('close'), { code: 1006 }))
+      await vi.advanceTimersByTimeAsync(wait - 1)
+      expect(f.sockets).toHaveLength(index + 1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(f.sockets).toHaveLength(index + 2)
+    }
+    expect(f.notices).toEqual([])
+  } finally {
+    await f.close()
+  }
+})
+
+it('stays off with one notice for a project without a GitHub origin', async () => {
+  const home = await temp('ultimate-cloud-off-')
+  vi.stubEnv('ULTIMATE_CLOUD_URL', 'wss://fake/sync')
+  vi.stubEnv('ULTIMATE_CLOUD_TOKEN', 'token')
+  const onOpen = vi.fn<ExtensionHost['onOpen']>()
+  const notice = vi.fn<ExtensionHost['notice']>()
+  cloud({
+    onOpen,
+    onClose: () => {},
+    faux: true,
+    notice,
+    projectRoot: home,
+    userHome: home,
+  } as unknown as ExtensionHost)
+  await onOpen.mock.calls[0][0]()
+  expect(notice.mock.calls).toEqual([[`Cloud sync is off: ${home} has no GitHub origin remote.`]])
 })
 
 it('opens and closes a faux host without cloud work when no URL is explicit', async () => {
