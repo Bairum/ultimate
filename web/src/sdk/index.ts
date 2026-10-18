@@ -44,7 +44,6 @@ export type { Api } from './api.ts'
 export {
   getConversation,
   getState,
-  getUiState,
   refreshModels,
   useAction,
   useChat,
@@ -122,5 +121,3 @@ export type {
   Usage,
   UserMessage,
 } from '@earendil-works/pi-ai'
-
-export { useComposer } from './composer.tsx'

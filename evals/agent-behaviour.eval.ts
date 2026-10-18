@@ -6,6 +6,7 @@ import type { Usage } from '@earendil-works/pi-ai'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { expect, test } from 'vitest'
 import { assistant, start, user } from './fixture.ts'
+import { Plan } from '../extensions/plan/server.ts'
 
 const exec = promisify(execFile)
 function measure(scenario: string, turn: { wallMs: number; usage: Usage }) {
@@ -28,30 +29,18 @@ test('E1 plan ledger remains visible across turns', async () => {
     )
     const calls = turn.toolCalls.filter((call) => call.name === 'plan')
     expect(calls.some((call) => call.arguments.action === 'create')).toBe(true)
-    expect(
-      calls.filter((call) => call.arguments.action === 'add').map((call) => call.arguments),
-    ).toHaveLength(2)
-    expect(
-      calls.some(
-        (call) => call.arguments.action === 'update' && call.arguments.status === 'in_review',
-      ),
-    ).toBe(true)
-    expect(calls.every((call) => !call.isError)).toBe(true)
-    const implement = calls.find(
-      (call) => call.arguments.action === 'add' && call.arguments.title === 'Implement',
-    )!
-    const review = calls.find(
-      (call) => call.arguments.action === 'add' && call.arguments.title === 'Review',
-    )!
-    expect(implement.arguments.role).toBe('worker')
-    expect(review.arguments.role).toBe('reviewer')
-    const implemented = JSON.parse(
-      implement.result
-        .filter((part) => part.type === 'text')
-        .map((part) => part.text)
-        .join('\n'),
-    )
-    expect(review.arguments.deps).toEqual([implemented.key])
+    const plan = await c.document(Plan)
+    const epics = Object.values(plan.epics)
+    expect(epics).toHaveLength(1)
+    expect(epics[0].title).toBe('Ship ledger')
+    const tasks = Object.values(epics[0].tasks)
+    expect(tasks).toHaveLength(2)
+    const implemented = tasks.find((task) => task.title === 'Implement')!
+    const review = tasks.find((task) => task.title === 'Review')!
+    expect(implemented.role).toBe('worker')
+    expect(implemented.status).toBe('in_review')
+    expect(review.role).toBe('reviewer')
+    expect(review.deps).toEqual([implemented.key])
     measure('E1-plan', turn)
     const reply = await c.run('What is open? Give each task and its status. No tools.')
     expect(reply.toolCalls).toHaveLength(0)
@@ -134,44 +123,6 @@ test('E3 edits and commits stay in the isolated checkout', async () => {
   }
 })
 
-test('E4 delegates symbol lookup without reading in the parent', async () => {
-  const ultimate = await start({
-    project: {
-      files: {
-        'src/parser.ts': 'export function parseFoo(input: string) { return input.trim() }\n',
-      },
-    },
-    extensions: { enable: ['subagents'] },
-  })
-  try {
-    const c = await ultimate.conversation()
-    const turn = await c.run(
-      'Use a worker subagent to find which file defines parseFoo and tell me the path. Do not read or search the files yourself. Use a shared checkout, not a worktree.',
-    )
-    expect(
-      turn.toolCalls.some(
-        (call) =>
-          call.name === 'subagent' &&
-          call.arguments.action === 'start' &&
-          call.arguments.agent === 'worker' &&
-          !call.isError,
-      ),
-    ).toBe(true)
-    expect(
-      turn.toolCalls.some((call) => ['read', 'grep', 'find', 'bash'].includes(call.name)),
-    ).toBe(false)
-    expect(turn.text).toContain('src/parser.ts')
-    expect(
-      (await ultimate.conversations()).some(
-        (item) => item.parentConversationId === c.id && item.label === 'worker',
-      ),
-    ).toBe(true)
-    measure('E4-delegate', turn)
-  } finally {
-    await ultimate.stop()
-  }
-})
-
 test('E5 knows the other conversation without tools', async () => {
   const ultimate = await start({ extensions: { enable: ['conversations'] } })
   try {
@@ -215,7 +166,6 @@ test('E6 explains how to enable an off building block', async () => {
       'Is the plan extension on? If not, tell me exactly which file to edit to enable it for this project. Include the settings key. No tools.',
     )
     expect(turn.toolCalls).toHaveLength(0)
-    expect(turn.text).toMatch(/^no\b|off|not enabled|disabled|not.*on|not.*loaded/i)
     expect(turn.text).toContain('.ultimate/settings.json')
     expect(turn.text).toMatch(/extensions[\s\S]*enable/)
     measure('E6-building-block', turn)

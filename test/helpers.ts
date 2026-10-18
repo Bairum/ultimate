@@ -1,5 +1,6 @@
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { setImmediate as yieldIO } from 'node:timers/promises'
 import { join, resolve, sep } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
@@ -144,11 +145,16 @@ export async function seedTally(harness: Harness, id = 1) {
     ;(await tx.doc(Tally, root)).since = entry.id
   }, context)
 }
-export async function until(test: () => boolean | Promise<boolean>, timeout = 30000) {
-  const deadline = Date.now() + timeout
+export async function until(
+  test: () => boolean | Promise<boolean>,
+  timeout = 30000,
+  tick?: () => Promise<unknown>,
+) {
+  const deadline = performance.now() + timeout
   while (!(await test())) {
-    if (Date.now() > deadline) throw new Error('Timed out')
-    await new Promise((done) => setTimeout(done, 30))
+    if (performance.now() > deadline) throw new Error('Timed out')
+    await tick?.()
+    await yieldIO()
   }
 }
 export async function post(server: string | { url: string }, path: string, data: unknown = {}) {
@@ -198,7 +204,7 @@ export async function attach(server: string | { url: string }, query = '') {
         if (!String(error).includes('fetch failed') && !String(error).includes('terminated'))
           throw error
       }
-      await new Promise((done) => setTimeout(done, 50))
+      await yieldIO()
     }
   })()
   await until(() => !!view)

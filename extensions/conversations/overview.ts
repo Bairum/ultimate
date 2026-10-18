@@ -96,6 +96,9 @@ export function overviewBehavior(
                   ? 'error'
                   : 'idle',
           ...(active ? { inputId: input.entry } : {}),
+          ...(active && (await tx.entry(input.entry!))?.kind !== 'pi.user'
+            ? { internalInput: true as const }
+            : {}),
           ...(answerId !== undefined ? { answerId } : {}),
           ...(state?.summary ? { summary: state.summary } : {}),
           ...(state?.feature ? { feature: state.feature } : {}),

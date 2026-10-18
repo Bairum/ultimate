@@ -128,6 +128,7 @@ const marker = (userHome: string) => join(userHome, '.ultimate/onboarding.json')
 
 export const userActions = [
   'start',
+  'help',
   'choose',
   'decide',
   'setExtension',
@@ -137,6 +138,26 @@ export const userActions = [
 ]
 
 export const actions: Record<string, ExtensionAction> = {
+  help: async (args, { host }) => {
+    const card = args && typeof args === 'object' && !Array.isArray(args) ? args.card : undefined
+    if (card !== 'project' && card !== 'git') throw new Error('Expected project or git card')
+    const service = host.use<SubagentsService>('subagents')
+    if (!service) throw new Error('Subagents are required for onboarding')
+    const id = await service.standing('ultimate', context)
+    const conversation = (await host.harness().conversation(id, context))!
+    await conversation.submit(
+      {
+        type: 'input',
+        content:
+          card === 'project'
+            ? "Help me decide whether to use this project's setup."
+            : 'Help me set up git for this folder.',
+        whenBusy: 'followUp',
+      },
+      context,
+    )
+    return { id }
+  },
   start: async (args, { host, conversationId }) => {
     const input = args as { root?: number; instructions?: string } | null
     if (

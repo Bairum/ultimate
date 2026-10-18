@@ -26,10 +26,7 @@ import {
 import { currentAssessment, Row, ChildRow, RootRow, StandingRow } from './rows.tsx'
 import { useRoots } from '../lineage/roots.tsx'
 import { ago, LanderState } from './lander.tsx'
-import { talkToUltimate, UltimateDot, useWaitingOnUser } from './ultimate.tsx'
-
-/** The label of side chats with a root, which old projects still store; they stay unlisted. */
-const sideLabel = 'side chat'
+import { StandingPhase, talkToUltimate, UltimateDot, useWaitingOnUser } from './ultimate.tsx'
 
 /** The shown conversation, also while its snapshot is still on the way. */
 const useShownId = () => useStore((state) => state.view?.conversation.id ?? state.requested)
@@ -80,12 +77,10 @@ export function Conversations() {
       .map((task) => task.conversationId),
   )
   // The task graph reflects the run; the timestamp/title list can lag.
-  const conversations = useConversations()
-    .filter((conversation) => conversation.label !== sideLabel)
-    .map((conversation) => ({
-      ...conversation,
-      busy: foreground.has(conversation.id) || overview[conversation.id]?.runState === 'working',
-    }))
+  const conversations = useConversations().map((conversation) => ({
+    ...conversation,
+    busy: foreground.has(conversation.id) || overview[conversation.id]?.runState === 'working',
+  }))
   const actions = useUltimate()
   const workspacesEnabled = useSystem()?.extensions.some(
     (extension) => extension.name === 'workspaces' && extension.enabled,
@@ -207,7 +202,7 @@ export function Conversations() {
         ) : (
           <>
             {busy ? (
-              <span className="shrink-0 text-brand">working</span>
+              <StandingPhase id={conversation.id} />
             ) : isUltimate && waiting > 0 ? (
               <span className="shrink-0 text-amber-700 dark:text-amber-300">
                 {waiting} waiting on you

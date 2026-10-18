@@ -95,13 +95,16 @@ describe('server reload', () => {
       server.extensions.info().find((extension) => extension.name === 'prompt')!.server!.loadedAt,
     ).toBe(promptLoaded)
     const successful = entry().server!.loadedAt
-    await until(async () => {
-      await writeFile(
-        join(server.host.ultimateRoot, 'extensions/counter/value.ts'),
-        'this is not valid TS !!!',
-      )
-      return !!entry().server!.error
-    })
+    await writeFile(
+      join(server.host.ultimateRoot, 'extensions/counter/value.ts'),
+      'this is not valid TS !!!',
+    )
+    // Chokidar can coalesce consecutive writes to the same path; deliver this change explicitly.
+    server.vite.watcher.emit(
+      'change',
+      join(server.host.ultimateRoot, 'extensions/counter/value.ts'),
+    )
+    await until(() => !!entry().server!.error)
     expect(entry().server!.loadedAt).toBe(successful)
     expect(server.host.registry.snapshot().extension('counter')).toBe(installed)
   })

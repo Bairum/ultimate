@@ -4,13 +4,19 @@ Optional answer cards for @ultimate's questions to the user, in its own transcri
 
 - **A reply-expected Board message to the user.** @ultimate's `message { to: 'user', text, reply: true }` (the
   default) triggers extraction in the same transaction that appends the message. One-way messages, user posts and
-  messages to conversations never do. The card shows under the outgoing `message` tool card in the sender's
+  messages to conversations never do. These explicit asks bypass the final-answer punctuation gate, so requests such
+  as “Please confirm whether to proceed” still extract. The card shows under the outgoing `message` tool card in the sender's
   transcript.
 - **@ultimate's final answer to a typed input.** Only in the standing `ultimate` conversation (the `Standing` index
   of `subagents`), and only when the answer settles a plain `pi.user` input: answers to Board messages, Board
   replies, and every other conversation's answers never trigger it. The card shows under that final answer.
 
+Final answers pass a deterministic gate before any model call: their last blank-line-delimited paragraph must contain
+`?` or a line starting with a numbered/lettered option (`1.`, `1)`, `a)`, `A.`). Earlier questions or lists alone do not
+qualify. The extractor receives the latest settled typed user input with the reply, both labelled as untrusted data.
+
 The configured summary model extracts only decisions and options present in the text, using `QUESTIONS_SYSTEM`;
+only decisions available now count, not pending work or a future branch proposal. This rule also covers Board asks;
 rhetorical closers, offers, empty results and model failures produce no card. Extraction memoizes its model and
 response and accounts usage on the task's conversation.
 
@@ -25,12 +31,12 @@ The root's `questions.board` document (conversation scope, latest history, initi
 - `yielded` and `reply?: { conversation, entry, questions }` for @ultimate's answers. A `GenerationTask` `onYield`
   hook creates one `questions.reply-extract` task per generation, owned by @ultimate's conversation, in the commit
   that advances `yielded`, so a replayed hook creates nothing twice. The task waits for the generation, confirms its
-  answer settled a `pi.user` input, extracts, and writes only if that answer is still current (`currentAnswer`: no
-  later input, queued input, run or reset): questions replace `reply`, an empty result clears it. A generation it does
-  not extract (an answer to a Board message, or one that failed) clears a `reply` that is no longer current, so the
-  title bar's waiting count ends with the card. A reset starts no generation, so the extension also clears `reply` when
-  a committed `pi.reset` follows its answer, and checks once on open for a reset it missed. One slot is enough because
-  only @ultimate's latest answer can be answered; it cannot grow.
+  answer settled a `pi.user` input, extracts, and writes only if no later typed input or reset follows that answer.
+  Board deliveries use `board.message` / `board.reply` entry kinds, not `pi.user`: those deliveries and the answers
+  they wake leave the card open, including when extraction finishes after them. Only a committed `pi.user`, a
+  `pi.reset`, or an answer to the card closes it. The extension checks committed user inputs and resets immediately,
+  and checks again on open for ones it missed. One slot is enough: every eligible newer final answer settles a new
+  typed input, which already closed the old card. Agent-woken answers never extract or replace it.
 
 Reopening resumes durable work without repeating a memoized response or creating duplicate cards.
 
@@ -38,13 +44,13 @@ Reopening resumes durable work without repeating a memoized response or creating
 
 Confirmations offer Yes/No; choices show the extracted options and their recommended marker. Both offer “Something
 else…” with an inline field. Send answers is enabled after at least one answer; omitted questions stay out. On
-phones, one question shows at a time with Back/Next. On desktop, 1–9 and Enter act on the newest card of the shown
-conversation (its final-answer card, else its newest open message card), without intercepting input/textarea
-editing.
+phones, one question shows at a time with Back/Next. On desktop, 1–9 and Enter act on the shown conversation's
+still-open final-answer card even across newer messages, else its newest open message card, without intercepting
+input/textarea editing.
 
 A message card disappears once its message is answered: by the card, a Board Reply or new post to the sender, or
-typing in the sender's conversation. A final-answer card disappears as soon as any input or reset follows the answer,
-or once its answer is claimed.
+typing in the sender's conversation. Unrelated agent messages do not answer it. A final-answer card disappears when
+typed user input or a reset follows the answer, or once its answer is claimed.
 
 ## Actions
 
@@ -54,16 +60,16 @@ formatted as `Q: …\nA: …` blocks separated by blank lines.
 - `answer { messageId, answers: [{ question, answer }] }` posts a normal user Board reply to the sender with
   `re: messageId` and returns `{ id }`. Board admission atomically verifies that the original remains open, so
   concurrent answers produce exactly one reply; normal Board delivery wakes the sender.
-- `reply { entryId, answers }` refuses unless `entryId` is @ultimate's current answer (`currentAnswer`: no later
-  input, queued input, run or reset) and claims the card by clearing `reply` in the same commit, so of concurrent
+- `reply { entryId, answers }` refuses unless `entryId` has an open card with no later typed user input or reset,
+  and claims the card by clearing `reply` in the same commit, so of concurrent
   calls exactly one wins and the rest are refused. It then submits a plain input in @ultimate's conversation with
   `requestId: questions:<entryId>` and `whenBusy: 'reject'`; if the submit fails, a compensating commit restores the
   claim when no newer `reply` replaced it, so the user can retry. Without an input-placement hook, an input or reset
   can still land between the claim and the submit; we accept that window of milliseconds because the Q/A text is
   self-contained and the user's own words.
 
-Stored transcript `questions.asked` entries from older builds are hidden and never answerable. Stored
-`questions.answers` entries retain their read-only “Your answers” card.
+Retired transcript question and answer entries are hidden rather than exposing their raw JSON; only open
+@ultimate questions get interactive cards.
 
 ## Faux
 

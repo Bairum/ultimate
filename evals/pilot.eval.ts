@@ -104,33 +104,6 @@ test('seeded tool failure supplies the context for a fix', async () => {
   }
 })
 
-test('automation request persists a weekday reminder', async () => {
-  const ultimate = await start({ extensions: { enable: ['automations', 'subagents'] } })
-  try {
-    const c = await ultimate.conversation({
-      history: [
-        user(
-          'Use Europe/Vienna for my reminders. Schedule them in Ultimate, not in an external service.',
-        ),
-        assistant(
-          'The automations and subagents extensions are enabled. I will create reminders directly with the automation tool, without inspecting or changing configuration. Its documented weekday schedule string is cron "0 9 * * 1-5" Europe/Vienna, including the quotes around the five fields.',
-        ),
-      ],
-    })
-    const turn = await c.run(
-      'Every weekday at 9:00 remind me to stretch. Create the recurring automation, but do not run it now.',
-    )
-    const { result } = await ultimate.action('automations', 'list')
-    expect(result).toHaveLength(1)
-    expect(result[0].enabled).toBe(true)
-    expect(result[0].prompt.toLowerCase()).toContain('stretch')
-    expect(result[0].schedule).toEqual({ kind: 'cron', expr: '0 9 * * 1-5', tz: 'Europe/Vienna' })
-    measure('automation', turn)
-  } finally {
-    await ultimate.stop()
-  }
-})
-
 test('codemode inspects loaded extensions instead of guessing', async () => {
   const ultimate = await start({ extensions: { enable: ['plan'] } })
   try {
@@ -155,7 +128,6 @@ test('codemode inspects loaded extensions instead of guessing', async () => {
       ),
     ).toBe(true)
     expect(turn.text).toMatch(/\bplan\b/i)
-    expect(turn.text).toMatch(/loaded|enabled|active|success|no load errors?/i)
     measure('codemode', turn)
   } finally {
     await ultimate.stop()

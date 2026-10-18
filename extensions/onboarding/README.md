@@ -59,9 +59,9 @@ same idempotent setting and admits exactly one input. Only the matching typed ch
 as **Chosen: …**, never the current settings or a local success flag. A quiet input card displays the summary.
 
 The status line keeps **project setup** while the project decision is open and **set up git** while isolation is
-unavailable. Clicking posts "Help me decide whether to use this project's setup." or "Help me set up git for this
-folder." to @ultimate through the Board, then opens the standing conversation returned by `addresses` on the Agent
-surface. First-run Continue and Start here's start/open links also select the Agent surface. While onboarding is
+unavailable. Clicking calls `help { card: 'project' | 'git' }`, which submits "Help me decide whether to use this
+project's setup." or "Help me set up git for this folder." directly in @ultimate's standing conversation and returns
+its id. The browser opens that conversation on the Agent surface. First-run Continue and Start here's start/open links also select the Agent surface. While onboarding is
 in progress, Start here shows only the open link, without the focus textarea or keyboard hint.
 The Extensions panel's About this setup routes there too rather than opening a setup dialog.
 The Git status is read again whenever the shown conversation finishes a run, including an agent's first Git commit.
@@ -79,6 +79,7 @@ This default-on built-in exports browser actions. Settings choices and completio
 cannot apply them through codemode `ultimate.action`.
 
 - `start { root?, instructions? }`: starts the flow above once per root, returning `{ id }`; user-only.
+- `help { card: 'project' | 'git' }`: asks @ultimate for setup help through a direct input, returning `{ id }`; user-only.
 - `status`: first-run state; project configuration, decision and README; the user's enable/disable lists; and `adds`,
   the project's agents, skills, extension folders, replacements and declared settings, inspected even while undecided.
 - `firstRunDone`: records completion in the injected user home's `.ultimate/onboarding.json`.

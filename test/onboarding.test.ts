@@ -3,8 +3,6 @@ import { join, resolve } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import { Standing } from '../extensions/subagents/server.ts'
 import { fauxServer, post, temp, removeTemp } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { git } from '../extensions/workspaces/git.ts'
@@ -231,16 +229,11 @@ it('offers setup only to named definitions, refuses inapplicable cards, and dedu
       return fauxAssistantMessage('Ready')
     }
     server.host.faux!.setResponses([route])
-    expect(
-      (
-        await post(server, '/api/extensions/board/actions/post', {
-          args: { to: '@setup-guide', text: 'Help' },
-        })
-      ).status,
-    ).toBe(200)
-    await server.harness.waitForIdle(context)
-    const standing = await server.harness.snapshot(Standing, ROOT_CONVERSATION_ID, context)
-    const conversation = (await server.harness.conversation(standing!['setup-guide'], context))!
+    const standing = await post(server, '/api/extensions/subagents/actions/standing', {
+      args: { name: 'setup-guide' },
+    })
+    expect(standing.status).toBe(200)
+    const conversation = (await server.harness.conversation(standing.data.result, context))!
     expect((await conversation.agent(context)).tools.map((tool) => tool.name)).toContain('setup')
     const run = async (name: string, args: Record<string, string>) => {
       await conversation.submit(

@@ -106,7 +106,6 @@ export type ExtensionHost = Pick<
   doc(kind: string): ConversationDocToken<JsonObject> | undefined
   metadata: typeof Metadata
 }
-const events = createEventBus()
 const runOpener = (callback: () => Promise<void>) =>
   callback().catch((error: unknown) => console.error('Extension onOpen:', error))
 const runReleaser = (callback: () => Promise<void>) =>
@@ -124,6 +123,8 @@ export async function loadExtensions(
   watch: Watch,
   notice: (message: string) => void = () => {},
 ) {
+  // Events belong to this host, not every host opened in the process.
+  const events = createEventBus()
   const roots = discoveryRoots(host.ultimateRoot, host.projectRoot, host.userHome)
   const directories = roots.map((root) => join(root.path, 'extensions'))
   const services = serviceRegistry((snapshot) =>

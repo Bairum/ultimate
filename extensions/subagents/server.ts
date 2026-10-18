@@ -806,12 +806,21 @@ export default function subagents(
         ].join(' ')
       }),
       section('subagents', async (input, context) => {
+        const canDelegate = input.agent.tools.some((tool) => tool.name === 'subagent')
+        const needsDefinitions = input.agent.tools.some((tool) =>
+          ['branch', 'automation'].includes(tool.name),
+        )
+        if (!canDelegate && !needsDefinitions) return undefined
         const discovered = await discoverAgents(
           host.ultimateRoot,
           host.projectRoot,
           host.userHome,
           host.modelRuntime,
         )
+        const definitions = discovered.definitions
+          .map((agent) => `${agent.name}: ${agent.description}`)
+          .join('\n')
+        if (!canDelegate) return `Available definitions:\n${definitions}`
         const conversation = await host
           .harness()
           .commit((tx) => tx.conversation(input.conversationId), context)
@@ -862,7 +871,7 @@ Test isolate behaviour in a temporary git repository or a preview instance (inst
 An idle or finished child is not evidence. Trust concrete worker evidence; investigate gaps and risks.
 Never push, merge to remotes, or ship unless the user asks. Children never push.
 Available definitions:
-`) + discovered.definitions.map((agent) => `${agent.name}: ${agent.description}`).join('\n')
+`) + definitions
         )
       }),
     ],

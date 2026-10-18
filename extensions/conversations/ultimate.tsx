@@ -4,6 +4,7 @@ import type { UltimateActions } from '@/sdk'
 import { emptyBoard, waitingOnUser } from '../board/data.tsx'
 import type { BoardData } from '../board/data.tsx'
 import type { QuestionsBoard } from '../questions/open.tsx'
+import { phaseText, usePhase } from '../phase/chip.tsx'
 import { useOverview } from './feature.tsx'
 
 /** Show @ultimate's standing conversation on the Agent surface; it starts branches and keeps the tallies. */
@@ -38,6 +39,17 @@ export function UltimateDot({ working, waiting }: { working: boolean; waiting: n
   )
 }
 
+/** A busy standing agent's word: its classified phase, lower case like its idle line, else "working". */
+export function useWorkingWord(id: number | undefined, working: boolean) {
+  const phase = usePhase(working ? id : undefined)
+  return phase && phase !== 'waiting' ? phaseText(phase).toLowerCase() : 'working'
+}
+
+/** A busy standing agent's line in the sidebar: its working word in the brand colour. */
+export function StandingPhase({ id }: { id: number }) {
+  return <span className="shrink-0 text-brand">{useWorkingWord(id, true)}</span>
+}
+
 /** The title bar's way to @ultimate from every surface, with its state and the questions that wait on you. */
 export function UltimateButton() {
   const actions = useUltimate()
@@ -53,7 +65,8 @@ export function UltimateButton() {
         (task) => !task.background && task.conversationId === id,
       ))
   const active = id !== undefined && shown === id && actions.surface === 'agent'
-  const label = working ? 'working' : waiting ? `${waiting} waiting on you` : 'idle'
+  const word = useWorkingWord(id, working)
+  const label = working ? word : waiting ? `${waiting} waiting on you` : 'idle'
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -70,6 +83,7 @@ export function UltimateButton() {
         >
           <UltimateDot waiting={waiting} working={working} />
           @ultimate
+          {working && word !== 'working' && <span className="text-brand">{word}</span>}
           {waiting > 0 && <span className="text-amber-700 dark:text-amber-300">{waiting}</span>}
         </button>
       </TooltipTrigger>

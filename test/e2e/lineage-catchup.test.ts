@@ -7,10 +7,10 @@ import { estimateTextTokens } from '@earendil-works/pi-ai/utils/estimate'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterEach, beforeAll, expect, it } from 'vitest'
-import { abstract, leaveNote, Tally } from '../extensions/lineage/server.ts'
-import { Seen, tallyText } from '../extensions/lineage/catchup.ts'
-import { context } from '../server/harness.ts'
-import { fauxServer, post, seedTally, sourceCopy, temp, until } from './helpers.ts'
+import { abstract, leaveNote, Tally } from '../../extensions/lineage/server.ts'
+import { Seen, tallyText } from '../../extensions/lineage/catchup.ts'
+import { context } from '../../server/harness.ts'
+import { fauxServer, post, seedTally, sourceCopy, temp, until } from '../helpers.ts'
 
 let ultimateRoot: string
 beforeAll(async () => {

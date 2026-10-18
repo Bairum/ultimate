@@ -33,8 +33,7 @@ export function newestAsked(board: Doc, messages: readonly Message[]) {
 }
 
 /**
- * The questions of final answer `entry` in `conversation` while it is @ultimate's current answer: none once any input
- * or reset follows it in the transcript.
+ * Questions stay open across agent deliveries and answers, until typed user input or reset follows them.
  */
 export function replyQuestions(
   board: Doc,
@@ -45,16 +44,15 @@ export function replyQuestions(
   const reply = board?.reply
   if (!reply || reply.conversation !== conversation || reply.entry !== entry) return []
   return transcript.some(
-    (item) =>
-      item.id > entry && (item.kind === 'pi.user' || item.kind === 'pi.reset' || item.input),
+    (item) => item.id > entry && (item.kind === 'pi.user' || item.kind === 'pi.reset'),
   )
     ? []
     : reply.questions
 }
 
 /**
- * The card on a conversation's page that takes the desktop keys: its open final-answer card, which follows every
- * message it sent, else the card of its newest open message to the user.
+ * The card taking desktop keys: an open final-answer card keeps precedence even across newer messages;
+ * otherwise the newest open message to the user takes them.
  */
 export function keyCard(
   board: Doc,

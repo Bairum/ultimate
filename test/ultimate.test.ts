@@ -72,12 +72,11 @@ async function fixture(onRequest?: (text: string, home: string) => Promise<void>
   const server = await open()
   const subagents = {
     standing: async (name: string, _ctx: typeof context) => {
-      const response = await post(server, '/api/extensions/board/actions/post', {
-        args: { to: `@${name}`, text: 'Initial greeting' },
+      const response = await post(server, '/api/extensions/subagents/actions/standing', {
+        args: { name },
       })
       expect(response.status).toBe(200)
-      const index = await server.harness.snapshot(Standing, ROOT_CONVERSATION_ID, context)
-      return index![name]
+      return response.data.result as ConversationId
     },
   }
   return { home, root, server, subagents, requests, open }
@@ -89,7 +88,7 @@ async function entries(server: Server, id: ConversationId) {
   )
 }
 async function log(server: Server) {
-  return (await server.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!.messages
+  return (await server.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))?.messages ?? []
 }
 async function ask(server: Server, id: ConversationId, text: string) {
   const conversation = (await server.harness.conversation(id, context))!
@@ -240,7 +239,6 @@ it('starts a lineage branch with a board input and caller attribution, returns i
 it('refreshes standing definitions for numeric-address deliveries', async () => {
   const f = await fixture()
   const dice = await f.subagents.standing('dice', context)
-  await until(async () => (await log(f.server)).some((m) => m.from === dice && m.re !== undefined))
   await writeFile(
     join(f.home, '.ultimate/agents/dice.md'),
     '---\nname: dice\ndescription: Dice\nresident: true\ntools: [message]\n---\nEdited numeric recipient.',
@@ -281,9 +279,6 @@ it('keeps Ultimate answers to board replies out of the log, including after reop
   const f = await fixture()
   const ultimate = await f.subagents.standing('ultimate', context)
   const resident = (await f.server.harness.conversation(ultimate, context))!
-  await until(async () =>
-    (await log(f.server)).some((m) => m.from === ultimate && m.to === 'user' && m.re !== undefined),
-  )
   const before = await log(f.server)
   const receipt = await resident.submit(
     {

@@ -140,14 +140,14 @@ export default async function fauxExtension(host: ExtensionHost) {
           ])
         if (
           last?.role === 'user' &&
-          text.startsWith('Message from user:') &&
+          !text.startsWith('Message from') &&
           since.some(
             (message) => message.role === 'toolResult' && message.toolName === 'seed_tally',
           )
         )
           return tool('branch', {
             root,
-            prompt: text.split('\n').slice(1).join('\n').split('\nAnswer here;')[0],
+            prompt: text,
             isolated: false,
           })
         if (last?.role === 'toolResult' && last.toolName === 'branch')
@@ -300,15 +300,15 @@ export default async function fauxExtension(host: ExtensionHost) {
       const chatSteps: Record<string, FauxContentBlock[][]> = {
         'chat demo': [
           [
-            fauxThinking('The user wants the board work checked and landed.'),
-            fauxToolCall('bash', { command: 'echo checking the board; sleep 0.3; echo clean' }),
+            fauxThinking('The user wants the parser fix checked and landed.'),
+            fauxToolCall('bash', { command: 'echo checking the parser; sleep 0.3; echo clean' }),
           ],
           [fauxToolCall('read', { path: join(host.projectRoot, 'README.md') })],
           [fauxToolCall('branch', { prompt: 'landing demo', isolated: false })],
           [
             fauxToolCall('message', {
               to: 'user',
-              text: 'The Board chat restyle landed as `081dc9b` and is pushed to `main`.\n\nDivergence: none.',
+              text: 'The parser fix landed as `081dc9b` and is pushed to `main`.\n\nDivergence: none.',
               reply: false,
             }),
           ],
@@ -365,7 +365,7 @@ export default async function fauxExtension(host: ExtensionHost) {
           [
             fauxToolCall('message', {
               to: target[1],
-              text: 'Can you check whether the board card renders on narrow screens?',
+              text: 'Can you check whether the status card renders on narrow screens?',
               reply: !target[2],
             }),
           ],

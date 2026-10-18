@@ -49,7 +49,12 @@ function Player() {
         .filter((conversation) => conversation.parentConversationId === undefined)
         .map((conversation) => conversation.id),
     )
-    const { due, waiting } = hear(overview.conversations, top, Date.now())
+    const standing = new Set(
+      conversations
+        .filter((conversation) => conversation.label === 'agent' || conversation.label === 'lander')
+        .map((conversation) => conversation.id),
+    )
+    const { due, waiting } = hear(overview.conversations, top, Date.now(), standing)
     for (const cue of due)
       if (!muted && !off.includes(cue.sound))
         announce(cue).catch((error: unknown) => console.warn('Sound failed', error))

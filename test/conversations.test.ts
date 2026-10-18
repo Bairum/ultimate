@@ -1,8 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { Type } from '@earendil-works/pi-ai'
-import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { defineExtension, defineTool, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
+import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import { attach, fauxServer, post, prepareFauxServer, temp, until } from './helpers.ts'
@@ -13,6 +12,7 @@ import { actions as conversationActions } from '../extensions/conversations/serv
 import type { ExtensionHost } from '../server/extensions.ts'
 import { actionExec } from '../server/actions.ts'
 import { currentAnswer, exchangeUser } from '../extensions/conversations/summary.ts'
+import { Overview } from '../extensions/conversations/overview.ts'
 
 type Server = Awaited<ReturnType<typeof fauxServer>>
 const servers: Server[] = []
@@ -171,7 +171,7 @@ it('tells each top-level conversation about the others, and the surface on scree
     expect(await render('surfaces', id)).toBe('The user is looking at the Agent surface (agent).')
 })
 
-it('renames and clears top-level conversations', async () => {
+it('renames top-level conversations', async () => {
   const { server, summary, create, message, action } = await launch()
   const id = await create()
   await message(id, 'Fix the parser', 2000)
@@ -199,10 +199,6 @@ it('renames and clears top-level conversations', async () => {
     status: 200,
     data: { result: { ok: true } },
   })
-  expect(await action('reset', { id: fork.id })).toEqual({
-    status: 200,
-    data: { result: { ok: true } },
-  })
   await post(server, '/api/conversations/1/submit', { text: 'delegate to worker' })
   await server.harness.waitForIdle(context)
   const child = server.api.conversations().find((item) => item.label === 'worker')!
@@ -213,61 +209,9 @@ it('renames and clears top-level conversations', async () => {
     ['rename', { id }, 'Expected a title'],
     ['rename', { id: 999999, title: 'x' }, 'Unknown conversation 999999'],
     ['rename', { id: child.id, title: 'x' }, owned],
-    ['reset', { id: child.id }, owned],
     ['conclude', { ids: [child.id] }, owned],
   ] as const)
     expect(await action(name, args)).toEqual({ status: 500, data: { error } })
-
-  // Clearing starts an empty context and keeps the name the first message gave it.
-  const conversation = (await server.harness.conversation(id, context))!
-  expect(await action('reset', { id })).toEqual({ status: 200, data: { result: { ok: true } } })
-  await until(async () => (await conversation.context(context)).head?.kind === 'pi.reset')
-  expect((await conversation.context(context)).entries.map((item) => item.kind)).toEqual([
-    'pi.reset',
-  ])
-  expect(await title()).toBe('Fix the parser')
-  await until(() => summary(id)?.title === 'Fix the parser')
-
-  // A working conversation is not cleared.
-  let release!: () => void
-  const gate = new Promise<void>((done) => {
-    release = done
-  })
-  server.host.registry.install(
-    defineExtension({
-      name: 'conversations-test',
-      tools: [
-        defineTool({
-          name: 'hold_run',
-          description: 'Hold the run',
-          parameters: Type.Object({}),
-          execute: async () => {
-            await gate
-            return {}
-          },
-        }),
-      ],
-    }),
-  )
-  server.host.faux!.setResponses([
-    fauxAssistantMessage([fauxToolCall('hold_run', {})], { stopReason: 'toolUse' }),
-    fauxAssistantMessage('Done.'),
-  ])
-  try {
-    await post(server, `/api/conversations/${id}/submit`, { text: 'work' })
-    await until(() => summary(id)?.busy === true)
-    expect(await action('reset', { id })).toEqual({
-      status: 500,
-      data: { error: `Conversation ${id} is working; stop it before clearing it` },
-    })
-  } finally {
-    release()
-  }
-  await server.harness.waitForIdle(context)
-  // No reset was placed after the run: its message is still in the context.
-  expect((await conversation.context(context)).entries.map((item) => item.kind)).toContain(
-    'pi.user',
-  )
 })
 
 it('projects arbitrary typed inputs, ignores user-role writes, and preserves activity across heads and reopen', async () => {
@@ -301,6 +245,11 @@ it('projects arbitrary typed inputs, ignores user-role writes, and preserves act
   const view = await conversation.viewState(context)
   const input = view.value.entries.find((entry) => entry.kind === 'test.request')!
   expect(input.input).toBe(true)
+  await until(
+    async () =>
+      (await server.harness.snapshot(Overview, ROOT_CONVERSATION_ID, context))?.conversations[id]
+        ?.internalInput === true,
+  )
   const answer = view.value.entries.findLast((entry) => entry.model?.[0]?.role === 'assistant')!
   view.dispose()
   const inputAt = input.model![0].timestamp
@@ -335,7 +284,7 @@ it('projects arbitrary typed inputs, ignores user-role writes, and preserves act
 
   await action('rename', { id, title: 'Kept title' })
   await until(() => summary(id)?.title === 'Kept title')
-  await action('reset', { id })
+  await conversation.reset(undefined, context)
   expect(summary(id)).toMatchObject({ title: 'Kept title', ...activity })
   const options = {
     ultimateRoot: server.host.ultimateRoot,
@@ -451,7 +400,7 @@ it('conclude merges concurrent additions, deduplicates ids and returns kept chec
   })
 })
 
-it('refuses to conclude or clear a root or a standing agent', async () => {
+it('refuses to conclude a root or a standing agent', async () => {
   const { server, create, action } = await launch()
   const ultimate = (
     await post(server, '/api/extensions/subagents/actions/standing', { args: { name: 'ultimate' } })
@@ -469,10 +418,6 @@ it('refuses to conclude or clear a root or a standing agent', async () => {
     expect(await action('conclude', { ids: [branch, id] })).toEqual({
       status: 500,
       data: { error: `#${id} is ${kind} cannot be concluded` },
-    })
-    expect(await action('reset', { id })).toEqual({
-      status: 500,
-      data: { error: `#${id} is ${kind} cannot be cleared` },
     })
   }
   // The refusal is the whole call's: the ordinary conversation named with it was not concluded either.

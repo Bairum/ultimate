@@ -230,7 +230,7 @@ it('layers settings live, installs and uninstalls tools and web facets, and noti
   await mkdir(config)
   await writeFile(settings, JSON.stringify({ extensions: { disable: ['subagents'] } }))
   await until(async () => !(await tools(server)).includes('subagent'))
-  expect((await web(server)).some((path) => path.includes('/subagents/'))).toBe(false)
+  await until(async () => !(await web(server)).some((path) => path.includes('/subagents/')))
   expect(server.host.build().id).not.toBe(initialBuild)
   expect(server.host.build().extensions.subagents).toBeUndefined()
   expect(server.extensions.info().find((entry) => entry.name === 'prompt')?.server?.loadedAt).toBe(
@@ -238,7 +238,7 @@ it('layers settings live, installs and uninstalls tools and web facets, and noti
   )
   await rm(settings)
   await until(async () => (await tools(server)).includes('subagent'))
-  expect((await web(server)).some((path) => path.includes('/subagents/'))).toBe(true)
+  await until(async () => (await web(server)).some((path) => path.includes('/subagents/')))
   expect(server.host.build().id).toBe(initialBuild)
   const folder = join(config, 'extensions/local')
   await mkdir(folder, { recursive: true })

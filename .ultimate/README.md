@@ -13,16 +13,13 @@ Every built-in is already on; this setup adds how the repository is landed and r
 
 ## How to work with it
 
-Talk to it. For bigger work it writes a plan, starts workers in worktrees, checks their commits, and lands them on
-your branch. Apps are surfaces beside the conversation: switch with the ULTIMATE menu or ⌘K (Ctrl+K). Edits to
-`extensions/` and `web/` hot-reload in front of you.
+See [the work model](../AGENTS.md#how-work-is-organised-a-forest-of-conversation-trees) for coordination and
+[Surfaces](../README.md#surfaces) for apps beside the conversation.
 
 ## How it runs
 
-`pnpm start` runs a small supervisor that owns the port, with the core as its child. A change to `server/` or
-`shared/` goes live through `restart`: a new core type-checks and boots beside the old one and takes over, or the old
-one keeps serving. Conversations, tool calls, and subagents reach SQLite before they show, so a restart or a crash
-resumes the run where it was.
+See [reload layers](../AGENTS.md#layers-and-how-they-reload), [running the server](../docs/running.md) and
+[durability](../docs/durability.md) before changing the running system.
 
 ## Read more
 

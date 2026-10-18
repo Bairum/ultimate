@@ -59,7 +59,7 @@ once (`btrfs filesystem du`). Measuring takes seconds, so one runs at a time and
 ## Lander
 
 Each submission and its landing result appear in the submitting conversation as tool and outcome cards.
-The `@lander` conversation keeps the full log; when the board is enabled, submissions also get a log record.
+The `@lander` conversation keeps the full log in `ultimate.lander` entries; these do not depend on Board.
 
 `workspace submit` requires a non-empty `divergence` string: how the delivered result differs from the original
 request (new agreements, different approach or library, changed scope), or "None" when it matches. It queues a
@@ -178,5 +178,5 @@ of the current code's own task waits for the next submit or open, so a determini
 
 Top-level mains use `workspace status`, `workspace submit` and `workspace land` for their own checkout.
 Landing reports commits and changed paths, with a restart hint for core changes to the running clone.
-Conclude releases only idle checkouts with no uncommitted or unlanded work; clear context never removes one.
+Conclude releases only idle checkouts with no uncommitted or unlanded work.
 Landing never removes a checkout or restarts Ultimate.

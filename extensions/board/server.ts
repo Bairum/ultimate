@@ -1,9 +1,5 @@
 import type { Context } from '@earendil-works/chord'
-import {
-  BACKGROUND_CONTEXT,
-  withAbortSignal,
-  awaitWithContext,
-} from '@earendil-works/chord/context'
+import { BACKGROUND_CONTEXT, awaitWithContext } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import {
   AssistantEntry,
@@ -433,11 +429,7 @@ async function send(
     return message.id
   }, ctx)
 }
-export const userActions = ['post']
 export const actions = {
-  async post(args: { to: string; text: string; re?: number }, { host, signal }: ActionContext) {
-    return { id: await send(host, 'user', args, withAbortSignal(signal, BACKGROUND_CONTEXT)) }
-  },
   async addresses(_args: unknown, { host }: ActionContext) {
     const agents =
       (await host.use<SubagentsService>('subagents')?.residents(BACKGROUND_CONTEXT)) ?? []

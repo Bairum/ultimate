@@ -24,6 +24,7 @@ const labels: Record<DisplayPhase, string> = {
   waiting: 'Waiting',
   wrapping_up: 'Wrapping up',
 }
+export const phaseText = (phase: DisplayPhase) => labels[phase]
 export function PhaseLabel({ phase }: { phase: DisplayPhase }) {
   return (
     <span className="inline-flex items-center gap-1.5">

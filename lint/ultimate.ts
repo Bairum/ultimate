@@ -7,6 +7,9 @@ interface ImportNode {
 interface Node {
   type: string
   name?: string
+  id?: Node
+  specifiers?: { type?: string; imported?: Node }[]
+  source?: Node
   value?: unknown
   computed?: boolean
   key?: Node
@@ -25,6 +28,7 @@ interface Context {
   filename: string
   options: [{ allow?: Record<string, string[]> }?]
   sourceCode: {
+    text: string
     getCommentsBefore(node: Node): unknown[]
     getCommentsInside(node: Node): unknown[]
   }
@@ -76,6 +80,99 @@ export default {
           NewExpression(node: Node) {
             if (isGlobal(node.callee, 'EventSource') || isGlobal(node.callee, 'WebSocket'))
               context.report({ node, message })
+          },
+        }
+      },
+    },
+    'no-real-wait-in-fast-tests': {
+      meta: { schema: [] },
+      create(context: Context) {
+        const exempt = (node: Node) => {
+          let current: Node | null | undefined = node
+          while (current) {
+            if (
+              context.sourceCode
+                .getCommentsBefore(current)
+                .some((comment) =>
+                  /fast-test-reason:\s*\S/.test((comment as { value: string }).value),
+                )
+            )
+              return true
+            current = current.parent
+          }
+          return false
+        }
+        const report = (node: Node) => {
+          if (!exempt(node))
+            context.report({
+              node,
+              message:
+                'Keep fast tests in-process and deterministic: use fake timers or test/e2e. A justified exception needs a fast-test-reason: comment.',
+            })
+        }
+        return {
+          ImportDeclaration(node: Node) {
+            const source = typeof node.source?.value === 'string' ? node.source.value : ''
+            if (
+              /^(node:)?child_process$|^execa(?:\/|$)|^(spawn|execFile)$/.test(source) ||
+              (/^(node:)?timers\/promises$/.test(source) &&
+                node.specifiers?.some(
+                  (specifier) =>
+                    specifier.imported?.name === 'setTimeout' ||
+                    specifier.type === 'ImportNamespaceSpecifier',
+                ))
+            )
+              report(node)
+          },
+          ImportExpression(node: Node) {
+            if (
+              typeof node.source?.value === 'string' &&
+              /^(node:)?child_process$|^execa(?:\/|$)/.test(node.source.value)
+            )
+              report(node)
+          },
+          CallExpression(node: Node) {
+            if (!isGlobal(node.callee, 'setTimeout')) return
+            let parent = node.parent
+            while (parent && parent.type !== 'NewExpression') parent = parent.parent
+            if (
+              parent?.callee?.name === 'Promise' &&
+              !/\bvi\.useFakeTimers\s*\(/.test(context.sourceCode.text)
+            )
+              report(node)
+          },
+        }
+      },
+    },
+    'no-retired-ui': {
+      meta: { schema: [] },
+      create(context: Context) {
+        return {
+          Literal(node: Node) {
+            if (
+              typeof node.value === 'string' &&
+              (/^(side chat|Branch from here|Clear context|New conversation)$/i.test(node.value) ||
+                (node.value === 'board' &&
+                  (node.parent?.key?.name ?? node.parent?.key?.value) === 'surface'))
+            )
+              context.report({
+                node,
+                message: 'Use the current conversation and surface vocabulary.',
+              })
+          },
+        }
+      },
+    },
+    'no-local-test-polling': {
+      meta: { schema: [] },
+      create(context: Context) {
+        return {
+          FunctionDeclaration(node: Node) {
+            if (['until', 'waitFor'].includes(node.id?.name ?? ''))
+              context.report({
+                node,
+                message: 'Use until from test/helpers.ts; it polls against a real deadline.',
+              })
           },
         }
       },
