@@ -19,6 +19,7 @@ import { UiState } from './ui-state.ts'
 import type { JsonValue } from '@earendil-works/chord'
 import { clampThinkingLevel, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
 import { Metadata } from './metadata.ts'
+import { EVENT_LOG_LABEL } from './events.ts'
 import { admit } from './request-security.ts'
 import type { Access } from './request-security.ts'
 import { conversationIndex } from './project.ts'
@@ -232,6 +233,8 @@ export async function createApi(
       if (!conversation) continue
       const agent = await conversation.agent(context)
       const metadata = await harness.snapshot(Metadata, record.id, context)
+      // Every list the user sees (sidebar, search, @ultimate, the cloud front page) comes from these summaries.
+      if (metadata?.label === EVENT_LOG_LABEL) continue
       const title = metadata?.title ?? metadata?.inputTitle
       refreshed.push({
         id: record.id,

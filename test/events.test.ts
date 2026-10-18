@@ -4,11 +4,11 @@ import { defineDoc, ROOT_CONVERSATION_ID as ROOT } from '@earendil-works/pi-dura
 import type { Tx } from '@earendil-works/pi-durable'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
-import { EventFeed } from '../server/events.ts'
+import { EventFeed, EventLog } from '../server/events.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { defineEvent, EVENT_FEED, NoticeEvent } from '../shared/events.ts'
 import type { EventRecord } from '../shared/events.ts'
-import { fauxServer, linkDependencies, post, temp, until } from './helpers.ts'
+import { attach, fauxServer, linkDependencies, post, temp, until } from './helpers.ts'
 
 it('shares Pi events between server extensions across reloads and isolates a throwing handler', async () => {
   const home = await temp('ultimate-bus-')
@@ -270,6 +270,31 @@ it('reads recent events newest first as copies, feeds the browser and records no
   expect(
     (await host.eventLog.recent({ events: [NoticeEvent] })).map((event) => event.data),
   ).toEqual([{ extension: 'probe', message: 'Probe broke', level: 'warning' }])
+})
+
+it('leaves the log conversation out of conversation lists but serves it by id', async () => {
+  const probe = await start(await project())
+  await probe.land('a1')
+  const log = (await probe.server.harness.snapshot(EventLog, ROOT, context))!.conversation!
+  const stream = await attach(probe.server, `?conversation=${log}`)
+  try {
+    expect(stream.view().conversation.id).toBe(log)
+    // Summaries refresh in commit order: once a later conversation is listed, the log's refresh is done too.
+    const { id: later } = await probe.server.harness.createConversation(
+      { ownership: { kind: 'ownerless' } },
+      context,
+    )
+    const listed = () =>
+      stream.events
+        .filter((event) => event.name === 'conversations')
+        .map((event) => (event.data as { id: number }[]).map((summary) => summary.id))
+        .at(-1) ?? []
+    await until(() => listed().includes(later))
+    expect(listed()).not.toContain(log)
+    expect(probe.server.api.conversations().map((summary) => summary.id)).not.toContain(log)
+  } finally {
+    await stream.close()
+  }
 })
 
 // Compile-time: events type their data at emit and in reactors.

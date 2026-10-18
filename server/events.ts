@@ -85,11 +85,14 @@ const record = (entry: EntryRecord): EventRecord => {
   })
 }
 
+/** Labels the log conversation, which conversation lists leave out; it stays readable by id. */
+export const EVENT_LOG_LABEL = 'events'
+
 async function logOf(tx: Tx) {
   const index = await tx.doc(EventLog, ROOT_CONVERSATION_ID)
   if (index.conversation === undefined) {
     const { id } = await tx.createConversation({ ownership: { kind: 'ownerless' } })
-    Object.assign(await tx.doc(Metadata, id), { title: 'Events', label: 'events' })
+    Object.assign(await tx.doc(Metadata, id), { title: 'Events', label: EVENT_LOG_LABEL })
     index.conversation = id
   }
   return index.conversation as ConversationId
