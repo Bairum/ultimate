@@ -29,6 +29,8 @@ import type { Access } from './request-security.ts'
 import { serviceRegistry } from './services.ts'
 import type { ServiceStatus, ServiceHandle } from './services.ts'
 import { reportCore } from './supervisor-protocol.ts'
+import { EventFeed, eventLog } from './events.ts'
+import type { EventHost } from './events.ts'
 
 export type ExtensionHost = Pick<
   PreparedHost,
@@ -105,7 +107,7 @@ export type ExtensionHost = Pick<
   ): Promise<unknown>
   doc(kind: string): ConversationDocToken<JsonObject> | undefined
   metadata: typeof Metadata
-}
+} & EventHost
 const runOpener = (callback: () => Promise<void>) =>
   callback().catch((error: unknown) => console.error('Extension onOpen:', error))
 const runReleaser = (callback: () => Promise<void>) =>
@@ -125,6 +127,7 @@ export async function loadExtensions(
 ) {
   // Events belong to this host, not every host opened in the process.
   const events = createEventBus()
+  const log = eventLog(runtime.harness)
   const roots = discoveryRoots(host.ultimateRoot, host.projectRoot, host.userHome)
   const directories = roots.map((root) => join(root.path, 'extensions'))
   const services = serviceRegistry((snapshot) =>
@@ -174,6 +177,8 @@ export async function loadExtensions(
       },
       service: (serviceName, status) => serviceScope.service(serviceName, status),
       notice: (message) => {
+        // Each distinct message once per facet load: a notice raised by a commit watcher cannot loop through its event.
+        if (open && facetNotices.get(facetHost)?.has(message) === false) log.notice(name, message)
         facetNotices.get(facetHost)!.add(message)
         notice(message)
         void changed()
@@ -218,6 +223,12 @@ export async function loadExtensions(
         if (sharedResource) extensionHost.onClose(cleanup)
         else facetCleanups.get(facetHost)!.add(cleanup)
       },
+      react: (reactorName, tokens, handler) => {
+        const reactor = log.reactor(`${name}/${reactorName}`, tokens, handler)
+        facetHost.onOpen(reactor.start)
+        facetHost.onRelease(reactor.stop)
+        stops.add(reactor.stop)
+      },
       events: {
         emit: (channel, data) => events.emit(channel, data),
         on: (channel, handler) => {
@@ -246,7 +257,10 @@ export async function loadExtensions(
   const records = new Map<string, ExtensionInfo>()
   const documents = new Map<string, ConversationDocToken<JsonObject>[]>()
   const findDoc = (kind: string) =>
-    [...documents.values()].flat().find((doc) => doc.definition.kind === kind)
+    [
+      EventFeed as never as ConversationDocToken<JsonObject>,
+      ...[...documents.values()].flat(),
+    ].find((doc) => doc.definition.kind === kind)
   const openers = new Set<() => Promise<void>>()
   const releasers = new Set<() => Promise<void>>()
   let open = false
@@ -293,6 +307,11 @@ export async function loadExtensions(
       return invoke(name, action, args, signal, conversationId)
     },
     events,
+    emit: log.emit,
+    react: () => {
+      throw new Error('Reactors require a facet scope')
+    },
+    eventLog: log.eventLog,
     provide: () => {
       throw new Error('Providers require a facet scope')
     },

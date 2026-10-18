@@ -183,6 +183,11 @@ async function fixture(
         throw new Error('Not used')
       },
       conversations: () => [],
+      emit: () => {
+        throw new Error('Not used')
+      },
+      react: () => {},
+      eventLog: { recent: async () => [], reactors: async () => [] },
       projects: async () => [],
       extensions: () => [],
       invoke: async () => {

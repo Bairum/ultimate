@@ -56,6 +56,7 @@ export {
   useDoc,
   useDocOf,
   useDocumentRenderers,
+  useEvents,
   useExtensionUiState,
   useExtensions,
   useIntro,
@@ -73,6 +74,8 @@ export {
   useUltimate,
 } from './hooks.ts'
 export type { ActionState, ConversationState, Restart } from './hooks.ts'
+export { defineEvent } from '../../../shared/events.ts'
+export type { EventContext, EventData, EventRecord, EventToken } from '../../../shared/events.ts'
 export { touchKeyboard, useViewport } from './viewport.ts'
 export type { Viewport } from './viewport.ts'
 export type { Connection, State } from './store.ts'

@@ -13,6 +13,25 @@ and keep durable state in documents. `useReady()` becomes true once the initial 
 arrives, stays true across hot reloads, and exposes failed facet names. Overlays render as facets install, even while
 others load; see [Events](../extensions/README.md#events).
 
+## Durable events
+
+For "this happened" that other extensions act on or people read later, use durable events instead of the bus. Define
+a token once with `defineEvent<Data>('<extension>.<event>', { version? })` from `shared/events.ts` (browser-safe) and:
+
+- `host.emit(tx, Event, data)` appends it inside your commit, so it exists exactly when your state change does.
+- `host.react(name, [Event, …], (tx, event) => …)` runs the handler once per event, oldest first: those emitted before
+  it started, then each new one, serially per name (`<extension>/<name>`). The cursor advances in the handler's
+  transaction, so writes through `tx` happen exactly once across crashes, reloads and failures; side effects outside
+  `tx` (files, processes, network) are at least once. A throw rolls back the handler and the cursor, records the
+  failure, and retries the event on the next matching commit or harness open. Reactors run while the harness is open
+  and stop with their facet; a reloaded facet registering the same name continues from the cursor.
+- `host.eventLog.recent({ events?, since?, limit })` reads the newest first as plain copies; `host.eventLog.reactors()`
+  shows each reactor's cursor, lag and last failure. In the browser, `useEvents({ events?, limit })` from `@/sdk` streams
+  the root's feed of the latest 100 events.
+
+Each distinct `host.notice` message of a facet is also recorded as an `ultimate.notice` event while storage is open.
+Keep events few and small: they are history.
+
 ## Inspecting yourself
 
 Use `codemode` to compose dependent or parallel `tools.*` calls and filter results before they enter your context. Its `ultimate.*` API is the way to inspect yourself: system/build, extension facets and load errors, conversations, stored entries and search (including before compactions/resets), task graph, models, and exported documents. `ultimate.action(extension, action, args?)` is its one write: call an extension action on behalf of this conversation. Use ordinary tools for other writes and single simple calls. `store`/`load` persist conversation-scoped values; see `extensions/codemode/README.md` for interruption semantics.

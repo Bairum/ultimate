@@ -21,7 +21,9 @@ import type {
 } from '@earendil-works/pi-durable'
 import { actions, allCommands, regionKeys, shellKeys, shownSurface } from './actions.ts'
 import type { Region } from './actions.ts'
-import { actionMessage, MachineOfflineError } from './api.ts'
+import { actionMessage, MachineOfflineError, ROOT } from './api.ts'
+import { EVENT_FEED } from '../../../shared/events.ts'
+import type { EventData, EventRecord, EventToken } from '../../../shared/events.ts'
 import type { ActionError } from './api.ts'
 import { api, registry, store, uiState } from './client.ts'
 import { HOME, chatTools, documentItems, introOf } from './registry.ts'
@@ -145,6 +147,26 @@ export function useDocOf<T extends JsonObject = JsonObject>(
   return useStore((state) =>
     conversation === undefined ? undefined : state.docsOf[conversation]?.[kind],
   ) as Readonly<T> | null | undefined
+}
+
+/**
+ * The newest durable events (`host.emit`), newest first and live; only those of `events` when given. Reads the root's
+ * feed of the latest 100 events of every kind, so a rare kind can show fewer than `limit`. `undefined` until it arrives.
+ */
+export function useEvents<T extends EventToken = EventToken>(
+  options: { events?: readonly T[]; limit?: number } = {},
+): readonly EventRecord<EventData<T>>[] | undefined {
+  const feed = useDocOf<{ events: EventRecord[] }>(ROOT, EVENT_FEED)
+  const kinds = options.events?.map((event) => event.kind).join(',')
+  const limit = options.limit ?? 20
+  return useMemo(() => {
+    if (feed === undefined) return undefined
+    const wanted = kinds?.split(',')
+    return (feed?.events ?? [])
+      .filter((event) => !wanted || wanted.includes(event.kind))
+      .toReversed()
+      .slice(0, limit) as EventRecord<EventData<T>>[]
+  }, [feed, kinds, limit])
 }
 
 /** The shown conversation and surface ids, and the shell's actions. */
