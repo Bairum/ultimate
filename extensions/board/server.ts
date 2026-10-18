@@ -9,10 +9,20 @@ import {
   defineExtension,
   defineTask,
   defineTool,
+  GenerationTask,
+  hook,
+  LiveDoc,
   ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, EntryId, TaskId, Tx } from '@earendil-works/pi-durable'
+import type {
+  ConversationId,
+  EntryId,
+  GenerationResult,
+  SubmissionId,
+  TaskId,
+  Tx,
+} from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { QuestionsService } from '../questions/server.ts'
@@ -65,6 +75,28 @@ const Requests = defineDoc<{ ids: Record<string, number> }>({
   fork: 'initial',
   initial: () => ({ ids: {} }),
 })
+/**
+ * Who started a branch through `branch`, so its later final answers reach that conversation. `yielded` is the newest
+ * generation observed, so a replayed hook creates no second observer.
+ */
+const Started = defineDoc<{ by?: number; yielded?: number }>({
+  kind: 'board.started',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({}),
+})
+/** An answer that asks for a decision wakes the starter: it ends with a question or numbered options. */
+function needsDecision(text: string) {
+  const last = text
+    .trim()
+    .split('\n')
+    .at(-1)!
+    .trim()
+    .replace(/[*_`]+$/, '')
+  return last.endsWith('?') || /^\d+[.)]\s/.test(last)
+}
 /** A reply-enabled message to the user that the user has not answered yet. */
 const openQuestion = (m: BoardMessage) => m.to === 'user' && m.reply && m.state === 'delivered'
 /** Typing in a conversation answers the questions it asked the user before that input. */
@@ -265,6 +297,90 @@ function delivery(host: ExtensionHost) {
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
 }
+const terminal = { status: 'terminal', outcome: { status: 'completed', result: null } } as const
+/**
+ * After a branch's run, its final answer reaches the conversation that started it, unless that answer already does:
+ * as the answer to one of the starter's messages, or because the run messaged the starter itself.
+ */
+function route(host: ExtensionHost) {
+  return defineTask<
+    { generation: TaskId<GenerationResult>; inputs: SubmissionId[]; by: number },
+    { phase: 'observe' },
+    null
+  >({
+    name: 'board.route',
+    version: 1,
+    initial: () => ({ phase: 'observe' }),
+    phases: {
+      observe: async (task, runtime, ctx) => {
+        const settled = await runtime.waitForTask(task.input.generation, ctx)
+        if (settled.state.outcome.status !== 'completed') {
+          await runtime.commit(() => terminal, ctx)
+          return
+        }
+        const answer = settled.state.outcome.result.entryId
+        const inputs = await Promise.all(
+          task.input.inputs.map(async (id) =>
+            (await host.harness().submission(id, ctx))?.status(ctx),
+          ),
+        )
+        const { by } = task.input
+        const id = runtime.conversationId
+        const text = await host.harness().commit(async (tx) => {
+          // A continued generation's answer is no run's final answer: only inputs it settled make one.
+          const answered = inputs.flatMap((input) =>
+            input?.type === 'input' && input.status === 'done' && input.answer === answer
+              ? [input.entry]
+              : [],
+          )
+          let since = Number.POSITIVE_INFINITY
+          for (const entryId of answered) {
+            const entry = await tx.entry(entryId)
+            // board.delivery returns the answer to the starter's message, or the starter expects none (one-way).
+            if (entry?.kind === 'board.message' && (entry.data as { from?: unknown })?.from === by)
+              return undefined
+            since = Math.min(since, entry?.model?.[0]?.timestamp ?? since)
+          }
+          if (!answered.length) return undefined
+          const message = (await tx.entry(answer))?.model?.[0]
+          if (
+            message?.role !== 'assistant' ||
+            message.stopReason === 'error' ||
+            message.stopReason === 'aborted'
+          )
+            return undefined
+          const until = message.timestamp
+          // Only tool calls count: an earlier run's routed answer can land after this run's input.
+          const messaged = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.some(
+            (m) =>
+              m.from === id &&
+              m.to === by &&
+              m.call !== undefined &&
+              m.at >= since &&
+              m.at <= until,
+          )
+          if (messaged) return undefined
+          return message.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
+        }, ctx)
+        if (text?.trim())
+          await send(
+            host,
+            id,
+            { to: `#${by}`, text, reply: false },
+            ctx,
+            undefined,
+            undefined,
+            `route:${answer}`,
+            undefined,
+            !needsDecision(text),
+          )
+        await runtime.commit(() => terminal, ctx)
+      },
+    },
+    abort: (_task, runtime, ctx) =>
+      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+  })
+}
 /** The conversation that started `id` as a subagent, which is the only one it may message. */
 async function parentOf(host: ExtensionHost, id: number, ctx: Context) {
   const owner = (await host.harness().commit((tx) => tx.conversation(id as ConversationId), ctx))
@@ -336,6 +452,7 @@ async function send(
   callId?: string,
   requestId?: string,
   answerId?: number,
+  note?: boolean,
 ) {
   if (requestId !== undefined && from !== 'user') {
     const sent = await host.harness().snapshot(Requests, from as ConversationId, ctx)
@@ -416,7 +533,7 @@ async function send(
         {
           message,
           steer,
-          note: parent === to && input.reply === false,
+          note: note ?? (parent === to && input.reply === false),
           fromLabel,
           toLabel,
         },
@@ -495,7 +612,35 @@ export default function board(host: ExtensionHost) {
   })
   return defineExtension({
     name: 'board',
-    tasks: [delivery(host)],
+    tasks: [delivery(host), route(host)],
+    hooks: [
+      hook(GenerationTask, {
+        onYield: async (_answer, api, ctx) => {
+          const by = (await api.snapshot(Started, api.conversationId, ctx))?.by
+          if (by === undefined) return undefined
+          await host.harness().commit(async (tx) => {
+            // One observer per generation, decided in the commit that creates it.
+            const started = await tx.doc(Started, api.conversationId)
+            if (started.yielded !== undefined && started.yielded >= api.taskId) return
+            started.yielded = api.taskId
+            await tx.createTask(
+              route(host),
+              {
+                generation: api.taskId as TaskId<GenerationResult>,
+                inputs: [...((await tx.doc(LiveDoc, api.conversationId)).run?.inputs ?? [])],
+                by,
+              },
+              {
+                ownership: { kind: 'conversation' },
+                conversationId: api.conversationId,
+                background: true,
+              },
+            )
+          }, ctx)
+          return undefined
+        },
+      }),
+    ],
     sections: [
       section('board', async (input, ctx) => {
         if (!input.agent.tools.some((tool) => tool.name === 'message')) return undefined
@@ -557,6 +702,7 @@ export default function board(host: ExtensionHost) {
             await host.harness().commit(async (tx) => {
               await configure(tx, branch.id, { instructions: coordinator.instructions })
               ;(await tx.doc(host.metadata, branch.id)).label = 'coordinator'
+              ;(await tx.doc(Started, branch.id)).by = api.conversationId
             }, ctx)
             id = await api.memo('branch-id', branch.id, ctx)
           }

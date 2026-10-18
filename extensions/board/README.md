@@ -64,6 +64,15 @@ It chooses the explicit root, otherwise the caller's tree root, otherwise the on
 produce an error listing the available ids. It forks the root's tally tip through lineage, attributes the tally prompt
 to the caller, and sends the first input as a board message with replies enabled. It returns the branch id and message id.
 The branch's answer therefore wakes its caller as a normal `board.reply`.
+The tool records the caller in the branch's `board.started` document, so later answers reach it too. A later run, woken
+by a subagent, a notify, a lander report or steering, ends with a final answer nobody receives. After each such run, a
+background `board.route` task (one per generation, from an `onYield` hook) sends that answer to the starter as a one-way
+board message from the branch, with the usual outgoing and incoming cards. It skips the answer when the run answered one
+of the starter's own messages (board.delivery replies, or the starter expected no answer), when the run itself called
+`message` to the starter, and when the answer is empty, failed or aborted. An answer whose last line is a question or a
+numbered option asks for a decision and wakes the starter as a follow-up; any other answer is a note, which wakes nothing.
+The reply assessment is not used: it arrives later, from the summary model, and only when one is configured. Request id
+`route:<answer entry>` deduplicates delivery in the branch's `board.requests`, so a restart never sends an answer twice.
 Before sending its first input, the tool rereads the `coordinator` definition (built-in, user, then trusted project override), applies only its instructions, and marks `ultimate.metadata.label = 'coordinator'`. The branch keeps its inherited model and tools. Coordinators report decisions to @ultimate and send it one-way landing or failure updates with the sha and divergence.
 The tool gives lineage its task and call ids for a task-scoped receipt, recorded atomically with the fork, so replay cannot
 create another branch even before the branch-id memo is saved. Pi retires that receipt when the originating task completes.

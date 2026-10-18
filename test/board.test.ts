@@ -927,6 +927,96 @@ it.each([false, true])(
     ).toHaveLength(1)
   },
 )
+async function branched(f: Awaited<ReturnType<typeof fixture>>) {
+  const tool = (await f.opened.root.agent(context)).deferred.find(
+    (candidate) => candidate.name === 'branch',
+  )!
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1]
+    await configure(tx, f.opened.root.id, { modelTools: { add: [tool] } })
+  }, context)
+  await f.opened.root.submit(
+    { type: 'input', content: 'BRANCH ' + JSON.stringify({ prompt: 'Explore', isolated: false }) },
+    context,
+  )
+  await until(async () => (await replies(f)).length === 1)
+  await f.opened.root.waitForIdle(context)
+  const id = (await f.log())!.messages[0].to as number
+  const branch = (await f.opened.harness.conversation(id as ConversationId, context))!
+  await branch.waitForIdle(context)
+  const from = async () => (await f.log())!.messages.filter((m) => m.from === id)
+  // Routing runs in background tasks, which idle waits skip: absence holds only once they settled.
+  const settled = async () => {
+    await f.opened.harness.waitForIdle(context)
+    await until(async () =>
+      (await f.opened.harness.inspect(context)).tasks.every(
+        (t) => t.record.kind !== 'board.route' && t.record.kind !== 'board.delivery',
+      ),
+    )
+  }
+  const later = async (content: string) => {
+    await (await branch.submit({ type: 'input', content }, context)).wait(context)
+    await settled()
+  }
+  await settled()
+  return { id, branch, from, later, settled }
+}
+it("routes a branch's later final answer to its starter once: a note, or a wake for a decision", async () => {
+  const f = await fixture()
+  const b = await branched(f)
+  await b.later('Landed abc123')
+  await until(async () => (await b.from()).length === 2)
+  await b.later('Approve the preview?\n1. Land it\n2. Iterate')
+  await until(async () => (await b.from()).length === 3)
+  // The note started no run, so only the decision woke @ultimate after the branch's first reply.
+  await until(async () => (await replies(f)).length === 1)
+  await f.opened.root.waitForIdle(context)
+  const routed = (await b.from()).slice(1)
+  expect(routed).toMatchObject([
+    { to: 1, text: 'Answer: Landed abc123', reply: false },
+    { to: 1, text: 'Answer: Approve the preview?\n1. Land it\n2. Iterate', reply: false },
+  ])
+  const view = await f.opened.root.viewState(context)
+  const inputs = view.value.entries.filter((e) => e.kind === 'board.message')
+  expect(inputs.map((e) => [e.data, e.input === true])).toEqual([
+    [expect.objectContaining({ id: routed[0].id, delivery: 'note' }), false],
+    [expect.objectContaining({ id: routed[1].id, delivery: 'followUp' }), true],
+  ])
+  view.dispose()
+  expect(f.observed).toContain(
+    `Message from #${b.id}:\nAnswer: Approve the preview?\n1. Land it\n2. Iterate\nOne-way message: #${b.id} expects no answer, and your answer here is not sent to it. If it needs to hear from you, message it.`,
+  )
+  // A reopen replays nothing: each answer was routed exactly once.
+  await f.opened.close()
+  await f.open()
+  await b.settled()
+  expect(await b.from()).toHaveLength(3)
+})
+it("does not route an answer to the starter's own messages, reply-enabled or one-way", async () => {
+  const f = await fixture()
+  const b = await branched(f)
+  expect(await b.from()).toMatchObject([{ re: 1 }])
+  await f.send(`#${b.id}`, 'Status?')
+  await until(async () => (await replies(f)).length === 2)
+  await f.send(`#${b.id}`, 'FYI', { reply: false })
+  await until(async () => (await f.log())!.messages.at(-1)?.answer !== undefined)
+  await b.settled()
+  expect((await b.from()).map((m) => m.re)).toEqual([1, 3])
+})
+it('does not route the final answer of a run that messaged its starter', async () => {
+  const f = await fixture()
+  const b = await branched(f)
+  await b.later('SEND ' + JSON.stringify({ to: '#1', text: 'Landed', reply: false }))
+  await b.settled()
+  // The run ended with a final answer after messaging, and that answer stayed in the branch.
+  const view = await b.branch.viewState(context)
+  expect(view.value.entries.at(-1)?.kind).toBe('pi.assistant')
+  view.dispose()
+  expect((await b.from()).map((m) => [m.text, m.call !== undefined])).toEqual([
+    [expect.stringContaining('Explore'), false],
+    ['Landed', true],
+  ])
+})
 it('recovers once after input placement, before the recipient settles', async () => {
   const f = await fixture()
   await f.send(String(f.recipient.id), 'HOLD')
