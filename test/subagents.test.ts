@@ -169,6 +169,12 @@ async function fixture(
       provide: () => {},
       service: () => ({ update: () => {}, dispose: () => {} }),
       use: () => undefined,
+      implement: () => {},
+      need: () => {
+        throw new Error('Not used')
+      },
+      want: () => undefined,
+      catalogue: () => ({ apis: [], missing: [], cycles: [] }),
       resource: (_key, create) => create(),
       onOpen: () => {},
       onRelease: () => {},

@@ -145,6 +145,14 @@ function globals(
       execute: () => host.extensions(),
     },
     {
+      name: 'catalogue',
+      description:
+        'Extension APIs: who provides, needs and wants each, plus missing providers and dependency cycles.',
+      signature:
+        '(): Promise<{ apis: { name: string; provider?: string; needs: string[]; wants: string[] }[]; missing: string[]; cycles: string[][] }>',
+      execute: () => host.catalogue(),
+    },
+    {
       name: 'action',
       description:
         "Call an extension action, as the UI does, on behalf of this conversation; ultimate.extensions() lists each extension's actions, its README their args.",
