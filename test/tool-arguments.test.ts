@@ -48,6 +48,8 @@ function source(deltas: string[]) {
   return { open, opened, pushed, message }
 }
 
+const model = { api: 'faux', provider: 'faux', id: 'faux-1' }
+
 async function drain(stream: ReturnType<typeof guardStream>) {
   const events: AssistantMessageEvent[] = []
   for await (const event of stream) events.push(event)
@@ -57,7 +59,7 @@ async function drain(stream: ReturnType<typeof guardStream>) {
 it('ends a tool call whose arguments gain a long whitespace run with a retryable error', async () => {
   const spaces = ' '.repeat(MAX_WHITESPACE_RUN / 2)
   const fake = source(['{"schedule":"in 30m","} 、】【 retry.', spaces, spaces, spaces, '"}'])
-  const { events, result } = await drain(guardStream(fake.open))
+  const { events, result } = await drain(guardStream(fake.open, model))
   expect(events.map((event) => event.type)).toEqual([
     'start',
     'toolcall_start',
@@ -81,11 +83,37 @@ it('passes a normal tool call and a large legitimate write through untouched', a
     const json = JSON.stringify(args)
     const deltas = json.match(/[\s\S]{1,7}/g) ?? []
     const fake = source(deltas)
-    const { events, result } = await drain(guardStream(fake.open))
+    const { events, result } = await drain(guardStream(fake.open, model))
     expect(events).toEqual(fake.pushed)
     expect(result).toBe(fake.message)
     expect(fake.opened.signal?.aborted).toBe(false)
   }
+})
+
+it('settles when the source ends by its result alone', async () => {
+  const { message } = source([])
+  const stream = guardStream(() => {
+    const silent = createAssistantMessageEventStream()
+    silent.end(message)
+    return silent
+  }, model)
+  expect(await drain(stream)).toEqual({ events: [], result: message })
+})
+
+it('ends with an error when the source fails', async () => {
+  const failing = createAssistantMessageEventStream()
+  failing[Symbol.asyncIterator] = async function* () {
+    yield* []
+    throw new Error('socket closed')
+  }
+  const { events, result } = await drain(guardStream(() => failing, model))
+  expect(events.map((event) => event.type)).toEqual(['error'])
+  expect(result).toMatchObject({
+    stopReason: 'error',
+    errorMessage: 'Model stream failed: Error: socket closed',
+    provider: 'faux',
+    model: 'faux-1',
+  })
 })
 
 it('lets the generation retry a degenerate response and answer', async () => {
