@@ -120,7 +120,7 @@ export default defineConfig({
                 onboarding: ['workspaces', 'subagents', 'lineage'],
                 plan: ['lineage', 'workspaces'],
                 self: ['workspaces'],
-                sounds: ['conversations'],
+                sounds: ['conversations', 'board', 'questions'],
                 'status-line': ['workspaces'],
                 subagents: ['conversations', 'plan', 'workspaces'],
                 sync: ['cloud', 'health', 'onboarding', 'secrets', 'subagents'],

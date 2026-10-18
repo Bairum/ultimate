@@ -1,95 +1,96 @@
 import { expect, it } from 'vitest'
 import type { OverviewRow } from '../../extensions/conversations/types.ts'
-import { cueOf, listener, settle } from '../../extensions/sounds/cues.ts'
+import { cuesOf, listener, settle } from '../../extensions/sounds/cues.ts'
+import type { Watched } from '../../extensions/sounds/cues.ts'
 
+const agent = 7
 const answered = (answerId: number, extra: Partial<OverviewRow> = {}): OverviewRow => ({
   runState: 'answered',
   inputId: answerId - 1,
   answerId,
   ...extra,
 })
-const assessed = (answerId: number, value: 'needs_input' | 'done' | 'neutral') =>
-  answered(answerId, {
-    assessmentStatus: 'ready',
-    assessment: { inputId: answerId - 1, answerId, value } as never,
-  })
+const watched = (extra: Partial<Watched> = {}): Watched => ({
+  agent,
+  messages: [],
+  extracting: false,
+  ...extra,
+})
+const sounds = (state: Watched) => cuesOf(state).map((cue) => cue.sound)
 
-it('tells a question, a finished task and a failed run apart', () => {
-  expect(cueOf('7', assessed(10, 'needs_input'))).toEqual({
-    key: '7:10',
-    sound: 'input',
-    settled: true,
-  })
-  expect(cueOf('7', assessed(10, 'done'))?.sound).toBe('finished')
-  expect(cueOf('7', assessed(10, 'neutral'))?.sound).toBe('finished')
-  expect(cueOf('7', { runState: 'error', inputId: 4 })).toEqual({
-    key: '7:4',
-    sound: 'failed',
-    settled: true,
-  })
-  expect(cueOf('7', answered(10, { assessmentStatus: 'error' }))?.settled).toBe(true)
+it('tells a question, a finished answer and a failed run apart', () => {
+  expect(cuesOf(watched({ row: answered(10) }))).toEqual([
+    { key: '7:10', sound: 'finished', settled: false },
+  ])
+  expect(cuesOf(watched({ row: answered(10), asked: { conversation: agent, entry: 10 } }))).toEqual(
+    [{ key: '7:10', sound: 'input', settled: true }],
+  )
+  expect(cuesOf(watched({ row: { runState: 'error', inputId: 4 } }))).toEqual([
+    { key: '7:4', sound: 'failed', settled: true },
+  ])
+  const messages = [
+    { id: 1, from: agent, to: 'user' as const, reply: true },
+    { id: 2, from: agent, to: 'user' as const, reply: false },
+  ]
+  expect(cuesOf(watched({ messages }))).toEqual([
+    { key: 'message:1', sound: 'input', settled: true },
+    { key: 'message:2', sound: 'finished', settled: true },
+  ])
 })
 
-it('stays quiet while working and while the assessment is in flight', () => {
-  expect(cueOf('7', { runState: 'working', inputId: 9 })).toBeUndefined()
-  expect(cueOf('7', { runState: 'queued' })).toBeUndefined()
-  expect(cueOf('7', answered(10, { assessmentStatus: 'pending' }))).toBeUndefined()
-  // A stale status from the previous reply: no assessment of this one is known yet.
-  expect(cueOf('7', answered(10, { assessmentStatus: 'ready' }))?.settled).toBe(false)
+it('stays quiet for everything that is not @ultimate talking to the user', () => {
+  // Answering another agent's message, not the user.
+  expect(sounds(watched({ row: answered(10, { internalInput: true }) }))).toEqual([])
+  // A card on another conversation's answer does not make this one a question.
+  expect(sounds(watched({ row: answered(10), asked: { conversation: 9, entry: 10 } }))).toEqual([
+    'finished',
+  ])
+  // Messages from other agents to the user, and @ultimate's messages to branches.
+  const messages = [
+    { id: 1, from: 30726, to: 'user' as const, reply: true },
+    { id: 2, from: 110108, to: 'user' as const, reply: false },
+    { id: 3, from: agent, to: 158849, reply: true },
+    { id: 4, from: 'user' as const, to: agent, reply: false },
+  ]
+  expect(sounds(watched({ messages }))).toEqual([])
+  expect(sounds(watched({ row: { runState: 'working', inputId: 9 } }))).toEqual([])
+  expect(cuesOf({ messages, extracting: false })).toEqual([])
 })
 
 it('takes what is there at first as heard, and sounds later news once', () => {
   const hear = listener()
-  const top = new Set([1, 2])
-  expect(hear({ 1: assessed(10, 'done') }, top, 0).due).toEqual([])
-  expect(hear({ 1: assessed(10, 'done') }, top, 1).due).toEqual([])
-  const news = { 1: assessed(10, 'done'), 2: assessed(20, 'needs_input') }
-  expect(hear(news, top, 2).due.map((cue) => cue.sound)).toEqual(['input'])
-  expect(hear(news, top, 3).due).toEqual([])
-  expect(hear({ ...news, 1: { runState: 'error', inputId: 30 } }, top, 4).due).toEqual([
-    { key: '1:30', sound: 'failed', settled: true },
+  const message = { id: 1, from: agent, to: 'user' as const, reply: true }
+  expect(hear(watched({ messages: [message] }), 0).due).toEqual([])
+  expect(hear(watched({ messages: [message] }), 1).due).toEqual([])
+  const next = { id: 2, from: agent, to: 'user' as const, reply: true }
+  expect(hear(watched({ messages: [message, next] }), 2).due.map((cue) => cue.key)).toEqual([
+    'message:2',
+  ])
+  expect(hear(watched({ messages: [message, next] }), 3).due).toEqual([])
+  expect(hear(watched({ row: { runState: 'error', inputId: 30 } }), 4).due).toEqual([
+    { key: '7:30', sound: 'failed', settled: true },
   ])
 })
 
-it('leaves parented conversations out', () => {
+it('waits for question extraction before an answer sounds as finished', () => {
   const hear = listener()
-  hear({}, new Set([1]), 0)
-  expect(hear({ 5: assessed(10, 'done') }, new Set([1]), 1).due).toEqual([])
-})
-
-it('keeps standing agents quiet for internal replies but sounds their replies to the user', () => {
-  const hear = listener()
-  const top = new Set([1, 2, 3])
-  const standing = new Set([1, 2])
-  hear({}, top, 0, standing)
-  const rows = {
-    1: answered(10, { internalInput: true }),
-    2: answered(20),
-    3: answered(30, { internalInput: true }),
-  }
-  expect(hear(rows, top, 100, standing)).toEqual({ due: [], waiting: true })
-  expect(hear(rows, top, 100 + settle, standing).due.map((cue) => cue.key)).toEqual([
-    '2:20',
-    '3:30',
-  ])
-  expect(hear(rows, top, 200 + settle, standing)).toEqual({ due: [], waiting: false })
-})
-
-it('waits for a reply to settle, and lets a starting assessment decide', () => {
-  const hear = listener()
-  const top = new Set([1])
-  hear({}, top, 0)
-  expect(hear({ 1: answered(10) }, top, 100)).toEqual({ due: [], waiting: true })
-  expect(hear({ 1: answered(10) }, top, 100 + settle).due.map((cue) => cue.sound)).toEqual([
+  hear(watched(), 0)
+  // No extraction showed up within the grace: finished.
+  expect(hear(watched({ row: answered(10) }), 100)).toEqual({ due: [], waiting: true })
+  expect(hear(watched({ row: answered(10) }), 100 + settle).due.map((cue) => cue.sound)).toEqual([
     'finished',
   ])
-
-  hear({ 1: answered(20) }, top, 10_000)
-  expect(hear({ 1: answered(20, { assessmentStatus: 'pending' }) }, top, 10_100)).toEqual({
-    due: [],
-    waiting: false,
-  })
-  expect(hear({ 1: assessed(20, 'needs_input') }, top, 20_000).due.map((cue) => cue.sound)).toEqual(
-    ['input'],
+  // An extraction runs past the grace, then attaches a card: a question, once.
+  expect(hear(watched({ row: answered(20), extracting: true }), 10_000).due).toEqual([])
+  expect(hear(watched({ row: answered(20), extracting: true }), 20_000).due).toEqual([])
+  const asked = { conversation: agent, entry: 20 }
+  expect(hear(watched({ row: answered(20), asked }), 20_100).due.map((cue) => cue.sound)).toEqual([
+    'input',
+  ])
+  expect(hear(watched({ row: answered(20), asked }), 20_200).due).toEqual([])
+  // An extraction that finds nothing: finished once it ends.
+  expect(hear(watched({ row: answered(30), extracting: true }), 30_000).due).toEqual([])
+  expect(hear(watched({ row: answered(30) }), 30_000 + settle).due.map((cue) => cue.sound)).toEqual(
+    ['finished'],
   )
 })
