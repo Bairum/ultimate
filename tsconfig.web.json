@@ -36,6 +36,8 @@
     "extensions/sounds/tones.ts",
     "extensions/instance/links.ts",
     "extensions/workspaces/types.ts",
+    "extensions/sync/types.ts",
+    "extensions/subagents/primary.ts",
     "extensions/subagents/message-types.ts",
     "test/web"
   ]

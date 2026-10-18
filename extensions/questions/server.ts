@@ -32,6 +32,7 @@ import type { SummaryModel } from '../conversations/summary-model.ts'
 import type { BoardMessage, BoardService } from '../board/server.ts'
 import { Board } from '../board/server.ts'
 import { Standing } from '../subagents/server.ts'
+import { primaryAgent } from '../subagents/primary.ts'
 
 import type { Question } from './types.ts'
 export const BoardQuestions = defineDoc<{
@@ -455,7 +456,8 @@ export default function questionsExtension(host: ExtensionHost) {
       hook(GenerationTask, {
         onYield: async (_answer, api, ctx) => {
           const standing = await api.snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
-          if (standing?.ultimate !== api.conversationId) return undefined
+          if (standing?.[primaryAgent(host.projectRoot, host.userHome)] !== api.conversationId)
+            return undefined
           await host.harness().commit(async (tx) => {
             // One extraction per generation, decided in the commit that creates it.
             const state = await tx.doc(BoardQuestions, ROOT_CONVERSATION_ID)

@@ -89,6 +89,16 @@ export const actions = { ping: async () => 'pong', revoke: async () => { remove(
         'POST',
       ),
     ).toBe(200)
+    // An action call without `args` runs with empty args.
+    expect(
+      await (
+        await fetch(server.url + '/api/extensions/access/actions/ping', {
+          method: 'POST',
+          headers: { origin: server.url },
+          body: '{}',
+        })
+      ).json(),
+    ).toEqual({ result: 'pong' })
     const upgrade = {
       connection: 'Upgrade',
       upgrade: 'websocket',

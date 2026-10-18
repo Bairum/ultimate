@@ -274,6 +274,15 @@ export default async function fauxExtension(host: ExtensionHost) {
           { stopReason: 'toolUse' },
         )
       }
+      if (last?.role === 'user' && last.content === 'fleet demo') return tool('fleet', {})
+      if (
+        last?.role === 'toolResult' &&
+        last.toolName === 'fleet' &&
+        transcript.messages[asked]?.content === 'fleet demo'
+      )
+        return fauxAssistantMessage([
+          fauxText('ultimate is moving from haza-pc to rog; blog runs here with one kept ref.'),
+        ])
       if (transcript.messages[asked]?.content === 'messages demo') {
         const steps = [
           fauxToolCall('message', {

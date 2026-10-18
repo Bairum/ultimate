@@ -22,7 +22,7 @@ import {
 } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import { ConversationRef } from '../conversations/feature.tsx'
-import { talkToUltimate } from '../conversations/ultimate.tsx'
+import { talkToUltimate, usePrimaryAgent } from '../conversations/ultimate.tsx'
 import { Open } from '../workspaces/landing.tsx'
 import { useRoots } from './roots.tsx'
 import { column, Familiarize } from './survey.tsx'
@@ -339,13 +339,26 @@ function TallyComposer({ id, dock }: { id: number; dock?: boolean }) {
   const history = useConversation((conversation) =>
     conversation.loading ? undefined : conversation.entries.length > 0,
   )
+  const primary = usePrimaryAgent()
   if (tally === undefined || history === undefined) return null
-  if (tally?.since === undefined && !history) return <Familiarize dock={dock} id={id} />
-  return <TallyFooter dock={dock} id={id} tokens={tally?.tokens} />
+  // The machine home has no project to read: its root stays empty and points at @sync.
+  if (tally?.since === undefined && !history && primary === 'ultimate')
+    return <Familiarize dock={dock} id={id} />
+  return <TallyFooter dock={dock} id={id} primary={primary} tokens={tally?.tokens} />
 }
 
 /** In place of a tally's composer: what it is, its size, and the way to @ultimate, who keeps it. */
-function TallyFooter({ id, tokens, dock }: { id: number; tokens?: number; dock?: boolean }) {
+function TallyFooter({
+  id,
+  tokens,
+  dock,
+  primary,
+}: {
+  id: number
+  tokens?: number
+  dock?: boolean
+  primary: string
+}) {
   const actions = useUltimate()
   return (
     <div className={cn(column(dock), 'pb-3')}>
@@ -366,11 +379,11 @@ function TallyFooter({ id, tokens, dock }: { id: number; tokens?: number; dock?:
             onClick={() => void talkToUltimate(actions)}
             type="button"
           >
-            Talk to @ultimate
+            Talk to @{primary}
           </button>
         </div>
         <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
-          What every new branch starts from. @ultimate maintains it.
+          What every new branch starts from. @{primary} maintains it.
         </p>
       </div>
     </div>

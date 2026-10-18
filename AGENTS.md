@@ -39,6 +39,9 @@ A project is a forest of conversation trees, like commit histories.
 
 `extensions/lineage/README.md` has the mechanics.
 
+**The machine home** (`~/.ultimate/machine`, port 4700) is one small Ultimate per machine whose only standing agent is
+@sync (`resident: machine`): it sees the fleet and drives moves between machines (`extensions/sync/README.md`).
+
 ## Layers and how they reload
 
 | Path                          | What lives there                                                                               | How a change goes live                                                                                                                                                                                 |

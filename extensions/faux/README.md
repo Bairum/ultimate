@@ -6,6 +6,8 @@ In @ultimate's conversation, send `messages demo` to send the user a one-way upd
 In @ultimate's conversation, `chat demo` (typed, or posted to @ultimate) runs tools, starts a `landing demo` branch
 that reports a landing back, and sends you a one-way update and a question; `ask demo` asks another question. A reply
 from another conversation gets a short acknowledgement.
+In @sync's conversation in a machine home, `fleet demo` calls `fleet`, which returns a demo fleet under faux
+(`extensions/sync/README.md` shows how to start a faux machine home).
 Under faux, summaries run on scripted neutral responses unless `summaryModel` is set. Their title and Ask line
 come from the latest user prompt, with generic demo summary, feature and activity text (a prompt containing `no feature` leaves the feature unset, to
 preview a conversation shown by its title); only the questions demo

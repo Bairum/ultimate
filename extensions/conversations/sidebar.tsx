@@ -26,7 +26,13 @@ import {
 import { currentAssessment, Row, ChildRow, RootRow, StandingRow } from './rows.tsx'
 import { useRoots } from '../lineage/roots.tsx'
 import { ago, LanderState } from './lander.tsx'
-import { StandingPhase, talkToUltimate, UltimateDot, useWaitingOnUser } from './ultimate.tsx'
+import {
+  StandingPhase,
+  talkToUltimate,
+  UltimateDot,
+  usePrimaryAgent,
+  useWaitingOnUser,
+} from './ultimate.tsx'
 
 /** The shown conversation, also while its snapshot is still on the way. */
 const useShownId = () => useStore((state) => state.view?.conversation.id ?? state.requested)
@@ -102,8 +108,10 @@ export function Conversations() {
   const topLevel = conversations.filter(
     (conversation) => conversation.parentConversationId === undefined,
   )
-  // @ultimate first, then the lander and other standing agents: pinned above the rest and never concluded.
-  const ultimateId = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')?.ultimate
+  // The primary agent (@ultimate, or @sync in the machine home) first, then the lander and other standing agents:
+  // pinned above the rest and never concluded.
+  const primary = usePrimaryAgent()
+  const ultimateId = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')?.[primary]
   const ultimate = topLevel.find((conversation) => conversation.id === ultimateId)
   const agents = topLevel
     .filter((conversation) => pinned(conversation) && conversation.id !== ultimateId)
@@ -189,7 +197,7 @@ export function Conversations() {
             <UltimateDot waiting={isUltimate ? waiting : 0} working={busy} />
           )
         }
-        name={conversation?.title ?? '@ultimate'}
+        name={conversation?.title ?? `@${primary}`}
         onOpen={() =>
           conversation && !isUltimate
             ? actions.switchConversation(conversation.id)

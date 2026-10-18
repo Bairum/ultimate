@@ -36,10 +36,13 @@ type Conversation = {
   parentConversationId?: number
   ownerTaskId?: number
 }
-/** @ultimate's standing conversation, which reads as a chat with the user. */
+/**
+ * The primary standing agent's conversation, which reads as a chat with the user: @ultimate's, or @sync's, which is
+ * resident only in the machine home.
+ */
 export const ultimateChat = (conversation: Conversation) =>
   conversation.label === 'agent' &&
-  conversation.title === '@ultimate' &&
+  (conversation.title === '@ultimate' || conversation.title === '@sync') &&
   conversation.parentConversationId === undefined &&
   conversation.ownerTaskId === undefined
 

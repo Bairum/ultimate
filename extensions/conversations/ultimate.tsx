@@ -1,17 +1,24 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { api, cn, useDocOf, useStore, useTasks, useUltimate } from '@/sdk'
+import { api, cn, getState, useDocOf, useStore, useSystem, useTasks, useUltimate } from '@/sdk'
 import type { UltimateActions } from '@/sdk'
+import { primaryAgent } from '../subagents/primary.ts'
 import { emptyBoard, waitingOnUser } from '../board/data.tsx'
 import type { BoardData } from '../board/data.tsx'
 import type { QuestionsBoard } from '../questions/open.tsx'
 import { phaseText, usePhase } from '../phase/chip.tsx'
 import { useOverview } from './feature.tsx'
 
-/** Show @ultimate's standing conversation on the Agent surface; it starts branches and keeps the tallies. */
+/** The home's primary standing agent: @sync in the machine home, else @ultimate. */
+const primaryOf = (system: ReturnType<typeof useSystem>) =>
+  system ? primaryAgent(system.project.root, system.machine.home) : 'ultimate'
+export const usePrimaryAgent = () => primaryOf(useSystem())
+
+/** Show the primary agent's standing conversation on the Agent surface: @ultimate starts branches and keeps tallies. */
 export async function talkToUltimate(
   actions: Pick<UltimateActions, 'switchConversation' | 'showSurface'>,
 ) {
-  const id = await api.action<number>('subagents', 'standing', { name: 'ultimate' })
+  const name = primaryOf(getState().system)
+  const id = await api.action<number>('subagents', 'standing', { name })
   actions.switchConversation(id)
   actions.showSurface('agent')
 }
@@ -53,7 +60,8 @@ export function StandingPhase({ id }: { id: number }) {
 /** The title bar's way to @ultimate from every surface, with its state and the questions that wait on you. */
 export function UltimateButton() {
   const actions = useUltimate()
-  const id = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')?.ultimate
+  const name = usePrimaryAgent()
+  const id = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')?.[name]
   const tasks = useTasks()
   const runState = useOverview()[id ?? -1]?.runState
   const shown = useStore((state) => state.view?.conversation.id ?? state.requested)
@@ -72,7 +80,7 @@ export function UltimateButton() {
       <TooltipTrigger asChild>
         <button
           aria-current={active ? 'page' : undefined}
-          aria-label={`Talk to @ultimate (${label})`}
+          aria-label={`Talk to @${name} (${label})`}
           className={cn(
             'flex h-5 shrink-0 items-center gap-1.5 rounded-sm px-1.5 transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
             active && 'text-foreground',
@@ -81,13 +89,14 @@ export function UltimateButton() {
           onClick={() => void talkToUltimate(actions)}
           type="button"
         >
-          <UltimateDot waiting={waiting} working={working} />
-          @ultimate
+          <UltimateDot waiting={waiting} working={working} />@{name}
           {working && word !== 'working' && <span className="text-brand">{word}</span>}
           {waiting > 0 && <span className="text-amber-700 dark:text-amber-300">{waiting}</span>}
         </button>
       </TooltipTrigger>
-      <TooltipContent>Talk to @ultimate · {label}</TooltipContent>
+      <TooltipContent>
+        Talk to @{name} · {label}
+      </TooltipContent>
     </Tooltip>
   )
 }

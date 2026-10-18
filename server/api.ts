@@ -107,7 +107,6 @@ async function runAction(
   if (request.headers['sec-fetch-site'] !== 'same-origin' && !request.headers.origin)
     throw new HttpError(403, 'Extension actions require a browser request')
   if (!extensions.action(name, key)) throw new HttpError(404, 'Unknown extension action')
-  if (!Object.hasOwn(data, 'args')) throw new HttpError(400, 'Expected args')
   const id = data.conversationId
   if (id !== undefined && (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1))
     throw new HttpError(400, 'Invalid conversation id')
@@ -117,7 +116,9 @@ async function runAction(
   }
   response.once('close', cancel)
   try {
-    const result = await extensions.invoke(name, key, data.args as JsonValue, controller.signal, id)
+    // Missing args mean none, so `curl -d '{}'` and agents can call argument-free actions.
+    const args = (Object.hasOwn(data, 'args') ? data.args : {}) as JsonValue
+    const result = await extensions.invoke(name, key, args, controller.signal, id)
     reply(response, 200, { result })
   } catch (error) {
     // An aborted action is the client leaving (a newer call, an unmount), not a fault.

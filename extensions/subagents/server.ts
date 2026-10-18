@@ -42,6 +42,7 @@ import {
   saveDefinition,
 } from './agents.ts'
 import { createChild } from './children.ts'
+import { residentHere } from './primary.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
 import { requestSummary } from '../conversations/summary.ts'
 import { summaryModel } from '../conversations/summary-model.ts'
@@ -544,8 +545,8 @@ export const actions = {
       throw new Error('isolate must be none or worktree')
     if (onFailure !== undefined && onFailure !== 'diagnose' && onFailure !== 'fix')
       throw new Error('onFailure must be diagnose or fix')
-    if (resident !== undefined && typeof resident !== 'boolean')
-      throw new Error('resident must be a boolean')
+    if (resident !== undefined && typeof resident !== 'boolean' && resident !== 'machine')
+      throw new Error('resident must be a boolean or machine')
     if (create === true) {
       const { definitions } = await discoverAgents(
         host.ultimateRoot,
@@ -606,7 +607,9 @@ export default function subagents(
   const residentDefinitions = async () =>
     (
       await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
-    ).definitions.filter((definition) => definition.resident)
+    ).definitions.filter((definition) =>
+      residentHere(definition.resident, host.projectRoot, host.userHome),
+    )
   host.provide('subagents', {
     async residents(_ctx) {
       return (await residentDefinitions()).map(({ name, description }) => ({ name, description }))

@@ -22,6 +22,7 @@ import { isolatable } from '../workspaces/git.ts'
 import type { SubagentsService } from '../subagents/server.ts'
 import { Standing, Subagents } from '../subagents/server.ts'
 import { discoverAgents } from '../subagents/agents.ts'
+import { primaryAgent } from '../subagents/primary.ts'
 import { Roots } from '../lineage/server.ts'
 import type { LineageService } from '../lineage/server.ts'
 export type BoardMessage = {
@@ -345,12 +346,13 @@ async function send(
     if (callId !== undefined && sent?.ids[callId] !== undefined) return sent.ids[callId]
   }
   const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
-  // @ultimate's messages to a busy conversation almost always steer it: new scope, a decision, a stop.
-  const steer = input.steer ?? (from !== 'user' && from === standing?.ultimate)
+  const primary = primaryAgent(host.projectRoot, host.userHome)
+  // The primary agent's messages to a busy conversation almost always steer it: new scope, a decision, a stop.
+  const steer = input.steer ?? (from !== 'user' && from === standing?.[primary])
   if (input.to === 'user') {
-    if (from !== standing?.ultimate)
+    if (from !== standing?.[primary])
       throw new Error(
-        'Only @ultimate messages the user; send this to @ultimate (reply: false) and it relays it.',
+        `Only @${primary} messages the user; send this to @${primary} (reply: false) and it relays it.`,
       )
   }
   if (!input.text.trim()) throw new Error('Message text must not be empty')
@@ -501,7 +503,8 @@ export default function board(host: ExtensionHost) {
         if (parent !== undefined)
           return `Use message only to update #${parent}, the conversation that started you, while you work; your final answer reaches it anyway. One-way updates (reply: false) reach #${parent} as notes it reads with its next input; ask with reply: true when you need its answer to continue.`
         const agents = (await host.use<SubagentsService>('subagents')?.residents(ctx)) ?? []
-        return `Use message to contact #id or @name. Only @ultimate messages user; send it updates with reply: false to relay. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
+        const primary = primaryAgent(host.projectRoot, host.userHome)
+        return `Use message to contact #id or @name. Only @${primary} messages user; send it updates with reply: false to relay. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
       }),
     ],
     tools: [

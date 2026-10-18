@@ -124,6 +124,14 @@ async function declared(path: string) {
   }
 }
 
+/** The machine home (`subagents/primary.ts`) has no project to set up or read: @sync is its only standing agent. */
+const isMachineHome = (projectRoot: string, userHome: string) =>
+  projectRoot === join(userHome, '.ultimate/machine')
+const refuseMachineHome = (host: { projectRoot: string; userHome: string }) => {
+  if (isMachineHome(host.projectRoot, host.userHome))
+    throw new Error('The machine home has no onboarding; talk to @sync')
+}
+
 const marker = (userHome: string) => join(userHome, '.ultimate/onboarding.json')
 
 export const userActions = [
@@ -141,6 +149,7 @@ export const actions: Record<string, ExtensionAction> = {
   help: async (args, { host }) => {
     const card = args && typeof args === 'object' && !Array.isArray(args) ? args.card : undefined
     if (card !== 'project' && card !== 'git') throw new Error('Expected project or git card')
+    refuseMachineHome(host)
     const service = host.use<SubagentsService>('subagents')
     if (!service) throw new Error('Subagents are required for onboarding')
     const id = await service.standing('ultimate', context)
@@ -168,6 +177,7 @@ export const actions: Record<string, ExtensionAction> = {
         (input.instructions !== undefined && typeof input.instructions !== 'string'))
     )
       throw new Error('Expected root id and optional instructions')
+    refuseMachineHome(host)
     const lineage = host.use<LineageService>('lineage')
     const root =
       input?.root ??
@@ -320,7 +330,9 @@ export const actions: Record<string, ExtensionAction> = {
   status: async (_args, { host }) => {
     const folders = await host.projectExtensions()
     return {
-      firstRun: !existsSync(marker(host.userHome)),
+      // The machine home shows no Get ready page: its first run starts no onboarding.
+      firstRun:
+        !existsSync(marker(host.userHome)) && !isMachineHome(host.projectRoot, host.userHome),
       project: await host.projectSetup(),
       // The user's own lists, for the first run's checkboxes.
       user: await declared(join(host.userHome, '.ultimate/settings.json')),
