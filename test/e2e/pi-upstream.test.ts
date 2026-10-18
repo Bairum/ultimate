@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
 
-const root = new URL('../', import.meta.url)
+const root = new URL('../../', import.meta.url)
 const reference = readFileSync(new URL('docs/pi-upstream.md', root), 'utf8')
 const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })
   .split('\0')
