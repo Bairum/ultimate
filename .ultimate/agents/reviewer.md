@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Luna review lead; runs every reviewer-* definition in parallel and returns one merged verdict.
-model: openai/gpt-6-luna
+model: openai-codex/gpt-6-luna
 thinking: medium
 tools: [read, bash, subagent]
 ---

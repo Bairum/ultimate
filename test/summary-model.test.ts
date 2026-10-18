@@ -110,7 +110,7 @@ async function launch({
   }
   const models = createModels()
   const main = fauxProvider({ tokensPerSecond: 100000 })
-  const luna = summaryProvider('openai', ['gpt-6-luna'])
+  const luna = summaryProvider('openai-codex', ['gpt-6-luna'])
   const acme = summaryProvider('acme', ['mini', 'large'])
   models.setProvider(main.provider)
   models.setProvider(luna.provider)
@@ -229,8 +229,8 @@ it('uses GPT-6 Luna with medium thinking when no summary model is set', async ()
   const f = await launch()
   await f.submit()
   await until(async () => (await f.read())?.assessmentStatus === 'ready')
-  expect(f.requests()).toEqual([{ model: 'openai/gpt-6-luna', reasoning: 'medium' }])
-  expect(await f.assessed()).toMatchObject([{ model: 'openai/gpt-6-luna' }])
+  expect(f.requests()).toEqual([{ model: 'openai-codex/gpt-6-luna', reasoning: 'medium' }])
+  expect(await f.assessed()).toMatchObject([{ model: 'openai-codex/gpt-6-luna' }])
 })
 
 it("lets the project's summary model override the user's", async () => {
@@ -266,7 +266,7 @@ it.each([
 ])('skips summaries quietly for an %s summary model', async (_case, summaryModel, notices) => {
   const f = await launch({
     user: { summaryModel },
-    available: (model) => model.provider === 'openai',
+    available: (model) => model.provider === 'openai-codex',
   })
   await f.submit()
   await until(async () => (await f.tasks()).length === 0)
@@ -303,7 +303,7 @@ it('writes only the user summary model, and refuses while project settings decid
   expect(await actions.summaryModel(null, ctx)).toEqual({
     value: 'acme/large',
     source: 'project',
-    default: 'openai/gpt-6-luna:medium',
+    default: 'openai-codex/gpt-6-luna:medium',
     path: projectFile,
   })
   for (const value of ['acme/mini:low', null])
@@ -318,7 +318,7 @@ it('writes only the user summary model, and refuses while project settings decid
   expect(await actions.summaryModel(null, ctx)).toEqual({
     value: 'acme/mini',
     source: 'user',
-    default: 'openai/gpt-6-luna:medium',
+    default: 'openai-codex/gpt-6-luna:medium',
   })
   expect(await actions.setSummaryModel({ value: 'acme/mini:low' }, ctx)).toMatchObject({
     value: 'acme/mini:low',

@@ -1,5 +1,7 @@
 import { join } from 'node:path'
 import { lazyStream } from '@earendil-works/pi-ai'
+import type { ProviderStreams } from '@earendil-works/pi-ai'
+import { openAICodexResponsesApi } from '@earendil-works/pi-ai/api/openai-codex-responses.lazy'
 import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy'
 import type { JsonValue } from '@earendil-works/chord'
 import type { JsonObject } from '@earendil-works/pi-durable'
@@ -12,6 +14,12 @@ type Stream = NonNullable<Overlay['streamSimple']>
 type FastHost = Pick<ExtensionHost, 'userHome' | 'projectSettings' | 'notice'>
 
 const reported = new Set<string>()
+
+/** The providers whose Responses payload takes `service_tier`: the ChatGPT/Codex login and the OpenAI API. */
+export const FAST_PROVIDERS = ['openai-codex', 'openai'] as const
+
+const fastProvider = (model: string) =>
+  FAST_PROVIDERS.some((provider) => model.startsWith(`${provider}/`))
 
 const userFile = (host: Pick<ExtensionHost, 'userHome'>) =>
   join(host.userHome, '.ultimate/settings.json')
@@ -31,10 +39,9 @@ export async function fastModels(host: FastHost): Promise<Set<string>> {
   const { value } = await fastSetting(host)
   if (value === undefined) return new Set()
   const valid =
-    Array.isArray(value) &&
-    value.every((entry) => typeof entry === 'string' && entry.startsWith('openai/'))
+    Array.isArray(value) && value.every((entry) => typeof entry === 'string' && fastProvider(entry))
   if (valid) return new Set(value as string[])
-  const message = `Invalid fastModels ${JSON.stringify(value)}: expected ["openai/<id>", …]; fast mode is off`
+  const message = `Invalid fastModels ${JSON.stringify(value)}: expected ["openai-codex/<id>" or "openai/<id>", …]; fast mode is off`
   if (!reported.has(message)) {
     reported.add(message)
     host.notice(message)
@@ -53,13 +60,13 @@ export const actions = {
     return status(host)
   },
   /**
-   * `{ model, on }`: adds `"openai/<id>"` to the user's `fastModels` or removes it. The project's tracked settings
+   * `{ model, on }`: adds `"openai-codex/<id>"` or `"openai/<id>"` to the user's `fastModels` or removes it. The project's tracked settings
    * file is never written: while it sets the list, this refuses.
    */
   async set(args: JsonValue, { host }: ActionContext) {
     const { model, on } = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
-    if (typeof model !== 'string' || !model.startsWith('openai/') || typeof on !== 'boolean')
-      throw new Error('Expected { model: "openai/<id>", on: boolean }')
+    if (typeof model !== 'string' || !fastProvider(model) || typeof on !== 'boolean')
+      throw new Error('Expected { model: "openai-codex/<id>" or "openai/<id>", on: boolean }')
     if ((await fastSetting(host)).project)
       throw new Error('Fast models are set by project settings; edit that file to change them')
     await updateSettings(userFile(host), (settings) => {
@@ -77,8 +84,8 @@ export const actions = {
   },
 } satisfies Record<string, ExtensionAction>
 
-/** Stream OpenAI Responses requests, asking for the priority (fast) service tier for the models `listed` names. */
-export function fastStream(listed: () => Promise<Set<string>>, api = openAIResponsesApi()): Stream {
+/** Stream (Codex) Responses requests, asking for the priority (fast) service tier for the models `listed` names. */
+export function fastStream(listed: () => Promise<Set<string>>, api: ProviderStreams): Stream {
   return (model, context, options) =>
     lazyStream(model, async () => {
       if (!(await listed()).has(`${model.provider}/${model.id}`))
@@ -102,11 +109,17 @@ export default function fast(host: ExtensionHost) {
   facets.add(facet)
   host.onClose(async () => {
     facets.delete(facet)
-    if (!facets.size) host.modelRuntime.unregisterProvider('openai')
+    if (!facets.size)
+      for (const provider of FAST_PROVIDERS) host.modelRuntime.unregisterProvider(provider)
+  })
+  const listed = () => fastModels(host)
+  host.modelRuntime.registerProvider('openai-codex', {
+    api: 'openai-codex-responses',
+    streamSimple: fastStream(listed, openAICodexResponsesApi()),
   })
   host.modelRuntime.registerProvider('openai', {
     api: 'openai-responses',
-    streamSimple: fastStream(() => fastModels(host)),
+    streamSimple: fastStream(listed, openAIResponsesApi()),
   })
   return { name: 'fast' }
 }

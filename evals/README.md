@@ -9,8 +9,8 @@ reporting once, and filling optional plan fields such as task dependencies. Thes
 different workflow or stall in their first generation. Failures remain visible; neither suite
 uses retries or pass-rate thresholds. To isolate routing, run `pnpm eval:behaviour -t tiny`.
 
-Pi's normal shared auth supplies OpenAI; no credentials are copied into fixtures.
-The default is `openai/gpt-6-luna` with `high` thinking.
+Pi's normal shared auth supplies OpenAI (the ChatGPT/Codex login); no credentials are copied into fixtures.
+The default is `openai-codex/gpt-6-luna` with `high` thinking.
 Override with `ULTIMATE_EVAL_MODEL` and `ULTIMATE_EVAL_THINKING`.
 Write a `*.eval.ts` file under `evals/`, using Vitest and `./fixture.ts`.
 Call `start({ project: { files, git }, extensions: { enable, disable } })`.
@@ -35,7 +35,7 @@ Each measured turn prints wall time and model usage, excluding seeded history us
 The reporter collects usage across workers, including turns whose assertions fail.
 After Vitest's results, it prints elapsed and summed turn time (a sequential-time comparison,
 not a separate sequential run), then ends with one total cost line:
-`Evals: 14 turns · 345,000 tokens · $0.42 · openai/gpt-6-luna`.
+`Evals: 14 turns · 345,000 tokens · $0.42 · openai-codex/gpt-6-luna`.
 Totals cover fixture conversation turns, not background summaries or delegated subagent usage.
 Prefer evals for tool choice and completing user requests, not exact wording.
 Keep faux tests for crashes, races, storage, durability, and process semantics.

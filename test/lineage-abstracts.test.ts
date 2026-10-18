@@ -218,7 +218,7 @@ it.concurrent('summarizes a branch into its title and its abstract in the tree r
             getAvailableSnapshot: () =>
               server.host.modelRuntime
                 .getModels()
-                .filter((model) => model.provider === 'openai' && model.id === 'gpt-6-luna'),
+                .filter((model) => model.provider === 'openai-codex' && model.id === 'gpt-6-luna'),
           },
           use: ((name: string) =>
             name === 'lineage'

@@ -106,7 +106,7 @@ it.concurrent.each(['agent', 'lander'])(
   },
 )
 
-const luna = { provider: 'openai', id: 'gpt-6-luna', thinking: 'medium' } as const
+const luna = { provider: 'openai-codex', id: 'gpt-6-luna', thinking: 'medium' } as const
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 afterAll(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()))
@@ -184,7 +184,7 @@ async function launch(subagents = false, initialIntent = false, root = false, br
     vi.spyOn(server.host.modelRuntime, 'getAvailableSnapshot').mockImplementation(() =>
       server.host.modelRuntime
         .getModels()
-        .filter((model) => model.provider === 'openai' && model.id === 'gpt-6-luna'),
+        .filter((model) => model.provider === 'openai-codex' && model.id === 'gpt-6-luna'),
     )
     const existing = registry.snapshot().extension('conversations')!
     registry.install(
@@ -201,7 +201,9 @@ async function launch(subagents = false, initialIntent = false, root = false, br
               getAvailableSnapshot: () =>
                 server.host.modelRuntime
                   .getModels()
-                  .filter((model) => model.provider === 'openai' && model.id === 'gpt-6-luna'),
+                  .filter(
+                    (model) => model.provider === 'openai-codex' && model.id === 'gpt-6-luna',
+                  ),
             },
             // Lineage stays off here; a rooted fixture stands in for it with every conversation its own root.
             use: ((name: string) =>
@@ -529,7 +531,12 @@ it.concurrent.each([2, 3])(
     expect((await fixture.read())?.status).toBe('stale')
     const discarded = (await fixture.entries()).filter((entry) => SummaryDiscarded.is(entry))
     expect(discarded.map((entry) => entry.data)).toEqual([
-      { reason: 'stale', cause: 'superseded', model: 'openai/gpt-6-luna', at: expect.any(Number) },
+      {
+        reason: 'stale',
+        cause: 'superseded',
+        model: 'openai-codex/gpt-6-luna',
+        at: expect.any(Number),
+      },
     ])
     const spawnTask = await fixture.server.harness.getTask(discarded[0].byTaskId!, context)
     expect(spawnTask?.kind).toBe('conversations.summary')
@@ -597,7 +604,7 @@ it.concurrent('summarizes the first, fourth and seventh completed exchanges, not
   expect(changes).toHaveLength(1)
   expect(changes[0].data).toEqual({
     title: 'Improve the conversation sidebar',
-    model: 'openai/gpt-6-luna',
+    model: 'openai-codex/gpt-6-luna',
     at: expect.any(Number),
   })
   expect(changes[0].model).toBeUndefined()
@@ -633,10 +640,10 @@ it.concurrent('logs each accepted title change once, but not a manual rename to 
   for (let count = 2; count <= 4; count++) await fixture.exchange()
   const changes = await fixture.titleChanges()
   expect(changes.map((entry) => entry.data)).toEqual([
-    { title: 'Refine the sidebar', model: 'openai/gpt-6-luna', at: expect.any(Number) },
+    { title: 'Refine the sidebar', model: 'openai-codex/gpt-6-luna', at: expect.any(Number) },
     {
       title: 'Improve the conversation sidebar',
-      model: 'openai/gpt-6-luna',
+      model: 'openai-codex/gpt-6-luna',
       at: expect.any(Number),
     },
   ])
@@ -740,7 +747,7 @@ it.concurrent('isolates provider errors', async () => {
   expect((await fixture.entries()).filter((entry) => SummaryDiscarded.is(entry))[0]?.data).toEqual({
     reason: 'error',
     cause: 'Provider offline',
-    model: 'openai/gpt-6-luna',
+    model: 'openai-codex/gpt-6-luna',
     at: expect.any(Number),
   })
   expect((await fixture.read())?.summary).toBeUndefined()
@@ -959,7 +966,7 @@ it.concurrent.each(['reply', 'spawn'] as const)(
 )
 
 it.concurrent.each(['none', 'legacy'])(
-  'skips summaries and assessments when current OpenAI Luna is unavailable (%s)',
+  'skips summaries and assessments when current Codex Luna is unavailable (%s)',
   async (available) => {
     const fixture = await launch()
     const server = fixture.server
@@ -969,7 +976,7 @@ it.concurrent.each(['none', 'legacy'])(
         ? []
         : server.host.modelRuntime
             .getModels()
-            .filter((model) => model.provider === 'openai-codex' && model.id === 'gpt-6-luna')
+            .filter((model) => model.provider === 'openai' && model.id === 'gpt-6-luna')
     expect(models).toHaveLength(available === 'none' ? 0 : 1)
     server.host.registry.install(
       defineExtension({
@@ -1104,7 +1111,7 @@ it.concurrent('validates assessment-only JSON and rejects unapproved or malforme
     return events
   })
   const getModel = vi.fn<(provider: string, id: string) => { provider: string; id: string }>(
-    () => ({ provider: 'openai', id: 'gpt-6-luna' }),
+    () => ({ provider: 'openai-codex', id: 'gpt-6-luna' }),
   )
   const models = {
     getModel,
@@ -1115,7 +1122,7 @@ it.concurrent('validates assessment-only JSON and rejects unapproved or malforme
       model: luna,
     }),
   ).toEqual(output)
-  expect(getModel).toHaveBeenCalledWith('openai', 'gpt-6-luna')
+  expect(getModel).toHaveBeenCalledWith('openai-codex', 'gpt-6-luna')
   expect(stream.mock.calls.at(-1)![1].systemPrompt).not.toContain('"feature"')
   expect(stream.mock.calls.at(-1)![1].systemPrompt).not.toContain('"abstract"')
   output = { assessment: 'done', activity: 'Done.', abstract: `  ${'x'.repeat(1300)}  ` }
@@ -1260,7 +1267,7 @@ it.concurrent('publishes initial intent while the main model request is blocked,
     const entries = await intents()
     expect(entries[0].data).toEqual({
       summary: 'Added concise summaries to the sidebar.',
-      model: 'openai/gpt-6-luna',
+      model: 'openai-codex/gpt-6-luna',
       at: expect.any(Number),
     })
     expect(entries[0].model).toBeUndefined()
@@ -1556,7 +1563,7 @@ it.concurrent('records an accepted assessment as an entry traced to its summary 
     {
       ...state.assessment,
       activity: 'Added concise summaries to the sidebar.',
-      model: 'openai/gpt-6-luna',
+      model: 'openai-codex/gpt-6-luna',
       at: expect.any(Number),
     },
   ])

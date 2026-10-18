@@ -1,7 +1,7 @@
 ---
 name: reviewer-sol
 description: Sol 6.1 independent read-only review of an immutable commit range.
-model: openai/gpt-6.1-sol
+model: openai-codex/gpt-6.1-sol
 thinking: high
 tools: [read, bash]
 ---

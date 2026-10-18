@@ -9,7 +9,7 @@ function FastToggle() {
   const ref = useConversation().agent.model
   const status = useAction<Status>('fast', 'status')
   useEvent('fast:changed', () => void status.refetch())
-  if (ref?.provider !== 'openai' || !status.data) return null
+  if ((ref?.provider !== 'openai-codex' && ref?.provider !== 'openai') || !status.data) return null
   const model = `${ref.provider}/${ref.modelId}`
   const on = status.data.models.includes(model)
   const { project } = status.data

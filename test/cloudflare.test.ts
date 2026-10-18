@@ -223,7 +223,7 @@ it('parses the resident definition and enables its deferred tool', async () => {
   expect(definition).toMatchObject({
     name: 'cloudflare',
     resident: true,
-    model: 'openai/gpt-6.1-sol',
+    model: 'openai-codex/gpt-6.1-sol',
     thinking: 'high',
   })
   expect(definition.tools).toEqual([

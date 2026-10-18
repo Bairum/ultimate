@@ -80,7 +80,7 @@ export async function start(
     toolResults?: Record<string, string>
   } = {},
 ) {
-  const model = options.model ?? process.env.ULTIMATE_EVAL_MODEL ?? 'openai/gpt-6-luna'
+  const model = options.model ?? process.env.ULTIMATE_EVAL_MODEL ?? 'openai-codex/gpt-6-luna'
   const thinkingLevel = options.thinking ?? process.env.ULTIMATE_EVAL_THINKING ?? 'high'
   const runtime = await ModelRuntime.create()
   const available = await runtime.getAvailable()

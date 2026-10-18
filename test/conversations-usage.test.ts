@@ -32,7 +32,7 @@ const reported = {
   cacheWrite1h: 6,
   cost: { input: 0.03, output: 0.05, cacheRead: 0.001, cacheWrite: 0, total: 0.081 },
 }
-const key = 'openai/gpt-6-luna'
+const key = 'openai-codex/gpt-6-luna'
 const cleanups: (() => Promise<void>)[] = []
 afterEach(async () => {
   for (const close of cleanups.splice(0)) await close()
@@ -47,7 +47,7 @@ async function launch({
   const models = createModels()
   const main = fauxProvider({ tokensPerSecond: 100000 })
   const luna = fauxProvider({
-    provider: 'openai',
+    provider: 'openai-codex',
     models: [{ id: 'gpt-6-luna', reasoning: true }],
   })
   models.setProvider(main.provider)
@@ -94,7 +94,8 @@ async function launch({
     projectSettings: async () => ({}),
     notice: () => {},
     modelRuntime: {
-      getAvailableSnapshot: () => models.getModels().filter((model) => model.provider === 'openai'),
+      getAvailableSnapshot: () =>
+        models.getModels().filter((model) => model.provider === 'openai-codex'),
     },
   })
   let release!: () => void
@@ -207,7 +208,7 @@ it('adds reported usage once, also on replay', async () => {
 })
 
 it.each(['done', 'needs_input'])(
-  'generates a title and %s assessment with only current OpenAI Luna available',
+  'generates a title and %s assessment with only current Codex Luna available',
   async (assessment) => {
     const f = await launch({ assessment })
     await f.submit()
@@ -218,7 +219,7 @@ it.each(['done', 'needs_input'])(
       'Implement the change',
     ])
     expect((await f.ledger())?.models[key]).toEqual(reported)
-    expect((await f.ledger())?.models['openai-codex/gpt-6-luna']).toBeUndefined()
+    expect((await f.ledger())?.models['openai/gpt-6-luna']).toBeUndefined()
   },
 )
 

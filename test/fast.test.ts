@@ -26,20 +26,23 @@ function recordingApi() {
   return { payloads, api: { streamSimple } as unknown as ProviderStreams }
 }
 
-const model = (id: string) => ({ provider: 'openai', id, api: 'openai-responses' }) as Model<Api>
+const model = (id: string, provider = 'openai-codex') =>
+  ({ provider, id, api: `${provider}-responses` }) as Model<Api>
 const context = normalizeContext({ messages: [] })
 
 it('asks for the priority tier only for listed models and keeps the caller payload hook', async () => {
   const { payloads, api } = recordingApi()
-  const stream = fastStream(async () => new Set(['openai/gpt-6.1-sol']), api)
+  const stream = fastStream(async () => new Set(['openai-codex/gpt-6.1-sol']), api)
   await stream(model('gpt-6.1-sol'), context).result()
   await stream(model('gpt-6-luna'), context).result()
+  await stream(model('gpt-6.1-sol', 'openai'), context).result()
   await stream(model('gpt-6.1-sol'), context, {
     onPayload: (payload) => ({ ...(payload as object), store: false }),
   }).result()
   expect(payloads).toEqual([
     { model: 'gpt-6.1-sol', service_tier: 'priority' },
     { model: 'gpt-6-luna' },
+    { model: 'gpt-6.1-sol' },
     { model: 'gpt-6.1-sol', store: false, service_tier: 'priority' },
   ])
 })
@@ -56,13 +59,15 @@ it('reads fastModels from project settings over user settings and rejects other 
   await mkdir(join(userHome, '.ultimate'), { recursive: true })
   await writeFile(
     join(userHome, '.ultimate/settings.json'),
-    JSON.stringify({ fastModels: ['openai/gpt-6.1-sol'] }),
+    JSON.stringify({ fastModels: ['openai-codex/gpt-6.1-sol', 'openai/gpt-6.1-sol'] }),
   )
-  expect(await fastModels(host({}))).toEqual(new Set(['openai/gpt-6.1-sol']))
+  expect(await fastModels(host({}))).toEqual(
+    new Set(['openai-codex/gpt-6.1-sol', 'openai/gpt-6.1-sol']),
+  )
   expect(await fastModels(host({ fastModels: [] }))).toEqual(new Set())
   expect(await fastModels(host({ fastModels: ['anthropic/claude-opus-5-5'] }))).toEqual(new Set())
   expect(notices).toEqual([
-    'Invalid fastModels ["anthropic/claude-opus-5-5"]: expected ["openai/<id>", …]; fast mode is off',
+    'Invalid fastModels ["anthropic/claude-opus-5-5"]: expected ["openai-codex/<id>" or "openai/<id>", …]; fast mode is off',
   ])
 })
 
@@ -74,22 +79,24 @@ it('toggles a model in the user settings and refuses while the project decides',
   } as unknown as ActionContext
   const file = join(userHome, '.ultimate/settings.json')
   await mkdir(join(userHome, '.ultimate'), { recursive: true })
-  await writeFile(file, JSON.stringify({ summaryModel: 'openai/gpt-6-luna' }))
-  expect(await actions.set({ model: 'openai/gpt-6.1-sol', on: true }, ctx)).toEqual({
-    models: ['openai/gpt-6.1-sol'],
+  await writeFile(file, JSON.stringify({ summaryModel: 'openai-codex/gpt-6-luna' }))
+  expect(await actions.set({ model: 'openai-codex/gpt-6.1-sol', on: true }, ctx)).toEqual({
+    models: ['openai-codex/gpt-6.1-sol'],
     project: false,
   })
   expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
-    summaryModel: 'openai/gpt-6-luna',
-    fastModels: ['openai/gpt-6.1-sol'],
+    summaryModel: 'openai-codex/gpt-6-luna',
+    fastModels: ['openai-codex/gpt-6.1-sol'],
   })
-  await actions.set({ model: 'openai/gpt-6.1-sol', on: false }, ctx)
-  expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ summaryModel: 'openai/gpt-6-luna' })
+  await actions.set({ model: 'openai-codex/gpt-6.1-sol', on: false }, ctx)
+  expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+    summaryModel: 'openai-codex/gpt-6-luna',
+  })
   await expect(actions.set({ model: 'anthropic/claude-opus-5-5', on: true }, ctx)).rejects.toThrow(
     'Expected',
   )
   project = { fastModels: [] }
-  await expect(actions.set({ model: 'openai/gpt-6.1-sol', on: true }, ctx)).rejects.toThrow(
+  await expect(actions.set({ model: 'openai-codex/gpt-6.1-sol', on: true }, ctx)).rejects.toThrow(
     'project settings',
   )
   expect(await actions.status(null, ctx)).toEqual({ models: [], project: true })
