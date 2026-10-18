@@ -2,7 +2,7 @@
  * The extension SDK: everything a `web.tsx` needs besides components (`@/components/ui/*`, `@/components/ai/*`).
  * The guide is extensions/README.md.
  */
-export { defineWebExtension } from './types.ts'
+export { defineWebExtension, definePoint, provide } from './types.ts'
 export { events, useEvent } from './events.ts'
 export { resumed } from './resume.ts'
 export type {
@@ -19,6 +19,8 @@ export type {
   InboxRenderer,
   LinkRenderer,
   PanelContribution,
+  Point,
+  Provision,
   SlotName,
   SurfaceContribution,
   ToolCallView,
@@ -39,6 +41,8 @@ export {
 } from '../app/primitives.tsx'
 /** Isolates another extension's component you render, such as a document renderer: it throws into an error card. */
 export { ExtensionBoundary } from '../app/boundary.tsx'
+/** Renders with the value another extension provides for your point; see `definePoint`. */
+export { Provided } from '../app/boundary.tsx'
 export { api } from './client.ts'
 export { ActionError, projectBase } from './api.ts'
 export type { ActionOptions, Api } from './api.ts'

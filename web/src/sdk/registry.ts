@@ -168,6 +168,10 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
     ),
     'an array of { id, title, keys?, group?, whileTyping?, when?, run }',
   ],
+  provides: [
+    arrayOf(fields({ point: isString, use: isFunction })),
+    'an array of provide(Point, useValue)',
+  ],
 }
 
 function validate(module: unknown): WebExtension {
@@ -328,6 +332,17 @@ export function slotItems(records: readonly ExtensionRecord[], slot: SlotName): 
     )
     .toSorted((a, b) => a.order - b.order)
     .map(({ order: _order, ...item }) => item)
+}
+
+/** The facet that provides `point`: the last in discovery order. */
+export function provisionOf(records: readonly ExtensionRecord[], point: string) {
+  return records
+    .flatMap(({ name, extension, version }) =>
+      (extension?.provides ?? [])
+        .filter((provision) => provision.point === point)
+        .map((provision) => ({ extension: name, version, use: provision.use })),
+    )
+    .at(-1)
 }
 
 export function panelItems(records: readonly ExtensionRecord[]): PanelItem[] {

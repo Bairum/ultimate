@@ -1,11 +1,11 @@
 import { cn } from 'cn'
 import { PuzzleIcon, TriangleAlertIcon } from 'lucide-react'
-import { Component, Fragment } from 'react'
+import { Component, Fragment, useContext } from 'react'
 import type { ErrorInfo, ReactNode } from 'react'
 import { errorMessage, shortenPath } from '../sdk/format.ts'
 import { ExtensionNameContext, useExtensions, useSystem } from '../sdk/hooks.ts'
-import { slotItems } from '../sdk/registry.ts'
-import type { SlotName } from '../sdk/types.ts'
+import { provisionOf, slotItems } from '../sdk/registry.ts'
+import type { Point, SlotName } from '../sdk/types.ts'
 
 /** A compact card naming the extension that failed. `inline` fits a status line or toolbar. */
 export function ErrorCard({
@@ -103,6 +103,53 @@ export class ExtensionBoundary extends Component<
       </>
     )
   }
+}
+
+/**
+ * Renders `children` with the value the facet providing `point` computes for `input`, or with `undefined` while none
+ * does. `children` only returns elements: it runs inside the provider's render, so it calls no hooks. A provider that
+ * throws shows an inline error card before `children(undefined)`.
+ */
+export function Provided<Input, Value>({
+  point,
+  input,
+  children,
+}: {
+  point: Point<Input, Value>
+  input: Input
+  children: (value: Value | undefined) => ReactNode
+}) {
+  // The caller's elements stay the caller's: its extension name keys its UI state.
+  const caller = useContext(ExtensionNameContext)
+  const own = (value: Value | undefined) => (
+    <ExtensionNameContext.Provider value={caller}>{children(value)}</ExtensionNameContext.Provider>
+  )
+  const provision = provisionOf(useExtensions(), point.point)
+  if (!provision) return own(undefined)
+  const use = provision.use as (input: Input) => Value
+  return (
+    <ExtensionBoundary
+      extension={provision.extension}
+      fallback={own(undefined)}
+      key={provision.extension}
+      variant="inline"
+      version={provision.version}
+    >
+      {/* A new version of the provider may call other hooks, so it mounts afresh. */}
+      <Provide input={input} key={provision.version} render={own} use={use} />
+    </ExtensionBoundary>
+  )
+}
+function Provide<Input, Value>({
+  use,
+  input,
+  render,
+}: {
+  use: (input: Input) => Value
+  input: Input
+  render: (value: Value) => ReactNode
+}) {
+  return render(use(input))
 }
 
 /** Every component extensions put in `name`, each behind its own boundary. */

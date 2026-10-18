@@ -168,6 +168,22 @@ runtime only from its `ui.tsx`, and its `api.ts` or `refs.ts` only as types (`ul
 imports at runtime only `shared/`, and types only from packages, `shared/` and extensions' `refs.ts` or `types.ts`;
 it is part of the web type check (`tsconfig.web.json`).
 
+A lower extension whose browser code shows something a higher one knows (a phase label on a sidebar row) declares a
+**point** in its `ui.tsx` and renders it with a render prop; the higher extension provides the value from its
+`web.tsx`, so the lower one imports nothing of it:
+
+```tsx
+// conversations/ui.tsx
+export const Phase = definePoint<number, { word: string } | undefined>('conversations.phase')
+// a row: <Provided point={Phase} input={id}>{(phase) => phase && <span>{phase.word}</span>}</Provided>
+// phase/web.tsx
+export default defineWebExtension({ provides: [provide(Phase, (id) => usePhaseWord(id))] })
+```
+
+The provider's function is a hook, run once per `<Provided>`; the last facet in discovery order providing a point wins,
+and while none does the render prop gets `undefined`. The server's counterpart is an extension point
+([docs/extensions.md](../docs/extensions.md#extension-apis)).
+
 The provider calls `host.implement(Echo, { echo: (text) => text })` in its factory; it is staged, replaced and
 removed with its facet. A consumer calls `host.need(Echo)` for a hard dependency or `host.want(Echo)` for an
 optional one. Both return a handle typed by the token that resolves the current provider on every member access, so
