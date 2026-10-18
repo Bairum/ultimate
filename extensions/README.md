@@ -108,8 +108,8 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 ## Extension APIs
 
 Everything an extension offers other extensions on the server lives in its `api.ts`: the service token, the documents
-others read and the events it emits. It is browser-safe, holds only contracts and is documented, because agents
-discover APIs by reading these files:
+others read and the events it emits. It holds only contracts and is documented, because agents discover APIs by
+reading these files:
 
 ```ts
 /** Echo: says text back. Other extensions use it to test a round trip. */
@@ -129,6 +129,30 @@ export const Echoed = defineEvent<{ text: string }>('echo.echoed')
 Lint holds every `extensions/*/api.ts` to that shape (`ultimate/api-file-shape`, `ultimate/api-naming`; see
 [docs/extensions.md](../docs/extensions.md#extension-apis)), and a server-side `.ts` file may import another
 extension's runtime code only from its `api.ts` (`ultimate/api-only-imports`); type imports are free.
+
+### The browser side: `refs.ts` and `ui.tsx`
+
+`api.ts` describes server code and may reach it through type imports, so the browser never imports it. An extension
+whose documents or actions the browser uses describes them in `refs.ts`, browser-safe and documented like `api.ts`:
+every action ref names its arguments and result, since agents read it to call the action with `ultimate.action`.
+
+```ts
+/** Echo in the browser: the echo log and the action that echoes. Browser-safe. */
+import { actionRef, docRef } from '../../shared/extension-api.ts'
+
+/** The echo log on conversation 1. */
+export const LogDoc = docRef<{ texts: string[] }>('echo.log')
+/** `{ text }` → `{ at }`: echo `text` and log it. */
+export const EchoAction = actionRef<{ text: string }, { at: number }>('echo', 'echo')
+```
+
+The web reads and calls through the refs, typed: `useDoc(LogDoc)`, `useDocOf(1, LogDoc)`, `useAction(EchoAction,
+args)`, `api.action(EchoAction, args)`. The server's `defineDoc` can use `kind: LogDoc.kind` so the two never drift.
+What other extensions' browser code uses (shared components, hooks and the refs they need) is exported from the
+owner's `ui.tsx`, which starts with a doc comment on what it offers. A `.tsx` file imports another extension at
+runtime only from its `ui.tsx`, and its `api.ts` or `refs.ts` only as types (`ultimate/api-only-imports`). `refs.ts`
+imports at runtime only `shared/`, and types only from packages, `shared/` and extensions' `refs.ts` or `types.ts`;
+it is part of the web type check (`tsconfig.web.json`).
 
 The provider calls `host.implement(Echo, { echo: (text) => text })` in its factory; it is staged, replaced and
 removed with its facet. A consumer calls `host.need(Echo)` for a hard dependency or `host.want(Echo)` for an
@@ -469,7 +493,7 @@ replace one, declare its id; to drop it, replace or delete its extension.
 
 A web facet runs in the browser; its server facet runs in Ultimate's Node process, next to the project's files, its
 command-line tools, and the network. Actions connect the two: `server.ts` exports `actions`, plain async functions, and
-the UI calls them by extension and action name, JSON in and JSON out.
+the UI calls them through a typed ref in the extension's `refs.ts`, JSON in and JSON out.
 
 ```ts
 // server.ts
@@ -487,9 +511,18 @@ export const actions = {
 }
 ```
 
+```ts
+// refs.ts
+/** Todos in the browser: the project's TODO comments. */
+import { actionRef } from '../../shared/extension-api.ts'
+
+/** No arguments → every `TODO` line as `file:line:text`. */
+export const ListAction = actionRef<null, string[]>('todos', 'list')
+```
+
 ```tsx
 // web.tsx
-const todos = useAction<string[]>('todos', 'list')
+const todos = useAction(ListAction)
 // todos.data, todos.error, todos.loading, todos.refetch()
 ```
 
@@ -519,11 +552,11 @@ runs either way.
 
 Call actions from the UI in one of two ways:
 
-- `useAction(extension, name, args?, { enabled?, onError? })` reads. It calls on mount and again whenever `extension`,
-  `name`, or `args` (compared as JSON) change, unless `enabled` is false; a newer call aborts the older one. It returns
+- `useAction(ref, args?, { enabled?, onError? })` reads. It calls on mount and again whenever the action or `args`
+  (compared as JSON) change, unless `enabled` is false; a newer call aborts the older one. It returns
   `{ data, error, loading, refetch }`: `data` stays while a refetch runs and resets when the args change; `refetch()`
   calls again, also when not `enabled`. A failure shows as a notice unless you pass `onError`.
-- `api.action(extension, name, args?, { conversationId?, signal?, keepalive? })` acts, once: a click that saves,
+- `api.action(ref, args?, { conversationId?, signal?, keepalive? })` acts, once: a click that saves,
   closes, or labels something; `keepalive` lets a call sent on `pagehide` outlive the page. It returns a promise of
   the result; afterwards, `refetch()` what changed. A rejection (an `ActionError` with `extension`, `action`,
   `status`, `message`) that nothing catches shows as a notice; catch it to handle it yourself.
@@ -531,7 +564,7 @@ Call actions from the UI in one of two ways:
 ```tsx
 <Button
   onClick={async () => {
-    await api.action('todos', 'resolve', { line })
+    await api.action(ResolveAction, { line })
     await todos.refetch()
   }}
 >
@@ -635,7 +668,7 @@ Pass the header your own title or controls as children: `<Header><span className
 ### Example: a Commits app
 
 A complete app: the project's recent commits in a list, the selected one beside it with a button that hands it to the
-agent, and the agent docked on the right. It needs nothing but `git`. Put the three files in
+agent, and the agent docked on the right. It needs nothing but `git`. Put the four files in
 `<project>/.ultimate/extensions/commits/`; on save, Commits appears in the switcher (`mod+2`).
 
 `server.ts`, the data:
@@ -647,7 +680,7 @@ import type { ActionContext } from '../../../server/actions.ts'
 
 export default defineExtension({ name: 'commits' })
 
-/** The UI calls these with `useAction('commits', name, args)`; each returns JSON. */
+/** The UI calls these through the refs in `refs.ts`; each returns JSON. */
 export const actions = {
   /** The latest 50 commits of the project. */
   async list(_args: JsonValue, ctx: ActionContext) {
@@ -670,6 +703,20 @@ export const actions = {
 }
 ```
 
+`refs.ts`, the actions as the browser calls them:
+
+```ts
+/** Commits in the browser: the project's recent commits and one commit's message and files. */
+import { actionRef } from '../../../shared/extension-api.ts'
+
+export type Commit = { sha: string; subject: string; author: string; when: string }
+
+/** No arguments → the latest 50 commits of the project. */
+export const ListAction = actionRef<null, Commit[]>('commits', 'list')
+/** A sha → that commit's message and the files it changed. */
+export const ShowAction = actionRef<string, { sha: string; text: string }>('commits', 'show')
+```
+
 `web.tsx`, the surface:
 
 ```tsx
@@ -686,13 +733,7 @@ import {
   useAction,
   useExtensionUiState,
 } from '@/sdk'
-
-interface Commit {
-  sha: string
-  subject: string
-  author: string
-  when: string
-}
+import { ListAction, ShowAction } from './refs.ts'
 
 /** One commit, and a button that hands it to the agent. */
 function Detail({ sha, text }: { sha: string; text: string }) {
@@ -719,12 +760,10 @@ function Detail({ sha, text }: { sha: string; text: string }) {
 
 /** Recent commits on the left, the selected one in the middle, the agent docked on the right. */
 function Commits() {
-  const commits = useAction<Commit[]>('commits', 'list')
+  const commits = useAction(ListAction)
   const [selected, setSelected] = useExtensionUiState<string | null>('selected', null)
   const sha = selected ?? commits.data?.[0]?.sha ?? null
-  const commit = useAction<{ sha: string; text: string }>('commits', 'show', sha, {
-    enabled: sha !== null,
-  })
+  const commit = useAction(ShowAction, sha ?? '', { enabled: sha !== null })
   return (
     <>
       <Header />
@@ -797,8 +836,8 @@ For a request such as "build a triage surface for this repo's GitHub issues":
    their args, and return small JSON shaped for the UI. Return setup states (missing tool, no login, no repository)
    as data, so the UI can say what to do.
 4. **Check each action with codemode `ultimate.action`** (see [Actions](#actions)) before any UI exists.
-5. **Write `web.tsx`** from the Commits example: keep `Header`, `Dock` with `Conversation variant="dock"`, and
-   `StatusLine`; replace the list and the detail. Read with `useAction`, act with `api.action` then `refetch`, keep
+5. **Write `refs.ts` and `web.tsx`** from the Commits example: a documented ref per action; keep `Header`, `Dock`
+   with `Conversation variant="dock"`, and `StatusLine`; replace the list and the detail. Read with `useAction`, act with `api.action` then `refetch`, keep
    the selection and filters in `useExtensionUiState`, and hand work to the agent with `api.submit(text, 'followUp')`,
    saying exactly what to do with which item.
 6. **Write `README.md`**, opening with one sentence; the Info panel shows it.
@@ -812,8 +851,8 @@ Keep in mind:
 - Ids are global: surface ids, command ids, and dialog ids start with your extension name.
 - Keep the agent on screen: a surface without a `Dock` holding `Conversation` makes the user switch away to talk.
 - Reach your server only through actions: no `fetch` to your own endpoints, no secrets in the browser.
-- One extension stays one folder. Prefer documents, commands, events, or the SDK to cross-extension imports.
-  Importing another extension's files makes it a dependency: declare it in `vite.config.ts` `ultimate/extension-imports`.
+- One extension stays one folder. Prefer documents, commands, events, or the SDK to cross-extension imports; another
+  extension's browser code comes only from its `ui.tsx` (see [Extension APIs](#the-browser-side-refsts-and-uitsx)).
   Lint enforces these declarations and forbids cycles.
 - The Agent surface is an extension too: to change it for one project, copy `extensions/agent` to the project's
   `.ultimate/extensions/agent/`.
@@ -832,12 +871,13 @@ live stream for the shown conversation plus one for each conversation whose docu
 | `useConversations()`                                                      | Summaries of every conversation: id, parent, owner task, label (what its creator calls it, such as a subagent's definition), title, cwd, busy, latest user and assistant message times (`inputAt`, `answerAt`)           |
 | `useTasks()`                                                              | The live task graph                                                                                                                                                                                                      |
 | `useModels()`                                                             | `GET /api/models`: providers with auth status, models with context window, reasoning, cost; `refreshModels()` fetches it again after credentials change                                                                  |
-| `useDoc(kind)`                                                            | An extension document of the shown conversation (`export const docs` in `server.ts`); `undefined` until the stream delivers it (subscribing creates it with its initial value)                                           |
-| `useDocOf(conversation, kind)`                                            | `useDoc` of a given conversation, shown or not, such as the root (`1`) or a coordinator; `undefined` while `conversation` is undefined. Hooks on one conversation share one stream                                       |
+| `useDoc(ref)`                                                             | The document a `docRef` in a `refs.ts` names, typed, on the shown conversation (`export const docs` in `server.ts`); `undefined` until the stream delivers it (subscribing creates it with its initial value)            |
+| `useDocOf(conversation, ref)`                                             | `useDoc` of a given conversation, shown or not, such as the root (`1`) or a coordinator; `undefined` while `conversation` is undefined. Hooks on one conversation share one stream                                       |
+| `useDocKind(kind)`                                                        | An untyped document by kind, only for views of every kind such as the Documents tab                                                                                                                                      |
 | `useUiState(key, initial)`                                                | Durable UI state, stored with the main conversation: survives reloads and restarts, shared by every tab. `[value, set]`, JSON values only                                                                                |
 | `useExtensionUiState(key, initial)`                                       | `useUiState` under `ext.<your extension>.<key>`; use it for your own UI state                                                                                                                                            |
 | `useUltimate()`                                                           | `conversationId`, `surface`, actions (`switchConversation`, `showSurface`, `openPanel`, `closePanel`, `togglePanel`, `toggleSidebar`, `runCommand`, `open`/`close(dialog)`, `openPalette`, `focusComposer`, `setTheme`)  |
-| `useAction(extension, name, args?, options?)`                             | A server action's result, called on mount and when its args change: `{ data, error, loading, refetch }` (see [Actions](#actions))                                                                                        |
+| `useAction(ref, args?, options?)`                                         | A server action's result, called on mount and when its args change: `{ data, error, loading, refetch }` (see [Actions](#actions))                                                                                        |
 | `useDialog(id)`                                                           | `[open, setOpen]` for a dialog an `overlay` component renders; `useUltimate().open(id)` opens it anywhere                                                                                                                |
 | `useConnection()`                                                         | Stream status: `connecting`, `open`, `reconnecting`                                                                                                                                                                      |
 | `useRestart()`                                                            | `api.restart()` with its outcome: `run`, `busy`, `pending` generation, and `error` when a check or boot failed or an activation was rolled back                                                                          |
@@ -877,9 +917,9 @@ Keep UI state that should survive a reload in `useExtensionUiState`; keep throwa
 ## Conventions
 
 - One feature per folder; the folder name is the extension name; a README is required. Keep it small.
-- Prefer documents, commands, events, or the SDK. On the server, another extension's runtime code is reached only
-  through its `api.ts` (see "Extension APIs"); type imports are free. Browser imports of another extension's files
-  are dependencies: declare them in `vite.config.ts` `ultimate/extension-imports`. Lint enforces both.
+- Prefer documents, commands, events, or the SDK. Another extension's runtime code is reached only through its
+  `api.ts` on the server and its `ui.tsx` in the browser (see "Extension APIs"); type imports are free. Lint enforces
+  both.
 - Shared pure helpers live in the top-level `lib/`, not in another extension: `exec.ts` (run a program), `git.ts`
   (git and isolation checks), `json-file.ts` (read, atomic write, serialised update), `settings.ts`, `secrets.ts`
   (read-only), `machine.ts` (machine-home checks, browser-safe), `cloud.ts` (the user's cloud settings),
