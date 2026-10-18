@@ -11,6 +11,7 @@ import {
   QUESTIONS_SYSTEM,
 } from '../extensions/questions/server.ts'
 import type { TurnUsage } from './reporter.ts'
+import { ultimateQuestionCorpus } from './ultimate-question-corpus.ts'
 
 /** Extract with the default summary model, as the questions extension does, and record the call's usage. */
 async function extract(reply: string, userInput?: string) {
@@ -134,6 +135,17 @@ test('Q3 a single go/no-go is one confirm question', async () => {
   )
   expect(questions).toHaveLength(1)
   expect(questions[0].kind).toBe('confirm')
+})
+
+test('Q5 real @ultimate preview decision', async () => {
+  const questions = await extract(ultimateQuestionCorpus[0].text)
+  expect(questions).toHaveLength(1)
+  expect(['choice', 'confirm']).toContain(questions[0].kind)
+  expect(questions[0].text).toMatch(/land|submit|approv/i)
+})
+
+test.for(ultimateQuestionCorpus.slice(1))('Q6 real @ultimate report: $name', async (sample) => {
+  expect(await extract(sample.text)).toEqual([])
 })
 
 test('Q4 a wrap-up that answers the user and offers more asks nothing', async () => {

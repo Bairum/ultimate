@@ -76,6 +76,8 @@ export async function start(
     extensions?: { enable?: string[]; disable?: string[] }
     model?: string
     thinking?: string
+    /** Replace execution only: retain real tool schemas and prompts, without side effects. */
+    toolResults?: Record<string, string>
   } = {},
 ) {
   const model = options.model ?? process.env.ULTIMATE_EVAL_MODEL ?? 'openai/gpt-6-luna'
@@ -121,6 +123,21 @@ export async function start(
         { cwd: projectRoot },
       )
     }
+    if (options.toolResults) {
+      const stub = join(projectRoot, '.ultimate/extensions/eval-tools/server.ts')
+      await mkdir(dirname(stub), { recursive: true })
+      await writeFile(
+        stub,
+        `export const actions = { ready: async () => true }
+        export default () => ({
+          name: 'eval-tools',
+          wraps: Object.entries(${JSON.stringify(options.toolResults)}).map(([name, output]) => ({
+            tool: name,
+            wrap: tool => ({ ...tool, deferred: false, execute: async () => ({ output: [{ type: 'text', text: output }] }) }),
+          })),
+        })`,
+      )
+    }
     const config = join(userHome, '.ultimate')
     await mkdir(config, { recursive: true })
     // Every built-in is on by default; an eval loads the coding agent plus only what it measures.
@@ -159,6 +176,8 @@ export async function start(
       if (!response.ok) throw new Error(`${path}: HTTP ${response.status}: ${JSON.stringify(data)}`)
       return data
     }
+    // A load error must stop the eval before a model can execute the real side-effecting tools.
+    if (options.toolResults) await post('/api/extensions/eval-tools/actions/ready', { args: {} })
     return {
       projectRoot,
       file: (path: string) => readFile(join(projectRoot, path), 'utf8'),
@@ -288,6 +307,11 @@ export async function start(
               throw new Error(`Model turn failed: ${failed.errorMessage ?? failed.stopReason}`)
             if (!replies.length) throw new Error('Model turn produced no assistant reply')
             return {
+              finalText: replies
+                .at(-1)!
+                .content.filter((c) => c.type === 'text')
+                .map((c) => c.text)
+                .join('\n'),
               text: replies
                 .flatMap((m) => m.content.filter((c) => c.type === 'text').map((c) => c.text))
                 .join('\n'),

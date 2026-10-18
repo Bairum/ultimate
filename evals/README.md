@@ -12,6 +12,11 @@ List conversations with `await ultimate.conversations()` (a snapshot from the ex
 The fixture runs a fixed base set (the coding agent without workspaces, conversations, status line, browser or faux); `enable` adds extensions to it, so each eval loads only what it measures.
 Use `assistant('', [toolCall])` and `toolResult(id, name, text, isError)` for tool history.
 Seeds append actual Durable entries without running a model.
+For side-effecting tools use `start({ toolResults: { branch: 'Branch #42 started.' } })`.
+This installs an eval-only wrapper retaining the real schema and replacing execution with canned text;
+wrapped deferred tools are exposed directly so they can be tested without codemode. Fixture startup
+checks that the wrapper loaded before running a model. Disable codemode when asserting on direct calls.
+`turn.finalText` is the last assistant answer; `turn.text` includes intermediate commentary too.
 Call `c.run(input)` to submit through HTTP and wait for idle; call it again to continue.
 Assert on `turn.text`, `turn.toolCalls`, files, git, or extension HTTP actions.
 Use `ultimate.file`, `ultimate.exec`, and `ultimate.action` to inspect outcomes.
