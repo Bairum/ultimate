@@ -1,4 +1,5 @@
 import { cn } from '@/sdk'
+import { phaseText, usePhase } from '../phase/chip.tsx'
 import { useWorkspaceIndex } from '../workspaces/data.tsx'
 import { FeatureTag } from './feature.tsx'
 
@@ -20,7 +21,7 @@ export function ago(at: number, now: number) {
 
 /**
  * The lander's line: "fixing" or "diagnosing" while its model works on a failure, a pulsing "landing" while it lands,
- * "working" while it answers someone, else "idle"; then its latest landing's feature, short sha and age, and how many
+ * its working phase (or "working") while it answers someone, else "idle"; then its latest landing's feature, short sha and age, and how many
  * submissions wait in its queue.
  */
 export function LanderState({
@@ -34,6 +35,7 @@ export function LanderState({
   now: number
   working: boolean
 }) {
+  const phase = usePhase(working ? id : undefined)
   const source = Object.entries(index.landerConversations).find(([, lander]) => lander === id)?.[0]
   const current = index.queue.find((item) => item.source === source && item.state === 'landing')
   const queued = index.queue.filter(
@@ -47,7 +49,9 @@ export function LanderState({
         : current
           ? 'landing'
           : working
-            ? 'working'
+            ? phase
+              ? phaseText(phase).toLowerCase()
+              : 'working'
             : 'idle'
   const last = Object.values(index.results).findLast((result) => result.lander === id && result.sha)
   const at = last?.steps.at(-1)?.at
