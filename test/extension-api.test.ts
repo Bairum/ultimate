@@ -114,6 +114,8 @@ it('serves typed APIs through held handles across provider reloads, failures and
   await until(() => server.system.current().extensionDiagnostics.includes(missing))
 })
 
+const untraced = <T>(_call: unknown, work: () => T) => work()
+
 it('types handles by their token and groups cycles into components', () => {
   const Echo = defineApi<{ echo(text: string): string }>()('echo')
   const providers = new Map<string, { extension: string; value: unknown }>([
@@ -125,6 +127,7 @@ it('types handles by their token and groups cycles into components', () => {
     (name) => providers.get(name),
     () => [...providers].map(([name, { extension }]) => [name, extension]),
     () => true,
+    untraced,
   )
   const [a, b, c] = [{}, {}, {}]
   const echo = apis.need(a, 'a', Echo, false)
@@ -149,6 +152,7 @@ it('reports a dense tangle as one component without walking its paths', () => {
     (name) => ({ extension: name, value: {} }),
     () => [...names, 'outside'].map((name) => [name, name]),
     () => true,
+    untraced,
   )
   for (const name of names) {
     const owner = {}

@@ -24,6 +24,7 @@ Only inside codemode (not standalone model tools):
 - `ultimate.projects()` — project folders, their top-level conversation summaries, and URL when running (JSON manifests only, not other stores' SQLite).
 - `ultimate.uiState()` — durable root-conversation UI state, so you can see what the user is looking at.
 - `ultimate.extensions()` — folders, facets, tools, sections, documents, load errors.
+- `ultimate.trace({ trace?, conversation?, since?, limit? })` — recorded service, action, reactor and tool calls (the newest `limit`, default 100, oldest first) with caller, callee, duration, status and context ids; `ultimate.traceTree(traceId)` nests one trace's calls under their parents.
 - `ultimate.action(extension, action, args?)` — the one write: call an extension action on behalf of this conversation, with the sandbox abort signal; omitted args become null. Returns its JSON result or throws its error. Discover actions with `ultimate.extensions()` and read their args in the extension README.
 - `ultimate.conversations()` — all stored conversation identities and ownership edges.
 - `ultimate.entries(conversationId, { kinds?, limit?, before? })` — newest-first fork-aware history, including entries before resets/compactions; `before` is an exclusive entry ID.

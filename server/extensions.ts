@@ -32,6 +32,8 @@ import { reportCore } from './supervisor-protocol.ts'
 import { EventFeed, eventLog } from './events.ts'
 import type { EventHost } from './events.ts'
 import { extensionApis } from './extension-apis.ts'
+import { callTrace } from './trace.ts'
+import type { TraceReader } from './trace.ts'
 import type { Api, Catalogue } from '../shared/extension-api.ts'
 
 export type ExtensionHost = Pick<
@@ -70,6 +72,8 @@ export type ExtensionHost = Pick<
   want<S>(api: Api<string, S>): S | undefined
   /** Who provides, needs and wants each API, plus missing providers and dependency cycles. */
   catalogue(): Catalogue
+  /** The recorded calls: services, actions, reactor runs and tools. */
+  trace: TraceReader
   resource<T>(key: string, create: () => T): T
   /** Run `callback` each time the harness opens, at once when it is open; the server serves once it settles. */
   onOpen(callback: () => Promise<void>): void
@@ -137,7 +141,8 @@ export async function loadExtensions(
 ) {
   // Events belong to this host, not every host opened in the process.
   const events = createEventBus()
-  const log = eventLog(runtime.harness)
+  const trace = callTrace(join(host.home, 'trace.sqlite'))
+  const log = eventLog(runtime.harness, trace.run)
   const roots = discoveryRoots(host.ultimateRoot, host.projectRoot, host.userHome)
   const directories = roots.map((root) => join(root.path, 'extensions'))
   const services = serviceRegistry((snapshot) =>
@@ -166,6 +171,7 @@ export async function loadExtensions(
         return extension ? [[name, extension] as [string, string]] : []
       }),
     (owner) => [...facetHosts.values()].includes(owner as ExtensionHost),
+    trace.run,
   )
   let missingApis = new Set<string>()
   const dispose = async (facetHost: ExtensionHost | undefined) => {
@@ -303,6 +309,7 @@ export async function loadExtensions(
     args: JsonValue,
     signal: AbortSignal,
     conversationId?: number,
+    caller = 'ui',
   ) {
     const table = actions.get(name)
     const fn = table && Object.hasOwn(table, action) ? table[action] : undefined
@@ -312,30 +319,33 @@ export async function loadExtensions(
       (!Number.isSafeInteger(conversationId) || conversationId < 1)
     )
       throw new Error('Invalid conversationId')
-    return fn(args, {
-      host: facetHosts.get(name)!,
-      conversationId,
-      signal,
-      exec: async (command, commandArgs, options) => {
-        const agent =
-          conversationId === undefined
-            ? undefined
-            : await runtime
-                .harness()
-                .snapshot(AgentDoc, conversationId as ConversationId, BACKGROUND_CONTEXT)
-        return actionExec(options?.cwd ?? agent?.cwd ?? host.projectRoot, signal)(
-          command,
-          commandArgs,
-          options,
-        )
-      },
-    })
+    const call = { caller, callee: name, name: `${name}/${action}`, args, conversationId }
+    return trace.run({ kind: 'action', ...call }, () =>
+      fn(args, {
+        host: facetHosts.get(name)!,
+        conversationId,
+        signal,
+        exec: async (command, commandArgs, options) => {
+          const agent =
+            conversationId === undefined
+              ? undefined
+              : await runtime
+                  .harness()
+                  .snapshot(AgentDoc, conversationId as ConversationId, BACKGROUND_CONTEXT)
+          return actionExec(options?.cwd ?? agent?.cwd ?? host.projectRoot, signal)(
+            command,
+            commandArgs,
+            options,
+          )
+        },
+      }),
+    )
   }
   const extensionHost: ExtensionHost = {
     invoke: async (name, action, args, signal, conversationId) => {
       if (userActions.get(name)?.includes(action))
         throw new Error(`${name}/${action} is a user-only action`)
-      return invoke(name, action, args, signal, conversationId)
+      return invoke(name, action, args, signal, conversationId, 'agent')
     },
     events,
     emit: log.emit,
@@ -358,6 +368,7 @@ export async function loadExtensions(
       throw new Error('Consumers require a facet scope')
     },
     catalogue: () => apis.catalogue(),
+    trace: trace.reader,
     service: () => {
       throw new Error('Services require a facet scope')
     },
@@ -550,7 +561,7 @@ export async function loadExtensions(
           )
             throw new Error('userActions must contain registered action names')
           const secrets = validateSecrets(module.secrets ?? [])
-          host.registry.install(extension)
+          host.registry.install(trace.tools(extension))
           const previousHost = facetHosts.get(name)
           facetHosts.set(name, facetHost)
           for (const [key, value] of provided.get(facetHost)!)
@@ -743,8 +754,10 @@ export async function loadExtensions(
     invoke,
     doc: findDoc,
     catalogue: () => apis.catalogue(),
+    trace: trace.reader,
     /** The harness is open: run the `onOpen` callbacks. */
     async opened() {
+      trace.open()
       open = true
       services.visible(true)
       await Promise.all([...openers].map(runOpener))
@@ -755,6 +768,7 @@ export async function loadExtensions(
       services.visible(false)
       open = false
       await Promise.all([...releasers].map(runReleaser))
+      trace.close()
     },
     async close() {
       closed = true
@@ -766,6 +780,7 @@ export async function loadExtensions(
       for (const result of results)
         if (result.status === 'rejected')
           notice(`Process resource cleanup failed: ${String(result.reason)}`)
+      trace.close()
     },
   }
 }

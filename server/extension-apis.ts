@@ -1,4 +1,5 @@
 import type { Api, Catalogue } from '../shared/extension-api.ts'
+import type { CallTrace } from './trace.ts'
 
 type Provider = { extension: string; value: unknown }
 
@@ -39,14 +40,18 @@ export function extensionApis(
   provided: () => Iterable<[name: string, extension: string]>,
   /** Whether a facet host is installed; staged and failed facets do not count. */
   installed: (owner: object) => boolean,
+  /** Runs every service call, so each is traced. */
+  trace: CallTrace['run'],
 ) {
   const uses = new Map<object, { extension: string; needs: Set<string>; wants: Set<string> }>()
-  // Every service call goes through here, so tracing can wrap calls in one place.
   const call = (caller: string, api: Api<string, unknown>, method: string, args: unknown[]) => {
     const provider = lookup(api.name)
     if (!provider) throw absent(caller, 'needs', api.name)
     const value = provider.value as Record<string, (...args: unknown[]) => unknown>
-    return Reflect.apply(value[method], value, args)
+    return trace(
+      { kind: 'service', caller, callee: provider.extension, name: `${api.name}.${method}`, args },
+      () => Reflect.apply(value[method], value, args),
+    )
   }
   // Resolves the provider on every member access, so a handle held since setup sees provider reloads.
   const handle = <S>(caller: string, api: Api<string, S>, verb: string) =>

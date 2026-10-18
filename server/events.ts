@@ -10,6 +10,8 @@ import type { ConversationId, EntryId, EntryRecord, Harness, Tx } from '@earendi
 import { EVENT_FEED, EVENT_FEED_SIZE, NoticeEvent } from '../shared/events.ts'
 import type { EventContext, EventData, EventRecord, EventToken } from '../shared/events.ts'
 import { Metadata } from './metadata.ts'
+import { traceContext } from './trace.ts'
+import type { CallTrace } from './trace.ts'
 
 /** Where the log lives and how far each reactor has read; on the root, next to other project-wide indexes. */
 export const EventLog = defineDoc<{ conversation?: number; cursors: Record<string, number> }>({
@@ -70,9 +72,10 @@ export interface EventHost {
   }
 }
 
-/** The context of the work that emits, stamped on every event. The trace fills this in. */
+/** The trace context of the work that emits, stamped on every event. */
 function currentContext(): EventContext | undefined {
-  return undefined
+  const trace = traceContext()
+  return trace && { ...trace }
 }
 
 const record = (entry: EntryRecord): EventRecord => {
@@ -136,7 +139,7 @@ async function scan(
 }
 
 /** Events, reactors and recorded notices of one extension host. */
-export function eventLog(harness: () => Harness) {
+export function eventLog(harness: () => Harness, trace: CallTrace['run']) {
   type Active = { kinds: Set<string>; handler: Reactor<JsonValue> }
   const reactors = new Map<
     string,
@@ -171,7 +174,19 @@ export function eventLog(harness: () => Harness) {
             })
             if (pending) {
               attempted = pending.id
-              await active.handler(tx, record(pending))
+              const event = record(pending)
+              // The emitter's context, not the drain's: commit listeners run in whichever work committed.
+              await trace(
+                {
+                  kind: 'reactor',
+                  caller: event.name,
+                  callee: name.split('/')[0],
+                  name,
+                  args: { event: event.id },
+                },
+                () => active.handler(tx, event),
+                event.context ?? null,
+              )
             }
             if (last !== after) index.cursors[name] = last
             return pending !== undefined

@@ -96,6 +96,7 @@ export interface BuildEntry {
 }
 export interface BuildInfo extends BuildEntry {
   core: string
+  lib: string
   extensions: Record<string, string>
   history: BuildEntry[]
 }
