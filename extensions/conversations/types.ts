@@ -24,6 +24,8 @@ export type OverviewRow = {
   /** `answered`: the latest input got a reply; whether its goal is met is the assessment's opinion. */
   runState: 'working' | 'queued' | 'idle' | 'answered' | 'error'
   inputId?: number
+  /** The latest input is extension-authored rather than a plain user message. */
+  internalInput?: true
   answerId?: number
   summary?: string
   feature?: string

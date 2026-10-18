@@ -73,6 +73,32 @@ async function fixture() {
   return { path, prepared, host, service, file }
 }
 
+it('gives coordinator guidance only to agents with subagent, retaining definitions for branch and automation', async () => {
+  const { service, host, prepared } = await fixture()
+  const standing = (await host.harness.conversation(await service.standing('x', ctx), ctx))!
+  const section = prepared.registry
+    .snapshot()
+    .extension('subagents')!
+    .sections!.find((item) => item.key === 'subagents')!
+  const agent = await standing.agent(ctx)
+  const render = (tools = agent.tools, conversationId = standing.id) =>
+    section.render(
+      { conversationId, agent: { ...agent, tools } } as Parameters<typeof section.render>[0],
+      ctx,
+    )
+  expect(await render()).toBeUndefined()
+  for (const name of ['branch', 'automation']) {
+    const text = await render([{ ...agent.tools[0], name }])
+    expect(text).toContain('Available definitions:\nx: Test')
+    expect(text).not.toContain('You coordinate')
+  }
+  const coordinator = await host.root.agent(ctx)
+  expect(coordinator.tools.some((tool) => tool.name === 'subagent')).toBe(true)
+  const text = await render(coordinator.tools, host.root.id)
+  expect(text).toContain('You coordinate. Own requirements')
+  expect(text).toContain('9. Post the verdict')
+})
+
 it('parses and saves the resident field, refusing non-booleans', async () => {
   const { path, prepared } = await fixture()
   expect(parseDefinition(definition('Instructions'), 'test').resident).toBe(true)

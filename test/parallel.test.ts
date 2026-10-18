@@ -40,17 +40,30 @@ async function fake(
     key: string | undefined,
   ) => { status?: number; data?: unknown; raw?: string; hang?: boolean },
 ) {
-  const server = createServer(async (request, response) => {
-    let text = ''
-    for await (const chunk of request) text += chunk
-    const result = handler(
-      JSON.parse(text),
-      request.url!,
-      request.headers['x-api-key'] as string | undefined,
-    )
-    if (result.hang) return
-    response.writeHead(result.status ?? 200, { 'content-type': 'application/json' })
-    response.end(result.raw ?? JSON.stringify(result.data))
+  const errors: unknown[] = []
+  const server = createServer((request, response) => {
+    void (async () => {
+      let text = ''
+      for await (const chunk of request) text += chunk
+      // A fetch cancelled just after dispatch can arrive without its JSON body.
+      if (!text) {
+        response.writeHead(400).end()
+        return
+      }
+      const result = handler(
+        JSON.parse(text),
+        request.url!,
+        request.headers['x-api-key'] as string | undefined,
+      )
+      if (result.hang) return
+      response.writeHead(result.status ?? 200, { 'content-type': 'application/json' })
+      response.end(result.raw ?? JSON.stringify(result.data))
+    })().catch((error) => {
+      // An interrupted upload is expected in cancellation tests; retain all other failures.
+      if (!request.complete && request.destroyed) return
+      errors.push(error)
+      response.destroy()
+    })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
@@ -59,8 +72,18 @@ async function fake(
   cleanup.push(async () => {
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
+    expect(errors).toEqual([])
   })
 }
+it('rejects an empty upload without calling the JSON handler', async () => {
+  const handler = vi.fn<() => { data: unknown }>(() => ({ data: {} }))
+  await fake(handler)
+  const response = await fetch(process.env.ULTIMATE_PARALLEL_TEST_URL + '/search', {
+    method: 'POST',
+  })
+  expect(response.status).toBe(400)
+  expect(handler).not.toHaveBeenCalled()
+})
 const page = {
   title: 'Example',
   url: 'https://example.com/',

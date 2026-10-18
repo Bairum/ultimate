@@ -21,7 +21,6 @@ import type { ModelsResponse } from '../../../shared/protocol.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
 import { composerRenderers, inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
-import { ComposerContext } from '../sdk/composer.tsx'
 
 const alt = isMac ? '⌥' : 'Alt'
 
@@ -128,11 +127,7 @@ export function Composer({ dock }: { dock?: boolean }) {
     },
     <ConversationComposer dock={dock} key={id} />,
   )
-  return (
-    <TranscriptContext value={entries}>
-      <ComposerContext value={{ draft: draftAccess(getDraft(id)) }}>{core}</ComposerContext>
-    </TranscriptContext>
-  )
+  return <TranscriptContext value={entries}>{core}</TranscriptContext>
 }
 
 type Draft = {
@@ -183,13 +178,6 @@ function clearDraft(
   if (draft.get().revision !== snapshot.revision) return
   if (draft.key && stored === snapshot.text) localStorage.removeItem(draft.key)
   draft.set({ text: stored === snapshot.text ? '' : stored })
-}
-
-function draftAccess(draft: ReturnType<typeof createDraft>) {
-  return {
-    read: () => ({ text: draft.get().text, revision: draft.get().revision }),
-    clear: (snapshot: { text: string; revision: number }) => clearDraft(draft, snapshot),
-  }
 }
 
 function ConversationComposer({ dock }: { dock?: boolean }) {
@@ -246,79 +234,77 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   }
 
   return (
-    <ComposerContext value={{ draft: draftAccess(draft) }}>
-      <div data-composer-target="conversation" className={cn(column(dock), 'pb-2')}>
-        <Inbox items={inbox} />
-        <PromptInput
-          onSubmit={(event) => {
-            event.preventDefault()
-            void send()
-          }}
-        >
-          <ImagePreviews
-            images={images}
-            disabled={loading || sending || reading}
-            remove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
-          />
-          <PromptInputTextarea
-            autoFocus={!touchKeyboard()}
-            readOnly={loading || sending}
-            onPaste={(event) => void paste(event)}
-            id="composer-input"
-            onChange={(event) => update(event.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder={
-              busy ? 'Steer the run, or queue a follow-up…' : 'Ask Ultimate to change something…'
-            }
-            value={text}
-          />
-          <PromptInputFooter className="@container">
-            <PromptInputTools>
-              <Slot name="composer.toolbar" variant="inline" />
-            </PromptInputTools>
-            <div className="flex min-w-0 items-center gap-2">
-              <span
-                className={cn(
-                  'truncate font-mono text-[11px]',
-                  error || blocked ? 'text-error' : 'text-muted-foreground/70',
-                )}
+    <div data-composer-target="conversation" className={cn(column(dock), 'pb-2')}>
+      <Inbox items={inbox} />
+      <PromptInput
+        onSubmit={(event) => {
+          event.preventDefault()
+          void send()
+        }}
+      >
+        <ImagePreviews
+          images={images}
+          disabled={loading || sending || reading}
+          remove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
+        />
+        <PromptInputTextarea
+          autoFocus={!touchKeyboard()}
+          readOnly={loading || sending}
+          onPaste={(event) => void paste(event)}
+          id="composer-input"
+          onChange={(event) => update(event.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder={
+            busy ? 'Steer the run, or queue a follow-up…' : 'Ask Ultimate to change something…'
+          }
+          value={text}
+        />
+        <PromptInputFooter className="@container">
+          <PromptInputTools>
+            <Slot name="composer.toolbar" variant="inline" />
+          </PromptInputTools>
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              className={cn(
+                'truncate font-mono text-[11px]',
+                error || blocked ? 'text-error' : 'text-muted-foreground/70',
+              )}
+            >
+              {error ??
+                blocked ??
+                (busy ? (
+                  <span className="pointer-coarse:hidden">
+                    <Kbd>↵</Kbd> steer · <Kbd>{alt} ↵</Kbd> follow-up · <Kbd>esc</Kbd> stop
+                  </span>
+                ) : null)}
+            </span>
+            {busy && (
+              <PromptInputSubmit
+                mode="stop"
+                onClick={() =>
+                  void api.abort().catch((failure: Error) => setError(failure.message))
+                }
+                title="Stop (Esc)"
+              />
+            )}
+            {(!busy || !empty) && (
+              <PromptInputSubmit
+                disabled={loading || empty || !!blocked || sending || reading}
+                aria-label={loading ? 'Loading conversation' : 'Send'}
+                title={loading ? 'Loading conversation' : busy ? 'Steer (Enter)' : 'Send (Enter)'}
+                className={loading ? 'bg-muted text-muted-foreground' : undefined}
               >
-                {error ??
-                  blocked ??
-                  (busy ? (
-                    <span className="pointer-coarse:hidden">
-                      <Kbd>↵</Kbd> steer · <Kbd>{alt} ↵</Kbd> follow-up · <Kbd>esc</Kbd> stop
-                    </span>
-                  ) : null)}
-              </span>
-              {busy && (
-                <PromptInputSubmit
-                  mode="stop"
-                  onClick={() =>
-                    void api.abort().catch((failure: Error) => setError(failure.message))
-                  }
-                  title="Stop (Esc)"
-                />
-              )}
-              {(!busy || !empty) && (
-                <PromptInputSubmit
-                  disabled={loading || empty || !!blocked || sending || reading}
-                  aria-label={loading ? 'Loading conversation' : 'Send'}
-                  title={loading ? 'Loading conversation' : busy ? 'Steer (Enter)' : 'Send (Enter)'}
-                  className={loading ? 'bg-muted text-muted-foreground' : undefined}
-                >
-                  {loading ? (
-                    <LoaderCircleIcon className="size-4 motion-safe:animate-spin" />
-                  ) : undefined}
-                </PromptInputSubmit>
-              )}
-            </div>
-          </PromptInputFooter>
-        </PromptInput>
-        <div className="flex items-center gap-3 overflow-hidden pt-1.5 font-mono text-[11px] whitespace-nowrap text-muted-foreground empty:hidden">
-          <Slot name="composer.status" variant="inline" />
-        </div>
+                {loading ? (
+                  <LoaderCircleIcon className="size-4 motion-safe:animate-spin" />
+                ) : undefined}
+              </PromptInputSubmit>
+            )}
+          </div>
+        </PromptInputFooter>
+      </PromptInput>
+      <div className="flex items-center gap-3 overflow-hidden pt-1.5 font-mono text-[11px] whitespace-nowrap text-muted-foreground empty:hidden">
+        <Slot name="composer.status" variant="inline" />
       </div>
-    </ComposerContext>
+    </div>
   )
 }

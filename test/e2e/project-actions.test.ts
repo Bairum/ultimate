@@ -8,9 +8,9 @@ import {
   until,
   post as requestPost,
   sourceCopy,
-} from './helpers.ts'
-import { context } from '../server/harness.ts'
-import { actionExec } from '../server/actions.ts'
+} from '../helpers.ts'
+import { context } from '../../server/harness.ts'
+import { actionExec } from '../../server/actions.ts'
 
 const directories: string[] = []
 const servers: Awaited<ReturnType<typeof createServer>>[] = []

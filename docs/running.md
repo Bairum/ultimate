@@ -1,0 +1,19 @@
+## Running the server
+
+- `pnpm install`, then `pnpm start` runs the supervisor on Node 26. It owns the public TCP port and single-instance lock, prints the URL and opens it as a Chrome app window (`http://ultimate.localhost:<port>`, a tab without a Chrome-family browser); `--no-open` or `ULTIMATE_NO_OPEN=1` disables opening.
+- Run `pnpm link --global` once in the clone, then `cd ~/Projects/app && ultimate`. `ultimate [dir] [--port N] [--no-open]` starts in that project, or opens a window of it when it already runs; `pnpm start` in the clone uses the clone as the project.
+- Project config belongs in `<project>/.ultimate/`: extensions, agents, skills, and optional `settings.json` (JSON object; `defaultSurface` selects the preferred surface). Discovery is built-in, user `~/.ultimate/`, then project config; later names win. User config is independent of `ULTIMATE_HOME`.
+- Server facets can export `actions`, a map of async `(args, ctx)` functions callable from codemode with `ultimate.action(extension, action, args?)` or from the UI by `POST /api/extensions/:name/actions/:action` with `{ args, conversationId? }`, returning `{ result }`. `ctx` has `host`, optional `conversationId`, `signal`, and `exec(command, args, { cwd?, timeout? })`; exec uses the project cwd, no shell, a 1 MiB output cap and a maximum 30 second timeout.
+- `pnpm dev` runs the core standalone; the `restart` tool requires `pnpm start`.
+- Call `restart` after editing `server/` or `shared/`, never for `web/`, `extensions/`, or `agents/`. `POST /api/restart` accepts the same swap; reconnect to events to observe the new generation. The supervisor type-checks and prepares a new child without storage, then waits for the old harness to close before opening the new one and resuming work. Failed checks/preparation keep the old child serving.
+- A crashed child restarts with backoff. After three failed boots the supervisor serves diagnostics and retries on changes in `server/`, `shared/`, or `extensions/`.
+- Binds only `127.0.0.1`; `--port` or `ULTIMATE_PORT` overrides selection, otherwise the supervisor chooses the first free port from `4747`.
+- `ULTIMATE_HOME` overrides state storage; the default is `~/.ultimate/projects/<basename>-<sha256(projectRoot) first 8 hex>/`. Different projects can run concurrently. Never run two storage owners on the same home.
+- `ULTIMATE_GENERATION` defaults to `1` and labels the process in system info.
+- `ULTIMATE_FAUX=1` uses a looping demo provider without tokens; its tools edit only a scratch file in the home.
+- Pi's models, settings, and auth are shared with `~/.pi/agent`; the `models` extension logs in to providers.
+- `pnpm check` checks format/lint/types; `pnpm test` runs the fast in-process faux tests with temporary homes (about 20 s today); `pnpm test:e2e` runs `test/e2e`, the tests that spawn real supervisors and instances; `pnpm eval` runs the real-model agent evals in `evals/` and ends with their cost. There are no browser tests: UI is verified on a faux instance with screenshot or browser.
+- `tsconfig.swap.json` is the server-only type-check gate for swaps.
+- `tsconfig.json` (server, tests, tooling) references `tsconfig.web.json` (browser: `web/src`, `extensions/**/*.tsx`).
+  `pnpm check` type-checks both; with plain `tsc`, run `tsc -b`.
+- The standalone server shuts down on SIGINT/SIGTERM; reopening resumes durable work.

@@ -3,7 +3,6 @@ import {
   CompactionTask,
   configure,
   defineExtension,
-  defineDoc,
   defineTask,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
@@ -12,7 +11,7 @@ import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { Roots, Tally } from '../extensions/lineage/server.ts'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
-import { attach, fauxServer, post, sourceCopy, temp, until } from './helpers.ts'
+import { fauxServer, sourceCopy, temp } from './helpers.ts'
 
 it('creates roots once, seeds them, and compacts only available tallies with the root focus', async () => {
   const home = await temp()
@@ -161,66 +160,6 @@ it('creates roots once, seeds them, and compacts only available tallies with the
   } finally {
     finishCompact.resolve()
     release.resolve()
-    await server.close()
-  }
-})
-
-it('reopens and branches from stored survey inputs, side notes and retired side documents', async () => {
-  const home = await temp()
-  const options = { ultimateRoot: await sourceCopy(home), home, userHome: home }
-  const legacySide = defineDoc<{ side?: { root: number; at: number; ended: string } }>({
-    kind: 'lineage.side',
-    version: 1,
-    scope: 'conversation',
-    history: 'latest',
-    fork: 'initial',
-    initial: () => ({}),
-  })
-  let server = await fauxServer(options)
-  try {
-    await server.harness.commit(async (tx) => {
-      const survey = await tx.appendEntry(ROOT_CONVERSATION_ID, {
-        kind: 'lineage.survey',
-        data: { focus: 'Old project reading' },
-        model: [{ role: 'user', content: 'Old project reading', timestamp: 0 }],
-      })
-      ;(await tx.doc(legacySide, ROOT_CONVERSATION_ID)).side = {
-        root: 1,
-        at: survey.id,
-        ended: 'note',
-      }
-      await tx.appendEntry(ROOT_CONVERSATION_ID, {
-        kind: 'lineage.note',
-        data: { source: 'side', from: 2, text: 'An old decision' },
-        model: [{ role: 'user', content: 'Side chat #2: An old decision', timestamp: 0 }],
-      })
-    }, context)
-    const storedSide = await server.harness.snapshot(legacySide, ROOT_CONVERSATION_ID, context)
-    await server.close()
-    server = await fauxServer(options)
-    await expect(
-      server.root.submit({ type: 'input', content: 'Reopen the side chat' }, context),
-    ).rejects.toThrow('has ended and takes no input')
-    const stream = await attach(server, '?conversation=1&docs=lineage.side')
-    try {
-      await until(() => stream.events.some((event) => event.name === 'doc'))
-      expect(stream.events.find((event) => event.name === 'doc')!.data).toEqual({
-        kind: 'lineage.side',
-        value: storedSide,
-      })
-    } finally {
-      await stream.close()
-    }
-    const branch = await post(server, '/api/extensions/lineage/actions/branch', {
-      args: { from: 1, prompt: 'Continue the work', isolated: false },
-    })
-    expect(branch.status).toBe(200)
-    const conversation = (await server.harness.conversation(branch.data.result.id, context))!
-    await server.harness.waitForIdle(context)
-    const messages = JSON.stringify((await conversation.context(context)).messages)
-    expect(messages).toContain('Old project reading')
-    expect(messages).toContain('An old decision')
-  } finally {
     await server.close()
   }
 })

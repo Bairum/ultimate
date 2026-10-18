@@ -4,7 +4,6 @@ import { join } from 'node:path'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { afterEach, expect, it, vi } from 'vitest'
-import { setImmediate as yieldToIO } from 'node:timers/promises'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import type { TaskId } from '@earendil-works/pi-durable'
@@ -14,16 +13,11 @@ import { Metadata } from '../server/metadata.ts'
 import automations, { actions, Automations } from '../extensions/automations/server.ts'
 import type { Automation } from '../extensions/automations/server.ts'
 import type { ActionContext } from '../server/actions.ts'
-import { temp } from './helpers.ts'
+import { temp, until as waitFor } from './helpers.ts'
 
-async function until(test: () => boolean | Promise<boolean>, timeout = 7000) {
-  for (let elapsed = 0; elapsed <= timeout; elapsed += 50) {
-    if (await test()) return
-    await vi.advanceTimersByTimeAsync(50)
-    await yieldToIO()
-  }
-  throw new Error('Timed out')
-}
+// Advance scheduler time while the shared helper measures IO against a real deadline.
+const until = (test: () => boolean | Promise<boolean>, timeout = 7000) =>
+  waitFor(test, timeout, () => vi.advanceTimersByTimeAsync(50))
 
 const hosts: OpenHost[] = []
 afterEach(async () => {

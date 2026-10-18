@@ -22,29 +22,29 @@ import {
 import { CodingTools } from '@earendil-works/pi-durable/tools'
 import type { ConversationId, JsonObject, TaskId, Tx } from '@earendil-works/pi-durable'
 import { afterAll, expect, it, vi } from 'vitest'
-import { context, prepareHarness } from '../server/harness.ts'
-import { Metadata } from '../server/metadata.ts'
-import { UiState } from '../server/ui-state.ts'
-import type { ExtensionHost } from '../server/extensions.ts'
-import type { ActionContext } from '../server/actions.ts'
+import { context, prepareHarness } from '../../server/harness.ts'
+import { Metadata } from '../../server/metadata.ts'
+import { UiState } from '../../server/ui-state.ts'
+import type { ExtensionHost } from '../../server/extensions.ts'
+import type { ActionContext } from '../../server/actions.ts'
 import workspaceExtension, {
   actions,
   order as workspacesOrder,
-} from '../extensions/workspaces/server.ts'
-import { Workspaces, workspaces } from '../extensions/workspaces/workspaces.ts'
-import { git, setup } from '../extensions/workspaces/git.ts'
-import type { LanderEntry, WorkspaceIndex } from '../extensions/workspaces/types.ts'
-import { createLander, landerCheckout, landerPath } from '../extensions/workspaces/lander.ts'
-import lineage, { leaveNote, rootOf, Roots, startBranch } from '../extensions/lineage/server.ts'
-import { subject } from '../extensions/conversations/server.ts'
-import type { ConversationsService } from '../extensions/conversations/server.ts'
-import { Summaries } from '../extensions/conversations/summary.ts'
-import self from '../extensions/self/server.ts'
-import board, { Board } from '../extensions/board/server.ts'
-import type { BoardService } from '../extensions/board/server.ts'
-import promptExtension, { order as promptOrder } from '../extensions/prompt/server.ts'
-import subagents, { Subagents } from '../extensions/subagents/server.ts'
-import { seedTally, temp, until } from './helpers.ts'
+} from '../../extensions/workspaces/server.ts'
+import { Workspaces, workspaces } from '../../extensions/workspaces/workspaces.ts'
+import { git, setup } from '../../extensions/workspaces/git.ts'
+import type { LanderEntry, WorkspaceIndex } from '../../extensions/workspaces/types.ts'
+import { createLander, landerCheckout, landerPath } from '../../extensions/workspaces/lander.ts'
+import lineage, { leaveNote, rootOf, Roots, startBranch } from '../../extensions/lineage/server.ts'
+import { subject } from '../../extensions/conversations/server.ts'
+import type { ConversationsService } from '../../extensions/conversations/server.ts'
+import { Summaries } from '../../extensions/conversations/summary.ts'
+import self from '../../extensions/self/server.ts'
+import board, { Board } from '../../extensions/board/server.ts'
+import type { BoardService } from '../../extensions/board/server.ts'
+import promptExtension, { order as promptOrder } from '../../extensions/prompt/server.ts'
+import subagents, { Subagents } from '../../extensions/subagents/server.ts'
+import { seedTally, temp, until } from '../helpers.ts'
 
 // Every test has its own repository and harness, so they all run concurrently; fixtures close when the file ends.
 vi.setConfig({ maxConcurrency: 16 })
@@ -268,8 +268,9 @@ async function holdGit(path: string, command: string, fail = false) {
 cat >/dev/null
 [ "$1" = prepared ] && [ ! -f '${started}' ] || exit 0
 case "$(tr '\\0' ' ' < /proc/$PPID/cmdline)" in "git ${command} "*) ;; *) exit 0 ;; esac
+mkfifo '${gate}'
 touch '${started}'
-while [ ! -f '${gate}' ]; do sleep 0.02; done
+read release < '${gate}'
 ${fail ? 'exit 1' : ''}
 `,
     { mode: 0o755 },
@@ -282,7 +283,7 @@ ${fail ? 'exit 1' : ''}
           () => false,
         ),
       ),
-    release: () => writeFile(gate, ''),
+    release: () => writeFile(gate, 'ready\n'),
   }
 }
 it.concurrent('serializes concurrent lander checkout creation', async () => {
@@ -316,8 +317,15 @@ it.concurrent('retries lander checkout creation after a failure', async () => {
 it.concurrent('creates through the action; setup receives ULTIMATE_SOURCE and the first model request waits for ready', async () => {
   const f = await fixture()
   const sourceFile = join(f.directory, 'source-env')
+  const gate = join(f.directory, 'setup-gate')
   f.host.projectSettings = async () => ({
-    isolates: { worktree: { setup: [`echo "$ULTIMATE_SOURCE" > '${sourceFile}'; sleep 0.3`] } },
+    isolates: {
+      worktree: {
+        setup: [
+          `mkfifo '${gate}'; echo "$ULTIMATE_SOURCE" > '${sourceFile}'; read release < '${gate}'`,
+        ],
+      },
+    },
   })
   let seen = ''
   f.prepared.faux!.setResponses([
@@ -332,7 +340,16 @@ it.concurrent('creates through the action; setup receives ULTIMATE_SOURCE and th
   expect(pending.path).toBe(join(f.home, 'worktrees', String(id)))
   const conversation = (await f.opened.harness.conversation(id, context))!
   expect((await conversation.agent(context)).cwd).toBe(pending.path)
-  await (await conversation.submit({ type: 'input', content: 'go' }, context)).wait(context)
+  const input = await conversation.submit({ type: 'input', content: 'go' }, context)
+  await until(() =>
+    access(sourceFile).then(
+      () => true,
+      () => false,
+    ),
+  )
+  expect(seen).toBe('')
+  await writeFile(gate, 'ready\n')
+  await input.wait(context)
   expect(seen).toBe('ready')
   expect((await readFile(sourceFile, 'utf8')).trim()).toBe(f.projectRoot)
   expect(await git(pending.path, 'branch', '--show-current')).toBe(pending.branch)
@@ -1254,15 +1271,29 @@ it.concurrent('lands two submissions in order onto a moved target and reports bo
 })
 it.concurrent('runs a check group concurrently and records each summary', async () => {
   const f = await fixture()
-  /** Marks itself, then waits for the other: run one after the other, both would fail. */
-  const meet = (name: string, other: string) =>
-    `touch '${join(f.directory, name)}'; for i in $(seq 100); do [ -f '${join(f.directory, other)}' ] && break; sleep 0.01; done; test -f '${join(f.directory, other)}' && printf 'log\\n\\033[32m${name} met\\033[0m\\n\\n'`
-  const group = [meet('one', 'two'), meet('two', 'one')]
+  /** Both checks must start before either gate is released; serial execution cannot pass. */
+  const meet = (name: string) =>
+    `mkfifo '${join(f.directory, name)}.gate'; touch '${join(f.directory, name)}'; read release < '${join(f.directory, name)}.gate'; printf 'log\\n\\033[32m${name} met\\033[0m\\n\\n'`
+  const group = [meet('one'), meet('two')]
   f.host.projectSettings = async () => ({ lander: { checks: ['true', group] } })
   const id = await f.create()
   await f.service.ready(id, context)
   await commit((await f.service.get(id, context))!.path)
   await f.service.submit(id, 'None', context)
+  await until(async () => {
+    const started = await Promise.all(
+      ['one', 'two'].map((name) =>
+        access(join(f.directory, name)).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    )
+    return started.every(Boolean)
+  })
+  await Promise.all(
+    ['one', 'two'].map((name) => writeFile(join(f.directory, name) + '.gate', 'ready\n')),
+  )
   const [report] = await submitted(f, id)
   expect(report).toContain('landed as')
   expect(report).not.toContain('Flaky')
@@ -1405,7 +1436,8 @@ it.concurrent('kills the whole process group of a running check when the lander 
   const f = await fixture()
   const pidFile = join(f.directory, 'child.pid')
   f.host.projectSettings = async () => ({
-    lander: { checks: [`sleep 300 & echo $! > '${pidFile}'; wait`] },
+    // An indefinitely blocked child lets the test observe process-group cancellation, not elapsed time.
+    lander: { checks: [`tail -f /dev/null & echo $! > '${pidFile}'; wait`] },
   })
   const id = await f.create()
   await f.service.ready(id, context)

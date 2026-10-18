@@ -1,13 +1,13 @@
 import { chmod, mkdir, stat, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { fauxServer, removeTemp, temp, until } from './helpers.ts'
+import { fauxServer, removeTemp, temp, until } from '../helpers.ts'
 import {
   readSecret,
   secretMetadata,
   validateValue,
   writeSecret,
-} from '../extensions/secrets/store.ts'
+} from '../../extensions/secrets/store.ts'
 
 const homes: string[] = []
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []

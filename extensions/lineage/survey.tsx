@@ -1,11 +1,8 @@
-import { ChevronRightIcon, CompassIcon, LoaderCircleIcon } from 'lucide-react'
+import { CompassIcon, LoaderCircleIcon } from 'lucide-react'
 import { useState } from 'react'
-import { MessageResponse } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Kbd } from '@/components/ui/kbd'
 import { api, cn, errorMessage, touchKeyboard, useDocOf, useSystem, useUltimate } from '@/sdk'
-import type { EntryRecord } from '@/sdk'
 
 /** The composer's reading column, as the core lays it out. */
 export const column = (dock?: boolean) =>
@@ -111,32 +108,5 @@ export function Familiarize({ id, dock }: { id: number; dock?: boolean }) {
         </div>
       </div>
     </div>
-  )
-}
-
-/** A root's survey input, from before @ultimate read projects: what it was asked to read, collapsed under its focus. */
-export function Survey({ entry, text }: { entry: EntryRecord; text: string }) {
-  const focus = (entry.data as { focus?: string } | undefined)?.focus
-  return (
-    <Collapsible
-      className="group/survey rounded-lg border border-brand/30 bg-brand/5"
-      data-lineage-survey={entry.conversationId}
-    >
-      <CollapsibleTrigger className="flex w-full cursor-pointer flex-col gap-1 px-3.5 py-2.5 text-left">
-        <span className="flex items-center gap-1.5 font-mono text-[11px] text-brand">
-          <ChevronRightIcon className="size-3.5 transition-transform group-data-[state=open]/survey:rotate-90" />
-          <CompassIcon className="size-3.5" />
-          Getting familiar with the project
-        </span>
-        <span className="text-xs text-muted-foreground">
-          {focus
-            ? `Your instructions: ${focus}`
-            : 'A general reading: what it is, how to run and test it, its layout and conventions.'}
-        </span>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="border-t border-brand/20 px-3.5 py-2.5 text-[13px]">
-        <MessageResponse>{text}</MessageResponse>
-      </CollapsibleContent>
-    </Collapsible>
   )
 }

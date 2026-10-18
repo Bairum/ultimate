@@ -11,8 +11,8 @@ import type {
   UserMessage,
 } from '@earendil-works/pi-ai'
 import { ModelRuntime, ProjectTrustStore } from '@earendil-works/pi-coding-agent'
-import { AssistantEntry, ToolResultEntry, UserEntry } from '@earendil-works/pi-durable'
-import type { ConversationId } from '@earendil-works/pi-durable'
+import { AssistantEntry, LiveDoc, ToolResultEntry, UserEntry } from '@earendil-works/pi-durable'
+import type { ConversationDocToken, ConversationId, JsonObject } from '@earendil-works/pi-durable'
 import { inject } from 'vitest'
 import type { TurnUsage } from './reporter.ts'
 import { createServer } from '../server/main.ts'
@@ -76,6 +76,8 @@ export async function start(
     extensions?: { enable?: string[]; disable?: string[] }
     model?: string
     thinking?: string
+    /** Replace execution only: retain real tool schemas and prompts, without side effects. */
+    toolResults?: Record<string, string>
   } = {},
 ) {
   const model = options.model ?? process.env.ULTIMATE_EVAL_MODEL ?? 'openai/gpt-6-luna'
@@ -121,6 +123,21 @@ export async function start(
         { cwd: projectRoot },
       )
     }
+    if (options.toolResults) {
+      const stub = join(projectRoot, '.ultimate/extensions/eval-tools/server.ts')
+      await mkdir(dirname(stub), { recursive: true })
+      await writeFile(
+        stub,
+        `export const actions = { ready: async () => true }
+        export default () => ({
+          name: 'eval-tools',
+          wraps: Object.entries(${JSON.stringify(options.toolResults)}).map(([name, output]) => ({
+            tool: name,
+            wrap: tool => ({ ...tool, deferred: false, execute: async () => ({ output: [{ type: 'text', text: output }] }) }),
+          })),
+        })`,
+      )
+    }
     const config = join(userHome, '.ultimate')
     await mkdir(config, { recursive: true })
     // Every built-in is on by default; an eval loads the coding agent plus only what it measures.
@@ -159,6 +176,8 @@ export async function start(
       if (!response.ok) throw new Error(`${path}: HTTP ${response.status}: ${JSON.stringify(data)}`)
       return data
     }
+    // A load error must stop the eval before a model can execute the real side-effecting tools.
+    if (options.toolResults) await post('/api/extensions/eval-tools/actions/ready', { args: {} })
     return {
       projectRoot,
       file: (path: string) => readFile(join(projectRoot, path), 'utf8'),
@@ -227,6 +246,11 @@ export async function start(
         }
         return {
           id,
+          async document<T extends JsonObject>(token: ConversationDocToken<T>) {
+            return running.harness.commit(async (tx) => {
+              return JSON.parse(JSON.stringify(await tx.doc(token, id))) as T
+            }, context)
+          },
           async run(input: string) {
             const before = (await messages()).length
             const started = performance.now()
@@ -238,13 +262,25 @@ export async function start(
               await Promise.race([
                 (async () => {
                   await submission.wait(context)
-                  await running.harness.waitForIdle(context)
+                  // A reminder's scheduler stays live until its due time in another conversation.
+                  // Wait for this turn's owned work, not every task in the harness.
+                  await conversation.waitForIdle(context)
                 })(),
                 new Promise<never>((_, reject) => {
-                  timer = setTimeout(
-                    () => reject(new Error(`Conversation ${id} did not become idle within 240s`)),
-                    240_000,
-                  )
+                  timer = setTimeout(() => {
+                    void (async () => {
+                      const inspection = await running.harness.inspect(context)
+                      const live = await running.harness.snapshot(LiveDoc, id, context)
+                      const turn = (await messages())
+                        .slice(before)
+                        .filter((message) => message.role !== 'system')
+                      reject(
+                        new Error(
+                          `Conversation ${id} did not become idle within 240s\n${JSON.stringify({ inspection, live, turn }, null, 2)}`,
+                        ),
+                      )
+                    })().catch(reject)
+                  }, 240_000)
                 }),
               ])
             } finally {
@@ -281,6 +317,11 @@ export async function start(
               throw new Error(`Model turn failed: ${failed.errorMessage ?? failed.stopReason}`)
             if (!replies.length) throw new Error('Model turn produced no assistant reply')
             return {
+              finalText: replies
+                .at(-1)!
+                .content.filter((c) => c.type === 'text')
+                .map((c) => c.text)
+                .join('\n'),
               text: replies
                 .flatMap((m) => m.content.filter((c) => c.type === 'text').map((c) => c.text))
                 .join('\n'),

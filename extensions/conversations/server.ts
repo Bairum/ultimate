@@ -50,14 +50,6 @@ async function refuseFixed(host: ExtensionHost, tx: Tx, id: ConversationId, verb
     throw new Error(`#${id} is a standing agent; standing agents cannot be ${verb}`)
 }
 
-async function setTitle(host: ExtensionHost, id: ConversationId, title: string | undefined) {
-  await host.harness().commit(async (tx) => {
-    const metadata = await tx.doc(host.metadata, id)
-    if (title) metadata.title = title
-    else delete metadata.title
-  }, context)
-}
-
 const projectFile = (host: ExtensionHost) => join(host.projectRoot, '.ultimate/settings.json')
 
 async function effectiveSummaryModel(host: ExtensionHost) {
@@ -133,45 +125,6 @@ export const actions = {
       else settings.summaryModel = value
     })
     return effectiveSummaryModel(host)
-  },
-  /** `{id}`: starts a new context, keeping the conversation's title. */
-  async reset(args: JsonValue, { host }: ActionContext) {
-    const id = await topLevelId(host, args)
-    await host.harness().commit((tx) => refuseFixed(host, tx, id, 'cleared'), context)
-    const graph = await host.harness().taskGraph(context)
-    try {
-      const summary = host.conversations().find((item) => item.id === id)
-      if (
-        Object.values(graph.value.tasks).some(
-          (task) => task.conversationId === id && !task.background,
-        )
-      )
-        throw new Error(`Conversation ${id} is working; stop it before clearing it`)
-      // The derived title comes from the first message in the active context, which the reset empties.
-      if (summary?.title && !(await host.harness().snapshot(host.metadata, id, context))?.title)
-        await setTitle(host, id, summary.title)
-    } finally {
-      graph.dispose()
-    }
-    await host.harness().commit(async (tx) => {
-      const state = await tx.doc(Summaries, id)
-      state.exchanges = 0
-      state.revision++
-      delete state.intentRequested
-      delete state.lastYield
-      delete state.lastAnswer
-      delete state.pending
-      delete state.summary
-      delete state.abstract
-      delete state.feature
-      delete state.summaryOwed
-      delete state.assessment
-      delete state.activity
-      delete state.assessmentStatus
-      delete state.status
-    }, context)
-    await (await host.harness().conversation(id, context))!.reset(undefined, context)
-    return { ok: true }
   },
 }
 

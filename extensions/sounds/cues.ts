@@ -15,7 +15,9 @@ export const sounds: { sound: Sound; label: string }[] = [
  */
 export type Cue = { key: string; sound: Sound; settled: boolean }
 
-export function cueOf(id: string, row: OverviewRow): Cue | undefined {
+export function cueOf(id: string, row: OverviewRow, standing = false): Cue | undefined {
+  // Standing agents also wake for other agents' messages; those replies are not outcomes for the user.
+  if (standing && row.internalInput) return undefined
   if (row.runState === 'error' && row.inputId !== undefined)
     return { key: `${id}:${row.inputId}`, sound: 'failed', settled: true }
   if (row.runState !== 'answered' || row.answerId === undefined) return undefined
@@ -40,9 +42,14 @@ export const settle = 2000
 export function listener() {
   let heard: Set<string> | undefined
   let waiting = new Map<string, number>()
-  return (rows: Record<string, OverviewRow>, top: ReadonlySet<number>, now: number) => {
+  return (
+    rows: Record<string, OverviewRow>,
+    top: ReadonlySet<number>,
+    now: number,
+    standing: ReadonlySet<number> = new Set(),
+  ) => {
     const cues = Object.entries(rows).flatMap(([id, row]) => {
-      const cue = cueOf(id, row)
+      const cue = cueOf(id, row, standing.has(Number(id)))
       return cue ? [[Number(id), cue] as const] : []
     })
     const due: Cue[] = []

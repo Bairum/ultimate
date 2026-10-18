@@ -20,7 +20,7 @@ import type { OpenHost } from '../server/harness.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { ActionContext } from '../server/actions.ts'
 import { Metadata } from '../server/metadata.ts'
-import board, { Board, actions, userActions } from '../extensions/board/server.ts'
+import board, { Board, actions } from '../extensions/board/server.ts'
 import type { BoardService } from '../extensions/board/server.ts'
 import {
   Branch,
@@ -516,21 +516,8 @@ it('resolves a standing address and returns unanswered inputs as failure replies
   expect(await actions.addresses({}, f.action())).toMatchObject({
     agents: [{ name: 'scout', description: 'Search', id: f.recipient.id }],
   })
-  await expect(actions.post({ to: '@lander', text: 'Hi' }, f.action())).rejects.toThrow(
-    'No recipient for @lander',
-  )
 })
-it('logs user inbox items without running and posts answers back to the user', async () => {
-  const f = await fixture()
-  await f.send('user', 'Inbox')
-  expect((await f.log())!.messages).toMatchObject([{ to: 'user', text: 'Inbox' }])
-  expect(f.observed.filter((t) => t.includes('Message from'))).toHaveLength(0)
-  await actions.post({ to: `#${f.recipient.id}`, text: 'From user', re: 1 }, f.action())
-  await until(async () => (await f.log())!.messages.length === 3)
-  expect((await f.log())!.messages[2]).toMatchObject({ to: 'user', from: f.recipient.id, re: 2 })
-  expect(await replies(f)).toHaveLength(0)
-})
-it('answers questions to the user when the user replies, posts anew, or types in the conversation', async () => {
+it('answers questions to the user through answer cards or input in the sender conversation', async () => {
   const f = await fixture()
   await f.opened.harness.commit(async (tx) => {
     ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = f.recipient.id
@@ -549,13 +536,11 @@ it('answers questions to the user when the user replies, posts anew, or types in
   // Asking typed into the recipient leaves that question open: only later input answers it.
   const replied = await ask('Which option?')
   expect(replied).toMatchObject({ to: 'user', reply: true, state: 'delivered' })
-  await actions.post({ to: `#${f.recipient.id}`, text: 'Option 1', re: replied.id }, f.action())
+  await f.service().answer(replied.id, 'Option 1', context)
+  await f.opened.harness.waitForIdle(context)
   expect(await state(replied.id)).toBe('answered')
 
   const report = await ask('Landed', false)
-  const posted = await ask('Ship it?')
-  await actions.post({ to: `#${f.recipient.id}`, text: 'Also add a flag' }, f.action())
-  expect(await state(posted.id)).toBe('answered')
   expect(await state(report.id)).toBe('delivered')
 
   const typed = await ask('Keep going?')
@@ -565,7 +550,7 @@ it('answers questions to the user when the user replies, posts anew, or types in
   // The question stays open when the user writes to another conversation.
   await ask('Another question?')
   const root = (await f.log())!.messages.at(-1)!
-  await actions.post({ to: '#1', text: 'Elsewhere' }, f.action())
+  await (await f.opened.root.submit({ type: 'input', content: 'Elsewhere' }, context)).wait(context)
   expect(await state(root.id)).toBe('delivered')
 })
 it('atomically admits only one answer-card reply through the Board service', async () => {
@@ -640,17 +625,16 @@ it('lets a subagent message only the conversation that started it', async () => 
 })
 it('refuses self, unknown ids, tally roots and unknown names with valid names', async () => {
   const f = await fixture()
-  await expect(actions.post({ to: '999', text: 'x' }, f.action())).rejects.toThrow(
-    'Unknown conversation',
-  )
-  await expect(actions.post({ to: '@missing', text: 'x' }, f.action())).rejects.toThrow('@scout')
+  await f.send('999')
+  await f.send('@missing')
+  expect(f.observed.join('\n')).toContain('Unknown conversation')
+  expect(f.observed.join('\n')).toContain('@scout')
   await f.opened.harness.commit(async (tx) => {
     ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.push(f.recipient.id)
     ;(await tx.doc(Tally, f.recipient.id)).since = 2
   }, context)
-  await expect(actions.post({ to: String(f.recipient.id), text: 'x' }, f.action())).rejects.toThrow(
-    'use note',
-  )
+  await f.send(String(f.recipient.id))
+  expect(f.observed.join('\n')).toContain('use note')
   await f.send('#1')
   const view = await f.opened.root.viewState(context)
   expect(JSON.stringify(view.value.entries)).toContain('cannot message yourself')
@@ -666,7 +650,7 @@ it('loads existing version-1 logs with the unused read mark', async () => {
   await f.send('user', 'Still loadable')
   expect((await f.log())!.messages).toMatchObject([{ text: 'Still loadable' }])
 })
-it('bounds the log and declares only post as a user-only action', async () => {
+it('bounds the log and exposes no user posting action', async () => {
   const f = await fixture()
   await f.opened.harness.commit(async (tx) => {
     const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
@@ -686,7 +670,7 @@ it('bounds the log and declares only post as a user-only action', async () => {
   expect((await f.log())!.messages).toHaveLength(300)
   expect((await f.log())!.messages[0].id).toBe(2)
   expect((await f.log())!.messages.at(-1)).toMatchObject({ id: 301, text: 'The newest' })
-  expect(userActions).toEqual(['post'])
+  expect(actions).not.toHaveProperty('post')
   expect(actions).not.toHaveProperty('read')
 })
 it('queues a busy recipient as follow-up, or steers its current run; @ultimate steers by default', async () => {
@@ -742,7 +726,7 @@ async function codemodeFixture() {
   await linkDependencies(home)
   await writeFile(
     join(home, 'extensions/board/server.ts'),
-    `export { default, actions, docs, userActions } from ${JSON.stringify(resolve('extensions/board/server.ts'))}`,
+    `export { default, actions, docs } from ${JSON.stringify(resolve('extensions/board/server.ts'))}`,
   )
   await writeFile(
     join(home, 'extensions/codemode/server.ts'),
@@ -762,7 +746,7 @@ async function codemodeFixture() {
     port: 0,
   })
 }
-it('rejects post through codemode at the installed action boundary', async () => {
+it('has no posting action at the installed codemode boundary', async () => {
   const server = await codemodeFixture()
   try {
     for (const action of ['post']) {
@@ -770,7 +754,7 @@ it('rejects post through codemode at the installed action boundary', async () =>
         fauxAssistantMessage(
           [
             fauxToolCall('codemode', {
-              code: `return await ultimate.action('board', '${action}', ${action === 'post' ? "{to:'user',text:'fake'}" : '{upTo:1}'});`,
+              code: `return await ultimate.action('board', '${action}', {to:'user',text:'fake'});`,
             }),
           ],
           { stopReason: 'toolUse' },
@@ -783,7 +767,7 @@ it('rejects post through codemode at the installed action boundary', async () =>
       const view = await server.root.viewState(context)
       try {
         const result = view.value.entries.findLast((e) => e.kind === 'pi.tool-result')!
-        expect(JSON.stringify(result)).toContain(`board/${action} is a user-only action`)
+        expect(JSON.stringify(result)).toContain(`Unknown extension action: board/${action}`)
       } finally {
         view.dispose()
       }

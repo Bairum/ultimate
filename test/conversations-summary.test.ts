@@ -449,7 +449,7 @@ it.concurrent.each([false, true])(
   },
 )
 
-it.concurrent.each(['rename', 'reset', 'newer'] as const)(
+it.concurrent.each(['rename', 'newer'] as const)(
   'protects a held spawn result after %s',
   async (change) => {
     const fixture = await launch()
@@ -472,7 +472,6 @@ it.concurrent.each(['rename', 'reset', 'newer'] as const)(
     await until(() => fixture.generated.mock.calls.length === 2)
     try {
       if (change === 'rename') await fixture.action('rename', 'Manual title')
-      else if (change === 'reset') await fixture.action('reset')
       else await fixture.exchange()
     } finally {
       release()
@@ -489,11 +488,10 @@ it.concurrent.each(['rename', 'reset', 'newer'] as const)(
     expect(state?.summary).toBe(
       {
         rename: 'Old spawn summary',
-        reset: undefined,
         newer: 'Added concise summaries to the sidebar.',
       }[change],
     )
-    expect(state?.exchanges).toBe({ rename: 1, reset: 0, newer: 2 }[change])
+    expect(state?.exchanges).toBe({ rename: 1, newer: 2 }[change])
   },
 )
 
@@ -732,34 +730,8 @@ it.concurrent('protects preexisting and in-flight manual titles, and blank renam
   expect(await fixture.titleChanges()).toHaveLength(1)
 })
 
-it.concurrent('clears summary and cadence on reset, drops stale completion and isolates provider errors', async () => {
+it.concurrent('isolates provider errors', async () => {
   const fixture = await launch(false, false, false, true)
-  let release!: () => void
-  const gate = new Promise<void>((done) => {
-    release = done
-  })
-  fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
-    await held(gate, signal)
-    return {
-      assessment: 'done' as const,
-      activity: 'Implemented the requested sidebar changes.',
-      title: 'A stale generated title',
-      summary: 'Stale summary.',
-      abstract: 'A stale abstract.',
-    }
-  })
-  fixture.server.host.faux!.setResponses([fauxAssistantMessage('Done.')])
-  const first = await fixture.server.root.submit({ type: 'input', content: 'Old context' }, context)
-  expect((await first.wait(context)).status).toBe('done')
-  await until(async () => (await fixture.read())?.status === 'pending')
-  expect((await fixture.action('reset')).status).toBe(200)
-  expect((await fixture.read())?.exchanges).toBe(0)
-  expect((await fixture.read())?.summary).toBeUndefined()
-  release()
-  await until(
-    async () => Object.values((await fixture.server.harness.inspect(context)).tasks).length === 0,
-  )
-  expect((await fixture.read())?.summary).toBeUndefined()
   fixture.generated.mockRejectedValueOnce(new Error('Provider offline'))
   fixture.generated.mockRejectedValueOnce(new Error('Provider offline'))
   await fixture.exchange()
@@ -776,7 +748,7 @@ it.concurrent('clears summary and cadence on reset, drops stale completion and i
   expect(await fixture.titleChanges()).toEqual([])
   for (let count = 2; count <= 4; count++) await fixture.exchange()
   await until(async () => (await fixture.read())?.status === 'ready')
-  expect(fixture.generated).toHaveBeenCalledTimes(6)
+  expect(fixture.generated).toHaveBeenCalledTimes(4)
 })
 
 it.concurrent('assesses owned children without renaming them, summarizes ownerless forks, and does not backfill', async () => {
@@ -904,8 +876,6 @@ it.concurrent('writes each branch abstract atomically with its accepted answer a
   expect(fixture.abstract).toHaveBeenCalledTimes(2)
   expect(fixture.generated.mock.calls[1][1]).toContain(`Previous abstract:\n${state?.abstract}`)
   expect(fixture.generated.mock.calls[1][3]).toBe(false)
-  expect((await fixture.action('reset')).status).toBe(200)
-  expect((await fixture.read())?.abstract).toBeUndefined()
 })
 
 it.concurrent.each(['error', 'aborted'] as const)(
@@ -1095,7 +1065,7 @@ it.concurrent('asks a root for the feature its whole tree builds', async () => {
   expect(root.generated.mock.calls.at(-1)![6]).toBe(true)
 })
 
-it.concurrent('stores and exposes a feature, keeps it when omitted, and clears it on reset', async () => {
+it.concurrent('stores and exposes a feature and keeps it when omitted', async () => {
   const fixture = await launch()
   fixture.generated.mockResolvedValueOnce({
     assessment: 'done',
@@ -1119,9 +1089,6 @@ it.concurrent('stores and exposes a feature, keeps it when omitted, and clears i
   expect(
     (await fixture.server.harness.snapshot(Metadata, fixture.server.root.id, context))?.title,
   ).toBe('Improve the conversation sidebar')
-  expect((await fixture.action('reset')).status).toBe(200)
-  expect((await fixture.read())?.feature).toBeUndefined()
-  await until(async () => (await row())?.feature === undefined)
 })
 
 it.concurrent('validates assessment-only JSON and rejects unapproved or malformed outcome states', async () => {
@@ -1314,13 +1281,9 @@ it.concurrent('publishes initial intent while the main model request is blocked,
   expect(await intents()).toEqual(entries)
   await fixture.reopen()
   expect(await intents()).toEqual(entries)
-  await fixture.action('reset')
-  await fixture.exchange()
-  expect(fixture.generated.mock.calls.filter((call) => call[5] === 'intent')).toHaveLength(2)
-  expect((await fixture.read())?.exchanges).toBe(1)
 })
 
-it.concurrent.each(['newer', 'reset', 'spawn'] as const)(
+it.concurrent.each(['newer', 'spawn'] as const)(
   'rejects a held initial intent after %s',
   async (change) => {
     const fixture = await launch(false, true)
@@ -1352,10 +1315,7 @@ it.concurrent.each(['newer', 'reset', 'spawn'] as const)(
       }),
     )
     fixture.server.host.faux!.setResponses([fauxAssistantMessage('Final reply.')])
-    const submitted = await fixture.server.root.submit(
-      { type: 'input', content: 'Initial goal' },
-      context,
-    )
+    await fixture.server.root.submit({ type: 'input', content: 'Initial goal' }, context)
     await until(() => fixture.generated.mock.calls.length === 1)
     try {
       if (change === 'newer')
@@ -1363,12 +1323,6 @@ it.concurrent.each(['newer', 'reset', 'spawn'] as const)(
       else if (change === 'spawn') {
         const entries = await fixture.server.root.context(context)
         await fixture.spawn(entries.entries.find((entry) => entry.kind === 'pi.user')!.id)
-      } else {
-        // A reset is only allowed while idle. Let the main reply supersede the intent first.
-        resume()
-        await submitted.wait(context)
-        await until(async () => (await fixture.read())?.exchanges === 1)
-        await fixture.action('reset')
       }
       release()
       await until(
@@ -1459,7 +1413,7 @@ it.concurrent('keeps an exchange answered across a mid-run compaction and reopen
   await fixture.reopen()
   await until(async () => (await row())?.runState === 'answered')
   expect((await row())?.assessment?.value).toBe('done')
-  // A raw reset, like a tool handoff, bypasses the reset action and its revision bump.
+  // A raw reset, like a tool handoff, ends the exchange even without a summary revision bump.
   await fixture.server.root.reset(undefined, context)
   await until(async () => (await row())?.runState === 'idle')
   expect((await row())?.assessment).toBeUndefined()

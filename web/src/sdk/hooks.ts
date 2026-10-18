@@ -162,11 +162,6 @@ export function useShownSurface() {
   return shownSurface(records, chosen, preferred)
 }
 
-/** The current UI value, including this tab's pending writes, for extension actions. */
-export function getUiState(key: string) {
-  return uiState.get(key)
-}
-
 /**
  * Durable UI state under `key`, stored with the main conversation (`ultimate.ui`): it survives reloads and restarts
  * and is shared by every tab, so the UI resumes where it was. Values are JSON; keys use `[A-Za-z0-9_.:-]`. The setter

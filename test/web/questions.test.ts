@@ -41,17 +41,30 @@ describe("@ultimate's final-answer card", () => {
     expect(replyQuestions(asked, 2, 40, [answer, { id: 41, kind: 'pi.reset' }])).toEqual([])
     expect(keyCard(asked, 2, [], [answer, { id: 41, kind: 'pi.reset' }])).toBeUndefined()
   })
-  it('disappears once any input follows the answer', () => {
+  it('closes only for typed input, not Board deliveries or the answers they wake', () => {
     const later = [answer, { id: 41, kind: 'conversations.assessed' }]
     expect(replyQuestions(asked, 2, 40, later)).toEqual([question])
     expect(replyQuestions(asked, 2, 40, [...later, { id: 42, kind: 'pi.user' }])).toEqual([])
     expect(
-      replyQuestions(asked, 2, 40, [...later, { id: 42, kind: 'board.message', input: true }]),
-    ).toEqual([])
+      replyQuestions(asked, 2, 40, [
+        ...later,
+        { id: 42, kind: 'board.message', input: true },
+        { id: 43, kind: 'board.reply', input: true },
+        { id: 44, kind: 'pi.assistant' },
+      ]),
+    ).toEqual([question])
   })
   it('gives the keys to the answer card, else the newest open message this conversation sent', () => {
     const messages = [open, { ...open, id: 6 }, { ...open, id: 7, from: 3 }]
     expect(keyCard(asked, 2, messages, [answer])).toBe('reply:40')
+    expect(
+      keyCard(asked, 2, messages, [
+        answer,
+        { id: 41, kind: 'board.message', input: true },
+        { id: 42, kind: 'pi.assistant' },
+      ]),
+    ).toBe('reply:40')
+    expect(openQuestions(board, open)).toEqual([question])
     expect(keyCard(asked, 2, messages, [answer, { id: 41, kind: 'pi.user' }])).toBe('message:6')
     expect(keyCard(board, 3, messages, [])).toBeUndefined()
     expect(keyCard(board, 2, [open], [])).toBe('message:5')

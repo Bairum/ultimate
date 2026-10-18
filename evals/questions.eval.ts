@@ -1,21 +1,27 @@
 import { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { appendFile } from 'node:fs/promises'
-import { expect, inject, test } from 'vitest'
+import { describe, expect, inject, test } from 'vitest'
 import { askSummaryModel } from '../extensions/conversations/summary.ts'
 import { DEFAULT_SUMMARY_MODEL } from '../extensions/conversations/summary-model.ts'
 import { parseSummaryModel } from '../extensions/conversations/summary-model-ref.ts'
-import { parseQuestions, QUESTIONS_SYSTEM } from '../extensions/questions/server.ts'
+import {
+  asksUser,
+  parseQuestions,
+  questionContext,
+  QUESTIONS_SYSTEM,
+} from '../extensions/questions/server.ts'
 import type { TurnUsage } from './reporter.ts'
+import { ultimateQuestionCorpus } from './ultimate-question-corpus.ts'
 
 /** Extract with the default summary model, as the questions extension does, and record the call's usage. */
-async function extract(reply: string) {
+async function extract(reply: string, userInput?: string) {
   const parsed = parseSummaryModel(DEFAULT_SUMMARY_MODEL)!
   const model = { provider: parsed.provider, id: parsed.id, thinking: parsed.thinking ?? 'off' }
   const started = performance.now()
   const response = await askSummaryModel(
     await ModelRuntime.create(),
     QUESTIONS_SYSTEM,
-    reply,
+    userInput === undefined ? reply : questionContext(reply, userInput),
     AbortSignal.timeout(120_000),
     { model },
   )
@@ -29,6 +35,39 @@ async function extract(reply: string) {
   expect(response.stopReason).toBe('stop')
   return parseQuestions(response.text)
 }
+
+describe('T7 decidable-now questions', () => {
+  const branchStarted = `Yes, I get the intent. Right now it doesn't work that way: state is stored per folder path on each machine, and each machine syncs to its own cloud copy. So starting Ultimate on ROG, or in another folder, begins with an empty state and its own separate URL.
+
+I started #130966 to design what you describe:
+- one global state per project;
+- a new machine downloads it and keeps syncing;
+- you choose where code runs, with only one machine writing at a time.
+
+It changes nothing until you pick from its proposal.`
+
+  test('the exact #97078/131003 answer is gated and asks nothing even on the Board path', async () => {
+    expect(asksUser(branchStarted)).toBe(false)
+    expect(await extract(branchStarted, 'You get the intent though, right?')).toEqual([])
+  })
+
+  test('waiting for a branch report is not a decision available now', async () => {
+    const reply =
+      'Waiting for #130966 to report back. Once its proposal arrives, you can choose whether to proceed.'
+    expect(asksUser(reply)).toBe(false)
+    expect(await extract(reply, 'Please have a branch investigate the design.')).toEqual([])
+  })
+
+  test('a land-or-change decision is available now', async () => {
+    const reply = 'Should I land it? 1. Yes 2. Change something first'
+    expect(asksUser(reply)).toBe(true)
+    const questions = await extract(reply, 'Review the fix and tell me the next step.')
+    expect(questions).toHaveLength(1)
+    expect(questions[0].text).toMatch(/land/i)
+    // F9 permits a confirm for a direct permission request even when alternatives are listed.
+    expect(['confirm', 'choice']).toContain(questions[0].kind)
+  })
+})
 
 // A real reply (#89359/107965): it answers the user's two questions under question-shaped headings, then asks one decision.
 const answeredThenDecision = `Worker #107824's asset scheme makes sense, so I'm letting it continue. All assets live under one fixed path and are named by content hash, so each is stored once. Each build keeps only its own \`index.html\`, at \`/b/<hash>/\`. That avoids a chicken-and-egg problem: the build's hash would otherwise depend on paths that contain the hash.
@@ -96,6 +135,17 @@ test('Q3 a single go/no-go is one confirm question', async () => {
   )
   expect(questions).toHaveLength(1)
   expect(questions[0].kind).toBe('confirm')
+})
+
+test('Q5 real @ultimate preview decision', async () => {
+  const questions = await extract(ultimateQuestionCorpus[0].text)
+  expect(questions).toHaveLength(1)
+  expect(['choice', 'confirm']).toContain(questions[0].kind)
+  expect(questions[0].text).toMatch(/land|submit|approv/i)
+})
+
+test.for(ultimateQuestionCorpus.slice(1))('Q6 real @ultimate report: $name', async (sample) => {
+  expect(await extract(sample.text)).toEqual([])
 })
 
 test('Q4 a wrap-up that answers the user and offers more asks nothing', async () => {

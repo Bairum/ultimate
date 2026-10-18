@@ -258,6 +258,8 @@ if (process.argv.includes('status')) {
       })
       // A browser refresh disconnects its event subscription, not the durable run.
       const browser = await attach(server)
+      // The CLI writing its marker does not mean the host has consumed its partial yet.
+      await until(() => JSON.stringify(browser.view().docs['pi.live'] ?? {}).includes('Recovered.'))
       await browser.close()
       const reconnected = await attach(server)
       await reconnected.close()

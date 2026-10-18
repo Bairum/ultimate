@@ -88,24 +88,7 @@ export const Tally = defineDoc<TallyState>({
   initial: () => ({ abstracts: {}, tokens: 0 }),
 })
 
-/** Kept only so old side chats stay read-only, including their question cards. */
-export const Side = defineDoc<{
-  side?: {
-    root: number
-    at: number
-    ended?: 'note' | 'branch' | 'discard'
-    ending?: 'note' | 'branch'
-  }
-}>({
-  kind: 'lineage.side',
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({}),
-})
-
-export const docs = [Roots, Branch, Tally, Seen, Side]
+export const docs = [Roots, Branch, Tally, Seen]
 
 /**
  * `lineage:branched` (a new branch) and `lineage:rooted` carry it: subscribers enlist their own document
@@ -977,13 +960,6 @@ async function refuseTally(tx: Tx, id: ConversationId) {
     throw new Error(`#${id} is a tally and runs no turns; ask @ultimate to start a branch`)
 }
 
-/** Stored side chats are read-only once ended or ending. */
-async function refuseEndedSide(tx: Tx, id: ConversationId) {
-  const side = (await tx.doc(Side, id)).side
-  if (side?.ending || side?.ended)
-    throw new Error(`Side chat #${id} ${side.ended ? 'has ended' : 'is ending'} and takes no input`)
-}
-
 export type LineageService = {
   branch: (input: BranchInput, ctx: Context) => ReturnType<typeof startBranch>
   rootOf: (id: number, ctx: Context) => ReturnType<typeof rootOf>
@@ -1014,7 +990,6 @@ export default function lineageExtension(host: ExtensionHost) {
       hook(GenerationTask, {
         beforeInput: async (input, api, ctx) => {
           await refuseTally(api.tx, api.conversationId)
-          await refuseEndedSide(api.tx, api.conversationId)
           return catchup(host, input, api, ctx, treeOf)
         },
       }),

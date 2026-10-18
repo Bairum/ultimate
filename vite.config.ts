@@ -20,7 +20,19 @@ export default defineConfig({
       {
         files: ['test/**'],
         excludeFiles: ['test/e2e/**'],
-        rules: { 'ultimate/no-test-timeout': 'error' },
+        rules: {
+          'ultimate/no-test-timeout': 'error',
+          'ultimate/no-real-wait-in-fast-tests': 'error',
+        },
+      },
+      {
+        files: ['test/**'],
+        excludeFiles: ['test/helpers.ts'],
+        rules: { 'ultimate/no-local-test-polling': 'error' },
+      },
+      {
+        files: ['extensions/**', 'web/**'],
+        rules: { 'ultimate/no-retired-ui': 'error' },
       },
       {
         files: ['**/*'],
