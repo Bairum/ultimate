@@ -140,9 +140,10 @@ export function Conversations() {
       .flatMap((branch) => [branch, ...branchesBelow(branch.id, concluded)])
   const latestIn = (root: ConversationSummary) =>
     Math.max(root.inputAt ?? 0, ...branchesBelow(root.id).map((branch) => branch.inputAt ?? 0))
-  // Trees by their newest input anywhere in them, newest first.
+  // Trees by their newest input anywhere in them, newest first. The machine home has no project and no trees:
+  // its only conversation is @sync.
   const rootRows = listed
-    .filter((conversation) => roots.has(conversation.id))
+    .filter((conversation) => primary !== 'sync' && roots.has(conversation.id))
     .toSorted((a, b) => latestIn(b) - latestIn(a) || b.id - a.id)
 
   const [warning, setWarning] = useState<{
