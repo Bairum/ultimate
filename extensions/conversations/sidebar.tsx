@@ -1,4 +1,4 @@
-import { ChevronRightIcon, GitBranchIcon, MessageCircleIcon } from 'lucide-react'
+import { ChevronRightIcon, GitBranchIcon, GitMergeIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -7,8 +7,8 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import type { WorkspacePending } from '../workspaces/types.ts'
 import {
   api,
-  cn,
   errorMessage,
+  useDocOf,
   useExtensionUiState,
   useNow,
   useStore,
@@ -19,10 +19,14 @@ import {
 import { hiddenConversationIds } from './visible.tsx'
 import { useOverview } from './feature.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
-import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
-import { currentAssessment, Row, ChildRow } from './rows.tsx'
+import {
+  useWorkspaceConversations as useConversations,
+  useWorkspaceIndex,
+} from '../workspaces/data.tsx'
+import { currentAssessment, Row, ChildRow, StandingRow } from './rows.tsx'
 import { useRoots } from '../lineage/roots.tsx'
-import { talkToUltimate } from './ultimate.tsx'
+import { ago, LanderState } from './lander.tsx'
+import { talkToUltimate, UltimateDot, useWaitingOnUser } from './ultimate.tsx'
 
 /** The label of side chats with a tally, which old projects still store; they stay unlisted. */
 const sideLabel = 'side chat'
@@ -92,7 +96,8 @@ export function Conversations() {
   const [seen] = useExtensionUiState<Record<string, number>>('seen', {})
   const shownTop = topOf(shownId, conversations)
   const hiddenIds = hiddenConversationIds(conversations, concludedIds)
-  const summary = shownTop && !hiddenIds.has(shownTop.id) ? overview[shownTop.id] : undefined
+  const summary =
+    shownTop && !pinned(shownTop) && !hiddenIds.has(shownTop.id) ? overview[shownTop.id] : undefined
   const roots = new Set(useRoots())
   const [expanded, setExpanded] = useExtensionUiState<number[]>('expanded', [])
   const [collapsedRoots, setCollapsedRoots] = useExtensionUiState<number[]>('collapsedRoots', [])
@@ -100,8 +105,14 @@ export function Conversations() {
   const topLevel = conversations.filter(
     (conversation) => conversation.parentConversationId === undefined,
   )
-  // Standing agents and landers are pinned above the rest and never concluded.
-  const landers = topLevel.filter(pinned).toSorted((a, b) => a.id - b.id)
+  // @ultimate first, then the lander and other standing agents: pinned above the rest and never concluded.
+  const ultimateId = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')?.ultimate
+  const ultimate = topLevel.find((conversation) => conversation.id === ultimateId)
+  const agents = topLevel
+    .filter((conversation) => pinned(conversation) && conversation.id !== ultimateId)
+    .toSorted((a, b) => Number(b.label === 'lander') - Number(a.label === 'lander') || a.id - b.id)
+  const waiting = useWaitingOnUser()
+  const workspaceIndex = useWorkspaceIndex()
   const listed = topLevel
     .filter((conversation) => !pinned(conversation) && !hiddenIds.has(conversation.id))
     .toSorted(byInput)
@@ -163,14 +174,67 @@ export function Conversations() {
     }
     await setConclude(id, conclude)
   }
+  /** A standing agent's or the lander's row: status and age, the lander's latest landing, @ultimate's questions. */
+  const standingRow = (conversation: ConversationSummary | undefined) => {
+    const busy = conversation !== undefined && working.has(conversation.id)
+    const latest = Math.max(conversation?.inputAt ?? 0, conversation?.answerAt ?? 0)
+    const lander = conversation?.label === 'lander'
+    const isUltimate = conversation === undefined || conversation.id === ultimateId
+    const shown = conversation !== undefined && conversation.id === shownTop?.id
+    return (
+      <StandingRow
+        conversation={conversation}
+        key={conversation?.id ?? 'ultimate'}
+        mark={
+          lander ? (
+            <GitMergeIcon aria-label="Lander" className="size-3 text-brand" strokeWidth={2.5} />
+          ) : (
+            <UltimateDot waiting={isUltimate ? waiting : 0} working={busy} />
+          )
+        }
+        name={conversation?.title ?? '@ultimate'}
+        onOpen={() =>
+          conversation && !isUltimate
+            ? actions.switchConversation(conversation.id)
+            : void talkToUltimate(actions)
+        }
+        shown={shown}
+      >
+        {lander ? (
+          <LanderState id={conversation.id} index={workspaceIndex} now={now} working={busy} />
+        ) : (
+          <>
+            {busy ? (
+              <span className="shrink-0 text-brand">working</span>
+            ) : isUltimate && waiting > 0 ? (
+              <span className="shrink-0 text-amber-700 dark:text-amber-300">
+                {waiting} waiting on you
+              </span>
+            ) : (
+              <span className="shrink-0">idle</span>
+            )}
+            {latest > 0 && (
+              <span
+                className="shrink-0 text-muted-foreground/80"
+                title={new Date(latest).toLocaleString()}
+              >
+                {ago(latest, now)}
+              </span>
+            )}
+          </>
+        )}
+      </StandingRow>
+    )
+  }
   const row = (conversation: ConversationSummary, shown = conversation.id === shownTop?.id) => {
+    if (pinned(conversation)) return standingRow(conversation)
     const recorded = seen[conversation.id]
     const state = working.get(conversation.id)
     return (
       <Row
         activity={overview[conversation.id]?.activity}
         assessment={tasks ? currentAssessment(overview[conversation.id]) : undefined}
-        concluded={!pinned(conversation) && hiddenIds.has(conversation.id)}
+        concluded={hiddenIds.has(conversation.id)}
         root={roots.has(conversation.id)}
         conversation={conversation}
         draft={conversation.inputAt === undefined}
@@ -363,28 +427,18 @@ export function Conversations() {
             <TooltipContent>Workspaces</TooltipContent>
           </Tooltip>
         )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label="Talk to @ultimate"
-              className={cn(
-                'size-7 cursor-pointer text-muted-foreground hover:text-foreground',
-                !workspacesEnabled && 'ml-auto',
-              )}
-              onClick={() => void talkToUltimate(actions)}
-              size="icon"
-              variant="ghost"
-            >
-              <MessageCircleIcon className="size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Talk to @ultimate</TooltipContent>
-        </Tooltip>
       </div>
       <nav aria-label="Conversations" className="flex flex-col gap-px">
-        {landers.length > 0 && (
-          <div className="mb-1 flex flex-col gap-px border-b border-border/60 pb-1">
-            {landers.map((conversation) => tree(conversation))}
+        <div className="mb-1 border-b border-border/60 pb-1">
+          {ultimate ? tree(ultimate) : standingRow(undefined)}
+        </div>
+        {agents.length > 0 && (
+          <div
+            aria-label="Agents"
+            className="mb-1 flex flex-col gap-px border-b border-border/60 pb-1"
+            role="group"
+          >
+            {agents.map((conversation) => tree(conversation))}
           </div>
         )}
         {rootRows.map((root) => tree(root))}

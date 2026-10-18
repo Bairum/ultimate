@@ -19,8 +19,9 @@ export function ago(at: number, now: number) {
 }
 
 /**
- * The lander's line: the feature it lands or landed last, then "fixing" or "diagnosing" while its model works on a
- * failure, a pulsing "landing" while it lands, "working" while it answers someone, else "idle" with its latest landing.
+ * The lander's line: "fixing" or "diagnosing" while its model works on a failure, a pulsing "landing" while it lands,
+ * "working" while it answers someone, else "idle"; then its latest landing's feature, short sha and age, and how many
+ * submissions wait in its queue.
  */
 export function LanderState({
   id,
@@ -35,6 +36,9 @@ export function LanderState({
 }) {
   const source = Object.entries(index.landerConversations).find(([, lander]) => lander === id)?.[0]
   const current = index.queue.find((item) => item.source === source && item.state === 'landing')
+  const queued = index.queue.filter(
+    (item) => item.source === source && item.state === 'queued',
+  ).length
   const label =
     current?.agent === 'fix'
       ? 'fixing'
@@ -44,14 +48,14 @@ export function LanderState({
           ? 'landing'
           : working
             ? 'working'
-            : undefined
+            : 'idle'
   const last = Object.values(index.results).findLast((result) => result.lander === id && result.sha)
-  const feature = (current ?? last)?.subject?.feature
-  const tag = feature && <FeatureTag feature={feature} />
-  if (label)
-    return (
-      <>
-        {tag}
+  const at = last?.steps.at(-1)?.at
+  return (
+    <>
+      {label === 'idle' ? (
+        <span className="shrink-0">idle</span>
+      ) : (
         <span
           className={cn('flex shrink-0 items-center gap-1', label !== 'diagnosing' && 'text-brand')}
         >
@@ -63,15 +67,15 @@ export function LanderState({
           />
           {label}
         </span>
-      </>
-    )
-  const at = last?.steps.at(-1)?.at
-  return (
-    <>
-      {tag}
-      <span className="truncate" title={at ? new Date(at).toLocaleString() : undefined}>
-        idle{last?.sha && ` · last ${last.sha.slice(0, 7)}${at ? ` ${ago(at, now)}` : ''}`}
-      </span>
+      )}
+      {last?.subject?.feature && <FeatureTag feature={last.subject.feature} />}
+      {last?.sha && <span className="shrink-0">{last.sha.slice(0, 7)}</span>}
+      {at !== undefined && (
+        <span className="shrink-0 text-muted-foreground/80" title={new Date(at).toLocaleString()}>
+          {ago(at, now)}
+        </span>
+      )}
+      {queued > 0 && <span className="shrink-0">queue {queued}</span>}
     </>
   )
 }

@@ -89,6 +89,7 @@ export default defineConfig({
                 cloud: ['onboarding', 'secrets'],
                 fast: ['onboarding'],
                 conversations: [
+                  'board',
                   'lineage',
                   'models',
                   'onboarding',

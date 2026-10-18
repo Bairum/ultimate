@@ -1,10 +1,8 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import {
-  ArrowRightIcon,
   CheckIcon,
   ChevronRightIcon,
   GitBranchIcon,
-  GitMergeIcon,
   InboxIcon,
   MailIcon,
   SendIcon,
@@ -30,96 +28,8 @@ import { MessageQuestions } from '../questions/card.tsx'
 import { openAgentSource } from '../subagents/messages.tsx'
 import { useWorkspaceIndex } from '../workspaces/data.tsx'
 import { accentOf } from './accent.tsx'
-import { answeredMessages, emptyBoard, messageStatus, relativeTime, side } from './data.tsx'
-import type { BoardData, BoardMessage, Participant } from './data.tsx'
-
-export function BoardRoster({
-  participants,
-  selected,
-  unread,
-  onSelect,
-  onMention,
-}: {
-  participants: Participant[]
-  selected?: string
-  unread: number
-  onSelect: (participant: Participant) => void
-  onMention: (address: string) => void
-}) {
-  const { switchConversation, showSurface } = useUltimate()
-  const now = useNow(60000)
-  return (
-    <nav aria-label="Board participants" className="border-b border-border bg-muted/10">
-      <div className="mx-auto flex max-w-[70rem] gap-2 overflow-x-auto px-3 py-3 sm:px-6">
-        {participants.map((participant) => (
-          <div
-            key={participant.key}
-            className={`w-40 shrink-0 rounded-md border font-mono text-[11px] ${selected === participant.key ? 'border-brand/60 bg-brand/5' : 'border-border bg-muted/20'}`}
-          >
-            <button
-              aria-pressed={selected === participant.key}
-              onClick={() => onSelect(participant)}
-              className="flex w-full cursor-pointer items-center gap-2 px-2.5 pt-2.5 text-left"
-            >
-              <span
-                className={`size-1.5 shrink-0 rounded-full ${participant.status === 'working' || participant.status === 'delegating' ? 'animate-pulse bg-brand' : participant.status === 'waiting' || participant.status === 'needs input' ? 'bg-amber-400' : 'bg-muted-foreground/50'}`}
-              />
-              <span className="min-w-0 flex-1 truncate text-foreground" title={participant.name}>
-                {typeof participant.id === 'number' && participant.address?.startsWith('#') ? (
-                  <ConversationRef
-                    id={participant.id}
-                    title={participant.name}
-                    className="flex w-full"
-                  />
-                ) : (
-                  participant.name
-                )}
-              </span>
-              {participant.id === 'user' && unread > 0 && (
-                <span className="ml-auto text-brand">{unread}</span>
-              )}
-            </button>
-            <div className="flex items-center gap-2 px-2.5 pt-1 pb-2 text-[10px] text-muted-foreground">
-              <span>
-                {participant.status === 'waiting'
-                  ? 'awaiting reply'
-                  : participant.status === 'delegating'
-                    ? 'subagents working'
-                    : participant.status}
-              </span>
-              {participant.at !== undefined && (
-                <time className="ml-auto" title={new Date(participant.at).toLocaleString()}>
-                  {relativeTime(participant.at, now)}
-                </time>
-              )}
-            </div>
-            {participant.address && (
-              <div className="flex items-center gap-3 border-t border-border/60 px-2.5 py-1.5 text-muted-foreground">
-                {typeof participant.id === 'number' && (
-                  <button
-                    className="cursor-pointer hover:text-foreground"
-                    onClick={() => {
-                      switchConversation(participant.id as number)
-                      showSurface('agent')
-                    }}
-                  >
-                    Open
-                  </button>
-                )}
-                <button
-                  className="ml-auto cursor-pointer hover:text-foreground"
-                  onClick={() => onMention(participant.address!)}
-                >
-                  Mention
-                </button>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </nav>
-  )
-}
+import { answeredMessages, emptyBoard, messageStatus, relativeTime } from './data.tsx'
+import type { BoardData, BoardMessage } from './data.tsx'
 
 export function Address({ id }: { id: number | 'user' }) {
   const standing = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')
@@ -131,12 +41,12 @@ export function Address({ id }: { id: number | 'user' }) {
   return <ConversationRef id={id} />
 }
 
-function Body({ text, compact = false }: { text: string; compact?: boolean }) {
+function Body({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false)
   return (
     <>
       <div
-        className={`min-w-0 overflow-auto px-3 py-3 text-[13px] leading-relaxed ${expanded ? '' : compact ? 'max-h-40' : 'max-h-64'}`}
+        className={`min-w-0 overflow-auto px-3 py-3 text-[13px] leading-relaxed ${expanded ? '' : 'max-h-64'}`}
       >
         <MessageResponse>{text}</MessageResponse>
       </div>
@@ -178,108 +88,14 @@ function Status({ message, perspective }: { message: BoardMessage; perspective: 
   return <span className={status === 'failed' ? 'text-destructive' : ''}>{status}</span>
 }
 
-/**
- * One board message as a chat bubble seen from `perspective`: its own messages on the right, received ones on the
- * left, and traffic between others quieter on the left with both sides named.
- */
-export function BoardCard({
-  message,
-  perspective,
-  quote,
-  onReply,
-}: {
-  message: BoardMessage
-  perspective: number | 'user'
-  quote?: string
-  onReply: () => void
-}) {
-  const { switchConversation, showSurface } = useUltimate()
-  const now = useNow(60000)
-  const isAnswer = message.re !== undefined && message.answer !== undefined
-  const destination = isAnswer ? message.from : message.to === 'user' ? message.from : message.to
-  const entry = isAnswer || message.to === 'user' ? message.answer : message.entry
-  const position = side(message, perspective)
-  const accent = accentOf(message.from)
-  return (
-    <section
-      data-board-message={message.id}
-      data-side={position}
-      className={cn(
-        'min-w-0 rounded-md border max-sm:w-full sm:w-fit sm:min-w-[20rem]',
-        position === 'right'
-          ? `self-end border-r-2 border-border sm:max-w-[85%] ${accent.right} ${accent.fill}`
-          : position === 'left'
-            ? `self-start border-l-2 border-border sm:max-w-[85%] ${accent.left} ${accent.fill}`
-            : `self-start border-l-2 border-border/60 sm:max-w-[78%] ${accent.left}`,
-      )}
-    >
-      <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-        {message.kind === 'landing' && <GitMergeIcon className={cn('size-3.5', accent.name)} />}
-        <span className={cn('flex min-w-0 font-semibold', accent.name)}>
-          <Address id={message.from} />
-        </span>
-        {message.to !== perspective && (
-          <>
-            <ArrowRightIcon className="size-3 shrink-0" />
-            <span className="flex min-w-0 text-foreground">
-              <Address id={message.to} />
-            </span>
-          </>
-        )}
-        <time
-          className="ml-auto"
-          dateTime={new Date(message.at).toISOString()}
-          title={new Date(message.at).toLocaleString()}
-        >
-          {relativeTime(message.at, now)}
-        </time>
-      </header>
-      {message.re !== undefined && (
-        <div
-          className="mx-3 mt-2 truncate border-l-2 border-border pl-2 text-[12px] text-muted-foreground"
-          title={quote}
-        >
-          ↳ {quote ?? `Message ${message.re}`}
-        </div>
-      )}
-      <Body text={message.text} compact={message.kind === 'landing'} />
-      <footer className="flex flex-wrap items-center gap-3 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
-        <Status message={message} perspective={perspective} />
-        {message.error && (
-          <span className="min-w-0 break-words text-destructive">{message.error}</span>
-        )}
-        <span className="ml-auto" />
-        {destination !== 'user' && entry !== undefined && (
-          <button
-            className="flex cursor-pointer items-center gap-1 hover:text-foreground"
-            onClick={() => {
-              events.emit('board:open', { conversation: destination, entry })
-              showSurface('agent')
-              switchConversation(destination)
-            }}
-          >
-            <SquareArrowOutUpRightIcon className="size-3" />
-            Open
-          </button>
-        )}
-        {message.to === 'user' && message.from !== 'user' && (
-          <button className="cursor-pointer hover:text-foreground" onClick={onReply}>
-            Reply
-          </button>
-        )}
-      </footer>
-    </section>
-  )
-}
-
 /** Where an outgoing message stands, in the sender's words. */
 function outgoingState(message: BoardMessage | undefined, toUser: boolean, sending: boolean) {
   if (!message) return sending ? 'sending' : undefined
   if (message.state === 'failed') return 'failed'
   if (message.state === 'answered') return 'answered'
   if (message.state === 'sent') return 'sending'
-  if (toUser) return message.reply ? 'awaiting your reply' : 'in your inbox'
-  return message.reply ? 'awaiting reply' : 'delivered'
+  if (!message.reply) return 'delivered'
+  return toUser ? 'awaiting your reply' : 'awaiting reply'
 }
 
 /**
@@ -382,15 +198,6 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
           {steer && ' · steer'}
         </span>
         {state && <span className={state === 'failed' ? 'text-destructive' : ''}>· {state}</span>}
-        {message && toUser && (
-          <button
-            className="ml-auto flex cursor-pointer items-center gap-1 hover:text-foreground"
-            onClick={() => showSurface('board')}
-          >
-            <SquareArrowOutUpRightIcon className="size-3" />
-            Board
-          </button>
-        )}
         {message && typeof message.to === 'number' && message.entry !== undefined && (
           <button
             className="ml-auto flex cursor-pointer items-center gap-1 hover:text-foreground"

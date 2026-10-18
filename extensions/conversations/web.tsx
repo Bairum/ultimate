@@ -3,6 +3,7 @@ import { getRoots } from '../lineage/roots.tsx'
 import { Conversations, Seen } from './sidebar.tsx'
 import { openReset, ResetDialog, SummaryModelDialog, summaryModelDialog } from './dialogs.tsx'
 import { SummaryAction } from './summary-entry.tsx'
+import { UltimateButton } from './ultimate.tsx'
 
 export default defineWebExtension({
   entries: {
@@ -12,7 +13,12 @@ export default defineWebExtension({
     'conversations.assessed': SummaryAction,
     'conversations.summary-discarded': SummaryAction,
   },
-  slots: { sidebar: Conversations, overlay: [ResetDialog, SummaryModelDialog, Seen] },
+  slots: {
+    sidebar: Conversations,
+    // Last in the title bar's left side, beside the surfaces.
+    'titlebar.left': [{ component: UltimateButton, order: 100 }],
+    overlay: [ResetDialog, SummaryModelDialog, Seen],
+  },
   commands: [
     {
       id: 'conversations.summary-model',

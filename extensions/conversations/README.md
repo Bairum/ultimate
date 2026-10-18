@@ -7,9 +7,19 @@ feature, activity or reply assessment. This applies to intent, spawn and complet
 
 ## Sidebar
 
-Ownerless top-level standing agents (label `agent`) are pinned with the lander, sorted by ID, and cannot be concluded or hidden.
+@ultimate has its own section at the very top: its row shows its status dot and `working`, `idle` or an amber
+`N waiting on you` (reply-enabled board messages to you still waiting on your answer), and the age of its latest
+message. Clicking it opens @ultimate on the Agent surface through `subagents.standing {name: 'ultimate'}`, also before
+its conversation exists. Below it, an Agents group lists the lander first, then the other ownerless top-level standing
+agents (label `agent`) by ID. These rows are never concluded or hidden and show no summary, feature or assessment:
+@lander shows its state (`landing`, `fixing`, `diagnosing`, `working` or `idle`), its latest landing's feature, short
+sha and age, and `queue N` while submissions wait; other agents show `working` or `idle` and the age. Their menu only
+clears the context.
 
-The sidebar pins the lander above the roots (lineage's `useRoots()`), each marked with a branch icon and `root`;
+The title bar's `@ultimate` button (`titlebar.left`, beside the surfaces, also on phones) opens @ultimate the same way
+from every surface. Its dot pulses while @ultimate works and is amber while questions wait on you, with their count.
+
+The sidebar lists the roots below the agents (lineage's `useRoots()`), each marked with a branch icon and `root`;
 trees sort by their newest input anywhere in them.
 Branches nest under their source (`branchOf.conversationId`), with a hairline guide and one indent per depth;
 siblings sort by latest input. Older conversations that are neither roots nor branches live in the collapsed
@@ -36,9 +46,8 @@ A child linked to a plan task leads with the plan's `TaskChip` and shows the tas
 A row switches to its child, highlights selection and keeps the top-level summary visible. History forks are not
 invented delegation edges. Expansion is persisted in `ext.conversations.expanded`; buttons support keyboard access.
 
-The sidebar's **Talk to @ultimate** button opens the standing agent on the Agent surface through
-`subagents.standing {name: 'ultimate'}`. @ultimate starts coordinator branches; there are no manual creation commands
-or isolation preferences. A separate Workspaces button opens the read-only checkout panel.
+@ultimate starts coordinator branches; there are no manual creation commands or isolation preferences. The sidebar
+header's Workspaces button opens the read-only checkout panel.
 Conclude releases clean, fully landed checkouts, including owned subagent checkouts. Uncommitted files,
 unlanded commits, and busy checkouts are kept; Clear context never removes checkouts or commits.
 The Workspaces panel shows checkouts read-only.

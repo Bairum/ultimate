@@ -1,6 +1,5 @@
 import {
   GitBranchIcon,
-  GitMergeIcon,
   CircleCheckIcon,
   CircleHelpIcon,
   EllipsisIcon,
@@ -8,6 +7,7 @@ import {
   PencilIcon,
 } from 'lucide-react'
 import { useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,9 +20,8 @@ import { FeatureTag } from './feature.tsx'
 import { TaskChip, useTaskOf } from '../plan/chip.tsx'
 import { PhaseLabel, usePhase } from '../phase/chip.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
-import { useWorkspaceIndex } from '../workspaces/data.tsx'
 import type { Assessment, OverviewRow } from './types.ts'
-import { ago, LanderState } from './lander.tsx'
+import { ago } from './lander.tsx'
 import { openReset } from './dialogs.tsx'
 
 export function currentAssessment(row: OverviewRow | undefined) {
@@ -130,13 +129,7 @@ export function Row({
         ? 'Untitled conversation'
         : `#${conversation.id}`)
   const latest = Math.max(conversation.inputAt ?? 0, conversation.answerAt ?? 0)
-  const lander = conversation.label === 'lander'
-  const standing =
-    conversation.label === 'agent' &&
-    conversation.parentConversationId === undefined &&
-    conversation.ownerTaskId === undefined
-  const hasMetadata = root || feature || conversation.workspace || latest > 0 || lander
-  const index = useWorkspaceIndex()
+  const hasMetadata = root || feature || conversation.workspace || latest > 0
   const rename = () => {
     cancelled.current = false
     setEditing(true)
@@ -151,7 +144,6 @@ export function Row({
     <span
       className={cn(
         'min-w-0 flex-1 truncate text-[13px]',
-        (lander || standing) && 'font-semibold text-foreground',
         conversation.title || !draft
           ? shown
             ? 'text-foreground'
@@ -211,15 +203,7 @@ export function Row({
           type="button"
         >
           <span className="flex w-full min-w-0 items-center gap-1.5">
-            {lander ? (
-              <GitMergeIcon
-                aria-label="Lander"
-                className="size-3 shrink-0 text-brand"
-                strokeWidth={2.5}
-              />
-            ) : (
-              <Mark assessment={assessment} unseen={unseen} working={working} />
-            )}
+            <Mark assessment={assessment} unseen={unseen} working={working} />
             {title}
           </span>
           {hasMetadata && (
@@ -230,17 +214,13 @@ export function Row({
                   root
                 </span>
               )}
-              {feature && !lander && <FeatureTag feature={feature} />}
-              {lander ? (
-                <LanderState id={conversation.id} index={index} now={now} working={!!working} />
-              ) : (
-                conversation.workspace && (
-                  <span className="shrink-0" title="Isolated checkout">
-                    #{conversation.id}
-                  </span>
-                )
+              {feature && <FeatureTag feature={feature} />}
+              {conversation.workspace && (
+                <span className="shrink-0" title="Isolated checkout">
+                  #{conversation.id}
+                </span>
               )}
-              {latest > 0 && !lander && (
+              {latest > 0 && (
                 <span
                   className="shrink-0 text-muted-foreground/80"
                   title={new Date(latest).toLocaleString()}
@@ -311,12 +291,92 @@ export function Row({
               <EraserIcon />
               Clear context…
             </DropdownMenuItem>
-            {!lander && !standing && (
-              <DropdownMenuItem className="text-[12.5px]" onSelect={() => onConclude(!concluded)}>
-                <CircleCheckIcon />
-                {concluded ? 'Resume' : 'Conclude'}
-              </DropdownMenuItem>
-            )}
+            <DropdownMenuItem className="text-[12.5px]" onSelect={() => onConclude(!concluded)}>
+              <CircleCheckIcon />
+              {concluded ? 'Resume' : 'Conclude'}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A standing agent or the lander: its fixed `@name`, a leading status mark and one quiet line of state, never a
+ * summary, feature or assessment. Click opens it; the menu only clears its context.
+ */
+export function StandingRow({
+  conversation,
+  name,
+  shown,
+  mark,
+  onOpen,
+  children,
+}: {
+  /** Missing until @ultimate's conversation is first opened. */
+  conversation?: ConversationSummary
+  name: string
+  shown: boolean
+  mark: ReactNode
+  onOpen: () => void
+  children: ReactNode
+}) {
+  const actions = useUltimate()
+  /** Opens the dialog once the menu has closed, so focus lands in it. */
+  const afterMenu = useRef<() => void>(undefined)
+  return (
+    <div
+      className={cn(
+        'group relative mx-2 flex h-11 items-center rounded-md transition-colors',
+        shown ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/50',
+      )}
+      data-conversation={conversation?.id}
+      data-standing={name}
+    >
+      <button
+        aria-current={shown ? 'true' : undefined}
+        className="flex h-full min-w-0 flex-1 cursor-pointer flex-col justify-center rounded-md pr-2 pl-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+        onClick={onOpen}
+        type="button"
+      >
+        <span className="flex w-full min-w-0 items-center gap-1.5">
+          <span className="flex size-3 shrink-0 items-center justify-center">{mark}</span>
+          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-foreground">
+            {name}
+          </span>
+        </span>
+        <span className="flex w-full min-w-0 items-center gap-2 pr-5 pl-[18px] font-mono text-[10px] leading-4 text-muted-foreground">
+          {children}
+        </span>
+      </button>
+      {conversation && (
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger
+            aria-label="Conversation actions"
+            className="invisible absolute right-1 bottom-1 flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none group-focus-within:visible group-hover:visible pointer-coarse:visible hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:visible data-[state=open]:bg-sidebar-accent data-[state=open]:text-foreground"
+          >
+            <EllipsisIcon className="size-3.5" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            className="w-44 [&_[role=menuitem]]:cursor-pointer"
+            onCloseAutoFocus={(event) => {
+              const next = afterMenu.current
+              afterMenu.current = undefined
+              if (!next) return
+              event.preventDefault()
+              next()
+            }}
+          >
+            <DropdownMenuItem
+              className="text-[12.5px]"
+              disabled={conversation.busy}
+              onSelect={() => (afterMenu.current = () => openReset(actions, conversation.id))}
+            >
+              <EraserIcon />
+              Clear context…
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       )}

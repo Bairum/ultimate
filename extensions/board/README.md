@@ -39,8 +39,8 @@ conversation closes the card too.
 One-way messages and user posts never request extraction; see [Questions](../questions/README.md).
 
 In the sender's transcript a `message` call renders as an outgoing card: recipient, one-way or expects reply, and
-the message's live state from the board log (sending, delivered, in your inbox, awaiting reply, answered, failed),
-with a link to the Board or the recipient's entry. A `branch` call renders as a branch-start card: the branch's
+the message's live state from the board log (sending, delivered, awaiting reply, awaiting your reply, answered,
+failed), with an Open link to the recipient's entry. A `branch` call renders as a branch-start card: the branch's
 feature and title, its root, isolated or shared, working or reported back, an Open link to its first input, and
 the prompt. Failed calls of either tool keep the generic tool card with their error.
 
@@ -135,32 +135,12 @@ Workspaces uses this for submission admission; landing reports do not append log
 
 ## UI
 
-The participants rail above the feed lists you (with unread count), standing agents, the existing lander, and unconcluded coordinators. Other top-level conversations with board messages appear too. It scrolls horizontally on phones. Status dots show working (busy), subagents working (idle while a subagent below it, at any depth, works; the
-same walk as the phase chip's Waiting), needs input (a current overview assessment), awaiting reply (an open reply-enabled outgoing message), or idle, alongside the latest conversation or board activity time. Click a participant to filter both directions; click again or Clear to restore the feed. Open / #id opens its conversation, and Mention addresses the composer.
-The filter replaces the feed's caption with who waits on whom: for you, how many open questions wait on you and how
-many of your posts await an answer; for anyone else, how many of its questions wait on you, how many of yours it
-owes, and its open requests with others when there are any.
-
-The conversations sidebar sits beside the Board as on Agent (`mod+b`, an overlay on phones). Picking a conversation
-there opens it on the Agent surface.
-
-The Board surface shows all traffic oldest first, or just your Inbox, as a chat seen from one participant: you, or
-the participant the feed is filtered to. Its own messages sit on the right, what it receives on the left, and traffic
-between others on the left too, quieter (no fill, slightly narrower) and naming both sides. Every sender has a stable
-accent (you the brand colour, others a small palette by id) shown as the bubble's stripe, a faint fill and the sender
-name; on phones bubbles take the full width and only the stripe's side tells them apart. A quiet `inbox N`
-status-line button counts unanswered reply-enabled messages to you. Bubbles show
-the sender, the recipient unless it is the perspective, time, reply quotes and an Open link when the transcript entry
-is known. Their footer says who waits on whom: an open question to you is an amber “awaiting your reply”, other open
-requests say “waiting on #x” (naming the sender unless it is the perspective), then answered, one-way, reply, landing,
-sending or failed. Landing items use a merge icon.
-
-Start a post with `@agent` or `#conversation`; autocomplete lists resident agents, the lander and recent conversations.
-Without an address, posts go to `@ultimate` when it exists. Enter sends on desktop (Shift+Enter inserts a newline);
-on touch keyboards, return always inserts a newline and the arrow button sends. Reply retains a link to its original
-message. Typed board messages and replies render as compact transcript cards with Source / Return navigation, in
-the sender's accent (`accent.tsx`) like its bubble. Incoming messages show whether they expect a reply or are
-one-way, plus their delivery mode (steered, follow-up or note) when recorded. Final answers name their reply
+There is no Board surface: the board is plumbing, and everything it carries renders in transcripts. You talk to
+@ultimate in its own conversation (the title bar's `@ultimate` button and the sidebar's top row, both in
+[conversations](../conversations/README.md), open it). Every sender has a stable accent (`accent.tsx`: you the
+brand colour, others a small palette by id) shown as a stripe, a faint fill and the sender name. Typed board
+messages and replies render as compact transcript cards with Source / Return navigation, in the sender's accent.
+Incoming messages show whether they expect a reply or are one-way, plus their delivery mode (steered, follow-up or note) when recorded. Final answers name their reply
 destination, or say “not sent” for a one-way message. Answers that cover several board messages list each
 destination; unrelated answers show no board label.
 
