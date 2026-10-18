@@ -12,8 +12,14 @@ To add a machine to the projects a deployed cloud already holds (see [Deploy](#d
    - [ ] Add `ULTIMATE_CLOUD_TOKEN` and `ULTIMATE_CLOUD_SNAPSHOT_KEY` in Secrets (⌘K → Secrets), the same values as on
          the other machines. Or copy `~/.ultimate/secrets.json` and `chmod 600` it; never print it.
    - [ ] Set `cloud.url` and `cloud.machine` in `~/.ultimate/settings.json` (step 5 of [Deploy](#deploy)).
-   - [ ] Create and run the machine's tunnel, add it to `cloud.tunnels` on the deploying machine, and deploy again
-         (step 6 of [Deploy](#deploy)). Without it the cloud reaches the project only while it is offline.
+   - [ ] Create the machine's tunnel (`pnpm exec wrangler tunnel create ultimate-<machine>` from any logged-in
+         machine), add it to `cloud.tunnels` on the deploying machine, and deploy again (step 6 of
+         [Deploy](#deploy)). Without it the project shows in the cloud only read-only, as if offline, while that
+         machine runs it.
+   - [ ] Run the tunnel and Ultimate as enabled user units, `ultimate-tunnel.service` (step 2 of [Deploy](#deploy);
+         Wrangler must be logged in on this machine) and an `ultimate.service` running `node bin/ultimate.ts` in the
+         clone, then `loginctl enable-linger $USER` so both start at boot without a login. A transient
+         `systemd-run` unit disappears when it stops.
 3. Run `ultimate` in a checkout at the same path as on the other machines (a move to a checkout at another path is
    refused). Where the project ends up depends on the checkout's `origin`:
    - **A GitHub origin the cloud knows:** the machine joins as a standby. Until the cloud answers it waits on standby
