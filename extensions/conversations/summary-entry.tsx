@@ -1,5 +1,5 @@
 import { PencilIcon } from 'lucide-react'
-import { formatTime } from '@/sdk'
+import { formatTime, useChat } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import type { Assessed, IntentSummary, SpawnSummary, SummaryDiscard, TitleChange } from './types.ts'
 
@@ -28,6 +28,9 @@ function summaryText(entry: EntryRecord) {
 }
 
 export function SummaryAction({ entry }: { entry: EntryRecord }) {
+  const chat = useChat()
+  // A chat's agent gets no summaries; older lines from before would only interrupt it.
+  if (chat) return null
   const text = summaryText(entry)
   const date = new Date((entry.data as { at: number }).at)
   return (
