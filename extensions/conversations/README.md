@@ -73,7 +73,9 @@ disabled while the conversation works), and Conclude. Before concluding, the UI 
 When a conversation or its subagents have uncommitted files or unlanded commits, a confirmation dialog names the
 work and explains that its checkout is kept until the work lands or is discarded. Otherwise it concludes at once.
 Concluded rows and their branches/subagents sit in a collapsed "Concluded · N" group at the bottom.
-Resume brings them back; sending to a concluded branch resumes it and any concluded ancestors automatically.
+Resume brings them back. Any input that starts a run in a concluded conversation (typed input, a board message or
+reply, a subagent report, an automation's message) resumes it and its concluded ancestors in the commit that places
+the input, through the patched `GenerationTask.beforeInput` hook. Notes and other writes start no run and resume nothing.
 Concluding the shown subtree shows another live conversation when one exists.
 
 Commands, under Conversations: `conversations.summary-model` ("Summary model…", see [Summary model](#summary-model)). The UI state keeps concluded

@@ -1,8 +1,14 @@
 import { join } from 'node:path'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { defineExtension, ROOT_CONVERSATION_ID, section } from '@earendil-works/pi-durable'
-import type { CommitPublication, ConversationId, Tx } from '@earendil-works/pi-durable'
+import {
+  defineExtension,
+  GenerationTask,
+  hook,
+  ROOT_CONVERSATION_ID,
+  section,
+} from '@earendil-works/pi-durable'
+import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { BranchedEvent } from '../lineage/server.ts'
@@ -128,23 +134,6 @@ export const actions = {
   },
 }
 
-/** Only placed composer inputs reopen ancestry; extension inputs and passive writes do not. */
-function placedInputs(publication: CommitPublication) {
-  return publication.changes.flatMap((change) =>
-    change.type === 'submission' &&
-    change.value.type === 'input' &&
-    change.value.status === 'placed' &&
-    publication.changes.some(
-      (entry) =>
-        entry.type === 'entry' &&
-        entry.value.id === change.value.entry &&
-        entry.value.kind === 'pi.user',
-    )
-      ? [change.value.conversationId]
-      : [],
-  )
-}
-
 function conversationIds(args: JsonValue): ConversationId[] {
   const ids = args && typeof args === 'object' && !Array.isArray(args) ? args.ids : undefined
   if (
@@ -155,45 +144,32 @@ function conversationIds(args: JsonValue): ConversationId[] {
   return [...new Set(ids)] as ConversationId[]
 }
 
-async function resume(host: ExtensionHost, ids: ConversationId[]) {
-  return host.harness().commit(async (tx) => {
-    const ancestors = new Set<ConversationId>()
-    for (const id of ids) {
-      let current: ConversationId | undefined = id
-      while (current !== undefined && !ancestors.has(current)) {
-        ancestors.add(current)
-        const found = await tx.conversation(current)
-        if (!found) throw new Error(`Unknown conversation ${current}`)
-        current = found.owner?.conversationId ?? found.parent?.conversationId
-      }
-    }
-    const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
-    const previous = ui['ext.conversations.concluded']
-    const removed = Array.isArray(previous)
-      ? previous.filter((id) => ancestors.has(id as ConversationId))
-      : []
-    if (removed.length)
-      ui['ext.conversations.concluded'] = (previous as JsonValue[]).filter(
-        (id) => !ancestors.has(id as ConversationId),
-      )
-    return removed
-  }, context)
+function resume(host: ExtensionHost, ids: ConversationId[]) {
+  return host.harness().commit((tx) => resumeIn(tx, ids), context)
 }
 
-function reopenOnInput(host: ExtensionHost) {
-  let stop: (() => void) | undefined
-  host.onOpen(async () => {
-    stop = host.harness().subscribeCommits((publication) => {
-      const ids = placedInputs(publication)
-      if (!ids.length) return
-      void resume(host, ids).catch((error) =>
-        host.notice('Unable to reopen conversation: ' + String(error)),
-      )
-    })
-  })
-  host.onClose(async () => {
-    stop?.()
-  })
+/** Removes `ids` and their ancestors from the concluded list inside `tx`; returns the ids it removed. */
+async function resumeIn(tx: Tx, ids: ConversationId[]) {
+  const ancestors = new Set<ConversationId>()
+  for (const id of ids) {
+    let current: ConversationId | undefined = id
+    while (current !== undefined && !ancestors.has(current)) {
+      ancestors.add(current)
+      const found = await tx.conversation(current)
+      if (!found) throw new Error(`Unknown conversation ${current}`)
+      current = found.owner?.conversationId ?? found.parent?.conversationId
+    }
+  }
+  const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
+  const previous = ui['ext.conversations.concluded']
+  const removed = Array.isArray(previous)
+    ? previous.filter((id) => ancestors.has(id as ConversationId))
+    : []
+  if (removed.length)
+    ui['ext.conversations.concluded'] = (previous as JsonValue[]).filter(
+      (id) => !ancestors.has(id as ConversationId),
+    )
+  return removed
 }
 
 export type ConversationsService = {
@@ -242,12 +218,24 @@ export default (host: ExtensionHost) => {
   host.events.on('lineage:rooted', named)
   activityBehavior(host)
   overviewBehavior(host)
-  reopenOnInput(host)
   /** Whether each conversation is top-level, read once: `owner` and `parent` never change after creation. */
   const topLevel = new Map<ConversationId, boolean>()
+  const summaries = summaryBehavior(host)
   return defineExtension({
     name: 'conversations',
-    ...summaryBehavior(host),
+    ...summaries,
+    hooks: [
+      ...summaries.hooks,
+      // Pi upstream: @earendil-works/pi-durable@1.3.0 — patched transactional beforeInput hook. Drop when Pi ships input-placement hooks.
+      // Any input that starts a run (typed, board message or reply, report, automation) brings the conversation and its
+      // concluded ancestors back, in the commit that places it. Writes (notes) start no run and never get here.
+      hook(GenerationTask, {
+        beforeInput: async (_input, api) => {
+          await resumeIn(api.tx, [api.conversationId])
+          return undefined
+        },
+      }),
+    ],
     sections: [
       section('conversations', async (input, caller) => {
         // Summaries can lag behind a new conversation, so its record decides; owned conversations get nothing.
