@@ -125,8 +125,13 @@ async function fixture() {
   prepared.faux!.setResponses([fauxAssistantMessage('cloud answer')])
   const opened = await prepared.open()
   const notices: string[] = []
+  const tailscale: { url?: string } = {}
   const host = {
     ...prepared,
+    use: (name: string) =>
+      name === 'tailscale'
+        ? { status: () => ({ state: 'ready', allow: [], ...tailscale }) }
+        : undefined,
     projectRoot: home,
     harness: () => opened.harness,
     conversations: () => [],
@@ -154,7 +159,9 @@ async function fixture() {
     prepared,
     opened,
     host,
+    home,
     notices,
+    tailscale,
     sockets,
     stop,
     async drain() {
@@ -169,6 +176,52 @@ async function fixture() {
     },
   }
 }
+
+it("names the tailnet address in hello and on change, and records a standby's writer for the ultimate command", async () => {
+  const f = await fixture()
+  try {
+    f.tailscale.url = 'https://test.tail3a3a66.ts.net:4747'
+    const [socket] = f.sockets
+    socket.open()
+    await f.drain()
+    expect(socket.messages[0]).toMatchObject({
+      type: 'hello',
+      tailnet: 'https://test.tail3a3a66.ts.net:4747',
+    })
+    // The writer records no other writer.
+    await expect(readFile(join(f.home, 'cloud-writer.json'), 'utf8')).rejects.toThrow('ENOENT')
+    // Tailscale stops, then publishes again: the cloud hears each change once, not every check.
+    f.tailscale.url = undefined
+    await vi.advanceTimersByTimeAsync(5000 * 3)
+    f.tailscale.url = 'https://test.tail3a3a66.ts.net:4747'
+    await vi.advanceTimersByTimeAsync(5000 * 3)
+    expect(socket.messages.filter((message) => message.type === 'tailnet')).toEqual([
+      { type: 'tailnet', url: null },
+      { type: 'tailnet', url: 'https://test.tail3a3a66.ts.net:4747' },
+    ])
+    // A standby whose writer is another machine with an address records it; it goes once the writer has none.
+    const writer = role('standby').writer
+    socket.receive({
+      ...role('standby'),
+      writer: { ...writer, tailnet: 'https://writer.tail3a3a66.ts.net:4747' },
+    })
+    await f.drain()
+    expect(JSON.parse(await readFile(join(f.home, 'cloud-writer.json'), 'utf8'))).toEqual({
+      machine: 'writer-machine',
+      tailnet: 'https://writer.tail3a3a66.ts.net:4747',
+    })
+    // The changed role reconnects; the next connection hears a writer without an address.
+    await vi.advanceTimersByTimeAsync(60_000)
+    const next = f.sockets.at(-1)!
+    expect(next).not.toBe(socket)
+    next.dispatchEvent(new Event('open'))
+    next.receive(role('standby'))
+    await f.drain()
+    await expect(readFile(join(f.home, 'cloud-writer.json'), 'utf8')).rejects.toThrow('ENOENT')
+  } finally {
+    await f.close()
+  }
+})
 
 it('ignores volatile system changes, refreshes them after a minute, and sends meaningful changes', async () => {
   const f = await fixture()

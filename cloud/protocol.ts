@@ -89,6 +89,12 @@ export const HELLO_LIMITS = {
   secret: /^[A-Z][A-Z0-9_]{0,63}$/,
 }
 
+/** A machine's tailnet address of its Ultimate, as the `tailscale` extension publishes it: `https://<node>.<tailnet>.ts.net:<port>`. */
+export const validTailnet = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  value.length <= 256 &&
+  /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net(:\d{1,5})?$/.test(value)
+
 /**
  * A releasing writer names at most this many worktrees with uncommitted changes, each path at most `path` long; the
  * conversations it waits for are bounded alike.
@@ -203,6 +209,8 @@ export interface CloudInfo {
     connected: boolean
     root: string
     lastSeen: number
+    /** Where this machine's checkout answers on the tailnet, as it last reported. */
+    tailnet?: string
     /** The writer's secret names this machine lacks. */
     missingSecrets: string[]
   }[]
@@ -229,6 +237,8 @@ export interface Writer {
   secrets: string[]
   /** False when the writer's store holds secrets its hello could not name: a move cannot verify them. */
   secretsComplete: boolean
+  /** Where the writer's Ultimate answers on the tailnet; absent until it published one. */
+  tailnet?: string
 }
 
 export type Hello = {
@@ -252,6 +262,8 @@ export type Hello = {
   secretsComplete: boolean
   /** The transition this machine is preparing, if any; another one targeting it has ended. */
   transition?: string
+  /** This checkout's tailnet address (`validTailnet`), once the `tailscale` extension published it. */
+  tailnet?: string
 }
 
 export type MachineMessage =
@@ -293,6 +305,8 @@ export type MachineMessage =
     }
   /** The user's secret names changed since hello; writer and standbys send it, bounded as in hello. */
   | { type: 'secrets'; secrets: string[]; secretsComplete: boolean }
+  /** The checkout's tailnet address changed since hello; null once it has none. Workers predating it ignore it. */
+  | { type: 'tailnet'; url: string | null }
   | { type: 'system'; value: SystemInfo }
   | { type: 'models'; value: unknown }
   | { type: 'delivered'; id: string; submissionId: number }
