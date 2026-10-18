@@ -417,8 +417,28 @@ it.concurrent('failed setup keeps its output tail, removes its empty branch, and
   const result = await f.call(id, 'write_commit')
   expect(result?.role === 'toolResult' && result.isError).toBe(true)
   expect(JSON.stringify(result)).toContain('Workspace setup failed:')
-  expect(JSON.stringify(result)).toContain('start a new conversation')
+  expect(JSON.stringify(result)).toContain('call a tool again to retry the setup')
   expect(f.writes).toBe(0)
+  await expect(access(join(f.projectRoot, 'change.txt'))).rejects.toThrow('ENOENT')
+})
+it.concurrent('retries a failed setup on the next tool call, so a fixed environment takes effect without a new conversation', async () => {
+  // The setup fails until the environment is fixed, as a unit PATH without pnpm did.
+  const f = await fixture(['test -f "$ULTIMATE_SOURCE/fixed" || { echo NOT_FIXED >&2; exit 1; }'])
+  const id = await f.create()
+  await f.service.ready(id, context)
+  expect((await f.service.get(id, context))!.state).toBe('failed')
+  const failed = await f.call(id, 'write_commit')
+  expect(JSON.stringify(failed)).toContain('NOT_FIXED')
+  expect(f.writes).toBe(0)
+
+  await writeFile(join(f.projectRoot, 'fixed'), '')
+  const result = await f.call(id, 'write_commit')
+  expect(result?.role === 'toolResult' && result.isError).toBe(false)
+  const workspace = (await f.service.get(id, context))!
+  expect(workspace.state).toBe('ready')
+  expect(workspace.error).toBeUndefined()
+  expect(f.writes).toBe(1)
+  expect(await readFile(join(workspace.path, 'change.txt'), 'utf8')).toBe('change')
   await expect(access(join(f.projectRoot, 'change.txt'))).rejects.toThrow('ENOENT')
 })
 it.concurrent('runs shared-only until a fresh repository has its first commit, then stands its lander without a reopen', async () => {

@@ -681,19 +681,30 @@ export function workspaces(host: Host) {
     return result
   }
   async function unavailable(id: ConversationId, context: Context) {
-    const workspace = await get(id, context)
+    let workspace = await get(id, context)
     if (!workspace) return undefined
-    if (workspace.state === 'failed')
-      return `Workspace setup failed: ${workspace.error}; start a new conversation`
+    if (workspace.state === 'failed') {
+      // Each tool call retries a failed setup, so a fixed environment (PATH, a lockfile) takes effect in place.
+      const kept = await ready(id, context, true)
+      if (kept) return `Workspace setup failed and its checkout keeps changes: ${kept.reason ?? ''}`
+      workspace = (await get(id, context))!
+      if (workspace.state === 'failed')
+        return `Workspace setup failed: ${workspace.error}; fix the cause, then call a tool again to retry the setup`
+    }
     if (workspace.state !== 'ready')
       return `Workspace is ${workspace.state}: ${workspace.error ?? 'checkout is not ready; send a new input to retry'}`
     if (!(await registeredCheckout(workspace)))
       return `Workspace checkout is missing or unregistered: ${workspace.path}${workspace.error ? `; ${workspace.error}` : ''}`
     return undefined
   }
+  /**
+   * Recreate a released checkout before the conversation uses it again, and with `retryFailed` also a failed setup whose
+   * checkout the failure rolled back (a path still there, as a foreign folder, stays failed).
+   */
   async function ready(
     id: ConversationId,
     context: Context,
+    retryFailed = false,
   ): Promise<WorkspacePending | undefined> {
     const record = await get(id, context)
     if (!record) return undefined
@@ -711,7 +722,18 @@ export function workspaces(host: Host) {
           await harness.commit(async (tx) => {
             ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'removed'
           }, context)
-        } else if (workspace.state !== 'removed') return false
+        } else if (
+          workspace.state !== 'removed' &&
+          !(
+            retryFailed &&
+            workspace.state === 'failed' &&
+            !(await lstat(workspace.path).catch((error: NodeJS.ErrnoException) => {
+              if (error.code !== 'ENOENT') throw error
+              return undefined
+            }))
+          )
+        )
+          return false
         const remaining = await finishRemoval(id, workspace, context)
         if (remaining) return remaining
         const exists = Boolean(await git(workspace.source, 'branch', '--list', workspace.branch))

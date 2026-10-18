@@ -22,7 +22,7 @@ commits is checked out unchanged, with its tip as the new base; a merged or miss
 target tip. Nested isolates prepare their source ancestor checkouts first.
 The existing `workspace_workflow` prompt section starts and waits for the same durable preparation task used
 on creation; setup commands run again before the model can use tools.
-Failed setup keeps its output tail and never force-removes dirty output. Start a new conversation to try again.
+Failed setup keeps its output tail and never force-removes dirty output. The conversation's next tool call retries it (checkout and setup again), so fixing the cause, such as a PATH without `pnpm`, takes effect in the same conversation; until it succeeds every tool call is blocked with the setup's error.
 
 The Workspaces panel shows the lander queue, statistics over every checkout, and the shown conversation's checkout,
 read-only: landing goes through agents. Concluding a conversation can release its clean, landed checkout.
