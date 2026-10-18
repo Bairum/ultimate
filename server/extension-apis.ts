@@ -79,7 +79,9 @@ export function extensionApis(
     const rows = new Map<string, Catalogue['apis'][number]>()
     const row = (name: string) => {
       let entry = rows.get(name)
-      if (!entry) rows.set(name, (entry = { name, needs: [], wants: [] }))
+      // An extension point `<owner>.<point>` is a contract its owner declares and wants; another extension provides it.
+      const owner = name.includes('.') ? { owner: name.split('.')[0] } : {}
+      if (!entry) rows.set(name, (entry = { name, ...owner, needs: [], wants: [] }))
       return entry
     }
     for (const [name, extension] of provided()) row(name).provider = extension
@@ -91,11 +93,15 @@ export function extensionApis(
     const apis = [...rows.values()]
       .map((entry) => ({ ...entry, needs: entry.needs.toSorted(), wants: entry.wants.toSorted() }))
       .toSorted((a, b) => a.name.localeCompare(b.name))
+    // Dependencies point at the contract's owner: a service's provider, or a point's declaring extension, which its
+    // provider then depends on too (dependency inversion), so a lower extension can call up without a cycle.
     const edges = new Map<string, Set<string>>()
-    for (const { provider, needs, wants } of apis)
-      for (const consumer of [...needs, ...wants])
-        if (provider && provider !== consumer)
-          edges.set(consumer, (edges.get(consumer) ?? new Set()).add(provider))
+    for (const { owner, provider, needs, wants } of apis) {
+      const contract = owner ?? provider
+      for (const user of [...needs, ...wants, ...(owner && provider ? [provider] : [])])
+        if (contract && contract !== user)
+          edges.set(user, (edges.get(user) ?? new Set()).add(contract))
+    }
     return {
       apis,
       missing: apis.filter((entry) => !entry.provider && entry.needs.length).map((e) => e.name),

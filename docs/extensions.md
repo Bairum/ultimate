@@ -53,6 +53,13 @@ the dependency instead, since the provider may load later, and the missing provi
 and wants, the missing providers and the dependency cycles (each a sorted group of extensions that depend on each
 other in a cycle).
 
+An **extension point** is how a lower extension calls up without depending on a higher one: it declares the contract
+in its own `api.ts` as `defineApi<Service>()('<folder>.<point>')` (for example `conversations.trees`) and `want`s it;
+the higher extension imports that token and `implement`s it. The catalogue counts every edge toward the contract's
+owner, the extension its name starts with: consumers depend on it, and so does a point's provider. A point's row
+carries `owner` and lists its provider; the owner wanting its own point depends on nothing, so the dependency keeps
+pointing down.
+
 An extension's `api.ts` is its whole server-side surface for others, and agents discover APIs by reading these files,
 so lint (`lint/ultimate.ts`) keeps them small and documented:
 
@@ -61,7 +68,8 @@ so lint (`lint/ultimate.ts`) keeps them small and documented:
   anything else with `import type`; no `node:*`), types, and
   `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)`. Every exported token and every member of a
   service type passed to `defineApi` has a doc comment saying what it does and when to use it.
-- `api-naming`: `defineApi<…>()('<folder>')`, `defineEvent('<folder>.<event>')` and `actionRef('<folder>', name)`.
+- `api-naming`: `defineApi<…>()('<folder>')` or an extension point `('<folder>.<point>')`,
+  `defineEvent('<folder>.<event>')` and `actionRef('<folder>', name)`.
 - `api-only-imports`: a server-side `.ts` file imports another extension's runtime code only from its `api.ts`, a
   browser `.tsx` file only from its `ui.tsx`; types come with `import type`, pure helpers from `lib/`.
 - `no-raw-services`: no `host.provide`, `host.use` or `host.events` in `extensions/`.

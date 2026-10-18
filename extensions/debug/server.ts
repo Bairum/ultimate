@@ -114,6 +114,7 @@ export default function debug(host: ExtensionHost) {
         const lines = catalogue.apis.map((api) =>
           [
             api.name,
+            api.owner && `point of ${api.owner}`,
             `provider=${api.provider ?? 'MISSING'}`,
             api.needs.length && `needs: ${api.needs.join(', ')}`,
             api.wants.length && `wants: ${api.wants.join(', ')}`,

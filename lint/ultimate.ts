@@ -535,11 +535,16 @@ export default {
               callee?.type === 'CallExpression' &&
               callee.callee?.type === 'Identifier' &&
               callee.callee.name === 'defineApi' &&
-              name !== own
+              !(
+                name === own ||
+                (typeof name === 'string' &&
+                  /^[a-z][a-z0-9-]*$/.test(name.slice(own.length + 1)) &&
+                  name.startsWith(`${own}.`))
+              )
             )
               context.report({
                 node,
-                message: `The API of extensions/${own} is named '${own}'.`,
+                message: `The API of extensions/${own} is named '${own}', its extension points '${own}.<point>'.`,
               })
             if (
               callee?.type === 'Identifier' &&

@@ -150,6 +150,38 @@ it('types handles by their token and groups cycles into components', () => {
   expect(apis.catalogue().cycles).toEqual([])
 })
 
+it('points the edges of an extension point at its owner, so a lower extension calls up without a cycle', () => {
+  const providers = new Map<string, { extension: string; value: unknown }>()
+  const apis = extensionApis(
+    (name) => providers.get(name),
+    () => [...providers].map(([name, { extension }]) => [name, extension]),
+    () => true,
+    untraced,
+  )
+  // Low declares and wants `low.hook`; high implements it and needs low's own service.
+  const Hook = defineApi<{ fire(): string }>()('low.hook')
+  providers.set('low', { extension: 'low', value: {} })
+  providers.set('low.hook', { extension: 'high', value: { fire: () => 'fired' } })
+  const [low, high, other] = [{}, {}, {}]
+  expect(apis.want(low, 'low', Hook)?.fire()).toBe('fired')
+  apis.need(high, 'high', defineApi()('low'), false)
+  // A third extension using the point depends on its owner, not on whoever implements it.
+  apis.want(other, 'other', Hook)
+  const catalogue = apis.catalogue()
+  expect(catalogue.apis).toContainEqual({
+    name: 'low.hook',
+    owner: 'low',
+    provider: 'high',
+    needs: [],
+    wants: ['low', 'other'],
+  })
+  expect(catalogue.cycles).toEqual([])
+  // The same calls through an ordinary service of high's are a cycle.
+  providers.set('high', { extension: 'high', value: {} })
+  apis.want(low, 'low', defineApi()('high'))
+  expect(apis.catalogue().cycles).toEqual([['high', 'low']])
+})
+
 it('reports a dense tangle as one component without walking its paths', () => {
   // Twelve extensions that all need each other have 12! cycles; enumerating them would never finish.
   const names = Array.from({ length: 12 }, (_, i) => `x${String(i).padStart(2, '0')}`)

@@ -186,15 +186,20 @@ it('asks ui.tsx for a summary and nothing else', () => {
   ])
 })
 
-it('names an API after its folder and prefixes its events', () => {
+it('names an API after its folder, its extension points and events with its prefix', () => {
   const source = `export const A = defineApi<S>()('other')
 export const B = defineEvent('other.thing')
 export const C = defineEvent('echo.')
-export const D = defineEvent('echo.thing')`
+export const D = defineEvent('echo.thing')
+export const E = defineApi<S>()('echo.hook')
+export const F = defineApi<S>()('other.hook')
+export const G = defineApi<S>()('echo.')`
   expect(lint('api-naming', 'extensions/echo/api.ts', source)).toEqual([
-    "The API of extensions/echo is named 'echo'.",
+    "The API of extensions/echo is named 'echo', its extension points 'echo.<point>'.",
     "Events of extensions/echo are named 'echo.<event>'.",
     "Events of extensions/echo are named 'echo.<event>'.",
+    "The API of extensions/echo is named 'echo', its extension points 'echo.<point>'.",
+    "The API of extensions/echo is named 'echo', its extension points 'echo.<point>'.",
   ])
 })
 
