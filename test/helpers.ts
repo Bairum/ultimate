@@ -84,15 +84,19 @@ export async function linkDependencies(root: string) {
     await symlink(resolve('node_modules', name), join(target, name))
   }
 }
-/** Copy `shared/` and every extension's `api.ts` into `root`, so partially copied extensions find their contracts. */
+/**
+ * Copy `shared/` and every extension's `api.ts` and `refs.ts` into `root`, so partially copied extensions find their
+ * contracts.
+ */
 export async function copyApis(root: string) {
   await cp(resolve('shared'), join(root, 'shared'), { recursive: true })
-  for (const name of await readdir(resolve('extensions'))) {
-    const api = resolve('extensions', name, 'api.ts')
-    if (!existsSync(api)) continue
-    await mkdir(join(root, 'extensions', name), { recursive: true })
-    await cp(api, join(root, 'extensions', name, 'api.ts'))
-  }
+  for (const name of await readdir(resolve('extensions')))
+    for (const file of ['api.ts', 'refs.ts']) {
+      const contract = resolve('extensions', name, file)
+      if (!existsSync(contract)) continue
+      await mkdir(join(root, 'extensions', name), { recursive: true })
+      await cp(contract, join(root, 'extensions', name, file))
+    }
 }
 export async function sourceCopy(parent: string) {
   await mkdir(parent, { recursive: true })

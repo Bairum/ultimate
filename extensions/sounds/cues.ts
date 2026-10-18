@@ -1,4 +1,4 @@
-import type { BoardMessage } from '../board/data.tsx'
+import type { BoardMessage } from '../board/refs.ts'
 import type { OverviewRow } from '../conversations/types.ts'
 
 export type Sound = 'input' | 'finished' | 'failed'

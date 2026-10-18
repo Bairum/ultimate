@@ -41,7 +41,9 @@ export {
 export { ExtensionBoundary } from '../app/boundary.tsx'
 export { api } from './client.ts'
 export { ActionError, projectBase } from './api.ts'
-export type { Api } from './api.ts'
+export type { ActionOptions, Api } from './api.ts'
+export type { UseActionOptions } from './hooks.ts'
+export type { ActionRef, DocRef } from '../../../shared/extension-api.ts'
 export {
   getConversation,
   getState,
@@ -54,6 +56,7 @@ export {
   useConversations,
   useDialog,
   useDoc,
+  useDocKind,
   useDocOf,
   useDocumentRenderers,
   useEvents,

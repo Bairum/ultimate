@@ -26,46 +26,14 @@ import {
   StandingField,
   thinkingLevels,
 } from './fields.tsx'
-import type { ModelRef } from './fields.tsx'
 import { Heading, Tag, useRefresh } from './parts.tsx'
-
-type Source = 'builtin' | 'user' | 'project'
-type Scope = 'user' | 'project'
-interface Definition {
-  name: string
-  description: string
-  path: string
-  source: Source
-  model?: ModelRef
-  thinking?: string
-  tools?: string[]
-  isolate?: 'none' | 'worktree'
-  resident?: boolean
-  onFailure?: 'diagnose' | 'fix'
-}
-interface Invalid {
-  name: string
-  path: string
-  source: Source
-  error: string
-}
-/** The `definitions` action: what `start` can name, the files that failed to parse, and what the form needs. */
-interface Discovery {
-  definitions: Definition[]
-  errors: Invalid[]
-  main: { model?: ModelRef; thinking?: string; tools: { name: string; description: string }[] }
-  scopes: Record<Scope, string>
-  projectLocal: boolean
-}
-/** The `definition` action: the definition that applies, a later file of its name that fails to parse, the raw file. */
-interface Shown {
-  definition?: Definition & { instructions: string }
-  invalid?: Invalid
-  source: Source
-  path: string
-  raw: string
-  files: Source[]
-}
+import {
+  DefinitionAction,
+  DefinitionsAction,
+  DeleteDefinitionAction,
+  SaveDefinitionAction,
+} from './refs.ts'
+import type { Discovery, ModelRef, Scope, Shown, Source } from './refs.ts'
 
 /**
  * The config dialog's id, and the UI state naming the definition it shows ('' for a new one); both are this extension's
@@ -93,7 +61,7 @@ function useOpenDefinition() {
 
 /** Definitions are reread at every start; the list refetches on focus, as after an edit, and when the dialog closes. */
 export function Definitions() {
-  const { data, refetch } = useAction<Discovery>('subagents', 'definitions')
+  const { data, refetch } = useAction(DefinitionsAction)
   const [editing] = useDialog(definitionDialog)
   useRefresh(refetch, String(editing))
   const show = useOpenDefinition()
@@ -217,14 +185,9 @@ function Loader({
   show: (name: string) => void
   close: () => void
 }) {
-  const discovery = useAction<Discovery>('subagents', 'definitions')
+  const discovery = useAction(DefinitionsAction)
   // Shown inline, as the dialog's content, rather than as a notice.
-  const shown = useAction<Shown>(
-    'subagents',
-    'definition',
-    { name },
-    { enabled: name !== '', onError: () => {} },
-  )
+  const shown = useAction(DefinitionAction, { name }, { enabled: name !== '', onError: () => {} })
   const [revision, setRevision] = useState(0)
   if (!discovery.data || (name && !shown.data))
     return (
@@ -259,7 +222,7 @@ interface Draft {
   model: ModelRef | null
   thinking: string | null
   tools: string[] | null
-  resident: boolean
+  resident: boolean | 'machine'
   isolate: 'none' | 'worktree'
   onFailure: 'diagnose' | 'fix' | null
   instructions: string
@@ -340,7 +303,7 @@ function Form({
     setPending('save')
     setError(undefined)
     try {
-      await api.action('subagents', 'saveDefinition', {
+      await api.action(SaveDefinitionAction, {
         name: draft.name,
         scope,
         ...(creating ? { create: true } : {}),
@@ -366,7 +329,7 @@ function Form({
     setPending('delete')
     setConfirming(false)
     try {
-      await api.action('subagents', 'deleteDefinition', { name: draft.name, scope: file })
+      await api.action(DeleteDefinitionAction, { name: draft.name, scope: file })
       await onChanged()
     } catch (failure) {
       setError(errorMessage(failure))
@@ -490,7 +453,10 @@ function Form({
               value={draft.thinking ?? 'inherit'}
             />
           </Field>
-          <StandingField value={draft.resident} onChange={(resident) => set({ resident })} />
+          <StandingField
+            value={draft.resident !== false}
+            onChange={(resident) => set({ resident })}
+          />
           <Field
             hint={
               draft.isolate === 'worktree'

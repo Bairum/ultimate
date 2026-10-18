@@ -4,11 +4,12 @@ import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { api, cn, errorMessage, useConversation, useDocOf, useTranscript, useViewport } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
+import { BoardDoc } from '../board/ui.tsx'
 import { keyCard, openQuestions, replyQuestions } from './open.tsx'
-import type { Message, QuestionsBoard } from './open.tsx'
+import type { Message } from './open.tsx'
+import { AnswerAction, QuestionsDoc, ReplyAction } from './refs.ts'
+import type { Answer } from './refs.ts'
 import type { Question } from './types.ts'
-
-type Answer = { question: string; answer: string }
 
 function options(question: Question) {
   return [
@@ -21,15 +22,15 @@ function options(question: Question) {
 
 /** Whether `card` is the one on the shown conversation's page that takes the desktop 1–9 and Enter keys. */
 function useKeys(card: string) {
-  const board = useDocOf<QuestionsBoard>(1, 'questions.board')
-  const messages = useDocOf<{ messages: Message[] }>(1, 'board')?.messages ?? []
+  const board = useDocOf(1, QuestionsDoc)
+  const messages = useDocOf(1, BoardDoc)?.messages ?? []
   const conversation = useConversation((value) => value.id)
   return keyCard(board, conversation, messages, useTranscript()) === card
 }
 
 /** The answer card under an open message to the user; renders nothing without extracted questions. */
 export function MessageQuestions({ message }: { message: Message }) {
-  const questions = openQuestions(useDocOf<QuestionsBoard>(1, 'questions.board'), message)
+  const questions = openQuestions(useDocOf(1, QuestionsDoc), message)
   const card = `message:${message.id}`
   const keys = useKeys(card)
   if (!questions.length) return null
@@ -38,7 +39,7 @@ export function MessageQuestions({ message }: { message: Message }) {
       card={card}
       questions={questions}
       keys={keys}
-      submit={(answers) => api.action('questions', 'answer', { messageId: message.id, answers })}
+      submit={(answers) => api.action(AnswerAction, { messageId: message.id, answers })}
     />
   )
 }
@@ -47,7 +48,7 @@ export function MessageQuestions({ message }: { message: Message }) {
 export function ReplyQuestions({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   const conversation = useConversation((value) => value.id)
   const questions = replyQuestions(
-    useDocOf<QuestionsBoard>(1, 'questions.board'),
+    useDocOf(1, QuestionsDoc),
     conversation,
     entry.id,
     useTranscript(),
@@ -64,7 +65,7 @@ export function ReplyQuestions({ entry, core }: { entry: EntryRecord; core: Reac
           questions={questions}
           keys={keys}
           className=""
-          submit={(answers) => api.action('questions', 'reply', { entryId: entry.id, answers })}
+          submit={(answers) => api.action(ReplyAction, { entryId: entry.id, answers })}
         />
       </section>
     </div>

@@ -6,6 +6,7 @@ import type { Context } from '@earendil-works/chord'
 import { defineDoc } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryId, TaskId } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
+import { StandingDoc } from './refs.ts'
 import type { createChild } from './children.ts'
 
 /** Each conversation's subagents and pending subagent actions, on the conversation that started them. */
@@ -40,7 +41,7 @@ export const Subagents = defineDoc<{
 
 /** `{ [name]: conversationId }` of the standing agents, on the root conversation. */
 export const Standing = defineDoc<Record<string, ConversationId>>({
-  kind: 'ultimate.standing-agents',
+  kind: StandingDoc.kind,
   version: 1,
   scope: 'conversation',
   history: 'latest',

@@ -1,11 +1,12 @@
 import { cn, useConversations, useDocOf } from '@/sdk'
-import type { OverviewRow, OverviewState } from './types.ts'
+import { OverviewDoc } from './refs.ts'
+import type { OverviewRow } from './types.ts'
 
 const none: Record<string, OverviewRow> = {}
 
 /** The root's overview rows by conversation id: one stream for all rows, unchanged when selection or expansion changes. */
 export function useOverview() {
-  return useDocOf<OverviewState>(1, 'ultimate.conversation-overview')?.conversations ?? none
+  return useDocOf(1, OverviewDoc)?.conversations ?? none
 }
 
 const hues = [

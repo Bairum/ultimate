@@ -33,33 +33,11 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { ConversationSummary, ToolCallView } from '@/sdk'
-import { stateLabel, useWorkspaces } from '../workspaces/data.tsx'
-import type { WorkspaceInfo } from '../workspaces/types.ts'
-import { StatusIcon, TaskChip, statusOf, useOpenTask, useTaskOf } from './chip.tsx'
-import type { TaskLink } from './chip.tsx'
+import { InfoAction, stateLabel, useWorkspaces } from '../workspaces/ui.tsx'
 import { finished, number, pillOf } from './progress.tsx'
-
-/** The `ultimate.plan` document, as `server.ts` defines it. */
-type Task = {
-  key: string
-  title: string
-  role: string
-  description: string
-  deps: string[]
-  status: string
-  child?: number
-  verdict?: string
-  notes: { at: string; text: string }[]
-}
-type Epic = {
-  key: string
-  title: string
-  body: string
-  status: string
-  verdict?: string
-  tasks: Record<string, Task>
-}
-type Plan = { next: number; epics: Record<string, Epic> }
+import { PlanDoc } from './refs.ts'
+import type { Epic, Plan, Task, TaskLink } from './refs.ts'
+import { StatusIcon, TaskChip, statusOf, useOpenTask, useTaskOf } from './ui.tsx'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 
@@ -121,9 +99,8 @@ function IsolateRow({ child, parent }: { child: ConversationSummary; parent: num
   const conversations = useConversations()
   const parentBusy = conversations.find((conversation) => conversation.id === parent)?.busy
   const recorded = useWorkspaces()[String(child.id)]
-  const { data: isolate, refetch } = useAction<WorkspaceInfo | null>(
-    'workspaces',
-    'info',
+  const { data: isolate, refetch } = useAction(
+    InfoAction,
     { id: child.id },
     { enabled: !!recorded },
   )
@@ -620,7 +597,7 @@ function CoordinatorPlan({
   request: Open
   settle: () => void
 }) {
-  const plan = useDoc<Plan>('ultimate.plan')
+  const plan = useDoc(PlanDoc)
   const [expanded, setExpanded] = useUiState('plan.panel', false)
   const [focus, setFocus] = useState<Focus>()
   useEffect(() => {
@@ -667,7 +644,7 @@ function CoordinatorPlan({
 
 function WorkerPlan({ conversation, task }: { conversation: number; task: TaskLink }) {
   const [expanded, setExpanded] = useUiState('plan.panel', false)
-  const plan = useDocOf<Plan>(expanded ? task.coordinator : undefined, 'ultimate.plan')
+  const plan = useDocOf(expanded ? task.coordinator : undefined, PlanDoc)
   const openTask = useOpenTask()
   const focus = useMemo(() => ({ key: task.key }), [task.key])
   return (
@@ -709,7 +686,7 @@ function WorkerPlan({ conversation, task }: { conversation: number; task: TaskLi
 /** A key in a `plan` call's header: the task's chip, or the epic key, opening the plan panel there. */
 function PlanKey({ id }: { id: string }) {
   const { conversationId } = useUltimate()
-  const plan = useDoc<Plan>('ultimate.plan')
+  const plan = useDoc(PlanDoc)
   const coordinator = useTaskOf(conversationId)?.coordinator ?? conversationId
   const openTask = useOpenTask()
   if (coordinator === undefined || !/^E\d+(\.\d+)?$/.test(id))

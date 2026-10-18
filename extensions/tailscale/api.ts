@@ -2,23 +2,9 @@
  * Tailscale: publishes this server on the user's tailnet over HTTPS. Other extensions read where it is reachable.
  */
 import { defineApi } from '../../shared/extension-api.ts'
+import type { Status } from './refs.ts'
 
-/** The publication state, the tailnet `url` once ready, and a `hint` when something blocks it. */
-export type Status = {
-  state:
-    | 'disabled'
-    | 'starting'
-    | 'ready'
-    | 'not-installed'
-    | 'not-running'
-    | 'not-operator'
-    | 'https-disabled'
-    | 'port-conflict'
-    | 'error'
-  url?: string
-  allow: string[]
-  hint?: string
-}
+export type { Status }
 
 /** What the `tailscale` service gives other extensions: this server's status, `url` once it is published. */
 export interface TailscaleService {

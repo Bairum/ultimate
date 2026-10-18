@@ -15,17 +15,10 @@ import {
   useSystem,
   useUltimate,
 } from '@/sdk'
+import { DeleteAction, ListAction, SetAction } from './refs.ts'
+import type { Secret } from './refs.ts'
 
 /** One row of the `list` action: a declared or stored secret, never its value. */
-interface Secret {
-  name: string
-  description?: string
-  url?: string
-  declaredBy: string[]
-  set: boolean
-  updatedAt?: string
-}
-
 /**
  * The row another facet asked for with `secrets:open { name }`, until the panel opens it. Kept outside React: the
  * panel mounts only once the request has opened it.
@@ -47,7 +40,7 @@ const subscribe = (listener: () => void) => {
 function useSecrets() {
   const system = useSystem()
   // Failures show inline in the panel, not as notices: the status line reads the list on every page.
-  const secrets = useAction<Secret[]>('secrets', 'list', null, { onError: () => {} })
+  const secrets = useAction(ListAction, null, { onError: () => {} })
   const signature = JSON.stringify(
     system?.extensions.map((extension) => [
       extension.name,
@@ -124,7 +117,7 @@ function ValueInput({
     setBusy(true)
     setError(undefined)
     try {
-      await api.action('secrets', 'set', { name, value: value.trim() })
+      await api.action(SetAction, { name, value: value.trim() })
       setValue('')
       events.emit('secrets:changed', { name })
       onDone()
@@ -206,7 +199,7 @@ function ConfirmDelete({ name, onDone }: { name: string; onDone: () => void }) {
     setBusy(true)
     setError(undefined)
     try {
-      await api.action('secrets', 'delete', { name })
+      await api.action(DeleteAction, { name })
       events.emit('secrets:changed', { name })
       onDone()
     } catch (failure) {

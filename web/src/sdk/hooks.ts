@@ -24,7 +24,9 @@ import type { Region } from './actions.ts'
 import { actionMessage, MachineOfflineError, ROOT } from './api.ts'
 import { EVENT_FEED } from '../../../shared/events.ts'
 import type { EventData, EventRecord, EventToken } from '../../../shared/events.ts'
-import type { ActionError } from './api.ts'
+import type { ActionArgs, ActionError, ActionOptions } from './api.ts'
+import { actionRef, docRef } from '../../../shared/extension-api.ts'
+import type { ActionRef, DocRef } from '../../../shared/extension-api.ts'
 import { api, registry, store, uiState } from './client.ts'
 import { HOME, chatTools, documentItems, introOf } from './registry.ts'
 import type { State } from './store.ts'
@@ -124,22 +126,29 @@ export const useNotices = () => useStore((state) => state.notices)
 /** Stream state: connecting, open, or reconnecting. */
 export const useConnection = () => useStore((state) => state.connection)
 
-/** An extension document of the shown conversation (`export const docs` of a server facet); null until created. */
-export function useDoc<T extends JsonObject = JsonObject>(
-  kind: string,
-): Readonly<T> | null | undefined {
+/**
+ * The document `ref` names (an extension's `refs.ts`; `export const docs` of its server facet) on the shown
+ * conversation; null until created.
+ */
+export function useDoc<T>(ref: DocRef<T>): Readonly<T> | null | undefined {
+  return useDocKind(ref.kind) as Readonly<T> | null | undefined
+}
+
+/** A document of the shown conversation by kind, untyped: only for views of every kind, such as the documents panel. */
+export function useDocKind(kind: string): Readonly<JsonObject> | null | undefined {
   useEffect(() => store.watchDoc(kind), [kind])
-  return useStore((state) => state.docs[kind]) as Readonly<T> | null | undefined
+  return useStore((state) => state.docs[kind])
 }
 
 /**
- * An extension document of conversation `conversation`, shown or not, such as the root's; `undefined` while
+ * The document `ref` names on conversation `conversation`, shown or not, such as the root's; `undefined` while
  * `conversation` is undefined and until its stream delivers it. Every hook on one conversation shares one stream.
  */
-export function useDocOf<T extends JsonObject = JsonObject>(
+export function useDocOf<T>(
   conversation: number | undefined,
-  kind: string,
+  ref: DocRef<T>,
 ): Readonly<T> | null | undefined {
+  const { kind } = ref
   useEffect(
     () => (conversation === undefined ? undefined : store.watchDocOf(conversation, kind)),
     [conversation, kind],
@@ -149,6 +158,8 @@ export function useDocOf<T extends JsonObject = JsonObject>(
   ) as Readonly<T> | null | undefined
 }
 
+const eventFeed = docRef<{ events: EventRecord[] }>(EVENT_FEED)
+
 /**
  * The newest durable events (`host.emit`), newest first and live; only those of `events` when given. Reads the root's
  * feed of the latest 100 events of every kind, so a rare kind can show fewer than `limit`. `undefined` until it arrives.
@@ -156,7 +167,7 @@ export function useDocOf<T extends JsonObject = JsonObject>(
 export function useEvents<T extends EventToken = EventToken>(
   options: { events?: readonly T[]; limit?: number } = {},
 ): readonly EventRecord<EventData<T>>[] | undefined {
-  const feed = useDocOf<{ events: EventRecord[] }>(ROOT, EVENT_FEED)
+  const feed = useDocOf(ROOT, eventFeed)
   const kinds = options.events?.map((event) => event.kind).join(',')
   const limit = options.limit ?? 20
   return useMemo(() => {
@@ -398,18 +409,20 @@ export interface ActionState<T> {
   refetch: () => Promise<T | undefined>
 }
 
+/** Options of `useAction`. */
+export type UseActionOptions = { enabled?: boolean; onError?: (error: ActionError) => void }
+
 /**
- * Call a server action of an extension and keep its result: on mount and whenever `extension`, `name`, or `args`
- * (compared as JSON) change, unless `enabled` is false. A newer call, new args, or an unmount abort the call in flight,
- * also one `refetch` started; its late result is ignored. A failure shows as a notice unless you pass `onError`.
+ * Call the server action `ref` names and keep its result: on mount and whenever the action or `args` (compared as
+ * JSON) change, unless `enabled` is false. A newer call, new args, or an unmount abort the call in flight, also one
+ * `refetch` started; its late result is ignored. A failure shows as a notice unless you pass `onError`.
  */
-export function useAction<T = JsonValue>(
-  extension: string,
-  name: string,
-  args: JsonValue = null,
-  options: { enabled?: boolean; onError?: (error: ActionError) => void } = {},
+export function useAction<Args, T>(
+  ref: ActionRef<Args, T>,
+  ...[args, options = {}]: ActionArgs<Args, UseActionOptions>
 ): ActionState<T> {
-  const key = JSON.stringify([extension, name, args])
+  const { extension, name } = ref
+  const key = JSON.stringify([extension, name, args ?? null])
   const [state, setState] = useState<{
     key: string
     data?: T
@@ -429,9 +442,14 @@ export function useAction<T = JsonValue>(
     latest.current.controller = controller
     setState((previous) => ({ ...(previous.key === key ? previous : { key }), loading: true }))
     try {
-      const data = await api.action<T>(extension, name, latest.current.args, {
-        signal: controller.signal,
-      })
+      // Rebuilt from its strings, so a ref made during render does not refetch on every render.
+      const data = await api.action(
+        actionRef<Args, T>(extension, name),
+        ...([latest.current.args, { signal: controller.signal }] as ActionArgs<
+          Args,
+          ActionOptions
+        >),
+      )
       if (controller.signal.aborted) return undefined
       setState({ key, data, loading: false })
       return data

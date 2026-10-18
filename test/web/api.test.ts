@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ActionError, createApi, MachineOfflineError } from '../../web/src/sdk/api.ts'
 import { createStore } from '../../web/src/sdk/store.ts'
+import { actionRef } from '../../shared/extension-api.ts'
 import type { SystemInfo } from '../../shared/protocol.ts'
 
 function setup(respond: (url: string, init: RequestInit) => Response | Promise<Response>) {
@@ -10,13 +11,14 @@ function setup(respond: (url: string, init: RequestInit) => Response | Promise<R
   const api = createApi(createStore(), { fetch })
   return { api, fetch }
 }
+const ref = (extension: string, name: string) => actionRef<unknown, unknown>(extension, name)
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 
 describe('extension actions', () => {
   it('posts args for the shown conversation and resolves with the result', async () => {
     const { api, fetch } = setup(() => json(200, { result: { notes: [1, 2] } }))
-    expect(await api.action('notes', 'list notes', { folder: 'drafts' })).toEqual({
+    expect(await api.action(ref('notes', 'list notes'), { folder: 'drafts' })).toEqual({
       notes: [1, 2],
     })
     const [url, init] = fetch.mock.calls[0]
@@ -26,7 +28,7 @@ describe('extension actions', () => {
       args: { folder: 'drafts' },
       conversationId: 1,
     })
-    await api.action('notes', 'list', null, { conversationId: 7 })
+    await api.action(ref('notes', 'list'), null, { conversationId: 7 })
     expect(JSON.parse(fetch.mock.calls[1][1]?.body as string)).toEqual({
       args: null,
       conversationId: 7,
@@ -38,9 +40,9 @@ describe('extension actions', () => {
     const store = createStore()
     const standby = { ...store.getState(), system: { standby: {} } as SystemInfo }
     const api = createApi({ ...store, getState: () => standby }, { fetch })
-    await api.action('cloud', 'move')
+    await api.action(ref('cloud', 'move'))
     expect(JSON.parse(fetch.mock.calls[0][1]?.body as string)).toEqual({ args: null })
-    await api.action('cloud', 'move', null, { conversationId: 7 })
+    await api.action(ref('cloud', 'move'), null, { conversationId: 7 })
     expect(JSON.parse(fetch.mock.calls[1][1]?.body as string)).toEqual({
       args: null,
       conversationId: 7,
@@ -49,7 +51,7 @@ describe('extension actions', () => {
 
   it('rejects with an ActionError naming the extension, action, status, and message', async () => {
     const { api } = setup(() => json(500, { error: 'Extension action failed' }))
-    const error = await api.action('notes', 'save', 'x').catch((failure: unknown) => failure)
+    const error = await api.action(ref('notes', 'save'), 'x').catch((failure: unknown) => failure)
     expect(error).toBeInstanceOf(ActionError)
     expect(error).toMatchObject({
       extension: 'notes',
@@ -58,12 +60,12 @@ describe('extension actions', () => {
       message: 'Extension action failed',
     })
     const missing = setup(() => json(404, { error: 'Unknown extension action' }))
-    await expect(missing.api.action('notes', 'nope')).rejects.toMatchObject({ status: 404 })
+    await expect(missing.api.action(ref('notes', 'nope'))).rejects.toMatchObject({ status: 404 })
   })
 
   it('distinguishes expected replica unavailability from real server failures', async () => {
     const offline = setup(() => json(503, { error: 'The machine is offline', offline: true }))
-    await expect(offline.api.action('onboarding', 'status')).rejects.toBeInstanceOf(
+    await expect(offline.api.action(ref('onboarding', 'status'))).rejects.toBeInstanceOf(
       MachineOfflineError,
     )
     await expect(
@@ -72,7 +74,9 @@ describe('extension actions', () => {
     await expect(offline.api.abort()).rejects.toBeInstanceOf(MachineOfflineError)
 
     const unavailable = setup(() => json(503, { error: 'Service unavailable' }))
-    await expect(unavailable.api.action('onboarding', 'status')).rejects.toBeInstanceOf(ActionError)
+    await expect(unavailable.api.action(ref('onboarding', 'status'))).rejects.toBeInstanceOf(
+      ActionError,
+    )
     await expect(unavailable.api.updateUi({ set: {} })).rejects.toMatchObject({ status: 503 })
     const failed = setup(() => json(500, { offline: true, error: 'Unexpected failure' }))
     await expect(failed.api.updateUi({ set: {} })).rejects.toMatchObject({ status: 500 })
@@ -105,7 +109,7 @@ describe('extension actions', () => {
           init.signal?.addEventListener('abort', () => reject(init.signal?.reason)),
         ),
     )
-    const pending = api.action('notes', 'slow', null, { signal: controller.signal })
+    const pending = api.action(ref('notes', 'slow'), null, { signal: controller.signal })
     controller.abort()
     const error = await pending.catch((failure: unknown) => failure)
     expect(error).not.toBeInstanceOf(ActionError)

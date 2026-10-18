@@ -40,7 +40,7 @@ interface Node {
 
 interface Context {
   filename: string
-  options: [{ allow?: Record<string, string[]> }?]
+  options: unknown[]
   sourceCode: {
     text: string
     getCommentsBefore(node: Node): unknown[]
@@ -56,13 +56,23 @@ const extensionOf = (filename: string) => {
 /** The repository-relative path segments an import `source` of `filename` resolves to. */
 const resolved = (filename: string, source: string) =>
   path.relative(process.cwd(), path.resolve(path.dirname(filename), source)).split(path.sep)
-/** `extensions/<name>/api.ts` of its own extension. */
-const apiFile = (filename: string) => {
+/**
+ * An extension's contract files: `api.ts` for server code, `refs.ts` for the documents and actions the browser reads
+ * and calls, `ui.tsx` for what other extensions' browser code imports.
+ */
+const contracts = ['api.ts', 'refs.ts', 'ui.tsx'] as const
+type Contract = (typeof contracts)[number]
+/** `extensions/<name>/<contract>`: the extension and which contract file it is. */
+const contractFile = (filename: string) => {
   const parts = path.relative(process.cwd(), filename).split(path.sep)
-  return parts.length === 3 && parts[0] === 'extensions' && parts[2] === 'api.ts'
-    ? parts[1]
+  const file = parts[2] as Contract
+  return parts.length === 3 && parts[0] === 'extensions' && contracts.includes(file)
+    ? { extension: parts[1], file }
     : undefined
 }
+/** Whether repository-relative `target` is `extensions/<any>/<name>`. */
+const extensionFile = (target: string[], ...names: string[]) =>
+  target.length === 3 && target[0] === 'extensions' && names.includes(target[2])
 /** Whether a JSDoc comment with text sits directly before `node`. */
 const documented = (context: Context, node: Node) =>
   (context.sourceCode.getCommentsBefore(node) as { type: string; value: string }[]).some(
@@ -80,7 +90,10 @@ const membersOf = (declaration: Node): Node[] =>
   declaration.type === 'TSInterfaceDeclaration'
     ? (((declaration.body as Node | undefined)?.body as Node[] | undefined) ?? [])
     : literals(declaration.typeAnnotation)
-const definers = new Set(['defineApi', 'defineEvent', 'defineDoc', 'defineEntry'])
+const definers: Record<'api.ts' | 'refs.ts', Set<string>> = {
+  'api.ts': new Set(['defineApi', 'defineEvent', 'defineDoc', 'defineEntry']),
+  'refs.ts': new Set(['docRef', 'actionRef']),
+}
 
 const propertyName = (node: Node | undefined) =>
   node?.computed ? node.property?.value : (node?.property?.name ?? node?.property?.value)
@@ -332,15 +345,21 @@ export default {
       create(context: Context) {
         const own = extensionOf(context.filename)
         if (!own) return {}
+        // Server code reaches another extension through its api.ts, browser code through its ui.tsx.
+        const browser = context.filename.endsWith('.tsx')
+        const allowed = browser ? 'ui.tsx' : 'api.ts'
+        const how = browser
+          ? 'its ui.tsx (components, hooks and the refs of its documents and actions)'
+          : 'its api.ts (a service, document or event token)'
         const check = (node: ImportNode) => {
           const source = node.source?.value
           if (typeof source !== 'string' || !source.startsWith('.')) return
           if (node.importKind === 'type' || node.exportKind === 'type') return
           const [directory, extension, ...file] = resolved(context.filename, source)
-          if (directory === 'extensions' && extension !== own && file.join('/') !== 'api.ts')
+          if (directory === 'extensions' && extension !== own && file.join('/') !== allowed)
             context.report({
               node,
-              message: `${own} imports ${extension}/${file.join('/')} at runtime; reach ${extension} through its api.ts (a service, document or event token), import types with \`import type\`, or move a pure helper to lib/.`,
+              message: `${own} imports ${extension}/${file.join('/')} at runtime; reach ${extension} through ${how}, import types with \`import type\`, or move a pure helper to lib/.`,
             })
         }
         return {
@@ -375,21 +394,41 @@ export default {
     'api-file-shape': {
       meta: { schema: [] },
       create(context: Context) {
-        if (!apiFile(context.filename)) return {}
+        const contract = contractFile(context.filename)
+        if (!contract) return {}
+        const { file } = contract
         const report = (node: Node, message: string) => context.report({ node, message })
         const checkImport = (node: Node) => {
           const source = String(node.source?.value)
           if (source.startsWith('node:'))
-            return report(node, 'api.ts is browser-safe: it imports no node:* module.')
-          if (node.importKind === 'type' || !source.startsWith('.')) return
-          const target = resolved(context.filename, source)
-          if (
-            target[0] !== 'shared' &&
-            !(target.length === 3 && target[0] === 'extensions' && target[2] === 'api.ts')
-          )
+            return report(node, `${file} is a contract: it imports no node:* module.`)
+          const target = source.startsWith('.') ? resolved(context.filename, source) : undefined
+          if (file === 'refs.ts') {
+            // The browser imports refs.ts (tsconfig.web.json), so it may not reach server code even for types.
+            if (node.importKind !== 'type')
+              return target?.[0] === 'shared'
+                ? undefined
+                : report(
+                    node,
+                    'refs.ts imports at runtime only shared/; use `import type` for the rest.',
+                  )
+            if (
+              target &&
+              (['server', 'bin', 'lib', 'web'].includes(target[0]) ||
+                (target[0] === 'extensions' && !extensionFile(target, 'refs.ts', 'types.ts')))
+            )
+              report(
+                node,
+                "refs.ts is browser-safe: it imports types only from packages, shared/ and extensions' refs.ts or types.ts.",
+              )
+            return
+          }
+          if (node.importKind === 'type' || !target) return
+          const ownRefs = target.join('/') === `extensions/${contract.extension}/refs.ts`
+          if (target[0] !== 'shared' && !extensionFile(target, 'api.ts') && !ownRefs)
             report(
               node,
-              "api.ts imports at runtime only shared/, packages and other extensions' api.ts; use `import type` for the rest.",
+              "api.ts imports at runtime only shared/, packages, its refs.ts and other extensions' api.ts; use `import type` for the rest.",
             )
         }
         return {
@@ -401,8 +440,10 @@ export default {
             if (!header || !/[.!?](\s|$)/.test(header))
               report(
                 node,
-                "Start api.ts with a doc comment on the extension's intent; its first sentence is the one-line summary.",
+                `Start ${file} with a doc comment on what it offers; its first sentence is the one-line summary.`,
               )
+            if (file === 'ui.tsx') return
+            const allowed = definers[file]
             const services = new Set<string>()
             const body = (node.body as Node[] | undefined) ?? []
             for (const statement of body) {
@@ -414,9 +455,10 @@ export default {
                 continue
               else if (
                 statement.type === 'ExportNamedDeclaration' &&
-                !statement.source &&
-                (statement.declaration?.type === 'TSTypeAliasDeclaration' ||
-                  statement.declaration?.type === 'TSInterfaceDeclaration')
+                (statement.exportKind === 'type' ||
+                  (!statement.source &&
+                    (statement.declaration?.type === 'TSTypeAliasDeclaration' ||
+                      statement.declaration?.type === 'TSInterfaceDeclaration')))
               )
                 continue
               else if (
@@ -424,11 +466,16 @@ export default {
                 statement.declaration?.type === 'VariableDeclaration' &&
                 statement.declaration.kind === 'const' &&
                 statement.declaration.declarations?.every((declarator) =>
-                  definers.has(root(declarator.init ?? undefined)?.name ?? ''),
+                  allowed.has(root(declarator.init ?? undefined)?.name ?? ''),
                 )
               ) {
                 if (!documented(context, statement))
-                  report(statement, 'Document each exported token: what it is and when to use it.')
+                  report(
+                    statement,
+                    file === 'refs.ts'
+                      ? "Document each ref: what it holds, or an action's arguments and result."
+                      : 'Document each exported token: what it is and when to use it.',
+                  )
                 for (const declarator of statement.declaration.declarations) {
                   const inner = declarator.init?.callee
                   const service = inner?.typeArguments?.params?.[0]?.typeName?.name
@@ -437,7 +484,9 @@ export default {
               } else
                 report(
                   statement,
-                  'api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)` and types.',
+                  file === 'refs.ts'
+                    ? 'refs.ts holds only contracts: imports, `export const X = docRef/actionRef(...)` and types.'
+                    : 'api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)` and types.',
                 )
             }
             for (const statement of body) {
@@ -459,12 +508,18 @@ export default {
     'api-naming': {
       meta: { schema: [] },
       create(context: Context) {
-        const own = apiFile(context.filename)
-        if (!own) return {}
+        const contract = contractFile(context.filename)
+        if (!contract || contract.file === 'ui.tsx') return {}
+        const own = contract.extension
         return {
           CallExpression(node: Node) {
             const callee = node.callee
             const name = node.arguments?.[0]?.value
+            if (callee?.type === 'Identifier' && callee.name === 'actionRef' && name !== own)
+              context.report({
+                node,
+                message: `extensions/${own} refers only to its own actions: actionRef('${own}', name).`,
+              })
             if (
               callee?.type === 'CallExpression' &&
               callee.callee?.type === 'Identifier' &&
@@ -489,43 +544,6 @@ export default {
                 message: `Events of extensions/${own} are named '${own}.<event>'.`,
               })
           },
-        }
-      },
-    },
-    'extension-imports': {
-      meta: {
-        schema: [
-          {
-            type: 'object',
-            properties: {
-              allow: {
-                type: 'object',
-                additionalProperties: { type: 'array', items: { type: 'string' } },
-              },
-            },
-            additionalProperties: false,
-          },
-        ],
-      },
-      create(context: Context) {
-        const own = extensionOf(context.filename)
-        if (!own) return {}
-        const allow = context.options[0]?.allow ?? {}
-        const check = (node: ImportNode) => {
-          const source = node.source?.value
-          if (typeof source !== 'string' || !source.startsWith('.')) return
-          const target = extensionOf(path.resolve(path.dirname(context.filename), source))
-          if (target && target !== own && !allow[own]?.includes(target)) {
-            context.report({
-              node,
-              message: `${own} imports ${target}; declare the dependency in vite.config.ts ultimate/extension-imports allow.${own}.`,
-            })
-          }
-        }
-        return {
-          ImportDeclaration: check,
-          ExportNamedDeclaration: check,
-          ExportAllDeclaration: check,
         }
       },
     },

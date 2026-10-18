@@ -1,6 +1,6 @@
 import { cn } from '@/sdk'
-import { phaseText, usePhase } from '../phase/chip.tsx'
-import { useWorkspaceIndex } from '../workspaces/data.tsx'
+import { phaseText, usePhase } from '../phase/ui.tsx'
+import { useWorkspaceIndex } from '../workspaces/ui.tsx'
 import { FeatureTag } from './feature.tsx'
 
 /** `now`, `5m`, `3h`, `2d`, then a short date. */

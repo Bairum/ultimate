@@ -2,16 +2,10 @@ import { RefreshCwIcon, TerminalIcon } from 'lucide-react'
 import { useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { defineWebExtension, refreshModels, useAction } from '@/sdk'
-
-interface Status {
-  available: boolean
-  loggedIn: boolean
-  subscription: boolean
-  plan: string | null
-}
+import { StatusAction } from './refs.ts'
 
 function ClaudeCodePanel() {
-  const { data, error, loading, refetch } = useAction<Status>('claude-code', 'status', null, {
+  const { data, error, loading, refetch } = useAction(StatusAction, null, {
     onError: () => {},
   })
   useEffect(() => {

@@ -16,14 +16,14 @@ import {
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { FirstRun, GitCard, ProjectCard, Recommended } from './pages.tsx'
-import type { Isolation } from './pages.tsx'
+import { IsolationAction } from '../workspaces/ui.tsx'
 import { ExtensionsPanel } from './panel.tsx'
 import { gitDialog, projectDialog } from './parts.tsx'
-import type { Status } from './parts.tsx'
+import { ChooseAction, HelpAction, StartAction, StatusAction } from './refs.ts'
 
 function useIsolation() {
   const workspaces = useExtensions().some((extension) => extension.name === 'workspaces')
-  const isolation = useAction<Isolation>('workspaces', 'isolation', {}, { enabled: workspaces })
+  const isolation = useAction(IsolationAction, null, { enabled: workspaces })
   const busy = useConversation((conversation) => conversation.busy)
   const { refetch } = isolation
   const wasBusy = useRef(busy)
@@ -38,12 +38,12 @@ function useIsolation() {
 }
 
 async function askUltimate(card: 'project' | 'git') {
-  const { id } = await api.action<{ id: number }>('onboarding', 'help', { card })
+  const { id } = await api.action(HelpAction, { card })
   return id
 }
 
 function Onboarding() {
-  const status = useAction<Status>('onboarding', 'status')
+  const status = useAction(StatusAction)
   const ui = useUltimate()
   const [finished, setFinished] = useState(false)
   // Existing panel/start-page entry points now ask @ultimate too; no setup dialogs remain.
@@ -68,7 +68,7 @@ function Onboarding() {
         onClosed={() => ui.focusComposer()}
         onDone={async (skipped) => {
           if (!skipped) {
-            const { id } = await api.action<{ id: number }>('onboarding', 'start', {})
+            const { id } = await api.action(StartAction, {})
             ui.switchConversation(id)
             ui.showSurface('agent')
           }
@@ -143,7 +143,7 @@ type Choice = { card: string; summary: string; toolCallId: string }
 function SetupCall({ call }: { call: ToolCallView }) {
   const transcript = useTranscript()
   const conversationId = useConversation((conversation) => conversation.id)
-  const status = useAction<Status>('onboarding', 'status')
+  const status = useAction(StatusAction)
   const isolation = useIsolation()
   const card = typeof call.args.card === 'string' ? call.args.card : ''
   const entry = transcript.find(
@@ -156,12 +156,7 @@ function SetupCall({ call }: { call: ToolCallView }) {
     local?: boolean
     initialize?: boolean
   }) => {
-    await api.action(
-      'onboarding',
-      'choose',
-      { card, ...payload, toolCallId: call.id },
-      { conversationId },
-    )
+    await api.action(ChooseAction, { card, ...payload, toolCallId: call.id }, { conversationId })
   }
   if (!['extensions', 'project', 'git'].includes(card)) return null
   const title =

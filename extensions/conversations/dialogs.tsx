@@ -10,17 +10,11 @@ import {
 } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { api, cn, errorMessage, useDialog, useModels } from '@/sdk'
-import { ModelRow } from '../models/picker.tsx'
+import { ModelRow } from '../models/ui.tsx'
+import { SetSummaryModelAction, SummaryModelAction } from './refs.ts'
+import type { SummaryModelSetting } from './refs.ts'
 import { parseSummaryModel } from './summary-model-ref.ts'
 export const summaryModelDialog = 'conversations.summary-model'
-
-type SummaryModelSetting = {
-  value: unknown
-  source: 'default' | 'user' | 'project'
-  default: string
-  /** The project's settings file, when it decides the model. */
-  path?: string
-}
 
 /**
  * Picks the model for titles, summaries, assessments and conclusions, saved as `summaryModel` in the user's settings.
@@ -38,7 +32,7 @@ export function SummaryModelDialog() {
     setError(undefined)
     setQuery('')
     api
-      .action<SummaryModelSetting>('conversations', 'summaryModel')
+      .action(SummaryModelAction)
       .then(setSetting, (failure: unknown) => setError(errorMessage(failure)))
   }, [open])
   const current = typeof setting?.value === 'string' ? setting.value : undefined
@@ -59,7 +53,7 @@ export function SummaryModelDialog() {
   const choose = async (value: string | null) => {
     setError(undefined)
     try {
-      const next = await api.action<SummaryModelSetting>('conversations', 'setSummaryModel', {
+      const next = await api.action(SetSummaryModelAction, {
         value,
       })
       setSetting(next)

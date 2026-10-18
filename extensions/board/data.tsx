@@ -1,25 +1,10 @@
-export type BoardMessage = {
-  id: number
-  from: number | 'user'
-  to: number | 'user'
-  text: string
-  at: number
-  reply: boolean
-  re?: number
-  state: 'sent' | 'delivered' | 'answered' | 'failed'
-  entry?: number
-  answer?: number
-  error?: string
-  /** The tool call that sent it: `message`'s own id, or `<script>/<n>` for a nested codemode call. */
-  call?: string
-}
+import type { BoardData, BoardMessage } from './refs.ts'
 
 /** Only incoming requests belong to an answer, never the outgoing reply log item. */
 export function answeredMessages(messages: BoardMessage[], conversation: number, entry: number) {
   return messages.filter((message) => message.to === conversation && message.answer === entry)
 }
 
-export type BoardData = { messages: BoardMessage[]; next: number }
 export const emptyBoard: BoardData = { messages: [], next: 1 }
 /**
  * What waits on the user's answer: each open question message to the user, and @ultimate's current final answer when

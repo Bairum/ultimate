@@ -27,7 +27,9 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { MessageResponse } from '@/components/ai/message'
-import type { Status } from './parts.tsx'
+import type { Isolation } from '../workspaces/refs.ts'
+import { FirstRunDoneAction } from './refs.ts'
+import type { OnboardingStatus as Status } from './refs.ts'
 
 import { extensionOptions, recommended, requiredExtensions } from './choices.tsx'
 
@@ -72,7 +74,7 @@ export function FirstRun({
     setBusy(true)
     try {
       await onDone(skipped)
-      await api.action('onboarding', 'firstRunDone')
+      await api.action(FirstRunDoneAction)
     } catch (failure) {
       setError(errorMessage(failure))
     } finally {
@@ -354,10 +356,6 @@ export function ProjectCard({
   )
 }
 
-export interface Isolation {
-  reason?: string
-  empty?: boolean
-}
 export function GitCard({
   isolation,
   onDone,

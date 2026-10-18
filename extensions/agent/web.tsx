@@ -10,7 +10,7 @@ import {
   getConversation,
 } from '@/sdk'
 import type { CommandContribution } from '@/sdk'
-import { getRoots } from '../lineage/roots.tsx'
+import { CompactAction, getRoots } from '../lineage/ui.tsx'
 
 /** The conversation in a centred column, with the sidebar and the right panel beside it. */
 function Agent() {
@@ -45,7 +45,7 @@ const commands: CommandContribution[] = [
     // A root compacts through lineage, which admits only a tally and gives it the root's summary focus.
     run: (context) =>
       context.conversationId !== undefined && getRoots()?.includes(context.conversationId)
-        ? api.action('lineage', 'compact', { id: context.conversationId })
+        ? api.action(CompactAction, { id: context.conversationId })
         : api.compact(),
   },
   {

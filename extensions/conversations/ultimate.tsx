@@ -2,10 +2,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { api, cn, getState, useDocOf, useStore, useSystem, useTasks, useUltimate } from '@/sdk'
 import type { UltimateActions } from '@/sdk'
 import { primaryAgent } from '../../lib/machine.ts'
-import { emptyBoard, waitingOnUser } from '../board/data.tsx'
-import type { BoardData } from '../board/data.tsx'
-import type { QuestionsBoard } from '../questions/open.tsx'
-import { phaseText, usePhase } from '../phase/chip.tsx'
+import { BoardDoc, emptyBoard, waitingOnUser } from '../board/ui.tsx'
+import { phaseText, usePhase } from '../phase/ui.tsx'
+import { QuestionsDoc } from '../questions/ui.tsx'
+import { StandingAction, StandingDoc } from '../subagents/ui.tsx'
 import { useOverview } from './feature.tsx'
 import { AgentMark } from './marks.tsx'
 
@@ -19,17 +19,14 @@ export async function talkToUltimate(
   actions: Pick<UltimateActions, 'switchConversation' | 'showSurface'>,
 ) {
   const name = primaryOf(getState().system)
-  const id = await api.action<number>('subagents', 'standing', { name })
+  const id = await api.action(StandingAction, { name })
   actions.switchConversation(id)
   actions.showSurface('agent')
 }
 
 /** How many of @ultimate's messages and final answers wait on the user's answer. */
 export const useWaitingOnUser = () =>
-  waitingOnUser(
-    useDocOf<BoardData>(1, 'board') ?? emptyBoard,
-    useDocOf<QuestionsBoard>(1, 'questions.board'),
-  )
+  waitingOnUser(useDocOf(1, BoardDoc) ?? emptyBoard, useDocOf(1, QuestionsDoc))
 
 /** A busy standing agent's word: its classified phase, lower case like its idle line, else "working". */
 export function useWorkingWord(id: number | undefined, working: boolean) {
@@ -46,7 +43,7 @@ export function StandingPhase({ id }: { id: number }) {
 export function UltimateButton() {
   const actions = useUltimate()
   const name = usePrimaryAgent()
-  const id = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')?.[name]
+  const id = useDocOf(1, StandingDoc)?.[name]
   const tasks = useTasks()
   const runState = useOverview()[id ?? -1]?.runState
   const shown = useStore((state) => state.view?.conversation.id ?? state.requested)

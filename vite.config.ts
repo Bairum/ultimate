@@ -132,46 +132,13 @@ export default defineConfig({
         },
       },
       {
-        // Server code reaches another extension only through its api.ts; the browser side still declares its imports.
-        files: ['extensions/**/*.ts'],
+        // Another extension at runtime only through its contract: api.ts from server code, ui.tsx from the browser.
+        files: ['extensions/**/*.ts', 'extensions/**/*.tsx'],
         rules: { 'ultimate/api-only-imports': 'error' },
       },
       {
-        files: ['extensions/*/api.ts'],
+        files: ['extensions/*/api.ts', 'extensions/*/refs.ts', 'extensions/*/ui.tsx'],
         rules: { 'ultimate/api-file-shape': 'error', 'ultimate/api-naming': 'error' },
-      },
-      {
-        files: ['extensions/**/*.tsx'],
-        rules: {
-          'ultimate/extension-imports': [
-            'error',
-            {
-              allow: {
-                agent: ['lineage'],
-                board: ['conversations', 'questions', 'subagents', 'workspaces'],
-                cloud: ['sync'],
-                conversations: [
-                  'board',
-                  'lineage',
-                  'models',
-                  'phase',
-                  'plan',
-                  'questions',
-                  'workspaces',
-                ],
-                lineage: ['conversations', 'workspaces'],
-                phase: ['conversations'],
-                plan: ['workspaces'],
-                sounds: ['board', 'conversations', 'questions'],
-                'status-line': ['workspaces'],
-                subagents: ['conversations', 'plan', 'workspaces'],
-                sync: ['cloud'],
-                tasks: ['conversations', 'plan', 'workspaces'],
-                workspaces: ['conversations', 'info'],
-              },
-            },
-          ],
-        },
       },
       {
         files: ['extensions/**/*.tsx'],

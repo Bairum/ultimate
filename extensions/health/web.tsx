@@ -2,7 +2,7 @@ import { TriangleAlertIcon } from 'lucide-react'
 import { useEffect } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { defineWebExtension, useAction } from '@/sdk'
-import type { ProviderHealth } from '../../cloud/protocol.ts'
+import { StateAction } from './refs.ts'
 
 /** `just now`, `5m ago`, `3h ago`, `2d ago`. */
 function ago(at: number) {
@@ -15,9 +15,8 @@ function ago(at: number) {
 
 /** An amber status-line item while a model provider's latest call on this machine failed. */
 function Failing() {
-  const { data, refetch } = useAction<{ machine: string; providers: ProviderHealth[] }>(
-    'health',
-    'state',
+  const { data, refetch } = useAction(
+    StateAction,
     null,
     // A failed poll keeps the last state; the next one tries again.
     { onError: () => {} },

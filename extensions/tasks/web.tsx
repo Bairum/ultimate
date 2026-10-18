@@ -14,12 +14,11 @@ import {
   useUiState,
 } from '@/sdk'
 import type { TaskGraph, TaskGraphNode } from '@/sdk'
-import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
-import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
-
-import { FeatureTag, useOverview } from '../conversations/feature.tsx'
-import { hiddenConversationIds } from '../conversations/visible.tsx'
-import { TaskChip, useTaskOf } from '../plan/chip.tsx'
+import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
+import { useWorkspaceConversations as useConversations } from '../workspaces/ui.tsx'
+import { FeatureTag, hiddenConversationIds, useOverview } from '../conversations/ui.tsx'
+import { TaskChip, useTaskOf } from '../plan/ui.tsx'
+import { StartedAction } from './refs.ts'
 
 interface Tree {
   /** Live tasks by owner task id. */
@@ -241,12 +240,7 @@ function TasksPanel() {
   // A start time never changes, so only tasks without one yet are asked for.
   const [started, setStarted] = useState<Record<string, number>>({})
   const missing = tasks.map((task) => task.id).filter((id) => !(id in started))
-  const { data } = useAction<Record<string, number>>(
-    'tasks',
-    'started',
-    { ids: missing },
-    { enabled: missing.length > 0 },
-  )
+  const { data } = useAction(StartedAction, { ids: missing }, { enabled: missing.length > 0 })
   useEffect(() => {
     if (data) setStarted((previous) => ({ ...previous, ...data }))
   }, [data])

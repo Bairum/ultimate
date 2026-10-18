@@ -23,11 +23,10 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
-import { ConversationRef } from '../conversations/feature.tsx'
-import { AgentMark } from '../conversations/marks.tsx'
-import { MessageQuestions } from '../questions/card.tsx'
-import { openAgentSource } from '../subagents/messages.tsx'
-import { useWorkspaceIndex } from '../workspaces/data.tsx'
+import { AgentMark, ConversationRef } from '../conversations/ui.tsx'
+import { MessageQuestions } from '../questions/ui.tsx'
+import { openAgentSource, StandingDoc } from '../subagents/ui.tsx'
+import { useWorkspaceIndex } from '../workspaces/ui.tsx'
 import { accentOf } from './accent.tsx'
 import {
   answeredMessages,
@@ -38,11 +37,12 @@ import {
   sentBy,
   sentStatus,
 } from './data.tsx'
-import type { BoardData, BoardMessage } from './data.tsx'
+import { BoardDoc } from './refs.ts'
+import type { BoardMessage } from './refs.ts'
 
 /** Who `id` is: you, `@name` for a standing agent or the lander (with its mark when `mark`), else a conversation link. */
 export function Address({ id, mark = false }: { id: number | 'user'; mark?: boolean }) {
-  const standing = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')
+  const standing = useDocOf(1, StandingDoc)
   const workspaces = useWorkspaceIndex()
   if (id === 'user') return <span>you</span>
   const name =
@@ -179,7 +179,7 @@ export function ChatBubble({
  * to you is a bubble.
  */
 export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
-  const board = useDocOf<BoardData>(1, 'board')
+  const board = useDocOf(1, BoardDoc)
   const { switchConversation, showSurface } = useUltimate()
   const chat = useChat()
   const sender = useConversation((conversation) => conversation.id)
@@ -253,7 +253,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
 
 /** The `branch` tool as the branch it started and the prompt it was given; a failed call keeps the generic card. */
 export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
-  const board = useDocOf<BoardData>(1, 'board')
+  const board = useDocOf(1, BoardDoc)
   const conversations = useConversations()
   const { switchConversation, showSurface } = useUltimate()
   if (call.status === 'error' || call.status === 'interrupted') return core
@@ -423,7 +423,7 @@ function ScriptMessages({
   core: ReactNode
   shown: readonly { id: string; name: string }[]
 }) {
-  const board = useDocOf<BoardData>(1, 'board') ?? emptyBoard
+  const board = useDocOf(1, BoardDoc) ?? emptyBoard
   const sent = shown.flatMap((block) =>
     block.name === 'codemode' ? sentBy(board.messages, block.id) : [],
   )
@@ -471,7 +471,7 @@ function ReplyFold({
   text: string
   at: number
 }) {
-  const board = useDocOf<BoardData>(1, 'board') ?? emptyBoard
+  const board = useDocOf(1, BoardDoc) ?? emptyBoard
   const answered = answeredMessages(board.messages, entry.conversationId, entry.id)
   if (!answered.length || answered.some((m) => !m.reply || m.from === 'user'))
     // An answer to you is a bubble like its messages, not a final-answer card.

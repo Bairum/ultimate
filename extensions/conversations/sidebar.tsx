@@ -4,7 +4,6 @@ import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import type { WorkspacePending } from '../workspaces/types.ts'
 import {
   api,
   errorMessage,
@@ -18,14 +17,18 @@ import {
 } from '@/sdk'
 import { hiddenConversationIds } from './visible.tsx'
 import { useOverview } from './feature.tsx'
-import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
+import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
 import {
+  PendingAction,
   useWorkspaceConversations as useConversations,
   useWorkspaceIndex,
-} from '../workspaces/data.tsx'
+} from '../workspaces/ui.tsx'
 import { currentAssessment, Row, ChildRow, StandingRow } from './rows.tsx'
 import { inFlight, RootRow } from './root.tsx'
-import { useRoots } from '../lineage/roots.tsx'
+import { useRoots } from '../lineage/ui.tsx'
+import { StandingDoc } from '../subagents/ui.tsx'
+import { ConcludeAction, ResumeAction } from './refs.ts'
+import type { WorkspacePending } from '../workspaces/types.ts'
 import { ago, LanderState } from './lander.tsx'
 import { StandingPhase, talkToUltimate, usePrimaryAgent, useWaitingOnUser } from './ultimate.tsx'
 
@@ -106,7 +109,7 @@ export function Conversations() {
   // The primary agent (@ultimate, or @sync in the machine home) first, then the lander and other standing agents:
   // pinned above the rest and never concluded.
   const primary = usePrimaryAgent()
-  const standingIds = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')
+  const standingIds = useDocOf(1, StandingDoc)
   const ultimateId = standingIds?.[primary]
   const ultimate = topLevel.find((conversation) => conversation.id === ultimateId)
   const agents = topLevel
@@ -150,7 +153,8 @@ export function Conversations() {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string>()
   const setConclude = async (id: number, conclude: boolean) => {
-    await api.action('conversations', conclude ? 'conclude' : 'resume', { ids: [id] })
+    if (conclude) await api.action(ConcludeAction, { ids: [id] })
+    else await api.action(ResumeAction, { ids: [id] })
     if (!conclude || !hiddenConversationIds(conversations, [id]).has(shownTop?.id ?? -1)) return
     const index = listed.findIndex((conversation) => conversation.id === id)
     const subtree = hiddenConversationIds(conversations, [id])
@@ -163,7 +167,7 @@ export function Conversations() {
     if (conclude && workspacesEnabled) {
       setError(undefined)
       try {
-        const work = await api.action<WorkspacePending[]>('workspaces', 'pending', { ids: [id] })
+        const work = await api.action(PendingAction, { ids: [id] })
         if (work.length) {
           setWarning({ id, work })
           return

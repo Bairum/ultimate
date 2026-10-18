@@ -6,6 +6,7 @@ import type { Context } from '@earendil-works/chord'
 import { defineDoc } from '@earendil-works/pi-durable'
 import type { EntryId } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
+import { BoardDoc } from './refs.ts'
 
 /** One Board message as the `board` document stores it. */
 export type BoardMessage = {
@@ -25,7 +26,7 @@ export type BoardMessage = {
 }
 /** Every message between conversations and the user, on the root conversation. */
 export const Board = defineDoc<{ messages: BoardMessage[]; next: number }>({
-  kind: 'board',
+  kind: BoardDoc.kind,
   version: 1,
   scope: 'conversation',
   history: 'latest',

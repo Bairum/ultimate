@@ -19,12 +19,13 @@ import {
 import { Button } from '@/components/ui/button'
 import { cn, defineWebExtension, useConversation, useToolDuration, useUltimate } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
-import { TaskChip, useTaskOf } from '../plan/chip.tsx'
-import { stateLabel, useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
+import { TaskChip, useTaskOf } from '../plan/ui.tsx'
+import { stateLabel, useWorkspaceConversations as useConversations } from '../workspaces/ui.tsx'
 import type { Workspace as Isolate, LandResult } from '../workspaces/types.ts'
 import { DefinitionDialog, Definitions } from './definitions.tsx'
 import { Tag } from './parts.tsx'
-import { AgentInbox, AgentInput, AgentMessages, openAgentSource } from './messages.tsx'
+import { AgentInbox, AgentInput, AgentMessages } from './messages.tsx'
+import { openAgentSource } from './ui.tsx'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 

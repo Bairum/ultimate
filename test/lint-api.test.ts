@@ -93,10 +93,10 @@ export const limit = 3
 export function helper() {}
 `
   expect(lint('api-file-shape', 'extensions/echo/api.ts', bad)).toEqual([
-    "Start api.ts with a doc comment on the extension's intent; its first sentence is the one-line summary.",
-    'api.ts is browser-safe: it imports no node:* module.',
-    "api.ts imports at runtime only shared/, packages and other extensions' api.ts; use `import type` for the rest.",
-    "api.ts imports at runtime only shared/, packages and other extensions' api.ts; use `import type` for the rest.",
+    'Start api.ts with a doc comment on what it offers; its first sentence is the one-line summary.',
+    'api.ts is a contract: it imports no node:* module.',
+    "api.ts imports at runtime only shared/, packages, its refs.ts and other extensions' api.ts; use `import type` for the rest.",
+    "api.ts imports at runtime only shared/, packages, its refs.ts and other extensions' api.ts; use `import type` for the rest.",
     'Document each exported token: what it is and when to use it.',
     'api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)` and types.',
     'api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)` and types.',
@@ -110,8 +110,73 @@ export function helper() {}
       `/** Echo */\n${api.slice(api.indexOf('import'))}`,
     ),
   ).toContain(
-    "Start api.ts with a doc comment on the extension's intent; its first sentence is the one-line summary.",
+    'Start api.ts with a doc comment on what it offers; its first sentence is the one-line summary.',
   )
+})
+
+const refs = `/**
+ * Echo in the browser: the echo log and the action that echoes. Browser-safe.
+ */
+import type { JsonValue } from '@earendil-works/chord'
+import { actionRef, docRef } from '../../shared/extension-api.ts'
+import type { ProviderHealth } from '../../shared/protocol.ts'
+import type { BoardData } from '../board/refs.ts'
+import type { EchoRow } from './types.ts'
+
+type Texts = { texts: string[] }
+export type Echoed = { text: string; at: number }
+
+/** The echo log on conversation 1. */
+export const LogDoc = docRef<Texts>('echo.log')
+/** \`{ text }\` → what was echoed. */
+export const EchoAction = actionRef<{ text: string }, Echoed>('echo', 'echo')
+`
+
+it('accepts a refs.ts of documented browser-safe refs and rejects server reach, runtime code and missing docs', () => {
+  expect(lint('api-file-shape', 'extensions/echo/refs.ts', refs)).toEqual([])
+  expect(lint('api-naming', 'extensions/echo/refs.ts', refs)).toEqual([])
+
+  const bad = `/** Echo in the browser. */
+import { readFile } from 'node:fs/promises'
+import { EchoApi } from './api.ts'
+import { defineDoc } from '@earendil-works/pi-durable'
+import type { echo } from './server.ts'
+import type { git } from '../../lib/git.ts'
+import type { ExtensionHost } from '../../server/extensions.ts'
+import type { BoardService } from '../board/api.ts'
+import { docRef } from '../../shared/extension-api.ts'
+export const LogDoc = docRef<{ texts: string[] }>('echo.log')
+export const limit = 3
+`
+  expect(lint('api-file-shape', 'extensions/echo/refs.ts', bad)).toEqual([
+    'refs.ts is a contract: it imports no node:* module.',
+    'refs.ts imports at runtime only shared/; use `import type` for the rest.',
+    'refs.ts imports at runtime only shared/; use `import type` for the rest.',
+    "refs.ts is browser-safe: it imports types only from packages, shared/ and extensions' refs.ts or types.ts.",
+    "refs.ts is browser-safe: it imports types only from packages, shared/ and extensions' refs.ts or types.ts.",
+    "refs.ts is browser-safe: it imports types only from packages, shared/ and extensions' refs.ts or types.ts.",
+    "refs.ts is browser-safe: it imports types only from packages, shared/ and extensions' refs.ts or types.ts.",
+    "Document each ref: what it holds, or an action's arguments and result.",
+    'refs.ts holds only contracts: imports, `export const X = docRef/actionRef(...)` and types.',
+  ])
+  expect(
+    lint('api-naming', 'extensions/echo/refs.ts', "export const A = actionRef('board', 'send')"),
+  ).toEqual(["extensions/echo refers only to its own actions: actionRef('echo', name)."])
+})
+
+it('asks ui.tsx for a summary and nothing else', () => {
+  expect(
+    lint(
+      'api-file-shape',
+      'extensions/echo/ui.tsx',
+      "/** Echo's components for other extensions: the echo line. */\nexport { EchoLine } from './line.tsx'\nexport const x = 1\n",
+    ),
+  ).toEqual([])
+  expect(
+    lint('api-file-shape', 'extensions/echo/ui.tsx', "export { EchoLine } from './line.tsx'"),
+  ).toEqual([
+    'Start ui.tsx with a doc comment on what it offers; its first sentence is the one-line summary.',
+  ])
 })
 
 it('names an API after its folder and prefixes its events', () => {
@@ -143,6 +208,27 @@ const later = () => import('../questions/server.ts')`
   ])
   // Outside extensions/ nothing is checked.
   expect(lint('api-only-imports', 'test/example.test.ts', source)).toEqual([])
+})
+
+const browserMessage = (file: string) =>
+  `echo imports ${file} at runtime; reach ${file.split('/')[0]} through its ui.tsx (components, hooks and the refs of its documents and actions), import types with \`import type\`, or move a pure helper to lib/.`
+
+it("allows browser code another extension's ui.tsx at runtime and its api.ts or refs.ts only for types", () => {
+  const source = `import { ConversationRef, OverviewDoc } from '../conversations/ui.tsx'
+import type { WorkspaceService } from '../workspaces/api.ts'
+import type { BoardData } from '../board/refs.ts'
+import type { Plan } from '../plan/web.tsx'
+import { LogDoc } from './refs.ts'
+import { useWorkspaces } from '../workspaces/data.tsx'
+import { WorkspacesApi } from '../workspaces/api.ts'
+import { BoardDoc } from '../board/refs.ts'
+export { TaskChip } from '../plan/chip.tsx'`
+  expect(lint('api-only-imports', 'extensions/echo/web.tsx', source)).toEqual([
+    browserMessage('workspaces/data.tsx'),
+    browserMessage('workspaces/api.ts'),
+    browserMessage('board/refs.ts'),
+    browserMessage('plan/chip.tsx'),
+  ])
 })
 
 it('rejects host.provide, host.use and host.events, also through an action context', () => {

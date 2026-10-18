@@ -1,20 +1,19 @@
 import { ZapIcon } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api, cn, defineWebExtension, events, useAction, useConversation, useEvent } from '@/sdk'
-
-type Status = { models: string[]; project: boolean }
+import { SetAction, StatusAction } from './refs.ts'
 
 /** Fast mode for the composer's OpenAI model: on for every request to that model, wherever it runs. */
 function FastToggle() {
   const ref = useConversation().agent.model
-  const status = useAction<Status>('fast', 'status')
+  const status = useAction(StatusAction)
   useEvent('fast:changed', () => void status.refetch())
   if ((ref?.provider !== 'openai-codex' && ref?.provider !== 'openai') || !status.data) return null
   const model = `${ref.provider}/${ref.modelId}`
   const on = status.data.models.includes(model)
   const { project } = status.data
   const toggle = async () => {
-    await api.action('fast', 'set', { model, on: !on })
+    await api.action(SetAction, { model, on: !on })
     events.emit('fast:changed', undefined)
   }
   return (
