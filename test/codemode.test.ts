@@ -151,6 +151,18 @@ it('calls extension actions with caller context and rejects missing or disabled 
     conversationId: server.root.id,
     signal: true,
   })
+  // The call trace shows the action as the agent's, inside the codemode tool call that made it.
+  const traced = await run(
+    server,
+    `const calls = await ultimate.trace({ conversation: ${server.root.id} });
+    const action = calls.findLast((call) => call.name === 'action-test/echo');
+    const [tool] = await ultimate.traceTree(action.trace);
+    return { action, tool: [tool.kind, tool.name, tool.children.map((call) => call.name)] };`,
+  )
+  expect(traced.data.details.value).toMatchObject({
+    action: { kind: 'action', caller: 'agent', ok: true, args: '{"value":42}' },
+    tool: ['tool', 'codemode', ['action-test/echo']],
+  })
   const defaults = await run(server, `return await ultimate.action('action-test', 'echo');`)
   expect(defaults.data.details.value).toMatchObject({ args: null })
   for (const [extension, action, error] of [

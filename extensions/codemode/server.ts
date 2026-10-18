@@ -153,6 +153,25 @@ function globals(
       execute: () => host.catalogue(),
     },
     {
+      name: 'trace',
+      description:
+        'Recorded calls (service, action, reactor, tool), newest `limit` oldest first; filter by trace id, conversation or ISO `since`.',
+      signature:
+        '(query?: { trace?: string; conversation?: number; since?: string; limit?: number }): Promise<{ id: string; parent?: string; trace: string; at: string; ms: number; caller: string; callee: string; kind: string; name: string; ok: boolean; error?: string; args?: string; result?: string; conversation?: number; task?: number; entry?: number }[]>',
+      execute: ([query]) =>
+        host.trace.query((query ?? {}) as Parameters<typeof host.trace.query>[0]),
+    },
+    {
+      name: 'traceTree',
+      description:
+        'The calls of one trace nested under their parents (`children`), in start order.',
+      signature: '(traceId: string): Promise<unknown[]>',
+      execute: ([traceId]) => {
+        if (typeof traceId !== 'string' || !traceId) throw new Error('traceId must be nonempty')
+        return host.trace.tree(traceId)
+      },
+    },
+    {
       name: 'action',
       description:
         "Call an extension action, as the UI does, on behalf of this conversation; ultimate.extensions() lists each extension's actions, its README their args.",

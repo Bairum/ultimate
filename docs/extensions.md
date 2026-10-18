@@ -39,7 +39,7 @@ A service one extension offers another is a typed token, `defineApi<Service>()('
 `shared/extension-api.ts`, kept in the provider's `api.ts` (browser-safe, so web code can import it too). The provider
 calls `host.implement(Token, value)`; consumers call `host.need(Token)` for a hard dependency or `host.want(Token)` for
 an optional one. Both return a handle that resolves the current provider on every member access, so a handle taken at
-setup survives provider reloads. Every method call goes through one internal `call`, the place tracing hooks in.
+setup survives provider reloads. Every method call goes through one internal `call`, which traces it (below).
 `need` throws `<ext> needs <api>, which no enabled extension provides` while nothing provides it (at setup it records
 the dependency instead, since the provider may load later, and the missing provider becomes an extension diagnostic);
 `want` returns undefined. `host.catalogue()` and codemode's `ultimate.catalogue()` list each API's provider, needs
@@ -64,6 +64,25 @@ Browser `.tsx` files still declare their imports of other extensions in `ultimat
 Pick the channel by what crosses it: services for calls between extensions, documents for durable state, durable
 events (above) for "this happened", actions for the UI and user boundary.
 
+## Tracing
+
+`server/trace.ts` records every service call (`<caller extension>` → `<api>.<method>`), extension action
+(`ui` or `agent` → `<extension>/<action>`), reactor run (event name → `<extension>/<reactor>`) and tool execution
+(`agent`, or the calling tool's extension for a nested call → tool name) with its duration, `ok` and error message.
+Each runs in a trace context (AsyncLocalStorage, which survives Pi Durable commits and its task runner) of
+`{ traceId, conversationId?, taskId?, entryId?, parentCall? }`: a call is the parent of the calls it makes, a tool
+call carries its conversation, task and the assistant entry holding the call, and `host.emit` stamps the context on
+the event so its reactors continue the emitter's trace. Nothing to do in an extension: `implement`, actions,
+`react` and tools are traced for you.
+
+Arguments and results are stored as JSON summaries of about 300 characters with values under keys matching
+`/secret|token|password|key|auth/i` replaced by `[redacted]`; tool calls keep none (the transcript has them), and
+neither do calls into the `secrets` extension. Rows go to `<home>/trace.sqlite` in batches outside Pi commits, while
+the harness is open only; retention keeps 7 days and at most 200,000 rows. A trace failure is logged once and never
+fails the call. Read with `host.trace.query({ trace?, conversation?, since?, limit })` (the newest `limit`, oldest
+first) and `host.trace.tree(traceId)` (calls nested under `children`), or codemode's `ultimate.trace(...)` and
+`ultimate.traceTree(traceId)`.
+
 ## Inspecting yourself
 
-Use `codemode` to compose dependent or parallel `tools.*` calls and filter results before they enter your context. Its `ultimate.*` API is the way to inspect yourself: system/build, extension facets and load errors, conversations, stored entries and search (including before compactions/resets), the extension API catalogue, task graph, models, and exported documents. `ultimate.action(extension, action, args?)` is its one write: call an extension action on behalf of this conversation. Use ordinary tools for other writes and single simple calls. `store`/`load` persist conversation-scoped values; see `extensions/codemode/README.md` for interruption semantics.
+Use `codemode` to compose dependent or parallel `tools.*` calls and filter results before they enter your context. Its `ultimate.*` API is the way to inspect yourself: system/build, extension facets and load errors, conversations, stored entries and search (including before compactions/resets), the extension API catalogue, the call trace, task graph, models, and exported documents. `ultimate.action(extension, action, args?)` is its one write: call an extension action on behalf of this conversation. Use ordinary tools for other writes and single simple calls. `store`/`load` persist conversation-scoped values; see `extensions/codemode/README.md` for interruption semantics.

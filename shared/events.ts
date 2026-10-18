@@ -1,7 +1,8 @@
 import type { JsonValue } from '@earendil-works/chord'
 
-/** Ids of the work an event happened in; the trace fills it in. */
+/** Ids of the work an event happened in, from the call trace: a reactor's run continues `traceId` under `parentCall`. */
 export type EventContext = {
+  traceId?: string
   conversationId?: number
   taskId?: number
   entryId?: number

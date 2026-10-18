@@ -179,6 +179,7 @@ async function fixture(
       },
       want: () => undefined,
       catalogue: () => ({ apis: [], missing: [], cycles: [] }),
+      trace: { query: () => [], tree: () => [] },
       resource: (_key, create) => create(),
       onOpen: () => {},
       onRelease: () => {},
