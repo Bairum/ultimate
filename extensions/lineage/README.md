@@ -121,7 +121,8 @@ including its standing-agent name when available.
 The user talks to @ultimate in its own conversation, opened by the top-bar @ultimate button or first sidebar row; it picks a root by reading tallies and starts coordinator branches.
 There is no manual creation page or message-hover branch action. Coordinator branches keep their composers for steering.
 
-An empty root shows the **Start here** card (`survey.tsx`): an optional focus and **Set up with @ultimate**.
+An empty root shows what the `EmptyRoot` point (`ui.tsx`) provides: onboarding's **Start here** card
+(`onboarding/survey.tsx`), an optional focus and **Set up with @ultimate**.
 This calls user action `onboarding.start` with that root and the focus verbatim as instructions, then opens @ultimate.
 Once started, it shows only a quiet **@ultimate is setting up this project · open** link from `onboarding.starts`.
 @ultimate reads the project and writes its first tally with `seed_tally` before starting work.

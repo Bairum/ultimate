@@ -1,7 +1,6 @@
-import { cn } from '@/sdk'
-import { phaseText, usePhase } from '../phase/ui.tsx'
-import { useWorkspaceIndex } from '../workspaces/ui.tsx'
-import { FeatureTag } from '../conversations/ui.tsx'
+import { cn, Provided } from '@/sdk'
+import type { useWorkspaceIndex } from '../workspaces/ui.tsx'
+import { ConversationPhase, FeatureTag } from '../conversations/ui.tsx'
 
 /** `now`, `5m`, `3h`, `2d`, then a short date. */
 export function ago(at: number, now: number) {
@@ -24,18 +23,21 @@ export function ago(at: number, now: number) {
  * its working phase (or "working") while it answers someone, else "idle"; then its latest landing's feature, short sha and age, and how many
  * submissions wait in its queue.
  */
-export function LanderState({
-  id,
-  index,
-  now,
-  working,
-}: {
+export function LanderState(props: LanderProps) {
+  return (
+    <Provided input={props.working ? props.id : undefined} point={ConversationPhase}>
+      {(phase) => <PhasedLanderState {...props} phase={phase?.word} />}
+    </Provided>
+  )
+}
+type LanderProps = {
   id: number
   index: ReturnType<typeof useWorkspaceIndex>
   now: number
   working: boolean
-}) {
-  const phase = usePhase(working ? id : undefined)
+}
+
+function PhasedLanderState({ id, index, now, working, phase }: LanderProps & { phase?: string }) {
   const source = Object.entries(index.landerConversations).find(([, lander]) => lander === id)?.[0]
   const current = index.queue.find((item) => item.source === source && item.state === 'landing')
   const queued = index.queue.filter(
@@ -49,9 +51,7 @@ export function LanderState({
         : current
           ? 'landing'
           : working
-            ? phase
-              ? phaseText(phase).toLowerCase()
-              : 'working'
+            ? (phase ?? 'working')
             : 'idle'
   const last = Object.values(index.results).findLast((result) => result.lander === id && result.sha)
   const at = last?.steps.at(-1)?.at

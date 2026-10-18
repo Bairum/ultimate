@@ -93,12 +93,10 @@ describe('board chat', () => {
     ).toBe(1)
     expect(waitingOnUser({ messages: [], next: 1 })).toBe(0)
   })
-  it("counts @ultimate's asking final answer as one more, whatever its number of questions", () => {
-    const reply = { conversation: 2, entry: 7, questions: [{}, {}] }
-    expect(waitingOnUser({ messages, next: 9 }, { reply })).toBe(2)
-    expect(waitingOnUser({ messages: [], next: 1 }, { reply })).toBe(1)
-    expect(waitingOnUser({ messages: [], next: 1 }, {})).toBe(0)
-    expect(waitingOnUser({ messages: [], next: 1 }, null)).toBe(0)
+  it("counts @ultimate's asking final answer as one more", () => {
+    expect(waitingOnUser({ messages, next: 9 }, true)).toBe(2)
+    expect(waitingOnUser({ messages: [], next: 1 }, true)).toBe(1)
+    expect(waitingOnUser({ messages: [], next: 1 }, false)).toBe(0)
   })
   it('shows elapsed minutes, hours and days without future negative times', () => {
     expect(relativeTime(1000, 0)).toBe('now')

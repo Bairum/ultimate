@@ -1,8 +1,21 @@
-/** Lineage for other extensions' browser code: the project's roots, a root's tally, landing links and compaction. */
-import { getState, useDocOf } from '@/sdk'
+/**
+ * Lineage for other extensions' browser code: the project's roots, a root's tally, landing links and compaction, and
+ * the point where an empty root shows how to start (onboarding's Start here card).
+ */
+import type { ReactNode } from 'react'
+import { definePoint, getState, useDocOf } from '@/sdk'
 import { RootsDoc } from './refs.ts'
 
 export { CompactAction, GithubAction, RecentAction, RootsDoc, TallyDoc } from './refs.ts'
+
+/** The composer's reading column, as the core lays it out; a card in place of a root's composer uses it. */
+export const column = (dock?: boolean) =>
+  dock ? 'w-full px-4' : 'mx-auto w-full max-w-[46rem] px-3 sm:px-6'
+
+/** What an empty root shows in place of its composer (`onboarding` provides the Start here card); `dock` is narrow. */
+export const EmptyRoot = definePoint<{ id: number; dock?: boolean }, ReactNode>(
+  'lineage.empty-root',
+)
 
 /** Conversation 1 keeps the `lineage.roots` document. */
 const keeper = 1

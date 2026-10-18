@@ -13,6 +13,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import {
   cn,
   defineWebExtension,
+  Provided,
   formatTime,
   formatTokens,
   useConversation,
@@ -25,8 +26,7 @@ import { ConversationRef, usePrimaryAgent } from '../conversations/ui.tsx'
 import { talkToUltimate } from '../subagents/ui.tsx'
 import { Open } from '../workspaces/ui.tsx'
 import { TallyDoc } from './refs.ts'
-import { column, Familiarize } from './survey.tsx'
-import { useRoots } from './ui.tsx'
+import { column, EmptyRoot, useRoots } from './ui.tsx'
 
 function userText(entry: EntryRecord) {
   const message = entry.model?.[0]
@@ -341,7 +341,11 @@ function TallyComposer({ id, dock }: { id: number; dock?: boolean }) {
   if (tally === undefined || history === undefined) return null
   // The machine home has no project to read: its root stays empty and points at @sync.
   if (tally?.since === undefined && !history && primary === 'ultimate')
-    return <Familiarize dock={dock} id={id} />
+    return (
+      <Provided input={{ id, dock }} point={EmptyRoot}>
+        {(start) => start}
+      </Provided>
+    )
   return <TallyFooter dock={dock} id={id} primary={primary} tokens={tally?.tokens} />
 }
 

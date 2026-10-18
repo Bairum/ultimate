@@ -7,13 +7,13 @@ export function answeredMessages(messages: BoardMessage[], conversation: number,
 
 export const emptyBoard: BoardData = { messages: [], next: 1 }
 /**
- * What waits on the user's answer: each open question message to the user, and @ultimate's current final answer when
- * it asks (`reply` in the root's `questions.board` document) as one more.
+ * What waits on the user's answer: each open question message to the user, and @ultimate's current final answer as one
+ * more when it asks (`answerWaits`, from the `AnswerWaits` point).
  */
-export const waitingOnUser = (board: BoardData, questions?: { reply?: unknown } | null) =>
+export const waitingOnUser = (board: BoardData, answerWaits = false) =>
   board.messages.filter(
     (message) => message.to === 'user' && message.reply && message.state === 'delivered',
-  ).length + (questions?.reply ? 1 : 0)
+  ).length + (answerWaits ? 1 : 0)
 
 type Conversation = {
   label?: string

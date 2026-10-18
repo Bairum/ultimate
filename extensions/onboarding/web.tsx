@@ -4,6 +4,7 @@ import {
   api,
   defineWebExtension,
   errorMessage,
+  provide,
   useAction,
   useConversation,
   useDialog,
@@ -17,6 +18,8 @@ import type { EntryRecord, ToolCallView } from '@/sdk'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { FirstRun, GitCard, ProjectCard, Recommended } from './pages.tsx'
 import { IsolationAction } from '../workspaces/ui.tsx'
+import { EmptyRoot } from '../lineage/ui.tsx'
+import { Familiarize } from './survey.tsx'
 import { ExtensionsPanel } from './panel.tsx'
 import { gitDialog, projectDialog } from './parts.tsx'
 import { ChooseAction, HelpAction, StartAction, StatusAction } from './refs.ts'
@@ -225,6 +228,7 @@ export default defineWebExtension({
     },
   },
   slots: { overlay: [Onboarding], 'statusline.right': [NoGit, Undecided] },
+  provides: [provide(EmptyRoot, ({ id, dock }) => <Familiarize dock={dock} id={id} />)],
   panels: [{ id: 'extensions', title: 'Extensions', icon: BlocksIcon, component: ExtensionsPanel }],
   commands: [
     {

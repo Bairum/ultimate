@@ -33,7 +33,7 @@ import { useRoots } from '../lineage/ui.tsx'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 import type { WorkspacePending } from '../workspaces/types.ts'
 import { ago, LanderState } from './lander.tsx'
-import { StandingPhase, useWaitingOnUser } from './ultimate.tsx'
+import { StandingPhase, WaitingOnUser } from './ultimate.tsx'
 import { useSidebarState } from './state.tsx'
 
 /** The shown conversation, also while its snapshot is still on the way. */
@@ -77,6 +77,11 @@ const pinned = (conversation: ConversationSummary) =>
 
 /** The project tree, with owned subagents under each row and earlier/concluded work at the bottom. */
 export function Conversations() {
+  return <WaitingOnUser>{(waiting) => <Tree waiting={waiting} />}</WaitingOnUser>
+}
+
+/** The tree, with how many messages and answers wait on the user for @ultimate's row. */
+function Tree({ waiting }: { waiting: number }) {
   const overview = useOverview()
   const tasks = useTasks()
   const foreground = new Set<number>(
@@ -119,7 +124,6 @@ export function Conversations() {
   const agents = topLevel
     .filter((conversation) => pinned(conversation) && conversation.id !== ultimateId)
     .toSorted((a, b) => Number(b.label === 'lander') - Number(a.label === 'lander') || a.id - b.id)
-  const waiting = useWaitingOnUser()
   const workspaceIndex = useWorkspaceIndex()
   const listed = topLevel
     .filter((conversation) => !pinned(conversation) && !hiddenIds.has(conversation.id))
