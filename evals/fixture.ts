@@ -11,7 +11,13 @@ import type {
   UserMessage,
 } from '@earendil-works/pi-ai'
 import { ModelRuntime, ProjectTrustStore } from '@earendil-works/pi-coding-agent'
-import { AssistantEntry, LiveDoc, ToolResultEntry, UserEntry } from '@earendil-works/pi-durable'
+import {
+  AssistantEntry,
+  configure,
+  LiveDoc,
+  ToolResultEntry,
+  UserEntry,
+} from '@earendil-works/pi-durable'
 import type { ConversationDocToken, ConversationId, JsonObject } from '@earendil-works/pi-durable'
 import { inject } from 'vitest'
 import type { TurnUsage } from './reporter.ts'
@@ -198,7 +204,13 @@ export async function start(
       async conversation({
         id: existingId,
         history = [],
-      }: { id?: ConversationId; history?: (Message | ReturnType<typeof assistant>)[] } = {}) {
+        instructions,
+      }: {
+        id?: ConversationId
+        history?: (Message | ReturnType<typeof assistant>)[]
+        /** Replace the conversation's instructions, as `branch` does with an agent definition. */
+        instructions?: string
+      } = {}) {
         const id =
           existingId ?? ((await post('/api/conversations', {})) as { id: ConversationId }).id
         await post(`/api/conversations/${id}/configure`, {
@@ -208,6 +220,7 @@ export async function start(
         const conversation = await running.harness.conversation(id, context)
         if (!conversation) throw new Error(`Missing conversation ${id}`)
         await running.harness.commit(async (tx) => {
+          if (instructions !== undefined) await configure(tx, id, { instructions })
           for (const message of history) {
             switch (message.role) {
               case 'user':
