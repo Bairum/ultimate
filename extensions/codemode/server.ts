@@ -481,12 +481,15 @@ export default function codemode(host: ExtensionHost) {
     sections: [
       section('codemode', ({ agent }) =>
         agent.tools.some((tool) => tool.name === 'codemode')
-          ? 'Prefer codemode for many dependent or parallel tool calls, filtering large results, or introspecting Ultimate. For a single simple operation use its tool directly. Change files with direct edit and write calls, never inside codemode, so each change shows as a diff.' +
+          ? 'Use codemode for dependent/parallel calls, filtered results or introspection; single calls use tools directly. Use edit/write outside codemode so changes show as diffs.' +
             (agent.tools.some((tool) => tool.name === 'restart')
               ? ' Call restart only at top level.'
               : '') +
-            ' Only text(), images and the return value enter context; return concise findings.\n\n' +
-            renderDeclarations({ tools: declarations(agent.tools) })
+            ' Only text(), images and return values enter context; filter to concise findings. ' +
+            'tools.<name>(args) uses the top-level tool schemas and rules (same arguments and results). Available: ' +
+            declarations(agent.tools)
+              .map((tool) => tool.name)
+              .join(', ')
           : undefined,
       ),
     ],

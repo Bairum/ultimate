@@ -47,7 +47,7 @@ ULTIMATE_PROJECT=/absolute/path/to/project ULTIMATE_SUPERVISED=0 ULTIMATE_GENERA
 
 Use port 4802 and a different `DEMO_HOME` and project for the second host. Explicit `ULTIMATE_PROJECT` and supervised mode avoid inheriting the agent terminal's host environment. Never reuse the running host's port or state home.
 
-Create conversations through each local UI (or `POST /api/conversations`, JSON `{}`); submit different prompts. The faux provider answers without model tokens. The cloud front page lists both projects under `demo-desk`. Follow their links and verify each shows only its own conversations. Stop one host: its row becomes offline and its history remains readable. Restart with the same project and state home: its URL stays the same and queued prompts deliver exactly once. Stop all three terminals after testing.
+Start coordinator branches through @ultimate in each local UI; submit different prompts. The faux provider answers without model tokens. The cloud front page lists both projects under `demo-desk`. Follow their links and verify each shows only its own conversations. Stop one host: its row becomes offline and its history remains readable. Restart with the same project and state home: its URL stays the same and queued prompts deliver exactly once. Stop all three terminals after testing.
 
 ## URLs, presence and sync
 

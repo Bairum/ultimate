@@ -59,7 +59,7 @@ once (`btrfs filesystem du`). Measuring takes seconds, so one runs at a time and
 ## Lander
 
 Each submission and its landing result appear in the submitting conversation as tool and outcome cards.
-The `@lander` conversation keeps the full log; when the board is enabled, submissions also get a log record.
+The `@lander` conversation keeps the full log in `ultimate.lander` entries; these do not depend on Board.
 
 `workspace submit` requires a non-empty `divergence` string: how the delivered result differs from the original
 request (new agreements, different approach or library, changed scope), or "None" when it matches. It queues a

@@ -107,9 +107,7 @@ Turn them off in `~/.ultimate/settings.json` for this machine or `<project>/.ult
 { "extensions": { "disable": ["tailscale", "claude-code"] } }
 ```
 
-Settings layer defaults → machine → project; later layers win, and `extensions.enable` turns one back on.
-Changes apply live, with no restart. User and project extension folders are on by default too: adding the folder
-is the opt-in.
+See [discovery and settings](docs/settings.md) for precedence, enabling extensions, project trust and live updates.
 
 ## Surfaces
 
@@ -127,7 +125,7 @@ and restarts land on the same view. The `surfaces` extension tells the agent whi
 - "Build a surface for …" — a whole app with its UI, server actions, and the agent docked beside it; switch to it while
   it is being built.
 - "Build a small extension that …" — it reads [extensions/README.md](extensions/README.md), writes
-  `extensions/<name>/web.tsx`, and the UI hot-reloads in front of you.
+  `<project>/.ultimate/extensions/<name>/web.tsx`, and the UI hot-reloads in front of you.
 - "Take a screenshot of yourself and tell me what looks off" — it can see and drive its own UI.
 - "Delegate to a worker: …" — subagents run as their own conversations (Agents tab, `open #id`).
 - "Use codemode to check which of your extensions failed to load" — one sandboxed script over its own runtime.

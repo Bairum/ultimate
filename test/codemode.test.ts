@@ -64,6 +64,35 @@ async function fixture() {
   ).toBeUndefined()
   return { server, options }
 }
+it('keeps codemode guidance without repeating top-level tool schemas', async () => {
+  const { server } = await fixture()
+  const agent = await server.root.agent(context)
+  const extension = server.host.registry.snapshot().extension('codemode')!
+  const section = extension.sections![0]
+  const text = await section.render(
+    { conversationId: server.root.id, agent } as Parameters<typeof section.render>[0],
+    context,
+  )
+  expect(text).toContain('Use edit/write outside codemode')
+  expect(text).toContain('filter to concise findings')
+  expect(text).toContain('top-level tool schemas and rules')
+  expect(text).toContain('Available: read, write, edit, bash')
+  expect(text).not.toContain('declare const tools')
+  const withRestart = await section.render(
+    {
+      conversationId: server.root.id,
+      agent: { ...agent, tools: [...agent.tools, { ...agent.tools[0], name: 'restart' }] },
+    } as unknown as Parameters<typeof section.render>[0],
+    context,
+  )
+  expect(withRestart).toContain('Call restart only at top level')
+  expect(withRestart?.split('Available: ')[1].split(', ')).not.toContain('restart')
+  const tool = agent.tools.find((item) => item.name === 'codemode')!
+  expect(tool.description).toContain('store(key,value)/load(key)')
+  expect(tool.description).toContain('yielded wait discards them')
+  expect(tool.description).toContain('declare const ultimate')
+})
+
 async function run(
   server: Awaited<ReturnType<typeof createServer>>,
   code: string,
