@@ -2,7 +2,7 @@
 
 Optional answer cards for @ultimate's questions to the user, in its own transcript. Two things ask:
 
-- **A reply-expected Board message to the user.** Any agent's `message { to: 'user', text, reply: true }` (the
+- **A reply-expected Board message to the user.** @ultimate's `message { to: 'user', text, reply: true }` (the
   default) triggers extraction in the same transaction that appends the message. One-way messages, user posts and
   messages to conversations never do. The card shows under the outgoing `message` tool card in the sender's
   transcript.

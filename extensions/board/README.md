@@ -17,13 +17,13 @@ The answer returns as `board.reply`, steering the sender. An unanswered input pr
 Answer directly rather than messaging the sender: the tool refuses reply-enabled messages back to a sender whose reply-enabled message is still unanswered, while `reply: false` updates and other recipients remain allowed.
 A subagent (a conversation its parent lists in `ultimate.subagents`) may message only that parent, so its work reaches
 the user through its coordinator and @ultimate; its prompt says so. Automation runs and top-level conversations may
-message anyone.
+message any agent; only @ultimate may message the user.
 `reply: false` is one-way: it wakes the recipient without returning an answer, and its model text says the
 answer is not sent. The log records its answering assistant entry in `answer` while keeping state `delivered`;
 no reply is appended. A subagent's one-way update to its parent is instead a `board.message` write with
 `delivery: 'note'` and no `input` flag. It starts no run; the parent reads it with its next model request.
-The note's delivery decision is saved in the task input for replay. Sending to `user` only writes an
-unread inbox item; it starts no run. Replies to a user post also stay in the inbox without starting a run.
+The note's delivery decision is saved in the task input for replay. Sending to `user` writes a message
+shown in @ultimate's transcript; it starts no run. Replies to a user post also appear there without starting a run.
 A reply-enabled message to `user` stays open, and its sender shows as awaiting reply, until the user answers it:
 a Reply, any new post to the sender, an answer card, or a plain input typed in the sender's conversation
 marks it answered. Posts commit the change with the message; typed inputs close it through a commit
@@ -32,7 +32,7 @@ subscription, only for questions asked before that input.
 Reply-expected agent messages to `user` also request question extraction in the append transaction through the
 optional questions service. The sender's outgoing `message` card in its transcript shows extracted decisions
 under the message body while it is open: Yes/No or choice buttons with a recommended marker, plus Something
-else. The Board feed shows no card. The user-only questions `answer` action posts
+else. The user-only questions `answer` action posts
 a normal user Board reply with `re` and Q/A text, waking the sender. Its admission atomically checks that the
 original message is still open, preventing duplicate replies. A Reply, a new post or typing in the sender's
 conversation closes the card too.
@@ -55,7 +55,7 @@ Note deliveries complete after placement, without waiting for an answer.
 
 ## Ultimate and branches
 
-Talk to `@ultimate` on the board to start and steer work. It is the built-in standing orchestrator, not a coding worker.
+Talk to `@ultimate` in its own conversation to start and steer work, using the top-bar @ultimate button or first sidebar row. It is the built-in standing orchestrator, not a coding worker.
 Model-facing messages identify standing senders as `#12 (@ultimate)` and the lander as `#40 (@lander)`; ordinary
 conversations stay `#id`, and user posts say `user`. Before delivery, standing recipients are refreshed from their
 current definitions, including numeric-address messages and automatic replies.
@@ -71,9 +71,10 @@ create another branch even before the branch-id memo is saved. Pi retires that r
 It deduplicates message admission with the same task-scoped `board.sent-calls` receipt as `message`, indexed by call id
 so nested codemode calls stay distinct.
 
-Ultimate's answers to the user's board posts reach the inbox through the ordinary reply path. Other answers stay
-in its conversation. To relay a branch result, decision or landing to the user, Ultimate sends one consolidated
-`message {to: 'user', text}` when the needed replies have arrived.
+Ultimate answers the user's typed input directly in its conversation. To relay a branch result, decision or landing
+to the user, Ultimate sends one consolidated `message {to: 'user', text}` when the needed replies have arrived.
+It appears there as a bubble with an answer card for questions. Decisions use a reply-expected message or the final
+answer to the user's input, ending with numbered options; reports that need no answer use `reply: false`.
 
 ## Document and typed inputs
 

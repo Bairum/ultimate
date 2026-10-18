@@ -30,7 +30,7 @@ place.
   subagents, plans, documents, automations, remote access and the rest ship in the clone and are on by default; turn any
   of them off per machine or per project (see "Building blocks" below).
 - **A forest of conversation trees.** Each root keeps a non-agent tally: prompts, latest conversation abstracts,
-  and landings with divergence and links back to their source. Talk to @ultimate on the Board: it starts coordinator
+  and landings with divergence and links back to their source. Talk to @ultimate in its conversation: it starts coordinator
   branches that inherit a root's tally before their prompt. Resuming a branch catches it up on what its tree learned.
   Roots are read-only; @ultimate keeps their tallies accurate and compacts them without deleting history.
 - **You can build whole applications in it, too.** A surface is a full-screen app next to the docked agent.
@@ -136,7 +136,7 @@ and restarts land on the same view. The `surfaces` extension tells the agent whi
 - Press `Ctrl+Alt+B` for the right panel: Info (machine, process, storage, build, extensions, skills), Agents, Tasks,
   Documents (the plan, the codemode store, and every other extension document), Workspaces, Extensions and more, each
   a tab.
-- Use **Talk to @ultimate** in the sidebar to ask for work, explore an idea, or start an independent line of work.
+- Use the top-bar **@ultimate** button or first sidebar row to ask for work, explore an idea, or start an independent line of work. Its messages and questions appear in its transcript, with answer cards beneath questions.
 
 ## How it is put together
 

@@ -18,8 +18,9 @@ A project is a forest of conversation trees, each tree like a history of commits
   **Talk to @ultimate** link.
 - **A branch** is a feature, a fix, an experiment. @ultimate picks a root by reading its tally, then starts a
   coordinator branch that inherits that context before its prompt. A branch is never a subagent.
-- **Talk to @ultimate on the Board.** The user's standing agent starts and steers branches and relays their answers to the user's inbox.
-  The sidebar's **Talk to @ultimate** button opens it; conversations and roots are not created by hand.
+- **Talk to @ultimate in its conversation.** The user's standing agent starts and steers branches and relays their answers there.
+  The top-bar **@ultimate** button or first sidebar row opens it; its messages and questions to you appear in that transcript.
+  Conversations and roots are not created by hand.
 - **Coordinators carry the work.** A branch plans, decides and verifies; subagents are for bounded execution and
   reconnaissance, and the lander is the final gate on main.
 - **Zoom out when you need to.** Read any root or sibling with codemode `ultimate.entries(id)` and
@@ -73,7 +74,7 @@ Skills load from clone `skills/`, then the project's `.pi/skills/`, then `~/.ult
 `<project>/.ultimate/skills/`, with later names winning. Personal instructions load from `~/.ultimate/AGENTS.md`
 (or `CLAUDE.md`) ahead of the project's. Pi's own `~/.pi/agent/skills/` and `~/.pi/agent/AGENTS.md` are not read: they
 belong to Pi, so link a skill into `~/.ultimate/skills/` to use it here.
-Every built-in is on by default, including `board` (durable agent messages and the user's inbox), `questions` (answer cards for @ultimate's questions to the user), `faux` (inert unless `ULTIMATE_FAUX=1`), `lineage` (conversation trees: roots, branches, notes), `parallel` (web tools; reads `secrets`), `classify` (Jev typed judgments; reads `secrets`), `cloud` (replica sync; inert until configured in user settings and Secrets), `cloudflare` (deferred Workers Observability tool; inert without a call and its secret), `phase` (working phases; requires `classify`), and `tailscale` (remote access; inert on faux servers except previews, and only user settings can turn it off for good). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
+Every built-in is on by default, including `board` (durable agent messages and @ultimate's messages to you), `questions` (answer cards for @ultimate's questions to the user), `faux` (inert unless `ULTIMATE_FAUX=1`), `lineage` (conversation trees: roots, branches, notes), `parallel` (web tools; reads `secrets`), `classify` (Jev typed judgments; reads `secrets`), `cloud` (replica sync; inert until configured in user settings and Secrets), `cloudflare` (deferred Workers Observability tool; inert without a call and its secret), `phase` (working phases; requires `classify`), and `tailscale` (remote access; inert on faux servers except previews, and only user settings can turn it off for good). Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
 restart. User/project extension folders are on by default too; `disable` turns off any extension. Unknown names
 produce a notice. `summaryModel` (`"provider/id[:thinking]"`, default `openai/gpt-6-luna:medium`; project over user)
@@ -144,7 +145,7 @@ and reports back, landed or not, with findings.
 It fixes small failures when the project configures it to; on success it fast-forwards the branch and pushes to
 `lander.push` (here `origin`), so keep working while it runs.
 Its progress shows live on the submit tool card, with expandable steps, and its report as an outcome card, both in
-the submitting conversation; the source's "Lander · <target>" conversation, pinned at the top of the sidebar, keeps
+the submitting conversation; the source's @lander conversation, pinned in the sidebar's agents group, keeps
 the full log and shows as working in the Agents tab while it lands. It runs the `lander` agent
 definition: here `.ultimate/agents/lander.md` with `onFailure: fix`, so a conflict or a twice-failing check is
 resolved and committed by its model, every check runs again, and only then does it land and push. Talk to it in its

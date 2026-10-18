@@ -116,7 +116,7 @@ function delivery(host: ExtensionHost) {
     phases: {
       deliver: async (task, runtime, ctx) => {
         const m = task.input.message
-        if (m.to === 'user') throw new Error('Inbox items need no delivery task')
+        if (m.to === 'user') throw new Error('Messages to the user need no delivery task')
         await refresh(m.to, ctx)
         const recipient = await host.harness().conversation(m.to as ConversationId, ctx)
         if (!recipient) throw new Error(`Unknown conversation #${m.to}`)

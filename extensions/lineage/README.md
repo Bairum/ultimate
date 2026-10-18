@@ -93,7 +93,7 @@ the task completes. The method returns `{ id }`. With `deliver: false`, no `line
 must deliver its first input (the board uses a reply-enabled message). `by: conversationId` attributes the tally's prompt node to that caller,
 including its standing-agent name when available.
 
-The user talks to @ultimate on the Board; it picks a root by reading tallies and starts coordinator branches.
+The user talks to @ultimate in its own conversation, opened by the top-bar @ultimate button or first sidebar row; it picks a root by reading tallies and starts coordinator branches.
 There is no manual creation page or message-hover branch action. Coordinator branches keep their composers for steering.
 
 An empty root shows the **Start here** card (`survey.tsx`): an optional focus and **Set up with @ultimate**.
