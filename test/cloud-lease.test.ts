@@ -615,7 +615,7 @@ it('moves from the cloud UI: the online writer drains, and every step reaches it
   await writer(laptop)
   expect(project.replica.store.lease()).toMatchObject({ machine: 'laptop', epoch: 2 })
   expect(project.replica.store.transition()).toMatchObject({ id, by: 'cloud' })
-  expect(desk.host.standby()).toMatchObject({ reason: 'Moved to laptop' })
+  expect(desk.host.standby()).toMatchObject({ reason: 'Moved to laptop', explained: true })
   expect(states(project.replica.store.transition())).toMatchObject({
     handover: 'done',
     download: 'done',

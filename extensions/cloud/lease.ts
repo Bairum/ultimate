@@ -912,7 +912,8 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       if (dirty.length) sync.send({ type: 'release-waiting', by, tasks: 0, dirty })
       releasingFor = id
       try {
-        return await release({ reason: `Moved to ${by}` })
+        // The standby page's cloud facet explains the move, and that "Move here" pulls it back.
+        return await release({ reason: `Moved to ${by}`, explained: true })
       } finally {
         releasingFor = undefined
       }

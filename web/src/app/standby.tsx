@@ -19,7 +19,8 @@ export function Standby({ standby }: { standby: JsonObject }) {
           ULTIMATE
         </div>
         <h1 className="mt-4 text-[15px] font-medium text-foreground">This machine is on standby</h1>
-        {typeof standby.reason === 'string' && (
+        {/* `explained`: a `standby` slot says why in its own words, so the reason would repeat it. */}
+        {typeof standby.reason === 'string' && standby.explained !== true && (
           <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{standby.reason}</p>
         )}
         <div className="mt-5 border-t border-border/70 pt-4 font-mono text-[12px] text-muted-foreground/80">
