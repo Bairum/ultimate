@@ -109,9 +109,12 @@ lander's sidebar row shows the feature it lands or landed last.
 1. Resets its own detached checkout, `<home>/lander/<hash of source>`, to the target branch tip. `isolates.worktree.setup`
    runs once when the checkout is created. With `lander.push`, it fetches the remote branch and merges it when it is ahead.
 2. Merges the submitted tip. A conflict aborts the merge and reports the conflicting paths.
-3. Runs `lander.checks` in order. Each check is stopped after 5 minutes without output or 15 minutes total,
-   killing its whole process group. Watchdog failures include which limit fired and the output tail, and enter
-   the same rerun/fix flow as other check failures. An entry is a command or an array of commands, a group that runs concurrently.
+3. Runs `lander.checks` in order. Each check is stopped after 2 minutes without output or 10 minutes total, or at
+   its own `timeout` (seconds, which also caps the no-output limit), killing its whole process group. Watchdog
+   failures name the limit that fired, the failed test lines seen so far (vitest's `FAIL`/`×` lines, kept even when
+   they scrolled out of the tail) and the output tail, and enter the same rerun/fix flow as other check failures.
+   An entry is a check or an array of checks, a group that runs concurrently; a check is a command string or
+   `{ "command": "pnpm test", "timeout": 180 }`.
    A failing check
    reruns once: passing then is reported as flaky, failing again reports the output tail once every command of its
    group settled. Each command keeps its own memo, steps and flaky note. A passed or flaky check records its last
@@ -134,7 +137,7 @@ lander's sidebar row shows the feature it lands or landed last.
    agent records a warning step and notice; the landing stays landed. Invalid deploy settings give a notice and
    disable only the hook. No setting or no matching paths means no deploy step.
 
-Settings (`.ultimate/settings.json`): `"lander": { "checks": ["pnpm check", ["pnpm test", "pnpm test:e2e"]], "push": "origin" }`;
+Settings (`.ultimate/settings.json`): `"lander": { "checks": ["pnpm check", [{ "command": "pnpm test", "timeout": 180 }, "pnpm test:e2e"]], "push": "origin" }`;
 both are optional. Optional `"deploy": { "agent": "cloudflare", "paths": ["cloud/", "web/", "package.json", "pnpm-lock.yaml"] }`
 inside `lander` enables the deploy handoff. `paths` is a non-empty list of non-empty path prefixes (not globs),
 and `agent` must name a resident agent. The board must be enabled.
