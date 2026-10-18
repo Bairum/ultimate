@@ -4,7 +4,7 @@ import type { CallTrace } from './trace.ts'
 type Provider = { extension: string; value: unknown }
 
 /** Tarjan's strongly connected components with more than one member: each sorted, sorted by first member. */
-function cycles(edges: Map<string, Set<string>>) {
+export function cycles(edges: Map<string, Set<string>>) {
   const index = new Map<string, number>()
   const low = new Map<string, number>()
   const stack: string[] = []
