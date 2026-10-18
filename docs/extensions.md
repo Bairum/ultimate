@@ -13,6 +13,23 @@ and keep durable state in documents. `useReady()` becomes true once the initial 
 arrives, stays true across hot reloads, and exposes failed facet names. Overlays render as facets install, even while
 others load; see [Events](../extensions/README.md#events).
 
+## Extension APIs
+
+A service one extension offers another is a typed token, `defineApi<Service>()('name')` from
+`shared/extension-api.ts`, kept in the provider's `api.ts` (browser-safe, so web code can import it too). The provider
+calls `host.implement(Token, value)`; consumers call `host.need(Token)` for a hard dependency or `host.want(Token)` for
+an optional one. Both return a handle that resolves the current provider on every member access, so a handle taken at
+setup survives provider reloads. Every method call goes through one internal `call`, the place tracing hooks in.
+`need` throws `<ext> needs <api>, which no enabled extension provides` while nothing provides it (at setup it records
+the dependency instead, since the provider may load later, and the missing provider becomes an extension diagnostic);
+`want` returns undefined. `host.catalogue()` and codemode's `ultimate.catalogue()` list each API's provider, needs
+and wants, the missing providers and the dependency cycles (each a sorted group of extensions that depend on each
+other in a cycle). `host.provide`/`host.use` are the untyped predecessors and
+share the provider table.
+
+Pick the channel by what crosses it: services for calls between extensions, documents for durable state, durable
+events (coming) for "this happened", actions for the UI and user boundary.
+
 ## Inspecting yourself
 
-Use `codemode` to compose dependent or parallel `tools.*` calls and filter results before they enter your context. Its `ultimate.*` API is the way to inspect yourself: system/build, extension facets and load errors, conversations, stored entries and search (including before compactions/resets), task graph, models, and exported documents. `ultimate.action(extension, action, args?)` is its one write: call an extension action on behalf of this conversation. Use ordinary tools for other writes and single simple calls. `store`/`load` persist conversation-scoped values; see `extensions/codemode/README.md` for interruption semantics.
+Use `codemode` to compose dependent or parallel `tools.*` calls and filter results before they enter your context. Its `ultimate.*` API is the way to inspect yourself: system/build, extension facets and load errors, conversations, stored entries and search (including before compactions/resets), the extension API catalogue, task graph, models, and exported documents. `ultimate.action(extension, action, args?)` is its one write: call an extension action on behalf of this conversation. Use ordinary tools for other writes and single simple calls. `store`/`load` persist conversation-scoped values; see `extensions/codemode/README.md` for interruption semantics.
