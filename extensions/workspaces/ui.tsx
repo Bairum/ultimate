@@ -1,8 +1,15 @@
 /**
  * Workspaces for other extensions' browser code: each conversation's worktree and the lander queue, landing links,
- * and the actions that inspect worktrees.
+ * the actions that inspect worktrees and the landing event.
  */
 export { stateLabel, useWorkspaceConversations, useWorkspaceIndex, useWorkspaces } from './data.tsx'
 export type { WorkspaceConversation } from './data.tsx'
 export { CommitCount, Open } from './landing.tsx'
-export { InfoAction, IsolationAction, PendingAction, WorkspacesDoc } from './refs.ts'
+export {
+  InfoAction,
+  IsolationAction,
+  PendingAction,
+  SubmissionLanded,
+  WorkspacesDoc,
+} from './refs.ts'
+export type { LandedData } from './refs.ts'

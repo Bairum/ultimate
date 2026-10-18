@@ -1,8 +1,9 @@
 /**
- * Lineage in the browser: the project's roots, each root's tally size, and the actions behind a root's sidebar row
- * and landing cards. Browser-safe.
+ * Lineage in the browser: the project's roots, each root's tally size, the actions behind a root's sidebar row and
+ * landing cards, and the branch and root events. Browser-safe.
  */
 import { actionRef, docRef } from '../../shared/extension-api.ts'
+import { defineEvent } from '../../shared/events.ts'
 import type { RootEvent } from './types.ts'
 
 /** `{ roots }` on conversation 1: the project's roots, each the top of one conversation tree. */
@@ -26,3 +27,13 @@ export const CompactAction = actionRef<{ id: number; instructions?: string }, { 
   'lineage',
   'compact',
 )
+
+/**
+ * A branch started: conversation `id` forked from `from` at entry `at`, its prompt `intent`. Emitted in the forking
+ * commit, before the branch's first run; react to it to set up a new branch's own state.
+ */
+export const Branched = defineEvent<{ id: number; from: number; at: number; intent: string }>(
+  'lineage.branched',
+)
+/** A root was created: conversation `id`, titled `intent`. Emitted in the creating commit. */
+export const Rooted = defineEvent<{ id: number; intent: string }>('lineage.rooted')

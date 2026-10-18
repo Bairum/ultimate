@@ -52,7 +52,6 @@ const api = `/**
 import type { Context } from '@earendil-works/chord'
 import { defineDoc } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
-import { defineEvent } from '../../shared/events.ts'
 import type { BoardMessage } from '../board/api.ts'
 import { Board } from '../board/api.ts'
 import type { echo } from './server.ts'
@@ -67,8 +66,7 @@ export type EchoService = {
 }
 /** The echo service; \`want\` it. */
 export const EchoApi = defineApi<EchoService>()('echo')
-/** Something was echoed. */
-export const Echoed = defineEvent<{ text: string }>('echo.echoed')
+export { Repeated } from './refs.ts'
 /** The echo log. */
 export const Log = defineDoc<{ texts: string[] }>({ kind: 'echo.log', version: 1, scope: 'conversation', initial: () => ({ texts: [] }) })
 `
@@ -91,6 +89,9 @@ export interface EchoService {
 export const EchoApi = defineApi<EchoService>()('echo')
 export const limit = 3
 export function helper() {}
+/** An event belongs in refs.ts. */
+export const Echoed = defineEvent<{ text: string }>('echo.echoed')
+export { EchoLine } from './line.ts'
 `
   expect(lint('api-file-shape', 'extensions/echo/api.ts', bad)).toEqual([
     'Start api.ts with a doc comment on what it offers; its first sentence is the one-line summary.',
@@ -98,8 +99,9 @@ export function helper() {}
     "api.ts imports at runtime only shared/, packages, its refs.ts and other extensions' api.ts; use `import type` for the rest.",
     "api.ts imports at runtime only shared/, packages, its refs.ts and other extensions' api.ts; use `import type` for the rest.",
     'Document each exported token: what it is and when to use it.',
-    "api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)`, types and `export const tier = 'core'`.",
-    "api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)`, types and `export const tier = 'core'`.",
+    ...Array(4).fill(
+      "api.ts holds only contracts: imports, `export const X = defineApi/defineDoc/defineEntry(...)`, re-exports of its refs.ts (where event tokens live, for the browser too), types and `export const tier = 'core'`.",
+    ),
     'Document EchoService.echo: what it does and when to call it.',
   ])
   // The tier line joins the core tier; any other tier is rejected.
@@ -126,6 +128,7 @@ const refs = `/**
  */
 import type { JsonValue } from '@earendil-works/chord'
 import { actionRef, docRef } from '../../shared/extension-api.ts'
+import { defineEvent } from '../../shared/events.ts'
 import type { ProviderHealth } from '../../shared/protocol.ts'
 import type { BoardData } from '../board/refs.ts'
 import type { EchoRow } from './types.ts'
@@ -137,6 +140,8 @@ export type Echoed = { text: string; at: number }
 export const LogDoc = docRef<Texts>('echo.log')
 /** \`{ text }\` → what was echoed. */
 export const EchoAction = actionRef<{ text: string }, Echoed>('echo', 'echo')
+/** Something was echoed; react to it to count echoes. */
+export const Repeated = defineEvent<{ text: string }>('echo.repeated')
 `
 
 it('accepts a refs.ts of documented browser-safe refs and rejects server reach, runtime code and missing docs', () => {
@@ -164,7 +169,7 @@ export const limit = 3
     "refs.ts is browser-safe: it imports types only from packages, shared/ and extensions' refs.ts or types.ts.",
     "refs.ts is browser-safe: it imports types only from packages, shared/ and extensions' refs.ts or types.ts.",
     "Document each ref: what it holds, or an action's arguments and result.",
-    'refs.ts holds only contracts: imports, `export const X = docRef/actionRef(...)` and types.',
+    'refs.ts holds only contracts: imports, `export const X = docRef/actionRef/defineEvent(...)` and types.',
   ])
   expect(
     lint('api-naming', 'extensions/echo/refs.ts', "export const A = actionRef('board', 'send')"),

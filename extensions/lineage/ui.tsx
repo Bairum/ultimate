@@ -1,12 +1,12 @@
 /**
- * Lineage for other extensions' browser code: the project's roots, a root's tally, landing links and compaction, and
- * the point where an empty root shows how to start (onboarding's Start here card).
+ * Lineage for other extensions' browser code: the project's roots, a root's tally, landing links and compaction, the
+ * branch and root events, and the point where an empty root shows how to start (onboarding's Start here card).
  */
 import type { ReactNode } from 'react'
 import { definePoint, getState, useDocOf } from '@/sdk'
 import { RootsDoc } from './refs.ts'
 
-export { CompactAction, RecentAction, RootsDoc, TallyDoc } from './refs.ts'
+export { Branched, CompactAction, RecentAction, Rooted, RootsDoc, TallyDoc } from './refs.ts'
 
 /** The composer's reading column, as the core lays it out; a card in place of a root's composer uses it. */
 export const column = (dock?: boolean) =>

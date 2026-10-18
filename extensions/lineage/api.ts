@@ -5,7 +5,6 @@
 import type { Context } from '@earendil-works/chord'
 import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
-import { defineEvent } from '../../shared/events.ts'
 import { RootsDoc } from './refs.ts'
 import type { BranchInput, leaveNote, rootOf, startBranch } from './server.ts'
 
@@ -45,15 +44,7 @@ export type LineageService = {
     source?: Parameters<typeof leaveNote>[3],
   ) => ReturnType<typeof leaveNote>
 }
-/**
- * A branch started: conversation `id` forked from `from` at entry `at`, its prompt `intent`. Emitted in the forking
- * commit, before the branch's first run; react to it to set up a new branch's own state.
- */
-export const Branched = defineEvent<{ id: number; from: number; at: number; intent: string }>(
-  'lineage.branched',
-)
-/** A root was created: conversation `id`, titled `intent`. Emitted in the creating commit. */
-export const Rooted = defineEvent<{ id: number; intent: string }>('lineage.rooted')
+export { Branched, Rooted } from './refs.ts'
 
 /** Trees, branches and notes; core, so `need` it. */
 export const LineageApi = defineApi<LineageService>()('lineage')

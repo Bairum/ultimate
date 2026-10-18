@@ -6,7 +6,6 @@ import type { Context } from '@earendil-works/chord'
 import { defineDoc } from '@earendil-works/pi-durable'
 import type { EntryId } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
-import { defineEvent } from '../../shared/events.ts'
 import { BoardDoc } from './refs.ts'
 
 /** One Board message as the `board` document stores it. */
@@ -46,11 +45,7 @@ export type BoardService = {
     ctx: Context,
   ): Promise<number>
 }
-/**
- * Conversation `from` asked the user something: it posted reply-enabled Board message `message` to the user. Emitted in
- * the posting commit; react to it to work on the question (questions extracts its answer card).
- */
-export const Asked = defineEvent<{ message: number; from: number }>('board.asked')
+export { Asked } from './refs.ts'
 /** Messages between conversations; core, so `need` it. */
 export const BoardApi = defineApi<BoardService>()('board')
 export const tier = 'core'

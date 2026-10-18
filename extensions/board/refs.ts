@@ -1,8 +1,9 @@
 /**
  * The Board in the browser: every message between conversations and the user, which the sidebar, the message cards
- * and the sounds read. Browser-safe.
+ * and the sounds read, and the event of a question to the user. Browser-safe.
  */
 import { docRef } from '../../shared/extension-api.ts'
+import { defineEvent } from '../../shared/events.ts'
 
 /** One Board message as the `board` document stores it. */
 export type BoardMessage = {
@@ -24,3 +25,9 @@ export type BoardData = { messages: BoardMessage[]; next: number }
 
 /** Every message between conversations and the user, oldest first, on conversation 1. */
 export const BoardDoc = docRef<BoardData>('board')
+
+/**
+ * Conversation `from` asked the user something: it posted reply-enabled Board message `message` to the user. Emitted in
+ * the posting commit; react to it to work on the question (questions extracts its answer card).
+ */
+export const Asked = defineEvent<{ message: number; from: number }>('board.asked')

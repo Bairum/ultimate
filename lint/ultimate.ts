@@ -94,8 +94,8 @@ const membersOf = (declaration: Node): Node[] =>
     ? (((declaration.body as Node | undefined)?.body as Node[] | undefined) ?? [])
     : literals(declaration.typeAnnotation)
 const definers: Record<'api.ts' | 'refs.ts', Set<string>> = {
-  'api.ts': new Set(['defineApi', 'defineEvent', 'defineDoc', 'defineEntry']),
-  'refs.ts': new Set(['docRef', 'actionRef']),
+  'api.ts': new Set(['defineApi', 'defineDoc', 'defineEntry']),
+  'refs.ts': new Set(['docRef', 'actionRef', 'defineEvent']),
 }
 
 /** The declarator of `export const tier = …`, which declares an extension's tier, if `statement` is one. */
@@ -478,6 +478,11 @@ export default {
               "api.ts imports at runtime only shared/, packages, its refs.ts and other extensions' api.ts; use `import type` for the rest.",
             )
         }
+        // api.ts passes on what its own refs.ts defines (event tokens), so server code imports one file.
+        const ownRefs = (statement: Node) =>
+          file === 'api.ts' &&
+          statement.type === 'ExportNamedDeclaration' &&
+          statement.source?.value === './refs.ts'
         return {
           Program(node: Node) {
             if (!apiSummary(context.sourceCode.text))
@@ -497,11 +502,12 @@ export default {
               )
                 continue
               else if (
-                statement.type === 'ExportNamedDeclaration' &&
-                (statement.exportKind === 'type' ||
-                  (!statement.source &&
-                    (statement.declaration?.type === 'TSTypeAliasDeclaration' ||
-                      statement.declaration?.type === 'TSInterfaceDeclaration')))
+                ownRefs(statement) ||
+                (statement.type === 'ExportNamedDeclaration' &&
+                  (statement.exportKind === 'type' ||
+                    (!statement.source &&
+                      (statement.declaration?.type === 'TSTypeAliasDeclaration' ||
+                        statement.declaration?.type === 'TSInterfaceDeclaration'))))
               )
                 continue
               else if (file === 'api.ts' && tierOf(statement) !== undefined) {
@@ -534,8 +540,8 @@ export default {
                 report(
                   statement,
                   file === 'refs.ts'
-                    ? 'refs.ts holds only contracts: imports, `export const X = docRef/actionRef(...)` and types.'
-                    : "api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)`, types and `export const tier = 'core'`.",
+                    ? 'refs.ts holds only contracts: imports, `export const X = docRef/actionRef/defineEvent(...)` and types.'
+                    : "api.ts holds only contracts: imports, `export const X = defineApi/defineDoc/defineEntry(...)`, re-exports of its refs.ts (where event tokens live, for the browser too), types and `export const tier = 'core'`.",
                 )
             }
             for (const statement of body) {
