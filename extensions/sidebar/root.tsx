@@ -6,25 +6,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import {
-  api,
-  cn,
-  events,
-  formatTokens,
-  useAction,
-  useDocOf,
-  useExtensionUiState,
-  useUltimate,
-} from '@/sdk'
+import { api, cn, events, formatTokens, useAction, useDocOf, useUltimate } from '@/sdk'
 import { BoardDoc, emptyBoard, isOpen } from '../board/ui.tsx'
 import { CompactAction, RecentAction, TallyDoc } from '../lineage/ui.tsx'
 import type { RootEvent } from '../lineage/types.ts'
 import { phaseText, usePhase } from '../phase/ui.tsx'
 import { CommitCount, useWorkspaceIndex } from '../workspaces/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
-import { FeatureTag, useOverview } from './feature.tsx'
+import { AgentMark, FeatureTag, useOverview } from '../conversations/ui.tsx'
 import { ago } from './lander.tsx'
-import { AgentMark } from './marks.tsx'
+import { useSidebarState } from './state.tsx'
 
 type Landing = Extract<RootEvent, { type: 'landed' }>
 type Actions = Pick<ReturnType<typeof useUltimate>, 'switchConversation' | 'showSurface'>
@@ -222,7 +213,7 @@ export function RootRow({
   const actions = useUltimate()
   const id = conversation.id
   const tally = useDocOf(id, TallyDoc)
-  const [unfolded, setUnfolded] = useExtensionUiState<number[]>('landingsOpen', [])
+  const [unfolded, setUnfolded] = useSidebarState<number[]>('landingsOpen', [])
   const more = unfolded.includes(id)
   const landings = useAction(
     RecentAction,

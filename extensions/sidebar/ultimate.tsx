@@ -1,28 +1,10 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { api, cn, getState, useDocOf, useStore, useSystem, useTasks, useUltimate } from '@/sdk'
-import type { UltimateActions } from '@/sdk'
-import { primaryAgent } from '../../lib/machine.ts'
+import { cn, useDocOf, useStore, useTasks, useUltimate } from '@/sdk'
 import { BoardDoc, emptyBoard, waitingOnUser } from '../board/ui.tsx'
+import { AgentMark, useOverview, usePrimaryAgent } from '../conversations/ui.tsx'
 import { phaseText, usePhase } from '../phase/ui.tsx'
 import { QuestionsDoc } from '../questions/ui.tsx'
-import { StandingAction, StandingDoc } from '../subagents/ui.tsx'
-import { useOverview } from './feature.tsx'
-import { AgentMark } from './marks.tsx'
-
-/** The home's primary standing agent: @sync in the machine home, else @ultimate. */
-const primaryOf = (system: ReturnType<typeof useSystem>) =>
-  system ? primaryAgent(system.project.root, system.machine.home) : 'ultimate'
-export const usePrimaryAgent = () => primaryOf(useSystem())
-
-/** Show the primary agent's standing conversation on the Agent surface: @ultimate starts branches and keeps tallies. */
-export async function talkToUltimate(
-  actions: Pick<UltimateActions, 'switchConversation' | 'showSurface'>,
-) {
-  const name = primaryOf(getState().system)
-  const id = await api.action(StandingAction, { name })
-  actions.switchConversation(id)
-  actions.showSurface('agent')
-}
+import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 
 /** How many of @ultimate's messages and final answers wait on the user's answer. */
 export const useWaitingOnUser = () =>

@@ -21,7 +21,8 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
-import { ConversationRef, talkToUltimate, usePrimaryAgent } from '../conversations/ui.tsx'
+import { ConversationRef, usePrimaryAgent } from '../conversations/ui.tsx'
+import { talkToUltimate } from '../subagents/ui.tsx'
 import { Open } from '../workspaces/ui.tsx'
 import { TallyDoc } from './refs.ts'
 import { column, Familiarize } from './survey.tsx'

@@ -16,15 +16,13 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api, cn, useUltimate } from '@/sdk'
-import { FeatureTag } from './feature.tsx'
+import { AgentMark, agentTitle, FeatureTag, RenameAction } from '../conversations/ui.tsx'
+import type { Presence } from '../conversations/ui.tsx'
 import { TaskChip, useTaskOf } from '../plan/ui.tsx'
 import { PhaseLabel, usePhase } from '../phase/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
-import type { Assessment, OverviewRow } from './types.ts'
+import type { Assessment, OverviewRow } from '../conversations/types.ts'
 import { ago } from './lander.tsx'
-import { RenameAction } from './refs.ts'
-import { AgentMark, agentTitle } from './marks.tsx'
-import type { Presence } from './marks.tsx'
 
 export function currentAssessment(row: OverviewRow | undefined) {
   return row?.runState === 'answered' &&

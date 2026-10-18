@@ -1,7 +1,7 @@
 import { cn } from '@/sdk'
 import { phaseText, usePhase } from '../phase/ui.tsx'
 import { useWorkspaceIndex } from '../workspaces/ui.tsx'
-import { FeatureTag } from './feature.tsx'
+import { FeatureTag } from '../conversations/ui.tsx'
 
 /** `now`, `5m`, `3h`, `2d`, then a short date. */
 export function ago(at: number, now: number) {
