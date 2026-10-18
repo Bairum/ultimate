@@ -3,8 +3,12 @@ import { useEffect, useState } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
-import { cn, defineWebExtension, useConversations, useDocOf, useExtensionUiState } from '@/sdk'
+import { cn, defineWebExtension, useDocOf, useExtensionUiState, useTasks } from '@/sdk'
+import { emptyBoard } from '../board/data.tsx'
+import type { BoardData } from '../board/data.tsx'
+import { usePrimaryAgent } from '../conversations/ultimate.tsx'
 import type { OverviewState } from '../conversations/types.ts'
+import type { QuestionsBoard } from '../questions/open.tsx'
 import { listener, settle, sounds } from './cues.ts'
 import type { Cue, Sound } from './cues.ts'
 import { play } from './tones.ts'
@@ -33,35 +37,41 @@ async function announce(cue: Cue) {
 }
 
 /**
- * Watches the root's conversation overview and sounds what top-level conversations newly tell: a question, a finished
- * task, a failed run. Whatever the overview shows when this tab opens has been heard already.
+ * Watches @ultimate (@sync in the machine home) and sounds what it newly tells the user: a question, a finished answer,
+ * a failed run. Whatever it shows when this tab opens has been heard already.
  */
 function Player() {
   const overview = useDocOf<OverviewState>(1, 'ultimate.conversation-overview')
-  const conversations = useConversations()
+  const board = useDocOf<BoardData>(1, 'board')
+  const questions = useDocOf<QuestionsBoard>(1, 'questions.board')
+  const name = usePrimaryAgent()
+  const agent = useDocOf<Record<string, number>>(1, 'ultimate.standing-agents')?.[name]
+  const tasks = useTasks()
+  const extracting = Object.values(tasks?.tasks ?? {}).some(
+    (task) => task.kind === 'questions.reply-extract' && task.conversationId === agent,
+  )
   const { muted, off } = useSettings()
   const [hear] = useState(listener)
   const [tick, setTick] = useState(0)
   useEffect(() => {
-    if (!overview) return undefined
-    const top = new Set(
-      conversations
-        .filter((conversation) => conversation.parentConversationId === undefined)
-        .map((conversation) => conversation.id),
+    if (!overview || agent === undefined) return undefined
+    const { due, waiting } = hear(
+      {
+        agent,
+        row: overview.conversations[agent],
+        messages: (board ?? emptyBoard).messages,
+        asked: questions?.reply,
+        extracting,
+      },
+      Date.now(),
     )
-    const standing = new Set(
-      conversations
-        .filter((conversation) => conversation.label === 'agent' || conversation.label === 'lander')
-        .map((conversation) => conversation.id),
-    )
-    const { due, waiting } = hear(overview.conversations, top, Date.now(), standing)
     for (const cue of due)
       if (!muted && !off.includes(cue.sound))
         announce(cue).catch((error: unknown) => console.warn('Sound failed', error))
     if (!waiting) return undefined
     const timer = setTimeout(() => setTick((count) => count + 1), settle)
     return () => clearTimeout(timer)
-  }, [hear, overview, conversations, muted, off, tick])
+  }, [hear, overview, board, questions, agent, extracting, muted, off, tick])
   return null
 }
 
@@ -71,6 +81,7 @@ const preview = (sound: Sound) =>
 /** The status-bar entry: a switch for all sounds and a checkbox and a preview for each. */
 function Control() {
   const { muted, setMuted, off, setOff } = useSettings()
+  const name = usePrimaryAgent()
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -122,7 +133,7 @@ function Control() {
           ))}
         </div>
         <div className="mt-1 border-t border-border/70 px-2 pt-1.5 pb-1 text-[11px] text-muted-foreground">
-          For top-level conversations
+          For @{name} only
         </div>
       </PopoverContent>
     </Popover>
