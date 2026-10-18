@@ -3,7 +3,11 @@ import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import cloud, { MAX_RETAINED_BYTES, startSync } from '../extensions/cloud/server.ts'
+import cloud, {
+  MAX_RETAINED_BYTES,
+  QUICK_RECONNECT_AFTER,
+  startSync,
+} from '../extensions/cloud/server.ts'
 import type { SyncSocket } from '../extensions/cloud/server.ts'
 import { docHash, PROJECT_MISMATCH } from '../cloud/protocol.ts'
 import type { CloudMessage, MachineMessage } from '../cloud/protocol.ts'
@@ -961,6 +965,78 @@ it('starts over with a fresh hello when its role changes on an open socket', asy
     expect(f.stop.state()).toMatchObject({ connected: false, role: 'standby', epoch: 2 })
     await vi.advanceTimersByTimeAsync(1000)
     expect(f.sockets).toHaveLength(2)
+  } finally {
+    await f.close()
+  }
+})
+
+it('reconnects at once when a connection that had been open drops, as a deploy restarts the replica', async () => {
+  const f = await fixture()
+  try {
+    f.sockets[0].open()
+    await f.drain()
+    await vi.advanceTimersByTimeAsync(QUICK_RECONNECT_AFTER)
+    // The deploy closes the socket: the first attempt runs without waiting.
+    f.sockets[0].dispatchEvent(Object.assign(new Event('close'), { code: 1012 }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.sockets).toHaveLength(2)
+    // The Worker is still restarting: backoff applies from the second failure on.
+    f.sockets[1].dispatchEvent(Object.assign(new Event('close'), { code: 1006 }))
+    await vi.advanceTimersByTimeAsync(999)
+    expect(f.sockets).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(f.sockets).toHaveLength(3)
+    f.sockets[2].dispatchEvent(Object.assign(new Event('close'), { code: 1006 }))
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(f.sockets).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(f.sockets).toHaveLength(4)
+    // Up again: the backoff resets once a role arrives, and a later drop again reconnects at once.
+    f.sockets[3].open()
+    await f.drain()
+    await vi.advanceTimersByTimeAsync(QUICK_RECONNECT_AFTER)
+    f.sockets[3].dispatchEvent(Object.assign(new Event('close'), { code: 1012 }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.sockets).toHaveLength(5)
+    expect(f.notices).toEqual([])
+  } finally {
+    await f.close()
+  }
+})
+
+it('reports catch-up progress and the unacknowledged backlog for operators', async () => {
+  const f = await fixture()
+  try {
+    const conversations = [{ id: 1 }, { id: 2 }] as ReturnType<ExtensionHost['conversations']>
+    f.host.conversations = () => conversations
+    await seedBacklog(f)
+    expect(f.stop.progress()).toEqual({ connected: false, catchingUp: false, backlog: 0 })
+    const socket = f.sockets[0]
+    socket.autoAck = false
+    socket.open()
+    await socket.waitForBatches(4)
+    await vi.advanceTimersByTimeAsync(250)
+    // Four batches wait for acknowledgement; neither conversation's entries are all queued yet.
+    expect(f.stop.progress()).toEqual({
+      connected: true,
+      catchingUp: true,
+      backlog: 6,
+      conversations: { synced: 0, total: 2 },
+    })
+    socket.autoAck = true
+    const acked = Date.now()
+    for (const batch of socket.batches()) socket.receive({ type: 'ack', batch: batch.batch })
+    await f.drain()
+    expect(f.stop.progress()).toEqual({
+      connected: true,
+      catchingUp: false,
+      backlog: 0,
+      lastAckAt: expect.any(Number),
+      conversations: { synced: 2, total: 2 },
+    })
+    expect(f.stop.progress().lastAckAt).toBeGreaterThanOrEqual(acked)
+    socket.dispatchEvent(new Event('close'))
+    expect(f.stop.progress()).toMatchObject({ connected: false, catchingUp: false })
   } finally {
     await f.close()
   }

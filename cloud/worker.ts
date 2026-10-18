@@ -11,7 +11,7 @@ import { admitsAccess } from './access.ts'
 import type { AccessConfig } from './access.ts'
 
 import type { Sql } from './replica.ts'
-import { HELLO_LIMITS, PROJECT_KEY, PROJECT_MISMATCH } from './protocol.ts'
+import { HELLO_LIMITS, LEFT_LIMITS, PROJECT_KEY, PROJECT_MISMATCH } from './protocol.ts'
 import type { CloudMessage, Hello, MachineMessage } from './protocol.ts'
 import { BUILD_ID, buildKey, contentType, uploadBuild, validName } from './builds.ts'
 import { DirectoryStore } from './directory.ts'
@@ -115,14 +115,35 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!key || !PROJECT_KEY.test(key))
       return Response.json({ error: 'Expected a project key' }, { status: 400 })
     // A relinked key syncs to its target's replica, which admits hellos naming either key.
-    const alias = await directory(env).fetch(
-      `https://directory/alias?key=${encodeURIComponent(key)}`,
-    )
-    if (!alias.ok) return env.REPLICA.get(env.REPLICA.idFromName(key)).fetch(request)
-    const { target }: { target: string } = await alias.json()
+    const target = await resolveKey(env, key)
+    if (target === key) return env.REPLICA.get(env.REPLICA.idFromName(key)).fetch(request)
     url.searchParams.set('project', target)
     url.searchParams.set('alias', key)
     return env.REPLICA.get(env.REPLICA.idFromName(target)).fetch(new Request(url, request))
+  }
+  // Agents reach what the cloud UI does behind Access with the sync token instead.
+  const agent = AGENT_ROUTES[url.pathname]
+  if (agent) {
+    if (!env.SYNC_TOKEN || !matchesSyncToken(request.headers.get('Authorization'), env.SYNC_TOKEN))
+      return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    if (request.method !== agent.method) {
+      await discardBody(request)
+      return new Response('Method not allowed', { status: 405 })
+    }
+    if (url.pathname === '/sync/directory') return directory(env).fetch('https://directory/list')
+    const key = url.searchParams.get('project')
+    if (!key || !PROJECT_KEY.test(key)) {
+      await discardBody(request)
+      return Response.json({ error: 'Expected a project key' }, { status: 400 })
+    }
+    const target = await resolveKey(env, key)
+    // A fresh request: the replica's own handler answers it, without the caller's headers.
+    return env.REPLICA.get(env.REPLICA.idFromName(target)).fetch(
+      new Request(`https://replica${agent.path}`, {
+        method: agent.method,
+        ...(agent.method === 'POST' ? { body: await request.text() } : {}),
+      }),
+    )
   }
   if (url.pathname === '/sync/relink') {
     if (!env.SYNC_TOKEN || !matchesSyncToken(request.headers.get('Authorization'), env.SYNC_TOKEN))
@@ -191,6 +212,22 @@ function directory(env: Env) {
   return env.DIRECTORY.get(env.DIRECTORY.idFromName('directory'))
 }
 
+/** The key whose replica serves `key`: the one it was relinked to, or itself. */
+async function resolveKey(env: Env, key: string) {
+  const alias = await directory(env).fetch(`https://directory/alias?key=${encodeURIComponent(key)}`)
+  if (!alias.ok) return key
+  const { target }: { target: string } = await alias.json()
+  return target
+}
+
+/** Bearer-authenticated twins of the cloud UI's routes, by path: the method and the replica route that answers. */
+const AGENT_ROUTES: Record<string, { method: 'GET' | 'POST'; path: string }> = {
+  '/sync/directory': { method: 'GET', path: '' },
+  '/sync/cloud': { method: 'GET', path: '/api/cloud' },
+  '/sync/move': { method: 'POST', path: '/api/cloud/move' },
+  '/sync/cancel': { method: 'POST', path: '/api/cloud/cancel' },
+}
+
 // Retired classes stay exported until a later deploy deletes them; nothing binds them (README "Deploy").
 class Retired {
   fetch() {
@@ -250,6 +287,13 @@ interface Attachment {
 const attachment = (socket: MachineSocket) =>
   socket.deserializeAttachment() as Attachment | null | undefined
 
+/** Secret names as hello carries them: bounded, names only. */
+const validSecrets = ({ secrets, secretsComplete }: Pick<Hello, 'secrets' | 'secretsComplete'>) =>
+  Array.isArray(secrets) &&
+  secrets.length <= HELLO_LIMITS.secrets &&
+  secrets.every((name) => typeof name === 'string' && HELLO_LIMITS.secret.test(name)) &&
+  typeof secretsComplete === 'boolean'
+
 function validHello(hello: Hello, { key, alias }: Attachment) {
   return (
     (hello.key === key || hello.key === alias) &&
@@ -267,10 +311,7 @@ function validHello(hello: Hello, { key, alias }: Attachment) {
     (hello.uiBuild === undefined || BUILD_ID.test(hello.uiBuild)) &&
     (hello.epoch === undefined || (Number.isSafeInteger(hello.epoch) && hello.epoch >= 1)) &&
     typeof hello.history === 'boolean' &&
-    Array.isArray(hello.secrets) &&
-    hello.secrets.length <= HELLO_LIMITS.secrets &&
-    hello.secrets.every((name) => typeof name === 'string' && HELLO_LIMITS.secret.test(name)) &&
-    typeof hello.secretsComplete === 'boolean' &&
+    validSecrets(hello) &&
     (hello.transition === undefined ||
       (typeof hello.transition === 'string' && /^[\w-]{1,64}$/.test(hello.transition)))
   )
@@ -395,6 +436,7 @@ export class SharedReplica {
           'request-release',
           'release-waiting',
           'transition',
+          'secrets',
         ].includes(message?.type)
       )
         type = message.type
@@ -471,14 +513,38 @@ export class SharedReplica {
         this.presence()
         return
       }
+      // Writer and standbys both keep their secret names current, so a standby's missing secrets refresh.
+      if (message.type === 'secrets') {
+        if (!held?.role || !held.machine || !held.checkout || !validSecrets(message)) return
+        const { secrets, secretsComplete } = message
+        socket.serializeAttachment({
+          ...held,
+          checkout: { ...held.checkout, secrets, secretsComplete },
+        })
+        this.store.secrets(held.machine, held.checkout.root, held.role === 'writer', {
+          secrets,
+          secretsComplete,
+        })
+        this.broadcast()
+        return
+      }
       // Only the writer's data is applied: a standby is fenced off.
       if (held?.role !== 'writer') return
       if (message.type === 'release-waiting') {
-        if (typeof message.by !== 'string' || !Number.isSafeInteger(message.tasks)) return
-        this.standby(message.by)?.send(
-          JSON.stringify({ type: 'release-waiting', by: message.by, tasks: message.tasks }),
+        const { by, tasks, dirty } = message
+        if (
+          typeof by !== 'string' ||
+          !Number.isSafeInteger(tasks) ||
+          (dirty !== undefined &&
+            (!Array.isArray(dirty) ||
+              dirty.length > LEFT_LIMITS.paths ||
+              !dirty.every((path) => typeof path === 'string' && path.length <= LEFT_LIMITS.path)))
         )
-        if (this.store.draining(message.by, message.tasks)) {
+          return
+        this.standby(by)?.send(
+          JSON.stringify({ type: 'release-waiting', by, tasks, ...(dirty ? { dirty } : {}) }),
+        )
+        if (this.store.draining(by, tasks, held.machine!, dirty)) {
           this.broadcast()
           this.presence()
         }

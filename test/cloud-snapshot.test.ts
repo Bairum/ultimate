@@ -302,6 +302,45 @@ it('skips the bundle when the repository has no ultimate branches', async () => 
   expect(count(result.database, 't')).toBe(3)
 })
 
+it('carries a branch checked out in a source worktree, with commits of its own, to a fresh clone', async () => {
+  // A writer's concluded conversations leave branches checked out in their worktrees; the move must take them along.
+  const repo = await temp('ultimate-snapshot-worktree-source-')
+  await git(repo, 'init', '-b', 'main')
+  await git(
+    repo,
+    '-c',
+    'user.name=T',
+    '-c',
+    'user.email=t@example.com',
+    'commit',
+    '--allow-empty',
+    '-m',
+    'root',
+  )
+  const clone = join(await temp('ultimate-snapshot-worktree-target-'), 'checkout')
+  await git(repo, 'clone', '--quiet', repo, clone)
+  const checkedOut = join(await temp('ultimate-snapshot-worktree-'), 'feature')
+  await git(repo, 'worktree', 'add', '--quiet', '-b', 'ultimate/feature', checkedOut)
+  await commit(repo, 'ultimate/feature', 'feature work')
+  const own = await commit(repo, 'ultimate/feature', 'more feature work')
+  const path = join(await temp('ultimate-snapshot-worktree-home-'), 'state.sqlite')
+  new DatabaseSync(path).close()
+  const uploaded = await uploadSnapshot({
+    ...remote,
+    epoch: 1,
+    machine: 'desk',
+    database: path,
+    repo,
+  })
+  expect(uploaded.bundle).toBeDefined()
+  const result = await downloadSnapshot({ ...remote, id: uploaded.id, dir, repo: clone })
+  expect(result.keptRefs).toEqual([])
+  expect(await tip(clone, 'ultimate/feature')).toBe(own)
+  expect(await git(clone, 'log', '--format=%s', 'ultimate/feature')).toBe(
+    'more feature work\nfeature work\nroot',
+  )
+})
+
 const call = (path: string, init: RequestInit = {}, token = 'dev') =>
   worker.fetch(
     new Request(`https://cloud.example/sync/snapshots/${path}`, {

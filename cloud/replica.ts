@@ -1,4 +1,5 @@
 import type { ConversationRecord, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
+import { handoverDetail, LEFT_LIMITS } from './protocol.ts'
 import type {
   CloudInfo,
   CloudMessage,
@@ -175,14 +176,37 @@ export class ReplicaStore {
     this.put('metadata', 7, { ...transition, error, cancellable: false })
     return true
   }
-  /** The writer's drain progress shows as the handover step's detail of the transition to `by`. */
-  draining(by: string, tasks: number): boolean {
+  /**
+   * The writer `from`'s drain progress shows as the handover step's detail of the transition to `by`, with the
+   * worktrees it leaves behind uncommitted (`dirty`), which the transition keeps as `left`.
+   */
+  draining(by: string, tasks: number, from: string, dirty?: string[]): boolean {
     const transition = this.transition()
     const handover = transition?.steps.find((step) => step.name === 'handover')
     if (transition?.target !== by || !handover) return false
-    handover.detail = `finishing ${tasks} ${tasks === 1 ? 'run' : 'runs'}`
+    if (dirty) transition.left = dirty
+    handover.detail = handoverDetail(from, tasks, transition.left?.length)
     this.put('metadata', 7, transition)
     return true
+  }
+  /**
+   * Secret names `machine` reported after its hello. They replace its record, and the lease's when they come from the
+   * writer's checkout at `root`.
+   */
+  secrets(
+    machine: string,
+    root: string,
+    writer: boolean,
+    names: Pick<Hello, 'secrets' | 'secretsComplete'>,
+  ) {
+    this.sql.transaction(() => {
+      const machines = this.machines()
+      if (machines[machine])
+        this.put('metadata', 6, { ...machines, [machine]: { ...machines[machine], ...names } })
+      const lease = this.lease()
+      if (writer && lease?.machine === machine && lease.root === root)
+        this.put('metadata', 5, { ...lease, ...names } satisfies LeaseRecord)
+    })
   }
   /** `GET /api/cloud`: every machine, the lease and the latest transition. */
   cloud(connected: Set<string>, online: boolean): CloudInfo {
@@ -367,7 +391,14 @@ export class ReplicaStore {
     message: Exclude<
       MachineMessage,
       {
-        type: 'hello' | 'release' | 'claim' | 'request-release' | 'release-waiting' | 'transition'
+        type:
+          | 'hello'
+          | 'release'
+          | 'claim'
+          | 'request-release'
+          | 'release-waiting'
+          | 'transition'
+          | 'secrets'
       }
     >,
   ): CloudMessage[] {
@@ -529,9 +560,14 @@ function validTransition(value: Transition, machine: string) {
         STATES.includes(step.state) &&
         text(step.detail) &&
         count(step.done) &&
-        count(step.total),
+        count(step.total) &&
+        count(step.commits),
     ) &&
     text(value.error) &&
+    (value.left === undefined ||
+      (Array.isArray(value.left) &&
+        value.left.length <= LEFT_LIMITS.paths &&
+        value.left.every((path) => typeof path === 'string' && path.length <= LEFT_LIMITS.path))) &&
     typeof value.cancellable === 'boolean' &&
     Number.isSafeInteger(value.startedAt)
   )

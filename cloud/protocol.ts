@@ -15,7 +15,7 @@
 //    The writer machine is the writer again, at the writer's root, when it names the stored epoch, or no epoch at all
 //    (a lost lease file); it stores the epoch it is told. Any other machine or checkout, or one naming another epoch,
 //    is a standby: it sends nothing
-//    but its hello and `claim`, and the cloud ignores anything else it sends. Standbys get `role` again whenever the
+//    but its hello, `claim` and `secrets`, and the cloud ignores anything else it sends. Standbys get `role` again whenever the
 //    writer, its online state or the lease changes. Steps 3 to 6 are the writer's alone.
 //    The lease only changes hands explicitly. A disconnect never frees it: an offline writer stays the writer. The
 //    writer frees it with `release` after uploading a snapshot; the lease keeps its epoch and the snapshot, and every
@@ -88,6 +88,21 @@ export const HELLO_LIMITS = {
   secret: /^[A-Z][A-Z0-9_]{0,63}$/,
 }
 
+/** A releasing writer names at most this many worktrees with uncommitted changes, each path at most `path` long. */
+export const LEFT_LIMITS = { paths: 20, path: 500 }
+
+/**
+ * The handover step's detail while the writer `from` drains: `finishing 2 runs`, then the worktrees with uncommitted
+ * changes that stay behind, `2 worktrees with uncommitted changes stay on haza-pc`.
+ */
+export function handoverDetail(from: string, tasks: number, left = 0) {
+  const parts: string[] = []
+  if (tasks > 0) parts.push(`finishing ${tasks} ${tasks === 1 ? 'run' : 'runs'}`)
+  if (left === 1) parts.push(`1 worktree with uncommitted changes stays on ${from}`)
+  if (left > 1) parts.push(`${left} worktrees with uncommitted changes stay on ${from}`)
+  return parts.join(' · ')
+}
+
 /** One step of preparing a machine to take the lease, in the order they run. */
 export interface TransitionStep {
   name: 'fetch' | 'install' | 'checks' | 'handover' | 'download' | 'branches' | 'claim'
@@ -97,6 +112,8 @@ export interface TransitionStep {
   /** Bytes, for `download`. */
   done?: number
   total?: number
+  /** Commits the `fetch` step fast-forwarded. */
+  commits?: number
 }
 /** A machine preparing to take the lease (`target`) from the current writer (`from`, null while it is free). */
 export interface Transition {
@@ -111,6 +128,8 @@ export interface Transition {
   /** Until the claim is sent. */
   cancellable: boolean
   startedAt: number
+  /** Worktrees of the writer's checkout with uncommitted changes, which stay on that machine. */
+  left?: string[]
 }
 
 /** `GET /p/<slug>/api/cloud`: every machine that said hello, the lease and the latest transition. */
@@ -193,8 +212,13 @@ export type MachineMessage =
   | { type: 'request-release'; id: string }
   /** The preparing machine reports its transition; null clears it. */
   | { type: 'transition'; value: Transition | null }
-  /** The writer tells the machine `by` that its release waits for `tasks` running tasks. */
-  | { type: 'release-waiting'; by: string; tasks: number }
+  /**
+   * The writer tells the machine `by` that its release waits for `tasks` running tasks; once, before it releases, it
+   * names the worktrees with uncommitted changes that stay behind (`dirty`, bounded by `LEFT_LIMITS`).
+   */
+  | { type: 'release-waiting'; by: string; tasks: number; dirty?: string[] }
+  /** The user's secret names changed since hello; writer and standbys send it, bounded as in hello. */
+  | { type: 'secrets'; secrets: string[]; secretsComplete: boolean }
   | { type: 'system'; value: SystemInfo }
   | { type: 'models'; value: unknown }
   | { type: 'delivered'; id: string; submissionId: number }
@@ -229,8 +253,8 @@ export type CloudMessage =
   | { type: 'move-to'; id: string; force?: boolean }
   /** To the target, from the cloud UI: stop transition `id` if it can still stop. */
   | { type: 'cancel'; id: string }
-  /** To the requester `by`: the writer's release waits for `tasks` running tasks. */
-  | { type: 'release-waiting'; by: string; tasks: number }
+  /** To the requester `by`: the writer's release waits for `tasks` running tasks, leaving `dirty` worktrees behind. */
+  | { type: 'release-waiting'; by: string; tasks: number; dirty?: string[] }
 
 /** SHA-256 hex of the JSON text; works in Node and in Workers. */
 export async function docHash(value: JsonObject | null): Promise<string> {

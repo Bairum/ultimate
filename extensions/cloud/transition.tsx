@@ -1,5 +1,13 @@
 import { cn } from 'cn'
-import { CheckIcon, CircleIcon, LoaderCircleIcon, MinusIcon, XIcon } from 'lucide-react'
+import {
+  ArrowUpIcon,
+  CheckIcon,
+  ChevronRightIcon,
+  CircleIcon,
+  LoaderCircleIcon,
+  MinusIcon,
+  XIcon,
+} from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { errorMessage } from '@/sdk'
@@ -61,8 +69,29 @@ function StepIcon({ state }: { state: TransitionStep['state'] }) {
   return <CircleIcon className="size-2 shrink-0 text-muted-foreground/40" />
 }
 
-function Step({ step }: { step: TransitionStep }) {
+/** The worktrees the writer leaves behind with uncommitted changes, collapsed under the handover line. */
+function Left({ paths }: { paths: string[] }) {
+  return (
+    <details className="group ml-5 text-muted-foreground/60">
+      <summary className="flex cursor-pointer list-none items-center gap-1 hover:text-muted-foreground [&::-webkit-details-marker]:hidden">
+        <ChevronRightIcon className="size-3 shrink-0 transition-transform group-open:rotate-90" />
+        {paths.length === 1 ? 'show the worktree' : `show ${paths.length} worktrees`}
+      </summary>
+      <ul className="mt-0.5 space-y-0.5 pl-4">
+        {paths.map((path) => (
+          <li className="truncate" key={path} title={path}>
+            {path}
+          </li>
+        ))}
+      </ul>
+    </details>
+  )
+}
+
+function Step({ step, left }: { step: TransitionStep; left?: string[] }) {
   const sized = step.name === 'download' && step.total !== undefined && step.total > 0
+  // A fetch that fast-forwarded names its commit count up front; the detail keeps the range.
+  const advanced = step.name === 'fetch' && !!step.commits && step.state === 'done'
   return (
     <li className="space-y-1">
       <div
@@ -76,6 +105,15 @@ function Step({ step }: { step: TransitionStep }) {
           <StepIcon state={step.state} />
         </span>
         <span className="shrink-0">{labels[step.name]}</span>
+        {advanced && (
+          <span
+            className="flex shrink-0 items-center gap-0.5 text-foreground/75"
+            title={`${step.commits} new ${step.commits === 1 ? 'commit' : 'commits'}`}
+          >
+            <ArrowUpIcon className="size-3" />
+            {step.commits}
+          </span>
+        )}
         {step.detail && step.state !== 'failed' && (
           <span className="min-w-0 truncate text-muted-foreground/60" title={step.detail}>
             · {step.detail}
@@ -95,6 +133,7 @@ function Step({ step }: { step: TransitionStep }) {
           />
         </div>
       )}
+      {step.name === 'handover' && left && left.length > 0 && <Left paths={left} />}
     </li>
   )
 }
@@ -187,7 +226,7 @@ export function TransitionCard({
           {transition.steps
             .filter((step) => !compact || step.name === transition.step)
             .map((step) => (
-              <Step key={step.name} step={step} />
+              <Step key={step.name} left={transition.left} step={step} />
             ))}
         </ol>
         {transition.error && (
