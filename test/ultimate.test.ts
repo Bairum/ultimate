@@ -106,9 +106,11 @@ it.concurrent('ships a resident Ultimate definition with valid tools; standing a
   const ultimate = await f.subagents.standing('ultimate', context)
   const agent = await (await f.server.harness.conversation(ultimate, context))!.agent(context)
   expect(agent.tools.map((tool) => tool.name).toSorted()).toEqual(definition.tools!.toSorted())
-  expect((await f.server.root.agent(context)).tools.map((tool) => tool.name)).not.toContain(
-    'branch',
-  )
+  // debug is deferred: @ultimate names it, the root agent does not get it.
+  expect(definition.tools).toContain('debug')
+  const rootTools = (await f.server.root.agent(context)).tools.map((tool) => tool.name)
+  expect(rootTools).not.toContain('branch')
+  expect(rootTools).not.toContain('debug')
   expect(
     (await f.server.harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.dice,
   ).toBeUndefined()
