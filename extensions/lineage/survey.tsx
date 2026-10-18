@@ -57,7 +57,7 @@ export function Familiarize({ id, dock }: { id: number; dock?: boolean }) {
             </p>
             <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
               Talk to @ultimate to choose your setup and read the project. It writes what it learned
-              as this root's first tally. Every branch you start here begins from it.
+              into this root's context, which every branch starts from.
             </p>
             <textarea
               aria-label="Focus"

@@ -42,10 +42,11 @@ const commands: CommandContribution[] = [
   {
     id: 'agent.compact',
     title: 'Compact the context',
-    // @ultimate compacts a root's tally with `compact_tally`.
-    when: (context) =>
-      context.conversationId === undefined || !getRoots()?.includes(context.conversationId),
-    run: () => api.compact(),
+    // A root compacts through lineage, which admits only a tally and gives it the root's summary focus.
+    run: (context) =>
+      context.conversationId !== undefined && getRoots()?.includes(context.conversationId)
+        ? api.action('lineage', 'compact', { id: context.conversationId })
+        : api.compact(),
   },
   {
     id: 'agent.composer',

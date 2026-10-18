@@ -1,6 +1,5 @@
 import { CheckIcon } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { Button } from '@/components/ui/button'
 import {
   Command,
   CommandEmpty,
@@ -11,68 +10,9 @@ import {
 } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { api, cn, errorMessage, useDialog, useModels } from '@/sdk'
-import type { UltimateActions } from '@/sdk'
 import { ModelRow } from '../models/picker.tsx'
 import { parseSummaryModel } from './summary-model-ref.ts'
-import { useWorkspaceConversations as useConversations } from '../workspaces/data.tsx'
-const resetDialog = 'conversations.reset'
 export const summaryModelDialog = 'conversations.summary-model'
-
-/** The conversation the clear-context dialog asks about; set just before it opens. */
-let resetTarget: number | undefined
-export function openReset(actions: Pick<UltimateActions, 'open'>, id: number) {
-  resetTarget = id
-  actions.open(resetDialog)
-}
-
-/** Asks before a context reset, from the row menu or the command; a failure stays in the dialog. */
-export function ResetDialog() {
-  const [open, setOpen] = useDialog(resetDialog)
-  const conversation = useConversations().find((candidate) => candidate.id === resetTarget)
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState<string>()
-  const close = () => {
-    setOpen(false)
-    setError(undefined)
-  }
-  const confirm = async () => {
-    setPending(true)
-    setError(undefined)
-    try {
-      await api.action('conversations', 'reset', { id: resetTarget ?? null })
-      close()
-    } catch (failure) {
-      setError(errorMessage(failure))
-    } finally {
-      setPending(false)
-    }
-  }
-  return (
-    <Dialog onOpenChange={(next) => (next ? setOpen(true) : close())} open={open}>
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-md" showCloseButton={false}>
-        <div className="px-5 pt-5 pb-4">
-          <DialogTitle className="text-[14px] font-medium">Clear the context</DialogTitle>
-          <DialogDescription className="mt-2 text-[13px] leading-relaxed break-words">
-            Clear the context of{' '}
-            <span className="text-foreground">
-              {conversation?.title ?? `#${resetTarget ?? '?'}`}
-            </span>
-            ? The agent starts fresh; the history stays stored.
-          </DialogDescription>
-          {error && <p className="mt-3 font-mono text-[12px] break-words text-error">{error}</p>}
-        </div>
-        <div className="flex justify-end gap-2 border-t border-border/70 bg-sidebar px-5 py-3">
-          <Button onClick={close} size="sm" variant="ghost">
-            Cancel
-          </Button>
-          <Button disabled={pending || conversation?.busy} onClick={() => void confirm()} size="sm">
-            {pending ? 'Clearing…' : 'Clear context'}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
 
 type SummaryModelSetting = {
   value: unknown

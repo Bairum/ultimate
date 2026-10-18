@@ -1,5 +1,5 @@
-The project's conversations in the Agent surface's sidebar: talk to @ultimate, switch, rename, clear, and conclude them.
-Several branches run at once as separate agents; lineage roots keep their shared tally without running turns.
+The project's conversations in the Agent surface's sidebar: talk to @ultimate, switch, rename, compact, and conclude them.
+Several branches run at once as separate agents; lineage roots keep their shared context without running turns.
 A summary model (GPT-6 Luna by default) automatically gives top-level conversations concise titles and sidebar summaries, and assesses each final reply without
 changing the main agent. Ownerless, top-level standing agents (label `agent`) and lander conversations
 (label `lander`) never schedule summary tasks: their `@name` titles stay fixed, with no automatic summary,
@@ -15,13 +15,19 @@ its conversation exists. Below it, an Agents group lists the lander first, then 
 agents (label `agent`) by ID. These rows are never concluded or hidden and show no summary, feature or assessment:
 @lander shows its state (`landing`, `fixing`, `diagnosing`, `working` or `idle`), its latest landing's feature, short
 sha and age, and `queue N` while submissions wait; other agents show `working` or `idle` and the age. Their menu only
-clears the context.
+compacts the context; they are never renamed, cleared or concluded.
 
 The title bar's `@ultimate` button (`titlebar.left`, beside the surfaces, also on phones) opens @ultimate the same way
 from every surface. Its dot pulses while @ultimate works and is amber while questions wait on you, with their count.
 
-The sidebar lists the roots below the agents (lineage's `useRoots()`), each marked with a branch icon and `root`;
-trees sort by their newest input anywhere in them.
+The sidebar lists the roots below the agents (lineage's `useRoots()`); trees sort by their newest input anywhere in
+them. A root's row (`RootRow`) is the head of its tree, not one of its conversations: a scroll icon (a pulsing dot
+while it compacts), its title in semibold, the size of its context, and the last three things that happened in it from
+lineage's `recent {id}` action (a landing's short sha and subject, a note with its sender, a new branch with its
+prompt, a compaction, or the context's start), each with its age; clicking one opens the root at that entry. It shows
+no feature, summary or assessment, and the summary below the tree is not shown for it. Its menu offers Compact context
+(lineage `compact {id}`, only for a root that has a context) and Talk to @ultimate; a root is never renamed, cleared or
+concluded here. The list refetches whenever the root's token count changes, which every new entry does.
 Branches nest under their source (`branchOf.conversationId`), with a hairline guide and one indent per depth;
 siblings sort by latest input. Older conversations that are neither roots nor branches live in the collapsed
 "Earlier · N" group, above "Concluded · N". Isolated rows carry a short `#<conversationId>` badge;
@@ -50,21 +56,20 @@ invented delegation edges. Expansion is persisted in `ext.conversations.expanded
 @ultimate starts coordinator branches; there are no manual creation commands or isolation preferences. The sidebar
 header's Workspaces button opens the read-only checkout panel.
 Conclude releases clean, fully landed checkouts, including owned subagent checkouts. Uncommitted files,
-unlanded commits, and busy checkouts are kept; Clear context never removes checkouts or commits.
+unlanded commits, and busy checkouts are kept.
 The Workspaces panel shows checkouts read-only.
 
 On hover or focus, a row's `…` menu offers Rename (inline; also on double-click; Enter or leaving the field saves,
-Escape cancels, and after either key focus returns to the row), Clear context… (asks first; not while the conversation
-itself works, as the server refuses), and Conclude. Before concluding, the UI calls workspaces `pending {ids}`.
+Escape cancels, and after either key focus returns to the row), Compact context (keeps the gist and frees context;
+disabled while the conversation works), and Conclude. There is no Clear context: it would drop what a branch inherited
+from its root along with everything else. Before concluding, the UI calls workspaces `pending {ids}`.
 When a conversation or its subagents have uncommitted files or unlanded commits, a confirmation dialog names the
 work and explains that its checkout is kept until the work lands or is discarded. Otherwise it concludes at once.
 Concluded rows and their branches/subagents sit in a collapsed "Concluded · N" group at the bottom.
 Resume brings them back; sending to a concluded branch resumes it and any concluded ancestors automatically.
 Concluding the shown subtree shows another live conversation when one exists.
 
-Commands, under Conversations: `conversations.reset`
-("Clear the context" of the shown top-level conversation, when it is idle, has entries and is not a listed root), and
-`conversations.summary-model` ("Summary model…", see [Summary model](#summary-model)). The UI state keeps concluded
+Commands, under Conversations: `conversations.summary-model` ("Summary model…", see [Summary model](#summary-model)). The UI state keeps concluded
 ids in `ext.conversations.concluded` and, in `ext.conversations.seen`, the latest answer time seen per top-level
 conversation; a conversation not recorded there counts as seen.
 
@@ -93,7 +98,8 @@ Actions are callable from the browser with `api.action` or by agents with
 `await ultimate.action('conversations', 'conclude', {ids: [N]})` in codemode. The browser never rewrites the concluded
 list. No state-key migration runs automatically.
 
-- `conclude {ids:number[]}`: validates top-level conversations (unknown ids and subagents throw), deduplicates and
+- `conclude {ids:number[]}`: validates top-level conversations (unknown ids, subagents, listed roots and standing agents
+  throw, refusing the whole call), deduplicates and
   adds them to `ext.conversations.concluded` in one transaction, then calls workspaces `release`. Returns
   `{ concluded: number[], kept: {id, uncommitted, unlanded, busy?}[] }`; `kept` explains which checkouts remain.
 - `resume {ids:number[]}`: transactionally removes ids and their concluded ancestors from the list, returning
@@ -107,7 +113,8 @@ The single-conversation actions below reject bad args, unknown conversations, an
   again and re-enables automatic titles on the next scheduled summary. Nonblank renames take manual ownership, even
   during generation. Returns `{ ok: true }`.
 - `reset {id}`: clears the conversation with a Durable reset (a `pi.reset` entry starts a new, empty context). It
-  refuses while the conversation works. A conversation named by its first message keeps that name as its title.
+  refuses while the conversation works, and for listed roots and standing agents (@ultimate, the lander, residents).
+  The UI no longer offers it. A conversation named by its first message keeps that name as its title.
   Returns `{ ok: true }`.
 
 ## Automatic summaries and reply assessments

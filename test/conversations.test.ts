@@ -412,6 +412,8 @@ it('conclude merges concurrent additions, deduplicates ids and returns kept chec
   const released: number[][] = []
   const host = {
     harness: () => server.harness,
+    doc: () => undefined,
+    metadata: Metadata,
     use: () => ({
       release: async (ids: number[]) => {
         released.push(ids)
@@ -447,6 +449,35 @@ it('conclude merges concurrent additions, deduplicates ids and returns kept chec
     status: 500,
     data: { error: 'Expected conversation ids' },
   })
+})
+
+it('refuses to conclude or clear a root or a standing agent', async () => {
+  const { server, create, action } = await launch()
+  const ultimate = (
+    await post(server, '/api/extensions/subagents/actions/standing', { args: { name: 'ultimate' } })
+  ).data.result as number
+  const lander = await create()
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(Metadata, lander)).label = 'lander'
+  }, context)
+  const branch = await create()
+  for (const [id, kind] of [
+    [1, 'a root; roots'],
+    [ultimate, 'a standing agent; standing agents'],
+    [lander, 'a standing agent; standing agents'],
+  ] as const) {
+    expect(await action('conclude', { ids: [branch, id] })).toEqual({
+      status: 500,
+      data: { error: `#${id} is ${kind} cannot be concluded` },
+    })
+    expect(await action('reset', { id })).toEqual({
+      status: 500,
+      data: { error: `#${id} is ${kind} cannot be cleared` },
+    })
+  }
+  // The refusal is the whole call's: the ordinary conversation named with it was not concluded either.
+  expect((await server.host.uiState(context))['ext.conversations.concluded']).toBeUndefined()
+  expect(await action('conclude', { ids: [branch] })).toMatchObject({ status: 200 })
 })
 
 it('resume removes concluded ancestors and leaves unrelated ids alone', async () => {

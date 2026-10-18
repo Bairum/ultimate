@@ -23,6 +23,7 @@
     ".ultimate/extensions/**/*.tsx",
     "shared/protocol.ts",
     "extensions/conversations/types.ts",
+    "extensions/lineage/types.ts",
     "extensions/phase/types.ts",
     "extensions/questions/types.ts",
     "extensions/conversations/summary-model-ref.ts",

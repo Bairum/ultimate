@@ -1,12 +1,17 @@
 import {
   GitBranchIcon,
+  GitForkIcon,
+  GitMergeIcon,
   CircleCheckIcon,
   CircleHelpIcon,
   EllipsisIcon,
-  EraserIcon,
+  FoldVerticalIcon,
+  MessageCircleIcon,
   PencilIcon,
+  ScrollTextIcon,
+  StickyNoteIcon,
 } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   DropdownMenu,
@@ -15,14 +20,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { api, cn, useUltimate } from '@/sdk'
+import { api, cn, events, formatTokens, useAction, useDocOf, useUltimate } from '@/sdk'
+import type { RootEvent } from '../lineage/types.ts'
 import { FeatureTag } from './feature.tsx'
 import { TaskChip, useTaskOf } from '../plan/chip.tsx'
 import { PhaseLabel, usePhase } from '../phase/chip.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/data.tsx'
 import type { Assessment, OverviewRow } from './types.ts'
 import { ago } from './lander.tsx'
-import { openReset } from './dialogs.tsx'
 
 export function currentAssessment(row: OverviewRow | undefined) {
   return row?.runState === 'answered' &&
@@ -96,9 +101,7 @@ export function Row({
   feature,
   assessment,
   activity,
-  root,
 }: {
-  root?: boolean
   conversation: ConversationSummary
   shown: boolean
   draft: boolean
@@ -129,7 +132,7 @@ export function Row({
         ? 'Untitled conversation'
         : `#${conversation.id}`)
   const latest = Math.max(conversation.inputAt ?? 0, conversation.answerAt ?? 0)
-  const hasMetadata = root || feature || conversation.workspace || latest > 0
+  const hasMetadata = feature || conversation.workspace || latest > 0
   const rename = () => {
     cancelled.current = false
     setEditing(true)
@@ -208,12 +211,6 @@ export function Row({
           </span>
           {hasMetadata && (
             <span className="flex w-full items-center gap-2 pr-5 pl-[18px] font-mono text-[10px] leading-4 text-muted-foreground">
-              {root && (
-                <span className="flex shrink-0 items-center gap-1">
-                  <GitBranchIcon aria-label="Root" className="size-2.5" />
-                  root
-                </span>
-              )}
               {feature && <FeatureTag feature={feature} />}
               {conversation.workspace && (
                 <span className="shrink-0" title="Isolated checkout">
@@ -283,14 +280,7 @@ export function Row({
               <PencilIcon />
               Rename
             </DropdownMenuItem>
-            <DropdownMenuItem
-              className="text-[12.5px]"
-              disabled={conversation.busy}
-              onSelect={() => (afterMenu.current = () => openReset(actions, conversation.id))}
-            >
-              <EraserIcon />
-              Clear context…
-            </DropdownMenuItem>
+            <CompactItem conversation={conversation} />
             <DropdownMenuItem className="text-[12.5px]" onSelect={() => onConclude(!concluded)}>
               <CircleCheckIcon />
               {concluded ? 'Resume' : 'Conclude'}
@@ -304,7 +294,8 @@ export function Row({
 
 /**
  * A standing agent or the lander: its fixed `@name`, a leading status mark and one quiet line of state, never a
- * summary, feature or assessment. Click opens it; the menu only clears its context.
+ * summary, feature or assessment. Click opens it; the menu only compacts its context: it is never cleared, renamed or
+ * concluded.
  */
 export function StandingRow({
   conversation,
@@ -322,9 +313,6 @@ export function StandingRow({
   onOpen: () => void
   children: ReactNode
 }) {
-  const actions = useUltimate()
-  /** Opens the dialog once the menu has closed, so focus lands in it. */
-  const afterMenu = useRef<() => void>(undefined)
   return (
     <div
       className={cn(
@@ -358,28 +346,206 @@ export function StandingRow({
           >
             <EllipsisIcon className="size-3.5" />
           </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="start"
-            className="w-44 [&_[role=menuitem]]:cursor-pointer"
-            onCloseAutoFocus={(event) => {
-              const next = afterMenu.current
-              afterMenu.current = undefined
-              if (!next) return
-              event.preventDefault()
-              next()
-            }}
-          >
-            <DropdownMenuItem
-              className="text-[12.5px]"
-              disabled={conversation.busy}
-              onSelect={() => (afterMenu.current = () => openReset(actions, conversation.id))}
-            >
-              <EraserIcon />
-              Clear context…
-            </DropdownMenuItem>
+          <DropdownMenuContent align="start" className="w-44 [&_[role=menuitem]]:cursor-pointer">
+            <CompactItem conversation={conversation} />
           </DropdownMenuContent>
         </DropdownMenu>
       )}
+    </div>
+  )
+}
+
+/** Compacts a conversation's context: the gist stays, older turns leave it; the history stays stored. */
+function CompactItem({ conversation }: { conversation: ConversationSummary }) {
+  return (
+    <DropdownMenuItem
+      className="text-[12.5px]"
+      disabled={conversation.busy}
+      onSelect={() => void api.compact(undefined, conversation.id)}
+    >
+      <FoldVerticalIcon />
+      Compact context
+    </DropdownMenuItem>
+  )
+}
+
+const eventIcons = {
+  landed: GitMergeIcon,
+  note: StickyNoteIcon,
+  branched: GitForkIcon,
+  compacted: FoldVerticalIcon,
+  started: ScrollTextIcon,
+}
+
+/** One line per root event: what happened, in a few words. */
+function eventText(event: RootEvent) {
+  switch (event.type) {
+    case 'landed':
+      return (
+        <>
+          <span className="shrink-0 text-foreground/80">{event.sha}</span>
+          <span className="truncate">{event.subject ?? 'landed'}</span>
+        </>
+      )
+    case 'note':
+      return (
+        <span className="truncate">
+          {event.from !== undefined && `#${event.from}: `}
+          {event.text.replace(/\s+/g, ' ')}
+        </span>
+      )
+    case 'branched':
+      return (
+        <>
+          <span className="shrink-0 text-foreground/80">#{event.branch}</span>
+          <span className="truncate">{event.intent.replace(/\s+/g, ' ')}</span>
+        </>
+      )
+    case 'compacted':
+      return <span className="truncate">context compacted</span>
+    default:
+      return <span className="truncate">context started</span>
+  }
+}
+
+/** Opens `conversation` at `entry` on the Agent surface. */
+function openEntry(
+  actions: Pick<ReturnType<typeof useUltimate>, 'switchConversation' | 'showSurface'>,
+  conversation: number,
+  entry: number,
+) {
+  events.emit('board:open', { conversation, entry })
+  actions.showSurface('agent')
+  actions.switchConversation(conversation)
+}
+
+/**
+ * The head of a tree: its title, the size of the context every branch starts from, and the last three things that
+ * happened in it (landings, notes, new branches, compactions), each opening the root at its entry. No feature, summary
+ * or assessment; the menu compacts the context or opens @ultimate, who keeps it. A root is never concluded or cleared.
+ */
+export function RootRow({
+  conversation,
+  shown,
+  working,
+  now,
+  onTalk,
+}: {
+  conversation: ConversationSummary
+  shown: boolean
+  working?: 'self' | 'subagents'
+  now: number
+  onTalk: () => void
+}) {
+  const actions = useUltimate()
+  const id = conversation.id
+  const tally = useDocOf<{ tokens: number; since?: number }>(id, 'lineage.tally')
+  const recent = useAction<RootEvent[]>('lineage', 'recent', { id }, { onError: () => {} })
+  const { refetch } = recent
+  // Every entry the root gets recounts its tokens: a new count means something may have happened.
+  const tokens = tally?.tokens
+  const first = useRef(true)
+  useEffect(() => {
+    if (first.current) {
+      first.current = false
+      return
+    }
+    void refetch()
+  }, [tokens, refetch])
+  const name = conversation.title ?? `#${id}`
+  return (
+    <div
+      className={cn(
+        'group relative mx-2 rounded-md transition-colors',
+        shown ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/50',
+      )}
+      data-conversation={id}
+      data-root-row={id}
+    >
+      <button
+        aria-current={shown ? 'true' : undefined}
+        className="flex h-7 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md pr-7 pl-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+        onClick={() => actions.switchConversation(id)}
+        type="button"
+      >
+        <span className="flex size-3 shrink-0 items-center justify-center">
+          {working ? (
+            <span className="size-1.5 animate-pulse-dot rounded-full bg-brand" />
+          ) : (
+            <ScrollTextIcon aria-label="Root" className="size-3 text-brand" />
+          )}
+        </span>
+        <span
+          className={cn(
+            'min-w-0 flex-1 truncate text-[13px] font-semibold',
+            shown ? 'text-foreground' : 'text-foreground/90',
+          )}
+          title={name}
+        >
+          {name}
+        </span>
+        {tokens !== undefined && tally?.since !== undefined && (
+          <span
+            className="shrink-0 font-mono text-[10px] text-muted-foreground/80"
+            title="Context every new branch starts from"
+          >
+            {formatTokens(tokens)}
+          </span>
+        )}
+      </button>
+      {!!recent.data?.length && (
+        <ul aria-label={`Recent in ${name}`} className="flex flex-col pb-1">
+          {recent.data.map((event) => {
+            const Icon = eventIcons[event.type]
+            return (
+              <li key={event.entry}>
+                <button
+                  className="flex h-5 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-sm pr-2 pl-[22px] text-left font-mono text-[10.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+                  data-root-event={event.type}
+                  onClick={() => openEntry(actions, id, event.entry)}
+                  title={`Open #${id}/${event.entry}`}
+                  type="button"
+                >
+                  <Icon
+                    className={cn(
+                      'size-3 shrink-0',
+                      event.type === 'landed' ? 'text-success' : 'text-muted-foreground/70',
+                    )}
+                  />
+                  {eventText(event)}
+                  {event.at !== undefined && (
+                    <span className="ml-auto shrink-0 pl-1 text-muted-foreground/60">
+                      {ago(event.at, now)}
+                    </span>
+                  )}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger
+          aria-label="Root actions"
+          className="invisible absolute top-1 right-1 flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none group-focus-within:visible group-hover:visible pointer-coarse:visible hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:visible data-[state=open]:bg-sidebar-accent data-[state=open]:text-foreground"
+        >
+          <EllipsisIcon className="size-3.5" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-48 [&_[role=menuitem]]:cursor-pointer">
+          <DropdownMenuItem
+            className="text-[12.5px]"
+            disabled={tally?.since === undefined || working !== undefined}
+            onSelect={() => void api.action('lineage', 'compact', { id })}
+          >
+            <FoldVerticalIcon />
+            Compact context
+          </DropdownMenuItem>
+          <DropdownMenuItem className="text-[12.5px]" onSelect={onTalk}>
+            <MessageCircleIcon />
+            Talk to @ultimate
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   )
 }

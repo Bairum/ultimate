@@ -23,6 +23,7 @@ import type {
   ConversationRecord,
   Cursor,
   EntryId,
+  EntryRecord,
   JsonObject,
   ModelRef,
   TaskId,
@@ -34,6 +35,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 import type { Tree } from './catchup.ts'
+import type { RootEvent } from './types.ts'
 
 /** The project's roots, each the top of one conversation tree; a fresh project's first conversation is its first. */
 export const Roots = defineDoc<{ roots: number[] }>({
@@ -796,6 +798,75 @@ function conversationArg(args: JsonValue) {
   return value as ConversationId
 }
 
+/** Starts a manual compaction of root tally `root` in the caller's transaction; refuses anything else. */
+async function compactTally(tx: Tx, root: number, instructions?: string) {
+  if (!(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.includes(root))
+    throw new Error(`#${root} is not a listed root`)
+  const id = root as ConversationId
+  if ((await tx.doc(Tally, id)).since === undefined) throw new Error(`#${root} is not a tally`)
+  if (await liveTask(tx, id, CompactionTask.definition.name))
+    throw new Error(`#${root} is already compacting`)
+  // Pi upstream: @earendil-works/pi-durable@1.3.0 src/harness/compaction.ts — inline unexported createCompaction for atomic admission.
+  const created = await tx.createTask(
+    CompactionTask,
+    { reason: 'manual', instructions },
+    { ownership: { kind: 'conversation' }, conversationId: id, background: false },
+  )
+  ;((await tx.doc(LiveDoc, id)).compactions ??= []).push({
+    taskId: created,
+    reason: 'manual',
+    blocking: false,
+    attempt: 1,
+  })
+  return created
+}
+
+/** What `entry` of a root tells its sidebar row: a landing, note, branch, compaction or the context's start. */
+function rootEvent(entry: EntryRecord): RootEvent | undefined {
+  const at = entry.model?.[0]?.timestamp
+  const base = { entry: entry.id as number, ...(at === undefined ? {} : { at }) }
+  const data = (entry.data ?? {}) as {
+    lineage?: { tally?: true }
+    branch?: unknown
+    intent?: unknown
+    source?: unknown
+    from?: unknown
+    sha?: unknown
+    commits?: unknown
+    text?: unknown
+  }
+  if (entry.kind === 'pi.compaction') return { ...base, type: 'compacted' }
+  if (entry.kind === 'pi.reset' && data.lineage?.tally) return { ...base, type: 'started' }
+  if (entry.kind === 'lineage.branched' && typeof data.branch === 'number')
+    return {
+      ...base,
+      type: 'branched',
+      branch: data.branch,
+      intent: typeof data.intent === 'string' ? data.intent : '',
+    }
+  if (entry.kind !== 'lineage.note' || data.source === 'main') return undefined
+  const from = typeof data.from === 'number' ? data.from : undefined
+  if (data.source === 'lander' && typeof data.sha === 'string') {
+    const commits = Array.isArray(data.commits) ? (data.commits as { subject?: string }[]) : []
+    const subject =
+      commits.find((commit) => commit.subject && !commit.subject.startsWith('Merge '))?.subject ??
+      commits[0]?.subject
+    return {
+      ...base,
+      type: 'landed',
+      sha: data.sha.slice(0, 7),
+      ...(subject ? { subject } : {}),
+      ...(from === undefined ? {} : { from }),
+    }
+  }
+  return {
+    ...base,
+    type: 'note',
+    ...(from === undefined ? {} : { from }),
+    text: typeof data.text === 'string' ? data.text : '',
+  }
+}
+
 /** Validates a new branch's prompt and configuration. */
 function rootInput(args: JsonValue) {
   const input = (args ?? {}) as Partial<BranchInput>
@@ -837,6 +908,41 @@ export const actions = {
         throw new Error(`${key} must be a positive integer`)
     if (input.from === undefined) throw new Error('from must be a positive integer')
     return startBranch(host, input as BranchInput, context)
+  },
+  /** `{id, limit?}`: the newest landings, notes, branches and compactions in root `id`, newest first (default 3). */
+  async recent(args: JsonValue, { host }: ActionContext) {
+    const id = conversationArg(args)
+    const requested = (args as { limit?: unknown }).limit
+    const limit =
+      typeof requested === 'number' && Number.isSafeInteger(requested)
+        ? Math.min(Math.max(requested, 1), 20)
+        : 3
+    return host.harness().commit(async (tx) => {
+      if (!(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.includes(id))
+        throw new Error(`#${id} is not a listed root`)
+      const events: RootEvent[] = []
+      let cursor: Cursor | undefined
+      do {
+        const page = await tx.scanEntries({ conversationId: id }, 100, cursor)
+        for (const entry of page.items) {
+          const event = rootEvent(entry)
+          if (event) events.push(event)
+          if (events.length === limit) return events
+        }
+        cursor = page.next
+      } while (cursor)
+      return events
+    }, context)
+  },
+  /** `{id, instructions?}`: compact root tally `id`, as @ultimate's `compact_tally` does. */
+  async compact(args: JsonValue, { host }: ActionContext) {
+    const id = conversationArg(args)
+    const instructions = (args as { instructions?: unknown }).instructions
+    if (instructions !== undefined && typeof instructions !== 'string')
+      throw new Error('instructions must be a string')
+    const taskId = await host.harness().commit((tx) => compactTally(tx, id, instructions), context)
+    host.harness().resume()
+    return { taskId }
   },
   /** Remove a root that never became a tally from `lineage.roots`, never the last; its tree's conversations leave every tree. */
   async unlist(args: JsonValue, { host }: ActionContext) {
@@ -1072,28 +1178,7 @@ export default function lineageExtension(host: ExtensionHost) {
           instructions: Type.Optional(Type.String()),
         }),
         async execute({ root, instructions }, api, ctx) {
-          const taskId = await api.commit(async (tx) => {
-            if (!(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.includes(root))
-              throw new Error(`#${root} is not a listed root`)
-            const id = root as ConversationId
-            if ((await tx.doc(Tally, id)).since === undefined)
-              throw new Error(`#${root} is not a tally`)
-            if (await liveTask(tx, id, CompactionTask.definition.name))
-              throw new Error(`#${root} is already compacting`)
-            // Pi upstream: @earendil-works/pi-durable@1.3.0 src/harness/compaction.ts — inline unexported createCompaction for atomic admission.
-            const created = await tx.createTask(
-              CompactionTask,
-              { reason: 'manual', instructions },
-              { ownership: { kind: 'conversation' }, conversationId: id, background: false },
-            )
-            ;((await tx.doc(LiveDoc, id)).compactions ??= []).push({
-              taskId: created,
-              reason: 'manual',
-              blocking: false,
-              attempt: 1,
-            })
-            return created
-          }, ctx)
+          const taskId = await api.commit((tx) => compactTally(tx, root, instructions), ctx)
           host.harness().resume()
           return { output: [{ type: 'text', text: JSON.stringify({ taskId }) }] }
         },

@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineExtension, ROOT_CONVERSATION_ID, section } from '@earendil-works/pi-durable'
-import type { CommitPublication, ConversationId } from '@earendil-works/pi-durable'
+import type { CommitPublication, ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { BranchedEvent } from '../lineage/server.ts'
@@ -30,6 +30,24 @@ async function topLevelId(host: ExtensionHost, args: JsonValue) {
   if (!found) throw new Error(`Unknown conversation ${id}`)
   if (found.owner) throw new Error(`Conversation ${id} is owned, not a top-level conversation`)
   return id as ConversationId
+}
+
+/**
+ * Roots and standing agents (@ultimate, the lander, other residents) are fixed parts of the project: refuse `verb`
+ * on them. Reads documents by kind, so it holds without lineage or subagents too.
+ */
+async function refuseFixed(host: ExtensionHost, tx: Tx, id: ConversationId, verb: string) {
+  const roots = host.doc('lineage.roots')
+  const listed = roots && ((await tx.doc(roots, ROOT_CONVERSATION_ID)) as { roots?: number[] })
+  if (listed?.roots?.includes(id)) throw new Error(`#${id} is a root; roots cannot be ${verb}`)
+  const standing = host.doc('ultimate.standing-agents')
+  const residents =
+    standing && ((await tx.doc(standing, ROOT_CONVERSATION_ID)) as Record<string, number>)
+  if (
+    Object.values(residents ?? {}).includes(id) ||
+    (await tx.doc(host.metadata, id)).label === 'lander'
+  )
+    throw new Error(`#${id} is a standing agent; standing agents cannot be ${verb}`)
 }
 
 async function setTitle(host: ExtensionHost, id: ConversationId, title: string | undefined) {
@@ -60,6 +78,7 @@ export const actions = {
         if (!found) throw new Error(`Unknown conversation ${id}`)
         if (found.owner)
           throw new Error(`Conversation ${id} is owned, not a top-level conversation`)
+        await refuseFixed(host, tx, id, 'concluded')
       }
       const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
       const previous = ui['ext.conversations.concluded']
@@ -118,6 +137,7 @@ export const actions = {
   /** `{id}`: starts a new context, keeping the conversation's title. */
   async reset(args: JsonValue, { host }: ActionContext) {
     const id = await topLevelId(host, args)
+    await host.harness().commit((tx) => refuseFixed(host, tx, id, 'cleared'), context)
     const graph = await host.harness().taskGraph(context)
     try {
       const summary = host.conversations().find((item) => item.id === id)
