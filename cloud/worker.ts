@@ -224,7 +224,8 @@ async function resolveKey(env: Env, key: string) {
 const AGENT_ROUTES: Record<string, { method: 'GET' | 'POST'; path: string }> = {
   '/sync/directory': { method: 'GET', path: '' },
   '/sync/cloud': { method: 'GET', path: '/api/cloud' },
-  '/sync/move': { method: 'POST', path: '/api/cloud/move' },
+  // The replica's own path for an agent's move, which no browser request reaches: the move is recorded as @sync's.
+  '/sync/move': { method: 'POST', path: '/sync/move' },
   '/sync/cancel': { method: 'POST', path: '/api/cloud/cancel' },
 }
 
@@ -624,6 +625,9 @@ export class SharedReplica {
       await discardBody(request)
       return Response.json({ error: 'Forbidden' }, { status: 403 })
     }
+    // Only the Worker's bearer route `/sync/move` reaches this path: browser requests reach `/api/*` alone.
+    if (url.pathname === '/sync/move')
+      return this.cloud(request, new URL('/api/cloud/move', url), 'sync')
     // The replica answers its own API before any request goes to the machine.
     if (url.pathname === '/api/cloud' || url.pathname.startsWith('/api/cloud/'))
       return this.cloud(request, url)
@@ -705,9 +709,10 @@ export class SharedReplica {
   }
   /**
    * `GET /api/cloud` lists machines, lease and transition; `POST /api/cloud/move {machine, force?}` asks that standby
-   * to prepare and take the lease, `POST /api/cloud/cancel` stops the running transition.
+   * to prepare and take the lease, started `by` the cloud UI or @sync, `POST /api/cloud/cancel` stops the running
+   * transition.
    */
-  async cloud(request: Request, url: URL) {
+  async cloud(request: Request, url: URL, by: 'cloud' | 'sync' = 'cloud') {
     const connected = new Set(this.admitted().map((socket) => attachment(socket)!.machine!))
     if (request.method === 'GET' && url.pathname === '/api/cloud')
       return Response.json(this.store.cloud(connected, this.sockets().length > 0))
@@ -728,7 +733,12 @@ export class SharedReplica {
       if (!target) return Response.json({ error: 'not connected' }, { status: 409 })
       const id = crypto.randomUUID()
       target.send(
-        JSON.stringify({ type: 'move-to', id, ...(body.force === true ? { force: true } : {}) }),
+        JSON.stringify({
+          type: 'move-to',
+          id,
+          by,
+          ...(body.force === true ? { force: true } : {}),
+        } satisfies CloudMessage),
       )
       return Response.json({ id }, { status: 202 })
     }

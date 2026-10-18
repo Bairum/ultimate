@@ -7,8 +7,9 @@
 //   storage, uploads a snapshot, records its hash in `cloud-lease.json`, sends `release` and waits for the free lease.
 // - A standby takes the lease on start (`cloud.autoClaim`, a free lease only), with "Move here", or when the cloud UI
 //   sends `move-to`. It first prepares, reporting each step as a `Transition`: it fast-forwards the checkout, installs
-//   when the lockfile changed, checks secrets and the project root, asks a holding writer to release, downloads the
-//   snapshot unless its database is that snapshot, and only then claims and opens storage with the snapshot installed.
+//   when the lockfile changed, checks the model login, secrets and the project root, asks a holding writer to release,
+//   downloads the snapshot unless its database is that snapshot, and only then claims and opens storage with the
+//   snapshot installed. The transition records who started it (`by`).
 //
 // Lifecycle switches never run inside a socket handler: roles are handled after a `setTimeout(0)`, one switch at a time.
 import { execFile } from 'node:child_process'
@@ -20,13 +21,15 @@ import { promisify } from 'node:util'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { handoverDetail, LEFT_LIMITS } from '../../cloud/protocol.ts'
-import type { Transition, TransitionStep } from '../../cloud/protocol.ts'
+import type { MoveBy, Transition, TransitionStep } from '../../cloud/protocol.ts'
 import type { projectBuilds } from '../../cloud/ui-build.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- a stop release holds storage's lock, which a swapped-in core owns
 import { acquireLock } from '../../server/lock.ts'
 import type { AutomationsService } from '../automations/server.ts'
 import { readSecret, secretMetadata } from '../secrets/store.ts'
+import { modelLogin, noLogin } from './login.ts'
+import type { ModelLogin } from './types.ts'
 import type { Connect, startSync, SyncOptions, SyncState } from './server.ts'
 import type { databaseHash, downloadSnapshot, uploadSnapshot } from './snapshot.ts'
 
@@ -55,6 +58,8 @@ export interface LeaseDeps {
   secret?: () => Promise<string | undefined>
   /** Runs git and pnpm for the prepare steps. */
   exec?: Exec
+  /** The model login this machine's agents run with, read from the host's model runtime unless injected. */
+  login?: () => Promise<ModelLogin>
 }
 /** `cloud.state`: everything the standby page shows. */
 export interface LeaseState {
@@ -73,6 +78,8 @@ export interface LeaseState {
   ran?: Transition
   /** The replica's project key the cloud admitted this machine under; a relinked checkout's differs from its origin's. */
   key?: string
+  /** The model login this machine's agents run with; a move here fails its checks without one. */
+  login: ModelLogin
   lastError?: string
 }
 
@@ -156,6 +163,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   const standbyPath = join(host.home, 'standby.json')
   const database = join(host.home, 'state.sqlite')
   const execute = deps.exec ?? exec
+  const loginHere = deps.login ?? (() => modelLogin(host))
   let sync: ReturnType<typeof startSync> | undefined
   let mode: 'serving' | 'standby' | undefined
   let closed = false
@@ -351,7 +359,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
             publish()
           }
         },
-        moveTo: (id, force) => setTimeout(() => void move({ id, force }).catch(report), 0),
+        moveTo: (id, force, by) => setTimeout(() => void move({ id, force, by }).catch(report), 0),
         cancel: (id) => {
           if (moving?.transition.id === id) cancel()
         },
@@ -465,7 +473,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     }
     const claimNow = autoClaim && !!state.free
     autoClaim = false
-    if (claimNow) await prepare(randomUUID(), false)
+    if (claimNow) await prepare(randomUUID(), false, 'auto')
   }
 
   /** Why "Move here" cannot work right now, if it cannot. */
@@ -573,7 +581,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
    * Prepare to take the lease and take it, reporting each step. A failure or a cancel before the claim leaves the
    * holder untouched and deletes only the download. Resolves whether this machine runs the project now.
    */
-  const prepare = async (id: string, force: boolean) => {
+  const prepare = async (id: string, force: boolean, by: MoveBy) => {
     const start = sync?.state()
     const refused = moving
       ? 'Another move is preparing'
@@ -588,6 +596,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       id,
       target: options.machine,
       from: start!.free ? null : (start!.writer?.machine ?? null),
+      by,
       step: 'fetch',
       steps: STEPS.map((name) => ({ name, state: 'pending' })),
       cancellable: true,
@@ -642,6 +651,9 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       if (reason) throw new Error(reason)
       const key = await secret()
       if (!key) throw new Error(missingKey)
+      // Without a model login nothing runs here once it moved: `force` only skips missing secrets.
+      const login = await loginHere()
+      if (!login.ok) throw new Error(noLogin(login.provider))
       const local = await localSecrets()
       const missing = missingSecrets(state, local)
       if (missing.length && !force) throw new Error(`Missing secrets: ${missing.join(', ')}`)
@@ -744,8 +756,11 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       return false
     }
   }
-  const move = ({ id = randomUUID(), force = false }: { id?: string; force?: boolean } = {}) =>
-    queue(() => prepare(id, force))
+  const move = ({
+    id = randomUUID(),
+    force = false,
+    by = 'local',
+  }: { id?: string; force?: boolean; by?: MoveBy } = {}) => queue(() => prepare(id, force, by))
 
   /**
    * With storage closed: upload the snapshot, record it, release and wait for the free lease. Resolves whether the
@@ -970,18 +985,20 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         ...(transition ? { transition: structuredClone(transition) } : {}),
         ...(ran ? { ran: structuredClone(ran) } : {}),
         ...(state?.project ? { key: state.project.key } : {}),
+        login: await loginHere(),
         lastError,
       }
     },
     /**
      * Start taking the project here: prepare, then claim a free lease or have the online writer release it first.
-     * `force` continues although secrets are missing. Resolves the transition ID at once; `move` resolves at its end.
+     * `force` continues although secrets are missing; `by` says who started it, this machine's page unless @sync.
+     * Resolves the transition ID at once; `move` resolves at its end.
      */
-    moveHere({ force = false }: { force?: boolean } = {}) {
+    moveHere({ force = false, by = 'local' }: { force?: boolean; by?: 'local' | 'sync' } = {}) {
       const reason = moving ? 'Another move is preparing' : blocked(sync?.state())
       if (reason) throw new Error(reason)
       const id = randomUUID()
-      void move({ id, force }).catch(report)
+      void move({ id, force, by }).catch(report)
       return { id }
     },
     move,

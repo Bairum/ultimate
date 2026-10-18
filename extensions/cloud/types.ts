@@ -1,5 +1,11 @@
 import type { Transition, Writer } from '../../cloud/protocol.ts'
 
+/** The provider this machine runs the project's agents with, and whether it has credentials here. */
+export interface ModelLogin {
+  provider: string
+  ok: boolean
+}
+
 /** The sync connection as operators watch it: catch-up and the acknowledgement window. */
 export interface SyncProgress {
   /** The sync socket is open and admitted. */
@@ -36,5 +42,7 @@ export interface CloudState {
   key?: string
   /** The sync connection's catch-up and backlog. */
   sync?: SyncProgress
+  /** While sync runs: the model login this machine's agents run with; a move here fails its checks without one. */
+  login?: ModelLogin
   lastError?: string
 }

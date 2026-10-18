@@ -98,8 +98,8 @@ export interface SyncHooks {
    * uncommitted changes stay behind (`dirty`).
    */
   releaseWaiting?(by: string, tasks: number, dirty?: string[]): void
-  /** The cloud UI asks this standby to take the lease as transition `id`. */
-  moveTo?(id: string, force: boolean): void
+  /** The cloud UI or @sync (`by`) asks this standby to take the lease as transition `id`. */
+  moveTo?(id: string, force: boolean, by: 'cloud' | 'sync'): void
   /** The cloud UI stops transition `id`. */
   cancel?(id: string): void
   /** The transition this machine prepares, named in hello so the cloud keeps it. */
@@ -650,7 +650,12 @@ export function startSync(
           hooks.releaseRequested?.(message.by, message.id)
         else if (message.type === 'release-waiting')
           hooks.releaseWaiting?.(message.by, message.tasks, message.dirty)
-        else if (message.type === 'move-to') hooks.moveTo?.(message.id, message.force === true)
+        else if (message.type === 'move-to')
+          hooks.moveTo?.(
+            message.id,
+            message.force === true,
+            message.by === 'sync' ? 'sync' : 'cloud',
+          )
         else if (message.type === 'cancel') hooks.cancel?.(message.id)
         // A claim on standby gets `cursor` and `outbox` too; the reopened, serving connection catches up.
         else if (!serving) return
@@ -753,13 +758,14 @@ export const actions = {
         }
       : { free: false, missing: [], status: localOnly ? 'local' : 'off' },
   /**
-   * `{force?}`: prepare this machine and take the project, from a free lease or from the online writer. Resolves the
-   * transition ID at once; `state` follows its steps. `force` continues although the writer has secrets this machine
-   * lacks.
+   * `{force?, by?}`: prepare this machine and take the project, from a free lease or from the online writer. Resolves
+   * the transition ID at once; `state` follows its steps. `force` continues although the writer has secrets this
+   * machine lacks. `by: 'sync'` records @sync as the move's initiator; otherwise it is this machine's page.
    */
   moveHere: async (args: JsonValue) => {
     if (!active) throw new Error('Cloud sync is off')
-    return active.moveHere({ force: (args as { force?: unknown } | null)?.force === true })
+    const { force, by } = (args ?? {}) as { force?: unknown; by?: unknown }
+    return active.moveHere({ force: force === true, by: by === 'sync' ? 'sync' : 'local' })
   },
   /** Stop the preparing move, until its claim is sent. */
   cancel: async () => {

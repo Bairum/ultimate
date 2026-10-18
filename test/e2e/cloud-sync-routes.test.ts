@@ -100,7 +100,8 @@ describe.skipIf(cloudSkip)(
       }, 120_000)
       const { transition, lease } = await project.info()
       expect(transition?.error).toBeUndefined()
-      expect(transition).toMatchObject({ target: 'b', from: 'a' })
+      // The bearer route is @sync's: the deployed Worker routes it so the target records that.
+      expect(transition).toMatchObject({ target: 'b', from: 'a', by: 'sync' })
       // Every step ran: the writer handed over, B downloaded its snapshot and claimed the lease.
       expect(transition?.steps.map((item) => [item.name, item.state])).toEqual([
         ['fetch', 'done'],

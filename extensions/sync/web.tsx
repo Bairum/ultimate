@@ -69,6 +69,9 @@ function ProjectRow({ project, machine }: { project: FleetProject; machine: stri
             : ` · ${local.sync.backlog} behind`}
         </div>
       )}
+      {local?.login && !local.login.ok && (
+        <Warning text={`no model login for ${local.login.provider}`} />
+      )}
       {local && local.missing.length > 0 && (
         <Warning text={`missing secrets: ${local.missing.join(', ')}`} />
       )}
