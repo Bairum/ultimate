@@ -8,7 +8,7 @@ import cloud, {
   QUICK_RECONNECT_AFTER,
   startSync,
 } from '../extensions/cloud/server.ts'
-import type { SyncSocket } from '../extensions/cloud/server.ts'
+import type { SyncHooks, SyncSocket } from '../extensions/cloud/server.ts'
 import { docHash, PROJECT_MISMATCH } from '../cloud/protocol.ts'
 import type { CloudMessage, MachineMessage } from '../cloud/protocol.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
@@ -119,7 +119,7 @@ class FakeCloud extends EventTarget implements SyncSocket {
   }
 }
 
-async function fixture() {
+async function fixture(hooks?: SyncHooks) {
   const home = await temp('ultimate-cloud-')
   const prepared = await prepareHarness({ ultimateRoot: home, userHome: home, home, faux: true })
   prepared.faux!.setResponses([fauxAssistantMessage('cloud answer')])
@@ -154,6 +154,8 @@ async function fixture() {
       sockets.push(socket)
       return socket
     },
+    undefined,
+    hooks,
   )
   return {
     prepared,
@@ -218,6 +220,27 @@ it("names the tailnet address in hello and on change, and records a standby's wr
     next.receive(role('standby'))
     await f.drain()
     await expect(readFile(join(f.home, 'cloud-writer.json'), 'utf8')).rejects.toThrow('ENOENT')
+  } finally {
+    await f.close()
+  }
+})
+
+it('admits a lease message deferred from the role notification', async () => {
+  const sent: boolean[] = []
+  const f = await fixture({
+    serving: false,
+    role: (state) => {
+      // Lease callbacks send after the notification, without waiting for the sync queue to drain.
+      queueMicrotask(() => sent.push(f.stop.send({ type: 'claim', epoch: state.epoch! })))
+    },
+  })
+  try {
+    const [socket] = f.sockets
+    socket.dispatchEvent(new Event('open'))
+    socket.receive(role('standby'))
+    await f.drain()
+    expect(sent).toEqual([true])
+    expect(socket.messages).toContainEqual({ type: 'claim', epoch: 1 })
   } finally {
     await f.close()
   }

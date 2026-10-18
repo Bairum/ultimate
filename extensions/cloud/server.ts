@@ -655,9 +655,10 @@ export function startSync(
             const { type: _, ...given } = message
             // On standby the lease module records the epoch once it opens storage as the writer.
             if (message.role === 'writer' && serving) await writeLease(message.epoch)
+            // Finish file I/O before notifying the lease: its deferred callback may send on this role.
+            await recordWriter(message.role === 'standby' ? message.writer : undefined)
             state = { key: identity.key, connected: true, ...given }
             hooks.role?.(state)
-            await recordWriter(message.role === 'standby' ? message.writer : undefined)
             // On standby nothing was sent, so a changed role needs no fresh hello.
             if (!serving) {
               role = message.role
