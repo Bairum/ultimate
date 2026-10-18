@@ -20,6 +20,12 @@ One file per machine, `~/.ultimate/health.json`, written by every Ultimate home 
 
 Times are epoch milliseconds. `lastOk` and `lastFail` come from real calls and pings, `lastChecked` from pings only, `lastUsed` from real calls only. A provider is `failing` when `lastFail` is newer than `lastOk`, `ok` once it has a `lastOk`, otherwise `unknown`. Writes read, merge each field by its maximum (the `error` stays with the newest `lastFail`) and rename a temporary file into place; two homes writing at once lose at most one event. An error is stored only as a structured summary: the HTTP status (when the message starts with it or names it, `status 401`) and the words of a fixed list of provider error codes and network errors it contains (`invalid_grant`, `rate_limit_error`, `overloaded`, `ECONNREFUSED`, …, `KNOWN` in `store.ts`), or "request failed". Its free text never is, so no request or auth contents reach the file or the cloud; add a code to `KNOWN` to keep it. The cloud report goes out after every tick that pinged, at least hourly, and after a failed attempt on the next tick. A move's checks ping a provider marked failing before they block (`cloud/login.ts`).
 
+## Login changes
+
+A login says nothing about the one it replaced, so a change starts that provider over at `unknown` (`reset` in `store.ts` drops its entry). Ultimate's own login and logout (`extensions/models`) reset the provider when they finish. The machine home also watches Pi's `auth.json` (its directory, since Pi replaces the file) and resets each provider whose login appeared or disappeared there, as `pi` /login or /logout do; a provider without an entry is due at once, so the next tick pings it and reports to the cloud. A token refresh rewrites the file without changing its providers and resets nothing. Only the file's provider names are read, never its values.
+
+Every machine keeps its own logins: never copy `auth.json` between machines. OAuth logins rotate their refresh token, so the first refresh on one machine revokes the other's copy with `invalid_grant`.
+
 ## Real usage
 
 A `GenerationTask` `afterResponse` hook records every terminal provider message at no cost: `stopReason: 'error'` records a failure with `errorMessage`, `aborted` nothing, anything else a success. The write never blocks or fails the generation. A faux server records nothing.

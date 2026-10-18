@@ -150,15 +150,31 @@ const writes = new Map<string, Promise<unknown>>()
  * lose one event.
  */
 export function record(userHome: string, provider: string, update: HealthEntry) {
-  const path = healthPath(userHome)
   const clean = update.error === undefined ? update : { ...update, error: sanitize(update.error) }
+  return write(userHome, (file) => {
+    file.providers[provider] = merge(file.providers[provider] ?? {}, clean)
+  })
+}
+
+/**
+ * Forget `providers`' entries, so each reads `unknown` until its next call or ping: its login was added, replaced or
+ * removed, and what the old login did says nothing about the new one.
+ */
+export function reset(userHome: string, providers: string[]) {
+  return write(userHome, (file) => {
+    for (const provider of providers) delete file.providers[provider]
+  })
+}
+
+function write(userHome: string, change: (file: HealthFile) => void) {
+  const path = healthPath(userHome)
   const operation = (writes.get(path) ?? Promise.resolve())
     .catch(() => {
       // The previous caller receives its failure; later writes must still run.
     })
     .then(async () => {
       const file = await readFileHealth(userHome)
-      file.providers[provider] = merge(file.providers[provider] ?? {}, clean)
+      change(file)
       await mkdir(dirname(path), { recursive: true })
       const temporary = `${path}.${randomUUID()}.tmp`
       try {

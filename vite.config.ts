@@ -113,6 +113,7 @@ export default defineConfig({
                   'workspaces',
                 ],
                 instance: ['subagents', 'tailscale', 'workspaces'],
+                models: ['health'],
                 lineage: ['conversations', 'workspaces'],
                 parallel: ['secrets'],
                 questions: ['conversations', 'lineage', 'board', 'subagents'],

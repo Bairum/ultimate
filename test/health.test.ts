@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import { afterEach, expect, it } from 'vitest'
 import { modelLogin, noLogin } from '../extensions/cloud/login.ts'
@@ -11,17 +12,21 @@ import {
   shouldReport,
 } from '../extensions/health/server.ts'
 import type { HeartbeatDeps } from '../extensions/health/server.ts'
+import healthExtension, { changedLogins, watchLogins } from '../extensions/health/server.ts'
+import { actions as models } from '../extensions/models/server.ts'
+import type { ActionContext } from '../server/actions.ts'
 import {
   healthPath,
   merge,
   readHealth,
   record,
+  reset,
   sanitize,
   state,
 } from '../extensions/health/store.ts'
 import type { HealthEntry } from '../extensions/health/store.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
-import { removeTemps, temp } from './helpers.ts'
+import { removeTemps, temp, until } from './helpers.ts'
 
 afterEach(removeTemps)
 
@@ -259,4 +264,77 @@ it('a move confirms a recorded failure with a ping, so a stale one never blocks 
     error: expect.stringMatching(/invalid_grant|overloaded/),
   })
   expect(pinged).toEqual(['haiku', 'haiku'])
+})
+
+it('resets a provider whose login changed to unknown, so the next heartbeat pings it', async () => {
+  const home = await temp('ultimate-health-reset-')
+  await record(home, 'anthropic', { lastOk: NOW - MINUTE, lastFail: NOW, error: 'invalid_grant' })
+  await record(home, 'openai-codex', { lastOk: NOW })
+  await reset(home, ['anthropic'])
+  const health = await readHealth(home)
+  expect(health.map((entry) => [entry.provider, entry.state])).toEqual([['openai-codex', 'ok']])
+  // With no entry, the provider is due at once even though the machine's interval has not passed.
+  expect(due({ 'openai-codex': { lastOk: NOW } }, NOW, ['anthropic', 'openai-codex'])).toEqual([
+    'anthropic',
+  ])
+})
+
+it('names the providers whose login appeared or disappeared, not a refreshed one', () => {
+  expect(changedLogins(new Set(['anthropic', 'openai']), new Set(['anthropic', 'claude']))).toEqual(
+    ['claude', 'openai'],
+  )
+  expect(changedLogins(new Set(['anthropic']), new Set(['anthropic']))).toEqual([])
+})
+
+it('watches auth.json: a login added or removed in pi resets its health, a token refresh does not', async () => {
+  const home = await temp('ultimate-health-watch-')
+  const agent = join(home, '.pi/agent')
+  await mkdir(agent, { recursive: true })
+  const auth = join(agent, 'auth.json')
+  await writeFile(auth, JSON.stringify({ anthropic: { refresh: 'a' } }))
+  await record(home, 'anthropic', { lastFail: NOW, error: 'invalid_grant' })
+  await record(home, 'openai-codex', { lastFail: NOW, error: 'invalid_grant' })
+  const calls: boolean[] = []
+  const stop = watchLogins(home, (providers) => calls.push(providers), auth, 0)
+  try {
+    // A refresh: same providers, new tokens, written by replacing the file as Pi does.
+    await writeFile(`${auth}.tmp`, JSON.stringify({ anthropic: { refresh: 'b' } }))
+    await rename(`${auth}.tmp`, auth)
+    await until(() => calls.length > 0)
+    expect(calls.at(-1)).toBe(false)
+    expect((await readHealth(home)).map((entry) => entry.provider)).toEqual([
+      'anthropic',
+      'openai-codex',
+    ])
+    // A new login: that provider starts over; the other keeps its record.
+    calls.length = 0
+    await writeFile(auth, JSON.stringify({ anthropic: { refresh: 'b' }, 'openai-codex': {} }))
+    await until(() => calls.includes(true))
+    expect((await readHealth(home)).map((entry) => entry.provider)).toEqual(['anthropic'])
+    // A logout.
+    calls.length = 0
+    await writeFile(auth, JSON.stringify({ 'openai-codex': {} }))
+    await until(() => calls.includes(true))
+    expect(await readHealth(home)).toEqual([])
+  } finally {
+    stop()
+  }
+})
+
+it("Ultimate's logout resets the provider's health", async () => {
+  const home = await temp('ultimate-health-logout-')
+  await record(home, 'anthropic', { lastFail: NOW, error: 'invalid_grant' })
+  const logouts: string[] = []
+  const services = new Map<string, unknown>()
+  const host = {
+    userHome: home,
+    faux: true,
+    provide: (name: string, value: unknown) => services.set(name, value),
+    use: (name: string) => services.get(name),
+    modelRuntime: { logout: async (provider: string) => void logouts.push(provider) },
+  } as unknown as ExtensionHost
+  healthExtension(host)
+  await models.logout({ provider: 'anthropic' }, { host } as ActionContext)
+  expect(logouts).toEqual(['anthropic'])
+  expect(await readHealth(home)).toEqual([])
 })

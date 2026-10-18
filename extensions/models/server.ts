@@ -6,6 +6,7 @@ import { defineDoc, defineExtension, ROOT_CONVERSATION_ID } from '@earendil-work
 import type { ConversationId, Cursor } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import type { HealthService } from '../health/server.ts'
 
 /** A Pi type as a document holds it: plain JSON, arrays mutable. */
 type Json<T> = T extends readonly (infer U)[]
@@ -96,6 +97,19 @@ const json = <T>(value: T): Json<T> => JSON.parse(JSON.stringify(value))
 
 export const userActions = ['login', 'answer', 'cancel', 'logout']
 
+/**
+ * A login or logout makes the provider's recorded health meaningless: reset it to unknown. The machine home sees
+ * `auth.json` change, pings the provider and reports it to the cloud (`extensions/health`).
+ */
+const forgetHealth = async (host: ActionContext['host'], provider: string) =>
+  host
+    .use<HealthService>('health')
+    ?.forget(provider)
+    .catch((error: unknown) => {
+      // Health is advisory: the login itself succeeded, and the next call or ping corrects the record.
+      console.error('models: health not reset:', error)
+    })
+
 export const actions = {
   /** Start a login flow for the calling conversation and resolve with its id; the document shows its progress. */
   async login(args: JsonValue, { host, conversationId }: ActionContext) {
@@ -170,8 +184,9 @@ export const actions = {
         // Provider errors may include secrets or callback codes; never forward them.
         () => (signal.aborted ? 'cancel' : 'error'),
       )
-      .then((status) => {
+      .then(async (status) => {
         live.delete(flowId)
+        if (status === 'complete') await forgetHealth(host, provider)
         return update((state) => {
           state.status = status
           delete state.prompt
@@ -197,7 +212,9 @@ export const actions = {
   },
   /** Remove the provider's stored credential, which pi shares. */
   async logout(args: JsonValue, { host }: ActionContext) {
-    await host.modelRuntime.logout(text(args, 'provider'))
+    const provider = text(args, 'provider')
+    await host.modelRuntime.logout(provider)
+    await forgetHealth(host, provider)
     return null
   },
 }

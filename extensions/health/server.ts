@@ -1,4 +1,8 @@
+import { existsSync, watch } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
+import { basename, dirname, join } from 'node:path'
+import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import type { Api, AssistantMessage, Model, Models } from '@earendil-works/pi-ai'
 import { defineExtension, GenerationTask, hook } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord'
@@ -8,7 +12,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { cloudConfig } from '../cloud/config.ts'
 import { isMachineHome } from '../subagents/primary.ts'
 import { httpBase } from '../sync/server.ts'
-import { readFileHealth, record, toHealth } from './store.ts'
+import { readFileHealth, record, reset, toHealth } from './store.ts'
 import type { HealthEntry } from './store.ts'
 
 const MINUTE = 60_000
@@ -126,6 +130,66 @@ export const hostDeps = (
   record: (provider, entry) => record(host.userHome, provider, entry),
 })
 
+/** Pi's credential store, shared with `pi`: one entry per logged-in provider. */
+export const authPath = () => join(getAgentDir(), 'auth.json')
+
+/** The providers with a stored login, read as keys only; a missing or unreadable file has none. */
+export async function loginProviders(path = authPath()) {
+  try {
+    return new Set(Object.keys(JSON.parse(await readFile(path, 'utf8')) as object))
+  } catch {
+    // No file yet, or one Pi is rewriting: no logins, and the next change event reads it again.
+    return new Set<string>()
+  }
+}
+
+/** The providers in only one of the two sets: a login added or removed. */
+export const changedLogins = (before: Set<string>, after: Set<string>) => [
+  ...[...after].filter((provider) => !before.has(provider)),
+  ...[...before].filter((provider) => !after.has(provider)),
+]
+
+/**
+ * Watch Pi's `auth.json` (logins from `pi` or any Ultimate home on this machine): reset the health of each provider
+ * whose login appeared or disappeared, then call `changed` with whether any did. A token refresh, or a login replaced
+ * in `pi`, rewrites the file without changing its providers; a failing provider is then pinged again within
+ * `CONFIRM`. Ultimate's own login and logout reset the provider themselves (`extensions/models`). Returns the stop
+ * function.
+ */
+export function watchLogins(
+  userHome: string,
+  changed: (providers: boolean) => void,
+  path = authPath(),
+  delay = 1000,
+) {
+  let known = loginProviders(path)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const settle = () => {
+    known = known.then(async (before) => {
+      const after = await loginProviders(path)
+      const providers = changedLogins(before, after)
+      if (providers.length) await reset(userHome, providers)
+      changed(providers.length > 0)
+      return after
+    })
+    known.catch((error: unknown) => {
+      // Health is advisory: a failed reset leaves the old state until the next call or ping corrects it.
+      console.error('health: login change not applied:', error)
+    })
+  }
+  // The directory, not the file: Pi replaces the file, which would end a watch on its old inode.
+  const watcher = watch(dirname(path), (_event, name) => {
+    if (name !== null && name !== basename(path)) return
+    clearTimeout(timer)
+    timer = setTimeout(settle, delay)
+  })
+  watcher.on('error', (error) => console.error('health: auth.json watch failed:', error))
+  return () => {
+    clearTimeout(timer)
+    watcher.close()
+  }
+}
+
 /** What a faux host shows: one provider ok, one failing, one never seen. */
 export function demoHealth(now: number): ProviderHealth[] {
   return [
@@ -186,7 +250,16 @@ async function report(host: ExtensionHost) {
   if (!response.ok) throw new Error(`POST /sync/health: ${response.status}`)
 }
 
+/** What `host.use('health')` offers other extensions. */
+export interface HealthService {
+  /** Reset `provider` to unknown after its login was added, replaced or removed. */
+  forget(provider: string): Promise<unknown>
+}
+
 export default function health(host: ExtensionHost) {
+  host.provide('health', {
+    forget: (provider) => reset(host.userHome, [provider]),
+  } satisfies HealthService)
   const hooks = host.faux
     ? []
     : [
@@ -235,9 +308,18 @@ export default function health(host: ExtensionHost) {
   }
   const start = setTimeout(tick, 30_000)
   const timer = setInterval(tick, TICK)
+  // A login change resets that provider (here, or in the models action that made it): the tick pings it as due and
+  // reports; a removed one has nothing to ping, so its report is owed explicitly.
+  const stopWatching = existsSync(dirname(authPath()))
+    ? watchLogins(host.userHome, (providers) => {
+        if (providers) shared.pending = true
+        tick()
+      })
+    : undefined
   host.onClose(async () => {
     clearTimeout(start)
     clearInterval(timer)
+    stopWatching?.()
     await shared.ticking
   })
   return defineExtension({ name: 'health', hooks })
