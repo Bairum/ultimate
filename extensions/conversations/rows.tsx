@@ -1,17 +1,12 @@
 import {
   GitBranchIcon,
-  GitForkIcon,
-  GitMergeIcon,
   CircleCheckIcon,
   CircleHelpIcon,
   EllipsisIcon,
   FoldVerticalIcon,
-  MessageCircleIcon,
   PencilIcon,
-  ScrollTextIcon,
-  StickyNoteIcon,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   DropdownMenu,
@@ -20,8 +15,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { api, cn, events, formatTokens, useAction, useDocOf, useUltimate } from '@/sdk'
-import type { RootEvent } from '../lineage/types.ts'
+import { api, cn, useUltimate } from '@/sdk'
 import { FeatureTag } from './feature.tsx'
 import { TaskChip, useTaskOf } from '../plan/chip.tsx'
 import { PhaseLabel, usePhase } from '../phase/chip.tsx'
@@ -381,185 +375,6 @@ function CompactItem({ conversation }: { conversation: ConversationSummary }) {
       <FoldVerticalIcon />
       Compact context
     </DropdownMenuItem>
-  )
-}
-
-const eventIcons = {
-  landed: GitMergeIcon,
-  note: StickyNoteIcon,
-  branched: GitForkIcon,
-  compacted: FoldVerticalIcon,
-  started: ScrollTextIcon,
-}
-
-/** One line per root event: what happened, in a few words. */
-function eventText(event: RootEvent) {
-  switch (event.type) {
-    case 'landed':
-      return (
-        <>
-          <span className="shrink-0 text-foreground/80">{event.sha}</span>
-          <span className="truncate">{event.subject ?? 'landed'}</span>
-        </>
-      )
-    case 'note':
-      return (
-        <span className="truncate">
-          {event.from !== undefined && `#${event.from}: `}
-          {event.text.replace(/\s+/g, ' ')}
-        </span>
-      )
-    case 'branched':
-      return (
-        <>
-          <span className="shrink-0 text-foreground/80">#{event.branch}</span>
-          <span className="truncate">{event.intent.replace(/\s+/g, ' ')}</span>
-        </>
-      )
-    case 'compacted':
-      return <span className="truncate">context compacted</span>
-    default:
-      return <span className="truncate">context started</span>
-  }
-}
-
-/** Opens `conversation` at `entry` on the Agent surface. */
-function openEntry(
-  actions: Pick<ReturnType<typeof useUltimate>, 'switchConversation' | 'showSurface'>,
-  conversation: number,
-  entry: number,
-) {
-  events.emit('board:open', { conversation, entry })
-  actions.showSurface('agent')
-  actions.switchConversation(conversation)
-}
-
-/**
- * The head of a tree: its title, the size of the context every branch starts from, and the last three things that
- * happened in it (landings, notes, new branches, compactions), each opening the root at its entry. No feature, summary
- * or assessment; the menu compacts the context or opens @ultimate, who keeps it. A root is never concluded or cleared.
- */
-export function RootRow({
-  conversation,
-  shown,
-  working,
-  now,
-  onTalk,
-}: {
-  conversation: ConversationSummary
-  shown: boolean
-  working?: 'self' | 'subagents'
-  now: number
-  onTalk: () => void
-}) {
-  const actions = useUltimate()
-  const id = conversation.id
-  const tally = useDocOf<{ tokens: number; since?: number }>(id, 'lineage.tally')
-  const recent = useAction<RootEvent[]>('lineage', 'recent', { id }, { onError: () => {} })
-  const { refetch } = recent
-  // Every entry the root gets recounts its tokens: a new count means something may have happened.
-  const tokens = tally?.tokens
-  const first = useRef(true)
-  useEffect(() => {
-    if (first.current) {
-      first.current = false
-      return
-    }
-    void refetch()
-  }, [tokens, refetch])
-  // A hardcoded name: the root's summary title described its pre-context history, not what it holds now.
-  const name = 'Project context'
-  return (
-    <div
-      className={cn(
-        'group relative mx-2 rounded-md transition-colors',
-        shown ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/50',
-      )}
-      data-conversation={id}
-      data-root-row={id}
-    >
-      <button
-        aria-current={shown ? 'true' : undefined}
-        className="flex h-9 w-full min-w-0 cursor-pointer items-center gap-2.5 rounded-md pr-7 pl-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
-        onClick={() => actions.switchConversation(id)}
-        title={conversation.title ? `${conversation.title} · #${id}` : `#${id}`}
-        type="button"
-      >
-        <AgentMark name="root" presence={working ? 'working' : undefined} />
-        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-          <span
-            className={cn(
-              'truncate text-[13px] font-semibold',
-              shown ? 'text-foreground' : 'text-foreground/90',
-            )}
-          >
-            {name}
-          </span>
-          <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">#{id}</span>
-        </span>
-        {tokens !== undefined && tally?.since !== undefined && (
-          <span
-            className="shrink-0 font-mono text-[10px] text-muted-foreground/80"
-            title="Context every new branch starts from"
-          >
-            {formatTokens(tokens)}
-          </span>
-        )}
-      </button>
-      {!!recent.data?.length && (
-        <ul aria-label={`Recent in ${name}`} className="flex flex-col pb-1">
-          {recent.data.map((event) => {
-            const Icon = eventIcons[event.type]
-            return (
-              <li key={event.entry}>
-                <button
-                  className="flex h-5 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-sm pr-2 pl-[42px] text-left font-mono text-[10.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
-                  data-root-event={event.type}
-                  onClick={() => openEntry(actions, id, event.entry)}
-                  title={`Open #${id}/${event.entry}`}
-                  type="button"
-                >
-                  <Icon
-                    className={cn(
-                      'size-3 shrink-0',
-                      event.type === 'landed' ? 'text-success' : 'text-muted-foreground/70',
-                    )}
-                  />
-                  {eventText(event)}
-                  {event.at !== undefined && (
-                    <span className="ml-auto shrink-0 pl-1 text-muted-foreground/60">
-                      {ago(event.at, now)}
-                    </span>
-                  )}
-                </button>
-              </li>
-            )
-          })}
-        </ul>
-      )}
-      <DropdownMenu modal={false}>
-        <DropdownMenuTrigger
-          aria-label="Root actions"
-          className="invisible absolute top-1 right-1 flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none group-focus-within:visible group-hover:visible pointer-coarse:visible hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:visible data-[state=open]:bg-sidebar-accent data-[state=open]:text-foreground"
-        >
-          <EllipsisIcon className="size-3.5" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-48 [&_[role=menuitem]]:cursor-pointer">
-          <DropdownMenuItem
-            className="text-[12.5px]"
-            disabled={tally?.since === undefined || working !== undefined}
-            onSelect={() => void api.action('lineage', 'compact', { id })}
-          >
-            <FoldVerticalIcon />
-            Compact context
-          </DropdownMenuItem>
-          <DropdownMenuItem className="text-[12.5px]" onSelect={onTalk}>
-            <MessageCircleIcon />
-            Talk to @ultimate
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
   )
 }
 

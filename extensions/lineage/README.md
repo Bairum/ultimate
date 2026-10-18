@@ -26,10 +26,14 @@ document, tools and model-facing text, where agents and stored entries already u
   `unlist` `{ id }` → `{ roots }` removes a root that never became a tally from the list: it refuses non-roots, the
   last root and tallies. The root and its branches then belong to no tree. Concluding only hides a conversation;
   unlisting is how a mistaken or abandoned root stops being offered to `branch`.
-  `recent` `{ id, limit? }` → `RootEvent[]` (`types.ts`) lists a listed root's newest events, newest first (default 3,
-  at most 20): landings `{ sha, subject?, from? }` (the first non-merge commit subject), other notes `{ from?, text }`,
-  new branches `{ branch, intent }`, compactions, and the genesis (`started`), each with its `entry` and `at`.
-  Catch-up notes and abstracts are left out. The sidebar's root row shows them.
+  `recent` `{ id, limit?, types? }` → `RootEvent[]` (`types.ts`) lists a listed root's newest events, newest first
+  (default 3, at most 20; only the given `types` when set): landings `{ sha, base?, commits, feature?, title?, from?,
+compare? }` (`commits` counts the note's listed commits plus `more`), other notes `{ from?, text }`, new branches
+  `{ branch, intent }`, compactions, and the genesis (`started`), each with its `entry` and `at`. With a GitHub
+  `origin`, a landing's `compare` is `https://github.com/<owner>/<repo>/compare/<base>...<sha>`; a note from before
+  landings recorded `base` uses the landing before it, which is where the lander's serial queue left the target.
+  Catch-up notes and abstracts are left out. The sidebar's root row shows the landings.
+  `github` → `https://github.com/<owner>/<repo>` or null: the root page's landing cards link the same range.
   `compact` `{ id, instructions? }` → `{ taskId }` starts the same compaction as `compact_tally`, for the root row's menu
   and the palette's Compact command on a root.
 - **Tally**: conversation-scoped doc `lineage.tally` (latest history) holds
@@ -50,7 +54,7 @@ document, tools and model-facing text, where agents and stored entries already u
   the tally. Note cards use the mellow yellow `--note` theme token. `ConversationRef` names conversations by feature,
   else title, then `#N`; model text keeps bare ids. Other extensions call `leaveNote(host, to, text, source?)`;
   `'root'` needs `source.from` and errors if it has no root. Successful landings leave a note in the submitter's root
-  (unless it is that root or has none), with `source: 'lander'`, `sha`, `target`, `commits`, `paths`, `divergence` and
+  (unless it is that root or has none), with `source: 'lander'`, `sha`, `base`, `target`, `commits`, `paths`, `divergence` and
   `at`. Text includes the submitter's `#N/at` breadcrumb and `Diverged: …`, including "None"; the landing card shows
   divergence too (up to 10 commits and 8 changed paths). A landing is the commit of a liquid abstract: in a tally, a
   lander note for a submitter with an open abstract carries it as `abstract` `{ at, text, title?, feature? }` and a

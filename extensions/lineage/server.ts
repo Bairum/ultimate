@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { awaitWithContext, BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
@@ -36,6 +38,7 @@ import type { WorkspaceService } from '../workspaces/server.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 import type { Tree } from './catchup.ts'
 import type { RootEvent } from './types.ts'
+import { projectKey } from '../cloud/identity.ts'
 
 /** The project's roots, each the top of one conversation tree; a fresh project's first conversation is its first. */
 export const Roots = defineDoc<{ roots: number[] }>({
@@ -876,7 +879,11 @@ function rootEvent(entry: EntryRecord): RootEvent | undefined {
     source?: unknown
     from?: unknown
     sha?: unknown
+    base?: unknown
     commits?: unknown
+    more?: unknown
+    feature?: unknown
+    title?: unknown
     text?: unknown
   }
   if (entry.kind === 'pi.compaction') return { ...base, type: 'compacted' }
@@ -891,15 +898,15 @@ function rootEvent(entry: EntryRecord): RootEvent | undefined {
   if (entry.kind !== 'lineage.note' || data.source === 'main') return undefined
   const from = typeof data.from === 'number' ? data.from : undefined
   if (data.source === 'lander' && typeof data.sha === 'string') {
-    const commits = Array.isArray(data.commits) ? (data.commits as { subject?: string }[]) : []
-    const subject =
-      commits.find((commit) => commit.subject && !commit.subject.startsWith('Merge '))?.subject ??
-      commits[0]?.subject
+    const listed = Array.isArray(data.commits) ? data.commits.length : 0
     return {
       ...base,
       type: 'landed',
-      sha: data.sha.slice(0, 7),
-      ...(subject ? { subject } : {}),
+      sha: data.sha,
+      ...(typeof data.base === 'string' ? { base: data.base } : {}),
+      commits: listed + (typeof data.more === 'number' ? data.more : 0),
+      ...(typeof data.feature === 'string' && data.feature ? { feature: data.feature } : {}),
+      ...(typeof data.title === 'string' && data.title ? { title: data.title } : {}),
       ...(from === undefined ? {} : { from }),
     }
   }
@@ -909,6 +916,43 @@ function rootEvent(entry: EntryRecord): RootEvent | undefined {
     ...(from === undefined ? {} : { from }),
     text: typeof data.text === 'string' ? data.text : '',
   }
+}
+
+const execFileAsync = promisify(execFile)
+
+/** `github.com/<owner>/<repo>` of the project's `origin`, if it is on GitHub. */
+const githubRepo = (projectRoot: string) =>
+  execFileAsync('git', ['remote', 'get-url', 'origin'], { cwd: projectRoot })
+    .then(({ stdout }) => projectKey(stdout))
+    // No repository or no origin: landings show their count without a link.
+    .catch(() => undefined)
+
+/**
+ * Each landing's GitHub compare URL, `base...sha`, when the project's `origin` is on GitHub. A landing from before notes
+ * recorded their base takes the landing before it, which is where the lander's serial queue left the target.
+ */
+async function withCompare(
+  projectRoot: string,
+  events: RootEvent[],
+  older: string | undefined,
+): Promise<RootEvent[]> {
+  if (!events.some((event) => event.type === 'landed')) return events
+  const remote = await githubRepo(projectRoot)
+  return remote ? compareLinks(remote, events, older) : events
+}
+
+/** `withCompare` for a known `github.com/<owner>/<repo>`. */
+export function compareLinks(
+  remote: string,
+  events: RootEvent[],
+  older: string | undefined,
+): RootEvent[] {
+  const landings = events.filter((event) => event.type === 'landed')
+  return events.map((event) => {
+    if (event.type !== 'landed') return event
+    const base = event.base ?? landings[landings.indexOf(event) + 1]?.sha ?? older
+    return base ? { ...event, compare: `https://${remote}/compare/${base}...${event.sha}` } : event
+  })
 }
 
 /** Validates a new branch's prompt and configuration. */
@@ -953,30 +997,54 @@ export const actions = {
     if (input.from === undefined) throw new Error('from must be a positive integer')
     return startBranch(host, input as BranchInput, context)
   },
-  /** `{id, limit?}`: the newest landings, notes, branches and compactions in root `id`, newest first (default 3). */
+  /**
+   * `{id, limit?, types?}`: the newest landings, notes, branches and compactions in root `id`, newest first (default
+   * 3), only of `types` when given. A landing on a GitHub `origin` links its compare range.
+   */
   async recent(args: JsonValue, { host }: ActionContext) {
     const id = conversationArg(args)
+    const types = (args as { types?: unknown }).types
+    if (
+      types !== undefined &&
+      (!Array.isArray(types) || types.some((type) => typeof type !== 'string'))
+    )
+      throw new Error('types must be a list of event types')
     const requested = (args as { limit?: unknown }).limit
     const limit =
       typeof requested === 'number' && Number.isSafeInteger(requested)
         ? Math.min(Math.max(requested, 1), 20)
         : 3
-    return host.harness().commit(async (tx) => {
+    const scanned = await host.harness().commit(async (tx) => {
       if (!(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.includes(id))
         throw new Error(`#${id} is not a listed root`)
       const events: RootEvent[] = []
+      // The landing before the oldest listed one: the base of a landing from before notes recorded it.
+      let older: string | undefined
       let cursor: Cursor | undefined
-      do {
+      scan: do {
         const page = await tx.scanEntries({ conversationId: id }, 100, cursor)
         for (const entry of page.items) {
           const event = rootEvent(entry)
-          if (event) events.push(event)
-          if (events.length === limit) return events
+          if (!event) continue
+          if (events.length === limit) {
+            if (event.type !== 'landed') continue
+            older = event.sha
+            break scan
+          }
+          if (!types || (types as string[]).includes(event.type)) events.push(event)
+          if (events.length === limit && !events.some((e) => e.type === 'landed' && !e.base))
+            break scan
         }
         cursor = page.next
       } while (cursor)
-      return events
+      return { events, older }
     }, context)
+    return withCompare(host.projectRoot, scanned.events, scanned.older)
+  },
+  /** `https://github.com/<owner>/<repo>` of the project's `origin`, or null off GitHub: landing cards link ranges. */
+  async github(_args: JsonValue, { host }: ActionContext) {
+    const repo = await githubRepo(host.projectRoot)
+    return repo ? `https://${repo}` : null
   },
   /** `{id, instructions?}`: compact root tally `id`, as @ultimate's `compact_tally` does. */
   async compact(args: JsonValue, { host }: ActionContext) {

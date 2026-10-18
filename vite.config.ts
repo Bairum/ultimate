@@ -100,6 +100,7 @@ export default defineConfig({
                 codemode: ['subagents'],
                 cloud: ['automations', 'health', 'onboarding', 'secrets', 'sync', 'tailscale'],
                 fast: ['onboarding'],
+                faux: ['lineage'],
                 health: ['cloud', 'subagents', 'sync'],
                 conversations: [
                   'board',
@@ -114,7 +115,7 @@ export default defineConfig({
                 ],
                 instance: ['subagents', 'tailscale', 'workspaces'],
                 models: ['health'],
-                lineage: ['conversations', 'workspaces'],
+                lineage: ['cloud', 'conversations', 'workspaces'],
                 parallel: ['secrets'],
                 questions: ['conversations', 'lineage', 'board', 'subagents'],
                 onboarding: ['workspaces', 'subagents', 'lineage'],

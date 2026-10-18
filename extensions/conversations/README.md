@@ -27,14 +27,24 @@ The title bar's `@ultimate` button (`titlebar.left`, beside the surfaces, also o
 from every surface. Its mark's dot pulses while @ultimate works and is amber while questions wait on you, with their count.
 
 The sidebar lists the roots below the agents (lineage's `useRoots()`); trees sort by their newest input anywhere in
-them. A root's row (`RootRow`) is the head of its tree, not one of its conversations: a scroll mark (with a pulsing dot
-while it compacts), the fixed name `Project context` with `#id` small (its summary title only on hover, since it
-described the root's history before it held a context), the size of its context, and the last three things that happened in it from
-lineage's `recent {id}` action (a landing's short sha and subject, a note with its sender, a new branch with its
-prompt, a compaction, or the context's start), each with its age; clicking one opens the root at that entry. It shows
-no feature, summary or assessment, and the summary below the tree is not shown for it. Its menu offers Compact context
-(lineage `compact {id}`, only for a root that has a context) and Talk to @ultimate; a root is never renamed, cleared or
-concluded here. The list refetches whenever the root's token count changes, which every new entry does.
+them. A root's row (`RootRow`, `root.tsx`) is a small dashboard of its tree, not one of its conversations: a scroll
+mark (with a pulsing dot while it compacts), the fixed name `Project context` with `#id` small (its summary title only
+on hover, since it described the root's history before it held a context) and the size of its context. Below it:
+
+- **In flight · N**: the tree's open branches, newest input first. A branch is open until it is concluded or it landed
+  after its latest input (a landed branch that gets new work is open again). Each shows its title, its feature tag,
+  a state (`submitted` or `landing` while the lander has it, the working phase while it works, amber `awaiting reply`
+  while a reply-enabled message it sent is open, else `idle`) and its age; clicking opens it.
+- **Landed**: the last three landings from lineage's `recent {id, types: ['landed']}`, as the shipped feature's tag
+  (its title when it has none, the full title on hover) and a commit count linking the GitHub compare range
+  (`CommitCount` from workspaces; no link without a GitHub `origin`), with the age. Clicking the feature opens the root
+  at that landing note. `N more` unfolds up to ten; the fold state is kept in `ext.conversations.landingsOpen`.
+
+Notes, new branches and compactions stay on the root's page. The row shows no feature, summary or assessment, and the
+summary below the tree is not shown for it. Its menu offers Compact context (lineage `compact {id}`, only for a root
+that has a context) and Talk to @ultimate; a root is never renamed, cleared or concluded here. Landings refetch
+whenever the root's token count changes, which every new entry does. The full branch tree folds under
+`All branches · N`, closed by default (`ext.conversations.expandedRoots`), since In flight already lists open work.
 Branches nest under their source (`branchOf.conversationId`), with a hairline guide and one indent per depth;
 siblings sort by latest input. Older conversations that are neither roots nor branches live in the collapsed
 "Earlier · N" group, above "Concluded · N". Isolated rows carry a short `#<conversationId>` badge;

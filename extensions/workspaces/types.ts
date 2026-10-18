@@ -64,6 +64,8 @@ export type LanderOutcome = {
   outcome: 'landed' | 'failed'
   divergence?: string
   sha?: string
+  /** The target's tip the landing moved from: `base..sha` is what it brought. */
+  base?: string
   commits?: string[]
   paths?: string[]
   flaky?: string[]

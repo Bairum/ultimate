@@ -9,7 +9,10 @@ import {
 } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxContentBlock, FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import type { JsonObject } from '@earendil-works/pi-durable'
+import type { JsonValue } from '@earendil-works/chord'
+import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import type { LineageService } from '../lineage/server.ts'
 
 const messageText = (content: unknown) =>
   typeof content === 'string'
@@ -453,4 +456,51 @@ export default async function fauxExtension(host: ExtensionHost) {
     faux.setResponses([demo])
   }
   return defineExtension({ name: 'faux' })
+}
+
+/** Landings for `seedLandings`, newest last: sha, base, feature, title, commits. */
+const demoLandings = [
+  ['3e55874', 'c4ceeb7', 'Provider Health', 'Track only logged-in providers', 1],
+  ['9bfcd3b', '3e55874', 'Agent Harness', 'Harness improvement epic', 17],
+  ['7c17166', '9bfcd3b', 'Sidebar', 'Hide sub-agents under listed roots', 1],
+  ['9057c43', '7c17166', 'Sidebar', 'Standing agent marks', 2],
+  ['45a315f', '9057c43', 'Lander Row', "The lander's feature tag", 1],
+] as const
+
+export const actions = {
+  /**
+   * Faux only: `{from}` writes demo landing notes from conversation `from` into its root, with real-looking shas,
+   * features and commit counts, to preview the root's Landed section and the landing cards.
+   */
+  async seedLandings(args: JsonValue, { host }: ActionContext) {
+    if (!host.faux) throw new Error('seedLandings runs only under faux')
+    const from = (args as { from?: unknown } | null)?.from
+    if (typeof from !== 'number') throw new Error('from must be a conversation id')
+    const lineage = host.use<LineageService>('lineage')
+    if (!lineage) throw new Error('lineage is not loaded')
+    for (const [sha, base, feature, title, count] of demoLandings) {
+      const commits = Array.from({ length: Math.min(count, 10) }, (_, n) => ({
+        sha: `${sha.slice(0, 5)}${n}0`,
+        subject: `feat: ${title.toLowerCase()} (${n + 1})`,
+      }))
+      await lineage.leaveNote('root', `Landed ${sha} on main from #${from} ${title} (${feature})`, {
+        from,
+        source: 'lander',
+        requestId: `faux-landing:${from}:${sha}`,
+        data: {
+          sha,
+          base,
+          target: 'main',
+          commits,
+          more: Math.max(0, count - 10),
+          paths: ['extensions/conversations/root.tsx'],
+          title,
+          feature,
+          divergence: 'None.',
+          pushed: 'origin/main',
+        },
+      })
+    }
+    return { seeded: demoLandings.length }
+  },
 }
