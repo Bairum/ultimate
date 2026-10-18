@@ -65,38 +65,66 @@ export interface HeartbeatDeps {
   record(provider: string, entry: HealthEntry): Promise<unknown>
 }
 
+/** The configured providers' available models, by provider. */
+async function configured(models: HeartbeatDeps['models']) {
+  const byProvider = new Map<string, Model<Api>[]>()
+  for (const model of await models.getAvailable())
+    if (models.getProviderAuthStatus(model.provider).configured)
+      byProvider.set(model.provider, [...(byProvider.get(model.provider) ?? []), model])
+  return byProvider
+}
+
+/** One tiny request with `provider`'s cheapest model, recorded as a check; returns whether it answered. */
+async function ping(deps: HeartbeatDeps, provider: string, models: readonly Model<Api>[]) {
+  const model = cheapest(models)!
+  let error: string | undefined
+  try {
+    const answer = await deps.models.completeSimple(
+      model,
+      { messages: [{ role: 'user', content: 'ping', timestamp: deps.now() }] },
+      { maxTokens: 16, signal: AbortSignal.timeout(60_000) },
+    )
+    if (answer.stopReason === 'error' || answer.stopReason === 'aborted')
+      error = answer.errorMessage ?? answer.stopReason
+  } catch (cause) {
+    error = cause instanceof Error ? cause.message : String(cause)
+  }
+  const now = deps.now()
+  await deps.record(
+    provider,
+    error === undefined
+      ? { lastChecked: now, lastOk: now }
+      : { lastChecked: now, lastFail: now, error },
+  )
+  return error === undefined
+}
+
 /** Ping each due provider once, in sequence, with its cheapest model; returns the providers it pinged. */
 export async function heartbeat(deps: HeartbeatDeps) {
-  const available = await deps.models.getAvailable()
-  const byProvider = new Map<string, Model<Api>[]>()
-  for (const model of available)
-    if (deps.models.getProviderAuthStatus(model.provider).configured)
-      byProvider.set(model.provider, [...(byProvider.get(model.provider) ?? []), model])
+  const byProvider = await configured(deps.models)
   const pinged = due(await deps.read(), deps.now(), [...byProvider.keys()])
-  for (const provider of pinged) {
-    const model = cheapest(byProvider.get(provider)!)!
-    let error: string | undefined
-    try {
-      const answer = await deps.models.completeSimple(
-        model,
-        { messages: [{ role: 'user', content: 'ping', timestamp: deps.now() }] },
-        { maxTokens: 16, signal: AbortSignal.timeout(60_000) },
-      )
-      if (answer.stopReason === 'error' || answer.stopReason === 'aborted')
-        error = answer.errorMessage ?? answer.stopReason
-    } catch (cause) {
-      error = cause instanceof Error ? cause.message : String(cause)
-    }
-    const now = deps.now()
-    await deps.record(
-      provider,
-      error === undefined
-        ? { lastChecked: now, lastOk: now }
-        : { lastChecked: now, lastFail: now, error },
-    )
-  }
+  for (const provider of pinged) await ping(deps, provider, byProvider.get(provider)!)
   return pinged
 }
+
+/**
+ * Ping `provider` now, as a move's checks do before a recorded failure blocks it, so a stale or one-off failure never
+ * blocks a move by itself. False when it is not configured or the ping fails.
+ */
+export async function confirm(deps: HeartbeatDeps, provider: string) {
+  const models = (await configured(deps.models)).get(provider)
+  return models ? ping(deps, provider, models) : false
+}
+
+/** Heartbeat dependencies on the host's model runtime and this machine's health file. */
+export const hostDeps = (
+  host: Pick<ExtensionHost, 'modelRuntime' | 'userHome'>,
+): HeartbeatDeps => ({
+  now: Date.now,
+  models: host.modelRuntime,
+  read: async () => (await readFileHealth(host.userHome)).providers,
+  record: (provider, entry) => record(host.userHome, provider, entry),
+})
 
 /** What a faux host shows: one provider ok, one failing, one never seen. */
 export function demoHealth(now: number): ProviderHealth[] {
@@ -174,21 +202,20 @@ export default function health(host: ExtensionHost) {
     ticking: undefined as Promise<void> | undefined,
     reported: 0,
   }))
-  const deps: HeartbeatDeps = {
-    now: Date.now,
-    models: host.modelRuntime,
-    read: async () => (await readFileHealth(host.userHome)).providers,
-    record: (provider, entry) => record(host.userHome, provider, entry),
-  }
+  const deps = hostDeps(host)
   const tick = () => {
     shared.ticking ??= (async () => {
       const pinged = await heartbeat(deps)
       if (!pinged.length && Date.now() - shared.reported < REPORT) return
-      await report(host).catch((error: unknown) => {
-        // The cloud may be down or not deployed yet; the next tick reports again.
-        console.error('health: report failed:', error instanceof Error ? error.message : error)
-      })
-      shared.reported = Date.now()
+      await report(host).then(
+        () => {
+          shared.reported = Date.now()
+        },
+        (error: unknown) => {
+          // The cloud may be down or not deployed yet; `reported` stays, so the next tick reports again.
+          console.error('health: report failed:', error instanceof Error ? error.message : error)
+        },
+      )
     })()
       .catch((error: unknown) => host.notice(`Provider heartbeat: ${String(error)}`))
       .finally(() => {

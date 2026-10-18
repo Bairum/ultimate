@@ -51,9 +51,32 @@ it('sanitises errors: no token survives, whitespace collapses, 120 characters at
   const error = sanitize(
     'Invalid key sk-ant-api03-SECRETsecret_42 sent\n\n  with Bearer abc.def-ghi and eyJhbGciOi.x.y',
   )
-  expect(error).toBe('Invalid key … sent with … and …')
+  expect(error).toBe('Invalid key … sent with Bearer … and …')
   expect(error).not.toContain('SECRET')
-  expect(sanitize('x'.repeat(300))).toHaveLength(120)
+  expect(sanitize('x '.repeat(300))).toHaveLength(120)
+})
+
+it('sanitises every credential format it can recognise, keeping provider error codes', () => {
+  const secrets = [
+    'authorization: bearer lowercaseSecret1',
+    'Authorization: Basic dXNlcjpwYXNz',
+    'refresh_token=rt.Abc123secret&x',
+    '{"access_token":"opaqueSecret99"}',
+    'api_key: plainSecret7',
+    'x-api-key=keySecret8',
+    'ghp_ghSecretValue1',
+    'xoxb-slackSecret-2',
+    'opaque 4f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c',
+    'cookie=sessionSecret3',
+  ]
+  const leaked = secrets.filter((text) => /Secret|dXNlcjpwYXNz|4f9a8b7c6d5e/.test(sanitize(text)))
+  expect(leaked).toEqual([])
+  expect(sanitize('400 invalid_grant: refresh token expired')).toBe(
+    '400 invalid_grant: refresh token …',
+  )
+  expect(sanitize('429 rate_limit_error: Too many requests')).toBe(
+    '429 rate_limit_error: Too many requests',
+  )
 })
 
 it('records real responses in the machine’s health file, merging concurrent writes', async () => {
@@ -176,4 +199,40 @@ it('a failing default provider is no model login for a move', async () => {
   )
   await record(home, 'anthropic', { lastOk: NOW + 2 })
   expect(await login()).toEqual({ provider: 'anthropic', ok: true })
+})
+
+it('a move confirms a recorded failure with a ping, so a stale one never blocks it', async () => {
+  const home = await temp()
+  let answers: 'stop' | 'error' = 'stop'
+  const pinged: string[] = []
+  const host = {
+    faux: undefined,
+    userHome: home,
+    settings: { getDefaultProvider: () => 'anthropic' } as unknown as ExtensionHost['settings'],
+    modelRuntime: {
+      getProviderAuthStatus: () => ({ configured: true }),
+      getAvailable: async () => [model('anthropic', 'haiku', 1)],
+      completeSimple: async (pingedModel: { id: string }) => {
+        pinged.push(pingedModel.id)
+        return {
+          stopReason: answers,
+          errorMessage: answers === 'error' ? 'invalid_grant' : undefined,
+        }
+      },
+    } as unknown as ExtensionHost['modelRuntime'],
+  }
+  // A failure long ago, no heartbeat since: the move's ping finds the provider working and clears it.
+  await record(home, 'anthropic', { lastFail: NOW, error: 'overloaded' })
+  expect(await modelLogin(host)).toMatchObject({ ok: false, error: 'overloaded' })
+  expect(await modelLogin(host, { confirm: true })).toEqual({ provider: 'anthropic', ok: true })
+  expect(pinged).toEqual(['haiku'])
+  expect(await modelLogin(host)).toEqual({ provider: 'anthropic', ok: true })
+  // A real revocation: the confirming ping fails too and its error blocks the move.
+  answers = 'error'
+  await record(home, 'anthropic', { lastFail: Date.now() + HOUR, error: 'old' })
+  expect(await modelLogin(host, { confirm: true })).toMatchObject({
+    ok: false,
+    error: expect.stringMatching(/invalid_grant|old/),
+  })
+  expect(pinged).toEqual(['haiku', 'haiku'])
 })

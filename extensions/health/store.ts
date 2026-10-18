@@ -20,10 +20,21 @@ export const healthPath = (userHome: string) => join(userHome, '.ultimate/health
 
 const STAMPS = ['lastOk', 'lastFail', 'lastChecked', 'lastUsed'] as const
 
-/** Drop anything that looks like a key or bearer token, collapse whitespace and cap at 120 characters. */
+/**
+ * Drop anything that looks like a credential, collapse whitespace and cap at 120 characters: auth schemes and their
+ * value, `token=…`-style pairs, JWTs, prefixed keys (`sk-…`, `ghp_…`) and any opaque run of 24+ key characters.
+ * Provider error codes such as `invalid_grant` stay.
+ */
 export function sanitize(error: string) {
   const text = error
-    .replace(/(sk-|Bearer\s+|eyJ)[\w.-]+/g, '…')
+    .replace(/\b(bearer|basic|token)\s+\S+/gi, '$1 …')
+    .replace(
+      /\b([\w-]*(?:token|key|secret|password|authorization|cookie)[\w-]*["']?\s*[:=]\s*)["']?[^\s"',;}]+/gi,
+      '$1…',
+    )
+    .replace(/\beyJ[\w.-]+/g, '…')
+    .replace(/\b(?:sk|rk|pk|ghp|gho|ghs|xox[a-z])[-_][\w-]+/gi, '…')
+    .replace(/[\w+/=.-]{24,}/g, '…')
     .replace(/\s+/g, ' ')
     .trim()
   return text.length > 120 ? `${text.slice(0, 119)}…` : text
