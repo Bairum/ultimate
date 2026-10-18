@@ -1146,6 +1146,51 @@ describe('turns without an answer', () => {
     expect(last.model?.[0]).toMatchObject({ role: 'assistant' })
     expect(JSON.stringify(last.model)).toContain('Report received')
   })
+  it('reports a one-way message answer once while a later queued follow-up is pending', async () => {
+    const f = await gatedFixture()
+    await call(f.opened, { action: 'start', agent: 'scout', task: 'Ready', background: true })
+    await until(async () => (await reports(f.opened)).length === 1)
+    await f.opened.harness.waitForIdle(context)
+    const [child] = await children(f.opened)
+    const handle = (await f.opened.harness.conversation(child.conversationId, context))!
+    const oneWay = await handle.submit(
+      {
+        type: 'input',
+        content: 'HOLD',
+        entry: {
+          kind: 'board.message',
+          data: { id: 1, from: f.opened.root.id, text: 'HOLD', reply: false, delivery: 'followUp' },
+        },
+      },
+      context,
+    )
+    await until(async () => f.holding.has(child.conversationId))
+    await call(f.opened, {
+      action: 'message',
+      id: child.conversationId,
+      text: 'Later follow-up',
+      steer: false,
+    })
+    f.childGate.release()
+    const answered = await oneWay.wait(context)
+    await until(async () =>
+      Object.values(
+        (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!.actions,
+      ).every((action) => action.status !== undefined),
+    )
+    await f.opened.harness.waitForIdle(context)
+    // The follow-up ran after the one-way message's run: two distinct answers, each reported once.
+    const answer = answered.status === 'done' ? answered.answer : undefined
+    const delivered = (await reports(f.opened)).slice(1).map((entry) => entry.data) as {
+      entry: number
+      body: string
+    }[]
+    expect(delivered).toHaveLength(2)
+    expect(delivered.filter((report) => report.entry === answer)).toHaveLength(1)
+    expect(delivered.find((report) => report.entry !== answer)?.body).toContain(
+      'Child: Later follow-up',
+    )
+  })
   it('delivers the answer that follows a child-side stop exactly once, across reopen', async () => {
     const f = await gatedFixture()
     await call(f.opened, { action: 'start', agent: 'scout', task: 'HOLD', background: true })

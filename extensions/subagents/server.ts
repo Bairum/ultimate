@@ -671,14 +671,18 @@ export default function subagents(
       )
       // A one-way Board message from the parent has no reporter and no Board reply: without this,
       // the answer it starts never reaches the parent, which stays idle. A pending reporter
-      // whose input shares the run delivers that answer itself.
+      // whose input was answered in the same run delivers that answer itself.
       const input = await tx.entry(submission.entry)
       const message = input?.data as { from?: unknown; reply?: unknown } | undefined
-      const messaged =
-        input?.kind === 'board.message' &&
-        message?.from === parent &&
-        message.reply === false &&
-        childActions.every((action) => action.status !== undefined)
+      let messaged =
+        input?.kind === 'board.message' && message?.from === parent && message.reply === false
+      for (const action of childActions) {
+        if (!messaged || action.status !== undefined) continue
+        for (const request of [`subagent:${action.reporter}`, action.retryRequest ?? []].flat()) {
+          const sibling = await tx.submissionByRequest(submission.conversationId, request)
+          if (sibling?.status === 'done' && sibling.answer === submission.answer) messaged = false
+        }
+      }
       if (!messaged) {
         const action = childActions.at(-1)
         const interrupted = action?.status === 'interrupted'
@@ -1183,12 +1187,17 @@ Available definitions:
             }
             // Report, never commit or delete: the coordinator decides what happens to the work.
             const workspace = await service()?.get(id, context)
+            // Name lists, not porcelain: the git helper trims output, which eats a leading status space.
+            const list = async (...command: string[]) =>
+              (await service()!.git(workspace!.path, ...command, '-z')).split('\0').filter(Boolean)
             const uncommitted =
               workspace?.state === 'ready'
-                ? (await service()!.git(workspace.path, 'status', '--porcelain'))
-                    .split('\n')
-                    .filter(Boolean)
-                    .map((line) => line.slice(3))
+                ? [
+                    ...new Set([
+                      ...(await list('diff', '--name-only', 'HEAD')),
+                      ...(await list('ls-files', '--others', '--exclude-standard')),
+                    ]),
+                  ]
                 : []
             return finish(
               `Stopped ${id}.${uncommitted.length ? `\nLeft uncommitted in ${workspace!.path}: ${uncommitted.join(', ')}` : ''}`,
