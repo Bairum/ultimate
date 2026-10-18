@@ -468,9 +468,9 @@ export const actions = {
   }),
 }
 
-export default function automations(host: Host & Pick<ExtensionHost, 'implement' | 'want'>) {
-  // Optional services, resolved where they are called; declared here so the catalogue lists them.
-  host.want(SubagentsApi)
+export default function automations(host: Host & Pick<ExtensionHost, 'implement' | 'need'>) {
+  // Core, always on; resolved where it is called, declared here so the catalogue lists it.
+  host.need(SubagentsApi)
   host.implement(AutomationsApi, {
     async nextDue() {
       const state = await host.harness().snapshot(Automations, BACKGROUND_CONTEXT)

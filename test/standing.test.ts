@@ -1,5 +1,5 @@
 // Harness tests use the faux provider without token pacing.
-import { temp, removeTemp } from './helpers.ts'
+import { idleNeed, temp, removeTemp } from './helpers.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -58,10 +58,7 @@ async function fixture() {
     implement: (_api, value) => {
       service = value as SubagentsService
     },
-    need: () => {
-      throw new Error('Not used')
-    },
-    want: () => undefined,
+    need: idleNeed,
     resource: (_key, create) => create(),
     extensions: () => [],
     notice: () => {},

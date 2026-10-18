@@ -152,9 +152,9 @@ function watchDefinitions(
   }
 }
 export default function workspaceExtension(host: ExtensionHost) {
-  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  // The handoff is an extension point, wanted where the lander calls it; conversations is core and always on.
   host.want(Handoff)
-  host.want(ConversationsApi)
+  const conversations = host.need(ConversationsApi)
   const service = workspaces(host)
   host.implement(WorkspacesApi, {
     ...service,
@@ -184,9 +184,8 @@ export default function workspaceExtension(host: ExtensionHost) {
   host.onOpen(async () => {
     releaseController = new AbortController()
     const { signal } = releaseController
-    releasing = (
-      host.want(ConversationsApi)?.concluded(context) ?? Promise.resolve(new Set<ConversationId>())
-    )
+    releasing = conversations
+      .concluded(context)
       .then((ids) => service.release([...ids], context, signal))
       .catch((error: unknown) => {
         host.notice(`Workspace release failed: ${String(error)}`)

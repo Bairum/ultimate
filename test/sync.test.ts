@@ -25,7 +25,7 @@ import type { MoveEnded } from '../extensions/sync/types.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { MachineHealth, ProviderHealth, Transition } from '../cloud/protocol.ts'
 import type { Project } from '../cloud/directory.ts'
-import { removeTemp, temp } from './helpers.ts'
+import { idleNeed, removeTemp, temp } from './helpers.ts'
 
 const ctx = BACKGROUND_CONTEXT
 const directories: string[] = []
@@ -59,10 +59,7 @@ async function host(project: (userHome: string) => string) {
       implement: (_api, value) => {
         service = value as SubagentsService
       },
-      need: () => {
-        throw new Error('Not used')
-      },
-      want: () => undefined,
+      need: idleNeed,
       resource: (_key, create) => create(),
       extensions: () => [],
       notice: () => {},
@@ -385,7 +382,7 @@ it('wakes @sync once per ended transition involving this machine, also across re
   // A restart forgets the watcher's memory; Pi's requestId keeps @sync's input single.
   const machine = await host((home) => machineRoot(home))
   const extensionHost = {
-    want: () => machine.service,
+    need: () => machine.service,
     harness: () => machine.open.harness,
   } as unknown as ExtensionHost
   const restarted = createWatcher(deps, (input) => submitMove(extensionHost, input))

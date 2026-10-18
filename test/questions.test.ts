@@ -25,6 +25,8 @@ import questionsExtension, {
   userActions,
 } from '../extensions/questions/server.ts'
 import { Standing } from '../extensions/subagents/api.ts'
+import type { SubagentsService } from '../extensions/subagents/api.ts'
+import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 
 const hosts: OpenHost[] = []
 afterEach(async () => {
@@ -65,6 +67,9 @@ async function fixture() {
     askSummaryModel,
     accountResponse,
   } satisfies Partial<ConversationsService>)
+  // Board's core dependencies: no standing agents to list, no worktrees.
+  services.set('subagents', { residents: async () => [] } satisfies Partial<SubagentsService>)
+  services.set('workspaces', { doc: Workspaces })
   prepared.registry.install(boardExtension(host))
   const extension = questionsExtension(host)
   let beforeCommit: ReturnType<typeof gate> | undefined

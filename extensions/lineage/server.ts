@@ -588,8 +588,8 @@ export const BranchReceipts = defineDoc<{ branches: Record<string, number> }>({
 /** The project checkout's tip, where new branches start, shared or isolated. */
 function head(host: ExtensionHost) {
   return host
-    .want(WorkspacesApi)
-    ?.git(host.projectRoot, 'rev-parse', 'HEAD')
+    .need(WorkspacesApi)
+    .git(host.projectRoot, 'rev-parse', 'HEAD')
     .catch(
       // A project without a Git HEAD can start conversations without a commit baseline.
       () => undefined,
@@ -684,11 +684,7 @@ async function forkBranch(
   const agent = await tx.doc(AgentDoc, fork.id)
   delete agent.tools
   delete agent.modelTools
-  if (input.isolated) {
-    const workspaces = host.want(WorkspacesApi)
-    if (!workspaces) throw new Error('Isolated branches require workspaces')
-    await workspaces.create(tx, fork.id, host.projectRoot)
-  }
+  if (input.isolated) await host.need(WorkspacesApi).create(tx, fork.id, host.projectRoot)
   if (main) await seedSeen(tx, fork.id, main, Date.now())
   // The branch knows its tally as far as its context reaches; its own prompt node, appended below, is no news to it.
   if (tally !== undefined) (await tx.doc(Seen, fork.id)).tally = tally
@@ -1118,8 +1114,8 @@ async function refuseTally(tx: Tx, id: ConversationId) {
 }
 
 export default function lineageExtension(host: ExtensionHost) {
-  // Optional services, resolved where they are called; declared here so the catalogue lists them.
-  host.want(WorkspacesApi)
+  // Core, always on; resolved where it is called, declared here so the catalogue lists it.
+  host.need(WorkspacesApi)
   host.implement(LineageApi, {
     branch: (input, ctx) => startBranch(host, input, ctx),
     rootOf: (id, ctx) => rootOf(host, id, ctx),

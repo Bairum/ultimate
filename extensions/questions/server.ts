@@ -249,14 +249,10 @@ export const actions = {
       if (!message || !open(message) || !questions?.length) throw new Error(NOT_OPEN)
       checkAnswers(data.answers, questions)
     }, context)
-    const board = host.want(BoardApi)
-    if (!board) throw new Error('Board is unavailable')
     return {
-      id: await board.answer(
-        data.messageId,
-        answerText(data.answers),
-        withAbortSignal(signal, context),
-      ),
+      id: await host
+        .need(BoardApi)
+        .answer(data.messageId, answerText(data.answers), withAbortSignal(signal, context)),
     }
   }),
   /**
@@ -310,8 +306,8 @@ export const actions = {
 }
 
 export default function questionsExtension(host: ExtensionHost) {
-  // Optional services, resolved where they are called; declared here so the catalogue lists them.
-  host.want(BoardApi)
+  // Core, always on; resolved where it is called, declared here so the catalogue lists it.
+  host.need(BoardApi)
   const conversations = host.need(ConversationsApi)
   const abort = aborted(conversations)
   const Extract = defineTask<{ messageId: number; text: string }, { phase: 'extract' }, null>({

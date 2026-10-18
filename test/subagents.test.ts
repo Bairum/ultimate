@@ -1,5 +1,5 @@
 // First: helpers mocks the faux provider's token pacing, which must apply before the server modules load.
-import { until, temp, removeTemp } from './helpers.ts'
+import { idleNeed, until, temp, removeTemp } from './helpers.ts'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { projectSettings } from '../server/project-setup.ts'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
@@ -85,10 +85,7 @@ async function fixture(
     harness: () => opened!.harness,
     metadata: Metadata,
     implement: () => {},
-    need: () => {
-      throw new Error('Not used')
-    },
-    want: () => undefined,
+    need: idleNeed,
     resource: (_key, create) => create(),
     extensions: () => [],
     notice: () => {},

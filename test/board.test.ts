@@ -733,6 +733,20 @@ async function codemodeFixture() {
     join(home, 'extensions/codemode/server.ts'),
     `export { default, docs } from ${JSON.stringify(resolve('extensions/codemode/server.ts'))}`,
   )
+  // Board needs the core's subagents and workspaces; stand-ins with no standing agents and no worktrees.
+  await mkdir(join(home, 'extensions/core-stand-ins'), { recursive: true })
+  await writeFile(
+    join(home, 'extensions/core-stand-ins/server.ts'),
+    `import { SubagentsApi } from ${JSON.stringify(resolve('extensions/subagents/api.ts'))}
+import { WorkspacesApi } from ${JSON.stringify(resolve('extensions/workspaces/api.ts'))}
+import { Workspaces } from ${JSON.stringify(resolve('extensions/workspaces/workspaces.ts'))}
+export default (host) => {
+  host.implement(SubagentsApi, { residents: async () => [] })
+  host.implement(WorkspacesApi, { doc: Workspaces })
+  return { name: 'core-stand-ins' }
+}
+`,
+  )
   await writeFile(
     join(home, 'vite.config.ts'),
     "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', optimizeDeps: { noDiscovery: true } })",

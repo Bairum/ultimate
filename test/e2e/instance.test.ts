@@ -15,6 +15,7 @@ import { git } from '../../lib/git.ts'
 import { projectSettings } from '../../server/project-setup.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import type { ConversationsService } from '../../extensions/conversations/api.ts'
 import { apis, attach, temp, removeTemp, until } from '../helpers.ts'
 
 type Preview = { id: string; url: string; home: string; pid: number }
@@ -100,6 +101,12 @@ async function fixture({ foreign = false } = {}) {
       cleanups.push(cleanup)
     },
   } as unknown as ExtensionHost
+  // The core's conversations: nothing concluded, no summaries.
+  services.set('conversations', {
+    concluded: async () => new Set(),
+    summaryModel: async () => undefined,
+    requestSummary: async () => {},
+  } satisfies Partial<ConversationsService>)
   const extension = instance(host)
   const service = workspaces(host)
   prepared.registry.install(workspaceExtension(host))

@@ -31,6 +31,13 @@ vi.mock('@earendil-works/pi-ai/providers/faux', async (importOriginal) => {
  * `implement`, `need` and `want` over a plain map, for extension hosts built by hand. `need` resolves the provider on
  * each member access like the real handle, so a fixture may implement an API after its consumer took the handle.
  */
+/**
+ * `need` for a hand-built host whose core services stay out of the test: every method resolves undefined, as a worktree
+ * lookup for a conversation without one does.
+ */
+export const idleNeed = <S>(_api: Api<string, S>) =>
+  new Proxy({}, { get: (_, key) => (key === 'then' ? undefined : async () => undefined) }) as S
+
 export function apis(provided = new Map<string, unknown>()) {
   return {
     provided,

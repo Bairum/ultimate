@@ -560,7 +560,6 @@ export default function subagents(
     | 'home'
     | 'projectSettings'
     | 'need'
-    | 'want'
     | 'implement'
     | 'resource'
     | 'extensions'
@@ -570,9 +569,9 @@ export default function subagents(
     | 'scanSubmissions'
   >,
 ) {
-  // Optional services, resolved where they are called; declared here so the catalogue lists them.
-  host.want(ConversationsApi)
-  host.want(WorkspacesApi)
+  // Core services, always on; each handle resolves the current provider at every call.
+  const conversations = host.need(ConversationsApi)
+  const workspaces = host.need(WorkspacesApi)
   const residentDefinitions = async () =>
     (
       await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
@@ -617,7 +616,6 @@ export default function subagents(
       }, ctx)
     },
   })
-  const service = () => host.want(WorkspacesApi)
   const Reporter = createReporter()
   let unsubscribe: (() => void) | undefined
   let recovery = Promise.resolve()
@@ -907,7 +905,7 @@ Available definitions:
             const rows = await Promise.all(
               Object.values(index.agents).map(async (agent) => ({
                 ...agent,
-                workspace: await service()?.get(agent.conversationId, context),
+                workspace: await workspaces.get(agent.conversationId, context),
                 busy:
                   (await api.snapshot(LiveDoc, agent.conversationId, context))?.run !== undefined,
               })),
@@ -923,11 +921,9 @@ Available definitions:
             if (await api.memo<boolean>('workspace-operation', context))
               throw new Error('Workspace operation interrupted; call again')
             await api.memo('workspace-operation', true, context)
-            const workspaceService = service()
-            if (!workspaceService) throw new Error('Workspace operations require workspaces')
             const operation = args.action
             return finish(
-              JSON.stringify(await workspaceService[operation](args.id as ConversationId, context)),
+              JSON.stringify(await workspaces[operation](args.id as ConversationId, context)),
             )
           }
           if (args.action === 'start' || args.action === 'message') {
@@ -955,12 +951,9 @@ Available definitions:
               throw new Error('Definition tools must be a subset of parent tools')
             const isolated =
               definition && (args.isolate ?? definition.isolate ?? 'none') === 'worktree'
-            const workspaceService = service()
-            if (isolated && !workspaceService)
-              throw new Error('Worktree isolates require workspaces')
             const warning =
               isolated &&
-              (await workspaceService!.git(parent.cwd ?? host.projectRoot, 'status', '--porcelain'))
+              (await workspaces.git(parent.cwd ?? host.projectRoot, 'status', '--porcelain'))
                 ? '\nWarning: parent has uncommitted changes; they are not in the worktree.'
                 : ''
             const task = await api.getTask(api.taskId, context)
@@ -978,20 +971,18 @@ Available definitions:
                 view.dispose()
               }
             }
-            const summaries = definition ? host.want(ConversationsApi) : undefined
-            const model = await summaries?.summaryModel()
+            const model = definition ? await conversations.summaryModel() : undefined
             const action = await api.commit(async (tx) => {
               const state = await tx.doc(Subagents, api.conversationId)
               if (state.actions[api.callId]) return { ...state.actions[api.callId] }
               let conversationId = args.id as ConversationId
               if (definition) {
-                if (summaries)
-                  await summaries.requestSummary(
-                    tx,
-                    api.conversationId,
-                    { reason: 'spawn', answer: assistant!, agent: definition.name, task: text },
-                    model,
-                  )
+                await conversations.requestSummary(
+                  tx,
+                  api.conversationId,
+                  { reason: 'spawn', answer: assistant!, agent: definition.name, task: text },
+                  model,
+                )
                 const owner = await tx.createTask(Anchor, null, {
                   ownership: { kind: 'conversation' },
                   background: true,
@@ -1019,7 +1010,7 @@ Available definitions:
                   reported: [],
                 }
                 if (isolated) {
-                  const workspace = await workspaceService!.create(
+                  const workspace = await workspaces.create(
                     tx,
                     child.id,
                     parent.cwd ?? host.projectRoot,
@@ -1043,7 +1034,7 @@ Available definitions:
               state.actions[api.callId] = createdAction
               return createdAction
             }, context)
-            const isolate = await service()?.get(action.conversationId, context)
+            const isolate = await workspaces.get(action.conversationId, context)
             const isolateInfo = isolate
               ? `\nIsolate: ${isolate.path}\nBranch: ${isolate.branch}${warning}`
               : ''
@@ -1148,7 +1139,7 @@ Available definitions:
               await api.waitForTask(run.taskId, context)
             }
             // Report, never commit or delete: the coordinator decides what happens to the work.
-            const workspace = await service()?.get(id, context)
+            const workspace = await workspaces.get(id, context)
             // Untrimmed NUL-separated name lists: the git helper in lib/ trims, which would cut a
             // leading space off the first name.
             const list = (...command: string[]) =>

@@ -26,7 +26,7 @@ it('derives neutral faux summaries from the latest prompt and only flags the que
   await fauxExtension({
     faux,
     home: await temp('ultimate-faux-summary-demo-'),
-    want: () => undefined,
+    need: () => undefined,
   } as unknown as ExtensionHost)
   const models = createModels()
   models.setProvider(faux.provider)

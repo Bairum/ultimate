@@ -360,9 +360,7 @@ export const moveText = ({ project, machine, transition: moved }: MoveEnded) => 
 
 /** Submit an ended move to @sync's conversation, once per transition. */
 export async function submitMove(host: ExtensionHost, input: MoveEnded) {
-  const service = host.want(SubagentsApi)
-  if (!service) throw new Error('Subagents are required for @sync')
-  const id = await service.standing('sync', BACKGROUND_CONTEXT)
+  const id = await host.need(SubagentsApi).standing('sync', BACKGROUND_CONTEXT)
   const conversation = (await host.harness().conversation(id, BACKGROUND_CONTEXT))!
   await conversation.submit(
     {
@@ -541,9 +539,7 @@ export const actions = {
     if (host.standby()) throw new Error('This project is on standby here; report on its writer')
     if (isMachineHome(host.projectRoot, host.userHome))
       throw new Error('The machine home takes no reports')
-    const service = host.want(SubagentsApi)
-    if (!service) throw new Error('Subagents are required for reports')
-    const id = await service.standing('ultimate', BACKGROUND_CONTEXT)
+    const id = await host.need(SubagentsApi).standing('ultimate', BACKGROUND_CONTEXT)
     const conversation = (await host.harness().conversation(id, BACKGROUND_CONTEXT))!
     const data: SyncReport = { from, text }
     await conversation.submit(
@@ -560,9 +556,9 @@ export const actions = {
 }
 
 export default function sync(host: ExtensionHost) {
-  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  // Resolved where they are called; declared here so the catalogue lists them. Health is optional.
   host.want(HealthApi)
-  host.want(SubagentsApi)
+  host.need(SubagentsApi)
   if (!isMachineHome(host.projectRoot, host.userHome)) return defineExtension({ name: 'sync' })
   const deps = syncDeps(host)
   const watcher = createWatcher(deps, (input) => submitMove(host, input))

@@ -26,8 +26,8 @@ const tool = (name: string, args: JsonObject, greeting?: string) =>
   })
 
 export default async function fauxExtension(host: ExtensionHost) {
-  // Optional services, resolved where they are called; declared here so the catalogue lists them.
-  host.want(LineageApi)
+  // Core, always on; resolved where it is called, declared here so the catalogue lists it.
+  host.need(LineageApi)
   const faux = host.faux
   if (faux) {
     const scratch = join(host.home, 'demo.txt')
@@ -478,8 +478,7 @@ export const actions = {
     if (!host.faux) throw new Error('seedLandings runs only under faux')
     const from = (args as { from?: unknown } | null)?.from
     if (typeof from !== 'number') throw new Error('from must be a conversation id')
-    const lineage = host.want(LineageApi)
-    if (!lineage) throw new Error('lineage is not loaded')
+    const lineage = host.need(LineageApi)
     for (const [sha, base, feature, title, count] of demoLandings) {
       const commits = Array.from({ length: Math.min(count, 10) }, (_, n) => ({
         sha: `${sha.slice(0, 5)}${n}0`,

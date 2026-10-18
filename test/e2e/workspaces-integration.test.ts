@@ -145,6 +145,16 @@ async function fixture(
     build: () => ({ id: 'test-build' }),
     system: () => ({ process: {} }),
   } as unknown as ExtensionHost
+  // The core's conversations, until a test implements its own: nothing concluded, no titles or summaries.
+  services.set(
+    'conversations',
+    conversations({
+      concluded: async () => new Set<ConversationId>(),
+      subject: async () => ({}),
+      summaryModel: async () => undefined,
+      requestSummary: async () => {},
+    }),
+  )
   const service = workspaces(host)
   if (boardEnabled) prepared.registry.install(board(host))
   prepared.registry.install(workspaceExtension(host))

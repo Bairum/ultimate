@@ -78,6 +78,7 @@ type Host = Pick<
   | 'userHome'
   | 'modelRuntime'
   | 'projectSettings'
+  | 'need'
   | 'want'
   | 'resource'
   | 'extensions'
@@ -633,7 +634,7 @@ export function workspaces(host: Host) {
     const tip = await git(workspace.path, 'rev-parse', 'HEAD')
     const path = await landerPath(host.home, workspace.source)
     const { change } = await landerAgent(host, context)
-    const subject = await host.want(ConversationsApi)?.subject(id, context)
+    const subject = await host.need(ConversationsApi).subject(id, context)
     const result = await host.harness().commit(async (tx) => {
       const row = await tx.conversation(id)
       if (!row || row.owner)
