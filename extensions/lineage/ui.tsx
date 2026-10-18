@@ -6,7 +6,7 @@ import type { ReactNode } from 'react'
 import { definePoint, getState, useDocOf } from '@/sdk'
 import { RootsDoc } from './refs.ts'
 
-export { CompactAction, GithubAction, RecentAction, RootsDoc, TallyDoc } from './refs.ts'
+export { CompactAction, RecentAction, RootsDoc, TallyDoc } from './refs.ts'
 
 /** The composer's reading column, as the core lays it out; a card in place of a root's composer uses it. */
 export const column = (dock?: boolean) =>

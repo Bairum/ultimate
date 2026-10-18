@@ -3,13 +3,8 @@
  * actions that inspect worktrees. Browser-safe.
  */
 import { actionRef, docRef } from '../../shared/extension-api.ts'
-import type {
-  WorkspaceDisk,
-  WorkspaceIndex,
-  WorkspaceInfo,
-  WorkspacePending,
-  WorkspaceStats,
-} from './types.ts'
+import type { WorkspaceDisk, WorkspaceIndex, WorkspaceInfo, WorkspaceStats } from './types.ts'
+import type { KeptWork } from '../conversations/types.ts'
 
 /** Why the project cannot isolate conversations (`reason`, absent when it can), and whether its folder is empty. */
 export type Isolation = { reason?: string; empty?: boolean }
@@ -20,10 +15,7 @@ export const WorkspacesDoc = docRef<WorkspaceIndex>('ultimate.workspaces')
 /** `{ id }` → conversation `id`'s worktree with its branch, tip and changes, or null when it has none. */
 export const InfoAction = actionRef<{ id: number }, WorkspaceInfo | null>('workspaces', 'info')
 /** `{ ids }` → the unlanded work of these conversations' worktrees, to warn before concluding them. */
-export const PendingAction = actionRef<{ ids: number[] }, WorkspacePending[]>(
-  'workspaces',
-  'pending',
-)
+export const PendingAction = actionRef<{ ids: number[] }, KeptWork[]>('workspaces', 'pending')
 /** No arguments → how many worktrees there are in total and in each state, for the workspaces panel. */
 export const StatsAction = actionRef<null, WorkspaceStats>('workspaces', 'stats')
 /** No arguments → the disk space the worktrees take (on btrfs also with shared blocks counted once), at most a minute old. */
@@ -33,3 +25,5 @@ export const DiskAction = actionRef<null, WorkspaceDisk>('workspaces', 'disk')
  * if it has none.
  */
 export const IsolationAction = actionRef<null, Isolation>('workspaces', 'isolation')
+/** No arguments → `https://github.com/<owner>/<repo>` of the project's `origin`, or null off GitHub. */
+export const GithubAction = actionRef<null, string | null>('workspaces', 'github')

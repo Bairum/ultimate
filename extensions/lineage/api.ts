@@ -4,18 +4,10 @@
  */
 import type { Context } from '@earendil-works/chord'
 import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { Tx } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
 import { defineEvent } from '../../shared/events.ts'
 import { RootsDoc } from './refs.ts'
-import type {
-  AbstractInput,
-  BranchInput,
-  branchOf,
-  leaveNote,
-  rootOf,
-  startBranch,
-} from './server.ts'
+import type { BranchInput, leaveNote, rootOf, startBranch } from './server.ts'
 
 /** The project's roots, each the top of one conversation tree; a fresh project's first conversation is its first. */
 export const Roots = defineDoc<{ roots: number[] }>({
@@ -52,10 +44,6 @@ export type LineageService = {
     text: string,
     source?: Parameters<typeof leaveNote>[3],
   ) => ReturnType<typeof leaveNote>
-  /** The root whose tally lists top-level conversation `id`, with its branch intent; undefined for roots and others. */
-  branchOf: (id: number, ctx: Context) => ReturnType<typeof branchOf>
-  /** Write the abstract of conversation `id` into its tree root's tally inside `tx`; a no-op outside a tree. */
-  abstract: (tx: Tx, id: number, input: AbstractInput) => Promise<void>
 }
 /**
  * A branch started: conversation `id` forked from `from` at entry `at`, its prompt `intent`. Emitted in the forking

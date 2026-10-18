@@ -31,7 +31,7 @@ import { currentAssessment, Row, ChildRow, StandingRow } from './rows.tsx'
 import { inFlight, RootRow } from './root.tsx'
 import { useRoots } from '../lineage/ui.tsx'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
-import type { WorkspacePending } from '../workspaces/types.ts'
+import type { KeptWork } from '../conversations/types.ts'
 import { ago, LanderState } from './lander.tsx'
 import { StandingPhase, WaitingOnUser } from './ultimate.tsx'
 import { useSidebarState } from './state.tsx'
@@ -155,7 +155,7 @@ function Tree({ waiting }: { waiting: number }) {
 
   const [warning, setWarning] = useState<{
     id: number
-    work?: WorkspacePending[]
+    work?: KeptWork[]
     failure?: string
   }>()
   const [pending, setPending] = useState(false)

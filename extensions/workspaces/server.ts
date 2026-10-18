@@ -20,11 +20,18 @@ import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- workspace discovery shares the core root watcher
 import { watchRoots } from '../../server/watch-roots.ts'
-import { BoardApi } from '../board/api.ts'
-import { ConversationsApi } from '../conversations/api.ts'
+import { ConversationsApi, Release } from '../conversations/api.ts'
 import { agentRoots } from '../../lib/agents.ts'
-import { WorkspacesApi } from './api.ts'
-import { DiskAction, InfoAction, IsolationAction, PendingAction, StatsAction } from './refs.ts'
+import { Handoff, WorkspacesApi } from './api.ts'
+import {
+  DiskAction,
+  GithubAction,
+  InfoAction,
+  IsolationAction,
+  PendingAction,
+  StatsAction,
+} from './refs.ts'
+import { githubRepo } from '../../lib/project-identity.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
 export const order = -200
 export const docs = [Workspaces]
@@ -52,6 +59,11 @@ async function setupGit(host: ExtensionHost) {
 }
 
 export const actions = {
+  /** `https://github.com/<owner>/<repo>` of the project's `origin`, or null off GitHub: landing cards link ranges. */
+  github: implementAction(GithubAction, async (_args, { host }) => {
+    const repo = await githubRepo(host.projectRoot)
+    return repo ? `https://${repo}` : null
+  }),
   pending: implementAction(PendingAction, (args, { host }) => {
     const ids = args && typeof args === 'object' && !Array.isArray(args) ? args.ids : undefined
     if (
@@ -141,7 +153,7 @@ function watchDefinitions(
 }
 export default function workspaceExtension(host: ExtensionHost) {
   // Optional services, resolved where they are called; declared here so the catalogue lists them.
-  host.want(BoardApi)
+  host.want(Handoff)
   host.want(ConversationsApi)
   const service = workspaces(host)
   host.implement(WorkspacesApi, {
@@ -150,6 +162,8 @@ export default function workspaceExtension(host: ExtensionHost) {
     doc: Workspaces,
     setupGit: () => setupGit(host),
   })
+  // Concluding conversations frees their worktrees, through conversations' extension point.
+  host.implement(Release, { release: (ids, caller) => service.release(ids, caller) })
   const resume = () =>
     service.resume(context).catch((error: unknown) => {
       host.notice(`Lander resume failed: ${String(error)}`)

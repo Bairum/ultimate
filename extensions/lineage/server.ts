@@ -31,18 +31,18 @@ import type {
 } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import type { ActionInput } from '../../lib/actions.ts'
-import { git } from '../../lib/git.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import type { LandedData } from '../workspaces/api.ts'
 import { Branch, Branched, LineageApi, Rooted, Roots } from './api.ts'
-import { CompactAction, GithubAction, RecentAction, TallyDoc } from './refs.ts'
+import { ConversationsApi, Trees } from '../conversations/api.ts'
+import { CompactAction, RecentAction, TallyDoc } from './refs.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 import type { Tree } from './catchup.ts'
 import type { RootEvent } from './types.ts'
-import { projectKey } from '../../lib/project-identity.ts'
+import { githubRepo } from '../../lib/project-identity.ts'
 
 export type BranchImage = { data: string; mimeType: string }
 
@@ -960,13 +960,6 @@ function rootEvent(entry: EntryRecord): RootEvent | undefined {
   }
 }
 
-/** `github.com/<owner>/<repo>` of the project's `origin`, if it is on GitHub. */
-const githubRepo = (projectRoot: string) =>
-  git(projectRoot, 'remote', 'get-url', 'origin')
-    .then(projectKey)
-    // No repository or no origin: landings show their count without a link.
-    .catch(() => undefined)
-
 /**
  * Each landing's GitHub compare URL, `base...sha`, when the project's `origin` is on GitHub. A landing from before notes
  * recorded their base takes the landing before it, which is where the lander's serial queue left the target.
@@ -1081,11 +1074,6 @@ export const actions = {
     }, context)
     return withCompare(host.projectRoot, scanned.events, scanned.older)
   }),
-  /** `https://github.com/<owner>/<repo>` of the project's `origin`, or null off GitHub: landing cards link ranges. */
-  github: implementAction(GithubAction, async (_args, { host }) => {
-    const repo = await githubRepo(host.projectRoot)
-    return repo ? `https://${repo}` : null
-  }),
   /** `{id, instructions?}`: compact root tally `id`, as @ultimate's `compact_tally` does. */
   compact: implementAction(CompactAction, async (args, { host }) => {
     const id = conversationArg(args)
@@ -1136,8 +1124,20 @@ export default function lineageExtension(host: ExtensionHost) {
     branch: (input, ctx) => startBranch(host, input, ctx),
     rootOf: (id, ctx) => rootOf(host, id, ctx),
     leaveNote: (to, text, source) => leaveNote(host, to, text, source),
+  })
+  // What summaries need to know of a conversation's tree, through conversations' extension point.
+  host.implement(Trees, {
+    rootOf: (id, ctx) => rootOf(host, id, ctx),
     branchOf: (id, ctx) => branchOf(host, id, ctx),
     abstract,
+  })
+  const conversations = host.need(ConversationsApi)
+  // A new branch or root is called by its intent until its summary names it: lineage titled it so, and marking that
+  // title generated lets the summary replace it.
+  host.react('named', [Branched, Rooted], async (tx, { data }) => {
+    const id = data.id as ConversationId
+    if (!(await tx.conversation(id))) return
+    await conversations.generatedTitle(tx, id, data.intent.replace(/\s+/g, ' ').slice(0, 80))
   })
   const { Notify, Prompt, LandingNote } = lineage(host)
   // Every landing notes its submitter's tree root once: a tally in this reactor's transaction, any other root through

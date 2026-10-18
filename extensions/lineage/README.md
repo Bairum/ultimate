@@ -11,8 +11,9 @@ document, tools and model-facing text, where agents and stored entries already u
   activity. The fork happens before the tree root receives a model-visible `lineage.branched` prompt node
   `{ branch, at, intent, images?, from? }`, so the branch does not inherit its own prompt twice. `from` is present
   when the source is not the root; that source also gets a display-only marker. The forking commit emits the durable
-  event `lineage.branched` `{ id, from, at, intent }` (`Branched` in `api.ts`); conversations reacts to it by marking
-  the intent title as generated. Plan reads `Branch` (also in `api.ts`) and empties the inherited plan in the commit
+  event `lineage.branched` `{ id, from, at, intent }` (`Branched` in `api.ts`); lineage's own `named` reactor (for it
+  and `lineage.rooted`) has conversations mark the intent title as generated (`generatedTitle`). Lineage provides
+  conversations' `conversations.trees` point (`rootOf`, `branchOf`, `abstract`) that summaries use. Plan reads `Branch` (also in `api.ts`) and empties the inherited plan in the commit
   that places the branch's first input.
 - **Roots**: doc `lineage.roots` on conversation 1 (`{ roots }`, initially `[1]`) lists the roots. Clients stream it
   (`useRoots()` in `roots.tsx`). Root lookup walks owners and fork sources to a listed root; conversations outside
@@ -36,7 +37,7 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   `origin`, a landing's `compare` is `https://github.com/<owner>/<repo>/compare/<base>...<sha>`; a note from before
   landings recorded `base` uses the landing before it, which is where the lander's serial queue left the target.
   Catch-up notes and abstracts are left out. The sidebar's root row shows the landings.
-  `github` → `https://github.com/<owner>/<repo>` or null: the root page's landing cards link the same range.
+  Workspaces' `github` action gives the root page's landing cards the same range.
   `compact` `{ id, instructions? }` → `{ taskId }` starts the same compaction as `compact_tally`, for the root row's menu
   and the palette's Compact command on a root.
 - **Tally**: conversation-scoped doc `lineage.tally` (latest history) holds

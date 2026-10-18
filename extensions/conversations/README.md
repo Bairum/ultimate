@@ -38,7 +38,8 @@ list. No state-key migration runs automatically.
 
 - `conclude {ids:number[]}`: validates top-level conversations (unknown ids, subagents, listed roots and standing agents
   throw, refusing the whole call), deduplicates and
-  adds them to `ext.conversations.concluded` in one transaction, then calls workspaces `release`. Returns
+  adds them to `ext.conversations.concluded` in one transaction, then frees their resources through the `conversations.release`
+  extension point, which workspaces provides (its worktrees). Returns
   `{ concluded: number[], kept: {id, uncommitted, unlanded, busy?}[] }`; `kept` explains which checkouts remain.
 - `resume {ids:number[]}`: transactionally removes ids and their concluded ancestors from the list, returning
   `{ resumed: number[] }` for the removed ids. The next input recreates a released checkout from the target tip;
@@ -79,7 +80,7 @@ Top-level conversations also get a title and summary on exchanges 1, 4, 7, and s
 For a top-level non-root conversation in a lineage tree, that same request produces an abstract after every completed
 exchange, independent of the title/summary cadence. It uses the original branch intent, previous abstract and transcript:
 Ask, Diverged (agreements, approach/library or scope changes, or none), State (including named commits), Areas and Open
-questions, capped at 1200 characters. Acceptance calls the lineage service's `abstract` in the same transaction as the
+questions, capped at 1200 characters. Acceptance calls `abstract` of the `conversations.trees` extension point, which lineage provides, in the same transaction as the
 reply assessment, with `at` pointing to the answer entry, and saves the text in summary state. A newer abstract updates
 the open one in place until a landing freezes it (see the lineage README); the root never reorders. Roots, owned
 conversations such as subagents, and conversations outside trees such as landers produce no abstract. Neither do
@@ -144,6 +145,10 @@ thinking level is stripped, so model ids may contain colons (`x-ai/grok-4.3:batc
 It provides the `conversations` service: `subject(id)` returns a conversation's current title, summary and feature,
 which workspaces snapshots for each submission. `concluded(caller)` returns a `Promise<Set<ConversationId>>`
 from the server-owned concluded list, used by workspaces to release checkouts on open.
+`generatedTitle(tx, id, title)` marks a new branch's or root's intent title as generated, so its summary may replace
+it; lineage calls it from its `named` reactor. This extension declares two extension points in `api.ts`:
+`conversations.trees` (`rootOf`, `branchOf`, `abstract`; lineage provides it) and `conversations.release`
+(workspaces provides it), so it depends on neither.
 
 ## How status and summaries flow
 

@@ -12,8 +12,8 @@ import { MentionText } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
 import { api, useConversations, useUltimate } from '@/sdk'
 import { FeatureTag } from '../conversations/ui.tsx'
-import { GithubAction } from '../lineage/ui.tsx'
-import type { LandingSubject } from './types.ts'
+import { GithubAction } from './refs.ts'
+import type { ConversationSubject } from '../conversations/types.ts'
 
 /** "open #id", with a dot while that conversation works. */
 export function Open({
@@ -54,7 +54,7 @@ export function useGithubRepo() {
   const [url, setUrl] = useState<string | null>()
   useEffect(() => {
     repo ??= api.action(GithubAction).catch(
-      // No lineage or no repository: landings show their count without a link.
+      // No repository: landings show their count without a link.
       () => null,
     )
     let live = true
@@ -101,7 +101,7 @@ export function Subject({
   from,
   className,
 }: {
-  subject?: LandingSubject
+  subject?: ConversationSubject
   from: number
   className?: string
 }) {
@@ -146,7 +146,7 @@ export function LandingCard({
 }: {
   tone: LandingTone
   headline: ReactNode
-  subject?: LandingSubject
+  subject?: ConversationSubject
   /** The submitting conversation. */
   from: number
   at?: ReactNode

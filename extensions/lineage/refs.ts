@@ -21,8 +21,6 @@ export const RecentAction = actionRef<
   { id: number; limit?: number; types?: RootEvent['type'][] },
   RootEvent[]
 >('lineage', 'recent')
-/** No arguments → `https://github.com/<owner>/<repo>` of the project's `origin`, or null off GitHub. */
-export const GithubAction = actionRef<null, string | null>('lineage', 'github')
 /** `{ id, instructions? }` → `{ taskId }`: compact root `id`'s tally, as @ultimate's `compact_tally` does. */
 export const CompactAction = actionRef<{ id: number; instructions?: string }, { taskId: number }>(
   'lineage',

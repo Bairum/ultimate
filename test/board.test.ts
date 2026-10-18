@@ -101,8 +101,9 @@ async function fixture(
     metadata: Metadata,
     emit,
     harness: () => opened.harness,
-    implement: (_api: unknown, value: BoardService) => {
-      service = value
+    // Board also implements workspaces' handoff point; the tests call its own service.
+    implement: (api: { name: string }, value: BoardService) => {
+      if (api.name === 'board') service = value
     },
     want: provider,
     need: provider,

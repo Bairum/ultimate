@@ -14,6 +14,8 @@ export const ConversationPhase = definePoint<
   number | undefined,
   { label: ReactNode; word: string; waiting: boolean } | undefined
 >('conversations.phase')
+/** Whether conversation `id` gets no summaries, so its transcript hides older summary lines (lineage: a root). */
+export const Unsummarized = definePoint<number, boolean>('conversations.unsummarized')
 /** The plan task conversation `id` works on (`plan` provides it): its chip and title. */
 export const ConversationTask = definePoint<
   number | undefined,

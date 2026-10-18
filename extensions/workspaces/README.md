@@ -27,6 +27,8 @@ Failed setup keeps its output tail and never force-removes dirty output. The con
 The Workspaces panel shows the lander queue, statistics over every checkout, and the shown conversation's checkout,
 read-only: landing goes through agents. Concluding a conversation can release its clean, landed checkout.
 `isolation` says why the project cannot be isolated, if it cannot; `info {id}` reads the record and current tips; `create {cwd?, title?}` returns a new conversation ID.
+`github` returns `https://github.com/<owner>/<repo>` of the project's `origin`, or null off GitHub; landing cards and
+the root row link commit ranges with it.
 `workspace land` fast-forwards the saved source branch to the clean, verified workspace tip.
 Unrelated dirty files in the source checkout do not block; `git merge --ff-only` refuses only real overlap.
 If the target changed or diverged, update the workspace onto it and verify again; landing never rebases or pushes.
@@ -133,7 +135,7 @@ lander's sidebar row shows the feature it lands or landed last.
    conversation id for the full log (changed paths and output tails live there).
 
 7. With `lander.deploy`, if any landed changed path starts with a configured prefix, sends one one-way board
-   message from the lander to the named standing agent. It asks the agent to deploy the landed SHA and report to
+   message (through the `workspaces.handoff` extension point, which board provides) from the lander to the named standing agent. It asks the agent to deploy the landed SHA and report to
    the submitter, with the commit subjects, matching paths and push status. This is a handoff, not a deployment:
    the lander does not wait. `deploy → @<agent>` appears in the submit card's steps, full log and report, which is
    why the handoff stays in the lander's report phase rather than reacting to `workspaces.landed`.

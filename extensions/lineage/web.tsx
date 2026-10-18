@@ -13,6 +13,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import {
   cn,
   defineWebExtension,
+  provide,
   Provided,
   formatTime,
   formatTokens,
@@ -22,7 +23,7 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
-import { ConversationRef, usePrimaryAgent } from '../conversations/ui.tsx'
+import { ConversationRef, Unsummarized, usePrimaryAgent } from '../conversations/ui.tsx'
 import { talkToUltimate } from '../subagents/ui.tsx'
 import { Open } from '../workspaces/ui.tsx'
 import { TallyDoc } from './refs.ts'
@@ -409,4 +410,6 @@ export default defineWebExtension({
   },
   composer: RootComposer,
   slots: { overlay: [Roots] },
+  // A root runs no turns and gets no summaries: its tally speaks for it.
+  provides: [provide(Unsummarized, (id) => useRoots()?.includes(id) ?? false)],
 })

@@ -10,9 +10,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { Branched, LineageApi, Rooted } from '../lineage/api.ts'
-import type { LandingSubject } from '../workspaces/types.ts'
-import { WorkspacesApi } from '../workspaces/api.ts'
+import type { ConversationSubject } from './types.ts'
 // oxlint-disable-next-line no-restricted-imports -- conversations publishes the core UI state document
 import { UiState } from '../../server/ui-state.ts'
 import {
@@ -29,7 +27,7 @@ import type { ActionInput } from '../../lib/actions.ts'
 import { updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import { Overview, overviewBehavior } from './overview.ts'
 import { activityBehavior } from './activity.ts'
-import { ConversationsApi } from './api.ts'
+import { ConversationsApi, Release, Trees } from './api.ts'
 import {
   ConcludeAction,
   RenameAction,
@@ -99,7 +97,7 @@ export const actions = {
         ...new Set([...(Array.isArray(previous) ? previous : []), ...ids]),
       ]
     }, context)
-    const kept = (await host.want(WorkspacesApi)?.release(ids, context)) ?? []
+    const kept = (await host.want(Release)?.release(ids, context)) ?? []
     return { concluded: ids, kept }
   }),
   resume: implementAction(ResumeAction, async (args, { host }) => {
@@ -193,7 +191,7 @@ export async function subject(
   host: Pick<ExtensionHost, 'harness' | 'metadata'>,
   id: ConversationId,
   caller: Context,
-): Promise<LandingSubject> {
+): Promise<ConversationSubject> {
   const [metadata, state] = await Promise.all([
     host.harness().snapshot(host.metadata, id, caller),
     host.harness().snapshot(Summaries, id, caller),
@@ -207,9 +205,9 @@ export async function subject(
 
 /** Tells each top-level conversation which other conversations work in this project. */
 export default (host: ExtensionHost) => {
-  // Optional services, resolved where they are called; declared here so the catalogue lists them.
-  host.want(LineageApi)
-  host.want(WorkspacesApi)
+  // Extension points this extension declares, resolved where they are called; declared here for the catalogue.
+  host.want(Trees)
+  host.want(Release)
   host.implement(ConversationsApi, {
     subject: (id, caller) => subject(host, id, caller),
     summaryModel: () => summaryModel(host),
@@ -220,16 +218,12 @@ export default (host: ExtensionHost) => {
       const ids = (await host.uiState(caller))['ext.conversations.concluded']
       return new Set(Array.isArray(ids) ? (ids as ConversationId[]) : [])
     },
-  })
-  // A new branch or root is called by its intent until its summary names it: lineage titles it so, and marking that
-  // title generated lets the summary replace it. A rename or summary since then chose the title; it stays.
-  host.react('named', [Branched, Rooted], async (tx, { data }) => {
-    const id = data.id as ConversationId
-    if (!(await tx.conversation(id))) return
-    const title = data.intent.replace(/\s+/g, ' ').slice(0, 80)
-    const state = await tx.doc(Summaries, id)
-    if (state.generatedTitle === undefined && (await tx.doc(host.metadata, id)).title === title)
-      state.generatedTitle = title
+    // A rename or summary since the conversation was named chose the title; it stays.
+    generatedTitle: async (tx, id, title) => {
+      const state = await tx.doc(Summaries, id)
+      if (state.generatedTitle === undefined && (await tx.doc(host.metadata, id)).title === title)
+        state.generatedTitle = title
+    },
   })
   activityBehavior(host)
   overviewBehavior(host)

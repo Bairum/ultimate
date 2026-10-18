@@ -1,12 +1,5 @@
-/** Work kept when concluding a conversation, including its owned descendants. */
-export type WorkspacePending = {
-  id: number
-  uncommitted: number
-  unlanded: number
-  busy?: string
-  reason?: string
-  descendant?: number
-}
+import type { ConversationSubject } from '../conversations/types.ts'
+
 export type Workspace = {
   path: string
   branch: string
@@ -17,8 +10,6 @@ export type Workspace = {
   error?: string
   landed?: string
 }
-/** What a submission lands, from its conversation's summary as it was when it was submitted. */
-export type LandingSubject = { title?: string; summary?: string; feature?: string }
 /** One `workspace submit`, waiting for or being processed by its source's lander. */
 export type QueueEntry = {
   id: string
@@ -30,7 +21,7 @@ export type QueueEntry = {
   at: number
   divergence: string
   state: 'queued' | 'landing'
-  subject?: LandingSubject
+  subject?: ConversationSubject
   step?: string
   /** What the lander did so far, as its conversation logs it. */
   steps: LanderStep[]
@@ -94,7 +85,7 @@ export type LanderEntry = {
   step?: string
   check?: LanderCheck
   /** On the submission's first line and its outcome. */
-  subject?: LandingSubject
+  subject?: ConversationSubject
 } & Partial<LanderOutcome>
 /** The lander task handing a failure to its model (entry kind `ultimate.lander-ask`); the model reads the prompt. */
 export type LanderAsk = Pick<
@@ -120,7 +111,7 @@ export type WorkspaceIndex = {
       lander: number
       steps: LanderStep[]
       conversationId?: number
-      subject?: LandingSubject
+      subject?: ConversationSubject
       at: number
       divergence: string
     }

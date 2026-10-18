@@ -37,7 +37,7 @@ import { git } from '../../lib/git.ts'
 import { setup } from '../../extensions/workspaces/setup.ts'
 import type { LanderEntry, WorkspaceIndex } from '../../extensions/workspaces/types.ts'
 import { createLander, landerCheckout, landerPath } from '../../extensions/workspaces/lander.ts'
-import { SubmissionLanded } from '../../extensions/workspaces/api.ts'
+import { Handoff, SubmissionLanded } from '../../extensions/workspaces/api.ts'
 import lineage, { leaveNote, startBranch } from '../../extensions/lineage/server.ts'
 import { LineageApi, Roots } from '../../extensions/lineage/api.ts'
 import { subject } from '../../extensions/conversations/server.ts'
@@ -46,7 +46,7 @@ import type { ConversationsService } from '../../extensions/conversations/api.ts
 import { Summaries } from '../../extensions/conversations/summary.ts'
 import self from '../../extensions/self/server.ts'
 import board from '../../extensions/board/server.ts'
-import { Board, BoardApi } from '../../extensions/board/api.ts'
+import { Board } from '../../extensions/board/api.ts'
 import promptExtension, { order as promptOrder } from '../../extensions/prompt/server.ts'
 import subagents from '../../extensions/subagents/server.ts'
 import { Subagents } from '../../extensions/subagents/api.ts'
@@ -1103,7 +1103,7 @@ it.concurrent('lets an ownerless history fork submit its own workspace', async (
 it.concurrent('lands and reports a submission without a lineage provider', async () => {
   const f = await lander({ checks: ['test -f base.txt'] })
   expect(f.host.want(LineageApi)).toBeUndefined()
-  expect(f.host.want(BoardApi)).toBeUndefined()
+  expect(f.host.want(Handoff)).toBeUndefined()
   const id = await f.create()
   await f.service.ready(id, context)
   const workspace = (await f.service.get(id, context))!
@@ -1210,7 +1210,7 @@ it.concurrent('reports a landing with a deploy warning when the handoff itself f
     '---\nname: deploy-test\ndescription: Deploys\nresident: true\n---\nDeploy.\n',
   )
   // The board is there and the agent is resident, but delivery fails, as without a subagents service.
-  const service = f.host.want(BoardApi)!
+  const service = f.host.want(Handoff)!
   service.send = async () => {
     throw new Error('subagents service unavailable')
   }

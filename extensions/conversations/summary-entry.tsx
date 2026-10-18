@@ -1,8 +1,8 @@
 import { PencilIcon } from 'lucide-react'
-import { formatTime, useChat } from '@/sdk'
+import { formatTime, Provided, useChat } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import type { Assessed, IntentSummary, SpawnSummary, SummaryDiscard, TitleChange } from './types.ts'
-import { useRoots } from '../lineage/ui.tsx'
+import { Unsummarized } from './ui.tsx'
 
 const assessmentLabel = { needs_input: 'may need input', done: 'Done', neutral: 'neutral' }
 
@@ -30,9 +30,16 @@ function summaryText(entry: EntryRecord) {
 
 export function SummaryAction({ entry }: { entry: EntryRecord }) {
   const chat = useChat()
-  const roots = useRoots()
   // A chat's agent and a root get no summaries; older lines from before would only interrupt them.
-  if (chat || roots?.includes(entry.conversationId)) return null
+  if (chat) return null
+  return (
+    <Provided input={entry.conversationId} point={Unsummarized}>
+      {(unsummarized) => (unsummarized ? null : <SummaryLine entry={entry} />)}
+    </Provided>
+  )
+}
+
+function SummaryLine({ entry }: { entry: EntryRecord }) {
   const text = summaryText(entry)
   const date = new Date((entry.data as { at: number }).at)
   return (

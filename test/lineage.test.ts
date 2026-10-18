@@ -361,7 +361,7 @@ it.concurrent('a late branched reaction leaves the title a branch chose since', 
     delete (await tx.doc(Summaries, id)).generatedTitle
     ;(await tx.doc(Metadata, id)).title = 'Renamed sidebar'
   }, context)
-  // As if conversations was off when it branched: it reacts now, after the rename.
+  // As if the reaction came late: lineage's naming runs now, after the rename.
   const at = (await server.harness.snapshot(Branch, id, context))!.branch!.at
   const late = await server.harness.commit(
     (tx) => emit(tx, Branched, { id, from: 1, at, intent: 'Polish the sidebar' }),
@@ -370,7 +370,7 @@ it.concurrent('a late branched reaction leaves the title a branch chose since', 
   await until(
     async () =>
       (await server.harness.snapshot(EventLog, ROOT_CONVERSATION_ID, context))!.cursors[
-        'conversations/named'
+        'lineage/named'
       ] >= late.id,
   )
   expect((await server.harness.snapshot(Summaries, id, context))?.generatedTitle).toBeUndefined()

@@ -35,3 +35,15 @@ export type OverviewRow = {
   assessmentStatus?: SummaryStatus
 }
 export type OverviewState = { conversations: Record<string, OverviewRow> }
+
+/** What a conversation is about at one moment: its title, summary and feature, as a record keeps them (a landing). */
+export type ConversationSubject = { title?: string; summary?: string; feature?: string }
+/** Work kept when concluding a conversation, including its owned descendants: why its resources stay. */
+export type KeptWork = {
+  id: number
+  uncommitted: number
+  unlanded: number
+  busy?: string
+  reason?: string
+  descendant?: number
+}

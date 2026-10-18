@@ -22,7 +22,7 @@ import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import { Overview } from '../extensions/conversations/overview.ts'
-import type { LineageService } from '../extensions/lineage/api.ts'
+import type { TreesService } from '../extensions/conversations/api.ts'
 import {
   generateSummary,
   summaryInput,
@@ -209,16 +209,13 @@ async function launch(subagents = false, initialIntent = false, root = false, br
             want: ((api: { name: string }) =>
               api.name === 'questions'
                 ? { request: questionsRequested }
-                : api.name === 'lineage' && (root || branch)
+                : api.name === 'conversations.trees' && (root || branch)
                   ? ({
-                      rootOf: async (id: number) => (root ? (id as ConversationId) : undefined),
+                      rootOf: async (id: number) => (root ? id : undefined),
                       branchOf: async () =>
                         branch ? { root: 1, intent: 'Improve the sidebar' } : undefined,
                       abstract,
-                    } satisfies Pick<LineageService, 'rootOf'> & {
-                      branchOf: unknown
-                      abstract: unknown
-                    })
+                    } satisfies TreesService)
                   : undefined) as NonNullable<SummaryHost['want']>,
           },
           generated,
