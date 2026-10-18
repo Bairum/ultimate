@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -1187,14 +1188,24 @@ Available definitions:
             }
             // Report, never commit or delete: the coordinator decides what happens to the work.
             const workspace = await service()?.get(id, context)
-            // Name lists, not porcelain: the git helper trims output, which eats a leading status space.
-            const list = async (...command: string[]) =>
-              (await service()!.git(workspace!.path, ...command, '-z')).split('\0').filter(Boolean)
+            // Untrimmed NUL-separated name lists: the workspaces git helper trims, which would cut a
+            // leading space off the first name.
+            const list = (...command: string[]) =>
+              new Promise<string[]>((resolve, reject) =>
+                execFile(
+                  'git',
+                  [...command, '-z'],
+                  { cwd: workspace!.path, maxBuffer: 1024 * 1024 },
+                  (error, stdout) =>
+                    error ? reject(error) : resolve(stdout.split('\0').filter(Boolean)),
+                ),
+              )
             const uncommitted =
               workspace?.state === 'ready'
                 ? [
                     ...new Set([
-                      ...(await list('diff', '--name-only', 'HEAD')),
+                      ...(await list('diff', '--cached', '--name-only')),
+                      ...(await list('diff', '--name-only')),
                       ...(await list('ls-files', '--others', '--exclude-standard')),
                     ]),
                   ]

@@ -716,6 +716,16 @@ it.concurrent('stop lists what a worker left uncommitted and keeps it', async ()
   expect(await stopped()).toContain(
     `Stopped ${child}.\\nLeft uncommitted in ${workspace.path}: base.txt, draft.txt`,
   )
+  // A staged change whose working copy was restored, and a name that starts with a space.
+  await git(workspace.path, 'checkout', '--', 'base.txt')
+  await writeFile(join(workspace.path, 'staged.txt'), 'staged')
+  await git(workspace.path, 'add', 'staged.txt')
+  await unlink(join(workspace.path, 'staged.txt'))
+  await writeFile(join(workspace.path, ' lead.txt'), 'lead')
+  await git(workspace.path, 'add', ' lead.txt')
+  expect(await stopped()).toContain(
+    `Stopped ${child}.\\nLeft uncommitted in ${workspace.path}:  lead.txt, staged.txt, draft.txt`,
+  )
   expect(await readFile(join(workspace.path, 'draft.txt'), 'utf8')).toBe('draft')
 })
 async function submitted(f: Awaited<ReturnType<typeof fixture>>, id: ConversationId) {
