@@ -243,6 +243,28 @@ export { TaskChip } from '../plan/chip.tsx'`
   ])
 })
 
+const coreMessage = (optional: string) =>
+  `conversations is core tier and imports optional ${optional}; declare a point in conversations that ${optional} provides, or react to an event.`
+
+it('keeps a core-tier extension to core-tier imports, runtime and type alike, and leaves optional ones free', () => {
+  // The tiers come from the repository's api.ts files: conversations, lineage and board are core; phase and plan not.
+  const source = `import { LineageApi } from '../lineage/api.ts'
+import type { BoardData } from '../board/refs.ts'
+import { usePhase } from '../phase/ui.tsx'
+import type { TaskLink } from '../plan/refs.ts'
+export { TaskChip } from '../plan/ui.tsx'
+import { git } from '../../lib/git.ts'
+const later = () => import('../questions/web.tsx')`
+  expect(lint('core-tier-deps', 'extensions/conversations/rows.tsx', source)).toEqual([
+    coreMessage('phase'),
+    coreMessage('plan'),
+    coreMessage('plan'),
+    coreMessage('questions'),
+  ])
+  expect(lint('core-tier-deps', 'extensions/phase/web.tsx', source)).toEqual([])
+  expect(lint('core-tier-deps', 'test/example.test.ts', source)).toEqual([])
+})
+
 it('rejects host.provide, host.use and host.events, also through an action context', () => {
   const source = `host.provide('echo', {})
 host.use('echo')?.echo()

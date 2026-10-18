@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { apiSummary } from '../lib/api-files.ts'
 import { coreTier } from '../shared/extension-api.ts'
@@ -103,6 +104,18 @@ const tierOf = (statement: Node) =>
   statement.declaration?.type === 'VariableDeclaration'
     ? statement.declaration.declarations?.find((declarator) => declarator.id?.name === 'tier')
     : undefined
+
+const tiers = new Map<string, boolean>()
+/** Whether `extensions/<name>` declares the core tier in its api.ts (`coreTier`), read once per lint process. */
+function coreExtension(name: string) {
+  let core = tiers.get(name)
+  if (core === undefined) {
+    const file = path.join(process.cwd(), 'extensions', name, 'api.ts')
+    core = existsSync(file) && coreTier.test(readFileSync(file, 'utf8'))
+    tiers.set(name, core)
+  }
+  return core
+}
 
 const propertyName = (node: Node | undefined) =>
   node?.computed ? node.property?.value : (node?.property?.name ?? node?.property?.value)
@@ -369,6 +382,31 @@ export default {
             context.report({
               node,
               message: `${own} imports ${extension}/${file.join('/')} at runtime; reach ${extension} through ${how}, import types with \`import type\`, or move a pure helper to lib/.`,
+            })
+        }
+        return {
+          ImportDeclaration: check,
+          ImportExpression: check,
+          ExportNamedDeclaration: check,
+          ExportAllDeclaration: check,
+        }
+      },
+    },
+    'core-tier-deps': {
+      meta: { schema: [] },
+      create(context: Context) {
+        const own = extensionOf(context.filename)
+        if (!own || !coreExtension(own)) return {}
+        // A core-tier extension relies only on the core tier, by runtime or type import alike; an optional extension
+        // reaches the core through a point the core declares (a web point, an extension point or an event).
+        const check = (node: ImportNode) => {
+          const source = node.source?.value
+          if (typeof source !== 'string' || !source.startsWith('.')) return
+          const [directory, extension] = resolved(context.filename, source)
+          if (directory === 'extensions' && extension !== own && !coreExtension(extension))
+            context.report({
+              node,
+              message: `${own} is core tier and imports optional ${extension}; declare a point in ${own} that ${extension} provides, or react to an event.`,
             })
         }
         return {

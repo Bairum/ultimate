@@ -133,8 +133,9 @@ export default defineConfig({
       },
       {
         // Another extension at runtime only through its contract: api.ts from server code, ui.tsx from the browser.
+        // A core-tier extension (`export const tier = 'core'` in its api.ts) imports only the core tier.
         files: ['extensions/**/*.ts', 'extensions/**/*.tsx'],
-        rules: { 'ultimate/api-only-imports': 'error' },
+        rules: { 'ultimate/api-only-imports': 'error', 'ultimate/core-tier-deps': 'error' },
       },
       {
         files: ['extensions/*/api.ts', 'extensions/*/refs.ts', 'extensions/*/ui.tsx'],
