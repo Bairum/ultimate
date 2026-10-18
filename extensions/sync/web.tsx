@@ -3,7 +3,7 @@ import { useEffect } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { cn, defineWebExtension, shortenPath, useAction, useSystem } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
-import type { Transition } from '../../cloud/protocol.ts'
+import type { ProviderHealth, Transition } from '../../cloud/protocol.ts'
 import { phaseOf, TransitionCard } from '../cloud/transition.tsx'
 import { polling } from './moves.ts'
 import type { Fleet, FleetProject, MoveEnded, SyncReport } from './types.ts'
@@ -14,6 +14,15 @@ function Dot({ on }: { on: boolean }) {
       className={cn('size-1.5 shrink-0 rounded-full', on ? 'bg-success' : 'bg-muted-foreground/40')}
     />
   )
+}
+
+/** `now`, `12m`, `3h`, `2d`: the provider row's compact ages. */
+function ago(at: number, now: number) {
+  const minutes = Math.max(0, Math.floor((now - at) / 60000))
+  if (minutes < 1) return 'now'
+  if (minutes < 60) return `${minutes}m`
+  if (minutes < 60 * 24) return `${Math.floor(minutes / 60)}h`
+  return `${Math.floor(minutes / 60 / 24)}d`
 }
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
@@ -70,7 +79,13 @@ function ProjectRow({ project, machine }: { project: FleetProject; machine: stri
         </div>
       )}
       {local?.login && !local.login.ok && (
-        <Warning text={`no model login for ${local.login.provider}`} />
+        <Warning
+          text={
+            local.login.error
+              ? `${local.login.provider} failing: ${local.login.error}`
+              : `no model login for ${local.login.provider}`
+          }
+        />
       )}
       {local && local.missing.length > 0 && (
         <Warning text={`missing secrets: ${local.missing.join(', ')}`} />
@@ -90,7 +105,69 @@ function ProjectRow({ project, machine }: { project: FleetProject; machine: stri
   )
 }
 
-/** The fleet as one quiet card: machines with their online dots, then one row per project. */
+/** `anthropic ✗ invalid_grant 3h`, like the cloud front page: ✓ ok, ✗ failing with its short error, ? unknown. */
+function Provider({ health, now }: { health: ProviderHealth; now: number }) {
+  const at =
+    health.state === 'ok' ? health.lastOk : health.state === 'failing' ? health.lastFail : undefined
+  const error = health.state === 'failing' ? health.error : undefined
+  return (
+    <span
+      className="inline-flex min-w-0 max-w-full items-baseline gap-1"
+      title={
+        health.state === 'ok'
+          ? `Last worked ${at === undefined ? '' : `${ago(at, now)} ago`}`
+          : health.state === 'failing'
+            ? `Failing${at === undefined ? '' : ` since ${ago(at, now)} ago`}${error ? `: ${error}` : ''}`
+            : 'Not used or checked yet'
+      }
+    >
+      <span className="text-foreground/85">{health.provider}</span>
+      {health.state === 'ok' && <span className="text-success">✓</span>}
+      {health.state === 'failing' && <span className="text-error">✗</span>}
+      {health.state === 'unknown' && <span className="text-muted-foreground/60">?</span>}
+      {error && <span className="max-w-40 truncate text-error/85">{error}</span>}
+      {at !== undefined && <span className="text-muted-foreground/70">{ago(at, now)}</span>}
+    </span>
+  )
+}
+
+/** One line per machine with a health report: its name, then each provider. */
+function Providers({ fleet }: { fleet: Fleet }) {
+  const reported = fleet.machines.filter((machine) => machine.health)
+  if (!reported.length) return null
+  const now = Date.now()
+  return (
+    <ul className="space-y-0.5 border-b border-border/60 px-3 py-1.5" data-sync-providers>
+      {reported.map((machine) => (
+        <li
+          className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5"
+          key={machine.machine}
+        >
+          <span className="w-16 shrink-0 truncate text-muted-foreground" title={machine.machine}>
+            {machine.machine}
+          </span>
+          <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+            {machine.health!.length ? (
+              machine.health!.map((provider, index) => (
+                <span
+                  className="inline-flex min-w-0 items-baseline gap-1.5"
+                  key={provider.provider}
+                >
+                  {index > 0 && <span className="text-muted-foreground/40">·</span>}
+                  <Provider health={provider} now={now} />
+                </span>
+              ))
+            ) : (
+              <span className="text-muted-foreground/70">no providers</span>
+            )}
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** The fleet as one quiet card: machines with their online dots, their providers, then one row per project. */
 export function FleetCard({ fleet }: { fleet: Fleet }) {
   return (
     <section
@@ -110,6 +187,7 @@ export function FleetCard({ fleet }: { fleet: Fleet }) {
           </span>
         ))}
       </header>
+      <Providers fleet={fleet} />
       {fleet.error && (
         <p className="border-b border-border/60 px-3 py-1.5 font-sans text-[12px] text-error/90">
           {fleet.error}

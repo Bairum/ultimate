@@ -33,6 +33,7 @@ const deps = (bearer = token): SyncDeps => ({
   identity: async () => undefined,
   stale: async () => [],
   keptRefs: async () => [],
+  health: async () => [],
 })
 
 describe.skipIf(cloudSkip)(

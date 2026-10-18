@@ -10,11 +10,12 @@ import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { startedBy } from '../../cloud/protocol.ts'
-import type { Transition } from '../../cloud/protocol.ts'
+import type { MachineHealth, ProviderHealth, Transition } from '../../cloud/protocol.ts'
 import type { Project } from '../../cloud/directory.ts'
 import { cloudConfig } from '../cloud/config.ts'
 import { projectIdentity } from '../cloud/identity.ts'
 import type { CloudState } from '../cloud/types.ts'
+import { readHealth } from '../health/store.ts'
 import type { SubagentsService } from '../subagents/server.ts'
 import { isMachineHome, machineRoot } from '../subagents/primary.ts'
 import { ended } from './moves.ts'
@@ -39,6 +40,8 @@ export interface SyncDeps {
   identity(root: string): Promise<{ key: string } | undefined>
   stale(home: string): Promise<string[]>
   keptRefs(root: string): Promise<string[]>
+  /** This machine's provider health, from `~/.ultimate/health.json`. */
+  health(): Promise<ProviderHealth[]>
 }
 
 /** `https://host` for the user's `wss://host/...` `cloud.url`. */
@@ -91,6 +94,7 @@ export function syncDeps(host: ExtensionHost): SyncDeps {
         return []
       }
     },
+    health: () => readHealth(host.userHome),
   }
 }
 
@@ -117,7 +121,7 @@ export async function localAction<T>(
   return (await answer<{ result: T }>(response, `${extension}.${name} at ${url}`)).result
 }
 
-/** A bearer route of the cloud: `/sync/directory`, `/sync/cloud`, `/sync/move`, `/sync/cancel`. */
+/** A bearer route of the cloud: `/sync/directory`, `/sync/health`, `/sync/cloud`, `/sync/move`, `/sync/cancel`. */
 async function cloudRoute<T>(
   deps: SyncDeps,
   path: string,
@@ -170,14 +174,24 @@ async function local(deps: SyncDeps, home: Home): Promise<LocalProject & { key?:
   }
 }
 
-/** Every project the cloud lists, with this machine's local view of each, and local projects the cloud lacks. */
+/**
+ * Every project the cloud lists, with this machine's local view of each, and local projects the cloud lacks; each
+ * machine carries its provider health, this machine's from its own file and the others' from `/sync/health`.
+ */
 export async function fleet(deps: SyncDeps): Promise<Fleet> {
   const cloud = await deps.cloud()
-  const [directory, locals] = await Promise.all([
+  const [directory, locals, reported, health] = await Promise.all([
     cloud
       ? cloudRoute<Project[]>(deps, '/sync/directory').catch((error: unknown) => String(error))
       : 'Cloud sync is not configured: set cloud.url and ULTIMATE_CLOUD_TOKEN',
     deps.homes().then((homes) => Promise.all(homes.map((home) => local(deps, home)))),
+    cloud
+      ? cloudRoute<MachineHealth[]>(deps, '/sync/health').catch(
+          // The directory's error already names cloud trouble; machines then show without other machines' health.
+          (): MachineHealth[] => [],
+        )
+      : [],
+    deps.health(),
   ])
   const listed = typeof directory === 'string' ? [] : directory
   const projects: FleetProject[] = listed.map((project) => {
@@ -202,14 +216,21 @@ export async function fleet(deps: SyncDeps): Promise<Fleet> {
         standbys: [],
         local: strip(item),
       })
-  const machines = new Map<string, { machine: string; online: boolean; projects: number }>()
+  const machines = new Map<string, Fleet['machines'][number]>()
+  const entry = (machine: string) => {
+    const found = machines.get(machine) ?? { machine, online: false, projects: 0 }
+    machines.set(machine, found)
+    return found
+  }
   for (const project of listed)
     for (const { machine, connected } of project.machines) {
-      const entry = machines.get(machine) ?? { machine, online: false, projects: 0 }
-      entry.online ||= connected
-      entry.projects++
-      machines.set(machine, entry)
+      const found = entry(machine)
+      found.online ||= connected
+      found.projects++
     }
+  for (const report of reported)
+    if (report.machine !== cloud?.machine) entry(report.machine).health = report.providers
+  if (cloud?.machine) entry(cloud.machine).health = health
   return {
     machine: cloud?.machine ?? '',
     machines: [...machines.values()].toSorted((a, b) => a.machine.localeCompare(b.machine)),
@@ -361,13 +382,38 @@ export async function submitMove(host: ExtensionHost, input: MoveEnded) {
   )
 }
 
+const MINUTE = 60000
+const HOUR = 60 * MINUTE
+
 /** What `fleet` shows on a faux host, which never reads cloud settings: two machines, a move in flight, warnings. */
-export const demoFleet = (userHome: string): Fleet => ({
+export const demoFleet = (userHome: string, now = Date.now()): Fleet => ({
   machine: 'rog',
   machines: [
-    { machine: 'haza-pc', online: true, projects: 2 },
+    {
+      machine: 'haza-pc',
+      online: true,
+      projects: 2,
+      health: [
+        {
+          provider: 'anthropic',
+          state: 'failing',
+          lastOk: now - 26 * HOUR,
+          lastFail: now - 3 * HOUR,
+          error: 'invalid_grant',
+        },
+        { provider: 'openai-codex', state: 'ok', lastOk: now - 12 * MINUTE },
+      ],
+    },
     { machine: 'mac', online: false, projects: 1 },
-    { machine: 'rog', online: true, projects: 2 },
+    {
+      machine: 'rog',
+      online: true,
+      projects: 2,
+      health: [
+        { provider: 'anthropic', state: 'ok', lastOk: now - 4 * MINUTE },
+        { provider: 'openai-codex', state: 'ok', lastOk: now - 40 * MINUTE },
+      ],
+    },
   ],
   projects: [
     {
@@ -436,7 +482,7 @@ export const demoFleet = (userHome: string): Fleet => ({
           conversations: { synced: 120, total: 537 },
         },
         missing: [],
-        login: { provider: 'anthropic', ok: false },
+        login: { provider: 'anthropic', ok: false, error: 'invalid_grant' },
         stale: [],
         keptRefs: ['ultimate-moved/7f3e/ultimate/draft'],
       },

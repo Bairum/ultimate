@@ -23,7 +23,7 @@ import type { Home, SyncDeps } from '../extensions/sync/server.ts'
 import { polling } from '../extensions/sync/moves.ts'
 import type { MoveEnded } from '../extensions/sync/types.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
-import type { Transition } from '../cloud/protocol.ts'
+import type { MachineHealth, ProviderHealth, Transition } from '../cloud/protocol.ts'
 import type { Project } from '../cloud/directory.ts'
 import { removeTemp, temp } from './helpers.ts'
 
@@ -138,7 +138,9 @@ const directory: Project[] = [
 ]
 
 /** The cloud and one running local project home, `ultimate` at :4747, recording every request. */
-function fake(options: { state?: () => unknown; directory?: () => Response } = {}) {
+function fake(
+  options: { state?: () => unknown; directory?: () => Response; health?: () => Response } = {},
+) {
   const requests: { url: string; body?: unknown; auth?: string; origin?: string }[] = []
   const homes: Home[] = [
     {
@@ -157,6 +159,7 @@ function fake(options: { state?: () => unknown; directory?: () => Response } = {
     stale: async (home) => (home === '/u/.ultimate/projects/u' ? ['state.stale-1.sqlite'] : []),
     keptRefs: async (root) =>
       root === '/u/Projects/ultimate' ? ['ultimate-moved/t0/ultimate/x'] : [],
+    health: async () => [],
     fetch: async (input, init) => {
       const url = input instanceof URL ? input.href : (input as string)
       const headers = (init?.headers ?? {}) as Record<string, string>
@@ -168,6 +171,8 @@ function fake(options: { state?: () => unknown; directory?: () => Response } = {
       })
       if (url === 'https://cloud.example/sync/directory')
         return options.directory?.() ?? Response.json(directory)
+      if (url === 'https://cloud.example/sync/health')
+        return options.health?.() ?? Response.json([])
       if (url.startsWith('https://cloud.example/sync/move'))
         return Response.json({ id: 'remote-1' }, { status: 202 })
       if (url.startsWith('https://cloud.example/sync/cancel')) return Response.json({ ok: true })
@@ -204,7 +209,7 @@ it('merges the cloud directory with local project homes, warnings and the model 
   expect(value.machine).toBe('rog')
   expect(value.machines).toEqual([
     { machine: 'haza-pc', online: true, projects: 1 },
-    { machine: 'rog', online: true, projects: 1 },
+    { machine: 'rog', online: true, projects: 1, health: [] },
   ])
   expect(value.projects[0]).toEqual({
     key: 'github.com/hazat/ultimate',
@@ -234,6 +239,43 @@ it('merges the cloud directory with local project homes, warnings and the model 
   const partial = await fleet(offline.deps)
   expect(partial.error).toContain('503')
   expect(partial.projects.map((project) => project.name)).toEqual(['ultimate', 'scratch'])
+})
+
+it('adds each machine’s provider health: this one from its file, others from the cloud, a failed read ignored', async () => {
+  const failing: ProviderHealth = {
+    provider: 'anthropic',
+    state: 'failing',
+    lastFail: 5,
+    error: 'invalid_grant',
+  }
+  const reports: MachineHealth[] = [
+    { machine: 'haza-pc', at: 9, providers: [failing] },
+    // The cloud's copy of this machine is older than its file and is not shown.
+    { machine: 'rog', at: 9, providers: [{ provider: 'anthropic', state: 'unknown' }] },
+    // A machine that reports health but holds no project still shows, offline.
+    { machine: 'mac', at: 1, providers: [] },
+  ]
+  const { deps, requests } = fake({ health: () => Response.json(reports) })
+  const own: ProviderHealth[] = [{ provider: 'anthropic', state: 'ok', lastOk: 8 }]
+  deps.health = async () => own
+  const value = await fleet(deps)
+  expect(requests.find((request) => request.url.endsWith('/sync/health'))?.auth).toBe(
+    'Bearer secret',
+  )
+  expect(value.machines).toEqual([
+    { machine: 'haza-pc', online: true, projects: 1, health: [failing] },
+    { machine: 'mac', online: false, projects: 0, health: [] },
+    { machine: 'rog', online: true, projects: 1, health: own },
+  ])
+
+  const down = fake({ health: () => new Response('down', { status: 503 }) })
+  down.deps.health = async () => own
+  const partial = await fleet(down.deps)
+  expect(partial.error).toBeUndefined()
+  expect(partial.machines).toEqual([
+    { machine: 'haza-pc', online: true, projects: 1 },
+    { machine: 'rog', online: true, projects: 1, health: own },
+  ])
 })
 
 it('routes moves here over loopback as @sync and elsewhere through the cloud, sending force only when given', async () => {

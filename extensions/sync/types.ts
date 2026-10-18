@@ -1,4 +1,4 @@
-import type { Transition } from '../../cloud/protocol.ts'
+import type { ProviderHealth, Transition } from '../../cloud/protocol.ts'
 import type { CloudState, ModelLogin, SyncProgress } from '../cloud/types.ts'
 
 /** A project home on this machine, as `fleet` sees it. */
@@ -35,7 +35,13 @@ export interface FleetProject {
 /** `fleet`: every machine and project the cloud knows, merged with what this machine has locally. */
 export interface Fleet {
   machine: string
-  machines: { machine: string; online: boolean; projects: number }[]
+  machines: {
+    machine: string
+    online: boolean
+    projects: number
+    /** Model provider health: this machine's from `~/.ultimate/health.json`, others' as they last reported it. */
+    health?: ProviderHealth[]
+  }[]
   projects: FleetProject[]
   /** Why the cloud's directory could not be read; the local projects still show. */
   error?: string
