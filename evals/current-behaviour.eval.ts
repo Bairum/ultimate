@@ -3,6 +3,7 @@ import { assert, expect, test } from 'vitest'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { assistant, start, toolResult, user } from './fixture.ts'
 import { routingInstructions } from './routing-instructions.ts'
+import { Plan } from '../extensions/plan/server.ts'
 
 async function standing(ultimate: Awaited<ReturnType<typeof start>>, name = 'ultimate') {
   const { result: id } = await ultimate.action('subagents', 'standing', { name })
@@ -189,6 +190,27 @@ test('cloudflare sends one final verification report only to the requester', asy
     expect(messages[0].arguments.to).toMatch(/^#?42$/)
     expect(messages[0].arguments.text).toEqual(expect.stringContaining('abc1234'))
     expect(messages[0].arguments.text).toEqual(expect.stringContaining('v2'))
+  } finally {
+    await ultimate.stop()
+  }
+})
+
+test('plan ledger records a requested task dependency', async () => {
+  const ultimate = await start({ extensions: { enable: ['plan'] } })
+  try {
+    const c = await ultimate.conversation({
+      history: [
+        user('Track our work in the plan ledger.'),
+        assistant('I will keep epics and tasks in the plan ledger.'),
+      ],
+    })
+    await c.run(
+      "Create an epic 'Ship ledger' with tasks Implement (worker) and Review (reviewer, depends on Implement). Do not delegate or do the tasks.",
+    )
+    const tasks = Object.values(Object.values((await c.document(Plan)).epics)[0].tasks)
+    const implemented = tasks.find((task) => task.title === 'Implement')!
+    const review = tasks.find((task) => task.title === 'Review')!
+    expect(review.deps).toEqual([implemented.key])
   } finally {
     await ultimate.stop()
   }

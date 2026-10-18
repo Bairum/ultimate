@@ -40,7 +40,7 @@ test('E1 plan ledger remains visible across turns', async () => {
     expect(implemented.role).toBe('worker')
     expect(implemented.status).toBe('in_review')
     expect(review.role).toBe('reviewer')
-    expect(review.deps).toEqual([implemented.key])
+    // Whether the model fills the optional deps is a tendency, checked in current-behaviour.eval.ts.
     measure('E1-plan', turn)
     const reply = await c.run('What is open? Give each task and its status. No tools.')
     expect(reply.toolCalls).toHaveLength(0)
