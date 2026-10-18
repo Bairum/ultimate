@@ -105,9 +105,16 @@ export const bounded = (value: unknown) =>
 /**
  * The handover step's detail while the writer `from` drains: `finishing 2 runs`, then the worktrees with uncommitted
  * changes it waits for (`held`), `waiting for 2 worktrees with uncommitted changes`, or that stay behind on a forced
- * move, `2 worktrees with uncommitted changes stay on haza-pc`.
+ * move, `2 worktrees with uncommitted changes stay on haza-pc`; or why it could not check them (`unchecked`), which
+ * holds it too.
  */
-export function handoverDetail(from: string, tasks: number, left = 0, held = false) {
+export function handoverDetail(
+  from: string,
+  tasks: number,
+  left = 0,
+  held = false,
+  unchecked?: string,
+) {
   const parts: string[] = []
   const worktrees = `${left} ${left === 1 ? 'worktree' : 'worktrees'} with uncommitted changes`
   if (tasks > 0) parts.push(`finishing ${tasks} ${tasks === 1 ? 'run' : 'runs'}`)
@@ -117,6 +124,7 @@ export function handoverDetail(from: string, tasks: number, left = 0, held = fal
         ? `waiting for ${worktrees}`
         : `${worktrees} ${left === 1 ? 'stays' : 'stay'} on ${from}`,
     )
+  if (unchecked) parts.push(`could not check worktrees: ${unchecked}`)
   return parts.join(' · ')
 }
 
@@ -270,7 +278,9 @@ export type MachineMessage =
    * The writer tells the machine `by` that its release waits for `tasks` running tasks of the conversations `runs`,
    * then for the worktrees with uncommitted changes `dirty` (`held`). Right before it releases it names the ones that
    * stay behind on a forced move (`dirty` without `held`, empty once the held ones were committed). Lists are bounded
-   * by `LEFT_LIMITS`; `runs` and `held` are absent from writers and Workers that predate them.
+   * by `LEFT_LIMITS`. `unchecked` says why the writer could not check its worktrees, which holds an unforced move
+   * too (at most `LEFT_LIMITS.path` long). `runs`, `held` and `unchecked` are absent from writers and Workers that
+   * predate them.
    */
   | {
       type: 'release-waiting'
@@ -279,6 +289,7 @@ export type MachineMessage =
       dirty?: string[]
       runs?: string[]
       held?: boolean
+      unchecked?: string
     }
   /** The user's secret names changed since hello; writer and standbys send it, bounded as in hello. */
   | { type: 'secrets'; secrets: string[]; secretsComplete: boolean }
@@ -324,6 +335,7 @@ export type CloudMessage =
       dirty?: string[]
       runs?: string[]
       held?: boolean
+      unchecked?: string
     }
 
 /**

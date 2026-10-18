@@ -145,7 +145,9 @@ const foregroundTasks = (graph: {
 }) => Object.values(graph.value.tasks).filter((task) => !task.background)
 const foreground = (graph: Parameters<typeof foregroundTasks>[0]) => foregroundTasks(graph).length
 /** Transition text bounded well under the replica's limit, keeping the end, where errors say what failed. */
-const clip = (text: string) => (text.length > 500 ? `…${text.slice(-499)}` : text)
+const clipTo = (text: string, max: number) =>
+  text.length > max ? `…${text.slice(-(max - 1))}` : text
+const clip = (text: string) => clipTo(text, 500)
 const runs = (count: number) => `${count} running ${count === 1 ? 'task' : 'tasks'}`
 const changes = (paths: string[]) =>
   `${paths.length} ${paths.length === 1 ? 'worktree' : 'worktrees'} with uncommitted changes`
@@ -355,9 +357,11 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         releaseRequested: (by, id, force) =>
           setTimeout(() => void moveTo(by, id, force).catch(report), 0),
         releaseWaiting: (waiting) => {
-          const { by, tasks, dirty, held = false } = waiting
+          const { by, tasks, dirty, held = false, unchecked } = waiting
           if (tasks > 0) host.notice(`Move to ${by} waits for ${runs(tasks)}`)
           else if (held && dirty?.length) host.notice(`Move to ${by} waits for ${changes(dirty)}`)
+          else if (unchecked)
+            host.notice(`Move to ${by} waits: could not check worktrees: ${unchecked}`)
           if (!moving) return
           applyWaiting(moving.transition, waiting)
           const handover = moving.transition.steps.find((step) => step.name === 'handover')
@@ -367,6 +371,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
               tasks,
               moving.transition.left?.length,
               held,
+              unchecked,
             )
             publish()
           }
@@ -579,8 +584,10 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     for (const block of list.split('\n\n')) {
       const path = /^worktree (.+)$/m.exec(block)?.[1]
       if (!path || /^(bare|prunable)/m.test(block)) continue
-      // A worktree whose folder is gone or broken has nothing left here to lose.
-      const status = await gitIn(path, 'status', '--porcelain').catch(() => '')
+      // A worktree whose folder is gone is `prunable`, skipped above; any other failure leaves its state unknown.
+      const status = await gitIn(path, 'status', '--porcelain').catch((error: unknown) => {
+        throw new Error(`${path}: ${tail(error)}`, { cause: error })
+      })
       if (status.trim())
         dirty.push(
           path.length > LEFT_LIMITS.path ? `…${path.slice(-(LEFT_LIMITS.path - 1))}` : path,
@@ -889,7 +896,8 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   /**
    * A standby asked for the lease for transition `id`. The release holds while foreground tasks run, then while
    * worktrees hold uncommitted changes, however long, reporting each with `release-waiting`: it rechecks on every task
-   * graph change and every `HOLD_RECHECK`. `force` skips both holds and releases at once, naming the dirty worktrees
+   * graph change and every `HOLD_RECHECK`. A worktree check that fails holds it too, and a run that starts during the
+   * check sends it back to waiting for runs. `force` skips every hold and releases at once, naming the dirty worktrees
    * that stay behind. A transition that ends meanwhile, failed or cancelled, stops the wait. @sync, which may have
    * asked, runs in the machine home's own process, so its run never counts here.
    */
@@ -902,11 +910,16 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         host.notice(`The move to ${by} stopped; this machine keeps the project`)
         return false
       }
-      const scan = () =>
-        dirtyWorktrees().catch((error: unknown) => {
-          host.notice(`Could not list worktrees with uncommitted changes: ${String(error)}`)
-          return []
-        })
+      // An unforced move cannot release on worktrees it could not check: the error holds it like dirty ones.
+      const scan = (): Promise<{ dirty: string[]; unchecked?: string }> =>
+        dirtyWorktrees().then(
+          (dirty) => ({ dirty }),
+          (error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error)
+            if (force) host.notice(`Could not list worktrees with uncommitted changes: ${message}`)
+            return { dirty: [], unchecked: clipTo(message, LEFT_LIMITS.path) }
+          },
+        )
       const graph = await host.harness().taskGraph(context)
       let wake = Promise.withResolvers<void>()
       let cancelled = false
@@ -927,21 +940,31 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
           wake = Promise.withResolvers<void>()
           if (closed || mode !== 'serving') return false
           if (cancelled || ended(sync.state())) return stopped()
-          const tasks = force ? 0 : foreground(graph)
-          const waiting =
-            tasks > 0
-              ? { tasks, runs: runningIn(graph) }
-              : // Scanned once the drained runs have written theirs, so the target hears which worktrees hold it.
-                { tasks: 0, dirty: (dirty = await scan()), held: !force }
-          // The move may have ended while the scan ran.
-          if (cancelled || ended(sync.state())) return stopped()
-          if (waiting.tasks === 0 && (force || !waiting.dirty?.length)) break
+          let waiting: { tasks: number; runs?: string[]; dirty?: string[]; held?: boolean }
+          let unchecked: string | undefined
+          if (!force && foreground(graph) > 0)
+            waiting = { tasks: foreground(graph), runs: runningIn(graph) }
+          else {
+            // Scanned once the drained runs have written theirs, so the target hears which worktrees hold it.
+            ;({ dirty, unchecked } = await scan())
+            // The move may have ended while the scan ran.
+            if (cancelled || ended(sync.state())) return stopped()
+            if (force) break
+            // A run that started during the scan holds the move again.
+            if (foreground(graph) > 0) continue
+            if (!dirty.length && !unchecked) break
+            waiting = { tasks: 0, dirty, held: true, ...(unchecked ? { unchecked } : {}) }
+          }
           const key = JSON.stringify(waiting)
           if (key !== reported) {
             reported = key
             sync.send({ type: 'release-waiting', by, ...waiting })
             host.notice(
-              `Move to ${by} waits for ${waiting.tasks > 0 ? runs(waiting.tasks) : changes(dirty)}`,
+              waiting.tasks > 0
+                ? `Move to ${by} waits for ${runs(waiting.tasks)}`
+                : unchecked
+                  ? `Move to ${by} waits: could not check worktrees: ${unchecked}`
+                  : `Move to ${by} waits for ${changes(dirty)}`,
             )
           }
           await wake.promise

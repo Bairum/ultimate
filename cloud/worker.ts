@@ -603,12 +603,13 @@ export class SharedReplica {
       // Only the writer's data is applied: a standby is fenced off.
       if (held?.role !== 'writer') return
       if (message.type === 'release-waiting') {
-        const { by, tasks, dirty, runs } = message
+        const { by, tasks, dirty, runs, unchecked } = message
         if (
           typeof by !== 'string' ||
           !Number.isSafeInteger(tasks) ||
           !bounded(dirty) ||
-          !bounded(runs)
+          !bounded(runs) ||
+          !bounded(unchecked === undefined ? undefined : [unchecked])
         )
           return
         const waiting = {
@@ -617,6 +618,7 @@ export class SharedReplica {
           ...(dirty ? { dirty } : {}),
           ...(runs ? { runs } : {}),
           ...(message.held === true ? { held: true } : {}),
+          ...(unchecked ? { unchecked } : {}),
         }
         this.standby(by)?.send(JSON.stringify({ type: 'release-waiting', ...waiting }))
         if (this.store.draining({ ...waiting, from: held.machine! })) {

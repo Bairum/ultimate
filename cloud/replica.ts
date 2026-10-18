@@ -188,6 +188,7 @@ export class ReplicaStore {
     dirty,
     runs,
     held = false,
+    unchecked,
   }: {
     by: string
     tasks: number
@@ -195,12 +196,13 @@ export class ReplicaStore {
     dirty?: string[]
     runs?: string[]
     held?: boolean
+    unchecked?: string
   }): boolean {
     const transition = this.transition()
     const handover = transition?.steps.find((step) => step.name === 'handover')
     if (transition?.target !== by || !handover) return false
     applyWaiting(transition, { tasks, dirty, runs })
-    handover.detail = handoverDetail(from, tasks, transition.left?.length, held)
+    handover.detail = handoverDetail(from, tasks, transition.left?.length, held, unchecked)
     this.put('metadata', 7, transition)
     return true
   }

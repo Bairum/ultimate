@@ -478,6 +478,91 @@ it('holds a move for worktrees with uncommitted changes, naming them, and releas
   })
 })
 
+for (const failing of ['worktree', 'status'] as const)
+  it(`holds an unforced move when its worktree check fails (git ${failing}), and releases once it succeeds`, async () => {
+    snapshotFetch()
+    const project = cloud()
+    const { root } = await checkout()
+    let broken = true
+    const desk = await machine('desk', project, root, {
+      git: async (args) => {
+        if (broken && args[0] === failing) throw new Error(`git ${failing} broke`)
+      },
+    })
+    await writer(desk)
+    const laptop = await machine('laptop', project, root, { autoClaim: false })
+    await standbyOn(laptop)
+    const moving = laptop.lease.move()
+    await until(() =>
+      desk.notices.some((notice) =>
+        notice.startsWith('Move to laptop waits: could not check worktrees: '),
+      ),
+    )
+    await until(
+      () =>
+        !!project.replica.store
+          .transition()
+          ?.steps.find((step) => step.name === 'handover')
+          ?.detail?.includes(`could not check worktrees: `),
+    )
+    expect(
+      project.replica.store.transition()!.steps.find((step) => step.name === 'handover')!.detail,
+    ).toContain(`git ${failing} broke`)
+    expect(desk.serving()).toBe(true)
+    expect(desk.snapshots.uploadSnapshot).not.toHaveBeenCalled()
+    // The check works again: the next recheck, here a task graph change, releases.
+    broken = false
+    const task = await sleep(desk.harness(), false)
+    await desk.harness().abortTask(task, context)
+    expect(await moving).toBe(true)
+    expect(project.replica.store.lease()).toMatchObject({ machine: 'laptop', epoch: 2 })
+  })
+
+it('releases a forced move although its worktree check fails', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const desk = await machine('desk', project, root, {
+    git: async (args) => {
+      if (args[0] === 'worktree') throw new Error('git worktree broke')
+    },
+  })
+  await writer(desk)
+  const laptop = await machine('laptop', project, root, { autoClaim: false })
+  await standbyOn(laptop)
+  expect(await laptop.lease.move({ force: true })).toBe(true)
+  expect(desk.notices).toContain(
+    'Could not list worktrees with uncommitted changes: git worktree broke',
+  )
+})
+
+it('holds again for a run that starts while it checks the worktrees', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const scanning = Promise.withResolvers<void>()
+  const resume = Promise.withResolvers<void>()
+  const desk = await machine('desk', project, root, {
+    git: async (args) => {
+      if (args[0] !== 'worktree') return
+      scanning.resolve()
+      await resume.promise
+    },
+  })
+  await writer(desk)
+  const laptop = await machine('laptop', project, root, { autoClaim: false })
+  await standbyOn(laptop)
+  const moving = laptop.lease.move()
+  await scanning.promise
+  const task = await sleep(desk.harness(), false)
+  resume.resolve()
+  await until(() => desk.notices.includes('Move to laptop waits for 1 running task'))
+  expect(desk.serving()).toBe(true)
+  expect(desk.snapshots.uploadSnapshot).not.toHaveBeenCalled()
+  await desk.harness().abortTask(task, context)
+  expect(await moving).toBe(true)
+})
+
 /** Runs due fake timers while a test polls with `until`. */
 const tick = () => vi.advanceTimersByTimeAsync(0)
 
@@ -505,15 +590,14 @@ it('holds a move for the runs it drains past the old ten-minute cap, naming thei
     expect(desk.snapshots.uploadSnapshot).not.toHaveBeenCalled()
     expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
     expect((await laptop.transition())?.error).toBeUndefined()
-    laptop.lease.cancel()
-    await until(
-      () => desk.notices.includes('The move to laptop stopped; this machine keeps the project'),
-      30000,
-      tick,
-    )
   } finally {
     vi.useRealTimers()
   }
+  // Cancelling, on real timers again, still ends the hold.
+  laptop.lease.cancel()
+  await until(() =>
+    desk.notices.includes('The move to laptop stopped; this machine keeps the project'),
+  )
 })
 
 it('releases a forced move at once despite running tasks and uncommitted worktrees, naming those left behind', async () => {
