@@ -5,7 +5,7 @@ import { uploadBuild, MAX_BUILD, MAX_FILE } from '../cloud/builds.ts'
 import type { R2Bucket } from '@cloudflare/workers-types'
 
 type Env = Parameters<typeof worker.fetch>[1]
-it.each(['/sync/builds/0123456789ab', '/p/desk/one/', '/b/0123456789ab/assets/test.js'])(
+it.each(['/sync/builds/0123456789ab', '/p/one/', '/b/0123456789ab/assets/test.js'])(
   'authenticates %s before any binding',
   async (path) => {
     const touch = vi.fn<() => never>(() => {
@@ -30,7 +30,7 @@ it('serves private project HTML with its UI version, falling back without a buil
     DIRECTORY: {
       idFromName: () => 'directory',
       get: () => ({
-        fetch: async () => Response.json({ machine: 'desk', project: '/one', uiBuild }),
+        fetch: async () => Response.json({ key: 'github.com/o/one', slug: 'one', uiBuild }),
       }),
     },
     BUILDS: { get: async () => ({ body: 'private HTML' }) },
@@ -40,17 +40,17 @@ it('serves private project HTML with its UI version, falling back without a buil
       get: () => ({ fetch: async () => fetch('data:text/plain,api') }),
     },
   } as unknown as Env
-  const response = await worker.fetch(new Request('https://cloud.example/p/desk/one/'), env)
+  const response = await worker.fetch(new Request('https://cloud.example/p/one/'), env)
   expect(await response.text()).toBe('private HTML')
   expect(response.headers.get('x-ultimate-cloud-version')).toBe('worker:0123456789ab')
   expect(response.headers.get('cache-control')).toBe('no-cache')
-  const api = await worker.fetch(new Request('https://cloud.example/p/desk/one/api/models'), env)
+  const api = await worker.fetch(new Request('https://cloud.example/p/one/api/models'), env)
   expect(api.headers.get('x-ultimate-cloud-version')).toBe('worker:0123456789ab')
   expect(await api.text()).toBe('api')
   uiBuild = undefined
-  expect(
-    await (await worker.fetch(new Request('https://cloud.example/p/desk/one/'), env)).text(),
-  ).toBe('generic')
+  expect(await (await worker.fetch(new Request('https://cloud.example/p/one/'), env)).text()).toBe(
+    'generic',
+  )
 })
 // An R2 list stub that pages one key at a time, so a missing cursor loop drops keys.
 function listing(held: Set<string> | Map<string, string>) {

@@ -1,21 +1,22 @@
 import type { Sql } from './replica.ts'
 
-export interface Instance {
-  machine: string
-  project: string
+/** A row of `/api/directory`: one project, wherever it runs. */
+export interface Project {
+  key: string
+  name: string
   slug: string
-  port: number
-  uiBuild?: string
-  connected: boolean
-  lastSeen: number
+  /** `machine` is null while the lease is free; `lastSeen` is when the writer last connected or left. */
+  writer: { machine: string | null; online: boolean; lastSeen?: number }
+  machines: { machine: string; role: 'writer' | 'standby'; connected: boolean; lastSeen: number }[]
   count: number
+  uiBuild?: string
 }
-export type Presence = Omit<Instance, 'slug'> & { hasEntries: boolean }
+export type Presence = Omit<Project, 'slug'> & { hasEntries: boolean }
 const safeSlug = (value: string) =>
   value
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '') || 'instance'
+    .replace(/^-|-$/g, '') || 'project'
 
 /** Stable reservations survive forgetting, so a returning project keeps its URL. */
 export class DirectoryStore {
@@ -23,43 +24,41 @@ export class DirectoryStore {
   constructor(sql: Sql) {
     this.sql = sql
     sql.exec(
-      'CREATE TABLE IF NOT EXISTS instances (key TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, value TEXT)',
+      'CREATE TABLE IF NOT EXISTS projects (key TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, value TEXT)',
     )
   }
-  list(): Instance[] {
+  list(): Project[] {
     return [
       ...this.sql.exec<{ value: string }>(
-        'SELECT value FROM instances WHERE value IS NOT NULL ORDER BY slug',
+        'SELECT value FROM projects WHERE value IS NOT NULL ORDER BY slug',
       ),
-    ]
-      .map((row) => JSON.parse(row.value) as Instance)
-      .toSorted((a, b) => a.machine.localeCompare(b.machine) || a.slug.localeCompare(b.slug))
+    ].map((row) => JSON.parse(row.value) as Project)
   }
-  resolve(slug: string): Instance | undefined {
+  resolve(slug: string): Project | undefined {
     const row = [
-      ...this.sql.exec<{ value: string | null }>('SELECT value FROM instances WHERE slug=?', slug),
+      ...this.sql.exec<{ value: string | null }>('SELECT value FROM projects WHERE slug=?', slug),
     ][0]
-    return row?.value ? (JSON.parse(row.value) as Instance) : undefined
+    return row?.value ? (JSON.parse(row.value) as Project) : undefined
   }
-  update(value: Presence) {
+  /** Projects with a connected machine always appear; an offline one with zero synced entries is forgotten. */
+  update({ hasEntries, ...value }: Presence) {
     this.sql.transaction(() => {
-      const key = JSON.stringify([value.machine, value.project])
       let slug = [
-        ...this.sql.exec<{ slug: string }>('SELECT slug FROM instances WHERE key=?', key),
+        ...this.sql.exec<{ slug: string }>('SELECT slug FROM projects WHERE key=?', value.key),
       ][0]?.slug
       if (!slug) {
-        const machine = safeSlug(value.machine)
-        const base = `${machine}/${safeSlug(value.project.split('/').filter(Boolean).at(-1) ?? 'project')}`
+        const base = safeSlug(value.name)
         slug = base
         let suffix = 2
-        while ([...this.sql.exec('SELECT key FROM instances WHERE slug=?', slug)].length)
+        while ([...this.sql.exec('SELECT key FROM projects WHERE slug=?', slug)].length)
           slug = `${base}-${suffix++}`
-        this.sql.exec('INSERT INTO instances (key, slug) VALUES (?, ?)', key, slug)
+        this.sql.exec('INSERT INTO projects (key, slug) VALUES (?, ?)', value.key, slug)
       }
+      const connected = value.machines.some((machine) => machine.connected)
       this.sql.exec(
-        'UPDATE instances SET value=? WHERE key=?',
-        !value.connected && !value.hasEntries ? null : JSON.stringify({ ...value, slug }),
-        key,
+        'UPDATE projects SET value=? WHERE key=?',
+        !connected && !hasEntries ? null : JSON.stringify({ ...value, slug }),
+        value.key,
       )
     })
   }

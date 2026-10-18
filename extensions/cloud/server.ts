@@ -1,4 +1,6 @@
-import { defineExtension } from '@earendil-works/pi-durable'
+import { readFile, rename, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { defineExtension, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type {
   CommitPublication,
   ConversationId,
@@ -11,9 +13,11 @@ import type {
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { docHash, PROJECT_MISMATCH } from '../../cloud/protocol.ts'
-import type { CloudMessage, MachineMessage, ReplicaDoc } from '../../cloud/protocol.ts'
+import type { CloudMessage, MachineMessage, ReplicaDoc, Writer } from '../../cloud/protocol.ts'
 import { projectBuilds } from '../../cloud/ui-build.ts'
+import { secretMetadata } from '../secrets/store.ts'
 import { cloudConfig } from './config.ts'
+import { projectIdentity } from './identity.ts'
 
 export const secrets = [
   { name: 'ULTIMATE_CLOUD_TOKEN', description: 'Bearer token for the cloud sync endpoint' },
@@ -33,12 +37,29 @@ const NodeWebSocket = WebSocket as unknown as new (
 const connect: Connect = (url, token) =>
   new NodeWebSocket(url, { headers: { Authorization: `Bearer ${token}` } })
 
+/** This machine's place in the project: the last role the cloud gave it, kept across reconnects. */
+export interface SyncState {
+  key: string
+  connected: boolean
+  role?: 'writer' | 'standby'
+  epoch?: number
+  /** The lease is free: a standby may claim it at `epoch`. */
+  free?: boolean
+  snapshot?: { id: string; epoch: number }
+  writer?: Writer
+}
+
+export interface SyncOptions {
+  url: string
+  token: string
+  machine: string
+  identity: { key: string; rootCommit: string }
+}
+
 /** One outbound connection; injected transport keeps sync tests entirely in process. */
 export function startSync(
   host: ExtensionHost,
-  url: string,
-  token: string,
-  machine: string,
+  { url, token, machine, identity }: SyncOptions,
   dial = connect,
   builds?: ReturnType<typeof projectBuilds>,
 ) {
@@ -48,13 +69,52 @@ export function startSync(
   let dispose: (() => void) | undefined
   let idle: (() => Promise<void>) | undefined
   let retainedBytes: (() => number) | undefined
+  let state: SyncState = { key: identity.key, connected: false }
+  const leasePath = join(host.home, 'cloud-lease.json')
+  const readLease = async () => {
+    try {
+      const lease = JSON.parse(await readFile(leasePath, 'utf8')) as {
+        key?: unknown
+        epoch?: unknown
+      }
+      return lease.key === identity.key && Number.isSafeInteger(lease.epoch)
+        ? (lease.epoch as number)
+        : undefined
+    } catch {
+      // No lease yet, or an unreadable one: hello names no epoch, and the writer's role rewrites it.
+      return undefined
+    }
+  }
+  const writeLease = async (epoch: number) => {
+    if ((await readLease()) === epoch) return
+    await writeFile(`${leasePath}.tmp`, JSON.stringify({ key: identity.key, epoch }))
+    await rename(`${leasePath}.tmp`, leasePath)
+  }
+  const secretNames = async () => {
+    try {
+      return (await secretMetadata(host.userHome)).map((secret) => secret.name)
+    } catch {
+      // The Secrets panel reports an unreadable store; until it is repaired this machine advertises none.
+      return []
+    }
+  }
+  const hasHistory = () =>
+    host
+      .harness()
+      .commit(
+        async (tx) =>
+          (await tx.scanConversations({}, 2)).items.length > 1 ||
+          (await tx.scanEntries({ conversationId: ROOT_CONVERSATION_ID }, 1)).items.length > 0,
+        context,
+      )
   const open = () => {
     if (stopped) return
     let socket: SyncSocket
     try {
       const endpoint = new URL(url)
-      endpoint.searchParams.set('machine', machine)
-      endpoint.searchParams.set('project', host.projectRoot)
+      endpoint.pathname = '/sync/v2'
+      endpoint.search = ''
+      endpoint.searchParams.set('project', identity.key)
       socket = dial(endpoint.href, token)
     } catch (error) {
       host.notice(`Cloud connection failed: ${String(error)}`)
@@ -66,6 +126,7 @@ export function startSync(
     let timer: ReturnType<typeof setTimeout> | undefined
     let metadataTimer: ReturnType<typeof setInterval> | undefined
     let summariesDirty = true
+    let role: SyncState['role']
     let ready = false
     let batch = 0
     const unacked = new Map<number, number>()
@@ -385,6 +446,7 @@ export function startSync(
     const close = () => {
       if (closed) return
       closed = true
+      state = { ...state, connected: false }
       unsubscribe?.()
       pending.conversations.length = 0
       pending.entries.length = 0
@@ -402,24 +464,46 @@ export function startSync(
       if (!stopped) schedule()
     }
     dispose = close
-    socket.addEventListener('open', () => {
-      builds?.connect()
-      send({
-        type: 'hello',
-        machine,
-        build: host.build().id,
-        uiBuild: builds?.current(),
-        project: host.projectRoot,
-        port: Number(new URL(host.system().process.url).port),
-      })
-      metadata()
-      metadataTimer = setInterval(metadata, 1000)
-      enqueue(async () => send({ type: 'models', value: await host.modelsResponse() }))
-    })
+    socket.addEventListener('open', () =>
+      enqueue(async () =>
+        send({
+          type: 'hello',
+          key: identity.key,
+          rootCommit: identity.rootCommit,
+          root: host.projectRoot,
+          machine,
+          build: host.build().id,
+          uiBuild: builds?.current(),
+          port: Number(new URL(host.system().process.url).port),
+          epoch: await readLease(),
+          history: await hasHistory(),
+          secrets: await secretNames(),
+        }),
+      ),
+    )
     socket.addEventListener('message', (event) => {
       try {
         const message = JSON.parse(String(event.data)) as CloudMessage
-        if (message.type === 'ack') {
+        if (message.type === 'role')
+          enqueue(async () => {
+            const { type: _, ...given } = message
+            if (message.role === 'writer') await writeLease(message.epoch)
+            state = { key: identity.key, connected: true, ...given }
+            // A role that changes on an open socket starts over with a fresh hello.
+            if (role && role !== message.role) return close()
+            if (role) return
+            role = message.role
+            // A standby only listens for role updates; it sends no data, which fences it off.
+            if (role !== 'writer') {
+              retry = 1000
+              return
+            }
+            builds?.connect()
+            metadata()
+            metadataTimer = setInterval(metadata, 1000)
+            send({ type: 'models', value: await host.modelsResponse() })
+          })
+        else if (message.type === 'ack') {
           unacked.delete(message.batch)
           flush()
           capacity?.()
@@ -455,7 +539,7 @@ export function startSync(
       if (event.code === PROJECT_MISMATCH) {
         stopped = true
         host.notice(
-          `Cloud sync stopped: the replica at ${url} belongs to another project (${event.reason}).`,
+          `Cloud sync stopped: the cloud refused ${identity.key} (${event.reason}); use cloud.relink if the repository was renamed.`,
         )
       }
       close()
@@ -478,8 +562,16 @@ export function startSync(
         await idle?.()
       },
       retainedBytes: () => retainedBytes?.() ?? 0,
+      state: () => state,
     },
   )
+}
+
+let active: ReturnType<typeof startSync> | undefined
+
+/** This process's sync role, or undefined while sync is off. */
+export function syncState(): SyncState | undefined {
+  return active?.state()
 }
 
 export default function cloud(host: ExtensionHost) {
@@ -487,13 +579,18 @@ export default function cloud(host: ExtensionHost) {
   let builds: ReturnType<typeof projectBuilds> | undefined
   host.onOpen(async () => {
     const config = await cloudConfig(host)
-    if (config) {
-      builds = projectBuilds(host, config.url, config.token)
-      stop = startSync(host, config.url, config.token, config.machine, connect, builds)
+    if (!config) return
+    const identity = await projectIdentity(host.projectRoot)
+    if (!identity) {
+      host.notice(`Cloud sync is off: ${host.projectRoot} has no GitHub origin remote.`)
+      return
     }
+    builds = projectBuilds(host, config.url, config.token)
+    stop = active = startSync(host, { ...config, identity }, connect, builds)
   })
   host.onClose(async () => {
     stop?.()
+    if (active === stop) active = undefined
     await builds?.stop()
     await stop?.idle()
   })

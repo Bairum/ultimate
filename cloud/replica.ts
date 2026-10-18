@@ -1,6 +1,33 @@
 import type { ConversationRecord, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
-import type { CloudMessage, MachineMessage, OutboxItem } from './protocol.ts'
+import type { CloudMessage, Hello, MachineMessage, OutboxItem } from './protocol.ts'
+
+type Role = Extract<CloudMessage, { type: 'role' }>
+/** A machine that said hello: how to reach it should it claim the lease, and when it was last seen. */
+export type MachineRecord = Pick<Hello, 'root' | 'port' | 'secrets'> & { lastSeen: number }
 import type { ConversationSummary } from '../shared/protocol.ts'
+
+/** The repository a replica belongs to, fixed by the first hello. */
+export interface ProjectRecord {
+  key: string
+  rootCommit: string
+  /** The registering machine's absolute project root. */
+  root: string
+  /** The repository name. */
+  name: string
+}
+
+/** The writer's lease and what the replica needs to reach the writer. */
+export interface LeaseRecord {
+  /** Null while the lease is free; root, port and secrets then stay the last writer's. */
+  machine: string | null
+  epoch: number
+  root: string
+  port: number
+  uiBuild?: string
+  secrets: string[]
+  /** The snapshot the last release uploaded, and the epoch it was taken at. */
+  snapshot?: { id: string; epoch: number }
+}
 
 /** The common subset of Durable Object SQL and a node:sqlite adapter. */
 export interface Sql {
@@ -52,17 +79,98 @@ export class ReplicaStore {
   metadata(id: number): unknown {
     return this.get('metadata', id)
   }
-  identity(): { machine: string; project: string; port: number; uiBuild?: string } | undefined {
-    return this.metadata(5) as ReturnType<ReplicaStore['identity']>
+  project(): ProjectRecord | undefined {
+    return this.metadata(4) as ProjectRecord | undefined
   }
-  key(): string | undefined {
-    return this.metadata(6) as string | undefined
+  lease(): LeaseRecord | undefined {
+    return this.metadata(5) as LeaseRecord | undefined
   }
-  claimKey(machine: string, project: string): boolean {
-    const key = JSON.stringify([machine, project])
-    if (this.key() && this.key() !== key) return false
-    this.put('metadata', 6, key)
-    return true
+  /** Every machine that said hello, by name. */
+  machines(): Record<string, MachineRecord> {
+    return (this.metadata(6) as Record<string, MachineRecord> | undefined) ?? {}
+  }
+  seen(machine: string, hello?: Hello) {
+    const machines = this.machines()
+    const known = hello
+      ? { root: hello.root, port: hello.port, secrets: hello.secrets }
+      : machines[machine]
+    if (known)
+      this.put('metadata', 6, { ...machines, [machine]: { ...known, lastSeen: Date.now() } })
+  }
+  role(role: Role['role'], online: boolean): Role {
+    const { machine, root, epoch, secrets, snapshot } = this.lease()!
+    return {
+      type: 'role',
+      role,
+      epoch,
+      free: machine === null,
+      ...(snapshot ? { snapshot } : {}),
+      writer: { machine, root, epoch, online: machine !== null && online, secrets },
+    }
+  }
+  private admitted(): CloudMessage[] {
+    return [this.role('writer', true), this.cursor(), { type: 'outbox', items: this.outbox() }]
+  }
+  /** The writer frees its lease at its epoch after uploading a snapshot. False: not the current lease. */
+  release(epoch: number, id: string): boolean {
+    return this.sql.transaction(() => {
+      const lease = this.lease()
+      if (lease?.machine == null || lease.epoch !== epoch) return false
+      this.put('metadata', 5, { ...lease, machine: null, snapshot: { id, epoch } })
+      return true
+    })
+  }
+  /** Take the free lease at its epoch, raising it by one. Undefined: taken, or another epoch. */
+  claim(machine: string, epoch: number): CloudMessage[] | undefined {
+    return this.sql.transaction(() => {
+      const lease = this.lease()
+      const claimant = this.machines()[machine]
+      if (!lease || !claimant || lease.machine !== null || lease.epoch !== epoch) return undefined
+      this.put('metadata', 5, {
+        ...lease,
+        machine,
+        epoch: epoch + 1,
+        root: claimant.root,
+        port: claimant.port,
+        secrets: claimant.secrets,
+      } satisfies LeaseRecord)
+      return this.admitted()
+    })
+  }
+  /**
+   * Admit a hello: the first registers its project with that machine as the writer at epoch 1. The writer machine is
+   * the writer again with the stored epoch or none; everyone else is a standby. Undefined: another repository.
+   */
+  hello(message: Hello, writerOnline: boolean): CloudMessage[] | undefined {
+    return this.sql.transaction(() => {
+      const project = this.project()
+      if (!project) {
+        const name = message.key.split('/').at(-1)!
+        this.put('metadata', 4, {
+          key: message.key,
+          rootCommit: message.rootCommit,
+          root: message.root,
+          name,
+        })
+        this.put('metadata', 5, { machine: message.machine, epoch: 1 })
+      } else if (project.key !== message.key || project.rootCommit !== message.rootCommit)
+        return undefined
+      this.seen(message.machine, message)
+      const lease = this.lease()!
+      if (
+        lease.machine !== message.machine ||
+        (message.epoch !== undefined && message.epoch !== lease.epoch)
+      )
+        return [this.role('standby', writerOnline)]
+      this.put('metadata', 5, {
+        ...lease,
+        root: message.root,
+        port: message.port,
+        uiBuild: message.uiBuild ?? lease.uiBuild,
+        secrets: message.secrets,
+      } satisfies LeaseRecord)
+      return this.admitted()
+    })
   }
   hasEntries(): boolean {
     return [...this.sql.exec('SELECT id FROM entries LIMIT 1')].length > 0
@@ -74,15 +182,6 @@ export class ReplicaStore {
     return [...this.sql.exec<{ value: string }>('SELECT value FROM summaries ORDER BY id')].map(
       (row) => JSON.parse(row.value) as ConversationSummary,
     )
-  }
-  /** Adopt existing trial data on first hello; later hosts must name the same project. */
-  claimProject(project: string): string {
-    return this.sql.transaction(() => {
-      const held = this.metadata(4) as string | undefined
-      if (held !== undefined) return held
-      this.put('metadata', 4, project)
-      return project
-    })
   }
   conversation(id: number): ConversationRecord | undefined {
     return this.get('conversations', id) as ConversationRecord | undefined
@@ -146,19 +245,14 @@ export class ReplicaStore {
     // Negative IDs distinguish cloud queue items from the machine's positive Pi submission IDs.
     return { item, submissionId: -row.submissionId }
   }
-  receive(message: MachineMessage): CloudMessage[] {
+  /** Apply data from the writer's socket; the lease changes through `hello`, `release` and `claim`. */
+  receive(
+    message: Exclude<MachineMessage, { type: 'hello' | 'release' | 'claim' }>,
+  ): CloudMessage[] {
     switch (message.type) {
-      case 'hello':
-        this.put('metadata', 5, {
-          machine: message.machine,
-          project: message.project,
-          port: message.port,
-          uiBuild: message.uiBuild ?? this.identity()?.uiBuild,
-        })
-        return [this.cursor(), { type: 'outbox', items: this.outbox() }]
       case 'uiBuild':
-        if (/^[a-f0-9]{12}$/.test(message.value) && this.identity())
-          this.put('metadata', 5, { ...this.identity(), uiBuild: message.value })
+        if (/^[a-f0-9]{12}$/.test(message.value) && this.lease())
+          this.put('metadata', 5, { ...this.lease(), uiBuild: message.value })
         return []
       case 'batch':
         this.sql.transaction(() => {

@@ -17,15 +17,16 @@
   "version_metadata": { "binding": "VERSION" },
   "durable_objects": {
     "bindings": [
-      { "name": "REPLICA", "class_name": "ProjectReplica" },
-      { "name": "DIRECTORY", "class_name": "Directory" }
+      { "name": "REPLICA", "class_name": "SharedReplica" },
+      { "name": "DIRECTORY", "class_name": "ProjectDirectory" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Replica"] },
     { "tag": "v2", "new_sqlite_classes": ["Directory"] },
     { "tag": "v3", "new_sqlite_classes": ["ProjectReplica"] },
-    { "tag": "v4", "deleted_classes": ["Replica"] }
+    { "tag": "v4", "deleted_classes": ["Replica"] },
+    { "tag": "v5", "new_sqlite_classes": ["SharedReplica", "ProjectDirectory"] }
   ],
   "assets": {
     "directory": "./dist",
