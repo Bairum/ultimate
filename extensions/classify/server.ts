@@ -1,7 +1,7 @@
 import type { JsonValue } from '@earendil-works/chord'
 import { defineExtension } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { readSecret } from '../secrets/store.ts'
+import { readSecret } from '../../lib/secrets.ts'
 
 export const secrets = [
   {

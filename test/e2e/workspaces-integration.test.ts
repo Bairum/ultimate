@@ -32,7 +32,8 @@ import workspaceExtension, {
   order as workspacesOrder,
 } from '../../extensions/workspaces/server.ts'
 import { Workspaces, workspaces } from '../../extensions/workspaces/workspaces.ts'
-import { git, setup } from '../../extensions/workspaces/git.ts'
+import { git } from '../../lib/git.ts'
+import { setup } from '../../extensions/workspaces/setup.ts'
 import type { LanderEntry, WorkspaceIndex } from '../../extensions/workspaces/types.ts'
 import { createLander, landerCheckout, landerPath } from '../../extensions/workspaces/lander.ts'
 import lineage, { leaveNote, rootOf, Roots, startBranch } from '../../extensions/lineage/server.ts'

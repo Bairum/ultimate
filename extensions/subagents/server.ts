@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -43,7 +42,8 @@ import {
   saveDefinition,
 } from './agents.ts'
 import { createChild } from './children.ts'
-import { residentHere } from './primary.ts'
+import { exec } from '../../lib/exec.ts'
+import { residentHere } from '../../lib/machine.ts'
 import type { WorkspaceService } from '../workspaces/server.ts'
 import { requestSummary } from '../conversations/summary.ts'
 import { summaryModel } from '../conversations/summary-model.ts'
@@ -1188,18 +1188,13 @@ Available definitions:
             }
             // Report, never commit or delete: the coordinator decides what happens to the work.
             const workspace = await service()?.get(id, context)
-            // Untrimmed NUL-separated name lists: the workspaces git helper trims, which would cut a
+            // Untrimmed NUL-separated name lists: the git helper in lib/ trims, which would cut a
             // leading space off the first name.
             const list = (...command: string[]) =>
-              new Promise<string[]>((resolve, reject) =>
-                execFile(
-                  'git',
-                  [...command, '-z'],
-                  { cwd: workspace!.path, maxBuffer: 1024 * 1024 },
-                  (error, stdout) =>
-                    error ? reject(error) : resolve(stdout.split('\0').filter(Boolean)),
-                ),
-              )
+              exec('git', [...command, '-z'], {
+                cwd: workspace!.path,
+                maxBuffer: 1024 * 1024,
+              }).then(({ stdout }) => stdout.split('\0').filter(Boolean))
             const uncommitted =
               workspace?.state === 'ready'
                 ? [

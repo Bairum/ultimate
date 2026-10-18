@@ -19,7 +19,7 @@ import type { Connect, SyncSocket, SyncState } from '../extensions/cloud/server.
 import { startLease } from '../extensions/cloud/lease.ts'
 import type { Exec } from '../extensions/cloud/lease.ts'
 import * as snapshot from '../extensions/cloud/snapshot.ts'
-import { git } from '../extensions/workspaces/git.ts'
+import { git } from '../lib/git.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { context, prepareHarness } from '../server/harness.ts'
 import { temp, until } from './helpers.ts'
@@ -291,10 +291,12 @@ beforeAll(() => {
   })
 })
 afterEach(async () => {
-  for (const running of machines) await running.close()
+  // Taken out of the set first: a close that hangs fails this test's hook once, not every later test's.
+  const running = [...machines]
   machines.clear()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
+  await Promise.all(running.map((each) => each.close()))
 })
 afterAll(() => {
   Reflect.deleteProperty(crypto.subtle, 'timingSafeEqual')

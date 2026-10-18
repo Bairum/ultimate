@@ -1,7 +1,7 @@
 /**
  * The machine home: an Ultimate host whose project is `~/.ultimate/machine`, a plain folder that never syncs. Its only
  * standing agent is @sync (`resident: machine`); a project home's primary standing agent is @ultimate.
- * Plain strings, no `node:path`, so the browser shares it.
+ * Plain strings, no `node:*`, so the browser shares it.
  */
 export const machineRoot = (userHome: string) => `${userHome.replace(/\/+$/, '')}/.ultimate/machine`
 

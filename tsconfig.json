@@ -18,6 +18,7 @@
     "lint",
     "server",
     "shared",
+    "lib",
     "cloud/protocol.ts",
     "cloud/build.ts",
     "cloud/ui-build.ts",

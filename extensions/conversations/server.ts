@@ -19,7 +19,7 @@ import { UiState } from '../../server/ui-state.ts'
 import { Summaries, summaryBehavior } from './summary.ts'
 import { summaryModelSetting } from './summary-model.ts'
 import { parseSummaryModel } from './summary-model-ref.ts'
-import { updateSettings } from '../onboarding/settings.ts'
+import { updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import { Overview, overviewBehavior } from './overview.ts'
 import { activityBehavior } from './activity.ts'
 
@@ -126,7 +126,7 @@ export const actions = {
       throw new Error(
         `The summary model is set by project settings in ${projectFile(host)}; edit that file to change it`,
       )
-    await updateSettings(join(host.userHome, '.ultimate/settings.json'), (settings) => {
+    await updateSettings(userSettingsPath(host.userHome), (settings) => {
       if (value === null) delete settings.summaryModel
       else settings.summaryModel = value
     })

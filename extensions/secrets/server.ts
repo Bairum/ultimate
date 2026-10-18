@@ -1,6 +1,7 @@
 import { defineExtension, section } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
-import { secretMetadata, validateName, validateValue, writeSecret } from './store.ts'
+import { secretMetadata, validateName, validateValue } from '../../lib/secrets.ts'
+import { writeSecret } from './store.ts'
 
 export default defineExtension({
   name: 'secrets',

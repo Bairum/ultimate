@@ -31,6 +31,8 @@ import type { ServiceStatus, ServiceHandle } from './services.ts'
 import { reportCore } from './supervisor-protocol.ts'
 import { EventFeed, eventLog } from './events.ts'
 import type { EventHost } from './events.ts'
+import { extensionApis } from './extension-apis.ts'
+import type { Api, Catalogue } from '../shared/extension-api.ts'
 
 export type ExtensionHost = Pick<
   PreparedHost,
@@ -60,6 +62,14 @@ export type ExtensionHost = Pick<
   provide(name: string, value: unknown): void
   // oxlint-disable-next-line typescript/no-unnecessary-type-parameters
   use<T>(name: string): T | undefined
+  /** Provide the service of `api`, with the reload semantics of `provide`. Facet scope only. */
+  implement<S>(api: Api<string, S>, value: NoInfer<S>): void
+  /** A handle to the current provider of `api`; throws while none is enabled, except during facet setup. */
+  need<S>(api: Api<string, S>): S
+  /** A handle to the current provider of `api`, or undefined while none is enabled. */
+  want<S>(api: Api<string, S>): S | undefined
+  /** Who provides, needs and wants each API, plus missing providers and dependency cycles. */
+  catalogue(): Catalogue
   resource<T>(key: string, create: () => T): T
   /** Run `callback` each time the harness opens, at once when it is open; the server serves once it settles. */
   onOpen(callback: () => Promise<void>): void
@@ -142,8 +152,25 @@ export async function loadExtensions(
   const facetReleasers = new Map<ExtensionHost, Set<() => Promise<void>>>()
   const facetCleanups = new Map<ExtensionHost, Set<() => Promise<void>>>()
   const facetNotices = new Map<ExtensionHost, Set<string>>()
+  const extensionOf = (facetHost: ExtensionHost) =>
+    [...facetHosts].find(([, current]) => current === facetHost)?.[0]
+  const apis = extensionApis(
+    (name) => {
+      const service = providers.get(name)
+      const extension = service && extensionOf(service.owner)
+      return extension ? { extension, value: service.value } : undefined
+    },
+    () =>
+      [...providers].flatMap(([name, { owner }]) => {
+        const extension = extensionOf(owner)
+        return extension ? [[name, extension] as [string, string]] : []
+      }),
+    (owner) => [...facetHosts.values()].includes(owner as ExtensionHost),
+  )
+  let missingApis = new Set<string>()
   const dispose = async (facetHost: ExtensionHost | undefined) => {
     if (!facetHost) return
+    apis.dispose(facetHost)
     facetServices.get(facetHost)?.dispose()
     facetServices.delete(facetHost)
     for (const [name, service] of providers) if (service.owner === facetHost) providers.delete(name)
@@ -175,6 +202,10 @@ export async function loadExtensions(
         if (facetHosts.get(name) === facetHost)
           providers.set(serviceName, { owner: facetHost, value })
       },
+      implement: (api, value) => facetHost.provide(api.name, value),
+      need: <S>(api: Api<string, S>): S =>
+        apis.need(facetHost, name, api, facetHosts.get(name) !== facetHost),
+      want: <S>(api: Api<string, S>): S | undefined => apis.want(facetHost, name, api),
       service: (serviceName, status) => serviceScope.service(serviceName, status),
       notice: (message) => {
         // Each distinct message once per facet load: a notice raised by a commit watcher cannot loop through its event.
@@ -317,6 +348,16 @@ export async function loadExtensions(
     },
     // oxlint-disable-next-line typescript/no-unnecessary-type-parameters
     use: <T>(name: string) => providers.get(name)?.value as T | undefined,
+    implement: () => {
+      throw new Error('Providers require a facet scope')
+    },
+    need: () => {
+      throw new Error('Consumers require a facet scope')
+    },
+    want: () => {
+      throw new Error('Consumers require a facet scope')
+    },
+    catalogue: () => apis.catalogue(),
     service: () => {
       throw new Error('Services require a facet scope')
     },
@@ -571,6 +612,9 @@ export async function loadExtensions(
       }
     }
     host.builds.refresh(winners.map(({ name, enabled }) => [name, enabled]))
+    const missing = new Set(apis.missing())
+    for (const message of missing) if (!missingApis.has(message)) notice(message)
+    missingApis = missing
     await changed()
   }
   async function reloadSettings() {
@@ -687,6 +731,7 @@ export async function loadExtensions(
         ...new Set([
           ...diagnostics,
           ...[...facetNotices.values()].flatMap((messages) => [...messages]),
+          ...apis.missing(),
           ...projectDiagnostics(host.projectRoot, host.userHome),
         ]),
       ],
@@ -697,6 +742,7 @@ export async function loadExtensions(
     },
     invoke,
     doc: findDoc,
+    catalogue: () => apis.catalogue(),
     /** The harness is open: run the `onOpen` callbacks. */
     async opened() {
       open = true

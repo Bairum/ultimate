@@ -1,7 +1,7 @@
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { readSecret } from '../secrets/store.ts'
+import { readSecret } from '../../lib/secrets.ts'
 import { parallelRequest, ParallelApiError } from './api.ts'
 import type { SearchResponse, ExtractResponse, ParallelResultItem, ParallelWarning } from './api.ts'
 import { truncateToolOutput } from './output.ts'

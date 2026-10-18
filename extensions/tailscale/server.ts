@@ -1,12 +1,13 @@
-import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 // oxlint-disable-next-line no-restricted-imports -- tailscale ownership uses the shared process lock and liveness check
 import { acquireLock, alive } from '../../server/lock.ts'
-import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 import { defineExtension } from '@earendil-works/pi-durable'
+import { exec } from '../../lib/exec.ts'
+import { readJson } from '../../lib/json-file.ts'
+import { userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ExtensionAction } from '../../server/actions.ts'
 
@@ -51,7 +52,6 @@ export interface TailscaleService {
 /** A claimed HTTPS port. A project's entry outlives its server so the project keeps its address; a preview's does not. */
 type Entry = { port: number; owner: string; temporary?: true }
 export const reloadOnSettings = true
-const run = promisify(execFile)
 const statuses = new WeakMap<ExtensionHost, Status>()
 const retries = new WeakMap<ExtensionHost, () => Promise<void>>()
 export const actions: Record<string, ExtensionAction> = {
@@ -84,7 +84,7 @@ export default function tailscale(host: ExtensionHost) {
     status = next
     statuses.set(host, next)
   }
-  const command = (args: string[]) => run(cli, args, { timeout: 15000, maxBuffer: 1024 * 1024 })
+  const command = (args: string[]) => exec(cli, args, { timeout: 15000, maxBuffer: 1024 * 1024 })
   const fail = (state: Status['state'], hint: string) => {
     set({ state, allow: status.allow, hint })
     host.notice(`Tailscale: ${hint}`)
@@ -105,12 +105,7 @@ export default function tailscale(host: ExtensionHost) {
       },
     )
     try {
-      let value: { ports: Record<string, Entry> } = { ports: {} }
-      try {
-        value = JSON.parse(await readFile(registryPath, 'utf8'))
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-      }
+      const value = await readJson<{ ports: Record<string, Entry> }>(registryPath, { ports: {} })
       if (
         !value.ports ||
         Object.values(value.ports).some(
@@ -139,18 +134,10 @@ export default function tailscale(host: ExtensionHost) {
   async function start() {
     if (ownedPort !== undefined || closed) return
     try {
-      let settings: {
+      const settings = await readJson<{
         extensions?: { disable?: string[] }
         tailscale?: { allow?: string[] }
-      }
-      try {
-        settings = JSON.parse(
-          await readFile(join(host.userHome, '.ultimate/settings.json'), 'utf8'),
-        )
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-        settings = {}
-      }
+      }>(userSettingsPath(host.userHome), {})
       if (settings.extensions?.disable?.includes('tailscale')) {
         fail(
           'disabled',

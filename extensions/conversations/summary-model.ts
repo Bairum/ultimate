@@ -1,9 +1,8 @@
-import { join } from 'node:path'
 import { clampThinkingLevel } from '@earendil-works/pi-ai'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { JsonObject } from '@earendil-works/pi-durable'
+import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { readSettings } from '../onboarding/settings.ts'
 import { parseSummaryModel } from './summary-model-ref.ts'
 
 /** Titles, summaries and reply assessments use this model unless settings name another. */
@@ -22,9 +21,7 @@ export async function summaryModelSetting(
   host: Pick<SummaryModelHost, 'userHome' | 'projectSettings'>,
 ) {
   // Invalid settings JSON is reported where settings load; here it counts as unset.
-  const user: JsonObject = await readSettings(join(host.userHome, '.ultimate/settings.json')).catch(
-    () => ({}),
-  )
+  const user: JsonObject = await readSettings(userSettingsPath(host.userHome)).catch(() => ({}))
   const project = await host.projectSettings()
   for (const [source, settings] of [
     ['project', project],

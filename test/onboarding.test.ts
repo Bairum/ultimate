@@ -5,7 +5,7 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { fauxServer, post, temp, removeTemp } from './helpers.ts'
 import { context } from '../server/harness.ts'
-import { git } from '../extensions/workspaces/git.ts'
+import { git } from '../lib/git.ts'
 import { projectDecision } from '../server/project-setup.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 

@@ -25,7 +25,12 @@ export async function uiFingerprint(root: string, project: string, userHome: str
   )
   const paths = (
     await Promise.all(
-      [join(root, 'web'), join(root, 'shared'), ...facets.map((e) => e.path)].map(tree),
+      [
+        join(root, 'web'),
+        join(root, 'shared'),
+        join(root, 'lib'),
+        ...facets.map((e) => e.path),
+      ].map(tree),
     )
   ).flat()
   paths.push(

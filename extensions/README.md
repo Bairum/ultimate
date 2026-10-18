@@ -48,7 +48,7 @@ machine → project; later layers win. Settings changes apply live without a res
 
 The `parallel` web tools read their key from `secrets`. Secrets are user-global, not project state.
 
-A server facet may export `secrets: { name: string; description: string; url?: string }[]`. Names must match `^[A-Z][A-Z0-9_]*$`, descriptions must be non-empty, and optional URLs must use http(s). Installed declarations appear in `ExtensionInfo.server.secrets` and the Secrets panel; values never appear in extension info. Other server facets may import `readSecret(userHome, name)` from `extensions/secrets/store.ts`, like automations imports subagent helpers.
+A server facet may export `secrets: { name: string; description: string; url?: string }[]`. Names must match `^[A-Z][A-Z0-9_]*$`, descriptions must be non-empty, and optional URLs must use http(s). Installed declarations appear in `ExtensionInfo.server.secrets` and the Secrets panel; values never appear in extension info. Other server facets read values with `readSecret(userHome, name)` from `lib/secrets.ts`; only the secrets extension writes them.
 
 The `tailscale` built-in exposes Ultimate to your own Tailscale login by default; only user settings set its allowlist, and a project cannot turn on what they disable. See [tailscale](tailscale/README.md) for stable project URLs and owner-login admission.
 
@@ -78,6 +78,7 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 - `conversations()`: every conversation's summary, as `useConversations()` gives the web; empty until the harness is open.
 - `harness()`, `uiState(context)`, `doc(kind)`: durable harness, root UI snapshot and exported conversation document token.
 - `provide(name, value)`, `use<T>(name)`: publish and look up typed process-local behaviour. Import the provider's contract with `import type`, never its implementation. Registrations are staged until installation succeeds, replaced on reload, and removed when the facet is disabled, removed or closed; a missing provider returns `undefined`. Look up at call time rather than retaining a provider across reloads. A failed replacement keeps the old provider. For example, workspaces provides `WorkspaceService` under `workspaces`; lineage provides `LineageService` under `lineage`. Shared branches and landings work without the other extension; isolated branches require workspaces.
+- `implement(api, value)`, `need(api)`, `want(api)`, `catalogue()`: the typed successors of `provide`/`use`; see [Extension APIs](#extension-apis).
 - `metadata`: the core's `ultimate.metadata` conversation document, `{ title?, label? }`; the shell names a conversation
   by them, so set them on conversations you create (`subagents` labels each child with its definition).
 - `events`: Pi's ephemeral process-local event bus; see [Events](#events).
@@ -103,6 +104,28 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
   closed (it may put another `state.sqlite` in place), removes `standby.json`, opens the harness, runs the `onOpen`
   callbacks and serves. Switches run one at a time; `deactivate` on standby and `activate` while open do nothing.
   Never await `deactivate` in a tool or hook: closing the harness waits for running task code to return.
+
+## Extension APIs
+
+Declare a service as a token in the provider's `api.ts`, typed by its contract and browser-safe:
+
+```ts
+import { defineApi } from '../../shared/extension-api.ts'
+export type EchoService = { echo(text: string): string }
+export const Echo = defineApi<EchoService>()('echo')
+```
+
+The provider calls `host.implement(Echo, { echo: (text) => text })` in its factory; it is staged, replaced and
+removed exactly like `provide`. A consumer calls `host.need(Echo)` for a hard dependency or `host.want(Echo)` for an
+optional one. Both return a handle typed by the token that resolves the current provider on every member access, so
+holding it from setup is fine. `need` throws `<ext> needs echo, which no enabled extension provides` while nothing
+provides it; called during setup it records the dependency instead (the provider may load later) and a still-missing
+provider becomes an extension diagnostic. `want` returns undefined while missing, so call it where you use it.
+`host.catalogue()` (codemode: `ultimate.catalogue()`) lists each API's provider, needs and wants, plus missing
+providers and dependency cycles, each a sorted group of extensions that depend on each other in a cycle.
+
+Which channel to use: services for calls between extensions; documents for durable state; durable events (coming)
+for "this happened"; actions for the UI and user boundary.
 
 ## Lifecycle
 
@@ -843,6 +866,10 @@ Keep UI state that should survive a reload in `useExtensionUiState`; keep throwa
 - One feature per folder; the folder name is the extension name; a README is required. Keep it small.
 - Prefer documents, commands, events, or the SDK. Imports from another extension's files are dependencies:
   declare them in `vite.config.ts` `ultimate/extension-imports`. Lint enforces declarations and forbids cycles.
+- Shared pure helpers live in the top-level `lib/`, not in another extension: `exec.ts` (run a program), `git.ts`
+  (git and isolation checks), `json-file.ts` (read, atomic write, serialised update), `settings.ts`, `secrets.ts`
+  (read-only) and `machine.ts` (machine-home checks, browser-safe). Import them freely; they hot reload with the
+  extensions that import them. `lib/` holds no state and imports no extension, `web/` or server runtime code.
 - Server facets: see `prompt/` for prompt sections and `coding-tools/server.ts` for tools; the root `AGENTS.md` explains
   reloads and durability. Server facets may `export const order = -100`: lower values come first, with the default 0
   keeping discovery order (built-in → user → project, then folder name); changing it reorders the server prompt and tools once.

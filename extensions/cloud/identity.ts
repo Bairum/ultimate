@@ -1,7 +1,4 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-
-const run = promisify(execFile)
+import { git } from '../../lib/git.ts'
 
 /** `github.com/<owner>/<repo>`, lowercased, for a GitHub SSH or HTTPS remote URL; undefined for any other. */
 export function projectKey(remote: string): string | undefined {
@@ -19,12 +16,11 @@ export function projectKey(remote: string): string | undefined {
 export async function projectIdentity(
   root: string,
 ): Promise<{ key: string; rootCommit: string } | undefined> {
-  const git = async (...args: string[]) => (await run('git', args, { cwd: root })).stdout.trim()
   try {
-    const key = projectKey(await git('remote', 'get-url', 'origin'))
+    const key = projectKey(await git(root, 'remote', 'get-url', 'origin'))
     if (!key) return undefined
     // rev-list lists newest first; a merged unrelated history adds roots, and the oldest stays the same.
-    const rootCommit = (await git('rev-list', '--max-parents=0', 'HEAD')).split('\n').at(-1)!
+    const rootCommit = (await git(root, 'rev-list', '--max-parents=0', 'HEAD')).split('\n').at(-1)!
     return { key, rootCommit }
   } catch {
     // No repository, no origin remote or no commit yet: the project has no global identity.

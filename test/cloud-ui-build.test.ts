@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { buildQueue, uiFingerprint } from '../cloud/ui-build.ts'
 
-it('fingerprints web source, enabled facets and enablement', async () => {
+it('fingerprints web source, shared helpers, enabled facets and enablement', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ui-fingerprint-'))
   try {
     for (const path of ['web', 'shared', 'extensions/demo', 'user'])
@@ -12,6 +12,7 @@ it('fingerprints web source, enabled facets and enablement', async () => {
     for (const path of [
       'web/main.tsx',
       'shared/protocol.ts',
+      'lib/machine.ts',
       'extensions/demo/web.tsx',
       'vite.config.ts',
       'package.json',
@@ -27,9 +28,12 @@ it('fingerprints web source, enabled facets and enablement', async () => {
     await writeFile(join(root, 'web/main.tsx'), 'changed')
     const web = await fingerprint()
     expect(web).not.toBe(original)
+    await writeFile(join(root, 'lib/machine.ts'), 'changed')
+    const lib = await fingerprint()
+    expect(lib).not.toBe(web)
     await writeFile(join(root, 'extensions/demo/web.tsx'), 'changed')
     const facet = await fingerprint()
-    expect(facet).not.toBe(web)
+    expect(facet).not.toBe(lib)
     await mkdir(join(root, 'user/.ultimate'), { recursive: true })
     await writeFile(
       join(root, 'user/.ultimate/settings.json'),

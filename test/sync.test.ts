@@ -8,7 +8,7 @@ import type { OpenHost } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import subagents from '../extensions/subagents/server.ts'
 import type { SubagentsService } from '../extensions/subagents/server.ts'
-import { machineRoot, primaryAgent, residentHere } from '../extensions/subagents/primary.ts'
+import { machineRoot, primaryAgent, residentHere } from '../lib/machine.ts'
 import { parseDefinition } from '../extensions/subagents/agents.ts'
 import {
   cancel,

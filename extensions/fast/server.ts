@@ -1,13 +1,12 @@
-import { join } from 'node:path'
 import { lazyStream } from '@earendil-works/pi-ai'
 import type { ProviderStreams } from '@earendil-works/pi-ai'
 import { openAICodexResponsesApi } from '@earendil-works/pi-ai/api/openai-codex-responses.lazy'
 import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy'
 import type { JsonValue } from '@earendil-works/chord'
 import type { JsonObject } from '@earendil-works/pi-durable'
+import { readSettings, updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { ActionContext, ExtensionAction } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { readSettings, updateSettings } from '../onboarding/settings.ts'
 
 type Overlay = Parameters<ExtensionHost['modelRuntime']['registerProvider']>[1]
 type Stream = NonNullable<Overlay['streamSimple']>
@@ -21,8 +20,7 @@ export const FAST_PROVIDERS = ['openai-codex', 'openai'] as const
 const fastProvider = (model: string) =>
   FAST_PROVIDERS.some((provider) => model.startsWith(`${provider}/`))
 
-const userFile = (host: Pick<ExtensionHost, 'userHome'>) =>
-  join(host.userHome, '.ultimate/settings.json')
+const userFile = (host: Pick<ExtensionHost, 'userHome'>) => userSettingsPath(host.userHome)
 
 /** The raw `fastModels` value: the project's settings, else the user's. */
 async function fastSetting(host: Pick<FastHost, 'userHome' | 'projectSettings'>) {

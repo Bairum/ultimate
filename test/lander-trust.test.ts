@@ -5,7 +5,7 @@ import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { context } from '../server/harness.ts'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
-import { git } from '../extensions/workspaces/git.ts'
+import { git } from '../lib/git.ts'
 import { fauxServer, post, temp } from './helpers.ts'
 
 const definition = (tools: string) =>

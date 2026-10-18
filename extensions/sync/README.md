@@ -4,7 +4,7 @@
 
 ## The machine home
 
-Each machine can run one small Ultimate whose project is `~/.ultimate/machine`, a plain folder without Git that never syncs: `ultimate --port 4700 --no-open ~/.ultimate/machine` (`pnpm setup:machine` installs it as `ultimate-machine.service`). `subagents/primary.ts` detects it (`projectRoot === <home>/.ultimate/machine`), on the server and in the browser through system info. There, only definitions with `resident: machine` are standing agents, so @sync (`agents/sync.md`) is its only one; in project homes only `resident: true` ones are. The home's primary agent, @sync there and @ultimate elsewhere, owns the top-bar button, the first sidebar row, chat mode and messages to the user. The machine home starts no onboarding and no root reading.
+Each machine can run one small Ultimate whose project is `~/.ultimate/machine`, a plain folder without Git that never syncs: `ultimate --port 4700 --no-open ~/.ultimate/machine` (`pnpm setup:machine` installs it as `ultimate-machine.service`). `lib/machine.ts` detects it (`projectRoot === <home>/.ultimate/machine`), on the server and in the browser through system info. There, only definitions with `resident: machine` are standing agents, so @sync (`agents/sync.md`) is its only one; in project homes only `resident: true` ones are. The home's primary agent, @sync there and @ultimate elsewhere, owns the top-bar button, the first sidebar row, chat mode and messages to the user. The machine home starts no onboarding and no root reading.
 
 To preview it without touching the real one, run a faux server with a temporary `HOME` whose project is `$HOME/.ultimate/machine`:
 

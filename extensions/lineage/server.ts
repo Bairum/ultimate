@@ -1,5 +1,3 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { awaitWithContext, BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
@@ -31,6 +29,7 @@ import type {
   TaskId,
   Tx,
 } from '@earendil-works/pi-durable'
+import { git } from '../../lib/git.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -918,12 +917,10 @@ function rootEvent(entry: EntryRecord): RootEvent | undefined {
   }
 }
 
-const execFileAsync = promisify(execFile)
-
 /** `github.com/<owner>/<repo>` of the project's `origin`, if it is on GitHub. */
 const githubRepo = (projectRoot: string) =>
-  execFileAsync('git', ['remote', 'get-url', 'origin'], { cwd: projectRoot })
-    .then(({ stdout }) => projectKey(stdout))
+  git(projectRoot, 'remote', 'get-url', 'origin')
+    .then(projectKey)
     // No repository or no origin: landings show their count without a link.
     .catch(() => undefined)
 

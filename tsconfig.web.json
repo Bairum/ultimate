@@ -39,7 +39,7 @@
     "extensions/workspaces/types.ts",
     "extensions/sync/types.ts",
     "extensions/sync/moves.ts",
-    "extensions/subagents/primary.ts",
+    "lib/machine.ts",
     "extensions/subagents/message-types.ts",
     "test/web"
   ]

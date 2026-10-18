@@ -9,7 +9,7 @@ import { Metadata } from '../../server/metadata.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import workspaceExtension from '../../extensions/workspaces/server.ts'
 import { workspaces } from '../../extensions/workspaces/workspaces.ts'
-import { git } from '../../extensions/workspaces/git.ts'
+import { git } from '../../lib/git.ts'
 import { temp, until } from '../helpers.ts'
 
 const cleanup: (() => Promise<void>)[] = []

@@ -13,13 +13,13 @@ import {
   ToolTask,
 } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
+import { empty, git, isolatable, noCommit, noRepository } from '../../lib/git.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- workspace discovery shares the core root watcher
 import { watchRoots } from '../../server/watch-roots.ts'
 import type { ConversationsService } from '../conversations/server.ts'
 import { agentRoots } from '../subagents/agents.ts'
-import { empty, git, isolatable, noCommit, noRepository } from './git.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
 export type WorkspaceService = ReturnType<typeof workspaces> & {
   git: typeof git

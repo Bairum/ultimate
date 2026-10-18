@@ -1,6 +1,5 @@
 // Encrypted, chunked project snapshots in the cloud's private R2: a consistent database copy plus a bundle of the
 // `ultimate/*` branches. Everything is compressed and sealed on the machine; the Worker stores only ciphertext.
-import { execFile } from 'node:child_process'
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdtemp, rename, rm, stat } from 'node:fs/promises'
@@ -9,8 +8,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { promisify } from 'node:util'
 import { createZstdCompress, createZstdDecompress } from 'node:zlib'
+import { git as gitIn } from '../../lib/git.ts'
 
 export interface SnapshotManifest {
   id: string
@@ -35,9 +34,9 @@ interface Remote {
 const CHUNK = 16 * 1024 * 1024
 // A for-each-ref pattern without a trailing slash matches refs below it, not `ultimate-moved/`.
 const BRANCHES = 'refs/heads/ultimate'
-const run = promisify(execFile)
-const git = async (repo: string, ...args: string[]) =>
-  (await run('git', args, { cwd: repo, maxBuffer: 16 * 1024 * 1024 })).stdout.trim()
+/** Bundles take as long as they take and list every branch. */
+const git = (repo: string, ...args: string[]) =>
+  gitIn({ cwd: repo, timeout: 0, maxBuffer: 16 * 1024 * 1024 }, ...args)
 
 /** Copy a closed or open SQLite file consistently (VACUUM INTO via node:sqlite, read-only), compress (zlib zstd), encrypt and upload. */
 export async function uploadSnapshot(o: {
