@@ -923,7 +923,12 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       const graph = await host.harness().taskGraph(context)
       let wake = Promise.withResolvers<void>()
       let cancelled = false
-      const unsubscribe = graph.subscribe(() => wake.resolve())
+      // Counts task graph changes, so a run that came and went during a scan is noticed.
+      let changed = 0
+      const unsubscribe = graph.subscribe(() => {
+        changed++
+        wake.resolve()
+      })
       const watch = (state: SyncState) => {
         if (!ended(state)) return
         cancelled = true
@@ -946,12 +951,15 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
             waiting = { tasks: foreground(graph), runs: runningIn(graph) }
           else {
             // Scanned once the drained runs have written theirs, so the target hears which worktrees hold it.
+            const before = changed
             ;({ dirty, unchecked } = await scan())
             // The move may have ended while the scan ran.
             if (cancelled || ended(sync.state())) return stopped()
             if (force) break
             // A run that started during the scan holds the move again.
-            if (foreground(graph) > 0) continue
+            // A run that started during the scan holds the move again; one that also ended may have changed a
+            // worktree the scan had already passed, so the scan runs again.
+            if (foreground(graph) > 0 || changed !== before) continue
             if (!dirty.length && !unchecked) break
             waiting = { tasks: 0, dirty, held: true, ...(unchecked ? { unchecked } : {}) }
           }

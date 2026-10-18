@@ -563,6 +563,45 @@ it('holds again for a run that starts while it checks the worktrees', async () =
   expect(await moving).toBe(true)
 })
 
+it('scans again when a run came and went during the scan, holding for the worktree it dirtied', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const worktrees = await temp('ultimate-lease-rescan-')
+  const later = join(worktrees, 'later')
+  await git(root, 'worktree', 'add', '-q', '-b', 'ultimate/later', later)
+  // The first scan pauses on the second worktree's status, after the main checkout was found clean.
+  const paused = Promise.withResolvers<void>()
+  const resume = Promise.withResolvers<void>()
+  let statuses = 0
+  const desk = await machine('desk', project, root, {
+    git: async (args) => {
+      if (args[0] !== 'status' || ++statuses !== 2) return
+      paused.resolve()
+      await resume.promise
+    },
+  })
+  await writer(desk)
+  const laptop = await machine('laptop', project, root, { autoClaim: false })
+  await standbyOn(laptop)
+  const moving = laptop.lease.move()
+  await paused.promise
+  // A run starts, edits the already-scanned main checkout and ends before the scan returns.
+  const task = await sleep(desk.harness(), false)
+  await writeFile(join(root, 'notes.txt'), 'written by a short run\n')
+  await desk.harness().abortTask(task, context)
+  resume.resolve()
+  await until(() =>
+    desk.notices.includes('Move to laptop waits for 1 worktree with uncommitted changes'),
+  )
+  await until(() => project.replica.store.transition()?.left?.length === 1)
+  expect(project.replica.store.transition()!.left).toEqual([root])
+  expect(desk.serving()).toBe(true)
+  expect(desk.snapshots.uploadSnapshot).not.toHaveBeenCalled()
+  laptop.lease.cancel()
+  expect(await moving).toBe(false)
+})
+
 /** Runs due fake timers while a test polls with `until`. */
 const tick = () => vi.advanceTimersByTimeAsync(0)
 
