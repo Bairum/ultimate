@@ -29,7 +29,7 @@ import { cloudConfig, leaseSettings } from './config.ts'
 import { projectIdentity } from './identity.ts'
 import { startLease } from './lease.ts'
 import type { Lease, LeaseDeps } from './lease.ts'
-import type { CloudState } from './types.ts'
+import type { CloudState, SyncProgress } from './types.ts'
 import * as snapshot from './snapshot.ts'
 
 export const secrets = [
@@ -54,6 +54,10 @@ const NodeWebSocket = WebSocket as unknown as new (
 ) => SyncSocket
 const connect: Connect = (url, token) =>
   new NodeWebSocket(url, { headers: { Authorization: `Bearer ${token}` } })
+/** How often the user's secret names are compared with the ones the cloud last heard. */
+export const SECRETS_CHECK = 5000
+/** A connection open this long that drops (a deploy restarting the replica) reconnects at once, without backoff. */
+export const QUICK_RECONNECT_AFTER = 10_000
 
 /** This machine's place in the project: the last role the cloud gave it, kept across reconnects. */
 export interface SyncState {
@@ -89,8 +93,11 @@ export interface SyncHooks {
   role?(state: SyncState): void
   /** The writer hears that the standby `by` asked for the lease, for transition `id`. */
   releaseRequested?(by: string, id: string): void
-  /** The requester hears that the writer's release waits for `tasks` running tasks. */
-  releaseWaiting?(by: string, tasks: number): void
+  /**
+   * The requester hears that the writer's release waits for `tasks` running tasks, and which of its worktrees with
+   * uncommitted changes stay behind (`dirty`).
+   */
+  releaseWaiting?(by: string, tasks: number, dirty?: string[]): void
   /** The cloud UI asks this standby to take the lease as transition `id`. */
   moveTo?(id: string, force: boolean): void
   /** The cloud UI stops transition `id`. */
@@ -117,6 +124,7 @@ export function startSync(
   let dispose: (() => void) | undefined
   let idle: (() => Promise<void>) | undefined
   let retainedBytes: (() => number) | undefined
+  let progress: (() => SyncProgress) | undefined
   let state: SyncState = { key: identity.key, connected: false }
   const leasePath = join(host.home, 'cloud-lease.json')
   const readLease = async () => {
@@ -196,11 +204,25 @@ export function startSync(
     let unsubscribe: (() => void) | undefined
     let timer: ReturnType<typeof setTimeout> | undefined
     let metadataTimer: ReturnType<typeof setInterval> | undefined
+    let secretsTimer: ReturnType<typeof setInterval> | undefined
+    let openedAt: number | undefined
     let summariesDirty = true
     let role: SyncState['role']
     let ready = false
     let batch = 0
     const unacked = new Map<number, number>()
+    let lastAckAt: number | undefined
+    // Catch-up progress: conversations whose entries and documents were all queued, of those the host lists.
+    let catchingUp = false
+    let synced = 0
+    let total = 0
+    progress = () => ({
+      connected: state.connected,
+      catchingUp,
+      backlog: unacked.size + (catchingUp ? Math.max(0, total - synced) : 0),
+      ...(lastAckAt === undefined ? {} : { lastAckAt }),
+      ...(catchingUp || total ? { conversations: { synced, total } } : {}),
+    })
     const pending: Batch = { type: 'batch', batch: 0, conversations: [], entries: [], docs: [] }
     let pendingBytes = 0
     let bufferedBytes = 0
@@ -431,6 +453,9 @@ export function startSync(
     }
     const catchUp = async (cursor: Extract<CloudMessage, { type: 'cursor' }>) => {
       if (ready) throw new Error('Duplicate cloud cursor')
+      catchingUp = true
+      synced = 0
+      total = host.conversations().length
       unsubscribe = host.harness().subscribeCommits((publication) => {
         buffer(publication)
         if (ready && !closed && !changesQueued) {
@@ -496,6 +521,8 @@ export function startSync(
             }
             docCursor = page.next
           } while (docCursor)
+          synced++
+          total = Math.max(total, synced)
         }
         conversationCursor = conversations.next
       } while (conversationCursor)
@@ -516,6 +543,7 @@ export function startSync(
       await waitForCapacity()
       if (closed) return
       ready = true
+      catchingUp = false
       await drainChanges()
       queue()
     }
@@ -523,6 +551,8 @@ export function startSync(
       if (closed) return
       closed = true
       state = { ...state, connected: false }
+      catchingUp = false
+      clearInterval(secretsTimer)
       unsubscribe?.()
       pending.conversations.length = 0
       pending.entries.length = 0
@@ -537,12 +567,33 @@ export function startSync(
       clearTimeout(timer)
       clearInterval(metadataTimer)
       socket.close()
-      if (!stopped) schedule()
+      // A connection that had been up a while dropped, as a deploy restarting the replica does: try again at once.
+      // Backoff applies from the next failure on, so a socket that never opens, or keeps closing soon, waits.
+      if (!stopped)
+        schedule(
+          openedAt !== undefined && Date.now() - openedAt >= QUICK_RECONNECT_AFTER ? 0 : undefined,
+        )
     }
     dispose = close
-    socket.addEventListener('open', () =>
+    // The user's secret names travel in hello, then whenever they change, so missing secrets stay current.
+    let lastSecrets: string | undefined
+    socket.addEventListener('open', () => {
+      openedAt = Date.now()
+      secretsTimer = setInterval(
+        () =>
+          enqueue(async () => {
+            if (!role || lastSecrets === undefined) return
+            const current = await secretNames()
+            if (JSON.stringify(current) === lastSecrets) return
+            lastSecrets = JSON.stringify(current)
+            send({ type: 'secrets', ...current })
+          }),
+        SECRETS_CHECK,
+      )
       enqueue(async () => {
         hooks.hello?.()
+        const names = await secretNames()
+        lastSecrets = JSON.stringify(names)
         send({
           type: 'hello',
           key: identity.key,
@@ -554,11 +605,11 @@ export function startSync(
           port: Number(new URL(host.system().process.url).port),
           epoch: (await claimEpoch()) ?? (await readLease()),
           history: await hasHistory(),
-          ...(await secretNames()),
+          ...names,
           ...(hooks.transition?.() ? { transition: hooks.transition() } : {}),
         })
-      }),
-    )
+      })
+    })
     socket.addEventListener('message', (event) => {
       try {
         const message = JSON.parse(String(event.data)) as CloudMessage
@@ -591,13 +642,14 @@ export function startSync(
           })
         else if (message.type === 'ack') {
           unacked.delete(message.batch)
+          lastAckAt = Date.now()
           flush()
           capacity?.()
           capacity = undefined
         } else if (message.type === 'release-requested')
           hooks.releaseRequested?.(message.by, message.id)
         else if (message.type === 'release-waiting')
-          hooks.releaseWaiting?.(message.by, message.tasks)
+          hooks.releaseWaiting?.(message.by, message.tasks, message.dirty)
         else if (message.type === 'move-to') hooks.moveTo?.(message.id, message.force === true)
         else if (message.type === 'cancel') hooks.cancel?.(message.id)
         // A claim on standby gets `cursor` and `outbox` too; the reopened, serving connection catches up.
@@ -640,9 +692,10 @@ export function startSync(
     })
     socket.addEventListener('error', close)
   }
-  const schedule = () => {
-    reconnect = setTimeout(open, retry)
-    retry = Math.min(30_000, retry * 2)
+  /** Reconnect after `delay`, or after the backoff, which doubles each time it is used. */
+  const schedule = (delay?: number) => {
+    reconnect = setTimeout(open, delay ?? retry)
+    if (delay === undefined) retry = Math.min(30_000, retry * 2)
   }
   open()
   return Object.assign(
@@ -657,6 +710,9 @@ export function startSync(
       },
       retainedBytes: () => retainedBytes?.() ?? 0,
       state: () => state,
+      /** The connection's catch-up and acknowledgement window, for operators. */
+      progress: (): SyncProgress =>
+        progress?.() ?? { connected: false, catchingUp: false, backlog: 0 },
       /** Send a lease message on the admitted socket; false while none is. */
       send: (message: MachineMessage) => socketSend?.(message) ?? false,
     },
@@ -684,10 +740,17 @@ export function syncState(): SyncState | undefined {
 }
 
 export const actions = {
-  /** `{status, machine, role, free, writer, missing, blocked, progress, transition, lastError}` for the cloud UI. */
+  /**
+   * `{status, machine, role, free, writer, missing, blocked, progress, transition, sync, lastError}` for the cloud UI.
+   */
   state: async (): Promise<CloudState> =>
     active
-      ? { ...(await active.state()), status: 'on', machine }
+      ? {
+          ...(await active.state()),
+          status: 'on',
+          machine,
+          ...(active.sync() ? { sync: active.sync()!.progress() } : {}),
+        }
       : { free: false, missing: [], status: localOnly ? 'local' : 'off' },
   /**
    * `{force?}`: prepare this machine and take the project, from a free lease or from the online writer. Resolves the

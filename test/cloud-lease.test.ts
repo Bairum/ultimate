@@ -8,7 +8,11 @@ import { ProjectDirectory } from '../cloud/worker.ts'
 import worker from '../cloud/worker.ts'
 import { DirectoryStore } from '../cloud/directory.ts'
 import type { Transition } from '../cloud/protocol.ts'
-import cloudExtension, { actions, joinOnStandby } from '../extensions/cloud/server.ts'
+import cloudExtension, {
+  actions,
+  joinOnStandby,
+  SECRETS_CHECK,
+} from '../extensions/cloud/server.ts'
 import type { SyncSocket } from '../extensions/cloud/server.ts'
 import * as snapshot from '../extensions/cloud/snapshot.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
@@ -268,6 +272,96 @@ it('refuses a plain move when the writer has more secrets than its hello could n
   expect(await laptop.lease.move({ force: true })).toBe(true)
 })
 
+it('keeps secret names current after hello: a standby and the writer add secrets, and missing updates on both ends', async () => {
+  // Only the secrets check's interval is faked; sockets, roles and git run as usual.
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+  try {
+    const project = cloud()
+    const { root } = await checkout()
+    const desk = await machine('desk', project, root)
+    await writer(desk)
+    const laptop = await machine('laptop', project, root, { autoClaim: false })
+    await standbyOn(laptop)
+    // The writer adds a secret after its hello: the standby hears it lacks it.
+    await writeSecret(desk.home, 'GITHUB_TOKEN', 'x')
+    await vi.advanceTimersByTimeAsync(SECRETS_CHECK)
+    await until(async () => (await laptop.lease.state()).missing.length > 0)
+    const cloudMissing = async () =>
+      (
+        (await (await project.api('/api/cloud')).json()) as {
+          machines: { machine: string; missingSecrets: string[] }[]
+        }
+      ).machines.find((item) => item.machine === 'laptop')!.missingSecrets
+    expect((await laptop.lease.state()).missing).toEqual(['GITHUB_TOKEN'])
+    expect(await cloudMissing()).toEqual(['GITHUB_TOKEN'])
+    const sockets = project.replica.admitted().length
+
+    // The standby adds it: the cloud stops listing it, without either machine reconnecting.
+    await writeSecret(laptop.home, 'GITHUB_TOKEN', 'x')
+    await vi.advanceTimersByTimeAsync(SECRETS_CHECK)
+    await until(async () => (await cloudMissing()).length === 0)
+    expect((await laptop.lease.state()).missing).toEqual([])
+
+    // The writer adds one: the standby hears it lacks it.
+    await writeSecret(desk.home, 'OPENAI_API_KEY', 'x')
+    await vi.advanceTimersByTimeAsync(SECRETS_CHECK)
+    await until(async () => (await laptop.lease.state()).missing.length > 0)
+    expect((await laptop.lease.state()).missing).toEqual(['OPENAI_API_KEY'])
+    expect(await cloudMissing()).toEqual(['OPENAI_API_KEY'])
+    expect(project.replica.admitted()).toHaveLength(sockets)
+    expect(desk.notices).toEqual([])
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it('names the fast-forward and its commit count in the fetch step', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const repo = await checkout()
+  const desk = await machine('desk', project, repo.root)
+  await writer(desk)
+  await idleRelease(desk)
+  const laptop = await machine('laptop', project, repo.root, { autoClaim: false })
+  await standbyOn(laptop)
+  const before = await git(repo.root, 'rev-parse', 'HEAD')
+  await repo.push({ 'a.txt': 'a\n' })
+  const tip = await repo.push({ 'b.txt': 'b\n' })
+  expect(await laptop.lease.move()).toBe(true)
+  const fetch = project.replica.store.transition()!.steps.find((step) => step.name === 'fetch')!
+  expect(fetch).toEqual({
+    name: 'fetch',
+    state: 'done',
+    commits: 2,
+    detail: `main fast-forwarded 2 commits, ${before.slice(0, 7)}..${tip.slice(0, 7)}`,
+  })
+})
+
+it('tells the target which worktrees with uncommitted changes stay behind, even with no task running', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const desk = await machine('desk', project, root)
+  await writer(desk)
+  // The main checkout has an untracked file, one worktree an edit, another none: two stay behind.
+  const worktrees = await temp('ultimate-lease-worktrees-')
+  const [edited, clean] = [join(worktrees, 'edited'), join(worktrees, 'clean')]
+  await git(root, 'worktree', 'add', '-q', '-b', 'ultimate/edited', edited)
+  await git(root, 'worktree', 'add', '-q', '-b', 'ultimate/clean', clean)
+  await writeFile(join(edited, 'README.md'), 'edited\n')
+  await writeFile(join(root, 'notes.txt'), 'scratch\n')
+  const laptop = await machine('laptop', project, root, { autoClaim: false })
+  await standbyOn(laptop)
+  // Both machines share this checkout here; its untracked file does not stop the laptop's fast-forward.
+  expect(await laptop.lease.move()).toBe(true)
+  const transition = project.replica.store.transition()!
+  expect(transition.left).toEqual([root, edited])
+  expect(transition.steps.find((step) => step.name === 'handover')).toMatchObject({
+    state: 'done',
+    detail: '2 worktrees with uncommitted changes stay on desk',
+  })
+})
+
 it('bounds a successful step detail too, so a long branch name never stalls the transition', async () => {
   snapshotFetch()
   const project = cloud()
@@ -286,7 +380,7 @@ it('bounds a successful step detail too, so a long branch name never stalls the 
   const fetch = project.replica.store.transition()!.steps.find((step) => step.name === 'fetch')!
   expect(fetch.state).toBe('done')
   expect(fetch.detail!.length).toBeLessThanOrEqual(500)
-  expect(fetch.detail!.endsWith('is up to date')).toBe(true)
+  expect(fetch.detail!.endsWith('already up to date')).toBe(true)
 })
 
 it('reports an oversized install failure by its last 500 characters, which the cloud keeps', async () => {

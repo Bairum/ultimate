@@ -62,7 +62,11 @@ const running = (transition?: Transition | null) =>
 const local = poll(
   (signal) => api.action<CloudState>('cloud', 'state', null, { signal }),
   (state) =>
-    state?.status === 'off' ? 30_000 : running(state?.transition) || state?.progress ? 1000 : 4000,
+    state?.status === 'off'
+      ? 30_000
+      : running(state?.transition) || state?.progress || state?.sync?.catchingUp
+        ? 1000
+        : 4000,
 )
 const remote = poll(
   async (signal) => {
@@ -326,6 +330,15 @@ function LocalPicker({ state }: { state: CloudState }) {
           )}
         </MachineRow>
       </ul>
+      {state.sync?.catchingUp && (
+        <p className="flex items-center gap-1.5 border-t border-border/60 px-3 py-1.5 text-[11px] text-muted-foreground">
+          <LoaderCircleIcon className="size-3 shrink-0 animate-spin" />
+          Catching up
+          {state.sync.conversations
+            ? ` ${state.sync.conversations.synced}/${state.sync.conversations.total} conversations`
+            : '…'}
+        </p>
+      )}
       {state.role === 'standby' && state.blocked && (
         <p className="border-t border-border/60 px-3 py-1.5 font-sans text-[12px] text-muted-foreground">
           {state.blocked}

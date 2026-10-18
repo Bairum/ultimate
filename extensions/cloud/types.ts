@@ -1,5 +1,19 @@
 import type { Transition, Writer } from '../../cloud/protocol.ts'
 
+/** The sync connection as operators watch it: catch-up and the acknowledgement window. */
+export interface SyncProgress {
+  /** The sync socket is open and admitted. */
+  connected: boolean
+  /** The writer is sending the replica what it lacks after connecting. */
+  catchingUp: boolean
+  /** Unacknowledged batches plus conversations catch-up has not reached yet. */
+  backlog: number
+  /** When the replica last acknowledged a batch. */
+  lastAckAt?: number
+  /** Catch-up's conversations: fully queued, of all the host lists. */
+  conversations?: { synced: number; total: number }
+}
+
 /** `cloud.state`: whether sync runs, this machine's name and its place in the lease, for the cloud UI. */
 export interface CloudState {
   /** `off`: not configured; `local`: configured, but the project has no GitHub origin. */
@@ -16,5 +30,7 @@ export interface CloudState {
   progress?: { kind: 'upload'; done: number; total: number }
   /** The move this machine runs, or else the latest one the cloud reported. */
   transition?: Transition
+  /** The sync connection's catch-up and backlog. */
+  sync?: SyncProgress
   lastError?: string
 }

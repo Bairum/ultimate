@@ -1,6 +1,7 @@
+import { timingSafeEqual } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { SharedReplica } from '../cloud/worker.ts'
+import cloudWorker, { SharedReplica } from '../cloud/worker.ts'
 import type { ConversationRecord, EntryRecord } from '@earendil-works/pi-durable'
 import { ReplicaStore, proxyRequest } from '../cloud/replica.ts'
 import type { Sql } from '../cloud/replica.ts'
@@ -715,6 +716,193 @@ describe('project replica sockets', () => {
     expect((await api('/api/cloud/cancel', {})).status).toBe(202)
     expect(laptop.sent().at(-1)).toEqual({ type: 'cancel', id })
     expect(machine).not.toHaveBeenCalled()
+  })
+
+  it('answers agents with the sync token on /sync/directory, /sync/cloud, /sync/move and /sync/cancel', async () => {
+    const { instance, connect } = shared()
+    const writer = connect()
+    writer.receive(hello({ secrets: ['A', 'B'] }))
+    const laptop = connect()
+    laptop.receive(hello({ machine: 'laptop', root: '/laptop', secrets: ['A'] }))
+    const replicas: string[] = []
+    const listed = vi.fn<() => Response>(() => Response.json([{ key: KEY }]))
+    const env = {
+      SYNC_TOKEN: 'synthetic-test-value',
+      REPLICA: {
+        idFromName: (name: string) => name,
+        get: (name: string) => {
+          replicas.push(name)
+          return instance
+        },
+      },
+      DIRECTORY: {
+        idFromName: () => 'directory',
+        get: () => ({
+          fetch: async (url: string) => {
+            const { pathname, searchParams } = new URL(url)
+            if (pathname === '/list') return listed()
+            // The renamed key was relinked to this project's replica.
+            return searchParams.get('key') === 'github.com/hazat/renamed'
+              ? Response.json({ target: KEY })
+              : new Response(null, { status: 404 })
+          },
+        }),
+      },
+    } as unknown as Parameters<typeof cloudWorker.fetch>[1]
+    const call = (path: string, init: RequestInit = {}, token = 'synthetic-test-value') =>
+      cloudWorker.fetch(
+        new Request(`https://cloud.example${path}`, {
+          ...init,
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        }),
+        env,
+      )
+    Object.defineProperty(crypto.subtle, 'timingSafeEqual', {
+      configurable: true,
+      value: timingSafeEqual,
+    })
+    try {
+      // Only the bearer token admits; nothing reaches a replica or the Directory without it.
+      for (const path of ['/sync/directory', `/sync/cloud?project=${KEY}`])
+        for (const token of ['', 'wrong']) expect((await call(path, {}, token)).status).toBe(401)
+      for (const path of ['/sync/move', '/sync/cancel'])
+        expect(
+          (await call(`${path}?project=${KEY}`, { method: 'POST', body: '{}' }, '')).status,
+        ).toBe(401)
+      expect(replicas).toEqual([])
+      expect(listed).not.toHaveBeenCalled()
+
+      expect(await (await call('/sync/directory')).json()).toEqual([{ key: KEY }])
+      const own = await instance.fetch(new Request('https://cloud.example/api/cloud'))
+      const expected = await own.json()
+      expect(await (await call(`/sync/cloud?project=${KEY}`)).json()).toEqual(expected)
+      // A relinked key reaches the replica it syncs to, as /sync/v2 does.
+      expect(await (await call('/sync/cloud?project=github.com/hazat/renamed')).json()).toEqual(
+        expected,
+      )
+      expect(replicas).toEqual([KEY, KEY])
+      expect((await call('/sync/cloud')).status).toBe(400)
+      expect((await call(`/sync/cloud?project=${KEY}`, { method: 'POST' })).status).toBe(405)
+
+      expect(
+        (await call(`/sync/cancel?project=${KEY}`, { method: 'POST', body: '{}' })).status,
+      ).toBe(409)
+      const moved = await call(`/sync/move?project=${KEY}`, {
+        method: 'POST',
+        body: JSON.stringify({ machine: 'laptop', force: true }),
+      })
+      expect(moved.status).toBe(202)
+      const { id } = (await moved.json()) as { id: string }
+      expect(laptop.sent().at(-1)).toEqual({ type: 'move-to', id, force: true })
+      const refused = await call(`/sync/move?project=${KEY}`, {
+        method: 'POST',
+        body: JSON.stringify({ machine: 'test' }),
+      })
+      expect({ status: refused.status, body: await refused.json() }).toEqual({
+        status: 409,
+        body: { error: 'runs there already' },
+      })
+      laptop.receive({ type: 'transition', value: { ...running(id), step: 'fetch' } })
+      const cancelled = await call(`/sync/cancel?project=${KEY}`, { method: 'POST' })
+      expect({ status: cancelled.status, body: await cancelled.json() }).toEqual({
+        status: 202,
+        body: { id },
+      })
+      expect(laptop.sent().at(-1)).toEqual({ type: 'cancel', id })
+      // Any other /sync path still answers 404.
+      expect((await call('/sync/other')).status).toBe(404)
+    } finally {
+      Reflect.deleteProperty(crypto.subtle, 'timingSafeEqual')
+    }
+  })
+
+  it('takes secret names after hello from writer and standbys, refreshing missing secrets without a reconnect', async () => {
+    const { instance, connect } = shared()
+    const writer = connect()
+    writer.receive(hello({ secrets: ['A'] }))
+    const laptop = connect()
+    laptop.receive(hello({ machine: 'laptop', root: '/laptop' }))
+    const missing = async () =>
+      (
+        (await (await instance.fetch(new Request('https://cloud.example/api/cloud'))).json()) as {
+          machines: { machine: string; missingSecrets: string[] }[]
+        }
+      ).machines.find((machine) => machine.machine === 'laptop')!.missingSecrets
+    expect(await missing()).toEqual(['A'])
+    // The standby adds the secret: the cloud stops listing it as missing, and every machine hears its role again.
+    const writes = writer.sent().length
+    laptop.receive({ type: 'secrets', secrets: ['A'], secretsComplete: true })
+    expect(await missing()).toEqual([])
+    expect(writer.sent()).toHaveLength(writes + 1)
+    // The writer adds one: the lease names it, and the standby's role says it lacks it.
+    writer.receive({ type: 'secrets', secrets: ['A', 'B'], secretsComplete: true })
+    expect(instance.store.lease()?.secrets).toEqual(['A', 'B'])
+    expect(laptop.sent().at(-1)).toMatchObject({
+      type: 'role',
+      role: 'standby',
+      writer: { secrets: ['A', 'B'] },
+    })
+    expect(await missing()).toEqual(['B'])
+    // The socket's checkout keeps them too, so a claim after a release takes the lease with current names.
+    expect(laptop.socket.deserializeAttachment()).toMatchObject({
+      checkout: { secrets: ['A'], secretsComplete: true },
+    })
+    // A standby's names never change the lease; malformed lists and unadmitted sockets change nothing.
+    laptop.receive({ type: 'secrets', secrets: ['C'], secretsComplete: false })
+    expect(instance.store.lease()).toMatchObject({ secrets: ['A', 'B'], secretsComplete: true })
+    const before = [...instance.store.sql.exec('SELECT * FROM metadata ORDER BY 1')]
+    for (const secrets of [['lower'], Array.from({ length: 65 }, (_, index) => `S${index}`)])
+      writer.receive({ type: 'secrets', secrets, secretsComplete: true })
+    connect().receive({ type: 'secrets', secrets: ['X'], secretsComplete: true })
+    expect([...instance.store.sql.exec('SELECT * FROM metadata ORDER BY 1')]).toEqual(before)
+    expect(writer.socket.close).not.toHaveBeenCalled()
+    expect(laptop.socket.close).not.toHaveBeenCalled()
+  })
+
+  it('names the worktrees a releasing writer leaves uncommitted in the handover and keeps them on the transition', () => {
+    const { instance, connect } = shared()
+    const writer = connect()
+    writer.receive(hello())
+    const laptop = connect()
+    laptop.receive(hello({ machine: 'laptop' }))
+    laptop.receive({
+      type: 'transition',
+      value: {
+        ...running('move-1'),
+        step: 'handover',
+        steps: [{ name: 'handover', state: 'running' }],
+      },
+    })
+    const dirty = ['/test', '/tmp/worktrees/feature']
+    writer.receive({ type: 'release-waiting', by: 'laptop', tasks: 0, dirty })
+    expect(laptop.sent().at(-2)).toEqual({ type: 'release-waiting', by: 'laptop', tasks: 0, dirty })
+    expect(instance.store.transition()).toMatchObject({
+      left: dirty,
+      steps: [
+        {
+          name: 'handover',
+          detail: '2 worktrees with uncommitted changes stay on test',
+        },
+      ],
+    })
+    // Later drain counts keep the list.
+    writer.receive({ type: 'release-waiting', by: 'laptop', tasks: 1 })
+    expect(instance.store.transition()?.steps[0].detail).toBe(
+      'finishing 1 run · 2 worktrees with uncommitted changes stay on test',
+    )
+    // Unbounded lists are refused, by the writer and in a reported transition alike.
+    for (const oversized of [
+      Array.from({ length: 21 }, (_, index) => `/w/${index}`),
+      [`/${'x'.repeat(500)}`],
+    ]) {
+      writer.receive({ type: 'release-waiting', by: 'laptop', tasks: 0, dirty: oversized })
+      expect(instance.store.transition()?.left).toEqual(dirty)
+      laptop.receive({
+        type: 'transition',
+        value: { ...running('move-1'), left: oversized },
+      })
+      expect(instance.store.transition()?.left).toEqual(dirty)
+    }
   })
 
   it('makes a second checkout on the writer machine, at another root, a standby that replaces nothing', () => {
