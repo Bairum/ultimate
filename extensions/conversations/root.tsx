@@ -23,7 +23,7 @@ import { phaseText, usePhase } from '../phase/ui.tsx'
 import { CommitCount, useWorkspaceIndex } from '../workspaces/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
 import { FeatureTag, useOverview } from './feature.tsx'
-import { ago } from './lander.tsx'
+import { ago } from './ago.ts'
 import { AgentMark } from './marks.tsx'
 
 type Landing = Extract<RootEvent, { type: 'landed' }>

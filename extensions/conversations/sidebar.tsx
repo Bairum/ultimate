@@ -29,7 +29,8 @@ import { useRoots } from '../lineage/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { ConcludeAction, ResumeAction } from './refs.ts'
 import type { WorkspacePending } from '../workspaces/types.ts'
-import { ago, LanderState } from './lander.tsx'
+import { ago } from './ago.ts'
+import { LanderState } from './lander.tsx'
 import { StandingPhase, talkToUltimate, usePrimaryAgent, useWaitingOnUser } from './ultimate.tsx'
 
 /** The shown conversation, also while its snapshot is still on the way. */

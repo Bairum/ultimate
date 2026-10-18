@@ -4,5 +4,5 @@
  */
 export { stateLabel, useWorkspaceConversations, useWorkspaceIndex, useWorkspaces } from './data.tsx'
 export type { WorkspaceConversation } from './data.tsx'
-export { CommitCount, Open } from './landing.tsx'
+export { CommitCount, Open, useGithubRepo } from './landing.tsx'
 export { InfoAction, IsolationAction, PendingAction, WorkspacesDoc } from './refs.ts'

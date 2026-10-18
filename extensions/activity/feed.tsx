@@ -8,12 +8,11 @@ import {
 import type { ReactNode } from 'react'
 import { cn, events, useUltimate } from '@/sdk'
 import type { EventRecord } from '@/sdk'
-import { ConversationRef, FeatureTag } from '../conversations/feature.tsx'
-import { ago } from '../conversations/lander.tsx'
-import { CommitCount, useGithubRepo } from '../workspaces/landing.tsx'
+import { ago, ConversationRef, FeatureTag } from '../conversations/ui.tsx'
+import { CommitCount, useGithubRepo } from '../workspaces/ui.tsx'
 
-// The parts of each event's data a row shows. The tokens live in workspaces/api.ts, lineage/api.ts and
-// shared/events.ts; web code cannot import those api.ts files yet, so their data shapes are restated here.
+// The parts of each event's data a row shows. The landing and branch tokens live in workspaces/api.ts and
+// lineage/api.ts, which are server contracts browser code cannot import, so their data shapes are restated here.
 type Landed = {
   conversationId: number
   at: number
