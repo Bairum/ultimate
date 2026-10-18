@@ -4,14 +4,15 @@ Durable messages between conversations, standing agents and the user. Built in a
 
 ## Messaging
 
-`message { to, text, reply?: true, steer?: false }` returns the message id immediately. Address a conversation
+`message { to, text, reply?: true, steer? }` returns the message id immediately. Address a conversation
 as `#123` or `123`, a standing agent as `@name`, or the project's existing lander as `@lander`.
 Only the `ultimate` resident's standing conversation may message `user`; other senders must send @ultimate a one-way update to relay.
 Self-messages, unknown conversations and tallies are refused; use `note` for a tally. Unknown standing names list
 the valid ones. Standing agents are resolved and configured through the `subagents` service at delivery admission.
 
 An idle recipient wakes. A busy one receives a follow-up after its current run, or steering during that run with
-`steer: true`. The typed `board.message` input identifies its sender and explains where its answer goes. Its `delivery`
+`steer: true`. `steer` defaults to `true` for @ultimate's messages, to any recipient including `@lander` and other
+standing agents, and to `false` for everyone else; an explicit value always wins. The typed `board.message` input identifies its sender and explains where its answer goes. Its `delivery`
 field records `steer` or `followUp`.
 The answer returns as `board.reply`, steering the sender. An unanswered input produces a failure reply instead.
 Answer directly rather than messaging the sender: the tool refuses reply-enabled messages back to a sender whose reply-enabled message is still unanswered, while `reply: false` updates and other recipients remain allowed.

@@ -348,8 +348,10 @@ async function send(
     const sent = await host.harness().snapshot(Sent, taskId, ctx)
     if (callId !== undefined && sent?.ids[callId] !== undefined) return sent.ids[callId]
   }
+  const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
+  // @ultimate's messages to a busy conversation almost always steer it: new scope, a decision, a stop.
+  const steer = input.steer ?? (from !== 'user' && from === standing?.ultimate)
   if (input.to === 'user') {
-    const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
     if (from !== standing?.ultimate)
       throw new Error(
         'Only @ultimate messages the user; send this to @ultimate (reply: false) and it relays it.',
@@ -415,7 +417,7 @@ async function send(
         delivery(host),
         {
           message,
-          steer: input.steer ?? false,
+          steer,
           note: parent === to && input.reply === false,
           fromLabel,
           toLabel,
@@ -579,7 +581,7 @@ export default function board(host: ExtensionHost) {
       defineTool({
         name: 'message',
         description:
-          'Send a message to #id or @name (only @ultimate may send to user). Returns immediately; the answer comes back as a reply.',
+          'Send a message to #id or @name (only @ultimate may send to user). Returns immediately; the answer comes back as a reply. A busy recipient gets it after its current run, or during it with steer: true (the default for @ultimate).',
         parameters: Type.Object({
           to: Type.String(),
           text: Type.String({ minLength: 1 }),

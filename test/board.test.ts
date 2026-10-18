@@ -689,12 +689,23 @@ it('bounds the log and declares only post as a user-only action', async () => {
   expect(userActions).toEqual(['post'])
   expect(actions).not.toHaveProperty('read')
 })
-it('queues a busy recipient as follow-up, or steers its current run', async () => {
-  for (const steer of [false, true]) {
+it('queues a busy recipient as follow-up, or steers its current run; @ultimate steers by default', async () => {
+  // The fixture's sender, #1, is @ultimate unless the case hands that role to another conversation.
+  const cases = [
+    { extra: { steer: false }, ultimate: true, steer: false },
+    { extra: { steer: true }, ultimate: false, steer: true },
+    { extra: {}, ultimate: true, steer: true },
+    { extra: {}, ultimate: false, steer: false },
+  ]
+  for (const { extra, ultimate, steer } of cases) {
     const f = await fixture()
+    if (!ultimate)
+      await f.opened.harness.commit(async (tx) => {
+        ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = 999 as ConversationId
+      }, context)
     await f.recipient.submit({ type: 'input', content: 'HOLD' }, context)
     await until(f.holding)
-    await f.send(String(f.recipient.id), 'Busy message', { steer })
+    await f.send(String(f.recipient.id), 'Busy message', extra)
     const page = await f.host.scanSubmissions(
       { conversationId: f.recipient.id },
       100,
