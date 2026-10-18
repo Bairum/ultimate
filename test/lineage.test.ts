@@ -194,6 +194,19 @@ it.concurrent('branches from a tally: the root gets the prompt node, the branch 
     ),
   ).toBe(true)
   await settled(server, first)
+  // Built-ins' calls through API handles are traced: lineage reads the branch's workspace through want(WorkspacesApi).
+  await until(() =>
+    server.extensions.trace
+      .query()
+      .some(
+        (row) =>
+          row.kind === 'service' &&
+          row.caller === 'lineage' &&
+          row.callee === 'workspaces' &&
+          row.name === 'workspaces.get' &&
+          row.ok,
+      ),
+  )
   expect((await server.harness.snapshot(Summaries, first, context))?.generatedTitle).toBe(
     'Add notes between conversations',
   )
