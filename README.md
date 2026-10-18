@@ -29,10 +29,10 @@ place.
 - **Everything on, switch off what you don't need.** A fresh Ultimate is Pi's coding agent with every built-in:
   subagents, plans, documents, automations, remote access and the rest ship in the clone and are on by default; turn any
   of them off per machine or per project (see "Building blocks" below).
-- **A forest of conversation trees.** Each root keeps a non-agent tally: prompts, latest conversation abstracts,
+- **A forest of conversation trees.** Each root keeps a read-only context: prompts, latest conversation abstracts,
   and landings with divergence and links back to their source. Talk to @ultimate in its conversation: it starts coordinator
-  branches that inherit a root's tally before their prompt. Resuming a branch catches it up on what its tree learned.
-  Roots are read-only; @ultimate keeps their tallies accurate and compacts them without deleting history.
+  branches that inherit a root's context before their prompt. Resuming a branch catches it up on what its tree learned.
+  @ultimate keeps each root's context accurate and compacts it without deleting history.
 - **You can build whole applications in it, too.** A surface is a full-screen app next to the docked agent.
   The point is an agent shaped for the project you work on.
 - **Lean and malleable.** Like Pi and Pi Durable, the core stays as small as possible and everything else is
@@ -58,7 +58,7 @@ cd ~/Projects/app && ultimate
 - No `pi` login yet? Open the command palette (`Ctrl+K`, `⌘K` on macOS) → "Log in to a provider". Logins are shared
   with `pi`, and so is logging out.
 - **First start** on a machine shows Get ready: log in to a provider and choose a model. Continue opens @ultimate,
-  which offers inline setup cards, reads the project and writes its first tally.
+  which offers inline setup cards, reads the project and writes the root's first context.
 - **A folder with its own `.ultimate/`** asks once: its setup or your global one. Its extensions, agents, and skills
   stay off until you choose it; @ultimate asks with an inline setup card during onboarding.
 - **The Extensions panel** (right panel, or `Ctrl+K` → "Extensions…") lists every extension and turns it on or off
@@ -122,7 +122,7 @@ and restarts land on the same view. The `surfaces` extension tells the agent whi
 ## What to try
 
 - Start a new project with **Set up with @ultimate** on Start here (or Continue on the first-run Get ready page).
-  Choose setup on the inline cards, steer its reading, then start your first coordinator branch from the project's tally.
+  Choose setup on the inline cards, steer its reading, then start your first coordinator branch from the project's context.
 - Ask it anything about this repository; watch tool calls, diffs, and thinking stream in.
 - "Build a surface for …" — a whole app with its UI, server actions, and the agent docked beside it; switch to it while
   it is being built.

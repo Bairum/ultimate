@@ -1,7 +1,6 @@
-import { defineWebExtension, getConversation, getState } from '@/sdk'
-import { getRoots } from '../lineage/roots.tsx'
+import { defineWebExtension } from '@/sdk'
 import { Conversations, Seen } from './sidebar.tsx'
-import { openReset, ResetDialog, SummaryModelDialog, summaryModelDialog } from './dialogs.tsx'
+import { SummaryModelDialog, summaryModelDialog } from './dialogs.tsx'
 import { SummaryAction } from './summary-entry.tsx'
 import { UltimateButton } from './ultimate.tsx'
 
@@ -17,7 +16,7 @@ export default defineWebExtension({
     sidebar: Conversations,
     // Last in the title bar's left side, beside the surfaces.
     'titlebar.left': [{ component: UltimateButton, order: 100 }],
-    overlay: [ResetDialog, SummaryModelDialog, Seen],
+    overlay: [SummaryModelDialog, Seen],
   },
   commands: [
     {
@@ -25,26 +24,6 @@ export default defineWebExtension({
       title: 'Summary model…',
       group: 'Conversations',
       run: (actions) => actions.open(summaryModelDialog),
-    },
-    {
-      id: 'conversations.reset',
-      title: 'Clear the context',
-      group: 'Conversations',
-      when: () => {
-        const { id, busy, entries } = getConversation()
-        const summary = getState().conversations.find((conversation) => conversation.id === id)
-        return (
-          id !== undefined &&
-          !getRoots()?.includes(id) &&
-          !busy &&
-          entries.length > 0 &&
-          summary?.parentConversationId === undefined
-        )
-      },
-      run: (context) => {
-        const { id } = getConversation()
-        if (id !== undefined) openReset(context, id)
-      },
     },
   ],
 })

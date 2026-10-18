@@ -124,6 +124,58 @@ it('unlists a root that never became a tally, never a tally or the last root', a
   expect((await unlist(last)).error).toBe(`#${last} is the last root`)
 })
 
+it("lists a root's newest landings, notes, branches and compactions, and compacts only a tally", async () => {
+  const { server } = await fixture()
+  const call = async (name: string, args: unknown) =>
+    (await post(server, `/api/extensions/lineage/actions/${name}`, { args })).data
+  const plain = (
+    await server.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)
+  ).id
+  expect((await call('recent', { id: plain })).error).toBe(`#${plain} is not a listed root`)
+  expect((await call('compact', { id: 1 })).error).toBe('#1 is not a tally')
+
+  await seedTally(server.harness)
+  // Enough older context that a compaction has something to summarize besides the recent entries it keeps.
+  await server.harness.commit(async (tx) => {
+    for (let n = 0; n < 12; n++)
+      await tx.appendEntry(1 as ConversationId, {
+        kind: 'test.history',
+        model: [{ role: 'user', content: 'Older work. '.repeat(1500), timestamp: n }],
+      })
+  }, context)
+  const branch = await branchFrom(server, { from: 1, prompt: 'Polish the sidebar' })
+  await settled(server, branch)
+  await leaveNote({ harness: () => server.harness }, 1, 'Keep it quiet.', { from: branch })
+  await leaveNote({ harness: () => server.harness }, 'root', 'Landed abc1234', {
+    from: branch,
+    source: 'lander',
+    data: {
+      sha: 'abc1234def',
+      commits: [
+        { sha: 'abc1234', subject: 'Merge def5678 from #2 into main' },
+        { sha: 'def5678', subject: 'feat(lineage): give the root its own row' },
+      ],
+    },
+  })
+  expect((await call('recent', { id: 1 })).result).toMatchObject([
+    {
+      type: 'landed',
+      sha: 'abc1234',
+      subject: 'feat(lineage): give the root its own row',
+      from: branch,
+    },
+    { type: 'note', from: branch, text: 'Keep it quiet.' },
+    { type: 'branched', branch, intent: 'Polish the sidebar' },
+  ])
+  expect((await call('recent', { id: 1, limit: 1 })).result).toHaveLength(1)
+
+  const { taskId } = (await call('compact', { id: 1 })).result
+  expect(typeof taskId).toBe('number')
+  await until(
+    async () => (await call('recent', { id: 1, limit: 1 })).result[0]?.type === 'compacted',
+  )
+})
+
 const branchFrom = async (server: Server, args: Record<string, unknown>) => {
   // An empty first conversation is a root that read nothing yet; one with history stays an ordinary root.
   if (args.from === 1) await seedTally(server.harness)

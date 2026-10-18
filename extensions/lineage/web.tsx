@@ -352,12 +352,12 @@ function Genesis({ entry }: { entry: EntryRecord }) {
       <CollapsibleTrigger className="flex w-full cursor-pointer flex-col gap-1 px-3.5 py-2.5 text-left">
         <span className="flex items-center gap-1.5 font-mono text-[11px] text-brand">
           <ChevronRightIcon className="size-3.5 transition-transform group-data-[state=open]/genesis:rotate-90" />
-          Tally starts here{from ? ` · distilled from #${from[1]}/${from[2]}` : ''}
+          Context starts here{from ? ` · distilled from #${from[1]}/${from[2]}` : ''}
         </span>
         <span className="text-xs text-muted-foreground">
           {source !== undefined && source !== entry.conversationId
-            ? 'The project reading is distilled into the start of this tally.'
-            : 'The conversation before this point is distilled into the start of the tally. Earlier messages remain available above.'}
+            ? 'The project reading is distilled into the start of this context.'
+            : 'The conversation before this point is distilled into the start of the context. Earlier messages remain available above.'}
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent className="border-t border-brand/20 px-3.5 py-2.5 text-[13px]">
@@ -414,7 +414,7 @@ function TallyFooter({ id, tokens, dock }: { id: number; tokens?: number; dock?:
       >
         <div className="flex min-w-0 items-center gap-2 font-mono text-[11px] text-muted-foreground">
           <ScrollTextIcon className="size-3.5 shrink-0 text-brand" />
-          <span className="shrink-0 text-foreground">Tally</span>
+          <span className="shrink-0 text-foreground">Context</span>
           {tokens !== undefined && (
             <span className="shrink-0" data-lineage-tokens={tokens}>
               · {formatTokens(tokens)} tokens
@@ -429,7 +429,7 @@ function TallyFooter({ id, tokens, dock }: { id: number; tokens?: number; dock?:
           </button>
         </div>
         <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
-          The context every new branch starts from. @ultimate keeps it up to date.
+          What every new branch starts from. @ultimate maintains it.
         </p>
       </div>
     </div>

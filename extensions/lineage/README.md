@@ -1,5 +1,8 @@
 A project is a forest of conversation trees. Each root keeps a non-agent tally of one line of work: prompts, each conversation's latest abstract, notes and landings. Branches do the work with that shared context.
 
+The UI calls a root's tally its **context** ("what every new branch starts from"); "tally" stays the internal name of the
+document, tools and model-facing text, where agents and stored entries already use it.
+
 - **Branch** (action `branch`
   `{ from, at?, prompt, images?, isolated?, model?, thinkingLevel? }` → `{ id }`). It forks the source at `at` (default: its latest entry) as an
   ownerless conversation in the project root, optionally isolated in its own worktree. There is no brief or reset:
@@ -23,11 +26,17 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
   `unlist` `{ id }` → `{ roots }` removes a root that never became a tally from the list: it refuses non-roots, the
   last root and tallies. The root and its branches then belong to no tree. Concluding only hides a conversation;
   unlisting is how a mistaken or abandoned root stops being offered to `branch`.
+  `recent` `{ id, limit? }` → `RootEvent[]` (`types.ts`) lists a listed root's newest events, newest first (default 3,
+  at most 20): landings `{ sha, subject?, from? }` (the first non-merge commit subject), other notes `{ from?, text }`,
+  new branches `{ branch, intent }`, compactions, and the genesis (`started`), each with its `entry` and `at`.
+  Catch-up notes and abstracts are left out. The sidebar's root row shows them.
+  `compact` `{ id, instructions? }` → `{ taskId }` starts the same compaction as `compact_tally`, for the root row's menu
+  and the palette's Compact command on a root.
 - **Tally**: conversation-scoped doc `lineage.tally` (latest history) holds
   `{ abstracts: Record<string, { anchor, at, text, title?, feature? }>, tokens: number, since?: number }`:
   each conversation's open abstract, estimated model-visible context tokens, and the entry where the root became a tally. Forks start with an empty doc,
   not the source's bookkeeping. Tokens are recounted from active context after commits that append root entries,
-  including resets and compaction. The root composer status shows the estimate as "Tally · … tokens".
+  including resets and compaction. The root footer shows the estimate as "Context · … tokens".
   `lineage.abstract` entries hold `{ conversation, at, text, title?, feature?, anchor? }`, with `at` pointing to the
   answer summarized. An abstract is liquid until its conversation lands, like an uncommitted working tree: the first
   one is model-visible and becomes the anchor; later ones are carriers without model messages (`anchor` set) whose
@@ -105,9 +114,10 @@ Once started, it shows only a quiet **@ultimate is setting up this project · op
 @ultimate reads the project and writes its first tally with `seed_tally` before starting work.
 
 Listed roots with a tally or existing history replace their composer through the SDK's `composer` renderer with a
-read-only footer: **Tally**, "The context every new branch starts from. @ultimate keeps it up to date.", estimated
+read-only footer: **Context**, "What every new branch starts from. @ultimate maintains it.", estimated
 tokens, and **Talk to @ultimate**. There is no text input. @ultimate maintains standing decisions with `note` and
-reshapes tallies with `compact_tally`; the palette hides compact, clear-context and composer-focus commands on roots.
+reshapes tallies with `compact_tally`; on a root the palette's Compact runs lineage `compact` and its composer-focus
+command is hidden. A root's transcript shows no summary or assessment lines.
 
 Old stored notes and survey inputs still render quietly, without creation controls. Old brief resets still render;
-a genesis reset shows a collapsible **Tally starts here** card.
+a genesis reset shows a collapsible **Context starts here** card.

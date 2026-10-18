@@ -28,7 +28,7 @@ narrow side region). Render `core` to preserve the existing composer, optionally
 discovery order: each receives the previous rendering as `core`, behind its own extension boundary with that rendering
 as fallback. These renderers can use `useTranscript()` for the shown conversation's current entries and
 `useComposer()` for draft access.
-Lineage uses this to show a root's read-only tally footer, or an empty root's Start here card, instead of a composer.
+Lineage uses this to show a root's read-only context footer, or an empty root's Start here card, instead of a composer.
 `switchConversation(id, { replace: true })` takes the current history entry instead of adding one, as a redirect does.
 
 ## Where extensions live

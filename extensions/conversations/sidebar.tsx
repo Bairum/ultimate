@@ -23,12 +23,12 @@ import {
   useWorkspaceConversations as useConversations,
   useWorkspaceIndex,
 } from '../workspaces/data.tsx'
-import { currentAssessment, Row, ChildRow, StandingRow } from './rows.tsx'
+import { currentAssessment, Row, ChildRow, RootRow, StandingRow } from './rows.tsx'
 import { useRoots } from '../lineage/roots.tsx'
 import { ago, LanderState } from './lander.tsx'
 import { talkToUltimate, UltimateDot, useWaitingOnUser } from './ultimate.tsx'
 
-/** The label of side chats with a tally, which old projects still store; they stay unlisted. */
+/** The label of side chats with a root, which old projects still store; they stay unlisted. */
 const sideLabel = 'side chat'
 
 /** The shown conversation, also while its snapshot is still on the way. */
@@ -96,9 +96,11 @@ export function Conversations() {
   const [seen] = useExtensionUiState<Record<string, number>>('seen', {})
   const shownTop = topOf(shownId, conversations)
   const hiddenIds = hiddenConversationIds(conversations, concludedIds)
-  const summary =
-    shownTop && !pinned(shownTop) && !hiddenIds.has(shownTop.id) ? overview[shownTop.id] : undefined
   const roots = new Set(useRoots())
+  const summary =
+    shownTop && !pinned(shownTop) && !roots.has(shownTop.id) && !hiddenIds.has(shownTop.id)
+      ? overview[shownTop.id]
+      : undefined
   const [expanded, setExpanded] = useExtensionUiState<number[]>('expanded', [])
   const [collapsedRoots, setCollapsedRoots] = useExtensionUiState<number[]>('collapsedRoots', [])
   const working = workingByTop(conversations)
@@ -228,6 +230,17 @@ export function Conversations() {
   }
   const row = (conversation: ConversationSummary, shown = conversation.id === shownTop?.id) => {
     if (pinned(conversation)) return standingRow(conversation)
+    if (roots.has(conversation.id))
+      return (
+        <RootRow
+          conversation={conversation}
+          key={conversation.id}
+          now={now}
+          onTalk={() => void talkToUltimate(actions)}
+          shown={shown}
+          working={working.get(conversation.id)}
+        />
+      )
     const recorded = seen[conversation.id]
     const state = working.get(conversation.id)
     return (
@@ -235,7 +248,6 @@ export function Conversations() {
         activity={overview[conversation.id]?.activity}
         assessment={tasks ? currentAssessment(overview[conversation.id]) : undefined}
         concluded={hiddenIds.has(conversation.id)}
-        root={roots.has(conversation.id)}
         conversation={conversation}
         draft={conversation.inputAt === undefined}
         feature={overview[conversation.id]?.feature}

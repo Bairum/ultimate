@@ -15,7 +15,9 @@ A project is a forest of conversation trees, each tree like a history of commits
   @ultimate maintains standing decisions with `note`, seeds empty roots with `seed_tally`, and reshapes tallies with
   `compact_tally` without deleting history. When the user asks for an independent line of work, it creates a root
   with `new_root` and seeds it from its own reading. The read-only footer shows estimated context tokens and a
-  **Talk to @ultimate** link.
+  **Talk to @ultimate** link. The UI calls a tally the root's **context**; "tally" stays the name in code, tools and
+  model text. The sidebar shows a root as the head of its tree with its last three events (landings, notes, branches,
+  compactions); roots and standing agents are never concluded or cleared, only compacted.
 - **A branch** is a feature, a fix, an experiment. @ultimate picks a root by reading its tally, then starts a
   coordinator branch that inherits that context before its prompt. A branch is never a subagent.
 - **Talk to @ultimate in its conversation.** The user's standing agent starts and steers branches and relays their answers there.
