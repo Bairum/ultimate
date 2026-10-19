@@ -19,8 +19,8 @@ export interface AgentDefinition {
   thinking?: ModelThinkingLevel
   tools?: string[]
   isolate?: 'none' | 'worktree'
-  /** A standing agent: `true` in project homes, `machine` in the machine home (see `lib/machine.ts`). */
-  resident?: boolean | 'machine'
+  /** A standing agent: `true` in project homes, `machine` in the machine home, `everywhere` in both (`lib/machine.ts`). */
+  resident?: boolean | 'machine' | 'everywhere'
   /** What the lander does when a submission fails: explain it, or fix it and land. Only the lander reads it. */
   onFailure?: 'diagnose' | 'fix'
 }
@@ -122,8 +122,13 @@ export function parseDefinition(
     throw new Error('isolate must be none or worktree')
   if (onFailure !== undefined && onFailure !== 'diagnose' && onFailure !== 'fix')
     throw new Error('onFailure must be diagnose or fix')
-  if (resident !== undefined && typeof resident !== 'boolean' && resident !== 'machine')
-    throw new Error('resident must be a boolean or machine')
+  if (
+    resident !== undefined &&
+    typeof resident !== 'boolean' &&
+    resident !== 'machine' &&
+    resident !== 'everywhere'
+  )
+    throw new Error('resident must be a boolean, machine or everywhere')
   if (!body) throw new Error('Instructions are required')
   return {
     name,
@@ -208,7 +213,7 @@ export interface DefinitionFields {
   thinking?: string
   tools?: string[]
   isolate?: 'none' | 'worktree'
-  resident?: boolean | 'machine'
+  resident?: boolean | 'machine' | 'everywhere'
   onFailure?: 'diagnose' | 'fix'
 }
 

@@ -1,14 +1,31 @@
-import { LoaderCircleIcon, MailIcon, ServerIcon, TriangleAlertIcon, TruckIcon } from 'lucide-react'
+import {
+  ArchiveIcon,
+  CheckIcon,
+  LoaderCircleIcon,
+  ServerIcon,
+  TriangleAlertIcon,
+  TruckIcon,
+  XIcon,
+} from 'lucide-react'
 import { useEffect } from 'react'
-import { MessageResponse } from '@/components/ai/message'
-import { cn, defineWebExtension, Fold, provide, shortenPath, useAction, useSystem } from '@/sdk'
+import {
+  cn,
+  defineWebExtension,
+  Fold,
+  formatBytes,
+  formatDuration,
+  provide,
+  shortenPath,
+  useAction,
+  useSystem,
+} from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import type { ProviderHealth } from '../../cloud/protocol.ts'
 import { TransitionAction } from './refs.ts'
 import { MoveHelp, phaseOf, TransitionCard } from '../cloud/ui.tsx'
 import { AskSync } from './ui.tsx'
 import { polling } from './moves.ts'
-import type { Fleet, FleetProject, MoveEnded, SyncReport } from './types.ts'
+import type { BackupEnded, Fleet, FleetProject, HealthTurned, MoveEnded } from './types.ts'
 
 function Dot({ on }: { on: boolean }) {
   return (
@@ -257,7 +274,7 @@ function MoveCall({ call, core }: { call: ToolCallView; core: React.ReactNode })
   return <TransitionCard transition={transition} />
 }
 
-/** The input that wakes @sync after a move ended. */
+/** The input that wakes @sync after a move to this machine ended. */
 function MoveEntry({ entry }: { entry: EntryRecord }) {
   const data = entry.data as unknown as MoveEnded
   return (
@@ -281,35 +298,114 @@ function MoveEntry({ entry }: { entry: EntryRecord }) {
   )
 }
 
-/** A report from @sync in a project's @ultimate, like a board message. */
-function ReportEntry({ entry }: { entry: EntryRecord }) {
-  const data = entry.data as unknown as SyncReport
+/**
+ * One line in the move card's frame for something that happened to this project here: green when it went well, red
+ * with the reason when it failed.
+ */
+function EventCard({
+  ok,
+  icon,
+  title,
+  detail,
+  at,
+  ...data
+}: {
+  ok: boolean
+  icon: React.ReactNode
+  title: React.ReactNode
+  detail?: string
+  at: number
+} & Record<`data-${string}`, string>) {
+  return (
+    <section
+      className={cn(
+        'min-w-0 rounded-md border border-l-2 border-border bg-card text-left font-mono text-[11.5px] shadow-xs',
+        ok ? 'border-l-success/70' : 'border-l-error/70',
+      )}
+      {...data}
+    >
+      <header className="flex min-w-0 items-center gap-2 py-1.5 pr-3 pl-3">
+        {ok ? (
+          <CheckIcon className="size-3.5 shrink-0 text-success" />
+        ) : (
+          <XIcon className="size-3.5 shrink-0 text-error" />
+        )}
+        {icon}
+        <span className="min-w-0 flex-1 truncate text-[12px] text-foreground/90">{title}</span>
+        <span className="shrink-0 text-muted-foreground/70" title={new Date(at).toLocaleString()}>
+          {new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </span>
+      </header>
+      {detail && (
+        <p className="border-t border-border/60 px-3 py-1.5 break-words whitespace-pre-wrap text-error/90">
+          {detail}
+        </p>
+      )}
+    </section>
+  )
+}
+
+/** A backup of this project finished (a note) or failed (an input that wakes @sync). */
+function BackupEntry({ entry }: { entry: EntryRecord }) {
+  const { project, report } = entry.data as unknown as BackupEnded
+  const summary = report.ok
+    ? `Backed up · ${formatBytes(report.bytes)} · ${formatDuration(report.ms)}`
+    : 'Backup failed'
   return (
     <Fold
       card={entry.id}
       summary={
         <>
-          <MailIcon className="size-3 shrink-0 text-brand" />
-          <span className="shrink-0 text-brand">{data.from}</span>
-          <span className="shrink-0">report · one-way</span>
+          <ArchiveIcon className={cn('size-3 shrink-0', report.ok ? 'text-brand' : 'text-error')} />
+          <span className="min-w-0 truncate">
+            {summary} · {project.name}
+          </span>
         </>
       }
     >
-      <section className="min-w-0 rounded-md border border-l-2 border-border border-l-brand/60">
-        <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-          <MailIcon className="size-3.5 shrink-0 text-brand" />
-          <span className="font-semibold text-brand">{data.from}</span>
-          <span>Report · one-way</span>
-        </header>
-        <div className="min-w-0 px-3 py-3 text-[13px] leading-relaxed">
-          <MessageResponse>{data.text}</MessageResponse>
-        </div>
-      </section>
+      <EventCard
+        at={report.at}
+        data-sync-backup-entry={report.ok ? 'done' : 'failed'}
+        icon={<ArchiveIcon className="size-3.5 shrink-0 text-muted-foreground" />}
+        ok={report.ok}
+        title={
+          <>
+            {summary}
+            <span className="text-muted-foreground/60"> · {project.name}</span>
+          </>
+        }
+        {...(report.ok ? {} : { detail: report.error })}
+      />
     </Fold>
   )
 }
 
-/** @sync's own conversation, a chat in the machine home; the fleet and move cards stay visible in it. */
+/** A model provider that turned failing on this machine. */
+function HealthEntry({ entry }: { entry: EntryRecord }) {
+  const data = entry.data as unknown as HealthTurned
+  return (
+    <Fold
+      card={entry.id}
+      summary={
+        <>
+          <TriangleAlertIcon className="size-3 shrink-0 text-error" />
+          <span className="min-w-0 truncate">{data.provider} failing</span>
+        </>
+      }
+    >
+      <EventCard
+        at={data.at}
+        data-sync-health-entry={data.provider}
+        icon={<TriangleAlertIcon className="size-3.5 shrink-0 text-muted-foreground" />}
+        ok={false}
+        title={`${data.provider} failing on this machine`}
+        {...(data.error ? { detail: data.error } : {})}
+      />
+    </Fold>
+  )
+}
+
+/** @sync's own conversation, in the machine home and in project homes; the fleet and move cards stay visible in it. */
 const syncChat = (conversation: {
   label?: string
   title?: string
@@ -321,13 +417,13 @@ const syncChat = (conversation: {
 
 export default defineWebExtension({
   tools: { fleet: FleetCall, move: MoveCall },
-  chat: { when: syncChat, tools: ['fleet', 'move', 'cancel', 'backup', 'report'] },
+  chat: { when: syncChat, tools: ['fleet', 'move', 'cancel', 'backup'] },
   intro: {
     when: syncChat,
-    title: '@sync moves your projects between machines.',
-    hint: 'Ask for the fleet, or: move ultimate here.',
+    title: '@sync moves your projects between machines and backs them up.',
+    hint: 'Ask for the fleet, or: back up this project.',
     placeholder: 'Ask @sync about your machines…',
   },
-  entries: { 'sync.move': MoveEntry, 'sync.report': ReportEntry },
+  entries: { 'sync.move': MoveEntry, 'sync.backup': BackupEntry, 'sync.health': HealthEntry },
   provides: [provide(MoveHelp, () => <AskSync />)],
 })

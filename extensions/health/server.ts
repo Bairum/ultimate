@@ -9,8 +9,9 @@ import type { MachineHealth, ProviderHealth } from '../../cloud/protocol.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { cloudConfig, httpBase } from '../../lib/cloud.ts'
 import { isMachineHome } from '../../lib/machine.ts'
-import { readFileHealth, readHealth, record, reset, toHealth } from './store.ts'
-import { HealthApi } from './api.ts'
+import { readFileHealth, readHealth, record, reset, sanitize, toHealth } from './store.ts'
+import { HealthApi, HealthFeedback } from './api.ts'
+import type { HealthFeedbackService } from './api.ts'
 import { LoginChanged } from '../models/api.ts'
 import type { HealthEntry } from './store.ts'
 import { implementAction } from '../../lib/actions.ts'
@@ -128,14 +129,33 @@ export async function confirm(deps: HeartbeatDeps, provider: string) {
   return models ? ping(deps, provider, models) : false
 }
 
+/**
+ * Record `entry` in this machine's health file and tell `feedback` when it turned the provider failing. The file is
+ * shared by every home, so only the home whose write turned it reports, once per turn.
+ */
+export async function recordHealth(
+  userHome: string,
+  provider: string,
+  entry: HealthEntry,
+  feedback: HealthFeedbackService | undefined,
+) {
+  if (!(await record(userHome, provider, entry)) || !feedback) return
+  await feedback.failing({
+    provider,
+    at: entry.lastFail ?? Date.now(),
+    ...(entry.error ? { error: sanitize(entry.error) } : {}),
+  })
+}
+
 /** Heartbeat dependencies on the host's model runtime and this machine's health file. */
 export const hostDeps = (
-  host: Pick<ExtensionHost, 'modelRuntime' | 'userHome'>,
+  host: Pick<ExtensionHost, 'modelRuntime' | 'userHome' | 'want'>,
 ): HeartbeatDeps => ({
   now: Date.now,
   models: host.modelRuntime,
   read: async () => (await readFileHealth(host.userHome)).providers,
-  record: (provider, entry) => record(host.userHome, provider, entry),
+  record: (provider, entry) =>
+    recordHealth(host.userHome, provider, entry, host.want(HealthFeedback)),
   forget: (providers) => reset(host.userHome, providers),
 })
 
@@ -260,6 +280,8 @@ async function report(host: ExtensionHost) {
 }
 
 export default function health(host: ExtensionHost) {
+  // Resolved where it is called; declared here so the catalogue lists it.
+  host.want(HealthFeedback)
   // A login added, replaced or removed through Ultimate makes the provider's record meaningless: start it over.
   host.react('login-changed', [LoginChanged], async (_tx, { data }) => {
     await reset(host.userHome, [data.provider])
@@ -277,10 +299,12 @@ export default function health(host: ExtensionHost) {
             // Only providers with a login here: a stray model reference to another fails, which is not its health.
             if (!entry || !host.modelRuntime.getProviderAuthStatus(message.provider).configured)
               return
-            record(host.userHome, message.provider, entry).catch((error: unknown) => {
-              // Health is advisory: a failed write must never fail or delay the agent's generation.
-              console.error('health: recording a response failed:', error)
-            })
+            recordHealth(host.userHome, message.provider, entry, host.want(HealthFeedback)).catch(
+              (error: unknown) => {
+                // Health is advisory: a failed write must never fail or delay the agent's generation.
+                console.error('health: recording a response failed:', error)
+              },
+            )
           },
         }),
       ]

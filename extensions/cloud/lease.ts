@@ -25,6 +25,8 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- a stop release holds storage's lock, which a swapped-in core owns
 import { acquireLock } from '../../server/lock.ts'
 import { AutomationsApi } from '../automations/api.ts'
+import { Feedback } from './api.ts'
+import type { BackupReport, FeedbackService } from './api.ts'
 import { readSecret, secretMetadata } from '../../lib/secrets.ts'
 import { modelLogin, noLogin } from './login.ts'
 import type { ModelLogin } from './types.ts'
@@ -223,6 +225,15 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     host.notice(message)
   }
   const report = (error: unknown) => fail(`Cloud lease: ${String(error)}`)
+  /** Feedback goes to whoever provides `cloud.feedback` (@sync); a failure to deliver it never fails the lease. */
+  const feedback = (send: (point: FeedbackService) => Promise<void>) =>
+    Promise.resolve()
+      .then(() => {
+        const point = host.want(Feedback)
+        return point && send(point)
+      })
+      .catch((error: unknown) => host.notice(`Cloud feedback: ${String(error)}`))
+  const tell = (backup: BackupReport) => feedback((point) => point.backup(backup))
   const serving = () => {
     try {
       host.harness()
@@ -782,6 +793,14 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     // The claim won. A failure from here keeps the download and the intent: the next start finishes opening storage.
     try {
       await openAsWriter(claimed, downloaded)
+      // Storage is open: the project's @sync hears it here, once, and checks this machine's health.
+      await feedback((point) =>
+        point.moved({
+          key: snapshotKey(),
+          machine: options.machine,
+          transition: structuredClone(transition),
+        }),
+      )
       return true
     } catch (error) {
       fail(
@@ -1023,6 +1042,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       throw new Error('A move or release is in flight')
     // Set before the first await, so a second call refuses at once.
     backingUp = { done: 0, total: 0 }
+    const started = Date.now()
     try {
       const key = await secret()
       if (!key) throw new Error(missingKey)
@@ -1050,9 +1070,12 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       lastBackup = done
       sync?.send({ type: 'backup', at: done.at })
       lastError = undefined
+      await tell({ ok: true, ...done, ms: done.at - started })
       return done
     } catch (error) {
-      fail(`Backup failed: ${error instanceof Error ? error.message : String(error)}`)
+      const message = error instanceof Error ? error.message : String(error)
+      fail(`Backup failed: ${message}`)
+      await tell({ ok: false, at: Date.now(), error: message })
       throw error
     } finally {
       backingUp = undefined
