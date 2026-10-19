@@ -15,6 +15,43 @@ export const waitingOnUser = (board: BoardData, answerWaits = false) =>
     (message) => message.to === 'user' && message.reply && message.state === 'delivered',
   ).length + (answerWaits ? 1 : 0)
 
+/**
+ * Where a conversation stands, the one state every view shows:
+ * - `working`: it runs, or has input queued;
+ * - `waits`: the primary agent (@ultimate, @sync in the machine home) has a question open with the user, the only
+ *   state that asks the user to act;
+ * - `awaiting`: it asked another agent (a branch asking @ultimate) and waits for the answer;
+ * - `done`: a subagent answered, and its answer went to its parent;
+ * - `failed`: its latest input ended without an answer;
+ * - `idle`: everything else.
+ */
+export type ConversationState = 'working' | 'waits' | 'awaiting' | 'done' | 'failed' | 'idle'
+
+export function conversationState(
+  conversation: {
+    id: number
+    /** `primary`: the agent that talks to the user; `subagent`: owned by a task of its parent. */
+    kind: 'primary' | 'subagent' | 'other'
+    runState?: 'working' | 'queued' | 'idle' | 'answered' | 'error'
+    busy?: boolean
+  },
+  board: BoardData,
+  answerWaits = false,
+): ConversationState {
+  const { id, kind, runState } = conversation
+  if (conversation.busy || runState === 'working' || runState === 'queued') return 'working'
+  if (kind === 'primary' && waitingOnUser(board, answerWaits) > 0) return 'waits'
+  if (
+    board.messages.some(
+      (message) => message.from === id && message.to !== 'user' && isOpen(message),
+    )
+  )
+    return 'awaiting'
+  if (runState === 'error') return 'failed'
+  if (kind === 'subagent' && runState === 'answered') return 'done'
+  return 'idle'
+}
+
 type Conversation = {
   label?: string
   title?: string

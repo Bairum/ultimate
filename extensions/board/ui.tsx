@@ -6,7 +6,8 @@ import type { ReactNode } from 'react'
 import { definePoint } from '@/sdk'
 import type { BoardMessage } from './refs.ts'
 
-export { emptyBoard, isOpen, waitingOnUser } from './data.tsx'
+export { conversationState, emptyBoard, isOpen, waitingOnUser } from './data.tsx'
+export type { ConversationState } from './data.tsx'
 export { Asked, BoardDoc, MessageSent } from './refs.ts'
 
 /** What shows under a Board message to the user (`questions` provides its answer card). */

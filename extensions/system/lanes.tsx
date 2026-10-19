@@ -4,16 +4,17 @@ import type { CSSProperties } from 'react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn, formatDuration, useConversations, useUltimate } from '@/sdk'
 import type { ConversationSummary } from '@/sdk'
+import type { ConversationState } from '../board/ui.tsx'
 import { AgentMark, agentTitle, ConversationRef } from '../conversations/ui.tsx'
 import { block, duration, label, ticks } from './layout.ts'
 import type { TreeRow, WindowName } from './layout.ts'
 import type { Lane, LaneRun } from './refs.ts'
 import { clock, KindIcon, TraceTree } from './tree.tsx'
 
-/** Where a lane stands: working now, waiting on the user's answer, or idle. */
-export type LaneState = 'running' | 'waiting' | 'idle'
-export const laneState = (lane: Lane, waiting: boolean): LaneState =>
-  lane.runs.at(-1)?.end === undefined ? 'running' : waiting ? 'waiting' : 'idle'
+/** Where a lane stands: running by its own open run, else its conversation's settled state. */
+export type LaneState = 'running' | Exclude<ConversationState, 'working'>
+export const laneState = (lane: Lane, state: ConversationState): LaneState =>
+  lane.runs.at(-1)?.end === undefined || state === 'working' ? 'running' : state
 
 /** A standing agent's name (`ultimate`, `lander`) for its mark and title; undefined for other conversations. */
 export function standingName(lane: Lane, summary: ConversationSummary | undefined) {
@@ -221,8 +222,19 @@ export function Guide({
 
 const stateWords: Record<LaneState, string> = {
   running: 'running',
-  waiting: 'needs you',
+  waits: 'waits on you',
+  awaiting: 'awaiting @ultimate',
+  done: 'done',
+  failed: 'failed',
   idle: 'idle',
+}
+
+const stateTones: Partial<Record<LaneState, string>> = {
+  running: 'text-brand',
+  waits: 'text-amber-700 dark:text-amber-300',
+  awaiting: 'text-amber-700/80 dark:text-amber-300/70',
+  done: 'text-success',
+  failed: 'text-error',
 }
 
 /**
@@ -285,7 +297,7 @@ export function LaneRow({
           >
             <AgentMark
               name={standing ?? lane.agent ?? 'agent'}
-              presence={state === 'running' ? 'working' : state === 'waiting' ? 'waiting' : 'idle'}
+              presence={state === 'running' ? 'working' : state === 'waits' ? 'waiting' : 'idle'}
             />
             <span className="flex min-w-0 flex-1 flex-col">
               {standing ? (
@@ -302,15 +314,7 @@ export function LaneRow({
                 />
               )}
               <span className="flex min-w-0 items-center gap-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
-                <span
-                  className={cn(
-                    'shrink-0',
-                    state === 'running' && 'text-brand',
-                    state === 'waiting' && 'text-amber-700 dark:text-amber-300',
-                  )}
-                >
-                  {stateWords[state]}
-                </span>
+                <span className={cn('shrink-0', stateTones[state])}>{stateWords[state]}</span>
                 {lane.agent && !standing && <span className="shrink-0">· {lane.agent}</span>}
                 {lane.model && <span className="truncate">· {modelName(lane.model)}</span>}
               </span>
@@ -342,7 +346,7 @@ export function LaneRow({
               tone={
                 item.end === undefined
                   ? 'running'
-                  : state === 'waiting' && index === lane.runs.length - 1
+                  : state === 'waits' && index === lane.runs.length - 1
                     ? 'waiting'
                     : 'done'
               }

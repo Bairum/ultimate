@@ -27,7 +27,8 @@ import {
   useWorkspaceConversations as useConversations,
   useWorkspaceIndex,
 } from '../workspaces/ui.tsx'
-import { currentAssessment, Row, ChildRow, StandingRow } from './rows.tsx'
+import { Row, ChildRow, StandingRow } from './rows.tsx'
+import { BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
 import { inFlight, RootRow } from './root.tsx'
 import { useRoots } from '../lineage/ui.tsx'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
@@ -83,6 +84,7 @@ export function Conversations() {
 /** The tree, with how many messages and answers wait on the user for @ultimate's row. */
 function Tree({ waiting }: { waiting: number }) {
   const overview = useOverview()
+  const board = useDocOf(1, BoardDoc) ?? emptyBoard
   const tasks = useTasks()
   const foreground = new Set<number>(
     Object.values(tasks?.tasks ?? {})
@@ -271,7 +273,10 @@ function Tree({ waiting }: { waiting: number }) {
     return (
       <Row
         activity={overview[conversation.id]?.activity}
-        assessment={tasks ? currentAssessment(overview[conversation.id]) : undefined}
+        state={conversationState(
+          { id: conversation.id, kind: 'other', runState: overview[conversation.id]?.runState },
+          board,
+        )}
         concluded={hiddenIds.has(conversation.id)}
         conversation={conversation}
         draft={conversation.inputAt === undefined}

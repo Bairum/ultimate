@@ -111,7 +111,6 @@ export default async function fauxExtension(host: ExtensionHost) {
           return fauxAssistantMessage([
             fauxText(
               JSON.stringify({
-                assessment: needsInput ? 'needs_input' : 'done',
                 activity: 'Replied in the demo.',
                 title: prompt,
                 summary: 'Scripted demo conversation.',

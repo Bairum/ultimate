@@ -1,6 +1,6 @@
 import type { EntryId } from '@earendil-works/pi-durable'
 
-/** `model`: the summary model that answered, as in `Assessed`. */
+/** `model`: the summary model that answered, as in `ReplySummary`. */
 export type IntentSummary = { summary: string; model?: string; at: number }
 
 export type TitleChange = { title: string; model?: string; at: number }
@@ -8,11 +8,16 @@ export type TitleChange = { title: string; model?: string; at: number }
 /** An accepted spawn refresh, recorded even when the title stays. */
 export type SpawnSummary = { summary: string; model?: string; at: number }
 
-export type AssessmentValue = 'needs_input' | 'done' | 'neutral'
-export type Assessment = { inputId: EntryId; answerId: EntryId; value: AssessmentValue }
 /** `stale`: newer work or a reset superseded the result; `error`: the request failed. */
 export type SummaryStatus = 'pending' | 'ready' | 'stale' | 'error'
-export type Assessed = Assessment & { activity: string; model?: string; at: number }
+/** What the latest final reply did, in one line, for the exchange `inputId` → `answerId`. */
+export type ReplySummary = {
+  inputId: EntryId
+  answerId: EntryId
+  activity: string
+  model?: string
+  at: number
+}
 export type SummaryDiscard = {
   reason: 'stale' | 'error'
   cause: string
@@ -21,7 +26,7 @@ export type SummaryDiscard = {
   at: number
 }
 export type OverviewRow = {
-  /** `answered`: the latest input got a reply; whether its goal is met is the assessment's opinion. */
+  /** `answered`: the latest input got a reply. */
   runState: 'working' | 'queued' | 'idle' | 'answered' | 'error'
   inputId?: number
   /** The latest input is extension-authored rather than a plain user message. */
@@ -31,7 +36,7 @@ export type OverviewRow = {
   feature?: string
   summaryStatus?: SummaryStatus
   activity?: string
-  assessment?: Assessment
+  /** The reply summary's state for the latest answer: `error` when it could not be written. */
   assessmentStatus?: SummaryStatus
 }
 export type OverviewState = { conversations: Record<string, OverviewRow> }
