@@ -8,7 +8,7 @@ import { actionRef } from '../../shared/extension-api.ts'
  */
 export type ReviewKind = 'uncommitted' | 'commit' | 'range' | 'branch'
 
-/** One changed file. Its hunks are in the diff's `patch` unless it is `binary`, `tooLarge` or `typeChanged`. */
+/** One changed file. Its hunks are in the diff's `patch` unless it is `binary`, `tooLarge`, `typeChanged` or `symlink`. */
 export type ReviewFile = {
   /** The path after the change; the old path for a deleted file. */
   path: string
@@ -22,6 +22,8 @@ export type ReviewFile = {
   tooLarge?: boolean
   /** It became a symlink or stopped being one (Git's `T`): listed, its hunks left out. */
   typeChanged?: boolean
+  /** A new symlink whose path or target cannot be written as a plain patch line: listed, its hunks left out. */
+  symlink?: boolean
 }
 
 export type ReviewDiff = {

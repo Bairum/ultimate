@@ -139,6 +139,20 @@ describe('review diffs of symlinks and multibyte text', () => {
     await rm(join(dir, 'dirlink'))
   })
 
+  it('lists a symlink with an unusual name or a multi-line target without hunks', async () => {
+    await symlink('target.txt', join(dir, 'tab\tname'))
+    await symlink('target.txt', join(dir, 'quote"name'))
+    await symlink('two\nlines', join(dir, 'newline-target'))
+    const result = await at('uncommitted')
+    expect(result.files).toEqual([
+      { path: 'newline-target', status: 'added', additions: 1, deletions: 0, symlink: true },
+      { path: 'quote"name', status: 'added', additions: 1, deletions: 0, symlink: true },
+      { path: 'tab\tname', status: 'added', additions: 1, deletions: 0, symlink: true },
+    ])
+    expect(result.patch).toBe('')
+    for (const name of ['tab\tname', 'quote"name', 'newline-target']) await rm(join(dir, name))
+  })
+
   it('lists a file replaced by a symlink once, without hunks, beside the other changes', async () => {
     await rm(join(dir, 'swap'))
     await symlink('target.txt', join(dir, 'swap'))

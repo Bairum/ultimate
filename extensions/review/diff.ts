@@ -154,7 +154,7 @@ function fit(files: ReviewFile[], patches: (string | undefined)[]) {
   files.forEach((file, index) => {
     const patch = patches[index]
     // A type change is a deleted and a new file under one name, which one diff view cannot show: listed, no hunks.
-    if (file.typeChanged) return
+    if (file.typeChanged || file.symlink) return
     const bytes = patch === undefined ? 0 : Buffer.byteLength(patch)
     if (patch === undefined || bytes > FILE_CAP) {
       file.tooLarge = true
@@ -217,7 +217,10 @@ async function untrackedDiff(top: string, path: string, args: string[], signal?:
  * `--no-index` follows a link to a directory and fails on it.
  */
 const linkPatch = (path: string, target: string) =>
-  `diff --git a/${path} b/${path}\nnew file mode 120000\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+${target}\n\\ No newline at end of file\n`
+  // A path git would quote, or a target that is not one line, would break the patch: those are listed without one.
+  !/^[\x20-\x7e]+$/.test(path) || /["\\]/.test(path) || /\p{Cc}/u.test(target)
+    ? undefined
+    : `diff --git a/${path} b/${path}\nnew file mode 120000\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+${target}\n\\ No newline at end of file\n`
 
 /** Files Git does not track and does not ignore, each as an added file with its patch; a symlink as its target. */
 async function untracked(top: string, signal?: AbortSignal) {
@@ -232,8 +235,15 @@ async function untracked(top: string, signal?: AbortSignal) {
   for (const path of list.stdout.split('\0').filter(Boolean)) {
     const info = await lstat(join(top, path))
     if (info.isSymbolicLink()) {
-      files.push({ path, status: 'added', additions: 1, deletions: 0 })
-      patches.push(linkPatch(path, await readlink(join(top, path))))
+      const patch = linkPatch(path, await readlink(join(top, path)))
+      files.push({
+        path,
+        status: 'added',
+        additions: 1,
+        deletions: 0,
+        ...(patch === undefined ? { symlink: true } : {}),
+      })
+      patches.push(patch)
       continue
     }
     const size = info.size

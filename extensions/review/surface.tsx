@@ -139,7 +139,7 @@ function FileMenu({ files, onPick }: { files: ReviewFile[]; onPick: (path: strin
   )
 }
 
-/** A file whose hunks were left out: binary, a type change, or too large to show. */
+/** A file whose hunks were left out: binary, a type change, a new symlink, or too large to show. */
 function Placeholder({ file }: { file: ReviewFile }) {
   return (
     <div className="rounded-md border border-border/70 bg-card/40">
@@ -152,7 +152,9 @@ function Placeholder({ file }: { file: ReviewFile }) {
           ? 'Binary file'
           : file.typeChanged
             ? 'Changed between a file and a symlink'
-            : 'Too large to show here'}
+            : file.symlink
+              ? 'New symlink'
+              : 'Too large to show here'}
       </p>
     </div>
   )
