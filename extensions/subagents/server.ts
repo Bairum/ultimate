@@ -583,8 +583,8 @@ export default function subagents(
     ).definitions.filter((definition) =>
       residentHere(definition.resident, host.projectRoot, host.userHome),
     )
-  /** Drops standing agents whose definition is gone; their conversations become ordinary ones. A file that fails
-   * to parse keeps its agent, so a typo does not retire it. */
+  /** Drops standing agents whose definition is gone; their conversations become ordinary ones. Retirement waits
+   * until every definition parses: an error names a file, not the agent it defines, so a typo retires nothing. */
   const pruneRetired = async (ctx: Context) => {
     const { definitions, errors } = await discoverAgents(
       host.ultimateRoot,
@@ -592,12 +592,12 @@ export default function subagents(
       host.userHome,
       host.modelRuntime,
     )
-    const kept = new Set([
-      ...definitions
+    if (errors.length > 0) return
+    const kept = new Set(
+      definitions
         .filter((definition) => residentHere(definition.resident, host.projectRoot, host.userHome))
         .map((definition) => definition.name),
-      ...errors.map((error) => error.name),
-    ])
+    )
     await host.harness().commit(async (tx) => {
       const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
       for (const name of Object.keys(index)) {

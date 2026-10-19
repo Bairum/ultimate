@@ -160,19 +160,25 @@ it('keeps one ownerless standing conversation, refreshes its definition and recr
   expect(await service.standing('x', ctx)).not.toBe(id)
 })
 
-it('retires a standing agent whose definition is deleted on the next open, but keeps a broken one', async () => {
+it('retires a standing agent whose definition is deleted on the next open, only once every definition parses', async () => {
   const { service, host, path, file, reopen } = await fixture()
   const id = await service.standing('x', ctx)
-  await writeFile(file, '---\nname: x\nresident: [\n---\nBroken')
-  await reopen()
-  expect(await host.harness.snapshot(Standing, ROOT_CONVERSATION_ID, ctx)).toEqual({ x: id })
-  expect(await host.harness.snapshot(Metadata, id, ctx)).toMatchObject({ label: 'agent' })
-  await rm(file)
   await writeFile(
     join(path, 'agents/y.md'),
     '---\nname: y\ndescription: Kept\nresident: true\n---\nY',
   )
   const kept = await service.standing('y', ctx)
+  await rm(file)
+  // A broken file may define any agent: its error names the file, so retirement waits.
+  const broken = join(path, 'agents/renamed.md')
+  await writeFile(broken, '---\nname: x\nresident: [\n---\nBroken')
+  await reopen()
+  expect(await host.harness.snapshot(Standing, ROOT_CONVERSATION_ID, ctx)).toEqual({
+    x: id,
+    y: kept,
+  })
+  expect(await host.harness.snapshot(Metadata, id, ctx)).toMatchObject({ label: 'agent' })
+  await rm(broken)
   await reopen()
   expect(await host.harness.snapshot(Standing, ROOT_CONVERSATION_ID, ctx)).toEqual({ y: kept })
   expect(await host.harness.snapshot(Metadata, id, ctx)).toEqual({ title: '@x' })
