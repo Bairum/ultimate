@@ -95,7 +95,11 @@ function delivery(host: ExtensionHost) {
   const refresh = async (id: number, ctx: Context) => {
     const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
     const name = Object.keys(index ?? {}).find((candidate) => index![candidate] === id)
-    if (name !== undefined) await host.need(SubagentsApi).standing(name, ctx)
+    if (name === undefined) return
+    const service = host.need(SubagentsApi)
+    // A retired agent's conversation stays addressable by id until the next open prunes it.
+    if ((await service.residents(ctx)).some((agent) => agent.name === name))
+      await service.standing(name, ctx)
   }
   return defineTask<
     { message: BoardMessage; steer: boolean; note: boolean; fromLabel: string; toLabel: string },

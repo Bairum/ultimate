@@ -10,6 +10,8 @@ Every built-in is already on; this setup adds how the repository is landed and r
 - `agents/lander.md`: the lander fixes a submission that fails to land, then lands it once every check passes again.
 - `agents/reviewer.md`: the review lead starts every `reviewer-*` definition (`reviewer-astra`, `reviewer-sol`) in
   parallel and returns one merged verdict.
+- `skills/ultimate-cloud-dev`: working on this repository's Worker (`cloud/`): probe Workers, rolling deploys,
+  Durable Object resets and deep telemetry. @sync deploys it.
 
 ## How to work with it
 
