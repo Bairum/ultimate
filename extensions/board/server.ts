@@ -17,7 +17,6 @@ import {
 } from '@earendil-works/pi-durable'
 import type {
   ConversationId,
-  Cursor,
   EntryId,
   EntryRecord,
   GenerationResult,
@@ -130,42 +129,6 @@ const Started = defineDoc<{ by?: number; yielded?: number }>({
 })
 /** A reply-enabled message to the user that the user has not answered yet. */
 const openQuestion = (m: BoardMessage) => m.to === 'user' && m.reply && m.state === 'delivered'
-/** Typing in a conversation answers the questions it asked the user before that input. */
-async function answerByInput(host: ExtensionHost, from: number, at: number) {
-  const asked = (m: BoardMessage) => openQuestion(m) && m.from === from && m.at < at
-  const log = await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)
-  if (!log?.messages.some(asked)) return
-  await host.harness().commit(async (tx) => {
-    for (const m of (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages)
-      if (asked(m)) m.state = 'answered'
-  }, BACKGROUND_CONTEXT)
-}
-/** Input typed while no watcher listened, such as before a crash: each asker's newest user input answers its questions. */
-async function answerMissed(host: ExtensionHost) {
-  const log = await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)
-  const askers = new Set(
-    (log?.messages ?? []).flatMap((m) =>
-      openQuestion(m) && typeof m.from === 'number' ? [m.from] : [],
-    ),
-  )
-  for (const from of askers) {
-    let cursor: Cursor | undefined
-    do {
-      const page = await host
-        .harness()
-        .commit(
-          (tx) => tx.scanEntries({ conversationId: from as ConversationId }, 64, cursor),
-          BACKGROUND_CONTEXT,
-        )
-      const input = page.items.find((entry) => entry.kind === 'pi.user')
-      if (input) {
-        await answerByInput(host, from, input.model?.[0]?.timestamp ?? 0)
-        break
-      }
-      cursor = page.next
-    } while (cursor)
-  }
-}
 async function append(tx: Tx, input: Omit<BoardMessage, 'id' | 'at'>) {
   const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
   const message = { ...input, id: log.next++, at: Date.now() }
@@ -789,16 +752,16 @@ async function send(
       if (!original || !openQuestion(original))
         throw new Error('These questions are no longer open')
     }
-    // Writing to a conversation, as a Reply or a new post, answers the questions it asked the user.
     if (input.images !== undefined && (from === 'user' || to === 'user'))
       throw new Error('images go along only to conversations and agents')
     const images =
       input.images === undefined
         ? undefined
         : await resolveImages(tx, from as ConversationId, input.images)
-    if (from === 'user' && to !== 'user')
+    // Only a Reply answers a question to the user, and only the one it replies to.
+    if (from === 'user' && input.re !== undefined)
       for (const m of (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages)
-        if (openQuestion(m) && (m.from === to || m.id === input.re)) m.state = 'answered'
+        if (openQuestion(m) && m.id === input.re) m.state = 'answered'
     if (from !== 'user' && input.reply !== false) {
       const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
       const pending = log.messages.find(
@@ -898,30 +861,6 @@ export default function board(host: ExtensionHost) {
   host.implement(Handoff, {
     send: (from, input, requestId, ctx) =>
       send(host, from, input, ctx, undefined, undefined, requestId),
-  })
-  let stop: (() => void) | undefined
-  const answering = new Set<Promise<void>>()
-  host.onOpen(async () => {
-    // Not a reactor: a user's input answering a message is a Pi entry, not a domain event.
-    stop = host.harness().subscribeCommits((publication) => {
-      for (const change of publication.changes)
-        if (change.type === 'entry' && change.value.kind === 'pi.user') {
-          const done: Promise<void> = answerByInput(
-            host,
-            change.value.conversationId,
-            change.value.model?.[0]?.timestamp ?? Date.now(),
-          )
-            .catch((error: unknown) => host.notice(`Board: ${String(error)}`))
-            .finally(() => answering.delete(done))
-          answering.add(done)
-        }
-    })
-    await answerMissed(host).catch((error: unknown) => host.notice(`Board: ${String(error)}`))
-  })
-  host.onClose(async () => {
-    stop?.()
-    stop = undefined
-    await Promise.all(answering)
   })
   return defineExtension({
     name: 'board',

@@ -584,28 +584,18 @@ it('answers questions to the user through answer cards or input in the sender co
   const report = await ask('Landed', false)
   expect(await state(report.id)).toBe('delivered')
 
-  const typed = await ask('Keep going?')
+  // Two open questions: answering one leaves the other open, and typing anywhere answers neither.
+  const first = await ask('Which command?')
+  const second = await ask('Approve the preview?')
+  await f.service().answer(first.id, 'Q: Which command?\nA: Both', context)
+  await f.opened.harness.waitForIdle(context)
+  expect(await state(first.id)).toBe('answered')
+  expect(await state(second.id)).toBe('delivered')
   await (await f.recipient.submit({ type: 'input', content: 'Yes' }, context)).wait(context)
-  await until(async () => (await state(typed.id)) === 'answered')
-
-  // The question stays open when the user writes to another conversation.
-  await ask('Another question?')
-  const root = (await f.log())!.messages.at(-1)!
   await (await f.opened.root.submit({ type: 'input', content: 'Elsewhere' }, context)).wait(context)
-  expect(await state(root.id)).toBe('delivered')
-
-  // An answering input whose handler was lost, as in a crash right after it committed, is caught up on the next open;
-  // a question asked after the newest input stays open.
-  await f.opened.harness.commit(async (tx) => {
-    const lost = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
-      (m) => m.id === typed.id,
-    )!
-    lost.state = 'delivered'
-  }, context)
   await f.opened.close()
   await f.open()
-  expect(await state(typed.id)).toBe('answered')
-  expect(await state(root.id)).toBe('delivered')
+  expect(await state(second.id)).toBe('delivered')
 })
 it('atomically admits only one answer-card reply through the Board service', async () => {
   const f = await fixture()
