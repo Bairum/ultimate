@@ -116,10 +116,16 @@ export function createApi(store: Store, options: { base?: string; fetch?: typeof
         whenBusy,
         images,
       } satisfies SubmitRequest),
-    history: async (id: number, before: number, signal?: AbortSignal): Promise<HistoryResponse> => {
-      const response = await request(base + conversation(id, `history?before=${before}`), {
-        signal,
-      })
+    /** Stored entries of `id` below `before`, newest first; with `after`, only those from `after` on, in larger pages. */
+    history: async (
+      id: number,
+      before: number,
+      signal?: AbortSignal,
+      after?: number,
+    ): Promise<HistoryResponse> => {
+      const query = new URLSearchParams({ before: String(before) })
+      if (after !== undefined) query.set('after', String(after))
+      const response = await request(base + conversation(id, `history?${query}`), { signal })
       store.received(response)
       const data = await response.json()
       if (!response.ok) throw new HttpError(response.status, data.error ?? 'Could not load history')

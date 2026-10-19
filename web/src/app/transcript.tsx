@@ -20,7 +20,6 @@ import {
 import {
   Fragment,
   memo,
-  startTransition,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
@@ -29,7 +28,6 @@ import {
   useState,
 } from 'react'
 import type { ReactNode } from 'react'
-import { flushSync } from 'react-dom'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
 import type { StickToBottomContext } from 'use-stick-to-bottom'
 import { useEvent } from '../sdk/events.ts'
@@ -163,11 +161,8 @@ export function Transcript({ dock }: { dock?: boolean }) {
   )
 }
 
-/** Rows a conversation shows at once when it opens; the rest follow without blocking. */
-const firstRows = 30
-
 function TranscriptEntries() {
-  const { id, entries: active, live, busy, loading } = useConversation()
+  const { id, entries: active, older, live, busy, loading } = useConversation()
   const [history, setHistory] = useState<EntryRecord[]>([])
   const previousActive = useRef(active)
   const [tailSpace, setTailSpace] = useState(0)
@@ -175,22 +170,26 @@ function TranscriptEntries() {
   const [error, setError] = useState('')
   const [exhausted, setExhausted] = useState(false)
   const [before, setBefore] = useState<number>()
+  // A windowed stream pages on from its oldest entry. A whole one after a head marker scans from its newest: retained
+  // suffixes can precede discarded compaction markers, which a minimum-active-ID cursor would skip. A whole one without
+  // a marker is the whole history.
+  const cursor = exhausted
+    ? undefined
+    : (before ?? older ?? (active[0]?.head === undefined ? undefined : active.at(-1)?.id))
   const request = useRef<AbortController | null>(null)
   const anchor = useRef<{ entryId: number; toolCallId?: string; top: number } | null>(null)
+  const sentinel = useRef<HTMLDivElement>(null)
   const { contentRef, scrollRef, stopScroll } = useStickToBottomContext()
-  // Retain already displayed rows when a live compaction replaces the active context.
+  // Retain already displayed rows when a live compaction replaces the active context, or a fresh window moves past them.
   const entries = useMemo(() => {
     const rows = new Map(history.map((entry) => [entry.id, entry]))
-    const condensed = active.some(
-      (entry) =>
-        (entry.kind === 'pi.compaction' || entry.kind === 'pi.reset') &&
-        !previousActive.current.some((old) => old.id === entry.id),
-    )
-    if (condensed) for (const entry of previousActive.current) rows.set(entry.id, entry)
+    for (const entry of previousActive.current) rows.set(entry.id, entry)
     for (const entry of active) rows.set(entry.id, entry)
     return [...rows.values()].toSorted((a, b) => a.id - b.id)
   }, [history, active])
   useLayoutEffect(() => {
+    const kept = new Set(active.map((entry) => entry.id))
+    const dropped = previousActive.current.filter((entry) => !kept.has(entry.id))
     if (
       active.some(
         (entry) =>
@@ -203,17 +202,17 @@ function TranscriptEntries() {
       anchor.current = null
       setPending(false)
       setError('')
-      setBefore(Math.max(...active.map((entry) => entry.id)))
+      setBefore(older ?? Math.max(...active.map((entry) => entry.id)))
       setExhausted(false)
-      const retained = previousActive.current
+    }
+    if (dropped.length)
       setHistory((previous) => {
         const rows = new Map(previous.map((entry) => [entry.id, entry]))
-        for (const entry of retained) rows.set(entry.id, entry)
+        for (const entry of dropped) rows.set(entry.id, entry)
         return [...rows.values()]
       })
-    }
     previousActive.current = active
-  }, [active])
+  }, [active, older])
   useEffect(() => () => request.current?.abort(), [])
   useLayoutEffect(() => {
     if (anchor.current && scrollRef.current) {
@@ -244,16 +243,14 @@ function TranscriptEntries() {
     releaseTail()
     return () => scroll.removeEventListener('scroll', releaseTail)
   }, [tailSpace, active, scrollRef, contentRef])
-  const loadEarlier = async () => {
-    if (id === undefined || request.current || !entries.length) return
+  const loadEarlier = useEffectEvent(async () => {
+    if (id === undefined || request.current || cursor === undefined) return
     const controller = new AbortController()
     request.current = controller
     setPending(true)
     setError('')
     try {
-      // Scan stored history independently of display order: retained suffixes can precede
-      // discarded compaction markers which a minimum-active-ID cursor would skip.
-      const page = await api.history(id, before ?? entries.at(-1)!.id, controller.signal)
+      const page = await api.history(id, cursor, controller.signal)
       if (controller.signal.aborted) return
       const { calls: mergedCalls } = indexTools([...entries, ...page.entries])
       const survivors = new Set<number>(
@@ -301,7 +298,10 @@ function TranscriptEntries() {
             top: candidates[0].getBoundingClientRect().top,
           }
       }
-      stopScroll()
+      // The anchor holds the rows in place; only a reader at the very bottom keeps following. Measured, not the library's
+      // flag, which settles a moment after a scroll.
+      const scroll = scrollRef.current
+      if (scroll && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 1) stopScroll()
       // A short transcript needs its existing empty tail to remain scrollable after prepending.
       setTailSpace((space) =>
         Math.max(
@@ -325,6 +325,53 @@ function TranscriptEntries() {
         setPending(false)
       }
     }
+  })
+  // Page in earlier history while the top comes within a viewport. A new observer after each page reports at once
+  // whether the top is still that close.
+  useEffect(() => {
+    const root = scrollRef.current
+    if (!root || !sentinel.current || loading || pending || error || cursor === undefined)
+      return undefined
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) void loadEarlier()
+      },
+      { root, rootMargin: '100% 0px 0px 0px' },
+    )
+    observer.observe(sentinel.current)
+    return () => observer.disconnect()
+  }, [scrollRef, loading, pending, error, cursor, history])
+  /** Read stored history down to entry `target`, in large pages bounded by it, so a reveal can scroll there. */
+  const loadDown = async (target: number) => {
+    if (id === undefined || request.current || cursor === undefined) return
+    const controller = new AbortController()
+    request.current = controller
+    setPending(true)
+    setError('')
+    try {
+      const rows: EntryRecord[] = []
+      for (let next: number | undefined = cursor; next !== undefined;) {
+        const page = await api.history(id, next, controller.signal, target)
+        rows.push(...page.entries)
+        next = page.before
+      }
+      if (controller.signal.aborted) return
+      stopScroll()
+      setHistory((previous) => {
+        const merged = new Map(previous.map((entry) => [entry.id, entry]))
+        for (const entry of rows) merged.set(entry.id, entry)
+        return [...merged.values()]
+      })
+      setBefore(target)
+    } catch (failure) {
+      if (!controller.signal.aborted)
+        setError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      if (!controller.signal.aborted) {
+        request.current = null
+        setPending(false)
+      }
+    }
   }
   const { results, calls } = useMemo(() => indexTools(entries), [entries])
   // Keyed on the tools, not `live`: a streamed token must not re-render every row.
@@ -333,17 +380,11 @@ function TranscriptEntries() {
   const visible = entries.filter(
     (entry) => !(entry.kind === 'pi.tool-result' && calls.has(toolCallId(entry) ?? '')),
   )
-  // Opening a long conversation renders its end first, then the rest as an interruptible transition.
-  const [whole, setWhole] = useState(false)
-  useEffect(() => {
-    if (!loading) startTransition(() => setWhole(true))
-  }, [loading])
-  const shown = whole ? visible : visible.slice(-firstRows)
   const chat = useChat()
   const keeps = (call: ToolCall) => !!chat?.(call)
   const rows: (ChatPart | WorkRun)[] = chat
-    ? chatRows(shown, keeps)
-    : shown.map((entry) => ({ entry }))
+    ? chatRows(visible, keeps)
+    : visible.map((entry) => ({ entry }))
   // Folded runs the reader or a reveal opened, by the key of their first part.
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set())
   const open = (key: string, value: boolean) =>
@@ -353,45 +394,62 @@ function TranscriptEntries() {
       else next.delete(key)
       return next
     })
-  // Reveal a stored row without the auto-follow animation overriding the jump; an older row needs every row first, and
-  // one in a folded run needs the run open.
+  // Reveal a stored row without the auto-follow animation overriding the jump; a row older than those loaded needs the
+  // history down to it first, and one in a folded run needs the run open.
+  const [reveal, setReveal] = useState<number>()
   useEvent('ultimate:reveal-entry', (value) => {
     const target = value as { conversationId?: number; entryId?: number } | undefined
     const entryId = target?.entryId
-    if (target?.conversationId !== id || entryId === undefined || !Number.isSafeInteger(entryId))
+    if (target?.conversationId === id && entryId !== undefined && Number.isSafeInteger(entryId))
+      setReveal(entryId)
+  })
+  const revealStep = useEffectEvent(() => {
+    if (reveal === undefined || loading || pending) return
+    if (error) {
+      setReveal(undefined)
       return
-    const run = chat && runOf(chatRows(visible, keeps), entryId)
-    flushSync(() => {
-      setWhole(true)
-      if (run) open(partKey(run.work[0]), true)
-    })
-    const element = contentRef.current?.querySelector(`[data-entry-id="${entryId}"]`)
+    }
+    if (cursor !== undefined && reveal < cursor && reveal < (entries[0]?.id ?? Infinity)) {
+      void loadDown(reveal)
+      return
+    }
+    // Open its folded run first; the next commit scrolls.
+    const run = chat && runOf(rows, reveal)
+    if (run && !opened.has(partKey(run.work[0]))) {
+      open(partKey(run.work[0]), true)
+      return
+    }
+    const element = contentRef.current?.querySelector(`[data-entry-id="${reveal}"]`)
     if (element) {
       stopScroll()
       element.scrollIntoView({ block: 'start' })
     }
+    setReveal(undefined)
   })
+  useLayoutEffect(() => revealStep(), [reveal, loading, pending, error, history, opened])
   return (
     <TranscriptContext value={entries}>
-      {!loading && entries.length > 0 && !exhausted && (
-        <div className="flex flex-col items-center gap-1">
-          <Button
-            className="cursor-pointer"
-            disabled={pending}
-            onClick={() => void loadEarlier()}
-            size="sm"
-            variant="ghost"
-          >
-            {pending
-              ? 'Loading earlier messages…'
-              : error
-                ? 'Retry loading earlier messages'
-                : 'Load earlier messages'}
-          </Button>
-          {error && (
-            <p className="text-xs text-error" role="alert">
-              {error}
-            </p>
+      {!loading && entries.length > 0 && cursor !== undefined && (
+        <div
+          className="flex min-h-5 items-center justify-center font-mono text-[11px] text-muted-foreground/70"
+          ref={sentinel}
+        >
+          {pending ? (
+            <Shimmer>loading earlier messages…</Shimmer>
+          ) : (
+            error && (
+              <span className="flex items-center gap-2" role="alert">
+                <span className="text-error">Could not load earlier messages</span>
+                <Button
+                  className="h-6 cursor-pointer px-2 font-mono text-[11px]"
+                  onClick={() => setError('')}
+                  size="sm"
+                  variant="ghost"
+                >
+                  Retry
+                </Button>
+              </span>
+            )
           )}
         </div>
       )}

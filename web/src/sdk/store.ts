@@ -1,12 +1,13 @@
 import { projectBase } from './api.ts'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { JsonValue } from '@earendil-works/chord'
-import type { ConversationView, JsonObject, TaskGraph } from '@earendil-works/pi-durable'
+import type { JsonObject, TaskGraph } from '@earendil-works/pi-durable'
 import type {
   ConversationSummary,
   ModelsResponse,
   Notice,
   ServerEvents,
+  StreamedView,
   SystemInfo,
 } from '../../../shared/protocol.ts'
 
@@ -39,7 +40,7 @@ export interface State {
   /** The conversation the stream should show; the server's root when absent. */
   requested?: number
   /** The shown conversation's replica: snapshot plus every applied ops batch. */
-  view?: ConversationView
+  view?: StreamedView
   /** Extension documents of the shown conversation, by kind. */
   docs: Docs
   /** Extension documents of given conversations (`watchDocOf`), by conversation id, then kind. */
@@ -169,7 +170,7 @@ export function createStore(options: StoreOptions = {}) {
         break
       case 'view':
         // A (re)connect starts from a fresh snapshot; ops of the old stream are gone with it.
-        set({ view: data as ConversationView })
+        set({ view: data as StreamedView })
         break
       case 'ops':
         if (state.view) set({ view: applyImmutable(state.view, data as ServerEvents['ops']) })

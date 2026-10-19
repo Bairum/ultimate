@@ -26,6 +26,11 @@ export interface ConfigureRequest {
   model?: ModelRef
   thinkingLevel?: ModelThinkingLevel
 }
+/**
+ * A conversation's view as `/api/events` streams it. A long active context arrives windowed: its head marker and newest
+ * entries, with `older` the exclusive `/history` cursor for the active entries left out. Absent when nothing was left out.
+ */
+export type StreamedView = ConversationView & { older?: number }
 /** Stored history, newest first; `before` is the exclusive cursor for the next page. */
 export interface HistoryResponse {
   entries: EntryRecord[]
@@ -176,7 +181,7 @@ export interface UiUpdateRequest {
 export interface ServerEvents {
   system: SystemInfo
   conversations: ConversationSummary[]
-  view: ConversationView
+  view: StreamedView
   ops: readonly Op[]
   ui: { value: Readonly<Record<string, JsonValue>> }
   uiOps: { ops: readonly Op[] }
