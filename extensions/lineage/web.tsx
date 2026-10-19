@@ -13,6 +13,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import {
   cn,
   defineWebExtension,
+  Fold,
   provide,
   Provided,
   formatTime,
@@ -151,27 +152,40 @@ function Abstract({ entry }: { entry: EntryRecord }) {
   if (omitted) return null
   const { conversation, at, text, title } = latest.data as AbstractData
   return (
-    <section
-      className="min-w-0 rounded-md border border-border bg-muted/20"
-      data-lineage-abstract={conversation}
+    <Fold
+      card={entry.id}
+      summary={
+        <>
+          <ScrollTextIcon className="size-3 shrink-0" />
+          <span className="shrink-0">Abstract</span>
+          <span className="flex min-w-0 text-foreground/80">
+            <ConversationRef id={conversation} title={title} />
+          </span>
+        </>
+      }
     >
-      <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
-        <ScrollTextIcon className="size-3.5 shrink-0" />
-        <span className="shrink-0">Abstract ·</span>
-        <button
-          className="flex min-w-0 cursor-pointer text-foreground hover:underline"
-          onClick={() => switchConversation(conversation)}
-          title={`Open #${conversation}`}
-          type="button"
-        >
-          <ConversationRef id={conversation} title={title} />
-        </button>
-        <Open className="ml-auto" entry={at} id={conversation} />
-      </header>
-      <p className="min-w-0 px-3 py-2.5 text-[12.5px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
-        <MentionText text={text} />
-      </p>
-    </section>
+      <section
+        className="min-w-0 rounded-md border border-border bg-muted/20"
+        data-lineage-abstract={conversation}
+      >
+        <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+          <ScrollTextIcon className="size-3.5 shrink-0" />
+          <span className="shrink-0">Abstract ·</span>
+          <button
+            className="flex min-w-0 cursor-pointer text-foreground hover:underline"
+            onClick={() => switchConversation(conversation)}
+            title={`Open #${conversation}`}
+            type="button"
+          >
+            <ConversationRef id={conversation} title={title} />
+          </button>
+          <Open className="ml-auto" entry={at} id={conversation} />
+        </header>
+        <p className="min-w-0 px-3 py-2.5 text-[12.5px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
+          <MentionText text={text} />
+        </p>
+      </section>
+    </Fold>
   )
 }
 
@@ -180,26 +194,39 @@ function Finished({ entry }: { entry: EntryRecord }) {
   const { switchConversation } = useUltimate()
   const { from, title, text } = entry.data as { from: number; title?: string; text: string }
   return (
-    <section
-      className="min-w-0 rounded-md border border-l-2 border-border border-l-success/70 bg-muted/20"
-      data-lineage-finished={from}
-    >
-      <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-        <CircleCheckIcon className="size-3.5 shrink-0 text-success" />
-        <button
-          className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left text-foreground hover:underline"
-          onClick={() => switchConversation(from)}
-          title={`Open #${from}`}
-          type="button"
-        >
-          <ConversationRef id={from} title={title} />
+    <Fold
+      card={entry.id}
+      summary={
+        <>
+          <CircleCheckIcon className="size-3 shrink-0 text-success" />
+          <span className="flex min-w-0 text-foreground/80">
+            <ConversationRef id={from} title={title} />
+          </span>
           <span className="shrink-0">finished</span>
-        </button>
-      </header>
-      <div className="min-w-0 px-3 py-2.5 text-[13px] leading-relaxed">
-        <MessageResponse>{text}</MessageResponse>
-      </div>
-    </section>
+        </>
+      }
+    >
+      <section
+        className="min-w-0 rounded-md border border-l-2 border-border border-l-success/70 bg-muted/20"
+        data-lineage-finished={from}
+      >
+        <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+          <CircleCheckIcon className="size-3.5 shrink-0 text-success" />
+          <button
+            className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left text-foreground hover:underline"
+            onClick={() => switchConversation(from)}
+            title={`Open #${from}`}
+            type="button"
+          >
+            <ConversationRef id={from} title={title} />
+            <span className="shrink-0">finished</span>
+          </button>
+        </header>
+        <div className="min-w-0 px-3 py-2.5 text-[13px] leading-relaxed">
+          <MessageResponse>{text}</MessageResponse>
+        </div>
+      </section>
+    </Fold>
   )
 }
 
@@ -253,20 +280,48 @@ function Note({ entry, core }: { entry: EntryRecord; core: React.ReactNode }) {
   }
   if (source === 'lander') return core
   if (source === 'finished') return <Finished entry={entry} />
-  if (source !== 'main') return <NoteCard id={from} label="Note from" note="received" text={text} />
+  if (source !== 'main')
+    return (
+      <Fold
+        card={entry.id}
+        summary={
+          <>
+            <StickyNoteIcon className="size-3 shrink-0 text-note" />
+            <span className="shrink-0">Note from</span>
+            {from !== undefined && (
+              <span className="flex min-w-0 text-foreground/80">
+                <ConversationRef id={from} />
+              </span>
+            )}
+          </>
+        }
+      >
+        <NoteCard id={from} label="Note from" note="received" text={text} />
+      </Fold>
+    )
   return (
-    <section
-      className="min-w-0 rounded-md border border-l-2 border-border border-l-brand/50 bg-muted/20"
-      data-lineage-note="main"
+    <Fold
+      card={entry.id}
+      summary={
+        <>
+          <GitBranchIcon className="size-3 shrink-0 text-brand" />
+          <span className="shrink-0">Catch-up</span>
+        </>
+      }
     >
-      <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-foreground">
-        <GitBranchIcon className="size-3.5 text-brand" />
-        Catch-up
-      </header>
-      <div className="min-w-0 px-3 py-2.5 text-[13px] leading-relaxed">
-        <MessageResponse>{text}</MessageResponse>
-      </div>
-    </section>
+      <section
+        className="min-w-0 rounded-md border border-l-2 border-border border-l-brand/50 bg-muted/20"
+        data-lineage-note="main"
+      >
+        <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-foreground">
+          <GitBranchIcon className="size-3.5 text-brand" />
+          Catch-up
+        </header>
+        <div className="min-w-0 px-3 py-2.5 text-[13px] leading-relaxed">
+          <MessageResponse>{text}</MessageResponse>
+        </div>
+      </section>
+    </Fold>
   )
 }
 

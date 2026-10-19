@@ -1,7 +1,7 @@
 import { LoaderCircleIcon, MailIcon, ServerIcon, TriangleAlertIcon, TruckIcon } from 'lucide-react'
 import { useEffect } from 'react'
 import { MessageResponse } from '@/components/ai/message'
-import { cn, defineWebExtension, provide, shortenPath, useAction, useSystem } from '@/sdk'
+import { cn, defineWebExtension, Fold, provide, shortenPath, useAction, useSystem } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import type { ProviderHealth } from '../../cloud/protocol.ts'
 import { TransitionAction } from './refs.ts'
@@ -254,13 +254,23 @@ function MoveCall({ call, core }: { call: ToolCallView; core: React.ReactNode })
 function MoveEntry({ entry }: { entry: EntryRecord }) {
   const data = entry.data as unknown as MoveEnded
   return (
-    <div className="space-y-1.5" data-sync-move={data.transition.id}>
-      <div className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
-        <TruckIcon className="size-3.5 text-brand" />
-        Move of {data.project.name} ended · @sync checks it
+    <Fold
+      card={entry.id}
+      summary={
+        <>
+          <TruckIcon className="size-3 shrink-0 text-brand" />
+          <span className="min-w-0 truncate">Move of {data.project.name} ended</span>
+        </>
+      }
+    >
+      <div className="space-y-1.5" data-sync-move={data.transition.id}>
+        <div className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
+          <TruckIcon className="size-3.5 text-brand" />
+          Move of {data.project.name} ended · @sync checks it
+        </div>
+        <TransitionCard transition={data.transition} />
       </div>
-      <TransitionCard transition={data.transition} />
-    </div>
+    </Fold>
   )
 }
 
@@ -268,16 +278,27 @@ function MoveEntry({ entry }: { entry: EntryRecord }) {
 function ReportEntry({ entry }: { entry: EntryRecord }) {
   const data = entry.data as unknown as SyncReport
   return (
-    <section className="min-w-0 rounded-md border border-l-2 border-border border-l-brand/60">
-      <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-        <MailIcon className="size-3.5 shrink-0 text-brand" />
-        <span className="font-semibold text-brand">{data.from}</span>
-        <span>Report · one-way</span>
-      </header>
-      <div className="min-w-0 px-3 py-3 text-[13px] leading-relaxed">
-        <MessageResponse>{data.text}</MessageResponse>
-      </div>
-    </section>
+    <Fold
+      card={entry.id}
+      summary={
+        <>
+          <MailIcon className="size-3 shrink-0 text-brand" />
+          <span className="shrink-0 text-brand">{data.from}</span>
+          <span className="shrink-0">report · one-way</span>
+        </>
+      }
+    >
+      <section className="min-w-0 rounded-md border border-l-2 border-border border-l-brand/60">
+        <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+          <MailIcon className="size-3.5 shrink-0 text-brand" />
+          <span className="font-semibold text-brand">{data.from}</span>
+          <span>Report · one-way</span>
+        </header>
+        <div className="min-w-0 px-3 py-3 text-[13px] leading-relaxed">
+          <MessageResponse>{data.text}</MessageResponse>
+        </div>
+      </section>
+    </Fold>
   )
 }
 

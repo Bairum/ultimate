@@ -3,7 +3,7 @@ import { ArrowLeftIcon, BotIcon, SquareArrowOutUpRightIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
-import { events, Provided, useEvent, useConversation, useUltimate } from '@/sdk'
+import { events, Fold, Provided, useEvent, useConversation, useUltimate } from '@/sdk'
 import { ConversationRef, ConversationTask } from '../conversations/ui.tsx'
 import { useWorkspaceConversations } from '../workspaces/ui.tsx'
 import type { AgentOrigin } from './message-types.ts'
@@ -57,54 +57,69 @@ export function AgentInput({ entry }: { entry: EntryRecord }) {
   const sender = conversations.find((conversation) => conversation.id === origin.sender)
   const body = origin.body
   return (
-    <section
-      data-agent-origin={origin.kind}
-      className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
+    <Fold
+      card={entry.id}
+      summary={
+        <>
+          <BotIcon className="size-3 shrink-0 text-brand" />
+          <span className="flex min-w-0 truncate text-foreground/80">
+            <Sender origin={origin} label={sender?.label} />
+          </span>
+          <span className="shrink-0">
+            {origin.kind === 'instruction' ? 'instruction' : 'report'}
+          </span>
+        </>
+      }
     >
-      <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-        <BotIcon className="size-3.5 text-brand" />
-        <span className="min-w-0 text-foreground">
-          <Sender origin={origin} label={sender?.label} />
-        </span>
-        <Provided input={origin?.sender} point={ConversationTask}>
-          {(task) => task?.chip}
-        </Provided>
-        <span>{origin.kind === 'instruction' ? 'instruction' : 'report'}</span>
-        <button
-          disabled={!sender}
-          title={
-            sender
-              ? `Open source conversation #${origin.sender}`
-              : 'Source conversation unavailable'
-          }
-          className="ml-auto flex cursor-pointer items-center gap-1 hover:text-foreground disabled:cursor-default disabled:opacity-50"
-          onClick={() =>
-            id &&
-            openAgentSource(
-              switchConversation,
-              { conversation: origin.sender, entry: origin.entry },
-              { conversation: id, entry: entry.id },
-            )
-          }
-        >
-          <SquareArrowOutUpRightIcon className="size-3" />
-          {sender ? 'source' : 'source unavailable'}
-        </button>
-      </header>
-      <div
-        className={`min-w-0 overflow-auto px-3 py-3 font-sans text-[13px] leading-relaxed ${expanded ? '' : 'max-h-96'}`}
+      <section
+        data-agent-origin={origin.kind}
+        className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
       >
-        <MessageResponse>{body}</MessageResponse>
-      </div>
-      {body.length > 1800 && (
-        <button
-          className="w-full cursor-pointer border-t border-border/60 px-3 py-2 text-left font-mono text-[11px] text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-          onClick={() => setExpanded(!expanded)}
+        <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+          <BotIcon className="size-3.5 text-brand" />
+          <span className="min-w-0 text-foreground">
+            <Sender origin={origin} label={sender?.label} />
+          </span>
+          <Provided input={origin?.sender} point={ConversationTask}>
+            {(task) => task?.chip}
+          </Provided>
+          <span>{origin.kind === 'instruction' ? 'instruction' : 'report'}</span>
+          <button
+            disabled={!sender}
+            title={
+              sender
+                ? `Open source conversation #${origin.sender}`
+                : 'Source conversation unavailable'
+            }
+            className="ml-auto flex cursor-pointer items-center gap-1 hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            onClick={() =>
+              id &&
+              openAgentSource(
+                switchConversation,
+                { conversation: origin.sender, entry: origin.entry },
+                { conversation: id, entry: entry.id },
+              )
+            }
+          >
+            <SquareArrowOutUpRightIcon className="size-3" />
+            {sender ? 'source' : 'source unavailable'}
+          </button>
+        </header>
+        <div
+          className={`min-w-0 overflow-auto px-3 py-3 font-sans text-[13px] leading-relaxed ${expanded ? '' : 'max-h-96'}`}
         >
-          {expanded ? 'Compact view' : 'Expand full message'}
-        </button>
-      )}
-    </section>
+          <MessageResponse>{body}</MessageResponse>
+        </div>
+        {body.length > 1800 && (
+          <button
+            className="w-full cursor-pointer border-t border-border/60 px-3 py-2 text-left font-mono text-[11px] text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded ? 'Compact view' : 'Expand full message'}
+          </button>
+        )}
+      </section>
+    </Fold>
   )
 }
 

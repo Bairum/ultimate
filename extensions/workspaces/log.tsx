@@ -130,6 +130,8 @@ export function LanderReport({ entry }: { entry: EntryRecord }) {
   return (
     <div data-lander-report={toneOf(outcome)}>
       <LandingCard
+        card={entry.id}
+        sha={outcome.commits?.length ? outcome.sha : undefined}
         from={outcome.conversationId ?? own}
         sourceEntry={outcome.at}
         divergence={outcome.divergence}
@@ -356,6 +358,8 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
     return (
       <div data-lander-outcome={data.outcome}>
         <LandingCard
+          card={entry.id}
+          sha={outcome.commits?.length ? outcome.sha : undefined}
           sourceEntry={data.sourceEntry}
           divergence={data.divergence}
           at={

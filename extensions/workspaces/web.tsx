@@ -70,6 +70,8 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
   return (
     <div data-lineage-note="lander">
       <LandingCard
+        card={entry.id}
+        sha={sha}
         from={from}
         sourceEntry={at}
         divergence={divergence}

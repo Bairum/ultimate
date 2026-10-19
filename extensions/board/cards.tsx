@@ -15,6 +15,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import {
   cn,
   events,
+  Fold,
   Provided,
   useChat,
   useConversation,
@@ -214,48 +215,67 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
       </ChatBubble>
     )
   const state = outgoingState(message, toUser, call.status !== 'done')
+  const Icon = toUser ? InboxIcon : SendIcon
   return (
-    <section
-      data-board-outgoing={message?.id}
-      className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
+    <Fold
+      card={call.id}
+      summary={
+        <>
+          <Icon className="size-3 shrink-0 text-brand" />
+          <span className="shrink-0">Message to</span>
+          <span className="flex min-w-0 text-foreground/80">
+            {recipient === undefined ? (to ?? '…') : <Address id={recipient} />}
+          </span>
+          {state && (
+            <span className={cn('shrink-0', state === 'failed' && 'text-destructive')}>
+              · {state}
+            </span>
+          )}
+        </>
+      }
     >
-      <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-        {toUser ? (
-          <InboxIcon className="size-3.5 text-brand" />
-        ) : (
-          <SendIcon className="size-3.5 text-brand" />
+      <section
+        data-board-outgoing={message?.id}
+        className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
+      >
+        <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+          {toUser ? (
+            <InboxIcon className="size-3.5 text-brand" />
+          ) : (
+            <SendIcon className="size-3.5 text-brand" />
+          )}
+          <span>Message to</span>
+          <span className="flex min-w-0 text-foreground">
+            {recipient === undefined ? (to ?? '…') : <Address id={recipient} />}
+          </span>
+          <span>
+            {(message?.reply ?? reply ?? true) ? 'expects reply' : 'one-way'}
+            {steer && ' · steer'}
+          </span>
+          {state && <span className={state === 'failed' ? 'text-destructive' : ''}>· {state}</span>}
+          {message && typeof message.to === 'number' && message.entry !== undefined && (
+            <button
+              className="ml-auto flex cursor-pointer items-center gap-1 hover:text-foreground"
+              onClick={() => {
+                events.emit('board:open', { conversation: message.to, entry: message.entry })
+                showSurface('agent')
+                switchConversation(message.to as number)
+              }}
+            >
+              <SquareArrowOutUpRightIcon className="size-3" />
+              Open
+            </button>
+          )}
+        </header>
+        {message?.error && (
+          <p className="border-b border-border/60 px-3 py-1.5 font-mono text-[11px] break-words text-destructive">
+            {message.error}
+          </p>
         )}
-        <span>Message to</span>
-        <span className="flex min-w-0 text-foreground">
-          {recipient === undefined ? (to ?? '…') : <Address id={recipient} />}
-        </span>
-        <span>
-          {(message?.reply ?? reply ?? true) ? 'expects reply' : 'one-way'}
-          {steer && ' · steer'}
-        </span>
-        {state && <span className={state === 'failed' ? 'text-destructive' : ''}>· {state}</span>}
-        {message && typeof message.to === 'number' && message.entry !== undefined && (
-          <button
-            className="ml-auto flex cursor-pointer items-center gap-1 hover:text-foreground"
-            onClick={() => {
-              events.emit('board:open', { conversation: message.to, entry: message.entry })
-              showSurface('agent')
-              switchConversation(message.to as number)
-            }}
-          >
-            <SquareArrowOutUpRightIcon className="size-3" />
-            Open
-          </button>
-        )}
-      </header>
-      {message?.error && (
-        <p className="border-b border-border/60 px-3 py-1.5 font-mono text-[11px] break-words text-destructive">
-          {message.error}
-        </p>
-      )}
-      <Body text={text ?? ''} />
-      {message && <Answers message={message} />}
-    </section>
+        <Body text={text ?? ''} />
+        {message && <Answers message={message} />}
+      </section>
+    </Fold>
   )
 }
 
@@ -282,54 +302,75 @@ export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode
           ? 'reported back'
           : 'working'
   return (
-    <section
-      data-board-branch={id}
-      className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
-    >
-      <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] whitespace-nowrap text-muted-foreground">
-        <GitBranchIcon className="size-3.5 shrink-0 text-brand" />
-        <span className="shrink-0">
-          <span className="max-sm:hidden">Started branch</span>
-          <span className="sm:hidden">Branch</span>
-        </span>
-        {id !== undefined && (
-          <span className="flex min-w-0 overflow-hidden text-foreground">
-            <ConversationRef
-              className="w-full"
-              id={id}
-              title={conversations.find((conversation) => conversation.id === id)?.title}
-            />
+    <Fold
+      card={call.id}
+      summary={
+        <>
+          <GitBranchIcon className="size-3 shrink-0 text-brand" />
+          <span className="shrink-0">Branch</span>
+          {id !== undefined && (
+            <span className="flex min-w-0 text-foreground/80">
+              <ConversationRef
+                id={id}
+                title={conversations.find((conversation) => conversation.id === id)?.title}
+              />
+            </span>
+          )}
+          <span className={cn('shrink-0', state === 'failed' && 'text-destructive')}>
+            · {state}
           </span>
+        </>
+      }
+    >
+      <section
+        data-board-branch={id}
+        className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
+      >
+        <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] whitespace-nowrap text-muted-foreground">
+          <GitBranchIcon className="size-3.5 shrink-0 text-brand" />
+          <span className="shrink-0">
+            <span className="max-sm:hidden">Started branch</span>
+            <span className="sm:hidden">Branch</span>
+          </span>
+          {id !== undefined && (
+            <span className="flex min-w-0 overflow-hidden text-foreground">
+              <ConversationRef
+                className="w-full"
+                id={id}
+                title={conversations.find((conversation) => conversation.id === id)?.title}
+              />
+            </span>
+          )}
+          <span className="shrink-0 max-sm:hidden">
+            {root !== undefined && `from #${root} · `}
+            {(isolated ?? true) ? 'isolated' : 'shared'}
+          </span>
+          <span className={`shrink-0 ${state === 'failed' ? 'text-destructive' : ''}`}>
+            · {state}
+          </span>
+          {id !== undefined && (
+            <button
+              className="ml-auto flex shrink-0 cursor-pointer items-center gap-1 hover:text-foreground"
+              onClick={() => {
+                if (message?.entry !== undefined)
+                  events.emit('board:open', { conversation: id, entry: message.entry })
+                showSurface('agent')
+                switchConversation(id)
+              }}
+            >
+              <SquareArrowOutUpRightIcon className="size-3" />
+              Open
+            </button>
+          )}
+        </header>
+        {message?.error && (
+          <p className="border-b border-border/60 px-3 py-1.5 font-mono text-[11px] break-words text-destructive">
+            {message.error}
+          </p>
         )}
-        <span className="shrink-0 max-sm:hidden">
-          {root !== undefined && `from #${root} · `}
-          {(isolated ?? true) ? 'isolated' : 'shared'}
-        </span>
-        <span className={`shrink-0 ${state === 'failed' ? 'text-destructive' : ''}`}>
-          · {state}
-        </span>
-        {id !== undefined && (
-          <button
-            className="ml-auto flex shrink-0 cursor-pointer items-center gap-1 hover:text-foreground"
-            onClick={() => {
-              if (message?.entry !== undefined)
-                events.emit('board:open', { conversation: id, entry: message.entry })
-              showSurface('agent')
-              switchConversation(id)
-            }}
-          >
-            <SquareArrowOutUpRightIcon className="size-3" />
-            Open
-          </button>
-        )}
-      </header>
-      {message?.error && (
-        <p className="border-b border-border/60 px-3 py-1.5 font-mono text-[11px] break-words text-destructive">
-          {message.error}
-        </p>
-      )}
-      <Body text={prompt ?? ''} />
-    </section>
+        <Body text={prompt ?? ''} />
+      </section>
+    </Fold>
   )
 }
 
@@ -347,44 +388,65 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
   const reply = entry.kind === 'board.reply'
   const accent = accentOf(origin.from)
   return (
-    <section
-      data-board-input={origin.id}
-      className={cn('min-w-0 rounded-md border border-l-2 border-border', accent.left, accent.fill)}
-    >
-      <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-        <MailIcon className={cn('size-3.5 shrink-0', accent.name)} />
-        <span className={cn('flex min-w-0 font-semibold', accent.name)}>
-          <Address id={origin.from} />
-        </span>
-        <span>{reply ? 'Reply' : 'Message'}</span>
-        {!reply && (
-          <span>
-            {origin.reply ? 'expects reply' : 'one-way'}
-            {origin.delivery &&
-              ` · ${{ steer: 'steered', followUp: 'follow-up', note: 'note' }[origin.delivery]}`}
+    <Fold
+      card={entry.id}
+      keep={origin.from === 'user'}
+      summary={
+        <>
+          <MailIcon className={cn('size-3 shrink-0', accent.name)} />
+          <span className={cn('flex min-w-0', accent.name)}>
+            <Address id={origin.from} />
           </span>
+          <span className="shrink-0">
+            {reply ? 'reply' : origin.reply ? 'message · expects reply' : 'message · one-way'}
+          </span>
+          {origin.failed && <span className="shrink-0 text-destructive">· failed</span>}
+        </>
+      }
+    >
+      <section
+        data-board-input={origin.id}
+        className={cn(
+          'min-w-0 rounded-md border border-l-2 border-border',
+          accent.left,
+          accent.fill,
         )}
-        {origin.failed && <span className="text-destructive">failed</span>}
-        {typeof origin.from === 'number' && (
-          <button
-            className="ml-auto flex cursor-pointer items-center gap-1 hover:text-foreground"
-            onClick={() =>
-              receiver &&
-              typeof origin.from === 'number' &&
-              openAgentSource(
-                switchConversation,
-                { conversation: origin.from },
-                { conversation: receiver },
-              )
-            }
-          >
-            <SquareArrowOutUpRightIcon className="size-3" />
-            Source
-          </button>
-        )}
-      </header>
-      <Body text={origin.text} />
-    </section>
+      >
+        <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+          <MailIcon className={cn('size-3.5 shrink-0', accent.name)} />
+          <span className={cn('flex min-w-0 font-semibold', accent.name)}>
+            <Address id={origin.from} />
+          </span>
+          <span>{reply ? 'Reply' : 'Message'}</span>
+          {!reply && (
+            <span>
+              {origin.reply ? 'expects reply' : 'one-way'}
+              {origin.delivery &&
+                ` · ${{ steer: 'steered', followUp: 'follow-up', note: 'note' }[origin.delivery]}`}
+            </span>
+          )}
+          {origin.failed && <span className="text-destructive">failed</span>}
+          {typeof origin.from === 'number' && (
+            <button
+              className="ml-auto flex cursor-pointer items-center gap-1 hover:text-foreground"
+              onClick={() =>
+                receiver &&
+                typeof origin.from === 'number' &&
+                openAgentSource(
+                  switchConversation,
+                  { conversation: origin.from },
+                  { conversation: receiver },
+                )
+              }
+            >
+              <SquareArrowOutUpRightIcon className="size-3" />
+              Source
+            </button>
+          )}
+        </header>
+        <Body text={origin.text} />
+      </section>
+    </Fold>
   )
 }
 

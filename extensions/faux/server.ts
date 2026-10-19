@@ -315,6 +315,35 @@ export default async function fauxExtension(host: ExtensionHost) {
           ? fauxAssistantMessage([steps[step]], { stopReason: 'toolUse' })
           : fauxAssistantMessage([fauxText('Messages demo complete.')])
       }
+      if (transcript.messages[asked]?.content === 'cards demo') {
+        const results = transcript.messages
+          .slice(asked)
+          .filter((message) => message.role === 'toolResult')
+        const branch = Number(
+          /Branch #(\d+) started/.exec(messageText(results[1]?.content))?.[1] ?? 1,
+        )
+        const steps = [
+          // A fresh instance's root is empty and takes no branch; on a second run this fails inside the folded work.
+          fauxToolCall('seed_tally', { root: 1, text: 'A faux project for previewing cards.' }),
+          fauxToolCall('branch', { prompt: 'landing demo', isolated: false }),
+          fauxToolCall('message', {
+            to: `#${branch}`,
+            text: 'Can you check whether the status card renders on narrow screens?',
+          }),
+          fauxToolCall('codemode', {
+            code: `return await ultimate.action('faux', 'seedCards', { from: ${branch} })`,
+          }),
+          fauxToolCall('message', {
+            to: 'user',
+            text: 'The card fold landed as `5e1f0a2` and is pushed to `main`.\n\nDivergence: none.',
+            reply: false,
+          }),
+          fauxToolCall('message', { to: 'user', text: decisions }),
+        ]
+        return results.length < steps.length
+          ? fauxAssistantMessage([steps[results.length]], { stopReason: 'toolUse' })
+          : fauxAssistantMessage([fauxText('Every card kind is in this conversation now.')])
+      }
       // A request as its first line, also when it arrived as a message: the chat demos run in @ultimate and its branch.
       const request = messageText(transcript.messages[asked]?.content)
         .replace(/^Message from [^\n]*:\n/, '')
@@ -472,7 +501,148 @@ const demoLandings = [
   ['45a315f', '9057c43', 'Lander Row', "The lander's feature tag", 1],
 ] as const
 
+/** What `seedCards` writes: one of each card that reaches @ultimate as an entry rather than a tool call. */
+function demoCards(from: number): { kind: string; data: JsonObject }[] {
+  const subject = { title: 'Fold cards in the chat', feature: 'Chat Cards' }
+  const commits = ['5e1f0a2', '4d0e9b1']
+  const steps: JsonObject[] = [
+    { step: 'started', at: Date.now() - 60000 },
+    { step: 'merged', at: Date.now() - 50000 },
+    {
+      step: 'checked',
+      at: Date.now() - 20000,
+      check: { command: 'pnpm check', result: 'passed', summary: 'clean' },
+    },
+    { step: 'landed', at: Date.now() - 10000 },
+  ]
+  return [
+    {
+      kind: 'board.message',
+      data: {
+        id: 9001,
+        from,
+        text: 'Should the folded line show the age of a message?',
+        reply: true,
+        delivery: 'followUp',
+      },
+    },
+    {
+      kind: 'board.reply',
+      data: { id: 9002, from, text: 'The status card fits on narrow screens.', reply: false },
+    },
+    {
+      kind: 'subagents.report',
+      data: {
+        sender: from,
+        kind: 'report',
+        agent: 'worker',
+        body: 'Status: DONE\n\nAll checks pass.',
+      },
+    },
+    {
+      kind: 'lineage.note',
+      data: { from, text: 'The transcript paging work touches `web/src/app/transcript.tsx`.' },
+    },
+    {
+      kind: 'lineage.note',
+      data: {
+        source: 'main',
+        text: 'Since you last ran, `main` gained 3 commits; none overlap yours.',
+      },
+    },
+    {
+      kind: 'lineage.finished',
+      data: { from, title: 'Landing demo', text: 'Landed `1a2b3c4` on `main`.' },
+    },
+    {
+      kind: 'lineage.abstract',
+      data: {
+        conversation: from,
+        at: 1,
+        title: 'Landing demo',
+        text: 'Ask: land the demo.\nState: landed.',
+      },
+    },
+    {
+      kind: 'workspaces.lander-report',
+      data: {
+        id: `faux-cards:${from}`,
+        outcome: {
+          outcome: 'landed',
+          sha: commits[0],
+          base: 'c4ceeb7',
+          commits,
+          paths: ['web/src/app/fold.tsx'],
+          pushed: 'origin/main',
+          target: 'main',
+          tip: commits[0],
+          lander: from,
+          steps,
+          conversationId: from,
+          subject,
+          at: 1,
+          divergence: 'None.',
+        },
+      },
+    },
+    {
+      kind: 'lineage.note',
+      data: {
+        from,
+        source: 'lander',
+        text: `Landed ${commits[0]} on main`,
+        sha: commits[0],
+        base: 'c4ceeb7',
+        target: 'main',
+        commits: commits.map((sha) => ({ sha, subject: 'feat: fold cards in the chat' })),
+        more: 0,
+        paths: ['web/src/app/fold.tsx'],
+        pushed: 'origin/main',
+        ...subject,
+      },
+    },
+    { kind: 'sync.report', data: { from: '@sync', text: 'Moved blog to rog; it runs there now.' } },
+    {
+      kind: 'sync.move',
+      data: {
+        project: { key: 'blog', name: 'blog', root: '/home/haza/Projects/blog' },
+        machine: 'rog',
+        transition: {
+          id: `faux-move:${from}`,
+          target: 'rog',
+          from: 'haza-pc',
+          by: 'sync',
+          step: 'claim',
+          steps: (['fetch', 'install', 'checks', 'handover', 'claim'] as const).map((name) => ({
+            name,
+            state: 'done',
+          })),
+          cancellable: false,
+          startedAt: Date.now() - 90000,
+        },
+      },
+    },
+  ]
+}
+
 export const actions = {
+  /**
+   * Faux only: writes one of each entry card (messages and a reply from `from`, a report, notes, a catch-up, finished,
+   * an abstract, landings, a @sync report and move) into the calling conversation, for `cards demo`. Display only: the
+   * entries carry no model messages.
+   */
+  async seedCards(args: JsonValue, { host, conversationId }: ActionContext) {
+    if (!host.faux) throw new Error('seedCards runs only under faux')
+    const from = (args as { from?: unknown } | null)?.from
+    if (typeof from !== 'number') throw new Error('from must be a conversation id')
+    if (conversationId === undefined)
+      throw new Error('seedCards writes into the calling conversation')
+    const cards = demoCards(from)
+    await host.harness().commit(async (tx) => {
+      for (const card of cards) await tx.appendEntry(conversationId as ConversationId, card)
+    }, BACKGROUND_CONTEXT)
+    return { seeded: cards.length }
+  },
   /**
    * Faux only: `{from}` writes demo landing notes from conversation `from` into its root, with real-looking shas,
    * features and commit counts, to preview the root's Landed section and the landing cards.
