@@ -8,10 +8,12 @@ that reports a landing back, and sends you a one-way update and a question; `ask
 from another conversation gets a short acknowledgement.
 In @ultimate's conversation, `cards demo` produces one of each card its chat folds to one line: it starts a
 `landing demo` branch, messages it, calls the `seedCards {from}` action through codemode (messages, a reply, a report,
-notes, a catch-up, finished, an abstract, a lander report and a landing note, a @sync report and move, display only),
+notes, a catch-up, finished, an abstract, a lander report and a landing note, a @sync move, display only),
 then sends you an update and a question, which stay open.
 In @sync's conversation in a machine home, `fleet demo` calls `fleet`, which returns a demo fleet under faux
-(`extensions/sync/README.md` shows how to start a faux machine home).
+(`extensions/sync/README.md` shows how to start a faux machine home); in a project home it shows only the demo's
+`ultimate` project. `sync demo` calls `seedSync` through codemode, which writes a finished backup, a failed backup and
+a move here into @sync's conversation, display only.
 Under faux, summaries run on scripted neutral responses unless `summaryModel` is set. Their title and Ask line
 come from the latest user prompt, with generic demo summary, feature and activity text (a prompt containing `no feature` leaves the feature unset, to
 preview a conversation shown by its title); only the questions demo

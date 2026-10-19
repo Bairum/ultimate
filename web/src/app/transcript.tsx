@@ -669,6 +669,7 @@ function EmptyState() {
         : '…',
     ],
   ]
+  const Card = intro?.card
   return (
     <ConversationEmptyState className="min-h-[55vh]">
       <div className="w-full max-w-md font-mono text-[12px]">
@@ -690,6 +691,13 @@ function EmptyState() {
             </Fragment>
           ))}
         </div>
+        {Card && intro && (
+          <div className="mt-5 text-left">
+            <ExtensionBoundary extension={intro.extension} version={intro.version}>
+              <Card />
+            </ExtensionBoundary>
+          </div>
+        )}
       </div>
     </ConversationEmptyState>
   )

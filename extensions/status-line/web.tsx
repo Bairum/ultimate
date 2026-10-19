@@ -14,12 +14,13 @@ import {
   useConversations as useAllConversations,
   useModels,
   useSystem,
+  useAction,
   useTranscript,
 } from '@/sdk'
 import type { AssistantMessage, EntryRecord, Usage } from '@/sdk'
 import { useWorkspaceConversations as useConversations } from '../workspaces/ui.tsx'
 import { lastAssistant, promptTokens as prompt, usageTotals } from './context.ts'
-import { RatesAction } from './refs.ts'
+import { EstimateAction, RatesAction } from './refs.ts'
 import type { RateSample } from './refs.ts'
 import { responseAfter, turnOf } from './turns.ts'
 
@@ -236,10 +237,17 @@ function Context() {
       candidate.provider === agent.model?.provider && candidate.id === agent.model.modelId,
   )
   const window = model?.contextWindow
+  const { message, stale, marker } = lastAssistant(entries)
+  // After a compaction or reset, an estimate stands in until the next response measures the context.
+  const estimate = useAction(
+    EstimateAction,
+    { marker: marker ?? 0 },
+    // A failed estimate leaves the meter at '?', as before estimates existed; no notice for a status readout.
+    { enabled: !!window && marker !== undefined, onError: () => undefined },
+  ).data
   if (!window) return null
-  const { message, stale } = lastAssistant(entries)
-  // A fresh conversation has an empty context; after a compaction it is unknown until the next response.
-  const used = stale ? undefined : message ? prompt(message.usage) : 0
+  // A fresh conversation has an empty context.
+  const used = stale ? (estimate ?? undefined) : message ? prompt(message.usage) : 0
   const percent = used === undefined ? undefined : (used / window) * 100
   return (
     <Item
@@ -253,7 +261,7 @@ function Context() {
       tip={
         used === undefined
           ? 'Context size is known after the next response'
-          : `${used.toLocaleString()} of ${window.toLocaleString()} tokens in context`
+          : `${stale ? 'About ' : ''}${used.toLocaleString()} of ${window.toLocaleString()} tokens in context${stale ? ', estimated until the next response' : ''}`
       }
     >
       <span className="relative h-1.5 w-8 overflow-hidden rounded-full bg-muted">
@@ -343,13 +351,11 @@ function Connection() {
   const connection = useConnection()
   const system = useSystem()
   const open = connection.status === 'open'
-  const offline = system?.offline === true
   return (
     <Item
       tip={
         system && (
           <>
-            {offline && <div>Machine offline · showing the last synced state</div>}
             {system.process.url} · pid {system.process.pid} · node {system.process.node}
             <div>
               generation {system.process.generation} · since{' '}
@@ -362,17 +368,11 @@ function Connection() {
       <span
         className={cn(
           'size-1.5 rounded-full',
-          offline ? 'bg-warning' : open ? 'bg-success' : 'animate-pulse-dot bg-warning',
+          open ? 'bg-success' : 'animate-pulse-dot bg-warning',
         )}
       />
-      <span className={offline || !open ? 'text-warning' : undefined}>
-        {offline
-          ? 'offline'
-          : open
-            ? 'live'
-            : connection.status === 'connecting'
-              ? 'connecting…'
-              : 'reconnecting…'}
+      <span className={open ? undefined : 'text-warning'}>
+        {open ? 'live' : connection.status === 'connecting' ? 'connecting…' : 'reconnecting…'}
       </span>
       {system && <span className="text-muted-foreground/70">gen {system.process.generation}</span>}
     </Item>

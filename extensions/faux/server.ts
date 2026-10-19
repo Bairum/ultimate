@@ -285,6 +285,14 @@ export default async function fauxExtension(host: ExtensionHost) {
         )
       }
       if (last?.role === 'user' && last.content === 'fleet demo') return tool('fleet', {})
+      if (last?.role === 'user' && last.content === 'sync demo')
+        return tool('codemode', { code: "return await ultimate.action('faux', 'seedSync')" })
+      if (
+        last?.role === 'toolResult' &&
+        last.toolName === 'codemode' &&
+        transcript.messages[asked]?.content === 'sync demo'
+      )
+        return fauxAssistantMessage([fauxText('Backups and the move are in this conversation.')])
       // Answers with the given Markdown verbatim, to preview how answers render it (such as `#id` mentions).
       const say = /^say ([\s\S]+)$/.exec(messageText(last?.role === 'user' ? last.content : ''))
       if (say) return fauxAssistantMessage([fauxText(say[1])])
@@ -601,7 +609,6 @@ function demoCards(from: number): { kind: string; data: JsonObject }[] {
         ...subject,
       },
     },
-    { kind: 'sync.report', data: { from: '@sync', text: 'Moved blog to rog; it runs there now.' } },
     {
       kind: 'sync.move',
       data: {
@@ -625,10 +632,61 @@ function demoCards(from: number): { kind: string; data: JsonObject }[] {
   ]
 }
 
+/** What `seedSync` writes into @sync's conversation: a finished backup, a failed one, and a move here. */
+const syncCards = (root: string): { kind: string; data: JsonObject }[] => {
+  const project = { key: 'github.com/hazat/ultimate', name: 'ultimate' }
+  const at = Date.now()
+  return [
+    {
+      kind: 'sync.backup',
+      data: {
+        project,
+        report: {
+          ok: true,
+          id: 'faux-backup-1',
+          at: at - 3 * 3600_000,
+          bytes: 12_582_912,
+          ms: 3200,
+        },
+      },
+    },
+    {
+      kind: 'sync.backup',
+      data: {
+        project,
+        report: {
+          ok: false,
+          at: at - 40 * 60_000,
+          error: 'PUT /sync/snapshots/github.com%2Fhazat%2Fultimate: 503 Service Unavailable',
+        },
+      },
+    },
+    {
+      kind: 'sync.move',
+      data: {
+        project: { ...project, root },
+        machine: 'rog',
+        transition: {
+          id: 'faux-sync-move',
+          target: 'rog',
+          from: 'haza-pc',
+          by: 'sync',
+          step: 'claim',
+          steps: (
+            ['fetch', 'install', 'checks', 'handover', 'download', 'branches', 'claim'] as const
+          ).map((name) => ({ name, state: 'done' })),
+          cancellable: false,
+          startedAt: at - 5 * 60_000,
+        },
+      },
+    },
+  ]
+}
+
 export const actions = {
   /**
    * Faux only: writes one of each entry card (messages and a reply from `from`, a report, notes, a catch-up, finished,
-   * an abstract, landings, a @sync report and move) into the calling conversation, for `cards demo`. Display only: the
+   * an abstract, landings, a @sync move) into the calling conversation, for `cards demo`. Display only: the
    * entries carry no model messages.
    */
   async seedCards(args: JsonValue, { host, conversationId }: ActionContext) {
@@ -638,6 +696,17 @@ export const actions = {
     if (conversationId === undefined)
       throw new Error('seedCards writes into the calling conversation')
     const cards = demoCards(from)
+    await host.harness().commit(async (tx) => {
+      for (const card of cards) await tx.appendEntry(conversationId as ConversationId, card)
+    }, BACKGROUND_CONTEXT)
+    return { seeded: cards.length }
+  },
+  /** Faux only: writes @sync's cards (a finished and a failed backup, a move here) into the calling conversation. */
+  async seedSync(_args: JsonValue, { host, conversationId }: ActionContext) {
+    if (!host.faux) throw new Error('seedSync runs only under faux')
+    if (conversationId === undefined)
+      throw new Error('seedSync writes into the calling conversation')
+    const cards = syncCards(host.projectRoot)
     await host.harness().commit(async (tx) => {
       for (const card of cards) await tx.appendEntry(conversationId as ConversationId, card)
     }, BACKGROUND_CONTEXT)

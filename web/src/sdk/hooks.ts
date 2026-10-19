@@ -20,7 +20,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import { actions, allCommands, regionKeys, shellKeys, shownSurface } from './actions.ts'
 import type { Region } from './actions.ts'
-import { actionMessage, MachineOfflineError, ROOT } from './api.ts'
+import { actionMessage, ROOT } from './api.ts'
 import { EVENT_FEED } from '../../../shared/events.ts'
 import type { StreamedView } from '../../../shared/protocol.ts'
 import type { EventData, EventRecord, EventToken } from '../../../shared/events.ts'
@@ -464,11 +464,6 @@ export function useAction<Args, T>(
         // Disabled or unmounted rather than replaced by a newer call: nothing is in flight anymore.
         if (latest.current.controller === controller)
           setState((previous) => ({ ...previous, loading: false }))
-        return undefined
-      }
-      if (error instanceof MachineOfflineError) {
-        // Status queries have no current answer in a read-only replica.
-        setState({ key, loading: false })
         return undefined
       }
       const failure = error as ActionError

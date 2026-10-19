@@ -19,6 +19,7 @@ import type { Connect, SyncSocket, SyncState } from '../extensions/cloud/server.
 import { startLease } from '../extensions/cloud/lease.ts'
 import type { Exec } from '../extensions/cloud/lease.ts'
 import * as snapshot from '../extensions/cloud/snapshot.ts'
+import type { FeedbackService } from '../extensions/cloud/api.ts'
 import { git } from '../lib/git.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { context, prepareHarness } from '../server/harness.ts'
@@ -69,6 +70,7 @@ function memoryBucket() {
     async delete(names: string | string[]) {
       for (const name of [names].flat()) objects.delete(name)
     },
+    keys: () => [...objects.keys()],
     async list({ prefix }: { prefix: string }) {
       return {
         objects: [...objects.keys()]
@@ -96,7 +98,6 @@ export function cloud({ aliases = {} }: { aliases?: Record<string, string> } = {
   }[] = []
   const replica = Object.assign(Object.create(SharedReplica.prototype) as SharedReplica, {
     store: new ReplicaStore(sql()),
-    streams: new Set(),
     ctx: { getWebSockets: () => sockets, waitUntil: () => {} },
     env: {
       DIRECTORY: {
@@ -132,10 +133,14 @@ export function cloud({ aliases = {} }: { aliases?: Record<string, string> } = {
       },
       deserializeAttachment: () => attachment,
     }
-    // The sender only sends JSON text.
+    // The sender sends JSON text, and `ping`, which the replica's auto-response answers without waking it.
     client.send = (data) =>
       queueMicrotask(() => {
         if (server.readyState !== WebSocket.OPEN) return
+        if (data === 'ping') {
+          if (!muted) client.dispatchEvent(new MessageEvent('message', { data: 'pong' }))
+          return
+        }
         const { type } = JSON.parse(data as string) as MachineMessage
         const hold = holds.findIndex(
           (item) => item.machine === machineOf(server) && item.type === type,
@@ -163,7 +168,7 @@ export function cloud({ aliases = {} }: { aliases?: Record<string, string> } = {
         replica.webSocketClose(socket)
       }
   }
-  /** A request to the project's API, as the cloud UI sends it. */
+  /** A request to the replica's own routes, as the Worker's bearer routes send it. */
   const api = (path: string, body?: unknown) =>
     replica.fetch(
       new Request(`https://cloud.example${path}`, {
@@ -282,7 +287,8 @@ export async function checkout() {
   }
 }
 
-const bucket = memoryBucket()
+/** The Worker's R2 bucket, shared by every test in the file. */
+export const bucket = memoryBucket()
 const machines = new Set<{ close(): Promise<void> }>()
 beforeAll(() => {
   Object.defineProperty(crypto.subtle, 'timingSafeEqual', {
@@ -343,6 +349,8 @@ export async function machine(
     git?: (args: readonly string[]) => Promise<void>
     /** The model login; faux hosts have one. */
     login?: { provider: string; ok: boolean }
+    /** Who hears the lease's `cloud.feedback`: backups and moves that ended here. */
+    feedback?: FeedbackService
   } = {},
 ) {
   const home = options.home ?? (await temp('ultimate-lease-'))
@@ -418,7 +426,8 @@ export async function machine(
     },
     onOpen: (callback) => openers.add(callback),
     onRelease: (callback) => releasers.add(callback),
-    want: () => undefined,
+    want: ((api: { name: string }) =>
+      api.name === 'cloud.feedback' ? options.feedback : undefined) as ExtensionHost['want'],
     conversations: () => [],
     system: () =>
       ({ process: { url: 'http://127.0.0.1:4800' } }) as unknown as ReturnType<
@@ -466,8 +475,8 @@ export async function machine(
     },
     {
       // Every role this machine hears, for what reaches each socket.
-      sync: (syncHost, syncOptions, syncDial, builds, hooks) =>
-        startSync(syncHost, syncOptions, syncDial, builds, {
+      sync: (syncHost, syncOptions, syncDial, hooks) =>
+        startSync(syncHost, syncOptions, syncDial, {
           ...hooks!,
           role: (state) => {
             roles.push(structuredClone(state))

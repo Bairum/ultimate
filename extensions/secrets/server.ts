@@ -1,20 +1,25 @@
 import { defineExtension, section } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
+import type { ExtensionHost } from '../../server/extensions.ts'
 import { secretMetadata, validateName, validateValue } from '../../lib/secrets.ts'
 import { writeSecret } from './store.ts'
 import { implementAction } from '../../lib/actions.ts'
+import { SecretsApi } from './api.ts'
 import { DeleteAction, ListAction, SetAction } from './refs.ts'
 
-export default defineExtension({
-  name: 'secrets',
-  sections: [
-    section(
-      'secrets',
-      () =>
-        'Secrets are managed by the user in the Secrets panel (⌘K → Secrets). Never read, print, or copy ~/.ultimate/secrets.json. When a tool reports a missing secret, tell the user its name and where to add it.',
-    ),
-  ],
-})
+export default function secrets(host: ExtensionHost) {
+  host.implement(SecretsApi, { set: (name, value) => writeSecret(host.userHome, name, value) })
+  return defineExtension({
+    name: 'secrets',
+    sections: [
+      section(
+        'secrets',
+        () =>
+          'Secrets are managed by the user in the Secrets panel (⌘K → Secrets). Never read, print, or copy ~/.ultimate/secrets.json. When a tool reports a missing secret, tell the user its name and where to add it.',
+      ),
+    ],
+  })
+}
 export const userActions = ['set', 'delete']
 
 export const actions: Record<string, ExtensionAction> = {

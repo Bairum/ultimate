@@ -21,7 +21,6 @@
     "lib",
     "cloud/protocol.ts",
     "cloud/build.ts",
-    "cloud/ui-build.ts",
     "cloud/deploy.ts",
     "scripts",
     "extensions/**/*.ts",

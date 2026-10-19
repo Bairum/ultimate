@@ -1,19 +1,12 @@
 import './front.css'
 import { cn } from 'cn'
-import { ChevronDownIcon, KeyRoundIcon, LoaderCircleIcon, NetworkIcon } from 'lucide-react'
+import { LoaderCircleIcon, NetworkIcon } from 'lucide-react'
 import { StrictMode, useEffect, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
-import type { CloudInfo, MachineHealth, ProviderHealth, Transition } from '../protocol.ts'
+import type { MachineHealth, ProviderHealth, Transition } from '../protocol.ts'
 
 /** A row of `/api/directory` (`Project` in cloud/directory.ts, which runs in the Worker). */
 interface Project {
@@ -28,7 +21,6 @@ interface Project {
     lastSeen: number
     tailnet?: string
   }[]
-  count: number
   transition?: Transition
 }
 
@@ -39,9 +31,9 @@ function Tailnet({ project }: { project: Project }) {
   return (
     <Button
       asChild
-      className="h-6 shrink-0 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
+      className="shrink-0 font-normal text-foreground/85 pointer-coarse:h-8"
       size="xs"
-      variant="ghost"
+      variant="outline"
     >
       <a
         aria-label={`Open ${project.name} on ${machine} over the tailnet`}
@@ -49,8 +41,8 @@ function Tailnet({ project }: { project: Project }) {
         href={tailnet}
         title={`Open ${project.name} directly on ${machine}: ${tailnet}`}
       >
-        <NetworkIcon className="size-3 opacity-70" />
-        <span className="max-sm:hidden">Open on tailnet</span>
+        <NetworkIcon className="opacity-70" />
+        Open on tailnet
       </a>
     </Button>
   )
@@ -106,10 +98,11 @@ function useDirectory() {
 
 /** `12m`, `3h`: `ago()` without its suffix, for the compact provider row. */
 const age = (at: number, now: number) => ago(at, now).replace(' ago', '')
-/** A machine is online while a project lists it connected, or it reported within two hours. */
-const ONLINE = 2 * 60 * 60 * 1000
-/** A report older than this says when it came. */
-const STALE = 90 * 60 * 1000
+/**
+ * A machine runs Ultimate while a project lists it connected, or while its machine home's hourly health report is
+ * fresh. Only running machines are listed.
+ */
+const RUNNING = 90 * 60 * 1000
 
 function Provider({ health, now }: { health: ProviderHealth; now: number }) {
   const at =
@@ -136,16 +129,8 @@ function Provider({ health, now }: { health: ProviderHealth; now: number }) {
   )
 }
 
-/** One line per machine: its online dot and name, then each provider's state, age and short error. */
-function Machines({
-  health,
-  connected,
-  now,
-}: {
-  health: MachineHealth[]
-  connected: Set<string>
-  now: number
-}) {
+/** One line per running machine: its name, then each provider's state, age and short error. */
+function Machines({ health, now }: { health: MachineHealth[]; now: number }) {
   return (
     <section className="flex flex-col gap-2">
       <h2 className="text-[10.5px] font-normal tracking-wider text-muted-foreground uppercase">
@@ -153,24 +138,18 @@ function Machines({
       </h2>
       <ul className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70 bg-card/40">
         {health.map((machine) => {
-          const online = connected.has(machine.machine) || now - machine.at < ONLINE
           return (
             <li
               className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-3 py-2 font-mono text-[11px]"
               key={machine.machine}
             >
               <span className="flex shrink-0 items-center gap-2">
-                <span
-                  className={cn(
-                    'size-1.5 shrink-0 self-center rounded-full',
-                    online ? 'bg-success' : 'bg-muted-foreground/40',
-                  )}
-                />
+                <span className="size-1.5 shrink-0 self-center rounded-full bg-success" />
                 <span className="font-sans text-[13px] font-medium text-foreground">
                   {machine.machine}
                 </span>
               </span>
-              <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 gap-y-1 pl-3.5 sm:pl-1">
+              <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 gap-y-1 max-sm:order-last max-sm:basis-full max-sm:pl-3.5 sm:pl-1">
                 {machine.providers.length ? (
                   machine.providers.map((provider, index) => (
                     <span
@@ -185,14 +164,6 @@ function Machines({
                   <span className="text-muted-foreground/70">no providers</span>
                 )}
               </span>
-              {now - machine.at > STALE && (
-                <span
-                  className="shrink-0 text-[10.5px] text-muted-foreground/60"
-                  title={new Date(machine.at).toLocaleString()}
-                >
-                  reported {ago(machine.at, now)}
-                </span>
-              )}
             </li>
           )
         })}
@@ -201,10 +172,10 @@ function Machines({
   )
 }
 
-/** Up and down move between rows, as in a list; Tab still walks them in order. */
+/** Up and down move between tailnet links, as in a list; Tab still walks them in order. */
 function moveFocus(event: KeyboardEvent<HTMLElement>) {
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
-  const rows = [...event.currentTarget.querySelectorAll<HTMLAnchorElement>('a[data-row]')]
+  const rows = [...event.currentTarget.querySelectorAll<HTMLAnchorElement>('a[data-tailnet]')]
   const index = rows.indexOf(document.activeElement as HTMLAnchorElement)
   const next = rows[event.key === 'ArrowDown' ? index + 1 : index < 0 ? rows.length - 1 : index - 1]
   if (!next) return
@@ -240,162 +211,53 @@ function moving(transition: Transition | undefined) {
   return `→ ${transition.target} · ${steps[transition.step]}${detail}`
 }
 
-/**
- * "Run on ▾": the project's machines, the connected standbys movable to. It asks the project's `/api/cloud` on open for
- * the secrets each lacks, and moves with `POST /p/<slug>/api/cloud/move`.
- */
-function RunOn({ project, onError }: { project: Project; onError: (error?: string) => void }) {
-  const [info, setInfo] = useState<CloudInfo>()
-  const missing = (machine: string) =>
-    info?.machines.find((candidate) => candidate.machine === machine)?.missingSecrets ?? []
-  const load = async () => {
-    try {
-      const response = await fetch(`/p/${project.slug}/api/cloud`)
-      if (response.ok) setInfo((await response.json()) as CloudInfo)
-    } catch {
-      // The list from the directory still shows; only the missing secrets are unknown.
-    }
-  }
-  const move = async (machine: string) => {
-    onError(undefined)
-    try {
-      const response = await fetch(`/p/${project.slug}/api/cloud/move`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ machine }),
-      })
-      if (!response.ok) {
-        const data = (await response.json().catch(() => ({}))) as { error?: string }
-        onError(`${machine}: ${data.error ?? response.status}`)
-      }
-    } catch {
-      onError(`${machine}: the cloud did not answer`)
-    }
-  }
-  const busy = !!moving(project.transition)
+/** The machine running the project, with its dot. Only projects whose writer runs are listed. */
+function Writer({ machine }: { machine: string }) {
   return (
-    <DropdownMenu onOpenChange={(open) => open && void load()}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          className="mr-2 h-6 shrink-0 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
-          size="xs"
-          variant="ghost"
-        >
-          Run on
-          <ChevronDownIcon className="size-3 opacity-60" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64 font-mono">
-        <DropdownMenuLabel className="text-[10.5px] font-normal tracking-wider text-muted-foreground uppercase">
-          Run {project.name} on
-        </DropdownMenuLabel>
-        {project.machines.map((machine) => {
-          const lacks = missing(machine.machine)
-          return (
-            <DropdownMenuItem
-              className="items-start text-[12px]"
-              disabled={busy || machine.role === 'writer' || !machine.connected}
-              key={machine.machine}
-              onSelect={() => void move(machine.machine)}
-            >
-              <span
-                className={cn(
-                  'mt-1.5 size-1.5 shrink-0 rounded-full',
-                  machine.connected ? 'bg-success' : 'bg-muted-foreground/40',
-                )}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate">{machine.machine}</span>
-                <span className="block truncate text-[11px] text-muted-foreground">
-                  {machine.role === 'writer'
-                    ? project.writer.online
-                      ? 'running'
-                      : 'holds the project · offline'
-                    : machine.connected
-                      ? 'standby · checkout ready'
-                      : 'not connected'}
-                </span>
-                {lacks.length > 0 && (
-                  <span className="flex items-center gap-1 text-[11px] text-warning">
-                    <KeyRoundIcon className="size-3" />
-                    <span className="truncate">missing {lacks.join(', ')}</span>
-                  </span>
-                )}
-              </span>
-            </DropdownMenuItem>
-          )
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <span className="flex min-w-0 shrink-0 items-center gap-1.5" title={`Runs on ${machine}`}>
+      <span className="size-1.5 shrink-0 rounded-full bg-success" />
+      <span className="truncate text-foreground/85">{machine}</span>
+    </span>
   )
 }
 
-function Row({ project, now }: { project: Project; now: number }) {
-  const { writer } = project
-  const { lastSeen } = writer
-  const standbys = project.machines.filter((machine) => machine.role === 'standby')
-  const conversations = `${project.count} conversation${project.count === 1 ? '' : 's'}`
+function Row({ project }: { project: Project }) {
+  const standbys = project.machines.filter(
+    (machine) => machine.role === 'standby' && machine.connected,
+  )
   const step = moving(project.transition)
-  const [error, setError] = useState<string>()
   return (
-    <li className="flex items-center">
-      <a
-        className="flex min-w-0 flex-1 flex-col gap-1 px-3 py-2.5 transition-colors pointer-coarse:py-3 outline-none hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
-        data-row
-        href={`/p/${project.slug}/`}
-      >
-        <span className="flex min-w-0 items-center gap-2">
+    <li className="flex flex-col gap-1.5 px-3 py-2.5 pointer-coarse:py-3">
+      <span className="flex min-w-0 items-center gap-3">
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-[13px] font-medium text-foreground">{project.name}</span>
           <span
-            className={cn(
-              'size-1.5 shrink-0 rounded-full',
-              writer.online ? 'bg-success' : 'bg-muted-foreground/40',
-            )}
-          />
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
-            {project.name}
-          </span>
-          <span
-            className="min-w-0 shrink truncate font-mono text-[11px] text-muted-foreground"
-            title={
-              writer.machine === null
-                ? 'Free: any standby machine may take it over'
-                : writer.online || lastSeen === undefined
-                  ? undefined
-                  : `Last seen ${new Date(lastSeen).toLocaleString()}`
-            }
+            className="truncate font-mono text-[10.5px] text-muted-foreground/70"
+            title={project.key}
           >
-            {writer.machine === null
-              ? 'free'
-              : writer.online
-                ? `runs on ${writer.machine}`
-                : `${writer.machine} · offline${lastSeen === undefined ? '' : ` since ${ago(lastSeen, now)}`}`}
-          </span>
-        </span>
-        <span className="flex min-w-0 items-center gap-3 pl-3.5 font-mono text-[10.5px] text-muted-foreground/70">
-          <span className="min-w-0 flex-1 truncate" title={project.key}>
             {project.key}
           </span>
-          {standbys.map((machine) => (
-            <span
-              className="shrink-0 rounded-sm border border-border/60 px-1 text-[10px] leading-4 text-muted-foreground/70"
-              key={machine.machine}
-              title={`Standby, ${machine.connected ? 'connected' : `last seen ${ago(machine.lastSeen, now)}`}`}
-            >
-              {machine.machine}
-            </span>
-          ))}
-          <span className="shrink-0">{conversations}</span>
         </span>
-        {step && (
-          <span className="flex min-w-0 items-center gap-1.5 pl-3.5 font-mono text-[11px] text-brand">
-            <LoaderCircleIcon className="size-3 shrink-0 animate-spin" />
-            <span className="truncate">{step}</span>
+        <Tailnet project={project} />
+      </span>
+      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px]">
+        <Writer machine={project.writer.machine!} />
+        {standbys.map((machine) => (
+          <span
+            className="shrink-0 rounded-sm border border-border/60 px-1 text-[10px] leading-4 text-muted-foreground/70"
+            key={machine.machine}
+            title="Standby"
+          >
+            {machine.machine}
           </span>
-        )}
-        {error && <span className="truncate pl-3.5 font-mono text-[11px] text-error">{error}</span>}
-      </a>
-      <Tailnet project={project} />
-      <RunOn onError={setError} project={project} />
+        ))}
+      </span>
+      {step && (
+        <span className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-brand">
+          <LoaderCircleIcon className="size-3 shrink-0 animate-spin" />
+          <span className="truncate">{step}</span>
+        </span>
+      )}
     </li>
   )
 }
@@ -411,12 +273,17 @@ function Message({ children }: { children: ReactNode }) {
 function Front() {
   const { directory, health, failing } = useDirectory()
   const now = Date.now()
-  const connected = new Set(
+  const rows =
     directory.state === 'loaded'
-      ? directory.rows.flatMap((row) =>
-          row.machines.filter((machine) => machine.connected).map((machine) => machine.machine),
-        )
-      : [],
+      ? directory.rows.filter((row) => row.writer.machine !== null && row.writer.online)
+      : []
+  const connected = new Set(
+    rows.flatMap((row) =>
+      row.machines.filter((machine) => machine.connected).map((machine) => machine.machine),
+    ),
+  )
+  const running = health.filter(
+    (machine) => connected.has(machine.machine) || now - machine.at < RUNNING,
   )
   return (
     <div className="flex min-h-dvh flex-col">
@@ -450,8 +317,8 @@ function Front() {
         <header>
           <h1 className="text-[15px] font-medium text-foreground">Projects</h1>
           <p className="mt-1 text-[13px] text-muted-foreground">
-            Every project that syncs here, and the machine it runs on. Open one to continue where it
-            left off.
+            Every project running on one of your machines right now. Open one on the tailnet to
+            continue where it left off.
           </p>
         </header>
         {directory.state === 'loading' && (
@@ -470,23 +337,23 @@ function Front() {
             </div>
           </Message>
         )}
-        {directory.state === 'loaded' && !directory.rows.length && (
+        {directory.state === 'loaded' && !rows.length && (
           <Message>
-            No projects yet. Configure{' '}
+            No project is running: start Ultimate on a machine with cloud sync (see New machine in{' '}
             <code className="rounded-sm bg-muted px-1 font-mono text-[12px] text-foreground/85">
-              cloud.url
-            </code>{' '}
-            and start Ultimate in a checkout with a GitHub origin.
+              cloud/README.md
+            </code>
+            )
           </Message>
         )}
-        {directory.state === 'loaded' && directory.rows.length > 0 && (
+        {rows.length > 0 && (
           <ul className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70 bg-card/40">
-            {directory.rows.map((row) => (
-              <Row key={row.slug} now={now} project={row} />
+            {rows.map((row) => (
+              <Row key={row.slug} project={row} />
             ))}
           </ul>
         )}
-        {health.length > 0 && <Machines connected={connected} health={health} now={now} />}
+        {running.length > 0 && <Machines health={running} now={now} />}
       </main>
     </div>
   )
