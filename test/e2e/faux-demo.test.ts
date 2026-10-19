@@ -21,7 +21,7 @@ afterEach(async () => {
   for (const server of servers.splice(0)) await server.close()
 })
 
-it('derives neutral faux summaries from the latest prompt and only flags the questions reply', async () => {
+it('derives faux summaries from the latest prompt and marks only the questions reply as awaiting a decision', async () => {
   const faux = fauxProvider()
   await fauxExtension({
     faux,
@@ -48,7 +48,6 @@ it('derives neutral faux summaries from the latest prompt and only flags the que
     `user: Earlier prompt\n\nassistant: Earlier reply\n\nuser:  ${prompt}\n\nassistant: Complete.`,
   )
   expect(normal).toEqual({
-    assessment: 'done',
     activity: 'Replied in the demo.',
     title: prompt.slice(0, 60),
     summary: 'Scripted demo conversation.',
@@ -58,12 +57,14 @@ it('derives neutral faux summaries from the latest prompt and only flags the que
   const question = await summarize(
     'user: questions demo\n\nassistant: Should we keep the preview running?',
   )
-  expect(question.assessment).toBe('needs_input')
   expect(question.title).toBe('questions demo')
+  expect(question.abstract).toBe('Ask: questions demo\nState: awaiting a decision')
   const answered = await summarize(
     'user: questions demo\n\nassistant: Should we keep the preview running?\n\nuser: Q: Should we keep the preview running?\nA: Yes\n\nassistant: Understood.',
   )
-  expect(answered.assessment).toBe('done')
+  expect(answered.abstract).toBe(
+    'Ask: Q: Should we keep the preview running? A: Yes\nState: scripted demo reply',
+  )
   expect(answered.feature).toBe('Demo')
 })
 

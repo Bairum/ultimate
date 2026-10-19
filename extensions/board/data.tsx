@@ -15,6 +15,62 @@ export const waitingOnUser = (board: BoardData, answerWaits = false) =>
     (message) => message.to === 'user' && message.reply && message.state === 'delivered',
   ).length + (answerWaits ? 1 : 0)
 
+/**
+ * Where a conversation stands, the one state every view shows:
+ * - `working`: it runs, or has input queued;
+ * - `waits`: the primary agent (@ultimate, @sync in the machine home) has a question open with the user, the only
+ *   state that asks the user to act;
+ * - `awaiting`: a conversation that is no subagent asked the primary agent (a branch asking @ultimate) and waits for
+ *   the answer; a subagent's questions go to its parent, which answers them in its own run;
+ * - `done`: a subagent answered, and its answer went to its parent;
+ * - `failed`: its latest input ended without an answer;
+ * - `idle`: everything else.
+ */
+export type ConversationState = 'working' | 'waits' | 'awaiting' | 'done' | 'failed' | 'idle'
+
+export function conversationState(
+  conversation: {
+    id: number
+    /** `primary`: the agent that talks to the user; `subagent`: owned by a task of its parent. */
+    kind: 'primary' | 'subagent' | 'other'
+    runState?: 'working' | 'queued' | 'idle' | 'answered' | 'error'
+    busy?: boolean
+    /** The primary agent's conversation, which a branch's open question waits on. */
+    primary?: number
+  },
+  board: BoardData,
+  answerWaits = false,
+): ConversationState {
+  const { id, kind, runState } = conversation
+  if (conversation.busy || runState === 'working' || runState === 'queued') return 'working'
+  if (kind === 'primary' && waitingOnUser(board, answerWaits) > 0) return 'waits'
+  if (
+    kind !== 'subagent' &&
+    board.messages.some(
+      (message) => message.from === id && message.to === conversation.primary && isOpen(message),
+    )
+  )
+    return 'awaiting'
+  if (runState === 'error') return 'failed'
+  if (kind === 'subagent' && runState === 'answered') return 'done'
+  return 'idle'
+}
+
+/** A state in the sidebar's and System's lower-case words; `waiting` counts what waits on you. */
+export function stateWord(state: ConversationState, waiting = 0) {
+  if (state === 'waits') return waiting > 0 ? `${waiting} waiting on you` : 'waits on you'
+  return state === 'awaiting' ? 'awaiting @ultimate' : state
+}
+
+/** The text colour each state is said in; working's comes from its phase, idle is quiet. */
+export const stateTone: Partial<Record<ConversationState, string>> = {
+  working: 'text-brand',
+  waits: 'text-amber-700 dark:text-amber-300',
+  awaiting: 'text-amber-700/80 dark:text-amber-300/70',
+  done: 'text-success',
+  failed: 'text-error',
+}
+
 type Conversation = {
   label?: string
   title?: string

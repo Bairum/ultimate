@@ -1,9 +1,9 @@
-What each conversation is about: titles, summaries, features and reply assessments, the overview the sidebar reads,
+What each conversation is about: titles, summaries, features and reply summaries, the overview the sidebar reads,
 and concluding and resuming conversations. Several branches run at once as separate agents; lineage roots keep their shared context without running turns.
-A summary model (GPT-6 Luna by default) automatically gives top-level conversations concise titles and sidebar summaries, and assesses each final reply without
+A summary model (GPT-6 Luna by default) automatically gives top-level conversations concise titles and sidebar summaries, and describes each final reply without
 changing the main agent. Ownerless, top-level standing agents (label `agent`) and lander conversations
 (label `lander`) never schedule summary tasks: their `@name` titles stay fixed, with no automatic summary,
-feature, activity or reply assessment. This applies to intent, spawn and completed-reply triggers.
+feature, activity or reply summary. This applies to intent, spawn and completed-reply triggers.
 
 ## Sidebar
 
@@ -56,7 +56,7 @@ The single-conversation actions below reject bad args, unknown conversations, an
   again and re-enables automatic titles on the next scheduled summary. Nonblank renames take manual ownership, even
   during generation. Returns `{ ok: true }`.
 
-## Automatic summaries and reply assessments
+## Automatic summaries and reply summaries
 
 Title/summary requests also classify a 1–3 word product feature label for top-level conversations.
 The label is exposed in the overview and kept unless the work clearly moves to another feature.
@@ -79,21 +79,23 @@ and a full-date tooltip. This custom system entry has no model contribution; it 
 
 The `GenerationTask.onYield` hook schedules a background observer. It waits for generation to settle and
 only counts an exchange when an input submission completed with that answer (not an intermediate yield).
-The [summary model](#summary-model) assesses each completed reply, including subagent replies, in a background task.
+The [summary model](#summary-model) describes each completed reply in one `activity` line, including subagent replies,
+in a background task. It judges nothing: whether a conversation waits, is done or failed comes from committed records
+(board's `conversationState`).
 Top-level conversations also get a title and summary on exchanges 1, 4, 7, and so on, in the same request.
 For a top-level non-root conversation in a lineage tree, that same request produces an abstract after every completed
 exchange, independent of the title/summary cadence. It uses the original branch intent, previous abstract and transcript:
 Ask, Diverged (agreements, approach/library or scope changes, or none), State (including named commits), Areas and Open
 questions, capped at 1200 characters. Acceptance calls `abstract` of the `conversations.trees` extension point, which lineage provides, in the same transaction as the
-reply assessment, with `at` pointing to the answer entry, and saves the text in summary state. A newer abstract updates
+reply summary, with `at` pointing to the answer entry, and saves the text in summary state. A newer abstract updates
 the open one in place until a landing freezes it (see the lineage README); the root never reorders. Roots, owned
 conversations such as subagents, and conversations outside trees such as landers produce no abstract. Neither do
 stale answers, failed or interrupted exchanges, or missing lineage or summary models. Exchange and intent detection use own entries, so inherited inputs and answers
 do not count as the branch's work.
-A summary delayed by newer work is included with the next current reply. Tools and partial replies do not trigger reply assessments.
+A summary delayed by newer work is included with the next current reply. Tools and partial replies do not trigger reply summaries.
 Successful subagent creation additionally schedules a parent title/summary refresh in the creation transaction,
 before either foreground waiting or background return. It describes the plan and delegation now starting, using
-recent visible text plus the agent/task, without publishing a final-reply assessment or activity, counting an
+recent visible text plus the agent/task, without publishing a final-reply activity, counting an
 exchange, or consuming the 1/4/7 reply cadence. The durable action receipt deduplicates replay; failed starts,
 messages and waits do not schedule it. If conversations or the summary model is unavailable, child creation proceeds
 without it.
@@ -102,9 +104,9 @@ is busy, but reset, newer input or a superseding summary request invalidates the
 An accepted spawn refresh appends `conversations.summarized` `{ summary, model?, at }`, also when the title stays.
 The request reads the original request (kept even when compaction removed it from context), recent
 user/assistant text and the previous summary, not tools, images or thinking.
-It times out after 60 seconds. Assessment, activity, title and summary are checked and shortened for display.
-Assessments describe the reply, not verified completion. New work or a reset can make a result stale; only a reset ends an exchange.
-Subagents get assessments and activity only; history forks are excluded.
+It times out after 60 seconds. Activity, title and summary are checked and shortened for display.
+New work or a reset can make a result stale; only a reset ends an exchange.
+Subagents get activity only; history forks are excluded.
 The summary model can name an untitled conversation or update its own last generated title.
 API titles, renames and creator-given labels are kept. A blank rename restores automatic naming.
 Each accepted automatic title change appends a `conversations.title-changed` entry with `{ title, model?, at }`
@@ -122,7 +124,7 @@ task. A task that finds no available model before it chose one settles quietly t
 ## Summary model
 
 `summaryModel` in `~/.ultimate/settings.json` or the project's `.ultimate/settings.json` (project wins, and only once
-the project is chosen) names the model for titles, summaries, reply assessments, question extraction and tree abstracts as
+the project is chosen) names the model for titles, summaries, reply summaries, question extraction and tree abstracts as
 `provider/id[:thinking]`, an exact provider and model id with an optional Pi thinking level, clamped to what the model
 supports (medium when omitted). Unset, it is `DEFAULT_SUMMARY_MODEL`: GPT-6 Luna with medium thinking through the
 current OpenAI provider (including Sign in with ChatGPT). In faux mode, the unset default is `faux/faux-1` with thinking off. `summary-model.ts` reads it when a request is considered and again when a
@@ -173,7 +175,8 @@ input submission (done/unanswered) · pi.live · pi.inbox · pi.reset ───�
 - **Run state**: `pi.live.run` is `working`; a user item in `pi.inbox` is `queued`.
 - **Summary task outcomes** are entries appended in the commit that settles the task, so each carries `byTaskId`
   (the summary task, whose input names the generation it observed). None contributes to the model context:
-  - `conversations.assessed` `{ inputId, answerId, value, activity, model?, at }`: an accepted reply assessment.
+  - `conversations.assessed` `{ inputId, answerId, activity, model?, at }`: an accepted reply summary. Entries from
+    before the judgement was removed also carry `value`, which nothing reads.
   - `conversations.summary-discarded` `{ reason: 'stale' | 'error', cause, model?, at }`: a received result superseded
     by newer work or a reset (`stale`), or a failed or aborted request (`error`). A task superseded before it asked the
     summary model leaves no entry.
@@ -182,7 +185,7 @@ input submission (done/unanswered) · pi.live · pi.inbox · pi.reset ───�
   - `conversations.title-changed`, `conversations.intent-summarized` and `conversations.summarized`, as above, with
     `model` likewise.
     The transcript shows each as one quiet line with its local time.
-- **Summaries** (`ultimate.conversation-summaries`) keeps the current summary, activity, assessment and their statuses
+- **Summaries** (`ultimate.conversation-summaries`) keeps the current summary, activity and their statuses
   (`pending`, `ready`, `stale`, `error`) plus the cadence. Stale shows nothing in the sidebar; error shows
   "unavailable · retries after next reply".
 
@@ -190,11 +193,10 @@ input submission (done/unanswered) · pi.live · pi.inbox · pi.reset ───�
 
 `ultimate.conversation-overview` keeps sidebar rows in the root conversation document.
 Each row's `runState` is `working`, `queued`, `answered`, `error` or `idle`, with the input and answer ids of the
-exchange, the summary, activity, and an assessment only while it belongs to that exact input and answer.
-Answered means a reply arrived; Done is the summary model's opinion, not proof of completion.
+exchange, the summary and activity. Answered means a reply arrived.
 One root-document stream serves all rows. Titles, timestamps, child links and agent labels come from the core
 conversation list.
 A commit only selects which rows to derive again: any committed submission, `pi.user`, `pi.reset` or `pi.compaction`
 entry, `pi.live.run` or `pi.inbox` change, or `Summaries` change. Derivation reads the records themselves, so a row
 built live equals the row a fresh open builds. On open, every conversation is derived anew without requesting old
-assessments.
+summaries.

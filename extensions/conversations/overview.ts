@@ -2,7 +2,7 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineDoc, InboxDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, SubmissionRecord } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { currentAnswer, resetAfter, Summaries } from './summary.ts'
+import { resetAfter, Summaries } from './summary.ts'
 import { isInput } from '../../lib/entries.ts'
 import { OverviewDoc } from './refs.ts'
 import type { OverviewRow, OverviewState } from './types.ts'
@@ -79,13 +79,6 @@ export function overviewBehavior(
         const active = input !== undefined && !(await resetAfter(tx, id, input.entry!))
         const answerId = active && input.status === 'done' ? input.answer : undefined
         const failed = active && input.status === 'unanswered' && !quiet.has(input.reason)
-        const assessment =
-          answerId !== undefined &&
-          state?.assessment?.answerId === answerId &&
-          state.assessment.inputId === input!.entry &&
-          (await currentAnswer(tx, id, answerId))
-            ? state.assessment
-            : undefined
         const row: OverviewRow = {
           runState: live.run
             ? 'working'
@@ -106,7 +99,6 @@ export function overviewBehavior(
           ...(state?.status ? { summaryStatus: state.status } : {}),
           ...(state?.activity ? { activity: state.activity } : {}),
           ...(state?.assessmentStatus ? { assessmentStatus: state.assessmentStatus } : {}),
-          ...(assessment ? { assessment } : {}),
         }
         if (JSON.stringify(index.conversations[id]) !== JSON.stringify(row))
           index.conversations[id] = row

@@ -1,10 +1,14 @@
 import { PencilIcon } from 'lucide-react'
 import { formatTime, Provided, useChat } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
-import type { Assessed, IntentSummary, SpawnSummary, SummaryDiscard, TitleChange } from './types.ts'
+import type {
+  IntentSummary,
+  ReplySummary,
+  SpawnSummary,
+  SummaryDiscard,
+  TitleChange,
+} from './types.ts'
 import { Unsummarized } from './ui.tsx'
-
-const assessmentLabel = { needs_input: 'may need input', done: 'Done', neutral: 'neutral' }
 
 /** What a summary task concluded, as one quiet line; each entry traces to its task by `byTaskId`. */
 function summaryText(entry: EntryRecord) {
@@ -15,10 +19,8 @@ function summaryText(entry: EntryRecord) {
       return `Title changed to “${(entry.data as TitleChange).title}”`
     case 'conversations.summarized':
       return `Summary: ${(entry.data as SpawnSummary).summary}`
-    case 'conversations.assessed': {
-      const data = entry.data as Assessed
-      return `Assessed: ${assessmentLabel[data.value]} (summary model's opinion) · ${data.activity}`
-    }
+    case 'conversations.assessed':
+      return `Reply: ${(entry.data as ReplySummary).activity}`
     default: {
       const data = entry.data as SummaryDiscard
       return data.reason === 'stale'

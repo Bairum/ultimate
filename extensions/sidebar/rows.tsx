@@ -2,6 +2,7 @@ import {
   GitBranchIcon,
   CircleCheckIcon,
   CircleHelpIcon,
+  CircleXIcon,
   EllipsisIcon,
   FoldVerticalIcon,
   PencilIcon,
@@ -15,7 +16,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { api, cn, Provided, useUltimate } from '@/sdk'
+import { api, cn, Provided, useDocOf, useUltimate } from '@/sdk'
+import { BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
 import {
   AgentMark,
   agentTitle,
@@ -26,40 +28,42 @@ import {
 } from '../conversations/ui.tsx'
 import type { Presence } from '../conversations/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
-import type { Assessment, OverviewRow } from '../conversations/types.ts'
+import type { OverviewRow } from '../conversations/types.ts'
+import type { ConversationState } from '../board/ui.tsx'
 import { ago } from './lander.tsx'
 
-export function currentAssessment(row: OverviewRow | undefined) {
-  return row?.runState === 'answered' &&
-    row.assessment?.answerId === row.answerId &&
-    row.assessment?.inputId === row.inputId
-    ? row.assessment
-    : undefined
-}
+/** What a row's mark and state word say for each settled state; `working` and `idle` show no icon. */
+const settled = {
+  awaiting: {
+    label: 'Awaiting @ultimate',
+    word: 'Awaiting @ultimate',
+    tone: 'text-amber-700 dark:text-amber-300',
+  },
+  done: { label: 'Done: its answer went to its parent', word: 'Done', tone: 'text-success' },
+  failed: { label: 'Its latest run failed', word: 'Failed', tone: 'text-error' },
+} as const
 
-/** The leading mark: working (pulsing), an unseen answer (solid), or an empty slot that keeps titles aligned. */
+/** The leading mark: working (pulsing), a settled state's icon, an unseen answer (solid), or an empty slot that keeps titles aligned. */
 function Mark({
   working,
   unseen,
-  assessment,
+  state,
 }: {
   working?: 'self' | 'subagents'
   unseen: boolean
-  assessment?: Assessment
+  state?: ConversationState
 }) {
-  const assessed = !working && assessment?.value !== 'neutral' ? assessment?.value : undefined
+  const shown = !working && state && state in settled ? (state as keyof typeof settled) : undefined
   const label = working
     ? working === 'self'
       ? 'Working'
       : 'Subagents working'
-    : assessed === 'done'
-      ? "Done (summary model's opinion, not verified)"
-      : assessed === 'needs_input'
-        ? "May need input (summary model's opinion, not verified)"
-        : 'New answer'
+    : shown
+      ? settled[shown].label
+      : 'New answer'
   return (
     <span className="flex size-3 shrink-0 items-center justify-center">
-      {(working || unseen || assessed) && (
+      {(working || unseen || shown) && (
         <Tooltip>
           <TooltipTrigger asChild>
             <span
@@ -67,13 +71,15 @@ function Mark({
               role="img"
               className={cn(
                 'flex items-center justify-center',
-                assessed === 'done' ? 'text-success' : 'text-muted-foreground',
+                shown ? settled[shown].tone : 'text-muted-foreground',
               )}
             >
-              {assessed === 'done' ? (
+              {shown === 'done' ? (
                 <CircleCheckIcon className="size-3.5" />
-              ) : assessed === 'needs_input' ? (
+              ) : shown === 'awaiting' ? (
                 <CircleHelpIcon className="size-3.5" />
+              ) : shown === 'failed' ? (
+                <CircleXIcon className="size-3.5" />
               ) : (
                 <span
                   className={cn('size-1.5 rounded-full bg-brand', working && 'animate-pulse-dot')}
@@ -97,7 +103,7 @@ type RowProps = {
   concluded: boolean
   now: number
   onConclude: (conclude: boolean) => void
-  assessment?: Assessment
+  state?: ConversationState
   activity?: string
   feature?: string
 }
@@ -122,7 +128,7 @@ function PhasedRow({
   now,
   onConclude,
   feature,
-  assessment,
+  state,
   activity,
   displayPhase,
 }: RowProps & { displayPhase?: { label: ReactNode } }) {
@@ -182,7 +188,7 @@ function PhasedRow({
     >
       {editing ? (
         <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-1.5">
-          <Mark assessment={assessment} unseen={unseen} working={markWorking} />
+          <Mark state={state} unseen={unseen} working={markWorking} />
           <input
             aria-label="Conversation title"
             autoFocus
@@ -218,7 +224,7 @@ function PhasedRow({
           type="button"
         >
           <span className="flex w-full min-w-0 items-center gap-1.5">
-            <Mark assessment={assessment} unseen={unseen} working={markWorking} />
+            <Mark state={state} unseen={unseen} working={markWorking} />
             {title}
           </span>
           {hasMetadata && (
@@ -302,7 +308,7 @@ function PhasedRow({
 
 /**
  * A standing agent or the lander: its fixed `@name`, a leading status mark and one quiet line of state, never a
- * summary, feature or assessment. Click opens it; the menu only compacts its context: it is never cleared, renamed or
+ * summary or feature. Click opens it; the menu only compacts its context: it is never cleared, renamed or
  * concluded.
  */
 export function StandingRow({
@@ -388,7 +394,13 @@ function CompactItem({ conversation }: { conversation: ConversationSummary }) {
   )
 }
 
-type ChildRowProps = { conversation: ConversationSummary; row?: OverviewRow; shown: boolean }
+type ChildRowProps = {
+  conversation: ConversationSummary
+  row?: OverviewRow
+  shown: boolean
+  /** The primary agent's conversation. */
+  primary?: number
+}
 
 /** A subagent under its conversation; one working on a plan task leads with its chip and shows the task's title. */
 export function ChildRow(props: ChildRowProps) {
@@ -403,19 +415,22 @@ function TaskedChildRow({
   conversation,
   row,
   shown,
+  primary,
   task,
 }: ChildRowProps & { task?: { chip: ReactNode; title: string } }) {
   const actions = useUltimate()
-  const working = conversation.busy || row?.runState === 'working'
-  const state = working
-    ? 'Working'
-    : row?.runState === 'answered'
-      ? 'Replied'
-      : row?.runState === 'error'
-        ? 'Run failed'
-        : row?.runState === 'queued'
-          ? 'Queued'
-          : 'Idle'
+  const board = useDocOf(1, BoardDoc) ?? emptyBoard
+  const state = conversationState(
+    {
+      id: conversation.id,
+      kind: 'subagent',
+      runState: row?.runState,
+      busy: conversation.busy,
+      primary,
+    },
+    board,
+  )
+  const working = state === 'working'
   return (
     <button
       aria-current={shown ? 'true' : undefined}
@@ -429,11 +444,7 @@ function TaskedChildRow({
       type="button"
     >
       <span className="flex w-full items-center gap-1.5">
-        <Mark
-          assessment={currentAssessment(row)}
-          unseen={false}
-          working={working ? 'self' : undefined}
-        />
+        <Mark state={state} unseen={false} working={working ? 'self' : undefined} />
         {task?.chip}
         <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-foreground/80">
           {conversation.label ?? 'Agent'} · #{conversation.id}
@@ -444,7 +455,22 @@ function TaskedChildRow({
             className="size-3 shrink-0 text-muted-foreground"
           />
         )}
-        <span className="shrink-0 text-[10px] text-muted-foreground">{state}</span>
+        <span
+          className={cn(
+            'shrink-0 text-[10px]',
+            working
+              ? 'text-brand'
+              : state in settled
+                ? settled[state as keyof typeof settled].tone
+                : 'text-muted-foreground',
+          )}
+        >
+          {working
+            ? 'Working'
+            : state in settled
+              ? settled[state as keyof typeof settled].word
+              : 'Idle'}
+        </span>
       </span>
       <span className="line-clamp-2 pl-[18px] text-[11px] leading-relaxed break-words text-muted-foreground">
         {task
@@ -453,11 +479,6 @@ function TaskedChildRow({
             ? `${working ? 'Last reply: ' : ''}${row.activity}`
             : (conversation.title ?? 'No reply yet')}
       </span>
-      {row?.assessmentStatus === 'error' && !working && (
-        <span className="pl-[18px] text-[10px] text-muted-foreground/70">
-          Assessment unavailable
-        </span>
-      )}
     </button>
   )
 }

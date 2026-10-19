@@ -6,6 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
   api,
+  cn,
   errorMessage,
   useDocOf,
   useNow,
@@ -27,7 +28,8 @@ import {
   useWorkspaceConversations as useConversations,
   useWorkspaceIndex,
 } from '../workspaces/ui.tsx'
-import { currentAssessment, Row, ChildRow, StandingRow } from './rows.tsx'
+import { Row, ChildRow, StandingRow } from './rows.tsx'
+import { BoardDoc, conversationState, emptyBoard, stateTone, stateWord } from '../board/ui.tsx'
 import { inFlight, RootRow } from './root.tsx'
 import { useRoots } from '../lineage/ui.tsx'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
@@ -83,6 +85,7 @@ export function Conversations() {
 /** The tree, with how many messages and answers wait on the user for @ultimate's row. */
 function Tree({ waiting }: { waiting: number }) {
   const overview = useOverview()
+  const board = useDocOf(1, BoardDoc) ?? emptyBoard
   const tasks = useTasks()
   const foreground = new Set<number>(
     Object.values(tasks?.tasks ?? {})
@@ -210,12 +213,30 @@ function Tree({ waiting }: { waiting: number }) {
         : (Object.entries(standingIds ?? {}).find(([, id]) => id === conversation.id)?.[0] ??
           conversation.title?.replace(/^@/, '') ??
           `#${conversation.id}`)
+    const state = conversation
+      ? conversationState(
+          {
+            id: conversation.id,
+            kind: isUltimate ? 'primary' : 'other',
+            runState: overview[conversation.id]?.runState,
+            busy,
+            primary: ultimateId,
+          },
+          board,
+          // `waiting` already counts the open questions; it waits on you exactly when that count is above zero.
+          waiting > 0,
+        )
+      : waiting > 0
+        ? 'waits'
+        : 'idle'
     return (
       <StandingRow
         conversation={conversation}
         key={conversation?.id ?? 'ultimate'}
         name={name}
-        presence={busy || landing ? 'working' : isUltimate && waiting > 0 ? 'waiting' : 'idle'}
+        presence={
+          state === 'working' || landing ? 'working' : state === 'waits' ? 'waiting' : 'idle'
+        }
         onOpen={() =>
           conversation && !isUltimate
             ? actions.switchConversation(conversation.id)
@@ -224,17 +245,13 @@ function Tree({ waiting }: { waiting: number }) {
         shown={shown}
       >
         {lander ? (
-          <LanderState id={conversation.id} index={workspaceIndex} now={now} working={busy} />
+          <LanderState id={conversation.id} index={workspaceIndex} now={now} state={state} />
         ) : (
           <>
-            {busy ? (
+            {state === 'working' && conversation ? (
               <StandingPhase id={conversation.id} />
-            ) : isUltimate && waiting > 0 ? (
-              <span className="shrink-0 text-amber-700 dark:text-amber-300">
-                {waiting} waiting on you
-              </span>
             ) : (
-              <span className="shrink-0">idle</span>
+              <span className={cn('shrink-0', stateTone[state])}>{stateWord(state, waiting)}</span>
             )}
             {latest > 0 && (
               <span
@@ -267,11 +284,22 @@ function Tree({ waiting }: { waiting: number }) {
         />
       )
     const recorded = seen[conversation.id]
-    const state = working.get(conversation.id)
+    const derived = conversationState(
+      {
+        id: conversation.id,
+        kind: 'other',
+        runState: overview[conversation.id]?.runState,
+        busy: conversation.busy,
+        primary: ultimateId,
+      },
+      board,
+    )
+    // Queued input counts as working too; subagents working below it say so.
+    const state = working.get(conversation.id) ?? (derived === 'working' ? 'self' : undefined)
     return (
       <Row
         activity={overview[conversation.id]?.activity}
-        assessment={tasks ? currentAssessment(overview[conversation.id]) : undefined}
+        state={derived}
         concluded={hiddenIds.has(conversation.id)}
         conversation={conversation}
         draft={conversation.inputAt === undefined}
@@ -342,6 +370,7 @@ function Tree({ waiting }: { waiting: number }) {
       <div key={conversation.id}>
         {nested ? (
           <ChildRow
+            primary={ultimateId}
             conversation={conversation}
             row={overview[conversation.id]}
             shown={shownId === conversation.id}

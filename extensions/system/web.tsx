@@ -9,11 +9,14 @@ import {
   StatusLine,
   useDocOf,
   useExtensionUiState,
+  Provided,
+  useConversations,
   useNow,
   useUltimate,
 } from '@/sdk'
-import { BoardDoc } from '../board/ui.tsx'
-import { useOverview } from '../conversations/ui.tsx'
+import { AnswerWaits, BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
+import { useOverview, usePrimaryAgent } from '../conversations/ui.tsx'
+import { StandingDoc } from '../subagents/ui.tsx'
 import { LaneTree } from './hierarchy.tsx'
 import { Axis, laneState } from './lanes.tsx'
 import { windows } from './layout.ts'
@@ -33,30 +36,29 @@ function useLive() {
   return useUltimate().surface === 'system' && visible
 }
 
-/**
- * Conversations waiting on the user: an open question to the user on the board, or an answer the summary model
- * judged to need input.
- */
-function useWaiting() {
-  const board = useDocOf(1, BoardDoc)
+/** Each lane's conversation state, the same the sidebar shows: only the primary agent can wait on you. */
+function useStates() {
+  const board = useDocOf(1, BoardDoc) ?? emptyBoard
   const overview = useOverview()
-  const waiting = new Set<number>()
-  for (const message of board?.messages ?? [])
-    if (
-      message.to === 'user' &&
-      message.reply &&
-      message.state === 'delivered' &&
-      message.from !== 'user'
+  const conversations = useConversations()
+  const name = usePrimaryAgent()
+  const primary = useDocOf(1, StandingDoc)?.[name]
+  return (lane: Lane, answerWaits: boolean) => {
+    const id = lane.conversation
+    const own = conversations.find((item) => item.id === id)
+    const state = conversationState(
+      {
+        id,
+        kind: id === primary ? 'primary' : own?.ownerTaskId !== undefined ? 'subagent' : 'other',
+        runState: overview[id]?.runState,
+        busy: own?.busy,
+        primary,
+      },
+      board,
+      answerWaits,
     )
-      waiting.add(message.from)
-  for (const [id, row] of Object.entries(overview))
-    if (
-      row.runState === 'answered' &&
-      row.assessment?.value === 'needs_input' &&
-      row.assessment.answerId === row.answerId
-    )
-      waiting.add(Number(id))
-  return waiting
+    return laneState(lane, state, overview[id] !== undefined)
+  }
 }
 
 /**
@@ -98,6 +100,14 @@ const dot = 'inline-block size-1.5 rounded-full'
 
 /** Agent Lanes on top, the stream of everything below; both live while on screen. */
 function System() {
+  return (
+    <Provided input={null} point={AnswerWaits}>
+      {(asks) => <Lanes answerWaits={!!asks} />}
+    </Provided>
+  )
+}
+
+function Lanes({ answerWaits }: { answerWaits: boolean }) {
   const live = useLive()
   const [stored, setWindow] = useExtensionUiState<WindowName>('window', '30m')
   const window: WindowName = Object.hasOwn(windows, stored) ? (stored as WindowName) : '30m'
@@ -110,15 +120,13 @@ function System() {
   const now = useNow(1000, live)
   const range = windows[window].ms
   const lanes = useLanes(range, live)
-  const waiting = useWaiting()
+  const stateOf = useStates()
   const list = lanes.data?.lanes ?? []
+  const states = new Map(list.map((lane) => [lane.conversation, stateOf(lane, answerWaits)]))
   // A parent listed only to hold its children's place did not work in the window: it is no agent at work.
-  const states = new Map(
-    list.map((lane) => [lane.conversation, laneState(lane, waiting.has(lane.conversation))]),
-  )
   const worked = list.filter((lane) => lane.runs.length > 0)
   const running = worked.filter((lane) => states.get(lane.conversation) === 'running').length
-  const needYou = worked.filter((lane) => states.get(lane.conversation) === 'waiting').length
+  const waits = list.some((lane) => states.get(lane.conversation) === 'waits')
   const since = now - range
   return (
     <>
@@ -137,10 +145,10 @@ function System() {
                 <span className={cn(dot, 'bg-brand', running > 0 && 'animate-pulse-dot')} />
                 {running} running
               </span>
-              {needYou > 0 && (
+              {waits && (
                 <span className="flex items-center gap-1.5 text-amber-700 dark:text-amber-300">
                   <span className={cn(dot, 'bg-amber-400')} />
-                  {needYou} need you
+                  waits on you
                 </span>
               )}
               {lanes.data?.more !== undefined && (

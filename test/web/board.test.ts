@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { accentIndex, accentOf } from '../../extensions/board/accent.tsx'
 import {
   answeredMessages,
+  conversationState,
+  stateWord,
   messageStatus,
   outgoingState,
   relativeTime,
@@ -187,5 +189,84 @@ describe('a sent message the log no longer holds', () => {
     expect(outgoingState(undefined, true, false)).toBeUndefined()
     expect(outgoingState(message, true, false)).toBe('awaiting your reply')
     expect(outgoingState({ ...message, reply: false }, true, false)).toBe('delivered')
+  })
+})
+
+/** A board of reply-expected questions from conversation 2 to the user, each overridable. */
+const board = (...messages: Partial<BoardMessage>[]) => ({
+  messages: messages.map((message, index) => ({
+    id: index + 1,
+    from: 2,
+    to: 'user' as const,
+    text: 'Question',
+    at: 0,
+    reply: true,
+    state: 'delivered' as const,
+    ...message,
+  })),
+  next: messages.length + 1,
+})
+
+describe('conversation state', () => {
+  const primary = { id: 2, kind: 'primary' as const }
+  const toUser = board({ from: 2, to: 'user' })
+
+  it('is working while it runs or has input queued, before anything else', () => {
+    expect(conversationState({ ...primary, busy: true }, toUser)).toBe('working')
+    expect(conversationState({ ...primary, runState: 'working' }, toUser)).toBe('working')
+    expect(conversationState({ ...primary, runState: 'queued' }, board())).toBe('working')
+  })
+
+  it('waits only for the primary agent with an open question to the user or an asking answer', () => {
+    expect(conversationState({ ...primary, runState: 'answered' }, toUser)).toBe('waits')
+    expect(conversationState({ ...primary, runState: 'answered' }, board(), true)).toBe('waits')
+    expect(conversationState({ ...primary, runState: 'answered' }, board())).toBe('idle')
+    expect(
+      conversationState({ ...primary, runState: 'answered' }, board({ state: 'answered' })),
+    ).toBe('idle')
+  })
+
+  it('never waits for a subagent or another conversation, even with open messages to the user', () => {
+    for (const kind of ['subagent', 'other'] as const)
+      expect(conversationState({ id: 2, kind, runState: 'answered' }, toUser, true)).not.toBe(
+        'waits',
+      )
+  })
+
+  it('awaits the primary agent while its reply-expected message to it is open', () => {
+    const branch = { id: 5, kind: 'other' as const, runState: 'answered' as const, primary: 3 }
+    for (const state of ['sent', 'delivered'] as const)
+      expect(conversationState(branch, board({ from: 5, to: 3, state }))).toBe('awaiting')
+    expect(conversationState(branch, board({ from: 5, to: 3, state: 'answered' }))).toBe('idle')
+    expect(conversationState(branch, board({ from: 5, to: 3, reply: false }))).toBe('idle')
+    // A coordinator's question to its own worker waits on no one the user watches.
+    expect(conversationState(branch, board({ from: 5, to: 9 }))).toBe('idle')
+    // A subagent's question goes to its parent, which answers it in its own run: it never shows as awaiting.
+    expect(conversationState({ ...branch, kind: 'subagent' }, board({ from: 5, to: 3 }))).toBe(
+      'done',
+    )
+  })
+
+  it('says every state in a word, so a standing row or lane never falls back to idle', () => {
+    // A standing agent (not the primary) asking @ultimate shows it, rather than idle.
+    const standing = { id: 7, kind: 'other' as const, runState: 'answered' as const, primary: 3 }
+    expect(stateWord(conversationState(standing, board({ from: 7, to: 3 })))).toBe(
+      'awaiting @ultimate',
+    )
+    expect(stateWord('waits', 2)).toBe('2 waiting on you')
+    expect(stateWord('failed')).toBe('failed')
+    expect(stateWord('done')).toBe('done')
+    expect(stateWord('idle')).toBe('idle')
+  })
+
+  it('failed when its latest input ended without an answer', () => {
+    expect(conversationState({ id: 5, kind: 'other', runState: 'error' }, board())).toBe('failed')
+  })
+
+  it('done for an answered subagent, idle for any other answered conversation', () => {
+    expect(conversationState({ id: 5, kind: 'subagent', runState: 'answered' }, board())).toBe(
+      'done',
+    )
+    expect(conversationState({ id: 5, kind: 'other', runState: 'answered' }, board())).toBe('idle')
   })
 })

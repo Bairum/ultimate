@@ -66,7 +66,7 @@ guide to writing extensions, and copy the closest existing one (`status-line`, `
 
 - [Running the server](docs/running.md): before starting, debugging or testing a server or core swap.
 - [Worktrees and integration](docs/worktrees.md): before previewing an isolate, landing or recovering a rejected push.
-- [Discovery and settings](docs/settings.md): before changing configuration, trust, resources or `summaryModel` (titles, summaries, reply assessments, question extraction and tree abstracts; faux uses `faux/faux-1:off` by default).
+- [Discovery and settings](docs/settings.md): before changing configuration, trust, resources or `summaryModel` (titles, summaries, reply summaries, question extraction and tree abstracts; faux uses `faux/faux-1:off` by default).
 - [Durability](docs/durability.md): before changing persistence, replay or durable UI state.
 - [Extension mechanics and introspection](docs/extensions.md): before wiring facets, documents, events or runtime inspection.
 - [Subagents](docs/subagents.md): before delegating, changing definitions or configuring the review team.

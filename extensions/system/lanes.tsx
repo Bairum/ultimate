@@ -4,16 +4,23 @@ import type { CSSProperties } from 'react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn, formatDuration, useConversations, useUltimate } from '@/sdk'
 import type { ConversationSummary } from '@/sdk'
+import { stateTone, stateWord } from '../board/ui.tsx'
+import type { ConversationState } from '../board/ui.tsx'
 import { AgentMark, agentTitle, ConversationRef } from '../conversations/ui.tsx'
 import { block, duration, label, ticks } from './layout.ts'
 import type { TreeRow, WindowName } from './layout.ts'
 import type { Lane, LaneRun } from './refs.ts'
 import { clock, KindIcon, TraceTree } from './tree.tsx'
 
-/** Where a lane stands: working now, waiting on the user's answer, or idle. */
-export type LaneState = 'running' | 'waiting' | 'idle'
-export const laneState = (lane: Lane, waiting: boolean): LaneState =>
-  lane.runs.at(-1)?.end === undefined ? 'running' : waiting ? 'waiting' : 'idle'
+/**
+ * Where a lane stands: its conversation's state, the one the sidebar shows; `known` is false while the conversation has
+ * no overview row yet, when only an open run on the timeline says it runs.
+ */
+export type LaneState = 'running' | Exclude<ConversationState, 'working'>
+export const laneState = (lane: Lane, state: ConversationState, known: boolean): LaneState =>
+  state === 'working' || (!known && lane.runs.length > 0 && lane.runs.at(-1)!.end === undefined)
+    ? 'running'
+    : state
 
 /** A standing agent's name (`ultimate`, `lander`) for its mark and title; undefined for other conversations. */
 export function standingName(lane: Lane, summary: ConversationSummary | undefined) {
@@ -219,11 +226,9 @@ export function Guide({
   )
 }
 
-const stateWords: Record<LaneState, string> = {
-  running: 'running',
-  waiting: 'needs you',
-  idle: 'idle',
-}
+/** A lane says its conversation's state in the sidebar's words; only an open run says "running". */
+const laneWord = (state: LaneState) => (state === 'running' ? 'running' : stateWord(state))
+const laneTone = (state: LaneState) => stateTone[state === 'running' ? 'working' : state]
 
 /**
  * One agent's lane: who it is (its mark and name, its model, its state) on the left, its runs on the timeline on the
@@ -285,7 +290,7 @@ export function LaneRow({
           >
             <AgentMark
               name={standing ?? lane.agent ?? 'agent'}
-              presence={state === 'running' ? 'working' : state === 'waiting' ? 'waiting' : 'idle'}
+              presence={state === 'running' ? 'working' : state === 'waits' ? 'waiting' : 'idle'}
             />
             <span className="flex min-w-0 flex-1 flex-col">
               {standing ? (
@@ -302,15 +307,7 @@ export function LaneRow({
                 />
               )}
               <span className="flex min-w-0 items-center gap-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
-                <span
-                  className={cn(
-                    'shrink-0',
-                    state === 'running' && 'text-brand',
-                    state === 'waiting' && 'text-amber-700 dark:text-amber-300',
-                  )}
-                >
-                  {stateWords[state]}
-                </span>
+                <span className={cn('shrink-0', laneTone(state))}>{laneWord(state)}</span>
                 {lane.agent && !standing && <span className="shrink-0">· {lane.agent}</span>}
                 {lane.model && <span className="truncate">· {modelName(lane.model)}</span>}
               </span>
@@ -342,7 +339,7 @@ export function LaneRow({
               tone={
                 item.end === undefined
                   ? 'running'
-                  : state === 'waiting' && index === lane.runs.length - 1
+                  : state === 'waits' && index === lane.runs.length - 1
                     ? 'waiting'
                     : 'done'
               }

@@ -92,7 +92,7 @@ export default async function fauxExtension(host: ExtensionHost) {
             ),
           ])
         if (
-          system.content.startsWith('Assess the latest') ||
+          system.content.startsWith('Describe the latest') ||
           system.content.startsWith('Summarize the initial') ||
           system.content.startsWith('Refresh a coding')
         ) {
@@ -111,7 +111,6 @@ export default async function fauxExtension(host: ExtensionHost) {
           return fauxAssistantMessage([
             fauxText(
               JSON.stringify({
-                assessment: needsInput ? 'needs_input' : 'done',
                 activity: 'Replied in the demo.',
                 title: prompt,
                 summary: 'Scripted demo conversation.',
@@ -249,6 +248,15 @@ export default async function fauxExtension(host: ExtensionHost) {
               task: 'Return the word DONE.',
             }),
           ],
+          { stopReason: 'toolUse' },
+        )
+      }
+      // One worker that answers and one whose run fails, to preview a subagent's done and failed states.
+      if (last?.role === 'user' && last.content === 'delegate demo') {
+        return fauxAssistantMessage(
+          ['Return the word DONE.', 'fail demo'].map((task) =>
+            fauxToolCall('subagent', { action: 'start', agent: 'worker', isolate: 'none', task }),
+          ),
           { stopReason: 'toolUse' },
         )
       }
