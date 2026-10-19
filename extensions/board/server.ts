@@ -248,20 +248,18 @@ async function settleTriage(
       ctx,
     )
     verdict = await runtime.memo('triage-verdict', assessed.verdict, ctx)
-    // Usage commits with the verdict's record, once: `recordTriage` writes only while the message is assessing.
-    const response = assessed.response
-    await runtime.commit(async (tx) => {
-      const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
-        (m) => m.id === input.id,
-      )
-      if (stored?.triage?.verdict === 'assessing')
-        await host.need(ConversationsApi).accountResponse(tx, recipient.id, response)
-      return undefined
-    }, ctx)
   }
-  // The verdict commits before the wake, so the row shows it while the run starts.
+  // The memoized response's usage commits with the verdict's record, once: only while the message still assesses,
+  // so a replay after either memo or this commit neither drops nor repeats it.
+  const response = await runtime.memo<ResponseReceipt>('triage-response', ctx)
   const decided = verdict
+  // The verdict commits before the wake, so the row shows it while the run starts.
   await runtime.commit(async (tx) => {
+    const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+      (m) => m.id === input.id,
+    )
+    if (stored?.triage?.verdict === 'assessing')
+      await host.need(ConversationsApi).accountResponse(tx, recipient.id, response)
     await recordTriage(host, tx, input.id, decided)
     return undefined
   }, ctx)
