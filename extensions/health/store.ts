@@ -144,26 +144,48 @@ export async function readHealth(userHome: string): Promise<ProviderHealth[]> {
 
 const writes = new Map<string, Promise<unknown>>()
 
+/** A provider's state before and after one write, and its error after. */
+export type Flip = {
+  provider: string
+  from: ProviderHealth['state']
+  to: ProviderHealth['state']
+  error?: string
+}
+
 /**
  * Merge `update` into `provider`'s entry: read, merge by max timestamp, then write through a same-directory temporary
  * file and an atomic rename. Writes from this process run one at a time; another home's concurrent write can at worst
- * lose one event.
+ * lose one event. Resolves the provider's state before and after.
  */
-export function record(userHome: string, provider: string, update: HealthEntry) {
+export async function record(
+  userHome: string,
+  provider: string,
+  update: HealthEntry,
+): Promise<Flip> {
   const clean = update.error === undefined ? update : { ...update, error: sanitize(update.error) }
-  return write(userHome, (file) => {
+  let from: ProviderHealth['state'] = 'unknown'
+  const written = await write(userHome, (file) => {
+    from = state(file.providers[provider] ?? {})
     file.providers[provider] = merge(file.providers[provider] ?? {}, clean)
   })
+  const entry = written.providers[provider]
+  const to = state(entry)
+  return { provider, from, to, ...(to === 'failing' && entry.error ? { error: entry.error } : {}) }
 }
 
 /**
  * Forget `providers`' entries, so each reads `unknown` until its next call or ping: its login was added, replaced or
  * removed, and what the old login did says nothing about the new one.
  */
-export function reset(userHome: string, providers: string[]) {
-  return write(userHome, (file) => {
-    for (const provider of providers) delete file.providers[provider]
+export async function reset(userHome: string, providers: string[]): Promise<Flip[]> {
+  const flips: Flip[] = []
+  await write(userHome, (file) => {
+    for (const provider of providers) {
+      flips.push({ provider, from: state(file.providers[provider] ?? {}), to: 'unknown' })
+      delete file.providers[provider]
+    }
   })
+  return flips
 }
 
 function write(userHome: string, change: (file: HealthFile) => void) {

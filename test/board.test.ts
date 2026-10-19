@@ -1,4 +1,4 @@
-import { temp, removeTemp, until, fauxServer, linkDependencies } from './helpers.ts'
+import { eventHost, temp, removeTemp, until, fauxServer, linkDependencies } from './helpers.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { awaitWithContext } from '@earendil-works/chord/context'
@@ -22,7 +22,7 @@ import type { ActionContext } from '../server/actions.ts'
 import { Metadata } from '../server/metadata.ts'
 import { emit } from '../server/events.ts'
 import board, { actions } from '../extensions/board/server.ts'
-import { Board } from '../extensions/board/api.ts'
+import { Board, MessageSent } from '../extensions/board/api.ts'
 import type { BoardService } from '../extensions/board/api.ts'
 import { BranchReceipts, Tally, rootOf, startBranch } from '../extensions/lineage/server.ts'
 import type { BranchInput } from '../extensions/lineage/server.ts'
@@ -289,6 +289,16 @@ it('wakes an idle recipient and returns one typed reply; one-way messages return
   await f.recipient.waitForIdle(context)
   expect(await replies(f)).toHaveLength(1)
   expect(f.observed.some((t) => t.includes('One way'))).toBe(true)
+  // Each post is one event, without its text; the reply is no post. #1 is @ultimate, which steers by default.
+  const sent = await eventHost(() => f.opened.harness, 'test').eventLog.recent({
+    events: [MessageSent],
+  })
+  const [first, , oneWay] = (await f.log())!.messages
+  expect(sent.map((event) => event.data)).toEqual([
+    { message: oneWay.id, from: 1, to: f.recipient.id, reply: false, steer: true },
+    { message: first.id, from: 1, to: f.recipient.id, reply: true, steer: true },
+  ])
+  expect(JSON.stringify(sent)).not.toContain('One way')
 })
 it('records a one-way input answer without returning it to the sender', async () => {
   const f = await fixture()

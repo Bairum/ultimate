@@ -3,6 +3,7 @@
  * or cancel a move. Browser-safe.
  */
 import { actionRef } from '../../shared/extension-api.ts'
+import { defineEvent } from '../../shared/events.ts'
 import type { CloudState } from './types.ts'
 
 /** No arguments → the lease as the cloud UI shows it: status, role, writer, missing secrets, the running move. */
@@ -18,3 +19,14 @@ export const MoveHereAction = actionRef<{ force?: boolean; by?: 'local' | 'sync'
 )
 /** No arguments → `{ ok }`: stop the preparing move, until its claim is sent. */
 export const CancelAction = actionRef<null, { ok: boolean }>('cloud', 'cancel')
+/**
+ * Machine `writer` changed its writer lease at `epoch`: `acquired` (it opened storage as the writer, from standby or a
+ * claim; a machine already serving when the cloud names it records none) or `releasing` (it closes storage to hand
+ * the lease on). Recorded while storage is open, so the released snapshot carries its own
+ * `releasing` to the next writer. A writer the cloud replaced records nothing: its database is parked as it was.
+ */
+export const LeaseChanged = defineEvent<{
+  epoch: number
+  writer: string
+  change: 'acquired' | 'releasing'
+}>('cloud.lease')

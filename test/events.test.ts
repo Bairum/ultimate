@@ -6,7 +6,7 @@ import { afterEach, expect, it } from 'vitest'
 import { context } from '../server/harness.ts'
 import { EventFeed, EventLog } from '../server/events.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
-import { defineEvent, EVENT_FEED, NoticeEvent } from '../shared/events.ts'
+import { defineEvent, EVENT_FEED, NoticeEvent, StartedEvent } from '../shared/events.ts'
 import type { EventRecord } from '../shared/events.ts'
 import { attach, fauxServer, linkDependencies, temp, until } from './helpers.ts'
 
@@ -143,6 +143,8 @@ it('emits atomically and reacts exactly once across catch-up, failures, reloads 
   expect(await probe.read(Seen)).toEqual(['a1', 'b2', 'c3', 'd4', 'e5', 'f6'])
   expect(await probe.read(Shipped)).toEqual(['a1', 'b2', 'c3', 'd4', 'e5', 'f6'])
   expect(await status()).toMatchObject({ lag: 0, running: true })
+  // Each open records one start; a facet reload records none.
+  expect(await (await probe.host()).eventLog.recent({ events: [StartedEvent] })).toHaveLength(2)
 })
 
 it('reads recent events newest first as copies, feeds the browser and records notices once', async () => {
@@ -162,6 +164,8 @@ it('reads recent events newest first as copies, feeds the browser and records no
     ['test.landed', { sha: 'b2' }],
     ['test.branched', { id: 7 }],
     ['test.landed', { sha: 'a1' }],
+    // Opening storage recorded the start first.
+    ['ultimate.started', { generation: 1, build: probe.server.host.build().id }],
   ])
   expect(all[2]).toEqual(branched)
   expect(branched).toMatchObject({ v: 1, kind: 'event.test.branched' })

@@ -38,6 +38,7 @@ import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import type { LandedData } from '../workspaces/api.ts'
 import { Branch, Branched, LineageApi, Rooted, Roots } from './api.ts'
 import { ConversationsApi, Trees } from '../conversations/api.ts'
+import { Started } from '../subagents/api.ts'
 import { CompactAction, RecentAction, TallyDoc } from './refs.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 import type { Tree } from './catchup.ts'
@@ -696,6 +697,14 @@ async function forkBranch(
   // The prompt is its first input, placed right after this commit: it sorts as asked for now.
   metadata.inputAt = Date.now()
   await host.emit(tx, Branched, { id: fork.id, from, at, intent: prompt })
+  await host.emit(tx, Started, {
+    id: fork.id,
+    agent: 'branch',
+    kind: 'branch',
+    parent: from,
+    ...(agent.model ? { model: `${agent.model.provider}/${agent.model.modelId}` } : {}),
+    ...(agent.thinkingLevel ? { thinking: agent.thinkingLevel } : {}),
+  })
   const images = input.images?.length ?? 0
   const marker = { branch: fork.id, at, intent: prompt, ...(images ? { images } : {}) }
   if (root !== undefined)

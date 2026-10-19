@@ -31,3 +31,15 @@ export const BoardDoc = docRef<BoardData>('board')
  * the posting commit; react to it to work on the question (questions extracts its answer card).
  */
 export const Asked = defineEvent<{ message: number; from: number }>('board.asked')
+
+/**
+ * Board message `message` was posted from `from` to `to`; `reply` whether it waits for an answer, `steer` whether it
+ * steers a busy recipient. Never its text. Emitted in the posting commit; answers are no posts.
+ */
+export const MessageSent = defineEvent<{
+  message: number
+  from: number | 'user'
+  to: number | 'user'
+  reply: boolean
+  steer: boolean
+}>('board.sent')

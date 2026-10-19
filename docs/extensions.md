@@ -37,7 +37,13 @@ Keep events few and small: they are history.
 
 The events today: `lineage.branched` and `lineage.rooted` (lineage has conversations mark the intent title as
 generated), `workspaces.landed` (lineage notes the submitter's tree root), `board.asked` (questions extracts the
-message's answer card) and `models.login-changed` (health resets the provider's record). Something the user must see
+message's answer card) and `models.login-changed` (health resets the provider's record). Recorded for the history and
+the system stream: `ultimate.started` (storage opened: generation, build), `subagents.started` (a subagent,
+automation run, new standing agent or branch configured: agent, model, thinking, parent), `board.sent` (a message
+posted: ids, `reply`, `steer`, never the text), `workspaces.check` (each lander check run: command, result, ms),
+`conversations.compacted`, `health.changed` (a provider's state flipped) and `cloud.lease` (lease acquired or
+releasing). The last three follow state outside the caller's commit (Pi's compaction, the machine's health file, the
+lease's storage switch), so each commits on its own right after it. Something the user must see
 exactly once and that feeds the result the owner reports, like the lander's deploy handoff, stays a call, idempotent by
 request id; when it calls up the layering, it goes through an extension point (below).
 `host.harness().subscribeCommits` remains for watching Pi's own records (entries, tasks, submissions, conversation
@@ -148,6 +154,18 @@ call carries its conversation, task and the assistant entry holding the call, an
 the event so its reactors continue the emitter's trace. Nothing to do in an extension: `implement`, actions,
 `react` and tools are traced for you.
 
+Every model stream is a `model` row too (`agent` for Pi's generations and compactions, `extension` for an
+extension's own call → `<provider>/<model>`): its duration, input, output and cache tokens and stop reason, never the
+prompt or the response; an error or aborted stop is a failed row. Pi runs requests outside any traced call but sends
+the conversation's provider session id, so a `beforeRequest` hook (`model-trace`, `server/tool-arguments.ts`) maps
+session ids to conversations; a request before its conversation's first generation in this process (a compaction just
+after a restart) stays unlinked, and an extension's call belongs to the call it runs in.
+
+UI polls would otherwise fill the trace: a successful action or service call that starts its trace and repeats one
+written within the last minute (same name, same argument summary) is not written, nor the calls it makes; it is
+counted instead, and `host.trace.polls()` lists the counts since the trace opened (`{ name, count, since }`, most
+first). Failures, sealed calls and calls inside other work are always written. On this host it cuts writes by ~89 %.
+
 Arguments and results are stored as JSON summaries of about 300 characters with values under keys matching
 `/secret|token|password|key|auth/i` replaced by `[redacted]`; tool calls keep none (the transcript has them). Calls
 into the extensions that handle credentials, `secrets` (secret values) and `models` (API keys and OAuth codes
@@ -155,8 +173,8 @@ answering a login), keep neither, nor an error message, only the error's class. 
 services take or return credentials joins `SEALED` in `server/trace.ts`. Rows go to `<home>/trace.sqlite` in batches outside Pi commits, while
 the harness is open only; retention keeps 7 days and at most 200,000 rows. A trace failure is logged once and never
 fails the call. Read with `host.trace.query({ trace?, conversation?, since?, limit })` (the newest `limit`, oldest
-first) and `host.trace.tree(traceId)` (calls nested under `children`), or codemode's `ultimate.trace(...)` and
-`ultimate.traceTree(traceId)`.
+first), `host.trace.tree(traceId)` (calls nested under `children`) and `host.trace.polls()`, or codemode's
+`ultimate.trace(...)` and `ultimate.traceTree(traceId)`.
 
 ## Inspecting yourself
 

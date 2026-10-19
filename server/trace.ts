@@ -1,8 +1,11 @@
 // The call trace: who called what, for how long, whether it failed, and the work it belongs to. Tool executions,
 // extension actions, reactor handlers and service calls each run in a trace context (AsyncLocalStorage, which survives
 // Pi Durable commits and its task runner); each call becomes the parent of the calls it makes, and events emitted
-// inside carry the context, so a reaction continues the emitter's chain. Rows are buffered and written to
-// `<home>/trace.sqlite` off the call path, never inside a Pi commit; tracing never changes or fails a call.
+// inside carry the context, so a reaction continues the emitter's chain. Model calls get a row each, linked to their
+// conversation. Rows are buffered and written to `<home>/trace.sqlite` off the call path, never inside a Pi commit;
+// tracing never changes or fails a call. A successful action or service call that starts its trace and repeats one
+// written within the last minute, with the same name and arguments (a UI poll), is only counted (`polls()`), as are
+// the calls it makes.
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
@@ -10,7 +13,7 @@ import type { Extension, ToolRegistration, ToolTaskInput } from '@earendil-works
 import type { EventContext } from '../shared/events.ts'
 
 export type TraceContext = EventContext & { traceId: string; parentCall: string }
-export type CallKind = 'service' | 'action' | 'reactor' | 'tool'
+export type CallKind = 'service' | 'action' | 'reactor' | 'tool' | 'model'
 /** What a traced call is; ids given here override those of the enclosing work. */
 export interface Call {
   kind: CallKind
@@ -57,6 +60,16 @@ const storage = new AsyncLocalStorage<TraceContext>()
 export const traceContext = () => storage.getStore()
 
 const LIMIT = 300
+/** How long a written successful action or service call stands for its repeats. */
+const REPEAT_MS = 60_000
+/**
+ * The key of a call that starts its trace (as UI polls do) and can repeat: an action or service call with comparable
+ * arguments. Nested calls belong to their parent's tree; sealed ones have no arguments to compare.
+ */
+const repeatKey = (call: Call, parent: EventContext | null, args: string | undefined) =>
+  !parent && (call.kind === 'action' || call.kind === 'service') && !call.sealed
+    ? `${call.name}\0${args ?? ''}`
+    : undefined
 const SECRET = /secret|token|password|key|auth/i
 // Calls into these extensions carry credentials (secret values; API keys and OAuth codes answering a model login), so
 // they keep no arguments, results or error messages, which may echo them; only the error's class.
@@ -104,6 +117,17 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
   const toolRuns = new WeakMap<TraceContext, { extension: string; done: boolean }>()
   /** Running tool calls by `<task>/<call id>`, so a Pi nested call, a task of its own, finds its caller. */
   const tools = new Map<string, TraceContext>()
+  /** When each successful trace-starting action or service call, by name and arguments, was last written. */
+  const written = new Map<string, number>()
+  /** Repeats not written since the trace opened, by call name. */
+  const polls = new Map<string, { count: number; since: number }>()
+  /** Contexts of calls that repeat one written within `REPEAT_MS`; the calls they make repeat with them. */
+  const repeats = new WeakSet<EventContext>()
+  const countRepeat = (name: string) => {
+    const counted = polls.get(name)
+    if (counted) counted.count++
+    else polls.set(name, { count: 1, since: Date.now() })
+  }
 
   function flush() {
     clearTimeout(timer)
@@ -151,29 +175,37 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
   }
 
   /**
-   * Run `work` as traced call `call`, a child of `parent`: the enclosing call by default, `null` for a new trace. A
-   * value or throw passes through; a promise is returned as one settling with the same value or error, and the row is
-   * recorded once it settles.
+   * Start traced call `call`, a child of `parent` (`null` for a new trace): the context its work runs in, and `finish`,
+   * which records the row; for work that is no function call, such as a model stream.
    */
-  function run<T>(
-    call: Call,
-    work: () => T,
-    parent: EventContext | null = traceContext() ?? null,
-  ): T {
+  function begin(call: Call, parent: EventContext | null) {
     const id = randomUUID()
     const context: TraceContext = { traceId: parent?.traceId ?? id, parentCall: id }
     for (const key of ['conversationId', 'taskId', 'entryId'] as const) {
       const value = call[key] ?? parent?.[key]
       if (value !== undefined) context[key] = value
     }
+    const credentials = SEALED.has(call.callee)
+    const sealed = call.sealed || credentials
+    const args = (!sealed && summary(call.args)) || undefined
+    const repeat = repeatKey({ ...call, sealed }, parent, args)
+    const last = repeat === undefined ? undefined : written.get(repeat)
+    if ((parent && repeats.has(parent)) || (last !== undefined && Date.now() - last < REPEAT_MS))
+      repeats.add(context)
     const started = performance.now()
     // Epoch milliseconds with a fraction, so a parent sorts before the child it started in the same millisecond.
     const at = performance.timeOrigin + started
     const finish = (ok: boolean, value: unknown) => {
       if (!database) return
       try {
-        const credentials = SEALED.has(call.callee)
-        const sealed = call.sealed || credentials
+        // A repeat that failed is news: it is written like any failure.
+        if (ok && repeats.has(context)) return countRepeat(call.name)
+        if (ok && repeat !== undefined) {
+          const now = Date.now()
+          written.set(repeat, now)
+          if (written.size > 10_000)
+            for (const [old, when] of written) if (now - when >= REPEAT_MS) written.delete(old)
+        }
         buffer.push([
           id,
           parent?.parentCall ?? null,
@@ -186,7 +218,7 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
           call.name,
           ok ? 1 : 0,
           ok ? null : failure(value, credentials),
-          (!sealed && summary(call.args)) || null,
+          args ?? null,
           (ok && !sealed && summary(value)) || null,
           context.conversationId ?? null,
           context.taskId ?? null,
@@ -197,6 +229,20 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
         failed(error)
       }
     }
+    return { context, finish }
+  }
+
+  /**
+   * Run `work` as traced call `call`, a child of `parent`: the enclosing call by default, `null` for a new trace. A
+   * value or throw passes through; a promise is returned as one settling with the same value or error, and the row is
+   * recorded once it settles.
+   */
+  function run<T>(
+    call: Call,
+    work: () => T,
+    parent: EventContext | null = traceContext() ?? null,
+  ): T {
+    const { context, finish } = begin(call, parent)
     let result: T
     try {
       result = storage.run(context, work)
@@ -223,9 +269,12 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
 
   return {
     run,
+    begin,
     /** Open `<home>/trace.sqlite` and apply retention, then hourly; a failure leaves tracing off. */
     open() {
       if (database) return
+      written.clear()
+      polls.clear()
       try {
         database = new DatabaseSync(file)
         database.exec(`PRAGMA journal_mode = WAL;
@@ -348,6 +397,16 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls (at);`)
           else roots.push(node)
         }
         return roots
+      },
+      /** Successful action and service calls not written as repeats since the trace opened, most first. */
+      polls(): { name: string; count: number; since: string }[] {
+        return [...polls]
+          .map(([name, { count, since }]) => ({
+            name,
+            count,
+            since: new Date(since).toISOString(),
+          }))
+          .toSorted((a, b) => b.count - a.count)
       },
     },
   }

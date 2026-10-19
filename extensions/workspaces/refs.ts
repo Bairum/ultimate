@@ -58,3 +58,14 @@ export type LandedData = {
  * only the push failed afterwards; react to it for anything that must follow every landing exactly once.
  */
 export const SubmissionLanded = defineEvent<LandedData>('workspaces.landed')
+/**
+ * The lander ran check `command` on submission `submission`: `passed`, `failed`, `flaky` (its rerun passed) or `timeout`
+ * (a watchdog stopped it), taking `ms`. Once per run, the rerun too, in the commit that logs its result; a crash
+ * before that commit runs the check again, as the lander log shows it.
+ */
+export const CheckRan = defineEvent<{
+  submission: string
+  command: string
+  result: 'passed' | 'failed' | 'flaky' | 'timeout'
+  ms: number
+}>('workspaces.check')

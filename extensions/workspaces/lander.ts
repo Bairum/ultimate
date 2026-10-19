@@ -22,7 +22,7 @@ import type {
 import { git } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { definitionAgent, discoverAgents } from '../../lib/agents.ts'
-import { Handoff, SubmissionLanded } from './api.ts'
+import { CheckRan, Handoff, SubmissionLanded } from './api.ts'
 import { setup } from './setup.ts'
 import type {
   Landed,
@@ -226,7 +226,7 @@ export async function runLanderCheck(
       withAbortSignal(signal, context),
     )
     context.abortSignal?.throwIfAborted()
-    if (stopped) return { failure: watchdogFailure(stopped) }
+    if (stopped) return { failure: watchdogFailure(stopped), timedOut: true }
     if (!result.ok) return { failure: `${output}\n${result.error.message}`.trim() }
     if (result.value.exitCode !== 0)
       return { failure: `${output}\nexit ${result.value.exitCode}`.trim() }
@@ -406,8 +406,16 @@ export function createLander(
           (await runtime.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!.queue.find(
             (item) => item.id === id,
           )?.landed
-        /** Log a step; a check's `output` tail goes to the lander log only, not the submission's steps. */
-        const step = (text: string, result?: LanderEntry['check'], output?: string) =>
+        /**
+         * Log a step; a check's `output` tail goes to the lander log only, not the submission's steps. A run check's
+         * step also emits `workspaces.check`, with `ran` its duration and whether a watchdog stopped it.
+         */
+        const step = (
+          text: string,
+          result?: LanderEntry['check'],
+          output?: string,
+          ran?: { ms: number; timedOut?: boolean },
+        ) =>
           runtime.commit(async (tx) => {
             const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue.find(
               (item) => item.id === id,
@@ -418,6 +426,13 @@ export function createLander(
               ...(result ? { check: result } : {}),
               ...(output ? { output } : {}),
             })
+            if (result && ran)
+              await host.emit(tx, CheckRan, {
+                submission: id,
+                command: result.command,
+                result: ran.timedOut ? 'timeout' : result.result,
+                ms: Math.round(ran.ms),
+              })
           }, context)
         /** Record the outcome, log it and report it to the submitter, in one commit. */
         const finish = (text: string, outcome: LanderOutcome) =>
@@ -814,6 +829,7 @@ export function createLander(
                 let first = await runtime.memo<'passed' | 'failed'>(key, context)
                 if (!first) {
                   await step(`checking: ${command}`)
+                  const began = performance.now()
                   const ran = await run(command, member)
                   const result = ran.failure === undefined ? 'passed' : 'failed'
                   // Logged before the memo: a crash in between reruns the check and logs it again, as it ran.
@@ -822,6 +838,7 @@ export function createLander(
                     `checked: ${command}`,
                     { command, result, ...(ran.summary ? { summary: ran.summary } : {}) },
                     ran.failure,
+                    { ms: performance.now() - began, timedOut: ran.timedOut },
                   )
                   first = await runtime.memo(key, result, context)
                 }
@@ -831,13 +848,29 @@ export function createLander(
                 let rerun = await runtime.memo<{ failure?: string }>(`${key}:rerun`, context)
                 if (!rerun) {
                   await step(`rerunning: ${command}`)
+                  const began = performance.now()
                   const ran = await run(command, member)
+                  const timing = { ms: performance.now() - began, timedOut: ran.timedOut }
                   if (ran.failure === undefined)
-                    await step(`checked: ${command}`, {
-                      command,
-                      result: 'flaky',
-                      ...(ran.summary ? { summary: ran.summary } : {}),
-                    })
+                    await step(
+                      `checked: ${command}`,
+                      {
+                        command,
+                        result: 'flaky',
+                        ...(ran.summary ? { summary: ran.summary } : {}),
+                      },
+                      undefined,
+                      timing,
+                    )
+                  else
+                    await runtime.commit(async (tx) => {
+                      await host.emit(tx, CheckRan, {
+                        submission: id,
+                        command,
+                        result: ran.timedOut ? 'timeout' : 'failed',
+                        ms: Math.round(timing.ms),
+                      })
+                    }, context)
                   rerun = await runtime.memo<{ failure?: string }>(
                     `${key}:rerun`,
                     ran.failure === undefined ? {} : { failure: ran.failure },

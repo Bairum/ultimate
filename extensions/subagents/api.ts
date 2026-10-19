@@ -9,6 +9,8 @@ import { defineApi } from '../../shared/extension-api.ts'
 import { StandingDoc } from './refs.ts'
 import type { createChild } from './children.ts'
 
+export { Started } from './refs.ts'
+
 /** Each conversation's subagents and pending subagent actions, on the conversation that started them. */
 export const Subagents = defineDoc<{
   agents: Record<

@@ -13,6 +13,10 @@ reads this extension's overview, titles and actions. `ui.tsx` declares the point
 
 ## Server facet
 
+`compactions.ts` emits `conversations.compacted` `{ conversation, entry, reason? }` (`Compacted` in `refs.ts`) for
+each compaction summary Pi places. Pi appends it in its compaction task with no hook in that commit, so a commit
+watcher emits it in a commit of its own: a crash between the two loses the event, nothing repeats it.
+
 `activity.ts` maintains `ultimate.metadata`'s `inputTitle`, `inputAt`, and `answerAt` from committed
 history; core only serves those fields, preferring an explicit `title` over the input title. Reset and
 compaction cut the active title source but preserve activity times from earlier history. On open, the

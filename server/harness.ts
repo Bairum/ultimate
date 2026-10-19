@@ -13,7 +13,8 @@ import { createRegistry, Harness } from '@earendil-works/pi-durable'
 import type { Context } from '@earendil-works/chord'
 import { UiState } from './ui-state.ts'
 import { listModels } from './models.ts'
-import { guardToolArguments } from './tool-arguments.ts'
+import { guardToolArguments, modelTrace } from './tool-arguments.ts'
+import { callTrace } from './trace.ts'
 import { projectSkills } from './skills.ts'
 import { requestSwap } from './supervisor-protocol.ts'
 import type {
@@ -109,7 +110,11 @@ export async function prepareHarness(options: HostOptions) {
     collection.setProvider(faux.provider)
     models = collection
   }
-  models = guardToolArguments(models)
+  // Here, not with the extensions: model calls are traced through the models the harness opens with.
+  const trace = callTrace(join(home, 'trace.sqlite'))
+  const modelCalls = modelTrace(trace)
+  registry.install(modelCalls.extension)
+  models = guardToolArguments(models, modelCalls)
   const available = fauxMode ? [] : await modelRuntime.getAvailable()
   const preferred =
     available.find(
@@ -165,6 +170,8 @@ export async function prepareHarness(options: HostOptions) {
     build: builds.current,
     home,
     database,
+    /** The call trace of this home, which extensions read as `host.trace`; open while the harness is. */
+    callTrace: trace,
     modelRuntime,
     settings,
     registry,

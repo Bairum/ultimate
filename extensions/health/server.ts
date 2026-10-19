@@ -9,12 +9,13 @@ import type { MachineHealth, ProviderHealth } from '../../cloud/protocol.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { cloudConfig, httpBase } from '../../lib/cloud.ts'
 import { isMachineHome } from '../../lib/machine.ts'
+import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { readFileHealth, readHealth, record, reset, toHealth } from './store.ts'
 import { HealthApi } from './api.ts'
 import { LoginChanged } from '../models/api.ts'
-import type { HealthEntry } from './store.ts'
+import type { Flip, HealthEntry } from './store.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { StateAction } from './refs.ts'
+import { Changed, StateAction } from './refs.ts'
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
@@ -128,15 +129,46 @@ export async function confirm(deps: HeartbeatDeps, provider: string) {
   return models ? ping(deps, provider, models) : false
 }
 
-/** Heartbeat dependencies on the host's model runtime and this machine's health file. */
+/**
+ * Emit `health.changed` for each flip that changed a provider's state, in a commit of its own: the state lives in the
+ * machine's health file, not in storage. Nothing while storage is closed; a failure only logs, health is advisory.
+ */
+export async function announce(host: Pick<ExtensionHost, 'harness' | 'emit'>, flips: Flip[]) {
+  const changed = flips.filter((flip) => flip.from !== flip.to)
+  if (!changed.length) return
+  let harness: ReturnType<ExtensionHost['harness']>
+  try {
+    harness = host.harness()
+  } catch {
+    // Storage is closed (standby, a switch): the next write that flips a state is announced.
+    return
+  }
+  await harness
+    .commit(async (tx) => {
+      for (const { provider, to, error } of changed)
+        await host.emit(tx, Changed, { provider, state: to, ...(error ? { error } : {}) })
+    }, context)
+    .catch((error: unknown) => console.error('health: announcing a change failed:', error))
+}
+
+/** Heartbeat dependencies on the host's model runtime and this machine's health file; `flipped` hears each write. */
 export const hostDeps = (
   host: Pick<ExtensionHost, 'modelRuntime' | 'userHome'>,
+  flipped: (flips: Flip[]) => Promise<void> = async () => {},
 ): HeartbeatDeps => ({
   now: Date.now,
   models: host.modelRuntime,
   read: async () => (await readFileHealth(host.userHome)).providers,
-  record: (provider, entry) => record(host.userHome, provider, entry),
-  forget: (providers) => reset(host.userHome, providers),
+  record: async (provider, entry) => {
+    const flip = await record(host.userHome, provider, entry)
+    await flipped([flip])
+    return flip
+  },
+  forget: async (providers) => {
+    const flips = await reset(host.userHome, providers)
+    await flipped(flips)
+    return flips
+  },
 })
 
 /** Pi's credential store, shared with `pi`: one entry per logged-in provider. */
@@ -170,6 +202,7 @@ export function watchLogins(
   changed: (providers: boolean) => void,
   path = authPath(),
   delay = 1000,
+  flipped: (flips: Flip[]) => Promise<void> = async () => {},
 ) {
   let known = loginProviders(path)
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -177,7 +210,7 @@ export function watchLogins(
     known = known.then(async (before) => {
       const after = await loginProviders(path)
       const providers = changedLogins(before, after)
-      if (providers.length) await reset(userHome, providers)
+      if (providers.length) await flipped(await reset(userHome, providers))
       changed(providers.length > 0)
       return after
     })
@@ -261,12 +294,16 @@ async function report(host: ExtensionHost) {
 
 export default function health(host: ExtensionHost) {
   // A login added, replaced or removed through Ultimate makes the provider's record meaningless: start it over.
-  host.react('login-changed', [LoginChanged], async (_tx, { data }) => {
-    await reset(host.userHome, [data.provider])
+  // Each write that flips a provider's state is announced as `health.changed`.
+  const flipped = (flips: Flip[]) => announce(host, flips)
+  host.react('login-changed', [LoginChanged], async (tx, { data }) => {
+    // In the reactor's transaction: its retry after a failure resets again but announces nothing twice.
+    for (const { provider, from, to } of await reset(host.userHome, [data.provider]))
+      if (from !== to) await host.emit(tx, Changed, { provider, state: to })
   })
   host.implement(HealthApi, {
     providers: () => readHealth(host.userHome),
-    confirm: (provider) => confirm(hostDeps(host), provider),
+    confirm: (provider) => confirm(hostDeps(host, flipped), provider),
   })
   const hooks = host.faux
     ? []
@@ -277,10 +314,12 @@ export default function health(host: ExtensionHost) {
             // Only providers with a login here: a stray model reference to another fails, which is not its health.
             if (!entry || !host.modelRuntime.getProviderAuthStatus(message.provider).configured)
               return
-            record(host.userHome, message.provider, entry).catch((error: unknown) => {
-              // Health is advisory: a failed write must never fail or delay the agent's generation.
-              console.error('health: recording a response failed:', error)
-            })
+            record(host.userHome, message.provider, entry)
+              .then((flip) => flipped([flip]))
+              .catch((error: unknown) => {
+                // Health is advisory: a failed write must never fail or delay the agent's generation.
+                console.error('health: recording a response failed:', error)
+              })
           },
         }),
       ]
@@ -294,7 +333,7 @@ export default function health(host: ExtensionHost) {
     reported: 0,
     pending: false as boolean | undefined,
   }))
-  const deps = hostDeps(host)
+  const deps = hostDeps(host, flipped)
   const tick = () => {
     shared.ticking ??= (async () => {
       const { pruned, pinged } = await heartbeat(deps)
@@ -321,10 +360,16 @@ export default function health(host: ExtensionHost) {
   // A login change resets that provider (here, or in the models action that made it): the tick pings it as due and
   // reports; a removed one has nothing to ping, so its report is owed explicitly.
   const stopWatching = existsSync(dirname(authPath()))
-    ? watchLogins(host.userHome, (providers) => {
-        if (providers) shared.pending = true
-        tick()
-      })
+    ? watchLogins(
+        host.userHome,
+        (providers) => {
+          if (providers) shared.pending = true
+          tick()
+        },
+        authPath(),
+        1000,
+        flipped,
+      )
     : undefined
   host.onClose(async () => {
     clearTimeout(start)

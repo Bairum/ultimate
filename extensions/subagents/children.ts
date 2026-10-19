@@ -1,9 +1,10 @@
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
-import { configure } from '@earendil-works/pi-durable'
+import { AgentDoc, configure } from '@earendil-works/pi-durable'
 import type {
   Agent,
   ConversationId,
   ConversationOwnership,
+  ConversationRecord,
   EntryId,
   Tx,
 } from '@earendil-works/pi-durable'
@@ -11,6 +12,30 @@ import type { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { definitionAgent } from '../../lib/agents.ts'
 import type { AgentDefinition } from '../../lib/agents.ts'
+import { Started } from './refs.ts'
+
+/**
+ * Emit `subagents.started` for `conversation`, configured in `tx` to run as `agent`: its model and thinking level as
+ * configured, and its parent, the owner or else the fork source.
+ */
+export async function started(
+  host: Pick<ExtensionHost, 'emit'>,
+  tx: Tx,
+  conversation: ConversationRecord,
+  agent: string,
+  kind: 'child' | 'standing' | 'branch',
+) {
+  const { model, thinkingLevel } = await tx.doc(AgentDoc, conversation.id)
+  const parent = conversation.owner?.conversationId ?? conversation.parent?.conversationId
+  await host.emit(tx, Started, {
+    id: conversation.id,
+    agent,
+    kind,
+    ...(model ? { model: `${model.provider}/${model.modelId}` } : {}),
+    ...(thinkingLevel ? { thinking: thinkingLevel } : {}),
+    ...(parent === undefined ? {} : { parent }),
+  })
+}
 
 /** A conversation configured from a definition (or as a copy of the parent's agent), new or forked at `fork.at`. */
 export async function createChild(

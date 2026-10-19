@@ -30,7 +30,7 @@ export type WorkspaceService = {
 /** Worktrees and landing; core, so `need` it. */
 export const WorkspacesApi = defineApi<WorkspaceService>()('workspaces')
 
-export { SubmissionLanded } from './refs.ts'
+export { CheckRan, SubmissionLanded } from './refs.ts'
 export type { LandedData } from './refs.ts'
 export type HandoffService = {
   /**

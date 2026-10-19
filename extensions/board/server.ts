@@ -31,7 +31,7 @@ import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import { primaryAgent } from '../../lib/machine.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { LineageApi, Roots } from '../lineage/api.ts'
-import { Asked, Board, BoardApi } from './api.ts'
+import { Asked, Board, BoardApi, MessageSent } from './api.ts'
 import type { BoardMessage } from './api.ts'
 export const docs = [Board]
 // The receipt commits with the message, closing the gap before api.memo records its id.
@@ -490,6 +490,7 @@ async function send(
       ...(input.re === undefined ? {} : { re: input.re }),
       ...(callId === undefined ? {} : { call: callId }),
     })
+    await host.emit(tx, MessageSent, { message: message.id, from, to, reply: message.reply, steer })
     if (to === 'user' && message.reply && from !== 'user')
       await host.emit(tx, Asked, { message: message.id, from })
     if (to !== 'user')

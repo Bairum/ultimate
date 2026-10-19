@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { prepareHarness } from '../server/harness.ts'
+import { emit } from '../server/events.ts'
 import type { OpenHost } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import subagents from '../extensions/subagents/server.ts'
@@ -65,6 +66,7 @@ async function host(project: (userHome: string) => string) {
       notice: () => {},
       onOpen: () => {},
       onClose: () => {},
+      emit,
     }),
   )
   open = await prepared.open()

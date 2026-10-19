@@ -6,6 +6,7 @@ import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../../server/harness.ts'
 import { Metadata } from '../../server/metadata.ts'
+import { emit } from '../../server/events.ts'
 import instance, { actions } from '../../extensions/instance/server.ts'
 import subagents from '../../extensions/subagents/server.ts'
 import { Subagents } from '../../extensions/subagents/api.ts'
@@ -90,6 +91,7 @@ async function fixture({ foreign = false } = {}) {
     projectSettings: () => projectSettings(project, root),
     harness: () => opened.harness,
     metadata: Metadata,
+    emit,
     ...apis(services),
     extensions: () => [{ name: 'workspaces', enabled: true }],
     resource<T>(key: string, create: () => T): T {

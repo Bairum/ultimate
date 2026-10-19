@@ -23,6 +23,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type {
   ConversationId,
+  ConversationRecord,
   Cursor,
   EntryId,
   EntryRecord,
@@ -39,7 +40,7 @@ import {
   discoverAgents,
   saveDefinition,
 } from '../../lib/agents.ts'
-import { createChild } from './children.ts'
+import { createChild, started } from './children.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { exec } from '../../lib/exec.ts'
 import { residentHere } from '../../lib/machine.ts'
@@ -567,6 +568,7 @@ export default function subagents(
     | 'onOpen'
     | 'onClose'
     | 'scanSubmissions'
+    | 'emit'
   >,
 ) {
   // Core services, always on; each handle resolves the current provider at every call.
@@ -579,7 +581,11 @@ export default function subagents(
       residentHere(definition.resident, host.projectRoot, host.userHome),
     )
   host.implement(SubagentsApi, {
-    createChild,
+    async createChild(tx, options) {
+      const child = await createChild(tx, options)
+      await started(host, tx, child, options.definition?.name ?? options.label, 'child')
+      return child
+    },
     async residents(_ctx) {
       return (await residentDefinitions()).map(({ name, description }) => ({ name, description }))
     },
@@ -595,6 +601,7 @@ export default function subagents(
       return host.harness().commit(async (tx) => {
         const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
         let id = Object.hasOwn(index, name) ? index[name] : undefined
+        let created: ConversationRecord | undefined
         // A new conversation starts on the main conversation's model; an existing one keeps the model and thinking
         // level chosen in it, so a refresh changes them only where the definition pins them.
         let base = main
@@ -606,12 +613,15 @@ export default function subagents(
             thinkingLevel: own.thinkingLevel ?? main.thinkingLevel,
           }
         } else {
-          id = (await tx.createConversation({ ownership: { kind: 'ownerless' } })).id
+          created = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+          id = created.id
           index[name] = id
         }
         const change = definitionAgent(definition, base, host.modelRuntime)
         await configure(tx, id, { ...change, cwd: host.projectRoot })
         Object.assign(await tx.doc(host.metadata, id), { label: 'agent', title: `@${name}` })
+        // Only a new conversation starts: a refresh reconfigures one that already runs.
+        if (created) await started(host, tx, created, name, 'standing')
         return id
       }, ctx)
     },
@@ -1003,6 +1013,7 @@ Available definitions:
                   cwd: parent.cwd ?? host.projectRoot,
                 })
                 conversationId = child.id
+                await started(host, tx, child, definition.name, 'child')
                 state.agents[String(child.id)] = {
                   conversationId,
                   agent: definition.name,

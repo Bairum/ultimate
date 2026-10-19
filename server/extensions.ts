@@ -28,7 +28,6 @@ import type { Access } from './request-security.ts'
 import { EventFeed, eventLog } from './events.ts'
 import type { EventHost } from './events.ts'
 import { extensionApis } from './extension-apis.ts'
-import { callTrace } from './trace.ts'
 import type { TraceReader } from './trace.ts'
 import type { Api, Catalogue } from '../shared/extension-api.ts'
 
@@ -131,7 +130,7 @@ export async function loadExtensions(
   watch: Watch,
   notice: (message: string) => void = () => {},
 ) {
-  const trace = callTrace(join(host.home, 'trace.sqlite'))
+  const trace = host.callTrace
   const log = eventLog(runtime.harness, trace.run)
   const roots = discoveryRoots(host.ultimateRoot, host.projectRoot, host.userHome)
   const directories = roots.map((root) => join(root.path, 'extensions'))

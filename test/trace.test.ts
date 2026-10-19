@@ -3,6 +3,9 @@ import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { afterAll, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
+import { createModels } from '@earendil-works/pi-ai/models'
+import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { guardToolArguments } from '../server/tool-arguments.ts'
 import { callTrace, summary } from '../server/trace.ts'
 import type { Call, CallTree } from '../server/trace.ts'
 import { fauxServer, linkDependencies, temp, until } from './helpers.ts'
@@ -219,6 +222,131 @@ it('links a tool call to its conversation and tool-call entry, with service call
       entry: assistant.id,
     }),
   )
+})
+
+it('records one model row per request with tokens and stop reason, never content, linked to its conversation', async () => {
+  const server = await start()
+  server.host.faux!.setResponses([
+    fauxAssistantMessage([fauxToolCall('probe', {})], { stopReason: 'toolUse' }),
+    fauxAssistantMessage('secret-answer-text'),
+  ])
+  await server.root.submit({ type: 'input', content: 'secret-prompt-text' }, context)
+  await server.harness.waitForIdle(context)
+  const models = server.extensions.trace.query().filter((row) => row.kind === 'model')
+  expect(models.map((row) => row.result && JSON.parse(row.result).stopReason)).toEqual([
+    'toolUse',
+    'stop',
+  ])
+  for (const row of models) {
+    expect(row).toMatchObject({
+      caller: 'agent',
+      callee: 'faux',
+      name: 'faux/faux-1',
+      ok: true,
+      conversation: server.root.id,
+    })
+    expect(row).not.toHaveProperty('parent')
+    expect(row).not.toHaveProperty('args')
+    expect(Object.keys(JSON.parse(row.result!))).toEqual([
+      'input',
+      'output',
+      'cacheRead',
+      'cacheWrite',
+      'stopReason',
+    ])
+    expect(JSON.parse(row.result!).output).toBeGreaterThan(0)
+  }
+  const text = JSON.stringify(server.extensions.trace.query())
+  expect(text).not.toContain('secret-prompt-text')
+  expect(text).not.toContain('secret-answer-text')
+})
+
+it('records a failed model stream as a failed row with its error', async () => {
+  const trace = callTrace(join(await temp(), 'trace.sqlite'))
+  trace.open()
+  const faux = fauxProvider()
+  const collection = createModels()
+  collection.setProvider(faux.provider)
+  const models = guardToolArguments(collection, { begin: trace.begin, conversationOf: () => 7 })
+  faux.setResponses([
+    fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'overloaded_error' }),
+  ])
+  const model = collection.getModel('faux', 'faux-1')!
+  await models.streamSimple(model, { messages: [] }, { sessionId: 's' }).result()
+  await until(() => trace.reader.query().length === 1)
+  expect(trace.reader.query()[0]).toMatchObject({
+    kind: 'model',
+    ok: false,
+    error: 'overloaded_error',
+    conversation: 7,
+  })
+  trace.close()
+})
+
+it('writes a repeated trace-starting action or service call once a minute and counts the rest; failures always', async () => {
+  const trace = callTrace(join(await temp(), 'trace.sqlite'))
+  trace.open()
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+  try {
+    const poll = (name: string, args?: unknown) =>
+      trace.run({ kind: 'action', caller: 'ui', callee: 'x', name, args }, () => 1)
+    for (let i = 0; i < 5; i++) poll('x/state')
+    poll('x/state', { other: true })
+    trace.run({ kind: 'tool', caller: 'agent', callee: 'x', name: 'bash' }, () => 1)
+    trace.run({ kind: 'tool', caller: 'agent', callee: 'x', name: 'bash' }, () => 1)
+    for (let i = 0; i < 2; i++)
+      expect(() =>
+        trace.run({ kind: 'service', caller: 'a', callee: 'x', name: 'x.fail' }, () => {
+          throw new Error('down')
+        }),
+      ).toThrow('down')
+    expect(trace.reader.query().map((row) => [row.name, row.ok])).toEqual([
+      ['x/state', true],
+      ['x/state', true],
+      ['bash', true],
+      ['bash', true],
+      ['x.fail', false],
+      ['x.fail', false],
+    ])
+    expect(trace.reader.polls()).toEqual([
+      { name: 'x/state', count: 4, since: new Date(1_000_000).toISOString() },
+    ])
+    // A repeat's own calls go with it; the same call nested in other work belongs to that tree and is written.
+    const nested = { kind: 'service', caller: 'x', callee: 'y', name: 'y.read' } as const
+    const outer = (name: string) =>
+      trace.run({ kind: 'action', caller: 'ui', callee: 'x', name }, () =>
+        trace.run(nested, () => 1),
+      )
+    outer('x/poll')
+    outer('x/poll')
+    trace.run({ kind: 'tool', caller: 'agent', callee: 'x', name: 'work' }, () => {
+      trace.run(nested, () => 1)
+      trace.run(nested, () => 1)
+    })
+    expect(trace.reader.query().filter((row) => row.name === 'y.read')).toHaveLength(3)
+    expect(trace.reader.query().filter((row) => row.name === 'x/poll')).toHaveLength(1)
+    // Sealed calls carry no arguments to compare: each is written.
+    for (let i = 0; i < 2; i++)
+      trace.run(
+        { kind: 'action', caller: 'ui', callee: 'x', name: 'x/answer', sealed: true },
+        () => 1,
+      )
+    expect(trace.reader.query().filter((row) => row.name === 'x/answer')).toHaveLength(2)
+    // A minute after it was written, the call is written again.
+    clock.mockReturnValue(1_060_000)
+    poll('x/state')
+    poll('x/state')
+    expect(trace.reader.query().filter((row) => row.name === 'x/state')).toHaveLength(3)
+    expect(trace.reader.polls()).toEqual([
+      { name: 'x/state', count: 5, since: new Date(1_000_000).toISOString() },
+      // The nested call settles first.
+      { name: 'y.read', count: 1, since: new Date(1_000_000).toISOString() },
+      { name: 'x/poll', count: 1, since: new Date(1_000_000).toISOString() },
+    ])
+  } finally {
+    clock.mockRestore()
+    trace.close()
+  }
 })
 
 it('keeps the newest rows within the cap, drops old ones, and records nothing while closed', async () => {

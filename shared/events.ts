@@ -50,6 +50,9 @@ export const NoticeEvent = defineEvent<{ extension: string; message: string; lev
   'ultimate.notice',
 )
 
+/** This process opened storage and serves: its supervisor generation and the build it runs. */
+export const StartedEvent = defineEvent<{ generation: number; build: string }>('ultimate.started')
+
 /** Root document with the newest events, which `useEvents()` streams to the browser. */
 export const EVENT_FEED = 'ultimate.event-feed'
 export const EVENT_FEED_SIZE = 100

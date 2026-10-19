@@ -3,7 +3,16 @@
  * conclude and resume conversations and pick the summary model. Browser-safe.
  */
 import { actionRef, docRef } from '../../shared/extension-api.ts'
+import { defineEvent } from '../../shared/events.ts'
 import type { KeptWork, OverviewState } from './types.ts'
+
+/**
+ * Pi compacted conversation `conversation`: its summary is entry `entry`; `reason` is Pi's (`threshold`, `overflow`,
+ * `manual`). Emitted in a commit of its own right after Pi's, which has no hook (`compactions.ts`).
+ */
+export const Compacted = defineEvent<{ conversation: number; entry: number; reason?: string }>(
+  'conversations.compacted',
+)
 
 /** The effective `summaryModel` setting and where it comes from. */
 export type SummaryModelSetting = {

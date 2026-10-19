@@ -22,6 +22,7 @@ import * as snapshot from '../extensions/cloud/snapshot.ts'
 import { git } from '../lib/git.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { context, prepareHarness } from '../server/harness.ts'
+import { emit, EventLog } from '../server/events.ts'
 import { temp, until } from './helpers.ts'
 
 export const KEY = 'github.com/o/project'
@@ -219,10 +220,17 @@ export const sleep = (harness: Harness, background: boolean) =>
     context,
   )
 
-/** Conversations, entries and live tasks, which a move must carry over unchanged. */
+/**
+ * Conversations, entries and live tasks, which a move must carry over unchanged; the event log is left out, since the
+ * move itself records lease events there.
+ */
 export async function inventory(harness: Harness) {
+  const log = (await harness.snapshot(EventLog, ROOT_CONVERSATION_ID, context))?.conversation
   const conversations = await harness.commit(
-    async (tx) => (await tx.scanConversations({}, 256)).items.map((record) => record.id),
+    async (tx) =>
+      (await tx.scanConversations({}, 256)).items
+        .map((record) => record.id)
+        .filter((id) => id !== log),
     context,
   )
   let entries = 0
@@ -425,6 +433,7 @@ export async function machine(
         ExtensionHost['system']
       >,
     build: () => ({ id: 'test-build' }) as ReturnType<ExtensionHost['build']>,
+    emit,
     notice: (message: string) => {
       notices.push(message)
     },

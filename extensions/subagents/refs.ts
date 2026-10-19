@@ -3,6 +3,7 @@
  * save and delete agent definitions. Browser-safe.
  */
 import { actionRef, docRef } from '../../shared/extension-api.ts'
+import { defineEvent } from '../../shared/events.ts'
 
 /** Where a definition file lives: shipped with Ultimate, in the user's home, or in the project. */
 export type Source = 'builtin' | 'user' | 'project'
@@ -56,6 +57,20 @@ export type DefinitionFields = {
   resident?: boolean | 'machine'
   onFailure?: 'diagnose' | 'fix'
 }
+
+/**
+ * Conversation `id` was configured to run as an agent: a subagent or automation run (`child`, `parent` the conversation
+ * that owns it), a new standing agent's conversation (`standing`), or a branch (`branch`, `parent` the conversation it
+ * forked from). `agent` is the definition or label, `model` `provider/modelId`. Emitted in the creating commit.
+ */
+export const Started = defineEvent<{
+  id: number
+  agent: string
+  model?: string
+  thinking?: string
+  parent?: number
+  kind: 'child' | 'standing' | 'branch'
+}>('subagents.started')
 
 /** `{ [name]: conversationId }` of the standing agents, on conversation 1. */
 export const StandingDoc = docRef<Record<string, number>>('ultimate.standing-agents')

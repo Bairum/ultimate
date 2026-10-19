@@ -37,7 +37,7 @@ import { git } from '../../lib/git.ts'
 import { setup } from '../../extensions/workspaces/setup.ts'
 import type { LanderEntry, WorkspaceIndex } from '../../extensions/workspaces/types.ts'
 import { createLander, landerCheckout, landerPath } from '../../extensions/workspaces/lander.ts'
-import { Handoff, SubmissionLanded } from '../../extensions/workspaces/api.ts'
+import { CheckRan, Handoff, SubmissionLanded } from '../../extensions/workspaces/api.ts'
 import lineage, { leaveNote, startBranch } from '../../extensions/lineage/server.ts'
 import { LineageApi, Roots } from '../../extensions/lineage/api.ts'
 import { subject } from '../../extensions/conversations/server.ts'
@@ -1472,6 +1472,22 @@ it.concurrent('reruns only the failing command of a group, reports its output tw
     outcome: 'landed',
     flaky: [expect.stringContaining('if [')],
   })
+  // Every run is one event, reruns included: the failing submission's, then the flaky one's.
+  const checks = await f.host.eventLog.recent({ events: [CheckRan], limit: 20 })
+  const runs = (submission: string) =>
+    checks
+      .filter((event) => event.data.submission === submission)
+      .map((event) => `${event.data.command.split(' ', 2).join(' ')} ${event.data.result}`)
+      .toSorted()
+  const submissions = [...new Set(checks.map((event) => event.data.submission))]
+  expect(submissions).toHaveLength(2)
+  expect(runs(submissions[1])).toEqual([
+    'echo CHECK_OUTPUT_TAIL; failed',
+    'echo CHECK_OUTPUT_TAIL; failed',
+    'echo PASSING_SUMMARY passed',
+  ])
+  expect(runs(submissions[0])).toEqual(['if [ failed', 'if [ flaky', 'true passed'])
+  for (const event of checks) expect(event.data.ms).toEqual(expect.any(Number))
 })
 it.concurrent('fast-forwards the worktree that has the target checked out, past unrelated dirty files but not over overlapping ones', async () => {
   const f = await lander({})

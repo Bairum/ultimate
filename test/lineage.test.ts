@@ -5,12 +5,14 @@ import { compareLinks, leaveNote, rootOf, Tally } from '../extensions/lineage/se
 import { Branch, Branched, Roots } from '../extensions/lineage/api.ts'
 import { Plan, Started } from '../extensions/plan/server.ts'
 import { Summaries } from '../extensions/conversations/summary.ts'
+import { Compacted } from '../extensions/conversations/refs.ts'
+import { Started as AgentStarted } from '../extensions/subagents/api.ts'
 import { defineExtension } from '@earendil-works/pi-durable'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import { emit, EventLog } from '../server/events.ts'
 import type { HistoryResponse } from '../shared/protocol.ts'
-import { post, seedTally, until } from './helpers.ts'
+import { eventHost, post, seedTally, until } from './helpers.ts'
 import {
   anchor,
   branchFrom,
@@ -123,6 +125,23 @@ it.concurrent("lists a root's newest landings, notes, branches and compactions, 
   await until(
     async () => (await call('recent', { id: 1, limit: 1 })).result[0]?.type === 'compacted',
   )
+
+  // The branch started as an agent, and the compaction was announced once, after Pi's commit.
+  const log = eventHost(() => server.harness, 'test').eventLog
+  expect((await log.recent({ events: [AgentStarted] })).map((event) => event.data)).toEqual([
+    {
+      id: branch,
+      agent: 'branch',
+      kind: 'branch',
+      parent: 1,
+      model: 'faux/faux-1',
+    },
+  ])
+  await until(async () => (await log.recent({ events: [Compacted] })).length === 1)
+  const [compacted] = await log.recent({ events: [Compacted] })
+  expect(compacted.data).toEqual({ conversation: 1, entry: expect.any(Number), reason: 'manual' })
+  await server.harness.waitForIdle(context)
+  expect(await log.recent({ events: [Compacted] })).toHaveLength(1)
 })
 
 const landed = (entry: number, sha: string, base?: string) =>

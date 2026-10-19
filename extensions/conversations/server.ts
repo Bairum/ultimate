@@ -27,6 +27,7 @@ import type { ActionInput } from '../../lib/actions.ts'
 import { updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import { Overview, overviewBehavior } from './overview.ts'
 import { activityBehavior } from './activity.ts'
+import { compactionEvents } from './compactions.ts'
 import { ConversationsApi, Release, Trees } from './api.ts'
 import {
   ConcludeAction,
@@ -227,6 +228,7 @@ export default (host: ExtensionHost) => {
   })
   activityBehavior(host)
   overviewBehavior(host)
+  compactionEvents(host)
   /** Whether each conversation is top-level, read once: `owner` and `parent` never change after creation. */
   const topLevel = new Map<ConversationId, boolean>()
   const summaries = summaryBehavior(host)

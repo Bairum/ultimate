@@ -39,7 +39,8 @@ import {
   toWorker,
   writer,
 } from './cloud-lease-fixture.ts'
-import { temp, until } from './helpers.ts'
+import { eventHost, temp, until } from './helpers.ts'
+import { LeaseChanged } from '../extensions/cloud/refs.ts'
 
 it('releases an idle writer, and another machine prepares and takes over the same history', async () => {
   snapshotFetch()
@@ -113,6 +114,13 @@ it('releases an idle writer, and another machine prepares and takes over the sam
   await until(() => desk.role()?.writer?.machine === 'laptop')
   expect(desk.serving()).toBe(false)
   expect(await desk.files()).toEqual(['state.sqlite'])
+  // The snapshot carried the desk's release; the laptop's claim follows it. The desk served from the start, so it
+  // never opened storage to acquire the lease.
+  const leases = await eventHost(laptop.harness, 'test').eventLog.recent({ events: [LeaseChanged] })
+  expect(leases.map((event) => event.data)).toEqual([
+    { epoch: 2, writer: 'laptop', change: 'acquired' },
+    { epoch: 1, writer: 'desk', change: 'releasing' },
+  ])
 })
 
 const joining = { reason: 'Waiting for the cloud', joining: true, cloud: true }

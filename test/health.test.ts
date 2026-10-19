@@ -4,6 +4,7 @@ import type { AssistantMessage } from '@earendil-works/pi-ai'
 import { afterEach, expect, it } from 'vitest'
 import { modelLogin, noLogin } from '../extensions/cloud/login.ts'
 import {
+  announce,
   cheapest,
   due,
   heartbeat,
@@ -29,6 +30,7 @@ import type { HealthEntry } from '../extensions/health/store.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { prepareHarness } from '../server/harness.ts'
 import { LoginChanged } from '../extensions/models/api.ts'
+import { Changed as HealthChanged } from '../extensions/health/refs.ts'
 import { apis, eventHost, removeTemps, temp, until } from './helpers.ts'
 
 afterEach(removeTemps)
@@ -395,6 +397,28 @@ it("Ultimate's logout resets the provider's health through models.login-changed"
     expect(
       (await events.eventLog.recent({ events: [LoginChanged] })).map((event) => event.data),
     ).toEqual([{ provider: 'openai-codex' }, { provider: 'anthropic' }])
+    // Each reset flipped a failing provider to unknown: one event each, in the reactor's commit.
+    expect(
+      (await events.eventLog.recent({ events: [HealthChanged] })).map((event) => event.data),
+    ).toEqual([
+      { provider: 'openai-codex', state: 'unknown' },
+      { provider: 'anthropic', state: 'unknown' },
+    ])
+    // A write is announced only when it flips the state.
+    await announce(host, [await record(home, 'anthropic', { lastOk: NOW })])
+    await announce(host, [await record(home, 'anthropic', { lastOk: NOW + 1 })])
+    await announce(host, [
+      await record(home, 'anthropic', { lastFail: NOW + 2, error: '401 key sk-secret' }),
+    ])
+    expect(
+      (await events.eventLog.recent({ events: [HealthChanged], limit: 2 })).map(
+        (event) => event.data,
+      ),
+    ).toEqual([
+      { provider: 'anthropic', state: 'failing', error: '401' },
+      { provider: 'anthropic', state: 'ok' },
+    ])
+    expect(await events.eventLog.recent({ events: [HealthChanged] })).toHaveLength(4)
   } finally {
     await opened.close()
   }

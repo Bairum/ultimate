@@ -7,7 +7,7 @@ import { definePoint } from '@/sdk'
 import type { BoardMessage } from './refs.ts'
 
 export { emptyBoard, isOpen, waitingOnUser } from './data.tsx'
-export { Asked, BoardDoc } from './refs.ts'
+export { Asked, BoardDoc, MessageSent } from './refs.ts'
 
 /** What shows under a Board message to the user (`questions` provides its answer card). */
 export const MessageAnswers = definePoint<BoardMessage, ReactNode>('board.message-answers')

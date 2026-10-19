@@ -95,7 +95,9 @@ conversation; it keeps the full log, grouped by submission, and shows in the Age
 The commit that records a landed outcome (also when only its push failed) emits the durable event
 `workspaces.landed` (`SubmissionLanded` in `api.ts`): submission, submitter and its `at`, `sha`, `base`, `target`,
 lander, divergence, the submit-time title, summary and feature, the first ten commits with `commitCount`, the first
-eight paths and `pushed`. Failures emit nothing. Lineage reacts to it with a landing note in the submitter's tree
+eight paths and `pushed`. Failures emit nothing. Each check run, a rerun included, emits `workspaces.check`
+(`CheckRan`): submission, command, `passed`, `failed`, `flaky` or `timeout` (a watchdog stopped it) and its `ms`, in the
+commit that logs its result. Lineage reacts to it with a landing note in the submitter's tree
 root, exactly once, unless the submitter is that root or has none; the lander itself calls no lineage service. Its
 data includes `divergence` and `at` alongside `from`, `sha`, `target`,
 `commits` and `paths`; model text cites `#<from>/<at>` and always includes `Diverged: …`, even for "None". The

@@ -28,6 +28,7 @@ import { acquireLock } from '../../server/lock.ts'
 import { AutomationsApi } from '../automations/api.ts'
 import { readSecret, secretMetadata } from '../../lib/secrets.ts'
 import { modelLogin, noLogin } from './login.ts'
+import { LeaseChanged } from './refs.ts'
 import type { ModelLogin } from './types.ts'
 import type { Connect, startSync, SyncOptions, SyncState } from './server.ts'
 import type { databaseHash, downloadSnapshot, uploadSnapshot } from './snapshot.ts'
@@ -211,6 +212,22 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     host.notice(message)
   }
   const report = (error: unknown) => fail(`Cloud lease: ${String(error)}`)
+  /**
+   * Record a lease transition as `cloud.lease`, while storage is open: `acquired` just after opening as the writer,
+   * `releasing` just before closing to upload, so the released snapshot holds it. A writer the cloud replaced records
+   * nothing: a write before parking would change the database it compares with the released snapshot. A failure only
+   * reports.
+   */
+  const announce = async (epoch: number, change: 'acquired' | 'releasing') => {
+    if (!serving()) return
+    await host
+      .harness()
+      .commit(
+        (tx) => host.emit(tx, LeaseChanged, { epoch, writer: options.machine, change }),
+        context,
+      )
+      .catch(report)
+  }
   const serving = () => {
     try {
       host.harness()
@@ -265,6 +282,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       await rename(download, path)
     })
     await rm(claimPath, { force: true })
+    await announce(epoch, 'acquired')
   }
   const fetchSnapshot = async (
     id: string,
@@ -842,6 +860,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       return false
     }
     autoClaim = false
+    await announce(state.epoch, 'releasing')
     await host.deactivate({ ...info, cloud: true }, async () => {})
     const result = await releaseClosed(state.epoch, key, AbortSignal.timeout(MOVE_CAP))
     // Nothing was released: serve again. A release sent but unconfirmed waits for the cloud's next role.
@@ -1005,7 +1024,10 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     }
     const signal = AbortSignal.timeout(STOP_BUDGET)
     const info = { reason: 'Released when Ultimate stopped', released: true, cloud: true }
-    if (serving()) await host.deactivate(info, async () => {})
+    if (serving()) {
+      await announce(state.epoch, 'releasing')
+      await host.deactivate(info, async () => {})
+    }
     let lock: Awaited<ReturnType<typeof acquireLock>>
     try {
       lock = await acquireLock(join(host.home, 'storage.lock'), { pid: process.pid })

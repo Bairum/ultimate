@@ -1,5 +1,5 @@
 // Harness tests use the faux provider without token pacing.
-import { idleNeed, temp, removeTemp } from './helpers.ts'
+import { eventHost, idleNeed, temp, removeTemp } from './helpers.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -14,9 +14,10 @@ import {
 } from '@earendil-works/pi-durable'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
 import { prepareHarness } from '../server/harness.ts'
+import { emit } from '../server/events.ts'
 import type { OpenHost } from '../server/harness.ts'
 import subagents from '../extensions/subagents/server.ts'
-import { Standing } from '../extensions/subagents/api.ts'
+import { Standing, Started } from '../extensions/subagents/api.ts'
 import type { SubagentsService } from '../extensions/subagents/api.ts'
 import { Metadata } from '../server/metadata.ts'
 import { parseDefinition, saveDefinition } from '../lib/agents.ts'
@@ -64,6 +65,7 @@ async function fixture() {
     notice: () => {},
     onOpen: () => {},
     onClose: () => {},
+    emit,
   })
   prepared.registry.install(backend)
   host = await prepared.open()
@@ -153,7 +155,20 @@ it('keeps one ownerless standing conversation, refreshes its definition and recr
   const database = new DatabaseSync(prepared.database)
   database.prepare('DELETE FROM conversations WHERE id = ?').run(id)
   database.close()
-  expect(await service.standing('x', ctx)).not.toBe(id)
+  const recreated = await service.standing('x', ctx)
+  expect(recreated).not.toBe(id)
+  // Each new conversation starts once; repeats and refreshes start nothing.
+  const log = eventHost(() => host.harness, 'test').eventLog
+  expect((await log.recent({ events: [Started] })).map((event) => event.data)).toEqual([
+    {
+      id: recreated,
+      agent: 'x',
+      kind: 'standing',
+      model: 'anthropic/claude-opus-4-8',
+      thinking: 'off',
+    },
+    { id, agent: 'x', kind: 'standing', model: 'faux/faux-1', thinking: 'off' },
+  ])
 })
 
 it('keeps a model chosen in the standing conversation across refreshes unless the definition pins one', async () => {

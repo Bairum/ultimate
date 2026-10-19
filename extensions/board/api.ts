@@ -45,7 +45,7 @@ export type BoardService = {
     ctx: Context,
   ): Promise<number>
 }
-export { Asked } from './refs.ts'
+export { Asked, MessageSent } from './refs.ts'
 /** Messages between conversations; core, so `need` it. */
 export const BoardApi = defineApi<BoardService>()('board')
 export const tier = 'core'

@@ -1,5 +1,5 @@
 // First: helpers mocks the faux provider's token pacing, which must apply before the server modules load.
-import { idleNeed, until, temp, removeTemp } from './helpers.ts'
+import { eventHost, idleNeed, until, temp, removeTemp } from './helpers.ts'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { projectSettings } from '../server/project-setup.ts'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
@@ -26,9 +26,10 @@ import { CodingTools } from '@earendil-works/pi-durable/tools'
 import { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { afterEach, describe, expect, it } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
+import { emit } from '../server/events.ts'
 import type { OpenHost } from '../server/harness.ts'
 import subagents, { actions } from '../extensions/subagents/server.ts'
-import { Subagents } from '../extensions/subagents/api.ts'
+import { Started, Subagents } from '../extensions/subagents/api.ts'
 import type { ActionContext } from '../server/actions.ts'
 import codemode from '../extensions/codemode/server.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -95,6 +96,7 @@ async function fixture(
     onClose: (callback) => {
       onClose.push(callback)
     },
+    emit,
   })
   backend = {
     ...backend,
@@ -174,7 +176,7 @@ async function fixture(
       },
       want: () => undefined,
       catalogue: () => ({ apis: [], missing: [], cycles: [] }),
-      trace: { query: () => [], tree: () => [] },
+      trace: { query: () => [], tree: () => [], polls: () => [] },
       resource: (_key, create) => create(),
       onOpen: () => {},
       onRelease: () => {},
@@ -1988,6 +1990,18 @@ describe('subagents', () => {
     const listed = JSON.parse((await call(opened, { action: 'list' })).text)
     expect(listed).toHaveLength(2)
     expect(listed[0]).toMatchObject({ conversationId: first.conversationId, busy: false })
+    // Each start is one event in its creating commit; messaging and waiting start nothing.
+    const log = eventHost(() => opened.harness, 'test').eventLog
+    expect((await log.recent({ events: [Started] })).map((event) => event.data)).toEqual(
+      [second, first].map((started) => ({
+        id: started.conversationId,
+        agent: 'scout',
+        kind: 'child',
+        model: 'faux/faux-1',
+        thinking: 'off',
+        parent: opened.root.id,
+      })),
+    )
   })
   it('background returns immediately, survives parent abort and restart, and reports exactly once', async () => {
     const f = await gatedFixture()

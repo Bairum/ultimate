@@ -9,6 +9,8 @@ as `#123` or `123`, a standing agent as `@name`, or the project's existing lande
 Only the `ultimate` resident's standing conversation may message `user`; other senders must send @ultimate a one-way update to relay.
 Self-messages, unknown conversations and tallies are refused; use `note` for a tally. Unknown standing names list
 the valid ones. Standing agents are resolved and configured through the `subagents` service at delivery admission.
+Each post emits `board.sent` `{ message, from, to, reply, steer }` (`MessageSent`) in the posting commit, never the
+text; replies are no posts and emit nothing.
 
 An idle recipient wakes. A busy one receives a follow-up after its current run, or steering during that run with
 `steer: true`. `steer` defaults to `true` for @ultimate's messages, to any recipient including `@lander` and other

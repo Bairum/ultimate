@@ -9,6 +9,9 @@ import type { Watch } from './extensions.ts'
 import { prepareHarness } from './harness.ts'
 import type { HostOptions, OpenHost } from './harness.ts'
 import { createSystem } from './system.ts'
+import { emit } from './events.ts'
+import { StartedEvent } from '../shared/events.ts'
+import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { ChildMessage, SupervisorMessage } from './supervisor-protocol.ts'
 
 import { alive } from './lock.ts'
@@ -210,6 +213,14 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
   /** Serve the opened harness: the `onOpen` callbacks, then the API, which replaces standby's. */
   const serve = async (harness: OpenHost) => {
     opened = harness
+    await harness.harness.commit(
+      (tx) =>
+        emit(tx, StartedEvent, {
+          generation: Number(process.env.ULTIMATE_GENERATION ?? 1),
+          build: host.build().id,
+        }),
+      context,
+    )
     await extensions.opened()
     processInfo.standby = undefined
     await system.changed()

@@ -24,6 +24,11 @@ Set `resident: true` (a boolean) to make a definition available as a standing ag
 
 Other extensions look up `host.want(SubagentsApi)` (`api.ts`, with the `Subagents` and `Standing` documents); definitions are read with `lib/agents.ts`. `residents(ctx)` reads the effective resident definitions fresh and returns `{name, description}[]`. `standing(name, ctx)` creates or returns its conversation ID and configures it from the current definition on top of the root conversation's agent on every call. A new standing conversation starts on the root's model and thinking level; afterwards it keeps the ones chosen in it, and a refresh changes them only where the definition pins `model` or `thinking` (a pin applies on every refresh, so to choose freely, leave it out of the definition). Unknown and non-resident names fail with the available names. Creation and indexing are atomic; deleted conversations are recreated. The exported `Standing` document, kind `ultimate.standing-agents`, holds `{ [name]: conversationId }` on `ROOT_CONVERSATION_ID`. The `standing {name}` action opens the same standing conversation and returns its ID.
 
+Each conversation configured to run as an agent emits `subagents.started` (`Started` in `refs.ts`) in its creating
+commit: `{ id, agent, model?, thinking?, parent?, kind }`, `kind` `child` for a subagent or an automation run
+(`createChild` through the service), `standing` for a new standing conversation (a refresh emits none) and `branch`
+for a branch, which lineage emits with the agent the fork kept.
+
 A deferred tool explicitly named in a definition's `tools` is loaded into that conversation's `modelTools.add`. This applies to children, automation profiles and standing agents; other conversations, including the root, do not gain it. Tools remain restricted to the base agent's enabled tools. Deferred tools are not a security boundary: nested tool calls can still reach enabled tools.
 
 ## Attributed transcript messages

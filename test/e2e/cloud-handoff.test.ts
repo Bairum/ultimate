@@ -159,12 +159,14 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
     expect((await files(a.home)).filter((file) => /^state\..*sqlite$/.test(file))).toEqual([
       'state.sqlite',
     ])
-    expect(counts(join(a.home, 'state.sqlite'))).toEqual(before)
-    // Plus B's own notice from the refused move ("Move here failed: Missing secrets"), raised on standby and recorded
-    // once B's storage opened: the event log conversation with its first event.
+    // Plus A's `cloud.lease` releasing event, recorded just before it closed storage, so the snapshot carries it.
+    expect(counts(join(a.home, 'state.sqlite'))).toEqual({ ...before, entries: before.entries + 1 })
+    // B has that history, event log included, then its own events once its storage opened: `ultimate.started`,
+    // `cloud.lease` acquired and its notice from the refused move ("Move here failed: Missing secrets"), raised on
+    // standby.
     expect(counts(join(b.home, 'state.sqlite'))).toEqual({
-      conversations: before.conversations + 1,
-      entries: before.entries + 1,
+      conversations: before.conversations,
+      entries: before.entries + 4,
     })
     expect(git(repo.clones.b, 'rev-parse', 'refs/heads/ultimate/e2e-from-a')).toBe(
       git(repo.project, 'rev-parse', 'HEAD'),
@@ -186,7 +188,12 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
     expect(step(moved.transition, 'handover')?.state).toBe('skipped')
     await until(async () => (await project.info()).lease?.machine === 'a' && (await serving(a)))
     expect((await project.info()).lease).toMatchObject({ machine: 'a', epoch: 3 })
-    expect(counts(join(a.home, 'state.sqlite'))).toEqual(counts(join(b.home, 'state.sqlite')))
+    // A took B's snapshot and recorded its start and its `cloud.lease` acquired on top.
+    const released = counts(join(b.home, 'state.sqlite'))
+    expect(counts(join(a.home, 'state.sqlite'))).toEqual({
+      ...released,
+      entries: released.entries + 2,
+    })
   }, 180_000)
 
   it('cancels a move during its download: the lease and both databases stay, the download goes', async () => {
