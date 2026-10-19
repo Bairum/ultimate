@@ -593,6 +593,19 @@ it('answers questions to the user through answer cards or input in the sender co
   const root = (await f.log())!.messages.at(-1)!
   await (await f.opened.root.submit({ type: 'input', content: 'Elsewhere' }, context)).wait(context)
   expect(await state(root.id)).toBe('delivered')
+
+  // An answering input whose handler was lost, as in a crash right after it committed, is caught up on the next open;
+  // a question asked after the newest input stays open.
+  await f.opened.harness.commit(async (tx) => {
+    const lost = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+      (m) => m.id === typed.id,
+    )!
+    lost.state = 'delivered'
+  }, context)
+  await f.opened.close()
+  await f.open()
+  expect(await state(typed.id)).toBe('answered')
+  expect(await state(root.id)).toBe('delivered')
 })
 it('atomically admits only one answer-card reply through the Board service', async () => {
   const f = await fixture()
