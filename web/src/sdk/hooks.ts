@@ -12,7 +12,6 @@ import type { JsonValue } from '@earendil-works/chord'
 import type { ToolCall } from '@earendil-works/pi-ai'
 import type {
   AgentState,
-  ConversationView,
   EntryRecord,
   InboxItem,
   JsonObject,
@@ -23,6 +22,7 @@ import { actions, allCommands, regionKeys, shellKeys, shownSurface } from './act
 import type { Region } from './actions.ts'
 import { actionMessage, MachineOfflineError, ROOT } from './api.ts'
 import { EVENT_FEED } from '../../../shared/events.ts'
+import type { StreamedView } from '../../../shared/protocol.ts'
 import type { EventData, EventRecord, EventToken } from '../../../shared/events.ts'
 import type { ActionArgs, ActionError, ActionOptions } from './api.ts'
 import { actionRef, docRef } from '../../../shared/extension-api.ts'
@@ -54,8 +54,13 @@ export interface ConversationState {
   id?: number
   /** True until the snapshot of the shown conversation arrived. */
   loading: boolean
-  /** Active transcript entries, oldest first. */
+  /**
+   * The streamed active entries, oldest first: the head marker and the newest entries of a long context, all of a short
+   * one. Whole-transcript readers use `useTranscript()`, which grows as the reader pages in earlier history.
+   */
   entries: readonly EntryRecord[]
+  /** The exclusive `api.history` cursor for active entries the stream left out; absent when it sent them all. */
+  older?: number
   /** `pi.agent`: model, thinking level, cwd, extensions, tools. */
   agent: AgentState
   /** `pi.usage`: spend per model and per tool. */
@@ -66,7 +71,7 @@ export interface ConversationState {
   inbox: readonly InboxItem[]
   /** A run is in progress. */
   busy: boolean
-  view?: ConversationView
+  view?: StreamedView
 }
 
 const empty: ConversationState = {
@@ -78,8 +83,8 @@ const empty: ConversationState = {
   inbox: [],
   busy: false,
 }
-const derived = new WeakMap<ConversationView, ConversationState>()
-function derive(view: ConversationView | undefined): ConversationState {
+const derived = new WeakMap<StreamedView, ConversationState>()
+function derive(view: StreamedView | undefined): ConversationState {
   if (!view) return empty
   let state = derived.get(view)
   if (!state) {
@@ -89,6 +94,7 @@ function derive(view: ConversationView | undefined): ConversationState {
       id: view.conversation.id,
       loading: false,
       entries: view.entries,
+      older: view.older,
       agent: docs['pi.agent'] ?? {},
       usage: (docs['pi.usage'] ?? empty.usage) as UsageState,
       live,

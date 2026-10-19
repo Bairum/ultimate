@@ -20,6 +20,7 @@ import {
   useConversation,
   useNow,
   useToolDuration,
+  useTranscript,
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
@@ -327,7 +328,7 @@ function Steps({
 /** One `ultimate.lander` entry: a submission header, a step, a check result, or the outcome card. */
 export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
   const data = entry.data as LanderEntry
-  const entries = useConversation((conversation) => conversation.entries)
+  const entries = useTranscript()
   const busy = useConversation((conversation) => conversation.busy)
   const own = (other: EntryRecord) =>
     other.kind === 'ultimate.lander' && (other.data as LanderEntry).submission === data.submission

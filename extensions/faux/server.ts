@@ -727,4 +727,83 @@ export const actions = {
     }, BACKGROUND_CONTEXT)
     return { seeded: 2 + demoLandings.length + notices.length }
   },
+  /**
+   * Faux only: `{conversation, count}` appends about `count` entries to `conversation` in turns of four: a user input,
+   * an assistant with a tool call, its result, and a Markdown answer. Previews a long transcript and its scrollback.
+   */
+  async seedHistory(args: JsonValue, { host }: ActionContext) {
+    if (!host.faux) throw new Error('seedHistory runs only under faux')
+    const { conversation, count = 1000 } = (args ?? {}) as {
+      conversation?: unknown
+      count?: unknown
+    }
+    if (typeof conversation !== 'number') throw new Error('conversation must be a conversation id')
+    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 1 || count > 20_000)
+      throw new Error('count must be an integer from 1 to 20000')
+    const id = conversation as ConversationId
+    const turns = Math.ceil(count / 4)
+    const start = Date.now() - turns * 60_000
+    // Commits of 50 turns keep each transaction small.
+    for (let from = 0; from < turns; from += 50)
+      await host.harness().commit(async (tx) => {
+        for (let turn = from; turn < Math.min(turns, from + 50); turn++) {
+          const at = start + turn * 60_000
+          const call = `seed-${id}-${turn}`
+          await tx.appendEntry(id, {
+            kind: 'pi.user',
+            model: [
+              {
+                role: 'user',
+                content: `Seeded request ${turn + 1}: check step ${turn + 1}`,
+                timestamp: at,
+              },
+            ],
+          })
+          await tx.appendEntry(id, {
+            kind: 'pi.assistant',
+            model: [
+              fauxAssistantMessage(
+                [
+                  fauxText(`Looking at step ${turn + 1}.`),
+                  fauxToolCall('bash', { command: `rg -n step${turn + 1} src` }, { id: call }),
+                ],
+                { stopReason: 'toolUse', timestamp: at + 1000 },
+              ),
+            ],
+          })
+          await tx.appendEntry(id, {
+            kind: 'pi.tool-result',
+            model: [
+              {
+                role: 'toolResult',
+                toolCallId: call,
+                toolName: 'bash',
+                content: [
+                  {
+                    type: 'text',
+                    text: `src/step${turn + 1}.ts:${turn + 3}: const step = ${turn + 1}`,
+                  },
+                ],
+                isError: false,
+                timestamp: at + 2000,
+              },
+            ],
+          })
+          await tx.appendEntry(id, {
+            kind: 'pi.assistant',
+            model: [
+              fauxAssistantMessage(
+                [
+                  fauxText(
+                    `## Step ${turn + 1}\n\nFound it in \`src/step${turn + 1}.ts\`:\n\n- the value is **${turn + 1}**\n- nothing else changed\n\n\`\`\`ts\nconst step = ${turn + 1}\n\`\`\``,
+                  ),
+                ],
+                { timestamp: at + 3000 },
+              ),
+            ],
+          })
+        }
+      }, BACKGROUND_CONTEXT)
+    return { seeded: turns * 4 }
+  },
 }
