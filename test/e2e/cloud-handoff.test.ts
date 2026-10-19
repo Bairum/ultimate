@@ -160,7 +160,12 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
       'state.sqlite',
     ])
     expect(counts(join(a.home, 'state.sqlite'))).toEqual(before)
-    expect(counts(join(b.home, 'state.sqlite'))).toEqual(before)
+    // Plus B's own notice from the refused move ("Move here failed: Missing secrets"), raised on standby and recorded
+    // once B's storage opened: the event log conversation with its first event.
+    expect(counts(join(b.home, 'state.sqlite'))).toEqual({
+      conversations: before.conversations + 1,
+      entries: before.entries + 1,
+    })
     expect(git(repo.clones.b, 'rev-parse', 'refs/heads/ultimate/e2e-from-a')).toBe(
       git(repo.project, 'rev-parse', 'HEAD'),
     )

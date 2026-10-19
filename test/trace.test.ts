@@ -263,3 +263,101 @@ it('summarises values: secret keys redacted, long values cut, unserializable sai
   expect(summary(cycle)).toBe('[unserializable]')
   expect(summary(undefined)).toBe(undefined)
 })
+
+type Execute = (
+  args: object,
+  api: { conversationId: number; taskId: number; callId: string },
+) => Promise<unknown>
+/** Tools of extension `ext` traced by a fresh store, called with a stand-in api whose task has `input`. */
+async function tracedTools(tools: Record<string, Execute>) {
+  const trace = callTrace(join(await temp(), 'trace.sqlite'))
+  trace.open()
+  const traced = trace.tools({
+    name: 'ext',
+    tools: Object.entries(tools).map(([name, execute]) => ({ name, execute }) as never),
+  }).tools!
+  const execute = (
+    name: string,
+    api: { conversationId: number; taskId: number; callId: string },
+    input: unknown,
+  ) =>
+    traced
+      .find((tool) => tool.name === name)!
+      .execute({}, { ...api, getTask: async () => ({ input }) } as never, {} as never)
+  return { trace, execute }
+}
+const model = (callId: string) => ({ kind: 'model', assistant: 10, callId })
+const nested = (parent: number, parentCallId: string, id: string) => ({
+  kind: 'nested',
+  parent,
+  parentCallId,
+  key: '1',
+  call: { type: 'toolCall', id, name: 'inner', arguments: {} },
+})
+
+it("finds a Pi nested call's caller by task and call id, not by a call id another conversation reuses", async () => {
+  const gates = new Map([1, 2].map((id) => [id, Promise.withResolvers<void>()]))
+  let entered = 0
+  const { trace, execute } = await tracedTools({
+    outer: async (_args, api) => {
+      entered++
+      await gates.get(api.conversationId)!.promise
+    },
+    inner: async () => undefined,
+  })
+  // Two model calls with the same provider call id, in two conversations, both running.
+  const outers = [1, 2].map((id) =>
+    execute('outer', { conversationId: id, taskId: 100 + id, callId: 'same' }, model('same')),
+  )
+  await until(() => entered === 2)
+  // Each one's nested call runs as a task of its own, outside any trace context.
+  for (const id of [2, 1])
+    await execute(
+      'inner',
+      { conversationId: id, taskId: 200 + id, callId: 'same/1' },
+      nested(100 + id, 'same', 'same/1'),
+    )
+  for (const gate of gates.values()) gate.resolve()
+  await Promise.all(outers)
+  const rows = trace.reader.query()
+  for (const id of [1, 2]) {
+    const outer = rows.find((row) => row.name === 'outer' && row.conversation === id)!
+    expect(rows.find((row) => row.name === 'inner' && row.conversation === id)).toMatchObject({
+      parent: outer.id,
+      trace: outer.trace,
+      caller: 'ext',
+    })
+  }
+  trace.close()
+})
+
+it('attaches an in-process tool call to its running caller, and a late callback to nothing', async () => {
+  const release = Promise.withResolvers<void>()
+  let late: Promise<unknown> | undefined
+  // The callers' own api and task, as codemode's `tools.*` passes them.
+  const api = { conversationId: 1, taskId: 7, callId: 'call' }
+  const { trace, execute } = await tracedTools({
+    outer: async () => {
+      await execute('first', { ...api, callId: 'call/1' }, model('call'))
+      // first has ended, outer still runs, when first's continuation calls a tool.
+      release.resolve()
+      await late
+    },
+    first: async () => {
+      late = release.promise.then(() =>
+        execute('inner', { ...api, callId: 'call/1/1' }, model('call')),
+      )
+    },
+    inner: async () => undefined,
+  })
+  await execute('outer', api, model('call'))
+  const rows = trace.reader.query()
+  const outer = rows.find((row) => row.name === 'outer')!
+  const first = rows.find((row) => row.name === 'first')!
+  const inner = rows.find((row) => row.name === 'inner')!
+  expect(first).toMatchObject({ parent: outer.id, trace: outer.trace, caller: 'ext' })
+  expect(inner).toMatchObject({ caller: 'agent' })
+  expect(inner.parent).toBeUndefined()
+  expect(inner.trace).not.toBe(outer.trace)
+  trace.close()
+})

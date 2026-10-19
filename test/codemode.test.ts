@@ -160,6 +160,14 @@ it('traces a tool a codemode script calls, and its service call, inside the code
           description: 'Echoes through a service',
           parameters: Type.Object({}),
           execute: async () => ({ output: [{ type: 'text', text: echo.echo('probed') }] }),
+        }), defineTool({
+          name: 'outer',
+          description: 'Runs a codemode script as a Pi nested call',
+          parameters: Type.Object({}),
+          execute: async (_args, api, ctx) => {
+            const result = await api.executeTool('codemode', { code: 'return await tools.probe({})' }, ctx)
+            return { output: [{ type: 'text', text: JSON.stringify(result.details?.value ?? result) }] }
+          },
         })] }
       }`,
     ],
@@ -178,6 +186,30 @@ it('traces a tool a codemode script calls, and its service call, inside the code
       'agent',
       'codemode',
       [['tool', 'codemode', 'probe', [['service', 'trace-probe', 'trace-echo.echo', []]]]],
+    ],
+  ])
+
+  // A model call runs codemode as a Pi nested task, which calls probe in-process: one chain of immediate parents.
+  server.host.faux!.setResponses([
+    fauxAssistantMessage([fauxToolCall('outer', {})], { stopReason: 'toolUse' }),
+    fauxAssistantMessage('Complete'),
+  ])
+  await server.root.submit({ type: 'input', content: 'run outer' }, context)
+  await server.harness.waitForIdle(context)
+  const outer = server.extensions.trace.query().find((row) => row.name === 'outer')!
+  expect(shape(server.extensions.trace.tree(outer.trace))).toEqual([
+    [
+      'tool',
+      'agent',
+      'outer',
+      [
+        [
+          'tool',
+          'trace-probe',
+          'codemode',
+          [['tool', 'codemode', 'probe', [['service', 'trace-probe', 'trace-echo.echo', []]]]],
+        ],
+      ],
     ],
   ])
 })

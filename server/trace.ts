@@ -100,8 +100,10 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
     reported = true
     console.error('Call trace failed; dropping trace records:', error)
   }
-  /** Running tool calls by call id, so the tools they call continue their trace. */
-  const tools = new Map<string, { context: TraceContext; extension: string; taskId: number }>()
+  /** The contexts of traced tool runs: the tool's extension, and whether the run has ended. */
+  const toolRuns = new WeakMap<TraceContext, { extension: string; done: boolean }>()
+  /** Running tool calls by `<task>/<call id>`, so a Pi nested call, a task of its own, finds its caller. */
+  const tools = new Map<string, TraceContext>()
 
   function flush() {
     clearTimeout(timer)
@@ -263,18 +265,24 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls (at);`)
           } catch {
             // The task read only labels the row (a test double may not offer it); the call runs regardless.
           }
-          // A Pi nested call continues its calling tool's trace. So does a tool another running tool calls directly, as
-          // codemode does; any other context (left by a timer or a commit) does not make it a child.
-          const current = traceContext()
-          const enclosing =
-            input?.kind === 'nested'
-              ? tools.get(input.parentCallId)
-              : current && [...tools.values()].find((running) => running.taskId === current.taskId)
-          const parent =
-            input?.kind === 'nested' ? enclosing?.context : enclosing ? current : undefined
+          // A task runs its own call; a tool another tool calls in-process with its api (codemode's `tools.*`) runs
+          // inside its caller's task. Its parent is the enclosing run, a Pi nested call's is its calling tool's run;
+          // either only while that tool runs. Anything else (a model call, a context left by a timer or a commit
+          // after its tool ended) starts a trace.
+          const own =
+            input && (input.kind === 'model' ? input.callId : input.call.id) === api.callId
+              ? input
+              : undefined
+          const enclosing = !own
+            ? traceContext()
+            : own.kind === 'nested'
+              ? tools.get(`${own.parent}/${own.parentCallId}`)
+              : undefined
+          const caller = enclosing && toolRuns.get(enclosing)
+          const parent = caller?.done === false ? enclosing : undefined
           const call: Call = {
             kind: 'tool',
-            caller: enclosing?.extension ?? 'agent',
+            caller: caller?.done === false ? caller.extension : 'agent',
             callee: extension.name,
             name: tool.name,
             conversationId: api.conversationId,
@@ -285,15 +293,16 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls (at);`)
           return run(
             call,
             async () => {
-              tools.set(api.callId, {
-                context: traceContext()!,
-                extension: extension.name,
-                taskId: api.taskId,
-              })
+              const self = traceContext()!
+              const key = `${api.taskId}/${api.callId}`
+              const state = { extension: extension.name, done: false }
+              toolRuns.set(self, state)
+              tools.set(key, self)
               try {
                 return await tool.execute(args, api, context)
               } finally {
-                tools.delete(api.callId)
+                tools.delete(key)
+                state.done = true
               }
             },
             parent ?? null,
