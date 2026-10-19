@@ -121,6 +121,33 @@ it('orders lanes depth first, roots as given and children by when they started',
   expect(shape(tree(lanes))).toEqual(['1. ', '  2 ', '    4. 1', '  3. ', '5. '])
 })
 
+it('shows every lane of a parent cycle once instead of dropping it', () => {
+  // A self-cycle, and a two-lane cycle with a child hanging off it: none has a listed root.
+  const lanes = [
+    lane(1, undefined, undefined, run(20)),
+    lane(2, 2, 15, run(14)),
+    lane(3, 4, 12, run(11)),
+    lane(4, 3, 10, run(9)),
+    lane(5, 4, 8, run(7)),
+  ]
+  const shown = tree(lanes).flatMap((row) => (row.kind === 'lane' ? [row.lane.conversation] : []))
+  expect(shown.toSorted((a, b) => a - b)).toEqual([1, 2, 3, 4, 5])
+  expect(shape(tree(lanes))).toEqual(['1. ', '2. ', '3. ', '  4. ', '    5. 0'])
+})
+
+it('leads with the pinned lane and its subtree, the rest in their given order', () => {
+  const lanes = [
+    lane(7, undefined, undefined, run(5)),
+    lane(1, undefined, undefined, run(20)),
+    lane(2, 1, 18, run(17)),
+    lane(3, undefined, undefined, run(3)),
+  ]
+  expect(shape(tree(lanes, new Set(), 1))).toEqual(['1. ', '  2. ', '7. ', '3. '])
+  // Unpinned, or pinned to a lane that is not a root, the order is unchanged.
+  expect(shape(tree(lanes))).toEqual(['7. ', '1. ', '  2. ', '3. '])
+  expect(shape(tree(lanes, new Set(), 2))).toEqual(['7. ', '1. ', '  2. ', '3. '])
+})
+
 it('folds more than three finished children behind one row, unless expanded', () => {
   const lanes = [
     lane(1, undefined, undefined, run(25)),

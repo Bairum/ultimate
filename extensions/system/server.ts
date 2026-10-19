@@ -429,16 +429,16 @@ export async function lanes(
   })
   all.sort((a, b) => b.active - a.active || b.lane.conversation - a.lane.conversation)
   // The most recently active lanes, each with its parent so its subtree hangs where it belongs: a parent that worked
-  // brings its lane along, one that did not is a lane without runs. One hop up, never the whole ancestry.
+  // brings its lane along, one that did not is a lane without runs. One hop up from each lane that worked, never the
+  // whole ancestry: an active lane already listed as another's parent still brings its own parent.
   const worked = new Map(all.map((item) => [item.lane.conversation, item.lane]))
   const listed = new Map<number, Lane>()
   for (const { lane } of all) {
-    if (listed.has(lane.conversation)) continue
+    const add = listed.has(lane.conversation) ? [] : [lane]
     const parent = parentOf(lane.conversation)
-    const add = [lane]
-    if (parent !== undefined && !listed.has(parent))
+    if (parent !== undefined && parent !== lane.conversation && !listed.has(parent))
       add.push(worked.get(parent) ?? { conversation: parent, runs: [] })
-    if (listed.size + add.length <= LANES)
+    if (add.length > 0 && listed.size + add.length <= LANES)
       for (const item of add) listed.set(item.conversation, item)
   }
   const more = all.filter((item) => !listed.has(item.lane.conversation)).length

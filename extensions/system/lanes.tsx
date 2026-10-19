@@ -16,7 +16,7 @@ export const laneState = (lane: Lane, waiting: boolean): LaneState =>
   lane.runs.at(-1)?.end === undefined ? 'running' : waiting ? 'waiting' : 'idle'
 
 /** A standing agent's name (`ultimate`, `lander`) for its mark and title; undefined for other conversations. */
-function standingName(lane: Lane, summary: ConversationSummary | undefined) {
+export function standingName(lane: Lane, summary: ConversationSummary | undefined) {
   if (summary?.label === 'lander') return 'lander'
   if (lane.kind === 'standing' && lane.agent) return lane.agent
   if (summary?.label === 'agent' && summary.title?.startsWith('@')) return summary.title.slice(1)

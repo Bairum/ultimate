@@ -465,6 +465,25 @@ it('keeps a parent with its child under the cap', async () => {
   expect(capped.more).toBe(1)
 })
 
+it('brings the parent of an active lane that another active lane already listed', async () => {
+  // C (802) under B (801) under idle A (800): C, the most recent, lists B as its parent first; B still brings A.
+  const f = await fixture(
+    [],
+    [
+      { id: 802, parentConversationId: 801, busy: false },
+      { id: 801, parentConversationId: 800, busy: false },
+    ],
+  )
+  f.call('read', 60, { kind: 'tool', conversation: 801 })
+  f.call('read', 90, { kind: 'tool', conversation: 802 })
+  const result = await f.lanesAt(200)
+  const byId = new Map(result.lanes.map((lane) => [lane.conversation, lane]))
+  expect([...byId.keys()].toSorted((a, b) => a - b)).toEqual([800, 801, 802])
+  expect(byId.get(802)?.parent).toBe(801)
+  expect(byId.get(801)?.parent).toBe(800)
+  expect(byId.get(800)?.runs).toEqual([])
+})
+
 it('caps lanes at 40 and calls at 200 per run, counting the rest', async () => {
   const f = await fixture()
   for (let conversation = 1; conversation <= 43; conversation++)

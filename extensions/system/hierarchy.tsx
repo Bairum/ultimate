@@ -2,8 +2,8 @@
 // its child's first block, and the chain of a hovered or picked lane lit while the rest dims.
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
-import { cn } from '@/sdk'
-import { Guide, INDENT, LaneRow, ROW_CENTRE } from './lanes.tsx'
+import { cn, useConversations } from '@/sdk'
+import { Guide, INDENT, LaneRow, ROW_CENTRE, standingName } from './lanes.tsx'
 import type { LaneState } from './lanes.tsx'
 import { chain, links, messageLinks, tree } from './layout.ts'
 import type { Frame, WindowName } from './layout.ts'
@@ -87,7 +87,16 @@ export function LaneTree({
   const [hovered, setHovered] = useState<number>()
   const [picked, setPicked] = useState<number>()
   const list = useRef<HTMLUListElement>(null)
-  const rows = tree(lanes, expanded)
+  const summaries = useConversations()
+  // @ultimate always leads, with the conversations it started under it.
+  const ultimate = lanes.find(
+    (lane) =>
+      standingName(
+        lane,
+        summaries.find((item) => item.id === lane.conversation),
+      ) === 'ultimate',
+  )?.conversation
+  const rows = tree(lanes, expanded, ultimate)
   const shown = lanes.filter((lane) => rows.some((row) => row.kind === 'lane' && row.lane === lane))
   const box = useFrame(
     list,

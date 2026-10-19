@@ -91,9 +91,14 @@ const startOf = (lane: Lane) =>
 /**
  * The lanes as a tree, depth first: roots (lanes whose parent is not listed) in the given order, children in the
  * order they started. A parent with more than `FOLD` finished children (no open run anywhere in their subtree) shows
- * the others and folds the finished ones into one row, unless it is in `expanded`.
+ * the others and folds the finished ones into one row, unless it is in `expanded`. The `pinned` lane (@ultimate)
+ * leads, with its subtree, whatever the activity order.
  */
-export function tree(lanes: readonly Lane[], expanded: ReadonlySet<number> = new Set()) {
+export function tree(
+  lanes: readonly Lane[],
+  expanded: ReadonlySet<number> = new Set(),
+  pinned?: number,
+) {
   const listed = new Set(lanes.map((lane) => lane.conversation))
   const children = new Map<number, Lane[]>()
   const roots: Lane[] = []
@@ -102,18 +107,32 @@ export function tree(lanes: readonly Lane[], expanded: ReadonlySet<number> = new
     else children.set(lane.parent, [...(children.get(lane.parent) ?? []), lane])
   }
   for (const list of children.values()) list.sort((a, b) => startOf(a) - startOf(b))
+  const first = roots.findIndex((lane) => lane.conversation === pinned)
+  if (first > 0) roots.unshift(...roots.splice(first, 1))
   const open = (lane: Lane): boolean =>
     lane.runs.at(-1)?.end === undefined && lane.runs.length > 0
       ? true
       : (children.get(lane.conversation) ?? []).some(open)
   const rows: TreeRow[] = []
+  const seen = new Set<number>()
+  /** `lane` and everything below it as placed. */
+  const mark = (lane: Lane): void => {
+    if (seen.has(lane.conversation)) return
+    seen.add(lane.conversation)
+    for (const child of children.get(lane.conversation) ?? []) mark(child)
+  }
   const visit = (lane: Lane, depth: number, last: boolean, through: boolean[]) => {
+    // A parent cycle in the data shows each of its lanes once, cut where the walk re-enters it.
+    if (seen.has(lane.conversation)) return
+    seen.add(lane.conversation)
     rows.push({ kind: 'lane', lane, depth, last, through })
     const below = depth === 0 ? [] : [...through, !last]
     const all = children.get(lane.conversation) ?? []
     const finished = all.filter((child) => !open(child))
     const fold = finished.length > FOLD && !expanded.has(lane.conversation)
     const shown = fold ? all.filter(open) : all
+    // Folded lanes are placed too: behind their fold row, not lost to a cycle.
+    if (fold) for (const child of all) if (!open(child)) mark(child)
     shown.forEach((child, index) =>
       visit(child, depth + 1, !fold && index === shown.length - 1, below),
     )
@@ -128,6 +147,8 @@ export function tree(lanes: readonly Lane[], expanded: ReadonlySet<number> = new
       })
   }
   for (const root of roots) visit(root, 0, true, [])
+  // Lanes only reachable through a cycle have no root: each such cycle starts at its first lane in the given order.
+  for (const lane of lanes) if (!seen.has(lane.conversation)) visit(lane, 0, true, [])
   return rows
 }
 
