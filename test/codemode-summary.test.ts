@@ -88,12 +88,16 @@ it('drops quoted, JSON and unnamed credentials, since only plain words leave', (
     `git clone https://user:q9Zr7vLm@github.com/o/r`,
     `AKIAIOSFODNN7EXAMPLE`,
     `sk-ant-api03-q9Zr7vLm`,
+    `password = q9Zr7vLm`,
+    `curl --user admin:q9Zr7vLm https://x`,
+    `curl -u admin:q9Zr7vLm https://x`,
   ]
   for (const text of leaks)
     expect({ text, scrubbed: scrub(text) }).not.toMatchObject({
       scrubbed: expect.stringContaining('q9Zr7vLm'),
     })
   expect(scrub('AKIAIOSFODNN7EXAMPLE')).not.toContain('AKIA')
+  expect(scrub('echo Basic dXNlcjpwYXNz')).not.toContain('dXNlcjpwYXNz')
   // Arguments are cleaned before serializing, so a value inside a JSON string can't escape as escaped text.
   const input = summaryInput([
     {

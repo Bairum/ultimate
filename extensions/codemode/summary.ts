@@ -82,7 +82,9 @@ const OPAQUE =
 
 /** A word that names a credential, so the word after it is one: `password:`, `Bearer`, `--token`, `Basic`. */
 const CREDENTIAL_NAME =
-  /(secret|token|passw|pwd|pass\b|key|auth|bearer|cookie|credential|session)[\w-]*[:=]?$/i
+  /((secret|token|passw|pwd|pass\b|key|auth|bearer|cookie|credential|session)[\w-]*|^--?(user|u))[:=]?$/i
+/** A base64 run after an auth scheme: mixed case inside a word, as `dXNlcjpwYXNz`; plain words never are. */
+const ENCODED = /^(?=.*[a-z][A-Z])[A-Za-z0-9+/]{8,}={0,2}$/
 /** An auth scheme word, which names a credential only right after an authorization header name. */
 const SCHEME = /^["']?(basic|digest|negotiate|ntlm)$/i
 
@@ -103,12 +105,16 @@ function safeWord(word: string) {
 export function scrub(text: string) {
   let named = false
   let header = false
+  let scheme = false
   return text
     .split(/(\s+)/)
     .map((word) => {
       if (!word.trim()) return word
-      const safe = !named && safeWord(word)
-      named = CREDENTIAL_NAME.test(word) || (header && SCHEME.test(word))
+      // A lone `=` or `:` between a name and its value keeps the name in force.
+      if (named && /^[:=]$/.test(word)) return word
+      const safe = !named && safeWord(word) && !(scheme && ENCODED.test(word))
+      scheme = SCHEME.test(word)
+      named = CREDENTIAL_NAME.test(word) || (header && scheme)
       header = /auth\w*:$/i.test(word)
       return safe ? word : '[…]'
     })
