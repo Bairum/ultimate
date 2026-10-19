@@ -7,8 +7,11 @@ import { defineEvent } from '../../shared/events.ts'
 
 /** What a codemode call did, in one past-tense line; `effect` when it changed something rather than only reading. */
 export type CallSummary = { line: string; effect?: boolean }
-/** A conversation's codemode summaries by tool call id, the newest 1000. */
-export type Summaries = { calls: Record<string, CallSummary> }
+/**
+ * A conversation's codemode summaries by tool call id, the newest 1000, and the calls whose summary task still runs (so
+ * none gets two).
+ */
+export type Summaries = { calls: Record<string, CallSummary>; pending?: string[] }
 
 /** The summaries of the conversation's codemode calls. */
 export const SummariesDoc = docRef<Summaries>('codemode.summaries')

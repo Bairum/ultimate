@@ -99,6 +99,17 @@ export const cases: {
     says: /^conclud.*135873/,
   },
   {
+    name: 'a write that succeeded before a failure still leads',
+    code: "await tools.write({path:'notes.md', content:'x'}); await tools.bash({command:'pnpm test'})",
+    calls: [
+      { name: 'write', args: { path: 'notes.md', content: 'x' }, status: 'ok' },
+      { name: 'bash', args: { command: 'pnpm test' }, status: 'error' },
+    ],
+    result: 'Script failed\nOutput:\nError: 3 tests failed',
+    effect: true,
+    says: /^wrote.*notes\.md/,
+  },
+  {
     name: '12 lists conversations and the task graph',
     code: 'const cs = await ultimate.conversations(); const g = await ultimate.taskGraph();\nreturn cs.filter(c => !c.owner).slice(0,5).map(c => ({id:c.id}));',
     calls: [ok('ultimate.conversations'), ok('ultimate.taskGraph')],

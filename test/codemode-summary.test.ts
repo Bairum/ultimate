@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { fixedLine, parseSummary, summaryInput } from '../extensions/codemode/summary.ts'
+import { fixedLine, parseSummary, scrub, summaryInput } from '../extensions/codemode/summary.ts'
 
 it('labels a script with no call or one read-only call without the model', () => {
   expect(fixedLine([])).toEqual({ line: 'Ran a script without tool calls' })
@@ -14,6 +14,21 @@ it('labels a script with no call or one read-only call without the model', () =>
   })
 })
 
+it('labels a failed read-only or empty script without the model, and asks it when a failure may follow a change', () => {
+  const read = { name: 'ultimate.entries', args: [1], status: 'error' }
+  expect(fixedLine([read], 'Error: Unknown conversation')).toEqual({
+    line: 'Failed: Error: Unknown conversation',
+  })
+  expect(fixedLine([], 'SyntaxError: unexpected token')).toEqual({
+    line: 'Failed: SyntaxError: unexpected token',
+  })
+  expect(fixedLine([], 'Error: token=abc123 rejected')).toEqual({
+    line: 'Failed: Error: token=[redacted] rejected',
+  })
+  const write = { name: 'write', args: { path: 'a' }, status: 'ok' }
+  expect(fixedLine([write], 'Error: later step failed')).toBeUndefined()
+})
+
 it('asks the model for actions, writes, commands and several calls', () => {
   const action = { name: 'ultimate.action', args: ['conversations', 'conclude', {}], status: 'ok' }
   expect(fixedLine([action])).toBeUndefined()
@@ -23,27 +38,44 @@ it('asks the model for actions, writes, commands and several calls', () => {
   expect(fixedLine([read, read])).toBeUndefined()
 })
 
-it('sends the script, each call and a clipped result as data', () => {
-  const input = JSON.parse(
-    summaryInput(
-      'return 1',
-      [
-        {
-          name: 'ultimate.action',
-          args: ['conversations', 'conclude', { ids: [1] }],
-          status: 'ok',
-        },
-      ],
-      'x'.repeat(5000),
-    ),
-  ) as { script: string; calls: { name: string; args: string }[]; result: string }
-  expect(input.script).toBe('return 1')
-  expect(input.calls[0]).toEqual({
+it('sends only the calls and a failure, never the script or a result', () => {
+  const conclude = {
     name: 'ultimate.action',
+    args: ['conversations', 'conclude', { ids: [1] }],
     status: 'ok',
-    args: '["conversations","conclude",{"ids":[1]}]',
+  }
+  expect(JSON.parse(summaryInput([conclude]))).toEqual({
+    calls: [
+      { name: 'ultimate.action', status: 'ok', args: '["conversations","conclude",{"ids":[1]}]' },
+    ],
   })
-  expect(input.result.length).toBeLessThan(1600)
+  expect(JSON.parse(summaryInput([], 'Error: no such conversation'))).toEqual({
+    calls: [],
+    error: 'Error: no such conversation',
+  })
+})
+
+it('removes credentials from arguments and errors before they reach the summary model', () => {
+  const input = summaryInput(
+    [
+      {
+        name: 'ultimate.action',
+        args: ['secrets', 'set', { name: 'GH', value: 'v', apiKey: 'sk-live-1' }],
+        status: 'ok',
+      },
+      {
+        name: 'bash',
+        args: {
+          command: 'curl -H "Authorization: Bearer ghp_abcdef123" https://x?token=s3cr3t',
+        },
+        status: 'ok',
+      },
+    ],
+    'Error: password=hunter2 refused for ' + 'A'.repeat(40),
+  )
+  for (const secret of ['sk-live-1', 'ghp_abcdef123', 's3cr3t', 'hunter2', 'A'.repeat(40)])
+    expect(input).not.toContain(secret)
+  expect(scrub('see notes.md line 4')).toBe('see notes.md line 4')
 })
 
 it('parses the line and effect, and rejects anything else', () => {

@@ -586,15 +586,7 @@ export default function codemode(host: ExtensionHost) {
             output: content,
             details: { calls, yielded: true, pendingSubagents } as JsonObject,
           }
-        await summarize(api, context, {
-          code: source,
-          calls,
-          ok: result.ok,
-          result: [
-            ...content.flatMap((item) => (item.type === 'text' ? [item.text] : [])),
-            ...(result.ok ? [] : [result.error.message]),
-          ].join('\n'),
-        })
+        await summarize(api, context, calls, result.ok ? undefined : result.error.message)
         if (result.ok) {
           if (result.storeWrites.delete.length || Object.keys(result.storeWrites.set).length) {
             // Durable 1.0 commits this separately: a crash can retain writes while reporting the call interrupted.
@@ -618,7 +610,7 @@ export default function codemode(host: ExtensionHost) {
         return { output: content, isError: true, details: { calls, error } as JsonObject }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        await summarize(api, context, { code: source, calls, ok: false, result: message })
+        await summarize(api, context, calls, message)
         return {
           output: [{ type: 'text', text: `Script failed\n${message}` }],
           isError: true,
@@ -629,24 +621,19 @@ export default function codemode(host: ExtensionHost) {
   })
   /**
    * Give call `api.callId` its one line: a fixed label for a trivial script, written now, or a background task that asks
-   * the summary model. Created in its own commit before the result: a crash in between leaves a line for an
-   * interrupted call, never a second task, since the call does not rerun.
+   * the summary model. Created in its own commit before the result; the call does not rerun, and a call that already
+   * has a line or a pending task gets no second one.
    */
-  const summarize = (
-    api: ToolExecutionApi,
-    context: Context,
-    input: { code: string; calls: Call[]; ok: boolean; result: string },
-  ) =>
+  const summarize = (api: ToolExecutionApi, context: Context, calls: Call[], error?: string) =>
     api.commit(async (tx) => {
-      const fixed = input.ok
-        ? fixedLine(input.calls)
-        : input.calls.length === 0
-          ? { line: `Script failed: ${input.result.split('\n').at(-1)!.slice(0, 80)}` }
-          : undefined
+      const doc = await tx.doc(SummaryDoc, api.conversationId)
+      if (doc.calls[api.callId] || doc.pending?.includes(api.callId)) return
+      const fixed = fixedLine(calls, error)
       if (fixed) return keep(tx, api.conversationId, api.callId, fixed)
+      doc.pending = [...(doc.pending ?? []), api.callId]
       await tx.createTask(
         Summary,
-        { call: api.callId, input: summaryInput(input.code, input.calls, input.result) },
+        { call: api.callId, input: summaryInput(calls, error) },
         {
           ownership: { kind: 'conversation' },
           conversationId: api.conversationId,
@@ -663,13 +650,16 @@ export default function codemode(host: ExtensionHost) {
         const conversations = host.need(ConversationsApi)
         let response = await runtime.memo<ResponseReceipt>('response', ctx)
         let model = await runtime.memo<SummaryModel>('model', ctx)
+        // Marked before asking: a restart between the request and its saved response does not ask again.
+        const asked = await runtime.memo<boolean>('asked', ctx)
         let summary: CallSummary | undefined
         try {
           if (!model) {
             const chosen = await conversations.summaryModel()
             if (chosen) model = await runtime.memo('model', chosen, ctx)
           }
-          if (model) {
+          if (model && (response || !asked)) {
+            if (!response) await runtime.memo('asked', true, ctx)
             response = await conversations.askSummaryModel(
               runtime.models,
               SUMMARY_SYSTEM,
@@ -685,19 +675,27 @@ export default function codemode(host: ExtensionHost) {
         }
         await runtime.commit(async (tx) => {
           await conversations.accountResponse(tx, runtime.conversationId, response)
-          if (summary) await keep(tx, runtime.conversationId, task.input.call, summary)
+          await settle(tx, runtime.conversationId, task.input.call, summary)
           return terminal
         }, ctx)
       },
     },
-    abort: async (_task, runtime, ctx) => {
+    abort: async (task, runtime, ctx) => {
       const response = await runtime.memo<ResponseReceipt>('response', ctx)
       await runtime.commit(async (tx) => {
         await host.need(ConversationsApi).accountResponse(tx, runtime.conversationId, response)
+        await settle(tx, runtime.conversationId, task.input.call)
         return { status: 'terminal', outcome: { status: 'aborted' } } as const
       }, ctx)
     },
   })
+  /** End call `call`'s summary task in `tx`: keep its line when there is one, and drop it from the pending ones. */
+  async function settle(tx: Tx, conversation: ConversationId, call: string, summary?: CallSummary) {
+    const doc = await tx.doc(SummaryDoc, conversation)
+    doc.pending = doc.pending?.filter((pending) => pending !== call)
+    if (!doc.pending?.length) delete doc.pending
+    if (summary) await keep(tx, conversation, call, summary)
+  }
   /** Store call `call`'s line and record it as an event, in `tx`. */
   async function keep(tx: Tx, conversation: ConversationId, call: string, summary: CallSummary) {
     const doc = await tx.doc(SummaryDoc, conversation)
