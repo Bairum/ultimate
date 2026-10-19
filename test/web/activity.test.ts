@@ -1,11 +1,12 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it, vi } from 'vitest'
-import type { EventRecord } from '../../shared/events.ts'
 import { Feed } from '../../extensions/activity/feed.tsx'
+import type { ActivityEvent } from '../../extensions/activity/feed.tsx'
 
 vi.mock('@/sdk', () => ({
   cn: (...names: unknown[]) => names.filter(Boolean).join(' '),
+  definePoint: (name: string) => ({ name }),
   events: { emit: () => {} },
   useUltimate: () => ({ showSurface: () => {}, switchConversation: () => {} }),
   useDocOf: () => ({ conversations: { '12': { feature: 'Activity Feed' } } }),
@@ -21,10 +22,18 @@ vi.mock('../../extensions/workspaces/landing.tsx', () => ({
 const now = Date.parse('2026-10-19T08:00:00Z')
 const minutes = (n: number) => new Date(now - n * 60_000).toISOString()
 const event = (id: number, name: string, at: string, data: unknown, context?: object) =>
-  ({ id, name, kind: `event.${name}`, v: 1, at, data, ...(context && { context }) }) as EventRecord
+  ({
+    id,
+    name,
+    kind: `event.${name}`,
+    v: 1,
+    at,
+    data,
+    ...(context && { context }),
+  }) as ActivityEvent
 
 /** Each row as its kind, the text a person reads, its links and whether its notice is amber. */
-function rows(list: EventRecord[]) {
+function rows(list: ActivityEvent[]) {
   const html = renderToStaticMarkup(createElement(Feed, { events: list, now }))
   return [...html.matchAll(/<li[^>]*data-activity="([^"]+)"[^>]*>(.*?)<\/li>/g)].map(
     ([, kind, row]) => ({
@@ -40,7 +49,7 @@ function rows(list: EventRecord[]) {
   )
 }
 
-it('shows one row per event, newest first as given, with what happened, where it leads and its age', () => {
+it('shows one row per event of its kinds, newest first as given, with what happened, where it leads and its age', () => {
   const feed = [
     event(9, 'sync.moved', minutes(1), { to: 'rog' }),
     event(8, 'ultimate.notice', minutes(3), {
@@ -67,8 +76,8 @@ it('shows one row per event, newest first as given, with what happened, where it
     event(6, 'lineage.branched', minutes(90), { id: 12, from: 1, at: 7, intent: 'Build it' }),
     event(5, 'lineage.rooted', minutes(60 * 30), { id: 1, intent: 'Project context' }),
   ]
+  // An event of another kind gets no row.
   expect(rows(feed)).toEqual([
-    { kind: 'sync.moved', text: 'sync.moved 1m', opens: undefined, href: undefined, amber: false },
     {
       kind: 'ultimate.notice',
       text: 'tailscale tailscale serve failed 3m',

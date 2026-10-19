@@ -1,10 +1,10 @@
 import { ActivityIcon } from 'lucide-react'
 import { defineWebExtension, useEvents, useNow } from '@/sdk'
-import { Feed } from './feed.tsx'
+import { activityEvents, Feed } from './feed.tsx'
 
 /** What happened in the project, newest first, from the durable event log. */
 function ActivityPanel() {
-  const events = useEvents({ limit: 100 })
+  const events = useEvents({ events: activityEvents, limit: 100 })
   const now = useNow(30_000)
   return (
     <div className="py-2">

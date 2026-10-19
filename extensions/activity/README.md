@@ -9,9 +9,10 @@ Each event is one quiet line with an icon for its kind, what happened and its ag
 - **Root** (`lineage.rooted`): the new root by its title.
 - **Notice** (`ultimate.notice`): the extension and its message, amber for warnings, wrapping to two lines. It opens the
   conversation it happened in when the event's trace context names one.
-- Any other event shows its name, so new kinds appear before they get their own row.
 
-Data comes from `useEvents()`, which streams the root's `ultimate.event-feed` document (the latest 100 events). The
+Data comes from `useEvents({ events })` with the owners' tokens (`SubmissionLanded` from workspaces, `Branched` and
+`Rooted` from lineage, `NoticeEvent` from `shared/events.ts`), which streams the root's `ultimate.event-feed` document
+(the latest 100 events); other kinds stay out until they get a row. The
 right panel is the place for it because the feed is project-wide, like Tasks and Agents, while the sidebar's root rows
 already show each tree's own landings. `Show recent activity` in the command palette opens it.
 

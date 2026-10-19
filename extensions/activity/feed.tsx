@@ -1,31 +1,31 @@
-import {
-  CircleDotIcon,
-  GitForkIcon,
-  GitMergeIcon,
-  ScrollTextIcon,
-  TriangleAlertIcon,
-} from 'lucide-react'
+import { GitForkIcon, GitMergeIcon, ScrollTextIcon, TriangleAlertIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { cn, events, useUltimate } from '@/sdk'
-import type { EventRecord } from '@/sdk'
-import { ago, ConversationRef, FeatureTag } from '../conversations/ui.tsx'
-import { CommitCount, useGithubRepo } from '../workspaces/ui.tsx'
+import type { EventData, EventRecord } from '@/sdk'
+import { NoticeEvent } from '../../shared/events.ts'
+import { ConversationRef, FeatureTag } from '../conversations/ui.tsx'
+import { Branched, Rooted } from '../lineage/ui.tsx'
+import { CommitCount, SubmissionLanded, useGithubRepo } from '../workspaces/ui.tsx'
 
-// The parts of each event's data a row shows. The landing and branch tokens live in workspaces/api.ts and
-// lineage/api.ts, which are server contracts browser code cannot import, so their data shapes are restated here.
-type Landed = {
-  conversationId: number
-  at: number
-  sha: string
-  base: string
-  target: string
-  title: string
-  feature?: string
-  commitCount: number
+/** The events the feed shows, each with its own row. */
+export const activityEvents = [SubmissionLanded, Branched, Rooted, NoticeEvent] as const
+export type ActivityEvent = EventRecord<EventData<(typeof activityEvents)[number]>>
+
+/** `now`, `5m`, `3h`, `2d`, then a short date, as the sidebar's root rows show ages. */
+function ago(at: number, now: number) {
+  const minutes = Math.max(0, (now - at) / 60000)
+  if (minutes < 1) return 'now'
+  if (minutes < 60) return `${Math.floor(minutes)}m`
+  if (minutes < 60 * 24) return `${Math.floor(minutes / 60)}h`
+  if (minutes < 60 * 24 * 7) return `${Math.floor(minutes / 60 / 24)}d`
+  const date = new Date(at)
+  return date.toLocaleDateString(
+    undefined,
+    date.getFullYear() === new Date(now).getFullYear()
+      ? { month: 'short', day: 'numeric' }
+      : { month: 'short', year: '2-digit' },
+  )
 }
-type Branched = { id: number; from: number; at: number; intent: string }
-type Rooted = { id: number; intent: string }
-type Notice = { extension: string; message: string; level: string }
 
 /** Where a row leads: a conversation, at an entry when there is one. */
 type Target = { conversation: number; entry?: number }
@@ -100,7 +100,9 @@ function Row({
 const iconClass = 'mt-[3px] size-3 shrink-0'
 const name = 'min-w-0 truncate font-sans text-[12px] text-foreground/85'
 
-function Landing({ event, now }: { event: EventRecord<Landed>; now: number }) {
+type Props<T> = { event: EventRecord<EventData<T>>; now: number }
+
+function Landing({ event, now }: Props<typeof SubmissionLanded>) {
   const github = useGithubRepo()
   const landing = event.data
   return (
@@ -124,7 +126,7 @@ function Landing({ event, now }: { event: EventRecord<Landed>; now: number }) {
   )
 }
 
-function Branch({ event, now }: { event: EventRecord<Branched>; now: number }) {
+function Branch({ event, now }: Props<typeof Branched>) {
   const { id, from } = event.data
   return (
     <Row
@@ -140,7 +142,7 @@ function Branch({ event, now }: { event: EventRecord<Branched>; now: number }) {
   )
 }
 
-function Root({ event, now }: { event: EventRecord<Rooted>; now: number }) {
+function Root({ event, now }: Props<typeof Rooted>) {
   const { id, intent } = event.data
   return (
     <Row
@@ -160,7 +162,7 @@ function Root({ event, now }: { event: EventRecord<Rooted>; now: number }) {
   )
 }
 
-function NoticeRow({ event, now }: { event: EventRecord<Notice>; now: number }) {
+function Notice({ event, now }: Props<typeof NoticeEvent>) {
   const { extension, message, level } = event.data
   const warning = level === 'warning'
   const conversation = event.context?.conversationId
@@ -186,29 +188,16 @@ function NoticeRow({ event, now }: { event: EventRecord<Notice>; now: number }) 
   )
 }
 
-/** An event this feed has no row for yet, by its name. */
-function Other({ event, now }: { event: EventRecord; now: number }) {
-  return (
-    <Row
-      event={event}
-      icon={<CircleDotIcon className={cn(iconClass, 'text-muted-foreground/60')} />}
-      now={now}
-      title={event.name}
-    >
-      <span className="truncate">{event.name}</span>
-    </Row>
-  )
-}
-
-const rows: Record<string, (props: { event: EventRecord<never>; now: number }) => ReactNode> = {
-  'workspaces.landed': Landing,
-  'lineage.branched': Branch,
-  'lineage.rooted': Root,
-  'ultimate.notice': NoticeRow,
+function Activity({ event, now }: { event: ActivityEvent; now: number }) {
+  if (SubmissionLanded.is(event)) return <Landing event={event} now={now} />
+  if (Branched.is(event)) return <Branch event={event} now={now} />
+  if (Rooted.is(event)) return <Root event={event} now={now} />
+  if (NoticeEvent.is(event)) return <Notice event={event} now={now} />
+  return null
 }
 
 /** Events newest first, one line each; quiet when there are none. */
-export function Feed({ events: list, now }: { events: readonly EventRecord[]; now: number }) {
+export function Feed({ events: list, now }: { events: readonly ActivityEvent[]; now: number }) {
   if (list.length === 0)
     return (
       <div className="px-3 py-6 text-center font-mono text-[11.5px] text-muted-foreground/70">
@@ -217,10 +206,9 @@ export function Feed({ events: list, now }: { events: readonly EventRecord[]; no
     )
   return (
     <ul className="flex flex-col">
-      {list.map((event) => {
-        const Kind = rows[event.name] ?? Other
-        return <Kind event={event as EventRecord<never>} key={event.id} now={now} />
-      })}
+      {list.map((event) => (
+        <Activity event={event} key={event.id} now={now} />
+      ))}
     </ul>
   )
 }
