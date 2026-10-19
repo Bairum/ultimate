@@ -24,6 +24,7 @@ import {
   cn,
   defineWebExtension,
   formatTime,
+  provide,
   useAction,
   useConversations,
   useDoc,
@@ -33,6 +34,7 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { ConversationSummary, ToolCallView } from '@/sdk'
+import { ConversationTask } from '../conversations/ui.tsx'
 import { InfoAction, stateLabel, useWorkspaces } from '../workspaces/ui.tsx'
 import { finished, number, pillOf } from './progress.tsx'
 import { PlanDoc } from './refs.ts'
@@ -798,7 +800,14 @@ function PlanCall({ call }: { call: ToolCallView }) {
   )
 }
 
+/** The plan task a child conversation works on, for its rows and report cards: the task chip and title. */
+function useConversationTask(id: number | undefined) {
+  const task = useTaskOf(id)
+  return task && { chip: <TaskChip task={task} />, title: task.title }
+}
+
 export default defineWebExtension({
   tools: { plan: PlanCall },
   slots: { overlay: PlanOverlay },
+  provides: [provide(ConversationTask, useConversationTask)],
 })

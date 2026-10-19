@@ -163,9 +163,7 @@ export const actions: Record<string, ExtensionAction> = {
     const card = args && typeof args === 'object' && !Array.isArray(args) ? args.card : undefined
     if (card !== 'project' && card !== 'git') throw new Error('Expected project or git card')
     refuseMachineHome(host)
-    const service = host.want(SubagentsApi)
-    if (!service) throw new Error('Subagents are required for onboarding')
-    const id = await service.standing('ultimate', context)
+    const id = await host.need(SubagentsApi).standing('ultimate', context)
     const conversation = (await host.harness().conversation(id, context))!
     await conversation.submit(
       {
@@ -191,21 +189,18 @@ export const actions: Record<string, ExtensionAction> = {
     )
       throw new Error('Expected root id and optional instructions')
     refuseMachineHome(host)
-    const lineage = host.want(LineageApi)
+    const lineage = host.need(LineageApi)
     const root =
       input?.root ??
-      (conversationId === undefined ? undefined : await lineage?.rootOf(conversationId, context)) ??
+      (conversationId === undefined ? undefined : await lineage.rootOf(conversationId, context)) ??
       1
     const harness = host.harness()
     const existing = (await harness.snapshot(Starts, ROOT_CONVERSATION_ID, context))?.roots[
       String(root)
     ]
     if (existing !== undefined) return { id: existing }
-    if (!lineage || (await lineage.rootOf(root, context)) !== root)
-      throw new Error('Expected a project root')
-    const service = host.want(SubagentsApi)
-    if (!service) throw new Error('Subagents are required for onboarding')
-    const id = await service.standing('ultimate', context)
+    if ((await lineage.rootOf(root, context)) !== root) throw new Error('Expected a project root')
+    const id = await host.need(SubagentsApi).standing('ultimate', context)
     const project = await host.projectSetup()
     const checkout = await isolatable(host.projectRoot)
     const facts = {
@@ -310,11 +305,7 @@ export const actions: Record<string, ExtensionAction> = {
         if (card === 'extensions')
           await actions.applyFirstRun({ extensions: payload.extensions! }, actionContext)
         else if (card === 'project') await actions.decide({ local: payload.local! }, actionContext)
-        else if (payload.initialize) {
-          const workspaces = host.want(WorkspacesApi)
-          if (!workspaces) throw new Error('Git setup requires workspaces')
-          await workspaces.setupGit()
-        }
+        else if (payload.initialize) await host.need(WorkspacesApi).setupGit()
         // Persist the payload before admission: queued submissions have no transcript entry yet.
         await harness.commit(async (tx) => {
           ;(await tx.doc(ChoiceRequests, id)).payloads[toolCallId] = payload
@@ -479,10 +470,10 @@ export const ChoiceEntry = defineEntry<{ card: string; summary: string; toolCall
 )
 
 export default function onboarding(host: ExtensionHost) {
-  // Optional services, resolved where they are called; declared here so the catalogue lists them.
-  host.want(LineageApi)
-  host.want(SubagentsApi)
-  host.want(WorkspacesApi)
+  // Core, always on; resolved where they are called, declared here so the catalogue lists them.
+  host.need(LineageApi)
+  host.need(SubagentsApi)
+  host.need(WorkspacesApi)
   return defineExtension({
     name: 'onboarding',
     tools: [

@@ -52,7 +52,6 @@ const api = `/**
 import type { Context } from '@earendil-works/chord'
 import { defineDoc } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
-import { defineEvent } from '../../shared/events.ts'
 import type { BoardMessage } from '../board/api.ts'
 import { Board } from '../board/api.ts'
 import type { echo } from './server.ts'
@@ -67,8 +66,7 @@ export type EchoService = {
 }
 /** The echo service; \`want\` it. */
 export const EchoApi = defineApi<EchoService>()('echo')
-/** Something was echoed. */
-export const Echoed = defineEvent<{ text: string }>('echo.echoed')
+export { Repeated } from './refs.ts'
 /** The echo log. */
 export const Log = defineDoc<{ texts: string[] }>({ kind: 'echo.log', version: 1, scope: 'conversation', initial: () => ({ texts: [] }) })
 `
@@ -91,6 +89,9 @@ export interface EchoService {
 export const EchoApi = defineApi<EchoService>()('echo')
 export const limit = 3
 export function helper() {}
+/** An event belongs in refs.ts. */
+export const Echoed = defineEvent<{ text: string }>('echo.echoed')
+export { EchoLine } from './line.ts'
 `
   expect(lint('api-file-shape', 'extensions/echo/api.ts', bad)).toEqual([
     'Start api.ts with a doc comment on what it offers; its first sentence is the one-line summary.',
@@ -98,10 +99,18 @@ export function helper() {}
     "api.ts imports at runtime only shared/, packages, its refs.ts and other extensions' api.ts; use `import type` for the rest.",
     "api.ts imports at runtime only shared/, packages, its refs.ts and other extensions' api.ts; use `import type` for the rest.",
     'Document each exported token: what it is and when to use it.',
-    'api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)` and types.',
-    'api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)` and types.',
+    ...Array(4).fill(
+      "api.ts holds only contracts: imports, `export const X = defineApi/defineDoc/defineEntry(...)`, re-exports of its refs.ts (where event tokens live, for the browser too), types and `export const tier = 'core'`.",
+    ),
     'Document EchoService.echo: what it does and when to call it.',
   ])
+  // The tier line joins the core tier; any other tier is rejected.
+  expect(
+    lint('api-file-shape', 'extensions/echo/api.ts', `${api}export const tier = 'core'\n`),
+  ).toEqual([])
+  expect(
+    lint('api-file-shape', 'extensions/echo/api.ts', `${api}export const tier = 'optional'\n`),
+  ).toEqual(["An extension declares its tier as `export const tier = 'core'` or not at all."])
   // A header without a sentence is no summary.
   expect(
     lint(
@@ -119,6 +128,7 @@ const refs = `/**
  */
 import type { JsonValue } from '@earendil-works/chord'
 import { actionRef, docRef } from '../../shared/extension-api.ts'
+import { defineEvent } from '../../shared/events.ts'
 import type { ProviderHealth } from '../../shared/protocol.ts'
 import type { BoardData } from '../board/refs.ts'
 import type { EchoRow } from './types.ts'
@@ -130,6 +140,8 @@ export type Echoed = { text: string; at: number }
 export const LogDoc = docRef<Texts>('echo.log')
 /** \`{ text }\` → what was echoed. */
 export const EchoAction = actionRef<{ text: string }, Echoed>('echo', 'echo')
+/** Something was echoed; react to it to count echoes. */
+export const Repeated = defineEvent<{ text: string }>('echo.repeated')
 `
 
 it('accepts a refs.ts of documented browser-safe refs and rejects server reach, runtime code and missing docs', () => {
@@ -157,7 +169,7 @@ export const limit = 3
     "refs.ts is browser-safe: it imports types only from packages, shared/ and extensions' refs.ts or types.ts.",
     "refs.ts is browser-safe: it imports types only from packages, shared/ and extensions' refs.ts or types.ts.",
     "Document each ref: what it holds, or an action's arguments and result.",
-    'refs.ts holds only contracts: imports, `export const X = docRef/actionRef(...)` and types.',
+    'refs.ts holds only contracts: imports, `export const X = docRef/actionRef/defineEvent(...)` and types.',
   ])
   expect(
     lint('api-naming', 'extensions/echo/refs.ts', "export const A = actionRef('board', 'send')"),
@@ -179,15 +191,20 @@ it('asks ui.tsx for a summary and nothing else', () => {
   ])
 })
 
-it('names an API after its folder and prefixes its events', () => {
+it('names an API after its folder, its extension points and events with its prefix', () => {
   const source = `export const A = defineApi<S>()('other')
 export const B = defineEvent('other.thing')
 export const C = defineEvent('echo.')
-export const D = defineEvent('echo.thing')`
+export const D = defineEvent('echo.thing')
+export const E = defineApi<S>()('echo.hook')
+export const F = defineApi<S>()('other.hook')
+export const G = defineApi<S>()('echo.')`
   expect(lint('api-naming', 'extensions/echo/api.ts', source)).toEqual([
-    "The API of extensions/echo is named 'echo'.",
+    "The API of extensions/echo is named 'echo', its extension points 'echo.<point>'.",
     "Events of extensions/echo are named 'echo.<event>'.",
     "Events of extensions/echo are named 'echo.<event>'.",
+    "The API of extensions/echo is named 'echo', its extension points 'echo.<point>'.",
+    "The API of extensions/echo is named 'echo', its extension points 'echo.<point>'.",
   ])
 })
 
@@ -231,10 +248,31 @@ export { TaskChip } from '../plan/chip.tsx'`
   ])
 })
 
-it('rejects host.provide, host.use and host.events, also through an action context', () => {
+const coreMessage = (optional: string) =>
+  `conversations is core tier and imports optional ${optional}; declare a point in conversations that ${optional} provides, or react to an event.`
+
+it('keeps a core-tier extension to core-tier imports, runtime and type alike, and leaves optional ones free', () => {
+  // The tiers come from the repository's api.ts files: conversations, lineage and board are core; phase and plan not.
+  const source = `import { LineageApi } from '../lineage/api.ts'
+import type { BoardData } from '../board/refs.ts'
+import { usePhase } from '../phase/ui.tsx'
+import type { TaskLink } from '../plan/refs.ts'
+export { TaskChip } from '../plan/ui.tsx'
+import { git } from '../../lib/git.ts'
+const later = () => import('../questions/web.tsx')`
+  expect(lint('core-tier-deps', 'extensions/conversations/rows.tsx', source)).toEqual([
+    coreMessage('phase'),
+    coreMessage('plan'),
+    coreMessage('plan'),
+    coreMessage('questions'),
+  ])
+  expect(lint('core-tier-deps', 'extensions/phase/web.tsx', source)).toEqual([])
+  expect(lint('core-tier-deps', 'test/example.test.ts', source)).toEqual([])
+})
+
+it('rejects host.provide and host.use, also through an action context', () => {
   const source = `host.provide('echo', {})
 host.use('echo')?.echo()
-host.events.on('x', () => {})
 ctx.host.use('echo')
 host.implement(EchoApi, {})
 host.want(EchoApi)
@@ -242,7 +280,6 @@ service.use('echo')`
   expect(lint('no-raw-services', 'extensions/echo/server.ts', source)).toEqual([
     'host.provide is untyped: declare a token in api.ts and use host.implement, host.need or host.want for services, host.emit and host.react for events.',
     'host.use is untyped: declare a token in api.ts and use host.implement, host.need or host.want for services, host.emit and host.react for events.',
-    'host.events is untyped: declare a token in api.ts and use host.implement, host.need or host.want for services, host.emit and host.react for events.',
     'host.use is untyped: declare a token in api.ts and use host.implement, host.need or host.want for services, host.emit and host.react for events.',
   ])
 })

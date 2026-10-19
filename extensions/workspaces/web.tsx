@@ -16,7 +16,7 @@ import { LanderAskEntry, LanderLogEntry, LanderReport, WorkspaceCall } from './l
 import { DiskAction, InfoAction, StatsAction } from './refs.ts'
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { ConversationRef } from '../conversations/ui.tsx'
-import { Row, Rows } from '../info/ui.tsx'
+import { Row, Rows } from '@/components/ui/rows'
 
 /** The lander's note in the root: the landing's card, from the note's own data, with the state it froze. */
 function LandingNote({ entry }: { entry: EntryRecord }) {

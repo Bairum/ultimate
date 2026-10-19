@@ -1,5 +1,7 @@
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { apiSummary } from '../lib/api-files.ts'
+import { coreTier } from '../shared/extension-api.ts'
 
 interface ImportNode {
   source?: { value?: unknown }
@@ -92,8 +94,27 @@ const membersOf = (declaration: Node): Node[] =>
     ? (((declaration.body as Node | undefined)?.body as Node[] | undefined) ?? [])
     : literals(declaration.typeAnnotation)
 const definers: Record<'api.ts' | 'refs.ts', Set<string>> = {
-  'api.ts': new Set(['defineApi', 'defineEvent', 'defineDoc', 'defineEntry']),
-  'refs.ts': new Set(['docRef', 'actionRef']),
+  'api.ts': new Set(['defineApi', 'defineDoc', 'defineEntry']),
+  'refs.ts': new Set(['docRef', 'actionRef', 'defineEvent']),
+}
+
+/** The declarator of `export const tier = …`, which declares an extension's tier, if `statement` is one. */
+const tierOf = (statement: Node) =>
+  statement.type === 'ExportNamedDeclaration' &&
+  statement.declaration?.type === 'VariableDeclaration'
+    ? statement.declaration.declarations?.find((declarator) => declarator.id?.name === 'tier')
+    : undefined
+
+const tiers = new Map<string, boolean>()
+/** Whether `extensions/<name>` declares the core tier in its api.ts (`coreTier`), read once per lint process. */
+function coreExtension(name: string) {
+  let core = tiers.get(name)
+  if (core === undefined) {
+    const file = path.join(process.cwd(), 'extensions', name, 'api.ts')
+    core = existsSync(file) && coreTier.test(readFileSync(file, 'utf8'))
+    tiers.set(name, core)
+  }
+  return core
 }
 
 const propertyName = (node: Node | undefined) =>
@@ -371,6 +392,31 @@ export default {
         }
       },
     },
+    'core-tier-deps': {
+      meta: { schema: [] },
+      create(context: Context) {
+        const own = extensionOf(context.filename)
+        if (!own || !coreExtension(own)) return {}
+        // A core-tier extension relies only on the core tier, by runtime or type import alike; an optional extension
+        // reaches the core through a point the core declares (a web point, an extension point or an event).
+        const check = (node: ImportNode) => {
+          const source = node.source?.value
+          if (typeof source !== 'string' || !source.startsWith('.')) return
+          const [directory, extension] = resolved(context.filename, source)
+          if (directory === 'extensions' && extension !== own && !coreExtension(extension))
+            context.report({
+              node,
+              message: `${own} is core tier and imports optional ${extension}; declare a point in ${own} that ${extension} provides, or react to an event.`,
+            })
+        }
+        return {
+          ImportDeclaration: check,
+          ImportExpression: check,
+          ExportNamedDeclaration: check,
+          ExportAllDeclaration: check,
+        }
+      },
+    },
     'no-raw-services': {
       meta: { schema: [] },
       create(context: Context) {
@@ -379,7 +425,7 @@ export default {
             const name = propertyName(node)
             const object = node.object
             if (
-              ['provide', 'use', 'events'].includes(String(name)) &&
+              ['provide', 'use'].includes(String(name)) &&
               (object?.type === 'Identifier'
                 ? object.name === 'host'
                 : object?.type === 'MemberExpression' && propertyName(object) === 'host')
@@ -432,6 +478,11 @@ export default {
               "api.ts imports at runtime only shared/, packages, its refs.ts and other extensions' api.ts; use `import type` for the rest.",
             )
         }
+        // api.ts passes on what its own refs.ts defines (event tokens), so server code imports one file.
+        const ownRefs = (statement: Node) =>
+          file === 'api.ts' &&
+          statement.type === 'ExportNamedDeclaration' &&
+          statement.source?.value === './refs.ts'
         return {
           Program(node: Node) {
             if (!apiSummary(context.sourceCode.text))
@@ -451,14 +502,21 @@ export default {
               )
                 continue
               else if (
-                statement.type === 'ExportNamedDeclaration' &&
-                (statement.exportKind === 'type' ||
-                  (!statement.source &&
-                    (statement.declaration?.type === 'TSTypeAliasDeclaration' ||
-                      statement.declaration?.type === 'TSInterfaceDeclaration')))
+                ownRefs(statement) ||
+                (statement.type === 'ExportNamedDeclaration' &&
+                  (statement.exportKind === 'type' ||
+                    (!statement.source &&
+                      (statement.declaration?.type === 'TSTypeAliasDeclaration' ||
+                        statement.declaration?.type === 'TSInterfaceDeclaration'))))
               )
                 continue
-              else if (
+              else if (file === 'api.ts' && tierOf(statement) !== undefined) {
+                if (!coreTier.test(context.sourceCode.text))
+                  report(
+                    statement,
+                    "An extension declares its tier as `export const tier = 'core'` or not at all.",
+                  )
+              } else if (
                 statement.type === 'ExportNamedDeclaration' &&
                 statement.declaration?.type === 'VariableDeclaration' &&
                 statement.declaration.kind === 'const' &&
@@ -482,8 +540,8 @@ export default {
                 report(
                   statement,
                   file === 'refs.ts'
-                    ? 'refs.ts holds only contracts: imports, `export const X = docRef/actionRef(...)` and types.'
-                    : 'api.ts holds only contracts: imports, `export const X = defineApi/defineEvent/defineDoc/defineEntry(...)` and types.',
+                    ? 'refs.ts holds only contracts: imports, `export const X = docRef/actionRef/defineEvent(...)` and types.'
+                    : "api.ts holds only contracts: imports, `export const X = defineApi/defineDoc/defineEntry(...)`, re-exports of its refs.ts (where event tokens live, for the browser too), types and `export const tier = 'core'`.",
                 )
             }
             for (const statement of body) {
@@ -521,11 +579,16 @@ export default {
               callee?.type === 'CallExpression' &&
               callee.callee?.type === 'Identifier' &&
               callee.callee.name === 'defineApi' &&
-              name !== own
+              !(
+                name === own ||
+                (typeof name === 'string' &&
+                  /^[a-z][a-z0-9-]*$/.test(name.slice(own.length + 1)) &&
+                  name.startsWith(`${own}.`))
+              )
             )
               context.report({
                 node,
-                message: `The API of extensions/${own} is named '${own}'.`,
+                message: `The API of extensions/${own} is named '${own}', its extension points '${own}.<point>'.`,
               })
             if (
               callee?.type === 'Identifier' &&

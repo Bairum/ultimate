@@ -27,7 +27,9 @@ import {
 } from '../extensions/health/store.ts'
 import type { HealthEntry } from '../extensions/health/store.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
-import { apis, removeTemps, temp, until } from './helpers.ts'
+import { prepareHarness } from '../server/harness.ts'
+import { LoginChanged } from '../extensions/models/api.ts'
+import { apis, eventHost, removeTemps, temp, until } from './helpers.ts'
 
 afterEach(removeTemps)
 
@@ -238,7 +240,13 @@ it('heartbeat forgets providers without a login here, so their old failures stop
 /** A login host whose `want` finds the health extension installed on the same user home and models. */
 function withHealth<T extends Pick<ExtensionHost, 'userHome' | 'modelRuntime'>>(host: T) {
   const services = apis()
-  healthExtension({ ...host, ...services, faux: true } as unknown as ExtensionHost)
+  // No login changes here, so its reactor is never started.
+  healthExtension({
+    ...host,
+    ...services,
+    faux: true,
+    react: () => {},
+  } as unknown as ExtensionHost)
   return { ...host, want: services.want }
 }
 
@@ -356,19 +364,38 @@ it('watches auth.json: a login added or removed in pi resets its health, a token
   }
 })
 
-it("Ultimate's logout resets the provider's health", async () => {
+it("Ultimate's logout resets the provider's health through models.login-changed", async () => {
   const home = await temp('ultimate-health-logout-')
   await record(home, 'anthropic', { lastFail: NOW, error: 'invalid_grant' })
-  const logouts: string[] = []
-  const services = new Map<string, unknown>()
-  const host = {
-    userHome: home,
-    faux: true,
-    ...apis(services),
-    modelRuntime: { logout: async (provider: string) => void logouts.push(provider) },
-  } as unknown as ExtensionHost
-  healthExtension(host)
-  await models.logout({ provider: 'anthropic' }, { host } as ActionContext)
-  expect(logouts).toEqual(['anthropic'])
-  expect(await readHealth(home)).toEqual([])
+  await record(home, 'openai-codex', { lastFail: NOW, error: 'invalid_grant' })
+  const prepared = await prepareHarness({ home, ultimateRoot: home, userHome: home, faux: true })
+  const opened = await prepared.open()
+  try {
+    const events = eventHost(() => opened.harness, 'health')
+    const logouts: string[] = []
+    const host = {
+      userHome: home,
+      faux: true,
+      ...apis(),
+      harness: () => opened.harness,
+      emit: events.emit,
+      react: events.react,
+      modelRuntime: { logout: async (provider: string) => void logouts.push(provider) },
+    } as unknown as ExtensionHost
+    healthExtension(host)
+    await events.start()
+    await models.logout({ provider: 'anthropic' }, { host } as ActionContext)
+    await until(events.settled)
+    expect(logouts).toEqual(['anthropic'])
+    expect((await readHealth(home)).map((entry) => entry.provider)).toEqual(['openai-codex'])
+    // Every login change resets: the next logout reaches health as well.
+    await models.logout({ provider: 'openai-codex' }, { host } as ActionContext)
+    await until(events.settled)
+    expect(await readHealth(home)).toEqual([])
+    expect(
+      (await events.eventLog.recent({ events: [LoginChanged] })).map((event) => event.data),
+    ).toEqual([{ provider: 'openai-codex' }, { provider: 'anthropic' }])
+  } finally {
+    await opened.close()
+  }
 })

@@ -1,9 +1,10 @@
 /**
  * Models in the browser: provider login flows, which a conversation's login dialog follows, and the actions that
- * start, answer and cancel them or log out. Browser-safe.
+ * start, answer and cancel them or log out, and the event of a completed login or logout. Browser-safe.
  */
 import type { AuthEvent, AuthPrompt, AuthType } from '@earendil-works/pi-ai'
 import { actionRef, docRef } from '../../shared/extension-api.ts'
+import { defineEvent } from '../../shared/events.ts'
 
 /** One login flow as the browser sees it. Answers and credentials never enter it. */
 export type LoginFlow = {
@@ -30,3 +31,9 @@ export const AnswerAction = actionRef<{ flowId: string; value: string }, null>('
 export const CancelAction = actionRef<{ flowId: string }, null>('models', 'cancel')
 /** `{ provider }` → null: remove the provider's stored credential, which Pi shares. */
 export const LogoutAction = actionRef<{ provider: string }, null>('models', 'logout')
+
+/**
+ * A login or logout of model provider `provider` completed through Ultimate; react to it to drop what you knew about
+ * that provider's credentials (health resets its record to unknown).
+ */
+export const LoginChanged = defineEvent<{ provider: string }>('models.login-changed')

@@ -468,15 +468,9 @@ export const actions = {
   }),
 }
 
-export default function automations(
-  host: Host & Pick<ExtensionHost, 'onOpen' | 'service' | 'implement' | 'want'>,
-) {
-  // Optional services, resolved where they are called; declared here so the catalogue lists them.
-  host.want(SubagentsApi)
-  const status = host.service('scheduler', { state: 'starting', detail: 'durable scheduler' })
-  host.onOpen(async () => {
-    status.update({ state: 'ready', detail: 'durable scheduler' })
-  })
+export default function automations(host: Host & Pick<ExtensionHost, 'implement' | 'need'>) {
+  // Core, always on; resolved where it is called, declared here so the catalogue lists it.
+  host.need(SubagentsApi)
   host.implement(AutomationsApi, {
     async nextDue() {
       const state = await host.harness().snapshot(Automations, BACKGROUND_CONTEXT)

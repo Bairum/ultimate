@@ -45,6 +45,10 @@ Every extension folder is on by default, built-in, user or project: adding the f
 with `{ "extensions": { "disable": ["hello"] } }` in `~/.ultimate/settings.json` (this machine) or
 `<project>/.ultimate/settings.json` (this project), and back on with `extensions.enable`. Settings layer defaults →
 machine → project; later layers win. Settings changes apply live without a restart; unknown names produce a notice.
+A core-tier extension (`export const tier = 'core'` in its `api.ts`, such as conversations, workspaces, subagents,
+lineage, board and sidebar) stays on whatever the settings say, and depends only on other core-tier extensions: an
+optional extension plugs into it through a point or an event, never the other way round (lint `core-tier-deps`; see
+[Core tier](../docs/extensions.md#core-tier)).
 
 The `parallel` web tools read their key from `secrets`. Secrets are user-global, not project state.
 
@@ -81,16 +85,9 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 - `implement(api, value)`, `need(api)`, `want(api)`, `catalogue()`: the typed successors of `provide`/`use`; see [Extension APIs](#extension-apis).
 - `metadata`: the core's `ultimate.metadata` conversation document, `{ title?, label? }`; the shell names a conversation
   by them, so set them on conversations you create (`subagents` labels each child with its definition).
-- `events`: Pi's ephemeral process-local event bus; see [Events](#events).
+- `emit(tx, event, data)`, `react(name, events, handler)`, `eventLog`: durable events; see [Events](#events).
+- `trace`: the recorded calls (services, actions, reactor runs, tools); see [docs/extensions.md](../docs/extensions.md#tracing).
 - `access.allow({ origin, verify })`: register an HTTP origin with an identity verifier; returns a disposer and is automatically removed when the facet unloads or reloads. HTTP, API, and websocket upgrades use the same admission rules.
-- `service(name, { state, detail? })`: register ephemeral terminal status (`starting`, `ready`, `busy`, or `error`);
-  returns `{ update(status), dispose() }`. Names must be non-empty and unique within the facet. Registrations are
-  staged until installation succeeds, then removed automatically on replacement, disable, removal or shutdown.
-  Failed installation leaves the previous facet's rows intact; stale handles cannot update/remove replacement rows.
-  Handles are always facet-scoped, even inside `resource()`; do not save them in reload-stable resources. Reports
-  are hidden while the harness is released, and the supervisor ignores status from inactive cores. This API only
-  describes services: it does not start processes, schedule work, poll, or persist state. Example:
-  `const status = host.service('worker', { state: 'starting' }); host.onOpen(async () => { status.update({ state: 'ready' }) })`.
 - `notice(message)`: publish a warning notice and retain it in this facet's system diagnostics for later clients, until unload/reload.
 - `resource(key, create)`, `onOpen(callback)`, `onRelease(callback)`, `onClose(cleanup)`: shared reload-stable resources, async work each
   time the harness opens (at once if it is open; the server serves once it settles), async work each time before it closes while the process stays (deactivate, a core swap; drop commit subscriptions there), and async cleanup. Facet-level callbacks are removed on unload/reload, with cleanup run before the replacement opens. Callbacks registered inside a shared resource's creation belong to that reload-stable resource and survive until server shutdown.
@@ -108,13 +105,12 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 ## Extension APIs
 
 Everything an extension offers other extensions on the server lives in its `api.ts`: the service token, the documents
-others read and the events it emits. It holds only contracts and is documented, because agents discover APIs by
-reading these files:
+others read and the events it emits (defined in its `refs.ts`, below, and re-exported). It holds only contracts and is
+documented, because agents discover APIs by reading these files:
 
 ```ts
 /** Echo: says text back. Other extensions use it to test a round trip. */
 import { defineApi } from '../../shared/extension-api.ts'
-import { defineEvent } from '../../shared/events.ts'
 
 export type EchoService = {
   /** Return `text` unchanged; use it to check that echo is reachable. */
@@ -122,8 +118,7 @@ export type EchoService = {
 }
 /** The echo service; `want` it, echo is optional. */
 export const Echo = defineApi<EchoService>()('echo')
-/** Text was echoed; react to it to count echoes. */
-export const Echoed = defineEvent<{ text: string }>('echo.echoed')
+export { Echoed } from './refs.ts'
 ```
 
 Lint holds every `extensions/*/api.ts` to that shape (`ultimate/api-file-shape`, `ultimate/api-naming`; see
@@ -137,13 +132,16 @@ whose documents or actions the browser uses describes them in `refs.ts`, browser
 every action ref names its arguments and result, since agents read it to call the action with `ultimate.action`.
 
 ```ts
-/** Echo in the browser: the echo log and the action that echoes. Browser-safe. */
+/** Echo in the browser: the echo log, the action that echoes and its event. Browser-safe. */
 import { actionRef, docRef } from '../../shared/extension-api.ts'
+import { defineEvent } from '../../shared/events.ts'
 
 /** The echo log on conversation 1. */
 export const LogDoc = docRef<{ texts: string[] }>('echo.log')
 /** `{ text }` → `{ at }`: echo `text` and log it. */
 export const EchoAction = actionRef<{ text: string }, { at: number }>('echo', 'echo')
+/** Text was echoed; react to it to count echoes. */
+export const Echoed = defineEvent<{ text: string }>('echo.echoed')
 ```
 
 The web reads and calls through the refs, typed: `useDoc(LogDoc)`, `useDocOf(1, LogDoc)`, `useAction(EchoAction,
@@ -168,19 +166,36 @@ runtime only from its `ui.tsx`, and its `api.ts` or `refs.ts` only as types (`ul
 imports at runtime only `shared/`, and types only from packages, `shared/` and extensions' `refs.ts` or `types.ts`;
 it is part of the web type check (`tsconfig.web.json`).
 
+A lower extension whose browser code shows something a higher one knows (a phase label on a sidebar row) declares a
+**point** in its `ui.tsx` and renders it with a render prop; the higher extension provides the value from its
+`web.tsx`, so the lower one imports nothing of it:
+
+```tsx
+// conversations/ui.tsx
+export const Phase = definePoint<number, { word: string } | undefined>('conversations.phase')
+// a row: <Provided point={Phase} input={id}>{(phase) => phase && <span>{phase.word}</span>}</Provided>
+// phase/web.tsx
+export default defineWebExtension({ provides: [provide(Phase, (id) => usePhaseWord(id))] })
+```
+
+The provider's function is a hook, run once per `<Provided>`; the last facet in discovery order providing a point wins,
+and while none does the render prop gets `undefined`. The server's counterpart is an extension point
+([docs/extensions.md](../docs/extensions.md#extension-apis)).
+
 The provider calls `host.implement(Echo, { echo: (text) => text })` in its factory; it is staged, replaced and
 removed with its facet. A consumer calls `host.need(Echo)` for a hard dependency or `host.want(Echo)` for an
 optional one. Both return a handle typed by the token that resolves the current provider on every member access, so
 holding it from setup is fine. `need` throws `<ext> needs echo, which no enabled extension provides` while nothing
 provides it; called during setup it records the dependency instead (the provider may load later) and a still-missing
-provider becomes an extension diagnostic. `want` returns undefined while missing, so call it where you use it.
+provider becomes an extension diagnostic. `want` returns undefined while missing, so call it where you use it. The core
+tier is always on, so its services are always `need`ed; `want` is for optional extensions and extension points.
 `host.catalogue()` (codemode: `ultimate.catalogue()`) lists each API's provider, needs and wants, plus missing
 providers and dependency cycles, each a sorted group of extensions that depend on each other in a cycle.
 
 Which channel to use: services for calls between extensions; documents for durable state; durable events for "this
 happened" (`host.emit` in your commit, `host.react` to act on it; see
-[docs/extensions.md](../docs/extensions.md#durable-events)); actions for the UI and user boundary. `host.provide`,
-`host.use` and the `host.events` bus are not used by extensions (`ultimate/no-raw-services`).
+[docs/extensions.md](../docs/extensions.md#durable-events)); actions for the UI and user boundary. Extensions never call the untyped `host.provide` and `host.use`
+(`ultimate/no-raw-services`).
 
 ## Lifecycle
 
@@ -192,7 +207,8 @@ Type imports from `server/` are fine. Runtime imports need a host capability or 
 
 ## Events
 
-On the server, "something happened" is a durable event in the emitter's `api.ts` (see Extension APIs). The browser
+On the server, "something happened" is a durable event whose token the emitter defines in its `refs.ts` and
+re-exports from `api.ts` and `ui.tsx` (see Extension APIs). The browser
 has an ephemeral `events` bus from `@/sdk`: it queues and replays nothing, catches and logs handler errors with the
 channel while other handlers continue, and `on(channel, handler)` returns an unsubscribe; clean it up when its owner
 is removed.

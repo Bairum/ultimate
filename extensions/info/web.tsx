@@ -17,7 +17,8 @@ import {
   useSystem,
 } from '@/sdk'
 import type { SystemInfo, Usage } from '@/sdk'
-import { Copy, ErrorText, Meter, Row, Rows, Section, Tag } from './ui.tsx'
+import { Row, Rows } from '@/components/ui/rows'
+import { Copy, ErrorText, Meter, Section, Tag } from './ui.tsx'
 
 const pad = (value: number) => String(value).padStart(2, '0')
 

@@ -6,25 +6,15 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import {
-  api,
-  cn,
-  events,
-  formatTokens,
-  useAction,
-  useDocOf,
-  useExtensionUiState,
-  useUltimate,
-} from '@/sdk'
+import { api, cn, events, formatTokens, Provided, useAction, useDocOf, useUltimate } from '@/sdk'
 import { BoardDoc, emptyBoard, isOpen } from '../board/ui.tsx'
 import { CompactAction, RecentAction, TallyDoc } from '../lineage/ui.tsx'
 import type { RootEvent } from '../lineage/types.ts'
-import { phaseText, usePhase } from '../phase/ui.tsx'
 import { CommitCount, useWorkspaceIndex } from '../workspaces/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
-import { FeatureTag, useOverview } from './feature.tsx'
-import { ago } from './ago.ts'
-import { AgentMark } from './marks.tsx'
+import { AgentMark, ConversationPhase, FeatureTag, useOverview } from '../conversations/ui.tsx'
+import { ago } from './lander.tsx'
+import { useSidebarState } from './state.tsx'
 
 type Landing = Extract<RootEvent, { type: 'landed' }>
 type Actions = Pick<ReturnType<typeof useUltimate>, 'switchConversation' | 'showSurface'>
@@ -60,16 +50,19 @@ export function inFlight(
 }
 
 /** Where an open branch stands, in a word or two, and how loud to say it. */
-function useBranchState(conversation: ConversationSummary, working: boolean) {
+function useBranchState(
+  conversation: ConversationSummary,
+  working: boolean,
+  phase: { word: string; waiting: boolean } | undefined,
+) {
   const index = useWorkspaceIndex()
   const board = useDocOf(1, BoardDoc) ?? emptyBoard
-  const phase = usePhase(working ? conversation.id : undefined)
   const queued = index.queue.find((item) => item.conversationId === conversation.id)
   if (queued?.state === 'landing') return { label: 'landing', tone: 'success' } as const
   if (queued) return { label: 'submitted', tone: 'success' } as const
   if (working)
     return {
-      label: phase && phase !== 'waiting' ? phaseText(phase).toLowerCase() : 'working',
+      label: phase && !phase.waiting ? phase.word : 'working',
       tone: 'brand',
     } as const
   // A branch's decisions reach you through @ultimate: an open question it asked (an approval, a choice) waits on an
@@ -86,21 +79,32 @@ const tones = {
   quiet: 'text-muted-foreground/70',
 }
 
-/** One open branch: its feature and title, where it stands, and its age; click opens it. */
-function FlightRow({
-  conversation,
-  working,
-  shown,
-  now,
-}: {
+type FlightProps = {
   conversation: ConversationSummary
   working: boolean
   shown: boolean
   now: number
-}) {
+}
+
+/** One open branch: its feature and title, where it stands, and its age; click opens it. */
+function FlightRow(props: FlightProps) {
+  return (
+    <Provided input={props.working ? props.conversation.id : undefined} point={ConversationPhase}>
+      {(phase) => <PhasedFlightRow {...props} phase={phase} />}
+    </Provided>
+  )
+}
+
+function PhasedFlightRow({
+  conversation,
+  working,
+  shown,
+  now,
+  phase,
+}: FlightProps & { phase?: { word: string; waiting: boolean } }) {
   const actions = useUltimate()
   const feature = useOverview()[conversation.id]?.feature
-  const state = useBranchState(conversation, working)
+  const state = useBranchState(conversation, working, phase)
   const latest = Math.max(conversation.inputAt ?? 0, conversation.answerAt ?? 0)
   const title = conversation.title ?? `#${conversation.id}`
   return (
@@ -222,7 +226,7 @@ export function RootRow({
   const actions = useUltimate()
   const id = conversation.id
   const tally = useDocOf(id, TallyDoc)
-  const [unfolded, setUnfolded] = useExtensionUiState<number[]>('landingsOpen', [])
+  const [unfolded, setUnfolded] = useSidebarState<number[]>('landingsOpen', [])
   const more = unfolded.includes(id)
   const landings = useAction(
     RecentAction,

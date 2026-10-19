@@ -7,14 +7,13 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 
 export default function self(host: ExtensionHost) {
-  // Optional services, resolved where they are called; declared here so the catalogue lists them.
-  host.want(WorkspacesApi)
-  const service = () => host.want(WorkspacesApi)
+  // Core, always on; the handle resolves the current provider at each call.
+  const workspaces = host.need(WorkspacesApi)
   return defineExtension({
     name: 'self',
     sections: [
       section('self', async (input, context) => {
-        const own = await service()?.get(input.conversationId, context)
+        const own = await workspaces.get(input.conversationId, context)
         const cwd = input.env?.cwd ?? input.agent.cwd ?? host.projectRoot
         const sourceRoot =
           own && host.projectRoot === host.ultimateRoot ? own.path : host.ultimateRoot
@@ -47,13 +46,13 @@ export default function self(host: ExtensionHost) {
         // The target generation is memoized before the swap, so replay reports it without restarting again.
         replay: 'safe',
         async execute(_args, api, context): Promise<ToolExecutionResult> {
-          const own = await service()?.get(api.conversationId, context)
+          const own = await workspaces.get(api.conversationId, context)
           if (
             own &&
             ((await realpath(own.source)) !== (await realpath(host.ultimateRoot)) ||
               !own.landed ||
-              (await service()!.git(host.ultimateRoot, 'status', '--porcelain')) ||
-              (await service()!.git(host.ultimateRoot, 'rev-parse', 'HEAD')) !== own.landed)
+              (await workspaces.git(host.ultimateRoot, 'status', '--porcelain')) ||
+              (await workspaces.git(host.ultimateRoot, 'rev-parse', 'HEAD')) !== own.landed)
           ) {
             const error = `Restart refused: land your workspace into ${own.source} first`
             return {

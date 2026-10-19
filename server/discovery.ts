@@ -1,9 +1,10 @@
-import { readdir, stat } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { discoveryRoots } from './project.ts'
 import type { Source } from './project.ts'
 import { useProjectSetup } from './project-setup.ts'
 import { extensionSettings } from './extension-settings.ts'
+import { coreTier } from '../shared/extension-api.ts'
 
 const sourceOrder = { builtin: 0, user: 1, project: 2 }
 
@@ -27,7 +28,7 @@ export async function discoverExtensions(
 ) {
   const winners = new Map<
     string,
-    { name: string; path: string; source: Source; files: string[]; error?: string }
+    { name: string; path: string; source: Source; files: string[]; core?: true; error?: string }
   >()
   for (const root of discoveryRoots(ultimateRoot, projectRoot, userHome)) {
     if (root.source === 'project' && !includeProject && !useProjectSetup(projectRoot, userHome))
@@ -44,11 +45,15 @@ export async function discoverExtensions(
       const path = join(directory, entry.name)
       try {
         if (!(await stat(path)).isDirectory()) continue
+        const files = await readdir(path)
+        const core =
+          files.includes('api.ts') && coreTier.test(await readFile(join(path, 'api.ts'), 'utf8'))
         winners.set(entry.name, {
           name: entry.name,
           path,
           source: root.source,
-          files: await readdir(path),
+          files,
+          ...(core ? { core } : {}),
         })
       } catch (error) {
         winners.set(entry.name, {
@@ -66,7 +71,8 @@ export async function discoverExtensions(
   const entries = [...winners.values()]
     .map((entry) => ({
       ...entry,
-      enabled: overrides.get(entry.name) ?? true,
+      // A core-tier extension stays on whatever the settings say; extension reloads report the ignored disable.
+      enabled: entry.core || (overrides.get(entry.name) ?? true),
     }))
     .toSorted(compareExtensions)
   return Object.assign(entries, { settings })

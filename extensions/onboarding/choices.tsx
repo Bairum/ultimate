@@ -1,6 +1,3 @@
-/** These keep the agent and its setup cards reachable until onboarding finishes. */
-export const requiredExtensions: readonly string[] = ['subagents', 'board', 'lineage', 'onboarding']
-
 export const recommended: readonly { name: string; line: string; needs?: string }[] = [
   { name: 'subagents', line: 'Hands bounded work to helper agents' },
   { name: 'board', line: 'Talk to @ultimate and the project team' },
@@ -14,14 +11,19 @@ export const recommended: readonly { name: string; line: string; needs?: string 
   { name: 'parallel', line: 'Web search and fetch (parallel.ai)', needs: 'secrets' },
 ]
 
-export function extensionOptions(disabled: readonly string[], changed: Record<string, boolean>) {
+/** The recommended switches; the `core` tier extensions are always on, so their boxes stay checked and locked. */
+export function extensionOptions(
+  disabled: readonly string[],
+  changed: Record<string, boolean>,
+  core: readonly string[],
+) {
   return recommended.map((entry) => {
-    const required = requiredExtensions.includes(entry.name)
+    const required = core.includes(entry.name)
     return {
       ...entry,
       required,
       checked: required || (changed[entry.name] ?? !disabled.includes(entry.name)),
-      hint: required ? 'needed by @ultimate' : entry.needs ? `needs ${entry.needs}` : undefined,
+      hint: required ? 'core, always on' : entry.needs ? `needs ${entry.needs}` : undefined,
     }
   })
 }

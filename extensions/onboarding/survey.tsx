@@ -3,11 +3,8 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import { api, cn, errorMessage, touchKeyboard, useDocOf, useSystem, useUltimate } from '@/sdk'
-import { StartAction, StartsDoc } from '../onboarding/ui.tsx'
-
-/** The composer's reading column, as the core lays it out. */
-export const column = (dock?: boolean) =>
-  dock ? 'w-full px-4' : 'mx-auto w-full max-w-[46rem] px-3 sm:px-6'
+import { column } from '../lineage/ui.tsx'
+import { StartAction, StartsDoc } from './refs.ts'
 
 /**
  * An empty root starts with @ultimate's setup and reading, toward optional instructions; what it learns seeds the tally

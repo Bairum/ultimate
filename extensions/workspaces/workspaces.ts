@@ -25,8 +25,8 @@ import type {
   WorkspaceDisk,
   WorkspaceInfo,
   WorkspaceStats,
-  WorkspacePending,
 } from './types.ts'
+import type { KeptWork } from '../conversations/types.ts'
 
 export const Workspaces = defineDoc<WorkspaceIndex>({
   kind: WorkspacesDoc.kind,
@@ -78,6 +78,7 @@ type Host = Pick<
   | 'userHome'
   | 'modelRuntime'
   | 'projectSettings'
+  | 'need'
   | 'want'
   | 'resource'
   | 'extensions'
@@ -88,7 +89,7 @@ type Host = Pick<
 async function changes(
   id: ConversationId,
   workspace: WorkspaceIndex['items'][string],
-): Promise<WorkspacePending> {
+): Promise<KeptWork> {
   return {
     id,
     uncommitted: (await git(workspace.path, 'status', '--porcelain')).split('\n').filter(Boolean)
@@ -411,8 +412,8 @@ export function workspaces(host: Host) {
       ? workspace
       : undefined
   }
-  async function pending(ids: number[], context: Context): Promise<WorkspacePending[]> {
-    const result: WorkspacePending[] = []
+  async function pending(ids: number[], context: Context): Promise<KeptWork[]> {
+    const result: KeptWork[] = []
     for (const id of (await candidates(ids, context)).ids) {
       const workspace = await presentCheckout(id, context)
       if (!workspace) continue
@@ -427,7 +428,7 @@ export function workspaces(host: Host) {
     workspace: WorkspaceIndex['items'][string],
     context: Context,
   ) {
-    let item: WorkspacePending = { id, uncommitted: 0, unlanded: 0 }
+    let item: KeptWork = { id, uncommitted: 0, unlanded: 0 }
     try {
       if (await presentCheckout(id, context)) {
         item = await changes(id, workspace)
@@ -475,8 +476,8 @@ export function workspaces(host: Host) {
     ids: number[],
     context: Context,
     signal?: AbortSignal,
-  ): Promise<WorkspacePending[]> {
-    const kept: WorkspacePending[] = []
+  ): Promise<KeptWork[]> {
+    const kept: KeptWork[] = []
     if (signal?.aborted) return kept
     const graph = await candidates(ids, context)
     const retained = new Map<number, number>()
@@ -492,7 +493,7 @@ export function workspaces(host: Host) {
           return
         }
         const present = await presentCheckout(id, context)
-        const item: WorkspacePending = present
+        const item: KeptWork = present
           ? await changes(id, workspace)
           : { id, uncommitted: 0, unlanded: 0 }
         if (retained.has(id)) item.descendant = retained.get(id)
@@ -633,7 +634,7 @@ export function workspaces(host: Host) {
     const tip = await git(workspace.path, 'rev-parse', 'HEAD')
     const path = await landerPath(host.home, workspace.source)
     const { change } = await landerAgent(host, context)
-    const subject = await host.want(ConversationsApi)?.subject(id, context)
+    const subject = await host.need(ConversationsApi).subject(id, context)
     const result = await host.harness().commit(async (tx) => {
       const row = await tx.conversation(id)
       if (!row || row.owner)
@@ -705,7 +706,7 @@ export function workspaces(host: Host) {
     id: ConversationId,
     context: Context,
     retryFailed = false,
-  ): Promise<WorkspacePending | undefined> {
+  ): Promise<KeptWork | undefined> {
     const record = await get(id, context)
     if (!record) return undefined
     const harness = host.harness()
@@ -780,7 +781,7 @@ export function workspaces(host: Host) {
           return false
         }, context)
       })
-    let retry: boolean | WorkspacePending
+    let retry: boolean | KeptWork
     do {
       if (parent) {
         const parentId = Number(parent) as ConversationId

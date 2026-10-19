@@ -156,14 +156,14 @@ function globals(
     {
       name: 'apis',
       description:
-        'Extension contracts: each enabled extension with an api.ts and the one-line summary of what it offers.',
+        'Extension contracts: each enabled extension with an api.ts or refs.ts and the one-line summary of what it offers.',
       signature: '(): Promise<{ name: string; summary: string }[]>',
       execute: () => apiSummaries(host.extensions()),
     },
     {
       name: 'api',
       description:
-        "The api.ts source of one extension: its documented services, events, documents and actions. Read it before calling the extension's actions.",
+        "The contract of one extension: its api.ts (services, documents) and refs.ts (documents, actions with their arguments and results, events), each under a header line. Read it before calling the extension's actions.",
       signature: '(name: string): Promise<string>',
       execute: ([name]) => {
         if (typeof name !== 'string' || !name) throw new Error('name must be nonempty')

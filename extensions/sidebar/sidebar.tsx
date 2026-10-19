@@ -8,15 +8,19 @@ import {
   api,
   errorMessage,
   useDocOf,
-  useExtensionUiState,
   useNow,
   useStore,
   useSystem,
   useTasks,
   useUltimate,
 } from '@/sdk'
-import { hiddenConversationIds } from './visible.tsx'
-import { useOverview } from './feature.tsx'
+import {
+  ConcludeAction,
+  hiddenConversationIds,
+  ResumeAction,
+  useOverview,
+  usePrimaryAgent,
+} from '../conversations/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
 import {
   PendingAction,
@@ -26,12 +30,11 @@ import {
 import { currentAssessment, Row, ChildRow, StandingRow } from './rows.tsx'
 import { inFlight, RootRow } from './root.tsx'
 import { useRoots } from '../lineage/ui.tsx'
-import { StandingDoc } from '../subagents/ui.tsx'
-import { ConcludeAction, ResumeAction } from './refs.ts'
-import type { WorkspacePending } from '../workspaces/types.ts'
-import { ago } from './ago.ts'
-import { LanderState } from './lander.tsx'
-import { StandingPhase, talkToUltimate, usePrimaryAgent, useWaitingOnUser } from './ultimate.tsx'
+import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
+import type { KeptWork } from '../conversations/types.ts'
+import { ago, LanderState } from './lander.tsx'
+import { StandingPhase, WaitingOnUser } from './ultimate.tsx'
+import { useSidebarState } from './state.tsx'
 
 /** The shown conversation, also while its snapshot is still on the way. */
 const useShownId = () => useStore((state) => state.view?.conversation.id ?? state.requested)
@@ -74,6 +77,11 @@ const pinned = (conversation: ConversationSummary) =>
 
 /** The project tree, with owned subagents under each row and earlier/concluded work at the bottom. */
 export function Conversations() {
+  return <WaitingOnUser>{(waiting) => <Tree waiting={waiting} />}</WaitingOnUser>
+}
+
+/** The tree, with how many messages and answers wait on the user for @ultimate's row. */
+function Tree({ waiting }: { waiting: number }) {
   const overview = useOverview()
   const tasks = useTasks()
   const foreground = new Set<number>(
@@ -92,8 +100,8 @@ export function Conversations() {
   )
   const shownId = useShownId()
   const now = useNow(60_000)
-  const [concludedIds] = useExtensionUiState<number[]>('concluded', [])
-  const [seen] = useExtensionUiState<Record<string, number>>('seen', {})
+  const [concludedIds] = useSidebarState<number[]>('concluded', [])
+  const [seen] = useSidebarState<Record<string, number>>('seen', {})
   const shownTop = topOf(shownId, conversations)
   const hiddenIds = hiddenConversationIds(conversations, concludedIds)
   const roots = new Set(useRoots())
@@ -101,8 +109,8 @@ export function Conversations() {
     shownTop && !pinned(shownTop) && !roots.has(shownTop.id) && !hiddenIds.has(shownTop.id)
       ? overview[shownTop.id]
       : undefined
-  const [expanded, setExpanded] = useExtensionUiState<number[]>('expanded', [])
-  const [expandedRoots, setExpandedRoots] = useExtensionUiState<number[]>('expandedRoots', [])
+  const [expanded, setExpanded] = useSidebarState<number[]>('expanded', [])
+  const [expandedRoots, setExpandedRoots] = useSidebarState<number[]>('expandedRoots', [])
   const working = workingByTop(conversations)
   const topLevel = conversations.filter(
     (conversation) => conversation.parentConversationId === undefined,
@@ -116,7 +124,6 @@ export function Conversations() {
   const agents = topLevel
     .filter((conversation) => pinned(conversation) && conversation.id !== ultimateId)
     .toSorted((a, b) => Number(b.label === 'lander') - Number(a.label === 'lander') || a.id - b.id)
-  const waiting = useWaitingOnUser()
   const workspaceIndex = useWorkspaceIndex()
   const listed = topLevel
     .filter((conversation) => !pinned(conversation) && !hiddenIds.has(conversation.id))
@@ -148,7 +155,7 @@ export function Conversations() {
 
   const [warning, setWarning] = useState<{
     id: number
-    work?: WorkspacePending[]
+    work?: KeptWork[]
     failure?: string
   }>()
   const [pending, setPending] = useState(false)
@@ -556,7 +563,7 @@ export function Conversations() {
 export function Seen() {
   const id = useShownId()
   const summary = useConversations().find((conversation) => conversation.id === id)
-  const [seen, setSeen] = useExtensionUiState<Record<string, number>>('seen', {})
+  const [seen, setSeen] = useSidebarState<Record<string, number>>('seen', {})
   const answerAt =
     summary && summary.parentConversationId === undefined && !summary.busy
       ? (summary.answerAt ?? 0)

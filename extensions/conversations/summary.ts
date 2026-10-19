@@ -27,7 +27,7 @@ import type {
   Usage,
 } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { LineageApi } from '../lineage/api.ts'
+import { Trees } from './api.ts'
 import { summaryModel } from './summary-model.ts'
 import { isInput } from '../../lib/entries.ts'
 import type { SummaryModel, SummaryModelHost } from './summary-model.ts'
@@ -568,10 +568,10 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
               ))
         // A root's feature names what its whole tree builds, not the part its latest exchange touched.
         const root =
-          (await host.want?.(LineageApi)?.rootOf(runtime.conversationId, context)) ===
+          (await host.want?.(Trees)?.rootOf(runtime.conversationId, context)) ===
           runtime.conversationId
         const branch = task.input.generation
-          ? await host.want?.(LineageApi)?.branchOf(runtime.conversationId, context)
+          ? await host.want?.(Trees)?.branchOf(runtime.conversationId, context)
           : undefined
         await runtime.commit(async (tx) => {
           const state = await tx.doc(Summaries, runtime.conversationId)
@@ -717,7 +717,7 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
             })
           // Lineage reads conversation records, so the abstract goes before this transaction's first entry.
           if (checkpoint.abstract && result.abstract && completed !== undefined) {
-            await host.want?.(LineageApi)?.abstract(tx, runtime.conversationId, {
+            await host.want?.(Trees)?.abstract(tx, runtime.conversationId, {
               text: result.abstract,
               at: checkpoint.answer,
               title: result.title ?? state.generatedTitle,

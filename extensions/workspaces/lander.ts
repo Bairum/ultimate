@@ -21,9 +21,8 @@ import type {
 } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { BoardApi } from '../board/api.ts'
 import { definitionAgent, discoverAgents } from '../../lib/agents.ts'
-import { SubmissionLanded } from './api.ts'
+import { Handoff, SubmissionLanded } from './api.ts'
 import { setup } from './setup.ts'
 import type {
   Landed,
@@ -1001,7 +1000,7 @@ export function createLander(
               deploy?.paths.some((prefix) => path.startsWith(prefix)),
             )
             if (deploy && result && paths.length) {
-              const board = host.want(BoardApi)
+              const board = host.want(Handoff)
               const definitions = await discoverAgents(
                 host.ultimateRoot,
                 host.projectRoot,

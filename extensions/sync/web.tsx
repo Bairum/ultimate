@@ -1,11 +1,12 @@
 import { LoaderCircleIcon, MailIcon, ServerIcon, TriangleAlertIcon, TruckIcon } from 'lucide-react'
 import { useEffect } from 'react'
 import { MessageResponse } from '@/components/ai/message'
-import { cn, defineWebExtension, shortenPath, useAction, useSystem } from '@/sdk'
+import { cn, defineWebExtension, provide, shortenPath, useAction, useSystem } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import type { ProviderHealth } from '../../cloud/protocol.ts'
 import { TransitionAction } from './refs.ts'
-import { phaseOf, TransitionCard } from '../cloud/ui.tsx'
+import { MoveHelp, phaseOf, TransitionCard } from '../cloud/ui.tsx'
+import { AskSync } from './ui.tsx'
 import { polling } from './moves.ts'
 import type { Fleet, FleetProject, MoveEnded, SyncReport } from './types.ts'
 
@@ -300,4 +301,5 @@ export default defineWebExtension({
     placeholder: 'Ask @sync about your machines…',
   },
   entries: { 'sync.move': MoveEntry, 'sync.report': ReportEntry },
+  provides: [provide(MoveHelp, () => <AskSync />)],
 })

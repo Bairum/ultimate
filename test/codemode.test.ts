@@ -16,6 +16,7 @@ import {
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { Store } from '../extensions/codemode/server.ts'
+import type { CallTree } from '../server/trace.ts'
 
 const servers: Awaited<ReturnType<typeof createServer>>[] = []
 const directories: string[] = []
@@ -130,6 +131,89 @@ async function run(
   }
 }
 
+/** Kind, caller and name of each call in a trace tree, nested like it. */
+const shape = (calls: CallTree[]): unknown[] =>
+  calls.map((call) => [call.kind, call.caller, call.name, shape(call.children)])
+
+it('traces a tool a codemode script calls, and its service call, inside the codemode call', async () => {
+  const { server, options } = await fixture()
+  const token = `import { defineApi } from ${JSON.stringify(resolve('shared/extension-api.ts'))}
+    const Echo = defineApi()('trace-echo')`
+  for (const [name, source] of [
+    [
+      'trace-echo',
+      `${token}
+      export default (host) => {
+        host.implement(Echo, { echo: (text) => text })
+        return { name: 'trace-echo' }
+      }`,
+    ],
+    [
+      'trace-probe',
+      `import { defineTool } from '@earendil-works/pi-durable'
+      import { Type } from '@earendil-works/pi-ai'
+      ${token}
+      export default (host) => {
+        const echo = host.need(Echo)
+        return { name: 'trace-probe', tools: [defineTool({
+          name: 'probe',
+          description: 'Echoes through a service',
+          parameters: Type.Object({}),
+          execute: async () => ({ output: [{ type: 'text', text: echo.echo('probed') }] }),
+        }), defineTool({
+          name: 'outer',
+          description: 'Runs a codemode script as a Pi nested call',
+          parameters: Type.Object({}),
+          execute: async (_args, api, ctx) => {
+            const result = await api.executeTool('codemode', { code: 'return await tools.probe({})' }, ctx)
+            return { output: [{ type: 'text', text: JSON.stringify(result.details?.value ?? result) }] }
+          },
+        })] }
+      }`,
+    ],
+  ]) {
+    await mkdir(join(options.ultimateRoot, 'extensions', name))
+    await writeFile(join(options.ultimateRoot, 'extensions', name, 'server.ts'), source)
+  }
+  await until(async () =>
+    (await server.root.agent(context)).tools.some((tool) => tool.name === 'probe'),
+  )
+  expect((await run(server, `return await tools.probe({});`)).data.details.value).toBe('probed')
+  const echo = server.extensions.trace.query().find((row) => row.name === 'trace-echo.echo')!
+  expect(shape(server.extensions.trace.tree(echo.trace))).toEqual([
+    [
+      'tool',
+      'agent',
+      'codemode',
+      [['tool', 'codemode', 'probe', [['service', 'trace-probe', 'trace-echo.echo', []]]]],
+    ],
+  ])
+
+  // A model call runs codemode as a Pi nested task, which calls probe in-process: one chain of immediate parents.
+  server.host.faux!.setResponses([
+    fauxAssistantMessage([fauxToolCall('outer', {})], { stopReason: 'toolUse' }),
+    fauxAssistantMessage('Complete'),
+  ])
+  await server.root.submit({ type: 'input', content: 'run outer' }, context)
+  await server.harness.waitForIdle(context)
+  const outer = server.extensions.trace.query().find((row) => row.name === 'outer')!
+  expect(shape(server.extensions.trace.tree(outer.trace))).toEqual([
+    [
+      'tool',
+      'agent',
+      'outer',
+      [
+        [
+          'tool',
+          'trace-probe',
+          'codemode',
+          [['tool', 'codemode', 'probe', [['service', 'trace-probe', 'trace-echo.echo', []]]]],
+        ],
+      ],
+    ],
+  ])
+})
+
 it('calls extension actions with caller context and rejects missing or disabled actions', async () => {
   const { server, options } = await fixture()
   const path = join(options.ultimateRoot, 'extensions/action-test')
@@ -188,26 +272,38 @@ it('calls extension actions with caller context and rejects missing or disabled 
   expect(disabled.text).toContain('Unknown extension action: action-test/echo')
 })
 
-it('discovers extension contracts: summaries first, then one api.ts by name', async () => {
+it('discovers extension contracts: summaries first, then one api.ts and refs.ts by name', async () => {
   const { server, options } = await fixture()
   const folder = join(options.projectRoot, '.ultimate/extensions/contract-test')
+  const browserOnly = join(options.projectRoot, '.ultimate/extensions/refs-only')
   await mkdir(folder, { recursive: true })
+  await mkdir(browserOnly, { recursive: true })
   const source =
     '/**\n * Contract test: a fixture with a documented contract. It offers nothing else.\n */\nexport type Service = { /** Says hi. */ hi(): string }\n'
+  const refs = '/** Contract test in the browser: one constant. */\nexport const Hi = 1\n'
   await writeFile(join(folder, 'api.ts'), source)
-  await writeFile(
-    join(folder, 'server.ts'),
-    "import { defineExtension } from '@earendil-works/pi-durable'; export default defineExtension({ name: 'contract-test' })",
-  )
+  await writeFile(join(folder, 'refs.ts'), refs)
+  await writeFile(join(browserOnly, 'refs.ts'), '/** Refs only: a browser contract. */\n')
+  for (const [path, name] of [
+    [folder, 'contract-test'],
+    [browserOnly, 'refs-only'],
+  ])
+    await writeFile(
+      join(path, 'server.ts'),
+      `import { defineExtension } from '@earendil-works/pi-durable'; export default defineExtension({ name: '${name}' })`,
+    )
   server.vite.watcher.emit('add', join(folder, 'server.ts'))
+  server.vite.watcher.emit('add', join(browserOnly, 'server.ts'))
   await until(() =>
-    server.extensions.info().some((entry) => entry.name === 'contract-test' && entry.enabled),
+    ['contract-test', 'refs-only'].every((name) =>
+      server.extensions.info().some((entry) => entry.name === name && entry.enabled),
+    ),
   )
   const result = await run(
     server,
     `const apis = await ultimate.apis();
     let unknown;
-    try { await ultimate.api('coding-tools') } catch (error) { unknown = error.message }
+    try { await ultimate.api('codemode') } catch (error) { unknown = error.message }
     return { apis, source: await ultimate.api('contract-test'), unknown };`,
   )
   const value = result.data.details.value as {
@@ -220,11 +316,42 @@ it('discovers extension contracts: summaries first, then one api.ts by name', as
     name: 'contract-test',
     summary: 'Contract test: a fixture with a documented contract.',
   })
+  // An extension with only a browser contract is listed by it.
+  expect(value.apis).toContainEqual({
+    name: 'refs-only',
+    summary: 'Refs only: a browser contract.',
+  })
   for (const api of value.apis) expect(api.summary).not.toBe('')
-  expect(value.source).toBe(source)
-  expect(value.unknown).toMatch(
-    /^No enabled extension "coding-tools" with an api\.ts; known: .*\bcontract-test\b/,
+  expect(value.source).toBe(
+    `// contract-test/api.ts: the server contract: services, extension points, documents\n${source}\n` +
+      `// contract-test/refs.ts: the browser contract: documents, actions (call them with ultimate.action) and events\n${refs}`,
   )
+  expect(value.unknown).toMatch(
+    /^No enabled extension "codemode" with an api\.ts or refs\.ts; known: .*\bcontract-test\b/,
+  )
+})
+
+it("returns workspaces' refs.ts with its api.ts, so agents see its actions and events", async () => {
+  const home = await temp('ultimate-codemode-workspaces-')
+  directories.push(home)
+  await mkdir(join(home, 'project'))
+  const server = await createServer({
+    ultimateRoot: resolve('.'),
+    projectRoot: join(home, 'project'),
+    userHome: home,
+    home: join(home, 'state'),
+  })
+  servers.push(server)
+  const result = await run(server, `return await ultimate.api('workspaces')`)
+  const source = result.data.details.value as string
+  expect(source).toContain(
+    `// workspaces/api.ts: the server contract: services, extension points, documents\n${await readFile(resolve('extensions/workspaces/api.ts'), 'utf8')}`,
+  )
+  expect(source).toContain('// workspaces/refs.ts: the browser contract')
+  expect(source).toContain(
+    "export const SubmissionLanded = defineEvent<LandedData>('workspaces.landed')",
+  )
+  expect(source).toContain("actionRef<{ id: number }, WorkspaceInfo | null>('workspaces', 'info')")
 })
 
 it('reserves trust and secret writes for the UI while allowing normal actions', async () => {

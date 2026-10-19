@@ -2,7 +2,7 @@ import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
 import { abstract, branchOf, leaveNote, rootOf, Tally } from '../extensions/lineage/server.ts'
-import type { LineageService } from '../extensions/lineage/api.ts'
+import type { TreesService } from '../extensions/conversations/api.ts'
 import { Summaries, summaryBehavior } from '../extensions/conversations/summary.ts'
 import type { SummaryHost } from '../extensions/conversations/summary.ts'
 import { defineExtension } from '@earendil-works/pi-durable'
@@ -221,14 +221,14 @@ it.concurrent('summarizes a branch into its title and its abstract in the tree r
                 .filter((model) => model.provider === 'openai-codex' && model.id === 'gpt-6-luna'),
           },
           want: ((api: { name: string }) =>
-            api.name === 'lineage'
+            api.name === 'conversations.trees'
               ? ({
                   rootOf: (id: number, ctx: typeof context) =>
                     rootOf({ harness: () => server.harness }, id, ctx),
                   branchOf: (id: number, ctx: typeof context) =>
                     branchOf({ harness: () => server.harness }, id, ctx),
                   abstract,
-                } satisfies Pick<LineageService, 'rootOf' | 'branchOf' | 'abstract'>)
+                } satisfies TreesService)
               : undefined) as NonNullable<SummaryHost['want']>,
         },
         async () => ({

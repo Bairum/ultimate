@@ -48,11 +48,21 @@ export const actionRef = <Args, Result>(
   name,
 })
 
+/**
+ * How an extension joins the core tier: this exact line in its `api.ts`. Core-tier extensions are always on and depend
+ * only on other core-tier extensions; discovery and the `core-tier-deps` lint rule read it from the file's text.
+ */
+export const coreTier = /^export const tier = 'core'$/m
+
 /** Who provides and who consumes each API, as `host.catalogue()` reports it. */
 export type Catalogue = {
-  apis: { name: string; provider?: string; needs: string[]; wants: string[] }[]
+  /** `owner` is set on an extension point `<owner>.<point>`: the extension that declares it in its api.ts. */
+  apis: { name: string; owner?: string; provider?: string; needs: string[]; wants: string[] }[]
   /** Needed APIs no enabled extension provides. */
   missing: string[]
-  /** Groups of extensions that depend on each other in a cycle over needs and wants, each sorted. */
+  /**
+   * Groups of extensions that depend on each other in a cycle, each sorted. A need or want depends on the API's owner
+   * (a service's provider); the provider of an extension point depends on the point's owner.
+   */
   cycles: string[][]
 }

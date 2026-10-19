@@ -1,4 +1,4 @@
-import { apis, temp, until } from './helpers.ts'
+import { apis, eventHost, temp, until } from './helpers.ts'
 import { afterEach, expect, it, vi } from 'vitest'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -11,11 +11,11 @@ import type { OpenHost } from '../server/harness.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { ActionContext } from '../server/actions.ts'
 import type { ConversationsService } from '../extensions/conversations/api.ts'
-import { QuestionsApi } from '../extensions/questions/api.ts'
+import { emit } from '../server/events.ts'
 import { accountResponse, askSummaryModel } from '../extensions/conversations/summary.ts'
 import { summaryModel } from '../extensions/conversations/summary-model.ts'
 import boardExtension from '../extensions/board/server.ts'
-import { Board } from '../extensions/board/api.ts'
+import { Asked, Board } from '../extensions/board/api.ts'
 import questionsExtension, {
   actions,
   BoardQuestions,
@@ -25,6 +25,8 @@ import questionsExtension, {
   userActions,
 } from '../extensions/questions/server.ts'
 import { Standing } from '../extensions/subagents/api.ts'
+import type { SubagentsService } from '../extensions/subagents/api.ts'
+import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 
 const hosts: OpenHost[] = []
 afterEach(async () => {
@@ -41,6 +43,10 @@ async function fixture() {
   const services = new Map<string, unknown>()
   const openers: (() => Promise<void>)[] = []
   const closers: (() => Promise<void>)[] = []
+  // Board's `board.asked` reaches questions' reactor through a real event log, as on a server.
+  const events = eventHost(() => opened.harness, 'questions')
+  openers.push(async () => void (await events.start()))
+  closers.push(async () => void (await events.stop()))
   const host = {
     ...prepared,
     userHome: home,
@@ -50,6 +56,8 @@ async function fixture() {
     doc: () => undefined,
     onOpen: (fn: () => Promise<void>) => openers.push(fn),
     onClose: (fn: () => Promise<void>) => closers.push(fn),
+    emit: events.emit,
+    react: events.react,
     notice: (message: string) => {
       throw new Error(message)
     },
@@ -59,6 +67,9 @@ async function fixture() {
     askSummaryModel,
     accountResponse,
   } satisfies Partial<ConversationsService>)
+  // Board's core dependencies: no standing agents to list, no worktrees.
+  services.set('subagents', { residents: async () => [] } satisfies Partial<SubagentsService>)
+  services.set('workspaces', { doc: Workspaces })
   prepared.registry.install(boardExtension(host))
   const extension = questionsExtension(host)
   let beforeCommit: ReturnType<typeof gate> | undefined
@@ -137,13 +148,16 @@ async function fixture() {
   await open()
   const log = () => opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context)
   const state = () => opened.harness.snapshot(BoardQuestions, ROOT_CONVERSATION_ID, context)
+  // Settled: every event reacted to and every task done.
   const settled = () =>
-    until(() =>
-      opened.harness.commit(
-        async (tx) =>
-          (await tx.scanTasks({}, 1000)).items.every((task) => task.state.status === 'terminal'),
-        context,
-      ),
+    until(
+      async () =>
+        (await events.settled()) &&
+        (await opened.harness.commit(
+          async (tx) =>
+            (await tx.scanTasks({}, 1000)).items.every((task) => task.state.status === 'terminal'),
+          context,
+        )),
     )
   const send = async (extra = {}) => {
     // Only @ultimate may message the user, so the root stands in for it while it sends.
@@ -242,8 +256,8 @@ it('extracts once only for reply-expected agent messages to the user', async () 
     requested: [id],
     asked: { [id]: [{ text: 'Keep it running?', kind: 'confirm' }] },
   })
-  const message = (await f.log())!.messages.find((m) => m.id === id)!
-  await f.opened.harness.commit((tx) => f.host.want(QuestionsApi)!.request(tx, message), context)
+  // The event again, as if delivered twice: the message was requested already.
+  await f.opened.harness.commit((tx) => emit(tx, Asked, { message: id, from: 1 }), context)
   await f.settled()
   expect(f.extract).toHaveBeenCalledTimes(1)
 })

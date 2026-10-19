@@ -101,8 +101,9 @@ async function fixture(
     metadata: Metadata,
     emit,
     harness: () => opened.harness,
-    implement: (_api: unknown, value: BoardService) => {
-      service = value
+    // Board also implements workspaces' handoff point; the tests call its own service.
+    implement: (api: { name: string }, value: BoardService) => {
+      if (api.name === 'board') service = value
     },
     want: provider,
     need: provider,
@@ -731,6 +732,20 @@ async function codemodeFixture() {
   await writeFile(
     join(home, 'extensions/codemode/server.ts'),
     `export { default, docs } from ${JSON.stringify(resolve('extensions/codemode/server.ts'))}`,
+  )
+  // Board needs the core's subagents and workspaces; stand-ins with no standing agents and no worktrees.
+  await mkdir(join(home, 'extensions/core-stand-ins'), { recursive: true })
+  await writeFile(
+    join(home, 'extensions/core-stand-ins/server.ts'),
+    `import { SubagentsApi } from ${JSON.stringify(resolve('extensions/subagents/api.ts'))}
+import { WorkspacesApi } from ${JSON.stringify(resolve('extensions/workspaces/api.ts'))}
+import { Workspaces } from ${JSON.stringify(resolve('extensions/workspaces/workspaces.ts'))}
+export default (host) => {
+  host.implement(SubagentsApi, { residents: async () => [] })
+  host.implement(WorkspacesApi, { doc: Workspaces })
+  return { name: 'core-stand-ins' }
+}
+`,
   )
   await writeFile(
     join(home, 'vite.config.ts'),

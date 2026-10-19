@@ -198,6 +198,7 @@ export const actions: Record<string, ExtensionAction> = {
 export default function instanceExtension(
   host: Pick<
     ExtensionHost,
+    | 'need'
     | 'want'
     | 'resource'
     | 'onClose'
@@ -214,10 +215,9 @@ export default function instanceExtension(
     | 'metadata'
   >,
 ) {
-  // Optional services, resolved where they are called; declared here so the catalogue lists them.
+  // Tailscale is optional and resolved where it is called; declared here so the catalogue lists it. Workspaces is core.
   host.want(TailscaleApi)
-  host.want(WorkspacesApi)
-  const service = () => host.want(WorkspacesApi)
+  const workspaces = host.need(WorkspacesApi)
   const instances = running(host)
   const starts = host.resource('instance.starts', () => ({ pending: 0 }))
   const ownSource = host.projectRoot === host.ultimateRoot
@@ -280,7 +280,7 @@ export default function instanceExtension(
                 if (!child) throw new Error(`Unknown subagent: ${args.subagent}`)
                 conversationId = child.conversationId
               }
-              const workspace = await service()?.get(conversationId, context)
+              const workspace = await workspaces.get(conversationId, context)
               if (args.subagent !== undefined && !workspace)
                 throw new Error('Subagent must have an active worktree isolate')
               if (workspace) {

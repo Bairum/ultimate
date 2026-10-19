@@ -58,8 +58,15 @@ export const traceContext = () => storage.getStore()
 
 const LIMIT = 300
 const SECRET = /secret|token|password|key|auth/i
-// Values of these extensions may be secrets, so their calls keep neither arguments nor results.
-const SEALED = new Set(['secrets'])
+// Calls into these extensions carry credentials (secret values; API keys and OAuth codes answering a model login), so
+// they keep no arguments, results or error messages, which may echo them; only the error's class.
+const SEALED = new Set(['secrets', 'models'])
+
+/** What a failed call stored: the error message, or for a call carrying credentials only the error's class. */
+function failure(error: unknown, credentials: boolean) {
+  if (credentials) return error instanceof Error ? error.name : typeof error
+  return error instanceof Error ? error.message : String(error)
+}
 
 /** JSON of `value`, cut at about 300 characters, with values under secret-looking keys replaced. */
 export function summary(value: unknown) {
@@ -93,8 +100,10 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
     reported = true
     console.error('Call trace failed; dropping trace records:', error)
   }
-  /** Running tool calls by task, so a nested call continues its caller's trace. */
-  const tools = new Map<number, { context: TraceContext; extension: string }>()
+  /** The contexts of traced tool runs: the tool's extension, and whether the run has ended. */
+  const toolRuns = new WeakMap<TraceContext, { extension: string; done: boolean }>()
+  /** Running tool calls by `<task>/<call id>`, so a Pi nested call, a task of its own, finds its caller. */
+  const tools = new Map<string, TraceContext>()
 
   function flush() {
     clearTimeout(timer)
@@ -163,7 +172,8 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
     const finish = (ok: boolean, value: unknown) => {
       if (!database) return
       try {
-        const sealed = call.sealed || SEALED.has(call.callee)
+        const credentials = SEALED.has(call.callee)
+        const sealed = call.sealed || credentials
         buffer.push([
           id,
           parent?.parentCall ?? null,
@@ -175,7 +185,7 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
           call.kind,
           call.name,
           ok ? 1 : 0,
-          ok ? null : value instanceof Error ? value.message : String(value),
+          ok ? null : failure(value, credentials),
           (!sealed && summary(call.args)) || null,
           (ok && !sealed && summary(value)) || null,
           context.conversationId ?? null,
@@ -255,10 +265,24 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls (at);`)
           } catch {
             // The task read only labels the row (a test double may not offer it); the call runs regardless.
           }
-          const caller = input?.kind === 'nested' ? tools.get(input.parent) : undefined
+          // A task runs its own call; a tool another tool calls in-process with its api (codemode's `tools.*`) runs
+          // inside its caller's task. Its parent is the enclosing run, a Pi nested call's is its calling tool's run;
+          // either only while that tool runs. Anything else (a model call, a context left by a timer or a commit
+          // after its tool ended) starts a trace.
+          const own =
+            input && (input.kind === 'model' ? input.callId : input.call.id) === api.callId
+              ? input
+              : undefined
+          const enclosing = !own
+            ? traceContext()
+            : own.kind === 'nested'
+              ? tools.get(`${own.parent}/${own.parentCallId}`)
+              : undefined
+          const caller = enclosing && toolRuns.get(enclosing)
+          const parent = caller?.done === false ? enclosing : undefined
           const call: Call = {
             kind: 'tool',
-            caller: caller?.extension ?? 'agent',
+            caller: caller?.done === false ? caller.extension : 'agent',
             callee: extension.name,
             name: tool.name,
             conversationId: api.conversationId,
@@ -269,14 +293,19 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls (at);`)
           return run(
             call,
             async () => {
-              tools.set(api.taskId, { context: traceContext()!, extension: extension.name })
+              const self = traceContext()!
+              const key = `${api.taskId}/${api.callId}`
+              const state = { extension: extension.name, done: false }
+              toolRuns.set(self, state)
+              tools.set(key, self)
               try {
                 return await tool.execute(args, api, context)
               } finally {
-                tools.delete(api.taskId)
+                tools.delete(key)
+                state.done = true
               }
             },
-            caller?.context ?? null,
+            parent ?? null,
           )
         },
       })

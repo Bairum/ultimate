@@ -188,6 +188,31 @@ export interface IntroContribution {
   placeholder?: string
 }
 
+/**
+ * A value one extension's browser code asks for and another provides: the web's extension point. The asking extension
+ * declares it in its `ui.tsx` as `definePoint<Input, Value>('<owner>.<point>')` and renders `<Provided point input>`;
+ * a higher extension imports it and lists `provide(Point, useValue)` under `provides`. Dependencies keep pointing at
+ * the owner, as with a server extension point.
+ */
+export interface Point<Input, Value> {
+  readonly point: string
+  /** Phantom: carries the input type; never set at runtime. */
+  readonly input?: Input
+  /** Phantom: carries the value type; never set at runtime. */
+  readonly value?: Value
+}
+export const definePoint = <Input, Value>(point: string): Point<Input, Value> => ({ point })
+
+/** What a facet provides for a point: `useValue` is a hook, run once per `<Provided>` with its input. */
+export interface Provision {
+  point: string
+  use: (input: never) => unknown
+}
+export const provide = <Input, Value>(
+  point: Point<Input, Value>,
+  useValue: (input: Input) => Value,
+): Provision => ({ point: point.point, use: useValue })
+
 /** The browser facet of an extension: `extensions/<name>/web.tsx` default-exports one. */
 export interface WebExtension {
   slots?: Partial<Record<SlotName, Contribution | readonly Contribution[]>>
@@ -215,6 +240,8 @@ export interface WebExtension {
   /** Document renderers; a later facet wins a kind. */
   documents?: readonly DocumentContribution[]
   commands?: readonly CommandContribution[]
+  /** Values for other extensions' points; the last facet in discovery order providing a point wins. */
+  provides?: readonly Provision[]
 }
 
 export function defineWebExtension(extension: WebExtension): WebExtension {

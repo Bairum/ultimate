@@ -3,8 +3,7 @@
  * conclude and resume conversations and pick the summary model. Browser-safe.
  */
 import { actionRef, docRef } from '../../shared/extension-api.ts'
-import type { WorkspacePending } from '../workspaces/types.ts'
-import type { OverviewState } from './types.ts'
+import type { KeptWork, OverviewState } from './types.ts'
 
 /** The effective `summaryModel` setting and where it comes from. */
 export type SummaryModelSetting = {
@@ -29,7 +28,7 @@ export const RenameAction = actionRef<{ id: number; title: string }, { ok: boole
  */
 export const ConcludeAction = actionRef<
   { ids: number[] },
-  { concluded: number[]; kept: WorkspacePending[] }
+  { concluded: number[]; kept: KeptWork[] }
 >('conversations', 'conclude')
 /** `{ ids }` → `{ resumed }`: resume these conversations and their ancestors; `resumed` lists the ones concluded before. */
 export const ResumeAction = actionRef<{ ids: number[] }, { resumed: number[] }>(

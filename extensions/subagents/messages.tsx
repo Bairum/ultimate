@@ -3,9 +3,8 @@ import { ArrowLeftIcon, BotIcon, SquareArrowOutUpRightIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
-import { events, useEvent, useConversation, useUltimate } from '@/sdk'
-import { ConversationRef } from '../conversations/ui.tsx'
-import { TaskChip, useTaskOf } from '../plan/ui.tsx'
+import { events, Provided, useEvent, useConversation, useUltimate } from '@/sdk'
+import { ConversationRef, ConversationTask } from '../conversations/ui.tsx'
 import { useWorkspaceConversations } from '../workspaces/ui.tsx'
 import type { AgentOrigin } from './message-types.ts'
 import { openAgentSource } from './ui.tsx'
@@ -55,7 +54,6 @@ export function AgentInput({ entry }: { entry: EntryRecord }) {
   const id = useConversation((conversation) => conversation.id)
   const { switchConversation } = useUltimate()
   const conversations = useWorkspaceConversations()
-  const task = useTaskOf(origin?.sender)
   const sender = conversations.find((conversation) => conversation.id === origin.sender)
   const body = origin.body
   return (
@@ -68,7 +66,9 @@ export function AgentInput({ entry }: { entry: EntryRecord }) {
         <span className="min-w-0 text-foreground">
           <Sender origin={origin} label={sender?.label} />
         </span>
-        {task && <TaskChip task={task} />}
+        <Provided input={origin?.sender} point={ConversationTask}>
+          {(task) => task?.chip}
+        </Provided>
         <span>{origin.kind === 'instruction' ? 'instruction' : 'report'}</span>
         <button
           disabled={!sender}

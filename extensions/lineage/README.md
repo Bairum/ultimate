@@ -11,8 +11,9 @@ document, tools and model-facing text, where agents and stored entries already u
   activity. The fork happens before the tree root receives a model-visible `lineage.branched` prompt node
   `{ branch, at, intent, images?, from? }`, so the branch does not inherit its own prompt twice. `from` is present
   when the source is not the root; that source also gets a display-only marker. The forking commit emits the durable
-  event `lineage.branched` `{ id, from, at, intent }` (`Branched` in `api.ts`); conversations reacts to it by marking
-  the intent title as generated. Plan reads `Branch` (also in `api.ts`) and empties the inherited plan in the commit
+  event `lineage.branched` `{ id, from, at, intent }` (`Branched` in `api.ts`); lineage's own `named` reactor (for it
+  and `lineage.rooted`) has conversations mark the intent title as generated (`generatedTitle`). Lineage provides
+  conversations' `conversations.trees` point (`rootOf`, `branchOf`, `abstract`) that summaries use. Plan reads `Branch` (also in `api.ts`) and empties the inherited plan in the commit
   that places the branch's first input.
 - **Roots**: doc `lineage.roots` on conversation 1 (`{ roots }`, initially `[1]`) lists the roots. Clients stream it
   (`useRoots()` in `roots.tsx`). Root lookup walks owners and fork sources to a listed root; conversations outside
@@ -36,7 +37,7 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   `origin`, a landing's `compare` is `https://github.com/<owner>/<repo>/compare/<base>...<sha>`; a note from before
   landings recorded `base` uses the landing before it, which is where the lander's serial queue left the target.
   Catch-up notes and abstracts are left out. The sidebar's root row shows the landings.
-  `github` → `https://github.com/<owner>/<repo>` or null: the root page's landing cards link the same range.
+  Workspaces' `github` action gives the root page's landing cards the same range.
   `compact` `{ id, instructions? }` → `{ taskId }` starts the same compaction as `compact_tally`, for the root row's menu
   and the palette's Compact command on a root.
 - **Tally**: conversation-scoped doc `lineage.tally` (latest history) holds
@@ -121,7 +122,8 @@ including its standing-agent name when available.
 The user talks to @ultimate in its own conversation, opened by the top-bar @ultimate button or first sidebar row; it picks a root by reading tallies and starts coordinator branches.
 There is no manual creation page or message-hover branch action. Coordinator branches keep their composers for steering.
 
-An empty root shows the **Start here** card (`survey.tsx`): an optional focus and **Set up with @ultimate**.
+An empty root shows what the `EmptyRoot` point (`ui.tsx`) provides: onboarding's **Start here** card
+(`onboarding/survey.tsx`), an optional focus and **Set up with @ultimate**.
 This calls user action `onboarding.start` with that root and the focus verbatim as instructions, then opens @ultimate.
 Once started, it shows only a quiet **@ultimate is setting up this project · open** link from `onboarding.starts`.
 @ultimate reads the project and writes its first tally with `seed_tally` before starting work.

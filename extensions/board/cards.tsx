@@ -15,6 +15,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import {
   cn,
   events,
+  Provided,
   useChat,
   useConversation,
   useConversations,
@@ -24,7 +25,6 @@ import {
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import { AgentMark, ConversationRef } from '../conversations/ui.tsx'
-import { MessageQuestions } from '../questions/ui.tsx'
 import { openAgentSource, StandingDoc } from '../subagents/ui.tsx'
 import { useWorkspaceIndex } from '../workspaces/ui.tsx'
 import { accentOf } from './accent.tsx'
@@ -39,6 +39,14 @@ import {
 } from './data.tsx'
 import { BoardDoc } from './refs.ts'
 import type { BoardMessage } from './refs.ts'
+import { MessageAnswers } from './ui.tsx'
+
+/** What an optional extension shows under a message to the user: questions' answer card. */
+const Answers = ({ message }: { message: BoardMessage }) => (
+  <Provided input={message} point={MessageAnswers}>
+    {(answers) => answers}
+  </Provided>
+)
 
 /** Who `id` is: you, `@name` for a standing agent or the lander (with its mark when `mark`), else a conversation link. */
 export function Address({ id, mark = false }: { id: number | 'user'; mark?: boolean }) {
@@ -202,7 +210,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
         running={call.status !== 'done'}
         text={text ?? ''}
       >
-        {message && <MessageQuestions message={message} />}
+        {message && <Answers message={message} />}
       </ChatBubble>
     )
   const state = outgoingState(message, toUser, call.status !== 'done')
@@ -246,7 +254,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
         </p>
       )}
       <Body text={text ?? ''} />
-      {message && <MessageQuestions message={message} />}
+      {message && <Answers message={message} />}
     </section>
   )
 }
@@ -436,7 +444,7 @@ function ScriptMessages({
       running={false}
       text={message.text}
     >
-      <MessageQuestions message={message} />
+      <Answers message={message} />
     </ChatBubble>
   ))
   if (shown.some((block) => block.name !== 'codemode'))

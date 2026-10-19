@@ -33,8 +33,8 @@ the agent should wait for an `onboarding.choice` input before continuing.
 The tool renderer shows a quiet, transcript-width card:
 
 - **Extensions:** recommended extensions as checkboxes, initially checked unless the user's settings disable them.
-  `subagents`, `board`, `lineage` and `onboarding` stay checked and disabled with "needed by @ultimate": turning them
-  off would cut off the agent and its setup cards. Dependencies are checked with their extension (`automations` needs
+  Core-tier extensions (`ExtensionInfo.core`, such as `subagents`, `board`, `lineage`, `onboarding` and `documents`)
+  stay checked and disabled with "core, always on": the server keeps them enabled whatever the settings say. Dependencies are checked with their extension (`automations` needs
   `subagents`, `parallel` needs `secrets`).
   Continue applies user-global choices with `applyFirstRun`. Both checked and unchecked choices are saved explicitly;
   project settings can still override user settings.
@@ -70,8 +70,9 @@ The Git status is read again whenever the shown conversation finishes a run, inc
 
 The right-panel tab (palette **Extensions…**) shows the project decision, a way to change it, Use this project's setup
 everywhere, and every extension with its source, deciding layer, README line and switch. Switches save to this project
-(when its setup is in use) or everywhere. Turning off `agent` or `onboarding` asks first, because the panel goes with
-them. Failures show on the row; the list follows system info.
+(when its setup is in use) or everywhere. A core-tier extension's switch stays on and disabled, its deciding layer
+reads `core`: the server keeps the core tier enabled whatever the settings say. Failures show on the row; the list
+follows system info.
 
 ## Actions
 

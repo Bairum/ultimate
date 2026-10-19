@@ -14,6 +14,9 @@ import { createServer, prepareServer } from '../server/main.ts'
 import type { ServerOptions } from '../server/main.ts'
 import type { ServerEvents, SystemInfo } from '../shared/protocol.ts'
 import type { Api } from '../shared/extension-api.ts'
+import type { EventData, EventToken } from '../shared/events.ts'
+import { eventLog } from '../server/events.ts'
+import type { Reactor } from '../server/events.ts'
 
 vi.mock('@earendil-works/pi-ai/providers/faux', async (importOriginal) => {
   const original = await importOriginal<typeof import('@earendil-works/pi-ai/providers/faux')>()
@@ -28,6 +31,13 @@ vi.mock('@earendil-works/pi-ai/providers/faux', async (importOriginal) => {
  * `implement`, `need` and `want` over a plain map, for extension hosts built by hand. `need` resolves the provider on
  * each member access like the real handle, so a fixture may implement an API after its consumer took the handle.
  */
+/**
+ * `need` for a hand-built host whose core services stay out of the test: every method resolves undefined, as a worktree
+ * lookup for a conversation without one does.
+ */
+export const idleNeed = <S>(_api: Api<string, S>) =>
+  new Proxy({}, { get: (_, key) => (key === 'then' ? undefined : async () => undefined) }) as S
+
 export function apis(provided = new Map<string, unknown>()) {
   return {
     provided,
@@ -40,6 +50,28 @@ export function apis(provided = new Map<string, unknown>()) {
           get: (_, key) => (provided.get(api.name) as Record<string | symbol, unknown>)?.[key],
         },
       ) as S,
+  }
+}
+
+/**
+ * A real event log for a hand-built host over `harness`: `emit`, and `react` as extension `name` registers reactors,
+ * which run from `start()` (each harness open) until `stop()`. `settled()` holds once every event is handled.
+ */
+export function eventHost(harness: () => Harness, name: string) {
+  const log = eventLog(harness, (_call, work) => work())
+  const reactors: ReturnType<typeof log.reactor>[] = []
+  return {
+    emit: log.emit,
+    react: <T extends EventToken>(
+      reactor: string,
+      events: readonly T[],
+      handler: Reactor<EventData<T>>,
+    ) => void reactors.push(log.reactor(`${name}/${reactor}`, events, handler)),
+    eventLog: log.eventLog,
+    start: () => Promise.all(reactors.map((reactor) => reactor.start())),
+    stop: () => Promise.all(reactors.map((reactor) => reactor.stop())),
+    settled: async () =>
+      (await log.eventLog.reactors()).every((reactor) => reactor.lag === 0 && !reactor.failure),
   }
 }
 

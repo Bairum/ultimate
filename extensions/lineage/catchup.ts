@@ -34,12 +34,10 @@ async function mainOf(
   ctx: Context,
   tx?: Tx,
 ): Promise<Main | undefined> {
-  const service = host.want(WorkspacesApi)
-  const workspace = service
-    ? tx
-      ? (await tx.doc(service.doc, ROOT_CONVERSATION_ID)).items[String(id)]
-      : await service.get(id, ctx)
-    : undefined
+  const service = host.need(WorkspacesApi)
+  const workspace = tx
+    ? (await tx.doc(service.doc, ROOT_CONVERSATION_ID)).items[String(id)]
+    : await service.get(id, ctx)
   const cwd = workspace?.source ?? host.projectRoot
   // A shared conversation follows the branch the project checkout is on, like a workspace's target.
   const target =

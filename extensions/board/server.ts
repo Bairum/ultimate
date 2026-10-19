@@ -24,15 +24,14 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { QuestionsApi } from '../questions/api.ts'
-import { WorkspacesApi } from '../workspaces/api.ts'
+import { Handoff, WorkspacesApi } from '../workspaces/api.ts'
 import { isolatable } from '../../lib/git.ts'
 
 import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import { primaryAgent } from '../../lib/machine.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { LineageApi, Roots } from '../lineage/api.ts'
-import { Board, BoardApi } from './api.ts'
+import { Asked, Board, BoardApi } from './api.ts'
 import type { BoardMessage } from './api.ts'
 export const docs = [Board]
 // The receipt commits with the message, closing the gap before api.memo records its id.
@@ -96,7 +95,7 @@ function delivery(host: ExtensionHost) {
   const refresh = async (id: number, ctx: Context) => {
     const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
     const name = Object.keys(index ?? {}).find((candidate) => index![candidate] === id)
-    if (name !== undefined) await host.want(SubagentsApi)?.standing(name, ctx)
+    if (name !== undefined) await host.need(SubagentsApi).standing(name, ctx)
   }
   return defineTask<
     { message: BoardMessage; steer: boolean; note: boolean; fromLabel: string; toLabel: string },
@@ -360,21 +359,18 @@ async function parentOf(host: ExtensionHost, id: number, ctx: Context) {
     : undefined
 }
 async function lander(host: ExtensionHost, ctx: Context) {
-  const service = host.want(WorkspacesApi)
-  if (!service) return undefined
   const checkout = await isolatable(host.projectRoot)
   if ('reason' in checkout) return undefined
-  return (await host.harness().snapshot(service.doc, ROOT_CONVERSATION_ID, ctx))
+  return (await host.harness().snapshot(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID, ctx))
     ?.landerConversations[checkout.source]
 }
 async function senderName(host: ExtensionHost, id: number | 'user', ctx: Context) {
   if (id === 'user') return 'user'
   const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
   const name = Object.keys(index ?? {}).find((candidate) => index?.[candidate] === id)
-  const workspaces = host.want(WorkspacesApi)
-  const workspace = workspaces
-    ? await host.harness().snapshot(workspaces.doc, ROOT_CONVERSATION_ID, ctx)
-    : undefined
+  const workspace = await host
+    .harness()
+    .snapshot(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID, ctx)
   const label =
     name ??
     (Object.values(workspace?.landerConversations ?? {}).includes(id) ? 'lander' : undefined)
@@ -385,13 +381,13 @@ async function resolve(host: ExtensionHost, to: string, from: number | 'user', c
   let id: number | undefined
   if (to === '@lander') id = await lander(host, ctx)
   else if (to.startsWith('@')) {
-    const service = host.want(SubagentsApi)
-    const valid = (await service?.residents(ctx)) ?? []
+    const service = host.need(SubagentsApi)
+    const valid = await service.residents(ctx)
     if (!valid.some((item) => `@${item.name}` === to))
       throw new Error(
         `Unknown address ${to}. Valid standing agents: ${valid.map((item) => `@${item.name}`).join(', ') || '(none)'}`,
       )
-    id = await service!.standing(to.slice(1), ctx)
+    id = await service.standing(to.slice(1), ctx)
   } else if (/^#?\d+$/.test(to)) id = Number(to.replace('#', ''))
   if (id === undefined) throw new Error(`No recipient for ${to}`)
   if (id === from) throw new Error('You cannot message yourself')
@@ -495,7 +491,7 @@ async function send(
       ...(callId === undefined ? {} : { call: callId }),
     })
     if (to === 'user' && message.reply && from !== 'user')
-      await host.want(QuestionsApi)?.request(tx, message)
+      await host.emit(tx, Asked, { message: message.id, from })
     if (to !== 'user')
       await tx.createTask(
         delivery(host),
@@ -519,7 +515,7 @@ async function send(
 }
 export const actions = {
   async addresses(_args: unknown, { host }: ActionContext) {
-    const agents = (await host.want(SubagentsApi)?.residents(BACKGROUND_CONTEXT)) ?? []
+    const agents = await host.need(SubagentsApi).residents(BACKGROUND_CONTEXT)
     const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)
     const conversations = host
       .conversations()
@@ -537,11 +533,10 @@ export const actions = {
   },
 }
 export default function board(host: ExtensionHost) {
-  // Optional services, resolved where they are called; declared here so the catalogue lists them.
-  host.want(LineageApi)
-  host.want(QuestionsApi)
-  host.want(SubagentsApi)
-  host.want(WorkspacesApi)
+  // Core, always on; resolved where they are called, declared here so the catalogue lists them.
+  host.need(LineageApi)
+  host.need(SubagentsApi)
+  host.need(WorkspacesApi)
   host.implement(BoardApi, {
     answer: async (messageId, text, ctx) => {
       const log = await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, ctx)
@@ -558,6 +553,11 @@ export default function board(host: ExtensionHost) {
         messageId,
       )
     },
+    send: (from, input, requestId, ctx) =>
+      send(host, from, input, ctx, undefined, undefined, requestId),
+  })
+  // The lander's deploy handoff, through workspaces' extension point, so workspaces depends on no board.
+  host.implement(Handoff, {
     send: (from, input, requestId, ctx) =>
       send(host, from, input, ctx, undefined, undefined, requestId),
   })
@@ -621,7 +621,7 @@ export default function board(host: ExtensionHost) {
         const parent = await parentOf(host, input.conversationId, ctx)
         if (parent !== undefined)
           return `Use message only to update #${parent}, the conversation that started you, while you work; your final answer reaches it anyway. One-way updates (reply: false) reach #${parent} as notes it reads with its next input; ask with reply: true when you need its answer to continue.`
-        const agents = (await host.want(SubagentsApi)?.residents(ctx)) ?? []
+        const agents = await host.need(SubagentsApi).residents(ctx)
         const primary = primaryAgent(host.projectRoot, host.userHome)
         return `Use message to contact #id or @name. Only @${primary} messages user; send it updates with reply: false to relay. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
       }),
@@ -641,8 +641,7 @@ export default function board(host: ExtensionHost) {
         async execute(input, api, ctx) {
           let id = await api.memo<number>('branch-id', ctx)
           if (id === undefined) {
-            const lineage = host.want(LineageApi)
-            if (!lineage) throw new Error('Branches require lineage')
+            const lineage = host.need(LineageApi)
             const roots =
               (await host.harness().snapshot(Roots, ROOT_CONVERSATION_ID, ctx))?.roots ?? []
             const root =

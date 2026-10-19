@@ -15,16 +15,19 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { api, cn, useUltimate } from '@/sdk'
-import { FeatureTag } from './feature.tsx'
-import { TaskChip, useTaskOf } from '../plan/ui.tsx'
-import { PhaseLabel, usePhase } from '../phase/ui.tsx'
+import { api, cn, Provided, useUltimate } from '@/sdk'
+import {
+  AgentMark,
+  agentTitle,
+  ConversationPhase,
+  ConversationTask,
+  FeatureTag,
+  RenameAction,
+} from '../conversations/ui.tsx'
+import type { Presence } from '../conversations/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
-import type { Assessment, OverviewRow } from './types.ts'
-import { ago } from './ago.ts'
-import { RenameAction } from './refs.ts'
-import { AgentMark, agentTitle } from './marks.tsx'
-import type { Presence } from './marks.tsx'
+import type { Assessment, OverviewRow } from '../conversations/types.ts'
+import { ago } from './lander.tsx'
 
 export function currentAssessment(row: OverviewRow | undefined) {
   return row?.runState === 'answered' &&
@@ -85,20 +88,7 @@ function Mark({
   )
 }
 
-/** One top-level conversation: click shows it; the menu renames, clears, concludes or resumes it. */
-export function Row({
-  conversation,
-  shown,
-  draft,
-  working,
-  unseen,
-  concluded,
-  now,
-  onConclude,
-  feature,
-  assessment,
-  activity,
-}: {
+type RowProps = {
   conversation: ConversationSummary
   shown: boolean
   draft: boolean
@@ -110,9 +100,32 @@ export function Row({
   assessment?: Assessment
   activity?: string
   feature?: string
-}) {
-  const phase = usePhase(conversation.id)
-  const displayPhase = working ? phase : undefined
+}
+
+/** One top-level conversation: click shows it; the menu renames, clears, concludes or resumes it. */
+export function Row(props: RowProps) {
+  return (
+    <Provided input={props.working ? props.conversation.id : undefined} point={ConversationPhase}>
+      {(phase) => <PhasedRow {...props} displayPhase={phase} />}
+    </Provided>
+  )
+}
+
+/** A row with its working phase, when one is known: the phase line makes the row taller. */
+function PhasedRow({
+  conversation,
+  shown,
+  draft,
+  working,
+  unseen,
+  concluded,
+  now,
+  onConclude,
+  feature,
+  assessment,
+  activity,
+  displayPhase,
+}: RowProps & { displayPhase?: { label: ReactNode } }) {
   const hasActivity = !!(displayPhase || activity)
   // One indicator per row: the phase line's pulsing dot, else the leading mark's while no phase is known yet.
   const markWorking = displayPhase ? undefined : working
@@ -228,11 +241,7 @@ export function Row({
           )}
           {hasActivity && (
             <span className="flex w-full min-w-0 items-center gap-1 pr-5 pl-[18px] text-[11px] leading-4 text-muted-foreground/70">
-              {displayPhase && (
-                <span className="shrink-0 text-brand">
-                  <PhaseLabel phase={displayPhase} />
-                </span>
-              )}
+              {displayPhase && <span className="shrink-0 text-brand">{displayPhase.label}</span>}
               {displayPhase && activity && <span>·</span>}
               {activity && <span className="truncate">{activity}</span>}
             </span>
@@ -379,17 +388,24 @@ function CompactItem({ conversation }: { conversation: ConversationSummary }) {
   )
 }
 
-export function ChildRow({
+type ChildRowProps = { conversation: ConversationSummary; row?: OverviewRow; shown: boolean }
+
+/** A subagent under its conversation; one working on a plan task leads with its chip and shows the task's title. */
+export function ChildRow(props: ChildRowProps) {
+  return (
+    <Provided input={props.conversation.id} point={ConversationTask}>
+      {(task) => <TaskedChildRow {...props} task={task} />}
+    </Provided>
+  )
+}
+
+function TaskedChildRow({
   conversation,
   row,
   shown,
-}: {
-  conversation: ConversationSummary
-  row?: OverviewRow
-  shown: boolean
-}) {
+  task,
+}: ChildRowProps & { task?: { chip: ReactNode; title: string } }) {
   const actions = useUltimate()
-  const task = useTaskOf(conversation.id)
   const working = conversation.busy || row?.runState === 'working'
   const state = working
     ? 'Working'
@@ -418,7 +434,7 @@ export function ChildRow({
           unseen={false}
           working={working ? 'self' : undefined}
         />
-        {task && <TaskChip task={task} />}
+        {task?.chip}
         <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-foreground/80">
           {conversation.label ?? 'Agent'} · #{conversation.id}
         </span>

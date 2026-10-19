@@ -32,10 +32,10 @@ import type {
   LanderEntry,
   LanderOutcome,
   LanderStep,
-  LandingSubject,
   SubmitResult,
   WorkspaceIndex,
 } from './types.ts'
+import type { ConversationSubject } from '../conversations/types.ts'
 
 const short = (sha: string) => sha.slice(0, 7)
 const time = (at: number) => formatTime(at, true)
@@ -422,7 +422,7 @@ export function LanderAskEntry({ entry }: { entry: EntryRecord }) {
 
 type Submission = {
   conversationId?: number
-  subject?: LandingSubject
+  subject?: ConversationSubject
   tip: string
   target: string
   steps: readonly LanderStep[]

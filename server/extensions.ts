@@ -2,8 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { compareExtensions, discoverExtensions } from './discovery.ts'
 import { decisionRoot, projectSetup, projectSettings, projectDiagnostics } from './project-setup.ts'
-import { createEventBus, ProjectTrustStore } from '@earendil-works/pi-coding-agent'
-import type { EventBus } from '@earendil-works/pi-coding-agent'
+import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { discoveryRoots, projects } from './project.ts'
 import type { ProjectInfo } from './project.ts'
 import { extensionSettingsFiles } from './extension-settings.ts'
@@ -26,9 +25,6 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { AgentDoc } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { Access } from './request-security.ts'
-import { serviceRegistry } from './services.ts'
-import type { ServiceStatus, ServiceHandle } from './services.ts'
-import { reportCore } from './supervisor-protocol.ts'
 import { EventFeed, eventLog } from './events.ts'
 import type { EventHost } from './events.ts'
 import { extensionApis } from './extension-apis.ts'
@@ -55,12 +51,8 @@ export type ExtensionHost = Pick<
   | 'skills'
   | 'restart'
 > & {
-  /** Process-local Pi bus, shared across facets and reloads. Events are ephemeral, not bridged to the browser. */
-  events: EventBus
   access: Pick<Access, 'allow'>
   notice(message: string): void
-  /** Ephemeral terminal status, scoped to this facet; staged until installation succeeds. */
-  service(name: string, status: ServiceStatus): ServiceHandle
   provide(name: string, value: unknown): void
   // oxlint-disable-next-line typescript/no-unnecessary-type-parameters
   use<T>(name: string): T | undefined
@@ -139,16 +131,10 @@ export async function loadExtensions(
   watch: Watch,
   notice: (message: string) => void = () => {},
 ) {
-  // Events belong to this host, not every host opened in the process.
-  const events = createEventBus()
   const trace = callTrace(join(host.home, 'trace.sqlite'))
   const log = eventLog(runtime.harness, trace.run)
   const roots = discoveryRoots(host.ultimateRoot, host.projectRoot, host.userHome)
   const directories = roots.map((root) => join(root.path, 'extensions'))
-  const services = serviceRegistry((snapshot) =>
-    reportCore({ type: 'services', services: snapshot }),
-  )
-  const facetServices = new Map<ExtensionHost, ReturnType<typeof services.scope>>()
   const provided = new Map<ExtensionHost, Map<string, unknown>>()
   const providers = new Map<string, { owner: ExtensionHost; value: unknown }>()
   const facetHosts = new Map<string, ExtensionHost>()
@@ -156,7 +142,8 @@ export async function loadExtensions(
   const facetOpeners = new Map<ExtensionHost, Set<() => Promise<void>>>()
   const facetReleasers = new Map<ExtensionHost, Set<() => Promise<void>>>()
   const facetCleanups = new Map<ExtensionHost, Set<() => Promise<void>>>()
-  const facetNotices = new Map<ExtensionHost, Set<string>>()
+  /** Each facet's distinct notice messages, and whether each is recorded as an event yet. */
+  const facetNotices = new Map<ExtensionHost, Map<string, boolean>>()
   const extensionOf = (facetHost: ExtensionHost) =>
     [...facetHosts].find(([, current]) => current === facetHost)?.[0]
   const apis = extensionApis(
@@ -177,8 +164,6 @@ export async function loadExtensions(
   const dispose = async (facetHost: ExtensionHost | undefined) => {
     if (!facetHost) return
     apis.dispose(facetHost)
-    facetServices.get(facetHost)?.dispose()
-    facetServices.delete(facetHost)
     for (const [name, service] of providers) if (service.owner === facetHost) providers.delete(name)
     provided.delete(facetHost)
     for (const stop of subscriptions.get(facetHost) ?? []) stop()
@@ -198,7 +183,6 @@ export async function loadExtensions(
     facetNotices.delete(facetHost)
   }
   const scope = (name: string): ExtensionHost => {
-    const serviceScope = services.scope(name)
     const stops = new Set<() => void>()
     let sharedResource = false
     const facetHost = {
@@ -212,11 +196,14 @@ export async function loadExtensions(
       need: <S>(api: Api<string, S>): S =>
         apis.need(facetHost, name, api, facetHosts.get(name) !== facetHost),
       want: <S>(api: Api<string, S>): S | undefined => apis.want(facetHost, name, api),
-      service: (serviceName, status) => serviceScope.service(serviceName, status),
       notice: (message) => {
         // Each distinct message once per facet load: a notice raised by a commit watcher cannot loop through its event.
-        if (open && facetNotices.get(facetHost)?.has(message) === false) log.notice(name, message)
-        facetNotices.get(facetHost)!.add(message)
+        // One raised while storage is closed is recorded when it opens.
+        const messages = facetNotices.get(facetHost)!
+        if (!messages.has(message)) {
+          messages.set(message, open)
+          if (open) log.notice(name, message)
+        }
         notice(message)
         void changed()
       },
@@ -266,26 +253,13 @@ export async function loadExtensions(
         facetHost.onRelease(reactor.stop)
         stops.add(reactor.stop)
       },
-      events: {
-        emit: (channel, data) => events.emit(channel, data),
-        on: (channel, handler) => {
-          const unsubscribe = events.on(channel, handler)
-          const stop = () => {
-            unsubscribe()
-            stops.delete(stop)
-          }
-          stops.add(stop)
-          return stop
-        },
-      },
     } satisfies ExtensionHost
     provided.set(facetHost, new Map())
-    facetServices.set(facetHost, serviceScope)
     subscriptions.set(facetHost, stops)
     facetOpeners.set(facetHost, new Set())
     facetReleasers.set(facetHost, new Set())
     facetCleanups.set(facetHost, new Set())
-    facetNotices.set(facetHost, new Set())
+    facetNotices.set(facetHost, new Map())
     return facetHost
   }
   const actions = new Map<string, Record<string, ExtensionAction>>()
@@ -347,7 +321,6 @@ export async function loadExtensions(
         throw new Error(`${name}/${action} is a user-only action`)
       return invoke(name, action, args, signal, conversationId, 'agent')
     },
-    events,
     emit: log.emit,
     react: () => {
       throw new Error('Reactors require a facet scope')
@@ -369,9 +342,6 @@ export async function loadExtensions(
     },
     catalogue: () => apis.catalogue(),
     trace: trace.reader,
-    service: () => {
-      throw new Error('Services require a facet scope')
-    },
     access: runtime.access,
     notice,
     resource: <T>(key: string, create: () => T) => {
@@ -510,13 +480,16 @@ export async function loadExtensions(
       ...[...settings.overrides.keys()]
         .filter((name) => !folders.includes(name))
         .map((name) => `Unknown extension: ${name}`),
+      ...winners
+        .filter((winner) => winner.core && settings.overrides.get(winner.name) === false)
+        .map((winner) => `${winner.name} is core and stays enabled; extensions.disable ignores it`),
     ]
     const signature = JSON.stringify([settings.contents, folders, diagnostics])
     if (signature !== previousSettings) {
       for (const message of diagnostics) notice(message)
       previousSettings = signature
     }
-    for (const { name, path, source, enabled, files, error: discoveryError } of winners) {
+    for (const { name, path, source, enabled, files, core, error: discoveryError } of winners) {
       const previous = records.get(name)
       host.extensionSources.set(name, source)
       const layer = settings.layers.get(name) ?? (source === 'builtin' ? 'default' : 'folder')
@@ -532,6 +505,7 @@ export async function loadExtensions(
         path,
         source,
         enabled,
+        ...(core ? { core } : {}),
         layer,
         actions: Object.keys(actions.get(name) ?? {}),
         readme,
@@ -567,7 +541,6 @@ export async function loadExtensions(
           for (const [key, value] of provided.get(facetHost)!)
             providers.set(key, { owner: facetHost, value })
           await dispose(previousHost)
-          facetServices.get(facetHost)!.activate()
           if (open) await Promise.all([...facetOpeners.get(facetHost)!].map(runOpener))
           actions.set(name, exportedActions)
           userActions.set(name, exportedUserActions)
@@ -741,7 +714,7 @@ export async function loadExtensions(
       diagnostics: () => [
         ...new Set([
           ...diagnostics,
-          ...[...facetNotices.values()].flatMap((messages) => [...messages]),
+          ...[...facetNotices.values()].flatMap((messages) => [...messages.keys()]),
           ...apis.missing(),
           ...projectDiagnostics(host.projectRoot, host.userHome),
         ]),
@@ -759,20 +732,22 @@ export async function loadExtensions(
     async opened() {
       trace.open()
       open = true
-      services.visible(true)
+      for (const [name, facetHost] of facetHosts)
+        for (const [message, recorded] of facetNotices.get(facetHost) ?? [])
+          if (!recorded) {
+            log.notice(name, message)
+            facetNotices.get(facetHost)!.set(message, true)
+          }
       await Promise.all([...openers].map(runOpener))
     },
-    services: services.snapshot,
     /** The harness is about to close: run the `onRelease` callbacks. */
     async released() {
-      services.visible(false)
       open = false
       await Promise.all([...releasers].map(runReleaser))
       trace.close()
     },
     async close() {
       closed = true
-      services.visible(false)
       unwatch()
       await chain
       for (const facetHost of subscriptions.keys()) await dispose(facetHost)

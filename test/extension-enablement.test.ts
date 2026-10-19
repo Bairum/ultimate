@@ -102,28 +102,20 @@ it.concurrent('orders facets by source so a project bash tool and renderer win r
 
 const serviceFacet = (detail: string, fail = false) => `
 import { defineExtension } from '@earendil-works/pi-durable'
-export const actions = { lookup: async (_args, { host }) => host.use('service-test'), stale: async (_args, { host }) => {
-  const saved = host.resource('service-test:handles', () => [])
-  saved[0].update({ state: 'error', detail: 'stale update' })
-  saved[0].dispose()
-} }
+export const actions = { lookup: async (_args, { host }) => host.use('service-test') }
 export default (host) => {
   host.provide('service-test', { detail: '${detail}' })
-  const status = host.service('worker', { state: 'starting', detail: '${detail}' })
-  host.resource('service-test:handles', () => []).push(status)
   ${fail ? "throw new Error('failed service installation')" : ''}
-  host.onOpen(async () => status.update({ state: 'ready', detail: '${detail}' }))
+  host.onOpen(async () => {})
   return defineExtension({ name: 'service-test' })
 }`
-it.concurrent('stages service rows, preserves them on failed reload and removes stale handles on replacement and disable', async () => {
+it.concurrent('keeps the provider on a failed reload, replaces it on reload and drops it on disable', async () => {
   const { home, projectRoot, server } = await fixture()
   const folder = join(projectRoot, '.ultimate/extensions/service-test')
   await mkdir(folder, { recursive: true })
   const file = join(folder, 'server.ts')
   await writeFile(file, serviceFacet('first'))
-  await until(() =>
-    server.extensions.services().some((s) => s.detail === 'first' && s.state === 'ready'),
-  )
+  await until(() => !!server.extensions.action('service-test', 'lookup'))
   const lookup = () =>
     server.extensions.invoke('service-test', 'lookup', {}, new AbortController().signal)
   expect(await lookup()).toEqual({ detail: 'first' })
@@ -136,20 +128,10 @@ it.concurrent('stages service rows, preserves them on failed reload and removes 
         .find((e) => e.name === 'service-test')
         ?.server?.error?.includes('failed service installation') === true,
   )
-  expect(server.extensions.services().filter((s) => s.extension === 'service-test')).toEqual([
-    { extension: 'service-test', name: 'worker', state: 'ready', detail: 'first' },
-  ])
   expect(await lookup()).toEqual({ detail: 'first' })
   await writeFile(file, serviceFacet('replacement'))
   server.vite.watcher.emit('change', file)
-  await until(() =>
-    server.extensions.services().some((s) => s.detail === 'replacement' && s.state === 'ready'),
-  )
-  expect(await lookup()).toEqual({ detail: 'replacement' })
-  await server.extensions.invoke('service-test', 'stale', {}, new AbortController().signal)
-  expect(server.extensions.services().filter((s) => s.extension === 'service-test')).toEqual([
-    { extension: 'service-test', name: 'worker', state: 'ready', detail: 'replacement' },
-  ])
+  await until(async () => ((await lookup()) as { detail?: string })?.detail === 'replacement')
   const consumer = join(projectRoot, '.ultimate/extensions/service-consumer')
   await mkdir(consumer, { recursive: true })
   await writeFile(
@@ -168,7 +150,6 @@ it.concurrent('stages service rows, preserves them on failed reload and removes 
   await until(
     () => server.extensions.info().find((e) => e.name === 'service-test')?.enabled === false,
   )
-  expect(server.extensions.services().some((s) => s.extension === 'service-test')).toBe(false)
   expect(
     await server.extensions.invoke('service-consumer', 'lookup', {}, new AbortController().signal),
   ).toBeNull()
@@ -209,9 +190,6 @@ it.concurrent('keeps the replacement provider available while the old cleanup is
   } finally {
     cleanup.resolve()
   }
-  await until(() =>
-    server.extensions.services().some((s) => s.detail === 'replacement' && s.state === 'ready'),
-  )
   expect(await lookup()).toEqual({ detail: 'replacement' })
 })
 
@@ -227,19 +205,19 @@ it.concurrent('layers settings live, installs and uninstalls tools and web facet
   const initialBuild = server.host.build().id
   const promptLoaded = server.extensions.info().find((entry) => entry.name === 'prompt')
     ?.server?.loadedAt
-  expect(server.host.build().extensions.subagents).toBeDefined()
+  expect(server.host.build().extensions.automations).toBeDefined()
   await mkdir(config)
-  await writeFile(settings, JSON.stringify({ extensions: { disable: ['subagents'] } }))
-  await until(async () => !(await tools(server)).includes('subagent'))
-  await until(async () => !(await web(server)).some((path) => path.includes('/subagents/')))
+  await writeFile(settings, JSON.stringify({ extensions: { disable: ['automations'] } }))
+  await until(async () => !(await tools(server)).includes('automation'))
+  await until(async () => !(await web(server)).some((path) => path.includes('/automations/')))
   expect(server.host.build().id).not.toBe(initialBuild)
-  expect(server.host.build().extensions.subagents).toBeUndefined()
+  expect(server.host.build().extensions.automations).toBeUndefined()
   expect(server.extensions.info().find((entry) => entry.name === 'prompt')?.server?.loadedAt).toBe(
     promptLoaded,
   )
   await rm(settings)
-  await until(async () => (await tools(server)).includes('subagent'))
-  await until(async () => (await web(server)).some((path) => path.includes('/subagents/')))
+  await until(async () => (await tools(server)).includes('automation'))
+  await until(async () => (await web(server)).some((path) => path.includes('/automations/')))
   expect(server.host.build().id).toBe(initialBuild)
   const folder = join(config, 'extensions/local')
   await mkdir(folder, { recursive: true })
@@ -251,20 +229,20 @@ it.concurrent('layers settings live, installs and uninstalls tools and web facet
   await mkdir(join(home, '.ultimate'), { recursive: true })
   await writeFile(
     join(home, '.ultimate/settings.json'),
-    JSON.stringify({ extensions: { disable: ['theme', 'subagents'] } }),
+    JSON.stringify({ extensions: { disable: ['info', 'automations'] } }),
   )
   await until(
-    () => server.extensions.info().find((entry) => entry.name === 'theme')?.enabled === false,
+    () => server.extensions.info().find((entry) => entry.name === 'info')?.enabled === false,
   )
   const connection = await attach(server)
   try {
     await writeFile(
       settings,
-      JSON.stringify({ extensions: { enable: ['subagents', 'unknown'], disable: ['local'] } }),
+      JSON.stringify({ extensions: { enable: ['automations', 'unknown'], disable: ['local'] } }),
     )
     await until(
       async () =>
-        (await tools(server)).includes('subagent') &&
+        (await tools(server)).includes('automation') &&
         !server.extensions.info().find((entry) => entry.name === 'local')?.enabled,
     )
     expect(server.extensions.info().find((entry) => entry.name === 'local')?.server).toBeUndefined()
@@ -272,7 +250,7 @@ it.concurrent('layers settings live, installs and uninstalls tools and web facet
       server.host.registry
         .snapshot()
         .installed()
-        .some((entry) => entry.name === 'theme' || entry.name === 'local'),
+        .some((entry) => entry.name === 'info' || entry.name === 'local'),
     ).toBe(false)
     await until(() =>
       connection.events.some(
@@ -300,13 +278,13 @@ it.concurrent('layers settings live, installs and uninstalls tools and web facet
 })
 
 it.concurrent('retains valid enablement through invalid edits and delivers startup diagnostics to later clients', async () => {
-  const valid = { extensions: { enable: ['unknown-startup'], disable: ['subagents'] } }
+  const valid = { extensions: { enable: ['unknown-startup'], disable: ['automations'] } }
   const { home, server } = await fixture(JSON.stringify(valid))
   const settings = join(home, '.ultimate/settings.json')
   const connection = await attach(server)
   try {
     expect(connection.system().extensionDiagnostics).toEqual(['Unknown extension: unknown-startup'])
-    expect(await tools(server)).not.toContain('subagent')
+    expect(await tools(server)).not.toContain('automation')
     const build = server.host.build().id
     const loadedAt = server.extensions.info().find((entry) => entry.name === 'plan')
       ?.server?.loadedAt
@@ -322,8 +300,8 @@ it.concurrent('retains valid enablement through invalid edits and delivers start
           .current()
           .extensionDiagnostics.some((message) => message.startsWith(settings + ':')),
       )
-      expect(await tools(server)).not.toContain('subagent')
-      expect((await web(server)).some((path) => path.includes('/subagents/'))).toBe(false)
+      expect(await tools(server)).not.toContain('automation')
+      expect((await web(server)).some((path) => path.includes('/automations/'))).toBe(false)
       expect(server.host.build().id).toBe(build)
       expect(
         server.extensions.info().find((entry) => entry.name === 'plan')?.server?.loadedAt,
@@ -347,7 +325,7 @@ it.concurrent('retains valid enablement through invalid edits and delivers start
     server.vite.watcher.emit('change', settings)
     await until(
       async () =>
-        (await tools(server)).includes('subagent') && !(await tools(server)).includes('plan'),
+        (await tools(server)).includes('automation') && !(await tools(server)).includes('plan'),
     )
     // Registry changes happen before the refreshed system snapshot is published.
     await until(() => server.system.current().extensionDiagnostics.length === 0)
@@ -355,6 +333,26 @@ it.concurrent('retains valid enablement through invalid edits and delivers start
   } finally {
     await connection.close()
   }
+})
+
+it.concurrent('keeps a core-tier extension enabled over extensions.disable, with a diagnostic', async () => {
+  const { home, server } = await fixture(
+    JSON.stringify({ extensions: { disable: ['subagents', 'automations'] } }),
+  )
+  const info = (name: string) => server.extensions.info().find((entry) => entry.name === name)
+  expect(info('subagents')).toMatchObject({ enabled: true, core: true })
+  expect(info('subagents')?.server?.error).toBeUndefined()
+  expect(await tools(server)).toContain('subagent')
+  expect(info('automations')).toMatchObject({ enabled: false })
+  expect(info('automations')?.core).toBeUndefined()
+  expect(server.system.current().extensionDiagnostics).toEqual([
+    'subagents is core and stays enabled; extensions.disable ignores it',
+  ])
+  const discovered = await discoverExtensions(resolve('.'), join(home, 'project'), home)
+  expect(discovered.find((entry) => entry.name === 'subagents')).toMatchObject({
+    enabled: true,
+    core: true,
+  })
 })
 
 it.concurrent('enables every built-in by default', async () => {

@@ -1,7 +1,20 @@
-import { defineWebExtension, useDocOf, useUltimate } from '@/sdk'
+import { defineWebExtension, provide, useDocOf, useUltimate } from '@/sdk'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { ConversationPhase } from '../conversations/ui.tsx'
 import { PhasesDoc } from './refs.ts'
-import { PhaseLabel, usePhase } from './ui.tsx'
+import { PhaseLabel, phaseText, usePhase } from './ui.tsx'
+
+/** A working conversation's phase for the sidebar: its label, its word, and whether it only waits on subagents. */
+function useConversationPhase(id: number | undefined) {
+  const phase = usePhase(id)
+  return (
+    phase && {
+      label: <PhaseLabel phase={phase} />,
+      word: phaseText(phase).toLowerCase(),
+      waiting: phase === 'waiting',
+    }
+  )
+}
 
 /** The shown conversation's phase, right-aligned on the line under its composer. */
 function PhaseStatus() {
@@ -27,4 +40,5 @@ function PhaseStatus() {
 }
 export default defineWebExtension({
   slots: { 'composer.status': { component: PhaseStatus, order: 100 } },
+  provides: [provide(ConversationPhase, useConversationPhase)],
 })
