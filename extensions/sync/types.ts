@@ -1,5 +1,5 @@
 import type { ProviderHealth, Transition } from '../../cloud/protocol.ts'
-import type { CloudState, ModelLogin, SyncProgress } from '../cloud/types.ts'
+import type { CloudState, ModelLogin } from '../cloud/types.ts'
 
 /** A project home on this machine, as `fleet` sees it. */
 export interface LocalProject {
@@ -11,7 +11,6 @@ export interface LocalProject {
   url?: string
   role?: CloudState['role']
   status?: CloudState['status']
-  sync?: SyncProgress
   /** Secret names the writer has and this machine lacks. */
   missing: string[]
   /** The model login the project's agents run with here; a move here fails without one. */

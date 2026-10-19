@@ -3,8 +3,6 @@ import { expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import worker, { ProjectDirectory } from '../cloud/worker.ts'
 import { DirectoryStore } from '../cloud/directory.ts'
-import { createApi, projectBase } from '../web/src/sdk/api.ts'
-import { createStore } from '../web/src/sdk/store.ts'
 
 it('routes sync by project key and refuses other keys and the retired endpoint', async () => {
   const fetch = vi.fn<(request: Request) => Promise<Response>>(async () => new Response('sync'))
@@ -203,35 +201,6 @@ it('redirects old machine URLs to the project slug, and only when that slug exis
   expect(forward).toHaveBeenCalledTimes(1)
 })
 
-it.each(['/', '/p/one/'])(
-  'uses the SDK base for writes, history, models and event streams at %s',
-  async (path) => {
-    vi.stubGlobal('location', { pathname: path })
-    try {
-      const request = vi.fn<typeof fetch>(async () => Response.json({}))
-      const open = vi.fn<(url: string) => EventSource>(
-        () => ({ close() {}, addEventListener() {} }) as unknown as EventSource,
-      )
-      const store = createStore({ fetch: request, eventSource: open })
-      const api = createApi(store, { fetch: request })
-      await api.submit('test')
-      await api.history(1, 10)
-      await store.refreshModels()
-      store.start()
-      const base = projectBase(path)
-      expect(request.mock.calls.map((call) => call[0])).toEqual([
-        `${base}/api/conversations/1/submit`,
-        `${base}/api/conversations/1/history?before=10`,
-        `${base}/api/models`,
-      ])
-      expect(open.mock.calls[0][0]).toBe(`${base}/api/events`)
-      store.stop()
-    } finally {
-      vi.unstubAllGlobals()
-    }
-  },
-)
-
 const ok = async () => new Response('ok')
 
 it('serves the front page shell from assets without touching the directory', async () => {
@@ -283,11 +252,4 @@ it.each([
   const { VERSION: _version, ...unversioned } = env
   const plain = await worker.fetch(new Request(`https://cloud.example${path}`), unversioned)
   expect(plain.headers.has('x-ultimate-cloud-version')).toBe(false)
-})
-
-it('derives the SDK base without changing local URLs', () => {
-  expect(projectBase('/')).toBe('')
-  expect(projectBase('/p/one/')).toBe('/p/one')
-  expect(projectBase('/p/one')).toBe('/p/one')
-  expect(projectBase('/p/one/api/events')).toBe('/p/one')
 })

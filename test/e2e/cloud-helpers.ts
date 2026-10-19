@@ -122,10 +122,7 @@ export async function worker(root: string, token: string, assets?: string) {
   settings.main = resolve('cloud/worker.ts')
   if (assets) settings.assets = { ...(settings.assets as object), directory: assets }
   await writeFile(join(config, 'wrangler.json'), JSON.stringify(settings))
-  await writeFile(
-    join(config, '.dev.vars'),
-    `SYNC_TOKEN=${token}\nMACHINE_ORIGIN=http://127.0.0.1\nACCESS_DEV_BYPASS=1\n`,
-  )
+  await writeFile(join(config, '.dev.vars'), `SYNC_TOKEN=${token}\nACCESS_DEV_BYPASS=1\n`)
   const port = await freePort()
   const child = spawn(
     process.execPath,
@@ -324,22 +321,25 @@ export async function crash(machine: Host) {
 /** A random secret value. */
 export const secretValue = () => randomBytes(16).toString('hex')
 
-/** The project API under `<cloud>/p/<slug>`, as the cloud UI calls it. */
-export function projectApi(cloud: string, slug: string) {
+/** Project `key`'s lease and moves through the cloud's bearer routes, as @sync calls them. */
+export function projectApi(cloud: string, key: string, token: string) {
   const call = async (path: string, body?: object) => {
-    const response = await fetch(`${cloud}/p/${slug}${path}`, {
+    const url = new URL(path, cloud)
+    url.searchParams.set('project', key)
+    const response = await fetch(url, {
       method: body ? 'POST' : 'GET',
-      ...(body
-        ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-        : {}),
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
     })
     return { status: response.status, data: (await response.json()) as Record<string, unknown> }
   }
   return {
-    call,
-    info: async () => (await call('/api/cloud')).data as unknown as CloudInfo,
-    move: (body: { machine: string; force?: boolean }) => call('/api/cloud/move', body),
-    cancel: () => call('/api/cloud/cancel', {}),
+    info: async () => (await call('/sync/cloud')).data as unknown as CloudInfo,
+    move: (body: { machine: string; force?: boolean }) => call('/sync/move', body),
+    cancel: () => call('/sync/cancel', {}),
   }
 }
 

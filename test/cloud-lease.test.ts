@@ -207,10 +207,7 @@ it('waits on standby with no database while the cloud is unreachable, however lo
           : undefined,
       activate,
     } as unknown as ExtensionHost
-    await cloudExtension(host, {
-      dial: unanswered,
-      builds: { connect: () => {}, stop: async () => {}, current: () => undefined },
-    })
+    await cloudExtension(host, { dial: unanswered })
     expect(host.standby()).toEqual(joining)
     await vi.advanceTimersByTimeAsync(10 * MINUTE)
     expect(activate).not.toHaveBeenCalled()

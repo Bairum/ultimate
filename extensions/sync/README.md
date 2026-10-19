@@ -19,7 +19,7 @@ In the machine home, @sync's empty conversation says what it does and its compos
 
 ## Ask @sync
 
-`ui.tsx` has `AskSync`, a quiet link sync provides for cloud's `MoveHelp` point, which the cloud facet shows on a project's standby page and in its status-line popover while this machine's home runs. It calls the `home` action, which finds `~/.ultimate/machine` with a running URL in `host.projects()` (the supervisor's `ultimate.lock` port) and links to @sync's conversation there. In the cloud (`/p/<slug>/`) it shows nothing.
+`ui.tsx` has `AskSync`, a quiet link sync provides for cloud's `MoveHelp` point, which the cloud facet shows on a project's standby page and in its status-line popover while this machine's home runs. It calls the `home` action, which finds `~/.ultimate/machine` with a running URL in `host.projects()` (the supervisor's `ultimate.lock` port) and links to @sync's conversation there.
 
 ## Tools (machine home only)
 
@@ -34,7 +34,7 @@ Every 5 s the machine home reads `cloud.state` of the running local project home
 
 Each tick considers both transitions `cloud.state` names: `transition` (the move this machine runs, or else the latest one the cloud reported) and `ran` (the last move this machine ran itself, kept in memory by the project home's lease even after a newer move replaces it in the cloud). So a move this machine took is caught while its project home keeps running, unless this machine starts another one before the next tick: `ran` then names the newer move, and a failed attempt retried within 5 s wakes @sync only for the retry.
 
-**The remaining window.** A move this machine only gave away (it was the source, not the target) is seen only through the cloud's latest transition. If a newer move replaces it within one 5 s tick, or while the machine home is down, @sync is not woken for it. The same holds for any move whose project home restarts before the machine home reads it, because `ran` lives in the project home's memory. Closing this fully needs a durable outbox in the project home, which this does not build: run `fleet` after the machine home was down to see the latest moves.
+**The remaining window.** A move this machine only gave away (it was the source, not the target) is seen only through the cloud's latest transition. If a newer move replaces it within one 5 s tick, or while the machine home is down, @sync is not woken for it. The same holds for any move whose project home restarts before the machine home reads it, because `ran` lives in the project home's memory. Closing this fully needs a durable record of moves in the project home, which this does not build: run `fleet` after the machine home was down to see the latest moves.
 
 ## Actions
 

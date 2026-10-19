@@ -132,10 +132,14 @@ export function cloud({ aliases = {} }: { aliases?: Record<string, string> } = {
       },
       deserializeAttachment: () => attachment,
     }
-    // The sender only sends JSON text.
+    // The sender sends JSON text, and `ping`, which the replica's auto-response answers without waking it.
     client.send = (data) =>
       queueMicrotask(() => {
         if (server.readyState !== WebSocket.OPEN) return
+        if (data === 'ping') {
+          if (!muted) client.dispatchEvent(new MessageEvent('message', { data: 'pong' }))
+          return
+        }
         const { type } = JSON.parse(data as string) as MachineMessage
         const hold = holds.findIndex(
           (item) => item.machine === machineOf(server) && item.type === type,
@@ -466,8 +470,8 @@ export async function machine(
     },
     {
       // Every role this machine hears, for what reaches each socket.
-      sync: (syncHost, syncOptions, syncDial, builds, hooks) =>
-        startSync(syncHost, syncOptions, syncDial, builds, {
+      sync: (syncHost, syncOptions, syncDial, hooks) =>
+        startSync(syncHost, syncOptions, syncDial, {
           ...hooks!,
           role: (state) => {
             roles.push(structuredClone(state))

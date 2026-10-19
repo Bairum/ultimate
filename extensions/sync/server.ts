@@ -160,7 +160,6 @@ async function local(deps: SyncDeps, home: Home): Promise<LocalProject & { key?:
     ...(home.url ? { url: home.url } : {}),
     ...(state?.role ? { role: state.role } : {}),
     ...(state?.status ? { status: state.status } : {}),
-    ...(state?.sync !== undefined ? { sync: state.sync } : {}),
     missing: state?.missing ?? [],
     ...(state?.login ? { login: state.login } : {}),
     stale,
@@ -487,12 +486,6 @@ export const demoFleet = (userHome: string, now = Date.now()): Fleet => ({
         url: 'http://127.0.0.1:4748',
         role: 'writer',
         status: 'on',
-        sync: {
-          connected: true,
-          catchingUp: true,
-          backlog: 3,
-          conversations: { synced: 120, total: 537 },
-        },
         missing: [],
         login: { provider: 'anthropic', ok: false, error: 'invalid_grant' },
         stale: [],
@@ -591,7 +584,7 @@ export default function sync(host: ExtensionHost) {
         // Reads only: the directory, local cloud state, files and refs.
         replay: 'safe',
         description:
-          'Every machine and project: writer, standbys, the move in flight, and this machine’s local view of each project (role, sync progress, missing secrets, model login, stale databases, kept ultimate-moved refs).',
+          'Every machine and project: writer, standbys, the move in flight, and this machine’s local view of each project (role, missing secrets, model login, stale databases, kept ultimate-moved refs).',
         parameters: Type.Object({}),
         async execute() {
           const value = host.faux ? demoFleet(host.userHome) : await fleet(deps)
