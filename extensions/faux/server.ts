@@ -251,6 +251,15 @@ export default async function fauxExtension(host: ExtensionHost) {
           { stopReason: 'toolUse' },
         )
       }
+      // One worker that answers and one whose run fails, to preview a subagent's done and failed states.
+      if (last?.role === 'user' && last.content === 'delegate demo') {
+        return fauxAssistantMessage(
+          ['Return the word DONE.', 'fail demo'].map((task) =>
+            fauxToolCall('subagent', { action: 'start', agent: 'worker', isolate: 'none', task }),
+          ),
+          { stopReason: 'toolUse' },
+        )
+      }
       if (last?.role === 'user' && last.content === 'Return the word DONE.') {
         return fauxAssistantMessage([fauxText('DONE')])
       }
