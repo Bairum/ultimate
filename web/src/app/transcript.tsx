@@ -42,7 +42,7 @@ import {
 import { MentionText, Message, MessageContent, MessageResponse } from '@/components/ai/message'
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai/reasoning'
 import { Shimmer } from '@/components/ai/shimmer'
-import { ToolImage } from '@/components/ai/tool'
+import { ToolImage, ToolStatusIcon } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { elidePath, formatDuration, formatTime, shortenPath } from '../sdk/format.ts'
 import {
@@ -56,7 +56,7 @@ import {
   useStore,
   useSystem,
 } from '../sdk/hooks.ts'
-import { entryRenderers, messageItems } from '../sdk/registry.ts'
+import { entryRenderers, messageItems, toolLine } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary } from './boundary.tsx'
 import { chatRows, runOf, windowGaps, windowKey } from './chat.ts'
@@ -615,6 +615,15 @@ function WorkRow({
         {working ? 'working' : 'worked'} · {run.steps} step{run.steps === 1 ? '' : 's'}
         <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/work:rotate-90" />
       </CollapsibleTrigger>
+      {!open && (
+        <StepLines
+          busy={busy}
+          onOpen={() => onOpenChange(true)}
+          results={results}
+          run={run}
+          slots={slots}
+        />
+      )}
       <CollapsibleContent className="mt-3 flex flex-col gap-3 border-l border-border/70 pl-3">
         {run.work.map((part) => (
           <div className="empty:hidden" data-entry-id={part.entry.id} key={partKey(part)}>
@@ -629,6 +638,79 @@ function WorkRow({
         ))}
       </CollapsibleContent>
     </Collapsible>
+  )
+}
+
+/** The tool calls of a folded run, in order. */
+function runCalls(run: WorkRun): ToolCall[] {
+  return run.work.flatMap(({ entry, blocks }) => {
+    const message = entry.model?.[0]
+    if (message?.role !== 'assistant') return []
+    return message.content.flatMap((block, index) =>
+      block.type === 'toolCall' && (!blocks || blocks.includes(index)) ? [block] : [],
+    )
+  })
+}
+
+/** Lines a folded run lists before “+N earlier”: the newest ones. */
+const STEP_LINES = 8
+
+/** A folded run's tool calls as a quiet list of one-line steps, newest last; clicking it opens the run. */
+function StepLines({
+  run,
+  results,
+  slots,
+  busy,
+  onOpen,
+}: {
+  run: WorkRun
+  results: Map<string, ToolResult>
+  slots: Map<string, ToolSlot>
+  busy: boolean
+  onOpen: () => void
+}) {
+  const extensions = useExtensions()
+  const calls = runCalls(run)
+  if (calls.length === 0) return null
+  const shown = calls.slice(-STEP_LINES)
+  return (
+    <button
+      className="mt-1.5 flex w-full min-w-0 cursor-pointer flex-col gap-0.5 border-l border-border/70 pl-3 text-left font-mono text-[11.5px] leading-[1.6] text-muted-foreground hover:text-foreground/90"
+      onClick={onOpen}
+      type="button"
+    >
+      {calls.length > shown.length && (
+        <span className="text-muted-foreground/60">+{calls.length - shown.length} earlier</span>
+      )}
+      {shown.map((block) => {
+        const call = toolCallView(block, {
+          result: results.get(block.id),
+          slot: slots.get(block.id),
+          streaming: false,
+          busy,
+        })
+        const line = toolLine(extensions, call.name)
+        return (
+          <span className="flex min-w-0 items-center gap-2" key={block.id}>
+            <ToolStatusIcon className="size-3" state={call.status} />
+            <span className="min-w-0 flex-1 truncate">
+              {line ? (
+                <ExtensionBoundary
+                  extension={line.extension}
+                  fallback={call.name}
+                  variant="inline"
+                  version={line.version}
+                >
+                  <line.component call={call} />
+                </ExtensionBoundary>
+              ) : (
+                call.name
+              )}
+            </span>
+          </span>
+        )
+      })}
+    </button>
   )
 }
 

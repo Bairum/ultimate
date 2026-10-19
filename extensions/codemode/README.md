@@ -60,6 +60,17 @@ Entry/search limits default to 100 and must be 1–1000. Pagination of raw entri
 
 With `ULTIMATE_FAUX=1`, submit `codemode demo` to see nested read/bash progress and the final result without a model account.
 
+## Summaries
+
+Every finished or failed codemode call gets one past-tense line saying what it did, such as "Concluded 6 conversations (#190416, #190537, …)" or "Read the conversations extension's contract". `details.calls` lists the `ultimate.*` helper calls next to the `tools.*` calls, so the line can name them; they stream as `✓ ultimate.<name> …` lines too.
+
+- **Fixed labels:** a script with no call, or with one read-only call (an `ultimate.*` read, `read`, `web_search`, `web_fetch`), is labelled from that call without a model (`summary.ts` `fixedLine`), in the call's own commit. So is a script that failed before any call.
+- **Summary model:** any other script starts a background `codemode.summary` task, in its own commit just before the call returns. It asks `summaryModel` once (through the conversations service, as board triage does) with the script, each call's name, status and clipped arguments, and the clipped result, all as untrusted data. The answer is `{ line, effect }`: a change (an action that concludes, creates, pauses or configures, a message, a write or edit) leads the line and sets `effect`. The response is memoized, so a resumed task never asks twice; its usage is accounted to the conversation. Without a model, or when the answer does not parse, no line is written and the card keeps the script header. A yielded script gets no line.
+- **Storage:** the line lives in the conversation document `codemode.summaries` (`{ calls: { [toolCallId]: { line, effect? } } }`, the newest 1000; `api.ts` holds its token) and is recorded as the event `codemode.summarized { conversation, call, line, effect }` in the same commit, which the System surface shows.
+- **Cost:** on this host about 120 codemode calls a day, a third of them fixed labels; the model call costs about $0.00005, so under one cent a day. `evals/codemode-summary.eval.ts` checks 16 real calls from @ultimate's conversation, with effects always leading.
+
+With `ULTIMATE_FAUX=1`, the faux `seedCodemode {conversation}` action (or the prompt `seed codemode`) writes a run of @ultimate's real codemode calls with their lines; `codemode steps demo` runs live calls and the faux summary model.
+
 ## UI
 
-`web.tsx` renders each `codemode` call: the script with highlighting (collapsed when long), the nested-call log (✓/✗, tool, arguments, duration; streamed while running, from `details.calls` when done), the text output, images, and the returned value as a JSON tree (`@/components/json-tree`). The Documents tab shows the shown conversation's `codemode.store` under Store, through the renderer `web.tsx` registers for it.
+The collapsed header shows the call's summary as plain text, an effect led by an accent ◆, with a quiet `codemode` label and the duration; until a summary exists it shows the script's first line. Its `toolLines` entry gives the same line to the chat's folded runs. `web.tsx` renders each `codemode` call: the script with highlighting (collapsed when long), the nested-call log (✓/✗, tool, arguments, duration; streamed while running, from `details.calls` when done), the text output, images, and the returned value as a JSON tree (`@/components/json-tree`). The Documents tab shows the shown conversation's `codemode.store` under Store, through the renderer `web.tsx` registers for it.
