@@ -14,6 +14,7 @@ import {
 import { Kbd } from '@/components/ui/kbd'
 import { api } from '../sdk/client.ts'
 import { errorMessage } from '../sdk/format.ts'
+import { events } from '../sdk/events.ts'
 import {
   TranscriptContext,
   useConversation,
@@ -220,6 +221,8 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
       return
     const submitted = draft.get()
     draft.set({ sending: true, error: undefined })
+    // Sending means following the run from here, wherever the reader had scrolled to.
+    events.emit('ultimate:sent', { conversationId: id })
     try {
       await api.submit(text.trim(), busy ? (whenBusy ?? 'steer') : undefined, id, images)
       clearDraft(draft, submitted)
