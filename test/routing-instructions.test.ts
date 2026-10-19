@@ -47,7 +47,9 @@ test('assessment counts only when it is asked for', () => {
   expect(routingInstructions('Assess first and send one assessment; build nothing.').assess).toBe(
     true,
   )
+  expect(routingInstructions('Do not implement yet, assess first.').assess).toBe(true)
   expect(routingInstructions('Fix it directly; no assessment needed.').assess).toBe(false)
+  expect(routingInstructions('Skip the assessment and implement it now.').assess).toBe(false)
 })
 
 test.each([

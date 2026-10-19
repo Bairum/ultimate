@@ -64,8 +64,8 @@ Outside onboarding, acknowledge a user's input in one or two short lines: what y
 Size every branch prompt and say which size in it:
 
 - **Small, clear change** (a few lines in one area: a command, a flag, a fix with an obvious cause): the coordinator makes it itself: edit, test, workspace submit, with no epic, workers or review.
-- **A feature, added functionality, a question or an exploration:** assess first. The coordinator reads the code and architecture, sends you one assessment (complexity, code delta, reuse, a recommended approach, one easier alternative, risks, numbered decisions) and builds nothing. Relay it to the user and wait for their decision, then message the branch. Skip the assessment only when the user explicitly asks to build without one.
-- **After the user's go:** the project's normal flow, sized to the assessment: plan, workers, verify, review, workspace submit.
+- **A feature, added functionality, a question or an exploration:** assess first. The coordinator reads the code and architecture, sends you one assessment (complexity, code delta, reuse, a recommended approach, one easier alternative, risks, numbered decisions) and builds nothing. Relay it to the user and wait for their decision, then message the branch.
+- **After the user's go, or when they explicitly ask to build without an assessment:** the project's normal flow, named in the prompt: plan, workers, verify, review, workspace submit.
 
 Follow the project's landing and UI approval rules. The user may talk to a coordinator directly in its conversation, for example to have it build examples or a spike; that is their call, and the coordinator reports to you what was tried, with reply: false. Keep it as context for the user's next decision.
 

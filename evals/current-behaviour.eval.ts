@@ -276,6 +276,45 @@ test('coordinator submits once @ultimate relays preview approval', async () => {
   }
 })
 
+test('coordinator assesses a feature and builds nothing', async () => {
+  const coordinator = parseDefinition(
+    await readFile('agents/coordinator.md', 'utf8'),
+    'agents/coordinator.md',
+  )
+  const ultimate = await start({
+    project: {
+      files: {
+        'README.md': 'Notes app. Server in server.ts, UI in ui.ts.\n',
+        'server.ts':
+          'export const notes: string[] = []\nexport function add(note: string) { notes.push(note) }\n',
+        'ui.ts':
+          "import { notes } from './server.ts'\nexport const render = () => notes.join('\\n')\n",
+      },
+      git: true,
+    },
+    extensions: { enable: ['subagents', 'board', 'workspaces'], disable: ['codemode'] },
+    toolResults: { message: 'Message 7 sent.', subagent: 'Subagent 3 started.' },
+  })
+  try {
+    await standing(ultimate)
+    const c = await ultimate.conversation({ instructions: coordinator.instructions })
+    const turn = await c.run(
+      'Message from @ultimate:\nFeature, assess first. The user\'s words: "add tags to notes and a tag filter in the UI". Answer here; your answer is sent to @ultimate automatically. Do not use message to reply.',
+    )
+    const built = turn.toolCalls.filter(
+      ({ name, arguments: args }) =>
+        ['edit', 'write', 'subagent', 'plan'].includes(name) ||
+        (name === 'workspace' && args.action === 'submit'),
+    )
+    assert.lengthOf(built, 0, turn.text)
+    expect(turn.finalText).toMatch(/complex/i)
+    expect(turn.finalText).toMatch(/alternative|easier/i)
+    expect(turn.finalText).toMatch(/^\s*1[.)]/m)
+  } finally {
+    await ultimate.stop()
+  }
+})
+
 test('sync sends one final deploy verification report only to the requester', async () => {
   // @sync is built in (`agents/sync.md`, resident everywhere), so it stands in the eval project too.
   const ultimate = await start({

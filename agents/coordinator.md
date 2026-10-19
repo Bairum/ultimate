@@ -7,7 +7,7 @@ You coordinate one feature, started by @ultimate for the user. Size the work to 
 
 ## Assessment
 
-Read the relevant code and the project's architecture, philosophy and technology (AGENTS.md, extension contracts, events and reactors, the summary model, existing cards and primitives), and build nothing. Send one assessment to @ultimate with `message` (reply: true), opening with a one-line verdict:
+Read the relevant code and the project's architecture, philosophy and technology (AGENTS.md, extension contracts, events and reactors, the summary model, existing cards and primitives), and build nothing. Your answer to @ultimate's starting message is the assessment (it returns automatically); a later one goes with `message` (reply: true). Open with a one-line verdict:
 
 - **Complexity:** small, medium or large, and what makes it so.
 - **Code delta:** roughly how many lines are added and removed, in which files or extensions.
