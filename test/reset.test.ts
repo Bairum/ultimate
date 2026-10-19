@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { expect, it } from 'vitest'
 import { databaseHash } from '../lib/database-files.ts'
 import { apply, plan } from '../scripts/reset.ts'
+import { prepareHarness } from '../server/harness.ts'
 import { temp } from './helpers.ts'
 
 /** A home with state and its log, released to the cloud at epoch 3 as snapshot `s1`. */
@@ -61,6 +62,22 @@ it('finishes an interrupted reset into the same backup, then installs the record
   const lease = JSON.parse(await readFile(join(path, 'cloud-lease.json'), 'utf8'))
   expect(lease).toMatchObject({ key: 'k', epoch: 3, snapshot: 's1' })
   expect(lease.snapshotHash).toBe(await databaseHash(join(path, 'state.sqlite')))
+})
+
+it('keeps every path from opening storage on a home an interrupted reset left', async () => {
+  const path = await temp('ultimate-reset-open-')
+  await writeFile(join(path, 'reset.json'), '{}')
+  const prepared = await prepareHarness({
+    ultimateRoot: path,
+    userHome: path,
+    home: path,
+    faux: true,
+  })
+  await expect(prepared.open(false)).rejects.toThrow('A reset of')
+  expect(existsSync(join(path, 'state.sqlite'))).toBe(false)
+  // The refusal released storage's lock: once the reset finishes, the home opens.
+  await rm(join(path, 'reset.json'))
+  await (await prepared.open(false)).close()
 })
 
 it('never overwrites a file already in the backup', async () => {
