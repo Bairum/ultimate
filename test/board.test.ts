@@ -1032,6 +1032,16 @@ it('refuses image references that do not resolve or exceed the limits', async ()
   expect(f.observed.join('\n')).toContain('images go along only to conversations and agents')
   expect((await f.log())?.messages ?? []).toHaveLength(0)
 })
+const result = (images: object[]) => [
+  {
+    role: 'toolResult',
+    toolCallId: 'shot',
+    toolName: 'screenshot',
+    content: [{ type: 'text', text: 'PNG' }, ...images],
+    isError: false,
+    timestamp: Date.now(),
+  },
+]
 it('forwards tool-result images, finds latest past a page, and checks every image', async () => {
   const f = await fixture()
   const to = `#${f.recipient.id}`
@@ -1041,16 +1051,6 @@ it('forwards tool-result images, finds latest past a page, and checks every imag
         (await tx.appendEntry(ROOT_CONVERSATION_ID, { kind: 'test.entry', model } as never)).id,
       context,
     )
-  const result = (images: object[]) => [
-    {
-      role: 'toolResult',
-      toolCallId: 'shot',
-      toolName: 'screenshot',
-      content: [{ type: 'text', text: 'PNG' }, ...images],
-      isError: false,
-      timestamp: Date.now(),
-    },
-  ]
   const shot = await write(result([png(7)]))
   // More plain entries than one scan page: latest still reaches the screenshot.
   await f.opened.harness.commit(async (tx) => {
