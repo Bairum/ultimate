@@ -1,6 +1,7 @@
 // The building blocks of surfaces, exported from `@/sdk`. Each is a thin wrapper over what the shell already has.
 import { cn } from 'cn'
 import {
+  EllipsisIcon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   PanelRightCloseIcon,
@@ -8,6 +9,12 @@ import {
 } from 'lucide-react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { PointerEvent, ReactNode, TouchEvent } from 'react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { actions, layout, shellKeys } from '../sdk/actions.ts'
 import { useConversation, useExtensions, useRegionOpen, useUiState } from '../sdk/hooks.ts'
@@ -148,49 +155,92 @@ export function Sidebar() {
 }
 
 const tab = 'flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 whitespace-nowrap'
+const tabButton =
+  'text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset'
+const GAP = 2
+
+/** How the tabs fit: whether the others drop their labels, and which of them move into the `⋯` menu. */
+type Fit = { compact: boolean; overflow: Set<string> }
+
+const key = (panel: PanelItem) => `${panel.extension}:${panel.id}`
 
 /**
  * A tab per extension panel. When not every label fits, the tabs other than the shown one keep only their icon and
- * name themselves in a tooltip.
+ * name themselves in a tooltip; when even the icons do not fit, the last ones move into a `⋯` menu. The shown tab
+ * always stays in the row.
  */
 function PanelTabs({ panels, active }: { panels: PanelItem[]; active: PanelItem }) {
   const row = useRef<HTMLDivElement>(null)
-  const labelled = useRef<HTMLDivElement>(null)
-  const [compact, setCompact] = useState(false)
+  const measure = useRef<HTMLDivElement>(null)
+  const [fit, setFit] = useState<Fit>({ compact: false, overflow: new Set() })
   useLayoutEffect(() => {
-    const fit = () => setCompact(labelled.current!.offsetWidth > row.current!.clientWidth)
-    fit()
-    const observer = new ResizeObserver(fit)
+    const compute = () => {
+      const width = (name: string) =>
+        measure.current!.querySelector<HTMLElement>(`[data-measure="${name}"]`)!.offsetWidth
+      const available = row.current!.clientWidth
+      const labelled = panels.map((panel) => width(`label:${key(panel)}`))
+      const icons = panels.map((panel) => width(`icon:${key(panel)}`))
+      const gaps = GAP * (panels.length - 1)
+      const next: Fit = { compact: false, overflow: new Set() }
+      if (labelled.reduce((a, b) => a + b, 0) + gaps > available) {
+        next.compact = true
+        const at = panels.indexOf(active)
+        const others = panels.flatMap((_, index) => (index === at ? [] : [index]))
+        const compact = labelled[at] + others.reduce((sum, index) => sum + icons[index], 0) + gaps
+        if (compact > available) {
+          let used = labelled[at] + GAP + width('more')
+          for (const index of others) {
+            used += GAP + icons[index]
+            if (used > available) next.overflow.add(key(panels[index]))
+          }
+        }
+      }
+      setFit((last) =>
+        last.compact === next.compact &&
+        [...next.overflow].join(' ') === [...last.overflow].join(' ')
+          ? last
+          : next,
+      )
+    }
+    compute()
+    const observer = new ResizeObserver(compute)
     observer.observe(row.current!)
-    observer.observe(labelled.current!)
+    observer.observe(measure.current!)
     return () => observer.disconnect()
-  }, [])
+  }, [panels, active])
+  const hidden = panels.filter((panel) => fit.overflow.has(key(panel)))
   return (
     <div className="flex h-10 shrink-0 items-center border-b border-border/70 px-2 font-mono text-[11.5px]">
       <div className="relative flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden" ref={row}>
-        {/* Every tab with its label, unseen: how wide the row needs to be. */}
-        <div aria-hidden className="invisible absolute flex w-max gap-0.5" ref={labelled}>
+        {/* Every tab with and without its label, and the menu button, unseen: what fits. */}
+        <div aria-hidden className="invisible absolute flex w-max gap-0.5" ref={measure}>
           {panels.map((panel) => {
             const Icon = panel.icon
             return (
-              <span className={tab} key={`${panel.extension}:${panel.id}`}>
-                {Icon && <Icon className="size-3.5" />}
-                {panel.title}
+              <span className="contents" key={key(panel)}>
+                <span className={tab} data-measure={`label:${key(panel)}`}>
+                  {Icon && <Icon className="size-3.5" />}
+                  {panel.title}
+                </span>
+                <span className={tab} data-measure={`icon:${key(panel)}`}>
+                  {Icon ? <Icon className="size-3.5" /> : panel.title}
+                </span>
               </span>
             )
           })}
+          <span className={tab} data-measure="more">
+            <EllipsisIcon className="size-3.5" />
+          </span>
         </div>
         {panels.map((panel) => {
+          if (fit.overflow.has(key(panel))) return null
+          const compact = fit.compact
           const Icon = panel.icon
           const iconOnly = compact && Icon !== undefined && panel.id !== active.id
           const button = (
             <button
               aria-label={iconOnly ? panel.title : undefined}
-              className={cn(
-                tab,
-                'text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
-                panel.id === active.id && 'bg-accent text-foreground',
-              )}
+              className={cn(tab, tabButton, panel.id === active.id && 'bg-accent text-foreground')}
               key={`${panel.extension}:${panel.id}`}
               onClick={() => actions.openPanel(panel.id)}
               type="button"
@@ -208,6 +258,35 @@ function PanelTabs({ panels, active }: { panels: PanelItem[]; active: PanelItem 
             button
           )
         })}
+        {hidden.length > 0 && (
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <button
+                aria-label={`${hidden.length} more panels`}
+                className={cn(tab, tabButton, 'data-[state=open]:text-foreground')}
+                title="More panels"
+                type="button"
+              >
+                <EllipsisIcon className="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-44">
+              {hidden.map((panel) => {
+                const Icon = panel.icon
+                return (
+                  <DropdownMenuItem
+                    className="gap-2 py-1 font-mono text-[12px]"
+                    key={key(panel)}
+                    onSelect={() => actions.openPanel(panel.id)}
+                  >
+                    {Icon && <Icon className="size-3.5" />}
+                    {panel.title}
+                  </DropdownMenuItem>
+                )
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
     </div>
   )
