@@ -104,7 +104,44 @@ function insert(database: DatabaseSync, rows: Row[]) {
   database.exec('COMMIT')
 }
 
+/** Write `rows` into the trace at `file`, closing it whatever happens. */
+function write(file: string, rows: Row[]) {
+  const database = new DatabaseSync(file)
+  try {
+    database.exec('PRAGMA busy_timeout = 2000')
+    insert(database, rows)
+  } finally {
+    database.close()
+  }
+}
+
 let ticker: ReturnType<typeof setInterval> | undefined
+
+/** Stop the calls `keepCalling` writes; the faux extension calls it when it closes or reloads. */
+export function stopCalling() {
+  clearInterval(ticker)
+  ticker = undefined
+}
+
+/**
+ * Conversation `conversation` keeps working: a tool or model call every 3 s for an hour, written into the trace at
+ * `file`, replacing the calls of an earlier seed.
+ */
+export function keepCalling(file: string, conversation: number) {
+  stopCalling()
+  const until = Date.now() + 60 * 60_000
+  let step = 0
+  const names = ['edit', 'bash', 'read', 'edit', 'screenshot']
+  ticker = setInterval(() => {
+    if (Date.now() > until) return stopCalling()
+    const at = Date.now() - 2000
+    write(file, [
+      step++ % 2
+        ? { at, ms: 1800, kind: 'model', name: CODEX, conversation }
+        : { at, ms: 600, kind: 'tool', name: names[step % names.length], conversation },
+    ])
+  }, 3000).unref()
+}
 
 /**
  * Creates a coordinator branch and two workers next to @ultimate and the lander, emits their `subagents.started`, and
@@ -191,33 +228,9 @@ export async function seedLanes(host: ExtensionHost) {
       ? []
       : [...run(ids.lander, 14, cycle(['bash'], 6)), ...run(ids.lander, 5, cycle(['bash'], 4))]),
   ]
-  const database = new DatabaseSync(join(host.home, 'trace.sqlite'))
-  database.exec('PRAGMA busy_timeout = 2000')
-  insert(database, rows)
-  database.close()
-
-  clearInterval(ticker)
-  const until = Date.now() + 60 * 60_000
-  let step = 0
-  const names = ['edit', 'bash', 'read', 'edit', 'screenshot']
-  ticker = setInterval(() => {
-    if (Date.now() > until) return clearInterval(ticker)
-    const live = new DatabaseSync(join(host.home, 'trace.sqlite'))
-    live.exec('PRAGMA busy_timeout = 2000')
-    const at = Date.now() - 2000
-    insert(live, [
-      step++ % 2
-        ? { at, ms: 1800, kind: 'model', name: CODEX, conversation: ids.running }
-        : {
-            at,
-            ms: 600,
-            kind: 'tool',
-            name: names[step % names.length],
-            conversation: ids.running,
-          },
-    ])
-    live.close()
-  }, 3000).unref()
+  const file = join(host.home, 'trace.sqlite')
+  write(file, rows)
+  keepCalling(file, ids.running)
   return {
     ultimate,
     coordinator: ids.coordinator,
