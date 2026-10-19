@@ -61,7 +61,7 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
     cloud = await worker(root, token)
     // B reaches the Worker through a proxy that can hold its snapshot downloads.
     proxy = await slowProxy(cloud.port)
-    project = projectApi(cloud.url, 'e2e-handoff')
+    project = projectApi(cloud.url, KEY, token)
   }, 180_000)
   afterAll(stopAll, 60_000)
 

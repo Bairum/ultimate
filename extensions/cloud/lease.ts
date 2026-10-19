@@ -21,7 +21,6 @@ import type { JsonObject } from '@earendil-works/pi-durable'
 import { exec as run } from '../../lib/exec.ts'
 import { applyWaiting, handoverDetail, LEFT_LIMITS } from '../../cloud/protocol.ts'
 import type { MoveBy, Transition, TransitionStep } from '../../cloud/protocol.ts'
-import type { projectBuilds } from '../../cloud/ui-build.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- a stop release holds storage's lock, which a swapped-in core owns
 import { acquireLock } from '../../server/lock.ts'
@@ -52,7 +51,6 @@ export interface LeaseDeps {
     downloadSnapshot: typeof downloadSnapshot
     databaseHash: typeof databaseHash
   }
-  builds?: ReturnType<typeof projectBuilds>
   /** The snapshot key, read from Secrets unless injected. */
   secret?: () => Promise<string | undefined>
   /** Runs git and pnpm for the prepare steps. */
@@ -343,47 +341,41 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   const connect = (next: 'serving' | 'standby') => {
     sync?.()
     mode = next
-    const current = deps.sync(
-      host,
-      options,
-      deps.dial,
-      next === 'serving' ? deps.builds : undefined,
-      {
-        serving: next === 'serving',
-        // A replaced connection's last roles no longer apply.
-        role: (state) => setTimeout(() => sync === current && onRole(state, current), 0),
-        releaseRequested: (by, id, force) =>
-          setTimeout(() => void moveTo(by, id, force).catch(report), 0),
-        releaseWaiting: (waiting) => {
-          const { by, tasks, dirty, held = false, unchecked } = waiting
-          if (tasks > 0) host.notice(`Move to ${by} waits for ${runs(tasks)}`)
-          else if (held && dirty?.length) host.notice(`Move to ${by} waits for ${changes(dirty)}`)
-          else if (unchecked)
-            host.notice(`Move to ${by} waits: could not check worktrees: ${unchecked}`)
-          if (!moving) return
-          applyWaiting(moving.transition, waiting)
-          const handover = moving.transition.steps.find((step) => step.name === 'handover')
-          if (handover && moving.transition.from) {
-            handover.detail = handoverDetail(
-              moving.transition.from,
-              tasks,
-              moving.transition.left?.length,
-              held,
-              unchecked,
-            )
-            publish()
-          }
-        },
-        moveTo: (id, force, by) => setTimeout(() => void move({ id, force, by }).catch(report), 0),
-        cancel: (id) => {
-          if (moving?.transition.id === id) cancel()
-        },
-        transition: () => moving?.transition.id ?? releasingFor,
-        hello: () => {
-          if (pendingClaim) pendingClaim.reconnected = true
-        },
+    const current = deps.sync(host, options, deps.dial, {
+      serving: next === 'serving',
+      // A replaced connection's last roles no longer apply.
+      role: (state) => setTimeout(() => sync === current && onRole(state, current), 0),
+      releaseRequested: (by, id, force) =>
+        setTimeout(() => void moveTo(by, id, force).catch(report), 0),
+      releaseWaiting: (waiting) => {
+        const { by, tasks, dirty, held = false, unchecked } = waiting
+        if (tasks > 0) host.notice(`Move to ${by} waits for ${runs(tasks)}`)
+        else if (held && dirty?.length) host.notice(`Move to ${by} waits for ${changes(dirty)}`)
+        else if (unchecked)
+          host.notice(`Move to ${by} waits: could not check worktrees: ${unchecked}`)
+        if (!moving) return
+        applyWaiting(moving.transition, waiting)
+        const handover = moving.transition.steps.find((step) => step.name === 'handover')
+        if (handover && moving.transition.from) {
+          handover.detail = handoverDetail(
+            moving.transition.from,
+            tasks,
+            moving.transition.left?.length,
+            held,
+            unchecked,
+          )
+          publish()
+        }
       },
-    )
+      moveTo: (id, force, by) => setTimeout(() => void move({ id, force, by }).catch(report), 0),
+      cancel: (id) => {
+        if (moving?.transition.id === id) cancel()
+      },
+      transition: () => moving?.transition.id ?? releasingFor,
+      hello: () => {
+        if (pendingClaim) pendingClaim.reconnected = true
+      },
+    })
     sync = current
     clearInterval(idleTimer)
     idleSince = undefined

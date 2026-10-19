@@ -30,7 +30,7 @@ async function project(name: string) {
   const root = join(base, name)
   await mkdir(root)
   const repo = await repository(root, `github.com/hazat/${name}`, ['desk', 'laptop'])
-  const api = projectApi(cloud.url, name)
+  const api = projectApi(cloud.url, `github.com/hazat/${name}`, token)
   const start = (machine: 'desk' | 'laptop', settings: Record<string, unknown> = {}) =>
     host(root, machine, {
       project: repo.project,

@@ -72,14 +72,6 @@ function ProjectRow({ project, machine }: { project: FleetProject; machine: stri
           ))}
         </span>
       </div>
-      {local?.sync?.catchingUp && (
-        <div className="text-muted-foreground">
-          catching up
-          {local.sync.conversations
-            ? ` ${local.sync.conversations.synced}/${local.sync.conversations.total} conversations`
-            : ` · ${local.sync.backlog} behind`}
-        </div>
-      )}
       {local?.login && !local.login.ok && (
         <Warning
           text={

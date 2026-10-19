@@ -185,7 +185,6 @@ function fake(
             free: false,
             missing: ['OPENAI_API_KEY'],
             login: { provider: 'anthropic', ok: false },
-            sync: { connected: true, catchingUp: false, backlog: 0 },
           },
         })
       if (url.endsWith('/cloud/actions/moveHere'))
@@ -222,7 +221,6 @@ it('merges the cloud directory with local project homes, warnings and the model 
       url: 'http://127.0.0.1:4747',
       role: 'standby',
       status: 'on',
-      sync: { connected: true, catchingUp: false, backlog: 0 },
       missing: ['OPENAI_API_KEY'],
       login: { provider: 'anthropic', ok: false },
       stale: ['state.stale-1.sqlite'],

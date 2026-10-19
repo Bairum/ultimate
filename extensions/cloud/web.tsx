@@ -4,8 +4,8 @@ import { useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { api, defineWebExtension, errorMessage, projectBase, Provided, useSystem } from '@/sdk'
-import type { CloudInfo, Transition } from '../../cloud/protocol.ts'
+import { api, defineWebExtension, errorMessage, Provided, useSystem } from '@/sdk'
+import type { Transition } from '../../cloud/protocol.ts'
 import type { CloudState } from './types.ts'
 import { movedAway, phaseOf, TransitionCard } from './transition.tsx'
 import { MoveHelp } from './ui.tsx'
@@ -17,11 +17,6 @@ const Help = () => (
     {(help) => help}
   </Provided>
 )
-
-// Locally the facet asks its own server (`cloud.state`, `moveHere`, `cancel`); in the cloud, at `/p/<slug>/`, it asks
-// the project's replica (`/api/cloud`), which answers while the writer machine is off too.
-const base = projectBase()
-const inCloud = base !== ''
 
 /** One poll shared by every component that reads it, running while any is mounted; a failed poll keeps the last value. */
 function poll<T>(
@@ -71,23 +66,9 @@ const running = (transition?: Transition | null) =>
 const local = poll(
   (signal) => api.action(StateAction, null, { signal }),
   (state) =>
-    state?.status === 'off'
-      ? 30_000
-      : running(state?.transition) || state?.progress || state?.sync?.catchingUp
-        ? 1000
-        : 4000,
-)
-const remote = poll(
-  async (signal) => {
-    // oxlint-disable-next-line ultimate/no-raw-stream -- the replica answers /api/cloud itself; no server facet does
-    const response = await fetch(`${base}/api/cloud`, { signal })
-    if (!response.ok) throw new Error(`${response.status}`)
-    return (await response.json()) as CloudInfo
-  },
-  (info) => (running(info?.transition) ? 1000 : 3000),
+    state?.status === 'off' ? 30_000 : running(state?.transition) || state?.progress ? 1000 : 4000,
 )
 const useLocal = () => useSyncExternalStore(local.subscribe, local.get)
-const useRemote = () => useSyncExternalStore(remote.subscribe, remote.get)
 
 const moveHere = async (force = false) => {
   await api.action(MoveHereAction, { force })
@@ -97,30 +78,6 @@ const cancelHere = async () => {
   await api.action(CancelAction)
   local.refresh()
 }
-/** `POST /api/cloud/<route>` of this project; rejects with the replica's error. */
-async function cloudPost(route: 'move' | 'cancel', body: object = {}) {
-  // oxlint-disable-next-line ultimate/no-raw-stream -- the replica answers /api/cloud itself; no server facet does
-  const response = await fetch(`${base}/api/cloud/${route}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!response.ok) {
-    const data = (await response.json().catch(() => ({}))) as { error?: string }
-    throw new Error(data.error ?? `${response.status} ${response.statusText}`)
-  }
-  remote.refresh()
-}
-
-/** `just now`, `5m ago`, `3h ago`, `2d ago`. */
-function ago(at: number) {
-  const minutes = Math.max(0, Math.floor((Date.now() - at) / 60000))
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  if (minutes < 60 * 24) return `${Math.floor(minutes / 60)}h ago`
-  return `${Math.floor(minutes / 60 / 24)}d ago`
-}
-
 // Transitions this page saw running: their success shows until dismissed, an older one's does not.
 const watched = new Set<string>()
 /** The last dismissed transition, for every tab of this browser. */
@@ -220,8 +177,6 @@ function useAct() {
   }
   return { busy, error, act }
 }
-
-// Locally: this machine, the writer it hears about, "Move here".
 
 /** "runs on rog", "rog · offline", "free": who has the project, as this machine hears it. */
 function holder(state: CloudState, released: boolean) {
@@ -362,15 +317,6 @@ function LocalPicker({ state }: { state: CloudState }) {
           )}
         </MachineRow>
       </ul>
-      {state.sync?.catchingUp && (
-        <p className="flex items-center gap-1.5 border-t border-border/60 px-3 py-1.5 text-[11px] text-muted-foreground">
-          <LoaderCircleIcon className="size-3 shrink-0 animate-spin" />
-          Catching up
-          {state.sync.conversations
-            ? ` ${state.sync.conversations.synced}/${state.sync.conversations.total} conversations`
-            : '…'}
-        </p>
-      )}
       {state.role === 'standby' && state.blocked && (
         <p className="border-t border-border/60 px-3 py-1.5 font-sans text-[12px] text-muted-foreground">
           {state.blocked}
@@ -388,81 +334,6 @@ function LocalPicker({ state }: { state: CloudState }) {
       </div>
     </>
   )
-}
-
-// In the cloud: every machine the replica knows, "Run here".
-
-function CloudTransition({ info, className }: { info: CloudInfo; className?: string }) {
-  const { shown, dismiss } = useShown(info.transition)
-  const transition = info.transition
-  if (!shown || !transition) return null
-  return (
-    <TransitionCard
-      className={className}
-      onCancel={() => cloudPost('cancel')}
-      onDismiss={dismiss}
-      onForce={() => cloudPost('move', { machine: transition.target, force: true })}
-      transition={transition}
-    />
-  )
-}
-
-/** The machine picker: the lease holder, standbys with a checkout, machines not connected, and what each lacks. */
-function CloudPicker({ info }: { info: CloudInfo }) {
-  const { busy, error, act } = useAct()
-  const moving = running(info.transition)
-  const machines = info.machines.toSorted(
-    (a, b) =>
-      Number(b.role === 'writer') - Number(a.role === 'writer') ||
-      Number(b.connected) - Number(a.connected) ||
-      a.machine.localeCompare(b.machine),
-  )
-  return (
-    <>
-      <Heading>Run on…</Heading>
-      <ul className="pb-1">
-        {machines.map((machine) => (
-          <MachineRow
-            key={machine.machine}
-            missing={machine.missingSecrets}
-            name={machine.machine}
-            on={machine.connected}
-            state={
-              machine.role === 'writer'
-                ? info.lease?.online
-                  ? 'running'
-                  : `holds the project · offline since ${ago(machine.lastSeen)}`
-                : machine.connected
-                  ? 'standby · checkout ready'
-                  : `not connected · seen ${ago(machine.lastSeen)}`
-            }
-          >
-            {machine.role === 'standby' && (
-              <Button
-                className="h-6 font-sans text-[12px]"
-                disabled={busy || moving || !machine.connected}
-                onClick={() => act(() => cloudPost('move', { machine: machine.machine }))}
-                size="xs"
-                title={machine.connected ? undefined : `${machine.machine} is not connected`}
-                variant="outline"
-              >
-                Run here
-              </Button>
-            )}
-          </MachineRow>
-        ))}
-      </ul>
-      {error && <p className="px-3 pb-2 font-sans text-[12px] text-error">{error}</p>}
-      <CloudTransition className="m-2 shadow-none" info={info} />
-    </>
-  )
-}
-
-/** The holder as the status line names it: `on haza-pc`, `haza-pc · offline` or `free`. */
-function cloudHolder(info: CloudInfo) {
-  const lease = info.lease
-  if (!lease || lease.machine === null) return 'free'
-  return lease.online ? `on ${lease.machine}` : `${lease.machine} · offline`
 }
 
 const statusButton =
@@ -535,20 +406,6 @@ function LocalExecutor() {
   )
 }
 
-function CloudExecutor() {
-  const info = useRemote()
-  if (!info?.lease) return null
-  return (
-    <ExecutorButton
-      label={cloudHolder(info)}
-      moving={running(info.transition)}
-      warn={!info.lease.online}
-    >
-      <CloudPicker info={info} />
-    </ExecutorButton>
-  )
-}
-
 // Right-aligned on wider screens, clear of the notices at the top centre.
 const banner =
   'pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center px-3 md:justify-end'
@@ -565,60 +422,10 @@ function LocalBanner() {
   )
 }
 
-/** In the cloud: the move in progress, or while no machine serves the project, a way to run it on one. */
-function CloudBanner() {
-  const info = useRemote()
-  if (!info) return null
-  return (
-    <div className={banner}>
-      <CloudTransition className="pointer-events-auto w-full max-w-md" info={info} />
-    </div>
-  )
-}
-
-/** In the cloud while no machine serves the project: who is off, and "Run on…" to start it on another. */
-function CloudOffline() {
-  const info = useRemote()
-  const offline = useSystem()?.offline === true
-  if (!info || !offline) return null
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          className="flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 font-mono text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
-          data-cloud-run-on
-          type="button"
-        >
-          <Dot on={false} />
-          <span className="max-md:hidden">
-            {info.lease?.machine ? `${info.lease.machine} is offline · ` : 'not running · '}
-          </span>
-          <span className="text-foreground/85">Run on…</span>
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 p-0 font-mono" side="bottom">
-        <CloudPicker info={info} />
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-/** The standby page in the cloud lists the machines to run the project on. */
-function CloudStandby() {
-  const info = useRemote()
-  if (!info) return null
-  return (
-    <div className="w-full rounded-md border border-border bg-card text-left font-mono">
-      <CloudPicker info={info} />
-    </div>
-  )
-}
-
 export default defineWebExtension({
   slots: {
-    standby: [inCloud ? CloudStandby : LocalStandby],
-    'statusline.right': [inCloud ? CloudExecutor : LocalExecutor],
-    'conversation.overlay': [inCloud ? CloudBanner : LocalBanner],
-    'header.right': inCloud ? [CloudOffline] : [],
+    standby: [LocalStandby],
+    'statusline.right': [LocalExecutor],
+    'conversation.overlay': [LocalBanner],
   },
 })
