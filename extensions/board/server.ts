@@ -17,6 +17,8 @@ import {
 } from '@earendil-works/pi-durable'
 import type {
   ConversationId,
+  EntryId,
+  EntryRecord,
   GenerationResult,
   SubmissionId,
   TaskId,
@@ -33,7 +35,63 @@ import { discoverAgents } from '../../lib/agents.ts'
 import { LineageApi, Roots } from '../lineage/api.ts'
 import { Asked, Board, BoardApi, MessageSent } from './api.ts'
 import type { BoardMessage } from './api.ts'
+import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 export const docs = [Board]
+
+/**
+ * Which images to forward: `latest`, the newest entry in the sender's conversation with images (a pasted input or a
+ * tool result such as a screenshot), or that entry's id.
+ */
+export type ImagesRef = 'latest' | number
+const SCAN_PAGE = 200
+function imagesOf(entry: EntryRecord | undefined) {
+  return (entry?.model ?? []).flatMap((message) =>
+    (message.role === 'user' || message.role === 'toolResult') &&
+    typeof message.content !== 'string'
+      ? message.content.flatMap((block) =>
+          block.type === 'image'
+            ? [{ type: 'image' as const, data: block.data, mimeType: block.mimeType }]
+            : [],
+        )
+      : [],
+  )
+}
+/** Resolve `ref` against conversation `from`'s visible history to the entry holding the images, checking the limits. */
+async function resolveImages(tx: Tx, from: ConversationId, ref: ImagesRef) {
+  let entry: EntryRecord | undefined
+  if (ref === 'latest') {
+    let cursor: Parameters<Tx['scanEntries']>[2]
+    do {
+      const page = await tx.scanEntries({ conversationId: from }, SCAN_PAGE, cursor)
+      entry = page.items.find((item) => imagesOf(item).length > 0)
+      cursor = page.next
+    } while (!entry && cursor !== undefined)
+    if (!entry) throw new Error('images: "latest" found no entry with images in this conversation')
+  } else {
+    if (!Number.isInteger(ref) || ref < 1)
+      throw new Error('images must be "latest" or the id of an entry with images')
+    entry = (
+      await tx.scanEntries(
+        { conversationId: from, minEntryId: ref as EntryId, maxEntryId: ref as EntryId },
+        1,
+      )
+    ).items[0]
+    if (!entry) throw new Error(`images: entry ${ref} is not in this conversation`)
+  }
+  const images = imagesOf(entry)
+  if (!images.length) throw new Error(`images: entry ${entry.id} has no images`)
+  if (images.length > maxImages)
+    throw new Error(
+      `images: entry ${entry.id} has ${images.length} images; at most ${maxImages} go along`,
+    )
+  for (const image of images)
+    if (
+      !imageMimeTypes.includes(image.mimeType) ||
+      Buffer.byteLength(image.data, 'base64') > maxImageBytes
+    )
+      throw new Error(`images: entry ${entry.id} has an unsupported image or one over 2 MiB`)
+  return { entry: entry.id, count: images.length }
+}
 // The receipt commits with the message, closing the gap before api.memo records its id.
 const Sent = defineDoc<{ ids: Record<string, number> }>({
   kind: 'board.sent-calls',
@@ -116,6 +174,10 @@ function delivery(host: ExtensionHost) {
         await refresh(m.to, ctx)
         const recipient = await host.harness().conversation(m.to as ConversationId, ctx)
         if (!recipient) throw new Error(`Unknown conversation #${m.to}`)
+        // Entries never change, so a replayed delivery attaches the same images.
+        const images = m.images
+          ? imagesOf(await host.harness().commit((tx) => tx.entry(m.images!.entry), ctx))
+          : []
         const entry = {
           kind: 'board.message',
           data: {
@@ -124,11 +186,13 @@ function delivery(host: ExtensionHost) {
             text: m.text,
             reply: m.reply,
             delivery: task.input.note ? 'note' : task.input.steer ? 'steer' : 'followUp',
+            ...(images.length ? { images: images.length } : {}),
           },
         }
-        const content = task.input.note
+        const body = task.input.note
           ? `Note from ${task.input.fromLabel} (one-way update, no answer goes back):\n${m.text}`
           : `Message from ${task.input.fromLabel}:\n${m.text}${m.reply ? `\nAnswer here; your answer is sent to ${task.input.fromLabel} automatically. Do not use message to reply.` : `\nOne-way message: ${task.input.fromLabel} expects no answer, and your answer here is not sent to it. If it needs to hear from you, message it.`}`
+        const content = images.length ? [{ type: 'text' as const, text: body }, ...images] : body
         const requestId = `board:${m.id}`
         const receipt = task.input.note
           ? await recipient.submit(
@@ -415,7 +479,14 @@ async function resolve(host: ExtensionHost, to: string, from: number | 'user', c
 async function send(
   host: ExtensionHost,
   from: number | 'user',
-  input: { to: string; text: string; reply?: boolean; steer?: boolean; re?: number },
+  input: {
+    to: string
+    text: string
+    reply?: boolean
+    steer?: boolean
+    re?: number
+    images?: ImagesRef
+  },
   ctx: Context,
   taskId?: TaskId,
   callId?: string,
@@ -468,6 +539,12 @@ async function send(
         throw new Error('These questions are no longer open')
     }
     // Writing to a conversation, as a Reply or a new post, answers the questions it asked the user.
+    if (input.images !== undefined && (from === 'user' || to === 'user'))
+      throw new Error('images go along only to conversations and agents')
+    const images =
+      input.images === undefined
+        ? undefined
+        : await resolveImages(tx, from as ConversationId, input.images)
     if (from === 'user' && to !== 'user')
       for (const m of (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages)
         if (openQuestion(m) && (m.from === to || m.id === input.re)) m.state = 'answered'
@@ -493,6 +570,7 @@ async function send(
       state: to === 'user' ? 'delivered' : 'sent',
       ...(input.re === undefined ? {} : { re: input.re }),
       ...(callId === undefined ? {} : { call: callId }),
+      ...(images ? { images } : {}),
     })
     await host.emit(tx, MessageSent, { message: message.id, from, to, reply: message.reply, steer })
     if (to === 'user' && message.reply && from !== 'user')
@@ -537,6 +615,10 @@ export const actions = {
     }
   },
 }
+const imagesParameter = Type.Union([Type.Literal('latest'), Type.Integer({ minimum: 1 })], {
+  description:
+    'Forward images from your conversation: "latest" for the newest input or tool result (screenshot) with images, or that entry\'s id.',
+})
 export default function board(host: ExtensionHost) {
   // Core, always on; resolved where they are called, declared here so the catalogue lists them.
   host.need(LineageApi)
@@ -640,6 +722,7 @@ export default function board(host: ExtensionHost) {
           prompt: Type.String({ minLength: 1 }),
           root: Type.Optional(Type.Number()),
           isolated: Type.Optional(Type.Boolean()),
+          images: Type.Optional(imagesParameter),
         }),
         // Lineage atomically deduplicates the fork; Sent deduplicates its first message.
         replay: 'safe',
@@ -687,7 +770,12 @@ export default function board(host: ExtensionHost) {
           const message = await send(
             host,
             api.conversationId,
-            { to: `#${id}`, text: input.prompt, reply: true },
+            {
+              to: `#${id}`,
+              text: input.prompt,
+              reply: true,
+              ...(input.images === undefined ? {} : { images: input.images }),
+            },
             ctx,
             api.taskId,
             api.callId,
@@ -706,6 +794,7 @@ export default function board(host: ExtensionHost) {
           text: Type.String({ minLength: 1 }),
           reply: Type.Optional(Type.Boolean()),
           steer: Type.Optional(Type.Boolean()),
+          images: Type.Optional(imagesParameter),
         }),
         // The task-scoped receipt deduplicates admission; the memo returns the same id on replay.
         replay: 'safe',

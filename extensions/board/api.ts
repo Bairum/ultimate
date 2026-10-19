@@ -23,6 +23,8 @@ export type BoardMessage = {
   error?: string
   /** The tool call that sent it: `message`'s or `branch`'s own id, `<script>/<n>` for a nested codemode call. */
   call?: string
+  /** Images forwarded with it: the sender's entry that holds them, attached to the recipient's input on delivery. */
+  images?: { entry: EntryId; count: number }
 }
 /** Every message between conversations and the user, on the root conversation. */
 export const Board = defineDoc<{ messages: BoardMessage[]; next: number }>({

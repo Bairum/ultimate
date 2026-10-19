@@ -968,6 +968,134 @@ it.each([false, true])(
     ).toHaveLength(1)
   },
 )
+const png = (n: number) => ({
+  type: 'image' as const,
+  mimeType: 'image/png',
+  data: `iVBORw0KGgo${n}AAAA`,
+})
+async function submitWithImages(
+  f: Awaited<ReturnType<typeof fixture>>,
+  text: string,
+  count: number,
+) {
+  const submission = await f.opened.root.submit(
+    {
+      type: 'input',
+      content: [{ type: 'text', text }, ...Array.from({ length: count }, (_, i) => png(i))],
+    },
+    context,
+  )
+  await submission.wait(context)
+  return (await submission.status(context)).entry!
+}
+async function placed(f: Awaited<ReturnType<typeof fixture>>, id: number, message: number) {
+  const view = await (await f.opened.harness.conversation(
+    id as ConversationId,
+    context,
+  ))!.viewState(context)
+  const entry = view.value.entries.find(
+    (e) => e.kind === 'board.message' && (e.data as { id: number }).id === message,
+  )
+  view.dispose()
+  return entry
+}
+const imagesIn = (entry: { model?: readonly { content: unknown }[] } | undefined) => {
+  const content = entry?.model?.[0]?.content
+  return Array.isArray(content) ? content.filter((p) => p.type === 'image') : []
+}
+it('forwards images from the sender to a message recipient, by latest or entry id', async () => {
+  const f = await fixture()
+  const to = `#${f.recipient.id}`
+  await submitWithImages(f, `SEND ${JSON.stringify({ to, text: 'See this', images: 'latest' })}`, 2)
+  await until(async () => (await f.log())!.messages[0]?.state === 'answered')
+  const first = (await f.log())!.messages[0]
+  expect(first.images).toMatchObject({ count: 2 })
+  const entry = await placed(f, f.recipient.id, first.id)
+  expect(entry?.data).toMatchObject({ images: 2 })
+  expect(imagesIn(entry)).toEqual([png(0), png(1)])
+  // A later input without images: `latest` still finds the one that has them, and an id names it exactly.
+  await f.send(to, 'Again', { images: 'latest' })
+  await f.send(to, 'By id', { images: first.images!.entry })
+  await until(async () => (await f.log())!.messages.filter((m) => m.images).length === 3)
+  for (const sent of (await f.log())!.messages.filter((m) => m.images && m.id !== first.id)) {
+    await until(async () => (await placed(f, f.recipient.id, sent.id)) !== undefined)
+    expect(imagesIn(await placed(f, f.recipient.id, sent.id))).toEqual([png(0), png(1)])
+  }
+})
+it('refuses image references that do not resolve or exceed the limits', async () => {
+  const f = await fixture()
+  const to = `#${f.recipient.id}`
+  await f.send(to, 'None yet', { images: 'latest' })
+  expect(f.observed.join('\n')).toContain('found no entry with images')
+  await f.send(to, 'Missing', { images: 99999 })
+  expect(f.observed.join('\n')).toContain('entry 99999 is not in this conversation')
+  const plain = await submitWithImages(f, 'plain', 0)
+  await f.send(to, 'Plain', { images: plain })
+  expect(f.observed.join('\n')).toContain(`entry ${plain} has no images`)
+  await submitWithImages(f, `SEND ${JSON.stringify({ to, text: 'Too many', images: 'latest' })}`, 5)
+  expect(f.observed.join('\n')).toContain('has 5 images; at most 4 go along')
+  await submitWithImages(
+    f,
+    `SEND ${JSON.stringify({ to: 'user', text: 'Look', images: 'latest' })}`,
+    1,
+  )
+  expect(f.observed.join('\n')).toContain('images go along only to conversations and agents')
+  expect((await f.log())?.messages ?? []).toHaveLength(0)
+})
+const result = (images: object[]) => [
+  {
+    role: 'toolResult',
+    toolCallId: 'shot',
+    toolName: 'screenshot',
+    content: [{ type: 'text', text: 'PNG' }, ...images],
+    isError: false,
+    timestamp: Date.now(),
+  },
+]
+it('forwards tool-result images, finds latest past a page, and checks every image', async () => {
+  const f = await fixture()
+  const to = `#${f.recipient.id}`
+  const write = (model: object[]) =>
+    f.opened.harness.commit(
+      async (tx) =>
+        (await tx.appendEntry(ROOT_CONVERSATION_ID, { kind: 'test.entry', model } as never)).id,
+      context,
+    )
+  const shot = await write(result([png(7)]))
+  // More plain entries than one scan page: latest still reaches the screenshot.
+  await f.opened.harness.commit(async (tx) => {
+    for (let i = 0; i < 250; i++)
+      await tx.appendEntry(ROOT_CONVERSATION_ID, { kind: 'test.filler' })
+  }, context)
+  await f.send(to, 'Screenshot', { images: 'latest' })
+  await until(async () => (await f.log())?.messages[0]?.state === 'answered')
+  const message = (await f.log())!.messages[0]
+  expect(message.images).toEqual({ entry: shot, count: 1 })
+  expect(imagesIn(await placed(f, f.recipient.id, message.id))).toEqual([png(7)])
+  const big = 'A'.repeat(Math.ceil(((2 * 1024 * 1024 + 3) / 3) * 4))
+  const oversized = await write(result([{ type: 'image', mimeType: 'image/png', data: big }]))
+  await f.send(to, 'Big', { images: oversized })
+  const svg = await write(result([{ type: 'image', mimeType: 'image/svg+xml', data: 'AAAA' }]))
+  await f.send(to, 'Svg', { images: svg })
+  expect(f.observed.join('\n')).toContain(
+    `entry ${oversized} has an unsupported image or one over 2 MiB`,
+  )
+  expect(f.observed.join('\n')).toContain(`entry ${svg} has an unsupported image or one over 2 MiB`)
+  // Another conversation's entry is not this sender's to forward.
+  const elsewhere = await f.opened.harness.commit(
+    async (tx) =>
+      (
+        await tx.appendEntry(f.recipient.id, {
+          kind: 'test.entry',
+          model: result([png(1)]),
+        } as never)
+      ).id,
+    context,
+  )
+  await f.send(to, 'Elsewhere', { images: elsewhere })
+  expect(f.observed.join('\n')).toContain(`entry ${elsewhere} is not in this conversation`)
+  expect((await f.log())!.messages.filter((m) => m.from === 1)).toHaveLength(1)
+})
 async function branched(f: Awaited<ReturnType<typeof fixture>>) {
   const tool = (await f.opened.root.agent(context)).deferred.find(
     (candidate) => candidate.name === 'branch',
@@ -1002,6 +1130,24 @@ async function branched(f: Awaited<ReturnType<typeof fixture>>) {
   await settled()
   return { id, branch, from, later, settled }
 }
+it('forwards images into a new branch with its prompt', async () => {
+  const f = await fixture()
+  const tool = (await f.opened.root.agent(context)).deferred.find((t) => t.name === 'branch')!
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1]
+    await configure(tx, f.opened.root.id, { modelTools: { add: [tool] } })
+  }, context)
+  await submitWithImages(
+    f,
+    'BRANCH ' + JSON.stringify({ prompt: 'Fix this card', isolated: false, images: 'latest' }),
+    1,
+  )
+  await until(async () => (await replies(f)).length === 1)
+  const message = (await f.log())!.messages[0]
+  expect(message.images?.count).toBe(1)
+  const entry = await placed(f, message.to as number, message.id)
+  expect(imagesIn(entry)).toEqual([png(0)])
+})
 it("routes a branch's later final answer to its starter once: a note, or a wake for a decision", async () => {
   const f = await fixture()
   const b = await branched(f)
