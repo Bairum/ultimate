@@ -994,6 +994,19 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       // Each hold is reported once per change.
       let reported = ''
       let dirty: string[] = []
+      /**
+       * Whether no backup uploads now. Otherwise it waits for the upload to end, or for a cancel or a task change, with
+       * every watcher still active, and the loop checks everything again before it releases.
+       */
+      const noBackup = async () => {
+        if (!backupRun) return true
+        if (reported !== 'backup') {
+          reported = 'backup'
+          host.notice(`Move to ${by} waits for a backup to finish`)
+        }
+        await Promise.race([backupRun, wake.promise])
+        return false
+      }
       try {
         for (;;) {
           wake = Promise.withResolvers<void>()
@@ -1009,12 +1022,17 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
             ;({ dirty, unchecked } = await scan())
             // The move may have ended while the scan ran.
             if (cancelled || ended(sync.state())) return stopped()
-            if (force) break
-            // A run that started during the scan holds the move again.
+            if (force) {
+              if (await noBackup()) break
+              continue
+            }
             // A run that started during the scan holds the move again; one that also ended may have changed a
             // worktree the scan had already passed, so the scan runs again.
             if (foreground(graph) > 0 || changed !== before) continue
-            if (!dirty.length && !unchecked) break
+            if (!dirty.length && !unchecked) {
+              if (await noBackup()) break
+              continue
+            }
             waiting = { tasks: 0, dirty, held: true, ...(unchecked ? { unchecked } : {}) }
           }
           const key = JSON.stringify(waiting)

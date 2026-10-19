@@ -678,15 +678,14 @@ export const scoped = (deps: SyncDeps, root: string): SyncDeps => ({
  * any move, cancel or backup request goes out.
  */
 export function projectActions(deps: SyncDeps, root: string) {
-  // `find` throws for a name outside the scoped fleet, naming the one project there is.
-  const inScope = async (name: string) => void find((await projectFleet(deps, root)).projects, name)
+  // `find` throws for a name outside the scoped fleet. The action then names the match by its canonical key, which is
+  // unique in the directory, so a foreign project with the same name is never the one acted on.
+  const key = async (name: string) => find((await projectFleet(deps, root)).projects, name).key
   return {
-    move: async (input: Parameters<typeof move>[1]) => (
-      await inScope(input.project),
-      move(deps, input)
-    ),
-    cancel: async (name: string) => (await inScope(name), cancel(deps, name)),
-    backup: async (name: string) => (await inScope(name), backup(deps, name)),
+    move: async (input: Parameters<typeof move>[1]) =>
+      move(deps, { ...input, project: await key(input.project) }),
+    cancel: async (name: string) => cancel(deps, await key(name)),
+    backup: async (name: string) => backup(deps, await key(name)),
   }
 }
 

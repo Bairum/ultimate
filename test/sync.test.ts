@@ -640,6 +640,33 @@ it('reads its own project in a project home through the real deps, reaching itse
   expect(await act.backup('ultimate')).toMatchObject({ key: 'github.com/hazat/ultimate', id: 'b1' })
 })
 
+it('addresses its own project by key in a project home, though a foreign one of the same name is listed first', async () => {
+  // Another owner's `ultimate`, listed before this checkout's project in the directory.
+  const foreign: Project = { ...directory[0], key: 'github.com/someone/ultimate', name: 'ultimate' }
+  const { deps, requests } = fake({
+    directory: () => Response.json([foreign, ...directory]),
+    state: () => ({ status: 'on', machine: 'rog', role: 'writer', free: false, missing: [] }),
+  })
+  const act = projectActions(scoped(deps, '/u/Projects/ultimate'), '/u/Projects/ultimate')
+  const acted = () =>
+    requests
+      .filter((request) =>
+        /moveHere|actions\/cancel|actions\/backup|\/sync\/(move|cancel)/.test(request.url),
+      )
+      .map((request) => request.url)
+  expect(await act.move({ project: 'ultimate', to: 'mac' })).toMatchObject({
+    key: 'github.com/hazat/ultimate',
+  })
+  expect(await act.cancel('ultimate')).toEqual({ key: 'github.com/hazat/ultimate', local: false })
+  expect(await act.backup('ultimate')).toMatchObject({ key: 'github.com/hazat/ultimate' })
+  expect(acted()).toEqual([
+    'https://cloud.example/sync/move?project=github.com%2Fhazat%2Fultimate',
+    'https://cloud.example/sync/cancel?project=github.com%2Fhazat%2Fultimate',
+    'http://127.0.0.1:4747/api/extensions/cloud/actions/backup',
+  ])
+  expect(requests.some((request) => request.url.includes('someone'))).toBe(false)
+})
+
 it('refuses another project in a project home before any request goes out', async () => {
   const other: Project = {
     ...directory[0],

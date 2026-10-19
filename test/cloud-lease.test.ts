@@ -1211,6 +1211,73 @@ it('lets an idle release that falls due mid-backup wait for the upload, then rel
   expect(desk.host.standby()).toMatchObject({ reason: 'Released · resume here' })
 })
 
+/** Desk as the writer with a backup held open mid-upload, and laptop on standby; `finish` lets the upload end. */
+async function heldBackup() {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const gate = Promise.withResolvers<void>()
+  const started = Promise.withResolvers<void>()
+  let backups = 0
+  const deferred = {
+    ...snapshot,
+    uploadSnapshot: vi.fn<typeof snapshot.uploadSnapshot>(async (o) => {
+      // The first upload is the backup, held open; any later one is a release's.
+      if (backups++ === 0) {
+        started.resolve()
+        await gate.promise
+      }
+      return snapshot.uploadSnapshot(o)
+    }),
+  }
+  const desk = await machine('desk', project, root, { snapshots: deferred })
+  await writer(desk)
+  const laptop = await machine('laptop', project, root, { autoClaim: false })
+  await standbyOn(laptop)
+  const backup = desk.lease.backup()
+  await started.promise
+  return { project, desk, laptop, deferred, backup, finish: () => gate.resolve() }
+}
+
+it('keeps the project when a move is cancelled while it waits for a backup, and releases nothing', async () => {
+  const { project, desk, laptop, deferred, backup, finish } = await heldBackup()
+  const moving = laptop.lease.move()
+  // The writer found nothing to hold for and waits for the backup's upload, its watchers still active.
+  await until(() => desk.notices.includes('Move to laptop waits for a backup to finish'))
+  laptop.lease.cancel()
+  expect(await moving).toBe(false)
+  await until(() =>
+    desk.notices.includes('The move to laptop stopped; this machine keeps the project'),
+  )
+  finish()
+  await backup
+  await desk.lease.settled()
+  // Only the backup uploaded: no release followed it.
+  expect(deferred.uploadSnapshot).toHaveBeenCalledOnce()
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+  expect(desk.serving()).toBe(true)
+})
+
+it('holds a move again for a run that starts while it waits for a backup', async () => {
+  const { project, desk, laptop, deferred, backup, finish } = await heldBackup()
+  const moving = laptop.lease.move()
+  await until(() => desk.notices.includes('Move to laptop waits for a backup to finish'))
+  const task = await sleep(desk.harness(), false)
+  await until(() => desk.notices.includes('Move to laptop waits for 1 running task'))
+  finish()
+  await backup
+  // The backup is done, but the run holds the release.
+  await until(() => !!project.replica.store.transition()?.waiting)
+  expect(deferred.uploadSnapshot).toHaveBeenCalledOnce()
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+  expect(desk.serving()).toBe(true)
+  // Once it ends, the move releases and the laptop takes the project.
+  await desk.harness().abortTask(task, context)
+  expect(await moving).toBe(true)
+  expect(deferred.uploadSnapshot).toHaveBeenCalledTimes(2)
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'laptop', epoch: 2 })
+})
+
 it('keeps the lease on stop while a backup still uploads', async () => {
   snapshotFetch()
   const project = cloud()
