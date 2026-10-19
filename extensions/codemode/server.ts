@@ -141,8 +141,28 @@ function localReads(host: ExtensionHost, context: Context) {
     }
     return matches
   }
+  /** Every conversation with its summary (title, label, cwd, busy, latest input) and whether it is concluded. */
+  const listed = async () => {
+    const summaries = new Map(host.conversations().map((summary) => [summary.id, summary]))
+    const concluded = (await host.uiState(context))['ext.conversations.concluded']
+    const done = new Set(Array.isArray(concluded) ? concluded : [])
+    return (await conversations()).map((record) => {
+      const summary = summaries.get(record.id)
+      return {
+        ...record,
+        ...(summary && {
+          title: summary.title,
+          label: summary.label,
+          cwd: summary.cwd,
+          busy: summary.busy,
+          inputAt: summary.inputAt,
+        }),
+        ...(done.has(record.id) && { concluded: true }),
+      }
+    })
+  }
   return {
-    conversations: () => conversations(),
+    conversations: () => listed(),
     entries: ([conversation, options]) =>
       entries(conversation, options as Parameters<typeof entries>[1]),
     search: ([text, options]) =>
@@ -270,7 +290,8 @@ function globals(
     },
     {
       name: 'conversations',
-      description: 'All stored conversation identities and ownership edges.',
+      description:
+        'All stored conversations: id, owner, and for listed ones title, label, cwd, busy, inputAt and concluded.',
       signature: '(options?: { project?: string }): Promise<unknown[]>',
       execute: read('conversations', 0),
     },

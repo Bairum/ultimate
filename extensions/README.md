@@ -18,7 +18,6 @@ existing extension and change it:
 | A status-line action, an entry renderer over core | `self`                                              |
 | An extension document in the UI (`useDoc`)        | `plan`, `codemode` (renderers), `models` (`useDoc`) |
 | A renderer for your document (Documents tab)      | `plan` (see [Documents](#documents))                |
-| A prompt section from durable UI state            | `surfaces`                                          |
 | Toasts or other global overlays                   | `notices`                                           |
 
 An optional `inbox` renderer wraps each queued composer input with `{ item, core, cancel }`. Return `core` for inputs you do not own; when replacing it, include `cancel` to retain core cancellation. Like entry renderers, the last facet in discovery order wins and runs behind an extension boundary with core fallback. Keep provenance and domain-specific UI in the extension.
@@ -626,8 +625,7 @@ matching the server's port. A plain agent `curl` receives 403; use `ultimate.act
 
 The window shows one surface at a time. **Agent** is the built-in home surface (`extensions/agent`): the conversation
 with the sidebar and the right panel. An app surface puts its own UI first and keeps the agent one keystroke away,
-usually docked beside it. The `surfaces` extension adds the agent's surface-awareness prompt; the UI itself
-works without it. The `documents` extension provides the Documents tab.
+usually docked beside it. The `documents` extension provides the Documents tab.
 
 - **Switching**: the title bar lists the surfaces (Agent first, then by `order`, then title); on phones the brand
   opens them as a menu. ⌘K has "Switch to …"; `mod+1…9` select the first nine (Ctrl+1…9 off macOS, which Chrome lets

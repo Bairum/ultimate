@@ -535,6 +535,18 @@ it("reads another running project's history through its API, and names a project
   expect(unknown.text).toContain('poe2-rust')
 })
 
+it('lists conversations with their title and cwd, since the prompt no longer does', async () => {
+  const { server } = await fixture()
+  const { id } = (await post(server, '/api/conversations', { title: 'Parser work' })).data as {
+    id: number
+  }
+  const result = await run(server, `return await ultimate.conversations()`)
+  expect(result.data.isError).toBe(false)
+  const found = (result.data.details.value as { id: number }[]).find((item) => item.id === id)
+  expect(found).toMatchObject({ title: 'Parser work', cwd: expect.any(String), busy: false })
+  expect(found).not.toHaveProperty('concluded')
+})
+
 it('reads stored history and documents from before a reset', async () => {
   const { server } = await fixture()
   await run(server, `store('saved', 7); return 1;`, 'history-needle')
