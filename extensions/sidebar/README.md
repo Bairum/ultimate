@@ -50,15 +50,14 @@ subagents is shown. Each row has its title (or `#id` for shared rows, `Untitled 
 and the time of its latest message (`now`, `5m`, `3h`, `2d`,
 then a date). Its leading mark pulses while it or any of its subagents works, and is solid when an answer arrived
 since you last looked at it. Actual foreground tasks and live run boundaries determine Working, not the potentially
-lagging title/timestamp list. While working, old assessment marks are suppressed.
+lagging title/timestamp list.
 A solid purple dot means an unread reply, not ongoing work; only the pulsing dot means working.
 
-Idle, currently assessed replies may show a circular question (needs input) or green circular check (Done). These are
-**summary model assessments, not verified completion**; the tooltips say so. For a child, a question means it may need its
-coordinator, not necessarily a human. Unknown, neutral, stale or failed assessments never show a success mark.
-There is no third red blocked/unfinished assessment. Assessments never trigger question extraction or answer
-cards; [questions](../questions/README.md) extracts only from reply-expected Board messages to the user and from
-@ultimate's final answers to typed input.
+Every row reads one state from board's `conversationState`, the same the System surface shows: working;
+**waits on you** (only the primary agent, @ultimate or @sync in the machine home: an open question to the user);
+**awaiting @ultimate** (amber question mark: an open reply-expected message the conversation sent another agent);
+**done** (green check, subagents only: it answered, and its answer went to its parent); **failed** (red cross: its
+latest input ended unanswered); else idle. Nothing here is a model's opinion of a reply.
 
 A conversation with genuinely owned children has an expandable Sub-agents group; a listed root shows none, since a
 root runs no turns and its children predate its tally (they stay reachable by link and search). Rows show the recorded agent role/name,
