@@ -58,8 +58,15 @@ export const traceContext = () => storage.getStore()
 
 const LIMIT = 300
 const SECRET = /secret|token|password|key|auth/i
-// Values of these extensions may be secrets, so their calls keep neither arguments nor results.
-const SEALED = new Set(['secrets'])
+// Calls into these extensions carry credentials (secret values; API keys and OAuth codes answering a model login), so
+// they keep no arguments, results or error messages, which may echo them; only the error's class.
+const SEALED = new Set(['secrets', 'models'])
+
+/** What a failed call stored: the error message, or for a call carrying credentials only the error's class. */
+function failure(error: unknown, credentials: boolean) {
+  if (credentials) return error instanceof Error ? error.name : typeof error
+  return error instanceof Error ? error.message : String(error)
+}
 
 /** JSON of `value`, cut at about 300 characters, with values under secret-looking keys replaced. */
 export function summary(value: unknown) {
@@ -93,8 +100,8 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
     reported = true
     console.error('Call trace failed; dropping trace records:', error)
   }
-  /** Running tool calls by task, so a nested call continues its caller's trace. */
-  const tools = new Map<number, { context: TraceContext; extension: string }>()
+  /** Running tool calls by call id, so the tools they call continue their trace. */
+  const tools = new Map<string, { context: TraceContext; extension: string; taskId: number }>()
 
   function flush() {
     clearTimeout(timer)
@@ -163,7 +170,8 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
     const finish = (ok: boolean, value: unknown) => {
       if (!database) return
       try {
-        const sealed = call.sealed || SEALED.has(call.callee)
+        const credentials = SEALED.has(call.callee)
+        const sealed = call.sealed || credentials
         buffer.push([
           id,
           parent?.parentCall ?? null,
@@ -175,7 +183,7 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
           call.kind,
           call.name,
           ok ? 1 : 0,
-          ok ? null : value instanceof Error ? value.message : String(value),
+          ok ? null : failure(value, credentials),
           (!sealed && summary(call.args)) || null,
           (ok && !sealed && summary(value)) || null,
           context.conversationId ?? null,
@@ -255,10 +263,18 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls (at);`)
           } catch {
             // The task read only labels the row (a test double may not offer it); the call runs regardless.
           }
-          const caller = input?.kind === 'nested' ? tools.get(input.parent) : undefined
+          // A Pi nested call continues its calling tool's trace. So does a tool another running tool calls directly, as
+          // codemode does; any other context (left by a timer or a commit) does not make it a child.
+          const current = traceContext()
+          const enclosing =
+            input?.kind === 'nested'
+              ? tools.get(input.parentCallId)
+              : current && [...tools.values()].find((running) => running.taskId === current.taskId)
+          const parent =
+            input?.kind === 'nested' ? enclosing?.context : enclosing ? current : undefined
           const call: Call = {
             kind: 'tool',
-            caller: caller?.extension ?? 'agent',
+            caller: enclosing?.extension ?? 'agent',
             callee: extension.name,
             name: tool.name,
             conversationId: api.conversationId,
@@ -269,14 +285,18 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls (at);`)
           return run(
             call,
             async () => {
-              tools.set(api.taskId, { context: traceContext()!, extension: extension.name })
+              tools.set(api.callId, {
+                context: traceContext()!,
+                extension: extension.name,
+                taskId: api.taskId,
+              })
               try {
                 return await tool.execute(args, api, context)
               } finally {
-                tools.delete(api.taskId)
+                tools.delete(api.callId)
               }
             },
-            caller?.context ?? null,
+            parent ?? null,
           )
         },
       })

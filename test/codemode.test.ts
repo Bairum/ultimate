@@ -16,6 +16,7 @@ import {
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { Store } from '../extensions/codemode/server.ts'
+import type { CallTree } from '../server/trace.ts'
 
 const servers: Awaited<ReturnType<typeof createServer>>[] = []
 const directories: string[] = []
@@ -129,6 +130,57 @@ async function run(
     state.dispose()
   }
 }
+
+/** Kind, caller and name of each call in a trace tree, nested like it. */
+const shape = (calls: CallTree[]): unknown[] =>
+  calls.map((call) => [call.kind, call.caller, call.name, shape(call.children)])
+
+it('traces a tool a codemode script calls, and its service call, inside the codemode call', async () => {
+  const { server, options } = await fixture()
+  const token = `import { defineApi } from ${JSON.stringify(resolve('shared/extension-api.ts'))}
+    const Echo = defineApi()('trace-echo')`
+  for (const [name, source] of [
+    [
+      'trace-echo',
+      `${token}
+      export default (host) => {
+        host.implement(Echo, { echo: (text) => text })
+        return { name: 'trace-echo' }
+      }`,
+    ],
+    [
+      'trace-probe',
+      `import { defineTool } from '@earendil-works/pi-durable'
+      import { Type } from '@earendil-works/pi-ai'
+      ${token}
+      export default (host) => {
+        const echo = host.need(Echo)
+        return { name: 'trace-probe', tools: [defineTool({
+          name: 'probe',
+          description: 'Echoes through a service',
+          parameters: Type.Object({}),
+          execute: async () => ({ output: [{ type: 'text', text: echo.echo('probed') }] }),
+        })] }
+      }`,
+    ],
+  ]) {
+    await mkdir(join(options.ultimateRoot, 'extensions', name))
+    await writeFile(join(options.ultimateRoot, 'extensions', name, 'server.ts'), source)
+  }
+  await until(async () =>
+    (await server.root.agent(context)).tools.some((tool) => tool.name === 'probe'),
+  )
+  expect((await run(server, `return await tools.probe({});`)).data.details.value).toBe('probed')
+  const echo = server.extensions.trace.query().find((row) => row.name === 'trace-echo.echo')!
+  expect(shape(server.extensions.trace.tree(echo.trace))).toEqual([
+    [
+      'tool',
+      'agent',
+      'codemode',
+      [['tool', 'codemode', 'probe', [['service', 'trace-probe', 'trace-echo.echo', []]]]],
+    ],
+  ])
+})
 
 it('calls extension actions with caller context and rejects missing or disabled actions', async () => {
   const { server, options } = await fixture()

@@ -30,8 +30,8 @@ const doc = (kind: string) =>
 const Shipped = doc('test.shipped')
 const Seen = doc('test.seen')
 
-/** A project with one extension, `probe`, whose actions hand out its facet host and raise a notice. */
-async function project() {
+/** A project with one extension, `probe`, whose actions hand out its facet host and raise a notice; `setup` runs at load. */
+async function project(setup = '') {
   const root = await temp()
   await linkDependencies(root)
   await mkdir(join(root, 'web'))
@@ -43,7 +43,10 @@ async function project() {
   const write = (version: number) =>
     writeFile(
       file,
-      `export default { name: 'probe' }
+      `export default (host) => {
+  ${setup}
+  return { name: 'probe' }
+}
 export const actions = {
   host: async (_, { host }) => host,
   notice: async (message, { host }) => host.notice(message),
@@ -186,6 +189,16 @@ it('reads recent events newest first as copies, feeds the browser and records no
   expect(
     (await host.eventLog.recent({ events: [NoticeEvent] })).map((event) => event.data),
   ).toEqual([{ extension: 'probe', message: 'Probe broke', level: 'warning' }])
+})
+
+it('records a notice raised during facet setup, before storage opens, once it opens', async () => {
+  const probe = await start(await project("host.notice('Probe set up without storage')"))
+  const host = await probe.host()
+  await until(async () => (await host.eventLog.recent({ events: [NoticeEvent] })).length > 0)
+  await probe.land('a1')
+  expect(
+    (await host.eventLog.recent({ events: [NoticeEvent] })).map((event) => event.data),
+  ).toEqual([{ extension: 'probe', message: 'Probe set up without storage', level: 'warning' }])
 })
 
 it('leaves the log conversation out of conversation lists but serves it by id', async () => {

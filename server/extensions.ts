@@ -142,7 +142,8 @@ export async function loadExtensions(
   const facetOpeners = new Map<ExtensionHost, Set<() => Promise<void>>>()
   const facetReleasers = new Map<ExtensionHost, Set<() => Promise<void>>>()
   const facetCleanups = new Map<ExtensionHost, Set<() => Promise<void>>>()
-  const facetNotices = new Map<ExtensionHost, Set<string>>()
+  /** Each facet's distinct notice messages, and whether each is recorded as an event yet. */
+  const facetNotices = new Map<ExtensionHost, Map<string, boolean>>()
   const extensionOf = (facetHost: ExtensionHost) =>
     [...facetHosts].find(([, current]) => current === facetHost)?.[0]
   const apis = extensionApis(
@@ -197,8 +198,12 @@ export async function loadExtensions(
       want: <S>(api: Api<string, S>): S | undefined => apis.want(facetHost, name, api),
       notice: (message) => {
         // Each distinct message once per facet load: a notice raised by a commit watcher cannot loop through its event.
-        if (open && facetNotices.get(facetHost)?.has(message) === false) log.notice(name, message)
-        facetNotices.get(facetHost)!.add(message)
+        // One raised while storage is closed is recorded when it opens.
+        const messages = facetNotices.get(facetHost)!
+        if (!messages.has(message)) {
+          messages.set(message, open)
+          if (open) log.notice(name, message)
+        }
         notice(message)
         void changed()
       },
@@ -254,7 +259,7 @@ export async function loadExtensions(
     facetOpeners.set(facetHost, new Set())
     facetReleasers.set(facetHost, new Set())
     facetCleanups.set(facetHost, new Set())
-    facetNotices.set(facetHost, new Set())
+    facetNotices.set(facetHost, new Map())
     return facetHost
   }
   const actions = new Map<string, Record<string, ExtensionAction>>()
@@ -709,7 +714,7 @@ export async function loadExtensions(
       diagnostics: () => [
         ...new Set([
           ...diagnostics,
-          ...[...facetNotices.values()].flatMap((messages) => [...messages]),
+          ...[...facetNotices.values()].flatMap((messages) => [...messages.keys()]),
           ...apis.missing(),
           ...projectDiagnostics(host.projectRoot, host.userHome),
         ]),
@@ -727,6 +732,12 @@ export async function loadExtensions(
     async opened() {
       trace.open()
       open = true
+      for (const [name, facetHost] of facetHosts)
+        for (const [message, recorded] of facetNotices.get(facetHost) ?? [])
+          if (!recorded) {
+            log.notice(name, message)
+            facetNotices.get(facetHost)!.set(message, true)
+          }
       await Promise.all([...openers].map(runOpener))
     },
     /** The harness is about to close: run the `onRelease` callbacks. */

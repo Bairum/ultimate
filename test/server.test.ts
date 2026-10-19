@@ -833,9 +833,21 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     expect((await action('cancel', { flowId: second })).status).toBe(200)
     await until(async () => (await flows(other))[second].status === 'cancel')
     expect((await flows(other))[second].prompt).toBeUndefined()
-    expect((await action('answer', { flowId: second, value: 'late' })).data).toEqual({
+    expect((await action('answer', { flowId: second, value: 'late-credential' })).data).toEqual({
       error: 'Unknown login flow',
     })
+    // The call trace records answers, accepted or rejected, without their credentials.
+    const answers = server.extensions.trace
+      .query({ limit: 1000 })
+      .filter((row) => row.name === 'models/answer')
+    expect(answers.map(({ ok, args, result, error }) => ({ ok, args, result, error }))).toEqual([
+      { ok: true, args: undefined, result: undefined, error: undefined },
+      { ok: true, args: undefined, result: undefined, error: undefined },
+      { ok: false, args: undefined, result: undefined, error: 'Error' },
+    ])
+    const trace = JSON.stringify(server.extensions.trace.query({ limit: 1000 }))
+    expect(trace).not.toContain('not-a-real-credential')
+    expect(trace).not.toContain('late-credential')
     expect(
       stream.events.some(
         (event) =>

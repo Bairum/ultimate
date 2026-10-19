@@ -140,7 +140,8 @@ events (above) for "this happened", actions for the UI and user boundary.
 
 `server/trace.ts` records every service call (`<caller extension>` → `<api>.<method>`), extension action
 (`ui` or `agent` → `<extension>/<action>`), reactor run (event name → `<extension>/<reactor>`) and tool execution
-(`agent`, or the calling tool's extension for a nested call → tool name) with its duration, `ok` and error message.
+(`agent`, or the calling tool's extension for a tool another running tool calls, as a Pi nested call or directly
+like codemode's `tools.*` → tool name) with its duration, `ok` and error message.
 Each runs in a trace context (AsyncLocalStorage, which survives Pi Durable commits and its task runner) of
 `{ traceId, conversationId?, taskId?, entryId?, parentCall? }`: a call is the parent of the calls it makes, a tool
 call carries its conversation, task and the assistant entry holding the call, and `host.emit` stamps the context on
@@ -148,8 +149,10 @@ the event so its reactors continue the emitter's trace. Nothing to do in an exte
 `react` and tools are traced for you.
 
 Arguments and results are stored as JSON summaries of about 300 characters with values under keys matching
-`/secret|token|password|key|auth/i` replaced by `[redacted]`; tool calls keep none (the transcript has them), and
-neither do calls into the `secrets` extension. Rows go to `<home>/trace.sqlite` in batches outside Pi commits, while
+`/secret|token|password|key|auth/i` replaced by `[redacted]`; tool calls keep none (the transcript has them). Calls
+into the extensions that handle credentials, `secrets` (secret values) and `models` (API keys and OAuth codes
+answering a login), keep neither, nor an error message, only the error's class. A new extension whose actions or
+services take or return credentials joins `SEALED` in `server/trace.ts`. Rows go to `<home>/trace.sqlite` in batches outside Pi commits, while
 the harness is open only; retention keeps 7 days and at most 200,000 rows. A trace failure is logged once and never
 fails the call. Read with `host.trace.query({ trace?, conversation?, since?, limit })` (the newest `limit`, oldest
 first) and `host.trace.tree(traceId)` (calls nested under `children`), or codemode's `ultimate.trace(...)` and
