@@ -125,7 +125,7 @@ test('E3 edits and commits stay in the isolated checkout', async () => {
   }
 })
 
-test('E5 knows the other conversation without tools', async () => {
+test('E5 looks up the other conversation through codemode', async () => {
   const ultimate = await start({ extensions: { enable: ['conversations'] } })
   try {
     const other = await ultimate.conversation({
@@ -134,15 +134,25 @@ test('E5 knows the other conversation without tools', async () => {
     const c = await ultimate.conversation({
       history: [
         user(
-          'When I ask about other conversations, use only the conversation index already supplied in your system context. Do not inspect live state with tools.',
+          'When I ask about other conversations, inspect this running Ultimate rather than guessing from memory.',
         ),
-        assistant('I will answer from the supplied conversation index without calling tools.'),
+        assistant(
+          'I will use codemode and ultimate.conversations() to look up other conversations.',
+        ),
       ],
     })
     const turn = await c.run(
-      'Which other conversations exist in this project and what are they doing? No tools.',
+      'Which other conversations exist in this project and what are they doing? Check with codemode and ultimate.conversations(). Do not change anything.',
     )
-    expect(turn.toolCalls).toHaveLength(0)
+    expect(
+      turn.toolCalls.some(
+        (call) =>
+          call.name === 'codemode' &&
+          typeof call.arguments.code === 'string' &&
+          call.arguments.code.includes('ultimate.conversations(') &&
+          !call.isError,
+      ),
+    ).toBe(true)
     expect(turn.text).toContain(String(other.id))
     expect(turn.text).toMatch(/parser/i)
     measure('E5-awareness', turn)

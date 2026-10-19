@@ -169,8 +169,7 @@ export function App() {
             : `The ${missing} surface is not installed, so Agent shows.`,
       })
   }, [ready, pending, missing])
-  // Tell the agent what the user looks at (extensions/surfaces): what rendered, so Agent after the chosen surface
-  // failed. Equal writes are dropped, so its prompt changes only with the surface.
+  // Record what the user looks at: what rendered, so Agent after the chosen surface failed. Equal writes are dropped.
   useEffect(() => {
     if (ready && shown) uiState.set(shellKeys.shownSurface, shown)
   }, [ready, shown])
