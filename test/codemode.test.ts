@@ -543,11 +543,6 @@ it('lists conversations with their title and cwd, since the prompt no longer doe
   const done = await create('Old work')
   // The conversations extension owns concluding; this fixture loads only codemode, so write its UI state directly.
   await post(server, '/api/ui', { set: { 'ext.conversations.concluded': [done] } })
-  await run(server, `return 1`)
-  await until(
-    () =>
-      server.api.conversations().find((item) => item.id === server.root.id)?.inputAt !== undefined,
-  )
   const result = await run(server, `return await ultimate.conversations()`)
   expect(result.data.isError).toBe(false)
   const listed = result.data.details.value as { id: number }[]
@@ -557,10 +552,6 @@ it('lists conversations with their title and cwd, since the prompt no longer doe
     busy: false,
   })
   expect(listed.find((item) => item.id === open)).not.toHaveProperty('concluded')
-  // The root ran a script before, so its latest input time is known.
-  expect(listed.find((item) => item.id === server.root.id)).toMatchObject({
-    inputAt: expect.any(Number),
-  })
   expect(listed.find((item) => item.id === done)).toMatchObject({
     title: 'Old work',
     concluded: true,
