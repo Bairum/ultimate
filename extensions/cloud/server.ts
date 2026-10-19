@@ -14,6 +14,7 @@ import { HealthApi } from '../health/api.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
 import { cloudConfig, leaseSettings } from '../../lib/cloud.ts'
 import { projectIdentity } from '../../lib/project-identity.ts'
+import { Feedback } from './api.ts'
 import { startLease } from './lease.ts'
 import type { Lease, LeaseDeps } from './lease.ts'
 import type { CloudState } from './types.ts'
@@ -481,6 +482,7 @@ export default async function cloud(host: ExtensionHost, deps: Partial<LeaseDeps
   // Optional services, resolved where they are called; declared here so the catalogue lists them.
   host.want(AutomationsApi)
   host.want(HealthApi)
+  host.want(Feedback)
   host.want(TailscaleApi)
   // The process stopping, not a reload of this facet, releases the lease.
   const stopping = host.resource('cloud.process', () => {

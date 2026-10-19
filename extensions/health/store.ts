@@ -147,13 +147,18 @@ const writes = new Map<string, Promise<unknown>>()
 /**
  * Merge `update` into `provider`'s entry: read, merge by max timestamp, then write through a same-directory temporary
  * file and an atomic rename. Writes from this process run one at a time; another home's concurrent write can at worst
- * lose one event.
+ * lose one event. Resolves true when this write turned the provider failing (from ok or unknown).
  */
-export function record(userHome: string, provider: string, update: HealthEntry) {
+export async function record(userHome: string, provider: string, update: HealthEntry) {
   const clean = update.error === undefined ? update : { ...update, error: sanitize(update.error) }
-  return write(userHome, (file) => {
-    file.providers[provider] = merge(file.providers[provider] ?? {}, clean)
+  let turned = false
+  await write(userHome, (file) => {
+    const before = file.providers[provider] ?? {}
+    const after = merge(before, clean)
+    turned = state(before) !== 'failing' && state(after) === 'failing'
+    file.providers[provider] = after
   })
+  return turned
 }
 
 /**

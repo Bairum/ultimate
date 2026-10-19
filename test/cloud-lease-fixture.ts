@@ -19,6 +19,7 @@ import type { Connect, SyncSocket, SyncState } from '../extensions/cloud/server.
 import { startLease } from '../extensions/cloud/lease.ts'
 import type { Exec } from '../extensions/cloud/lease.ts'
 import * as snapshot from '../extensions/cloud/snapshot.ts'
+import type { FeedbackService } from '../extensions/cloud/api.ts'
 import { git } from '../lib/git.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { context, prepareHarness } from '../server/harness.ts'
@@ -348,6 +349,8 @@ export async function machine(
     git?: (args: readonly string[]) => Promise<void>
     /** The model login; faux hosts have one. */
     login?: { provider: string; ok: boolean }
+    /** Who hears the lease's `cloud.feedback`: backups and moves that ended here. */
+    feedback?: FeedbackService
   } = {},
 ) {
   const home = options.home ?? (await temp('ultimate-lease-'))
@@ -423,7 +426,8 @@ export async function machine(
     },
     onOpen: (callback) => openers.add(callback),
     onRelease: (callback) => releasers.add(callback),
-    want: () => undefined,
+    want: ((api: { name: string }) =>
+      api.name === 'cloud.feedback' ? options.feedback : undefined) as ExtensionHost['want'],
     conversations: () => [],
     system: () =>
       ({ process: { url: 'http://127.0.0.1:4800' } }) as unknown as ReturnType<

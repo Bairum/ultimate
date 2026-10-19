@@ -16,6 +16,7 @@ import cloudExtension, {
 import type { SyncSocket } from '../extensions/cloud/server.ts'
 import { modelLogin } from '../extensions/cloud/login.ts'
 import * as snapshot from '../extensions/cloud/snapshot.ts'
+import type { FeedbackService } from '../extensions/cloud/api.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
 import { git } from '../lib/git.ts'
 import type { ActionContext } from '../server/actions.ts'
@@ -601,8 +602,12 @@ it('scans again when a run came and went during the scan, holding for the worktr
   expect(await moving).toBe(false)
 })
 
-/** Runs due fake timers while a test polls with `until`. */
-const tick = () => vi.advanceTimersByTimeAsync(0)
+/**
+ * Runs due fake timers while a test polls with `until`. It advances 1 ms, not 0: a zero-delay timer created while the
+ * fake clock is mid-tick (a socket message arriving between its timers) is due 1 ms later, and a 0 ms advance never
+ * reaches it, so the move would stall at its handover.
+ */
+const tick = () => vi.advanceTimersByTimeAsync(1)
 
 it('holds a move for the runs it drains past the old ten-minute cap, naming their conversations', async () => {
   const project = cloud()
@@ -1089,6 +1094,75 @@ it('prunes backups like any snapshot: the Worker keeps the three newest complete
   expect(
     bucket.keys().filter((name) => ids.some((id) => name.includes(`/${id}/`) && !kept.has(id))),
   ).toEqual([])
+})
+
+/** A `cloud.feedback` point that records what machine `name`'s lease reports. */
+const heard = (name: string) => {
+  const events: { machine: string; kind: string; value: unknown }[] = []
+  const feedback: FeedbackService = {
+    backup: async (report) => void events.push({ machine: name, kind: 'backup', value: report }),
+    moved: async (input) => void events.push({ machine: name, kind: 'moved', value: input }),
+  }
+  return { events, feedback }
+}
+
+it('reports each backup and a move that ended here once, to the feedback point of the machine it happened on', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const deskHeard = heard('desk')
+  let failing = false
+  const flaky = {
+    ...snapshot,
+    uploadSnapshot: vi.fn<typeof snapshot.uploadSnapshot>(async (o) => {
+      if (failing) throw new Error('PUT /sync/snapshots: 503')
+      return snapshot.uploadSnapshot(o)
+    }),
+  }
+  const desk = await machine('desk', project, root, {
+    snapshots: flaky,
+    feedback: deskHeard.feedback,
+  })
+  await writer(desk)
+  const done = await desk.lease.backup()
+  failing = true
+  await expect(desk.lease.backup()).rejects.toThrow('503')
+  failing = false
+  expect(deskHeard.events).toEqual([
+    {
+      machine: 'desk',
+      kind: 'backup',
+      value: { ok: true, ...done, ms: expect.any(Number) },
+    },
+    {
+      machine: 'desk',
+      kind: 'backup',
+      value: { ok: false, at: expect.any(Number), error: 'PUT /sync/snapshots: 503' },
+    },
+  ])
+
+  await sleep(desk.harness(), true)
+  const laptopHeard = heard('laptop')
+  const laptop = await machine('laptop', project, root, {
+    autoClaim: false,
+    feedback: laptopHeard.feedback,
+  })
+  await standbyOn(laptop)
+  expect(await laptop.lease.move()).toBe(true)
+  // The target hears the move once, with storage open; the source machine hears nothing of it.
+  expect(laptopHeard.events).toEqual([
+    {
+      machine: 'laptop',
+      kind: 'moved',
+      value: {
+        key: KEY,
+        machine: 'laptop',
+        transition: expect.objectContaining({ target: 'laptop', from: 'desk', by: 'local' }),
+      },
+    },
+  ])
+  expect(laptop.serving()).toBe(true)
+  expect(deskHeard.events).toHaveLength(2)
 })
 
 it('refuses a second backup while one runs, during a release, and on a standby', async () => {

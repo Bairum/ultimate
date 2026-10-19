@@ -8,6 +8,11 @@ export interface ModelLogin {
   error?: string
 }
 
+/** A backup that finished (`ok`, with the snapshot, its bytes and how long it took) or failed with its reason. */
+export type BackupReport =
+  | { ok: true; id: string; at: number; bytes: number; ms: number }
+  | { ok: false; at: number; error: string }
+
 /** `cloud.state`: whether sync runs, this machine's name and its place in the lease, for the cloud UI. */
 export interface CloudState {
   /** `off`: not configured; `local`: configured, but the project has no GitHub origin. */

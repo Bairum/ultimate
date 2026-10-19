@@ -7,18 +7,25 @@ import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
 import { isMachineHome, machineRoot } from '../../lib/machine.ts'
-import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { startedBy } from '../../cloud/protocol.ts'
 import type { MachineHealth, ProviderHealth, Transition } from '../../cloud/protocol.ts'
 import type { Project } from '../../cloud/directory.ts'
 import { cloudConfig, httpBase } from '../../lib/cloud.ts'
 import { projectIdentity } from '../../lib/project-identity.ts'
+import { Feedback } from '../cloud/api.ts'
 import type { CloudState } from '../cloud/types.ts'
-import { HealthApi } from '../health/api.ts'
+import { HealthApi, HealthFeedback } from '../health/api.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { ended } from './moves.ts'
-import type { Fleet, FleetProject, LocalProject, MoveEnded, SyncReport } from './types.ts'
+import type {
+  BackupEnded,
+  Fleet,
+  FleetProject,
+  HealthTurned,
+  LocalProject,
+  MoveEnded,
+} from './types.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { HomeAction, TransitionAction } from './refs.ts'
 
@@ -333,8 +340,11 @@ export async function transition(deps: SyncDeps, name: string) {
 }
 
 /**
- * Wakes @sync once per ended move involving this machine: each tick reads `cloud.state` of the running local projects
- * and submits a `sync.move` input with requestId `sync-move:<id>`, which Pi deduplicates across restarts.
+ * The machine home's watcher: wakes its @sync once per ended move to this machine that the project's own home cannot
+ * report, because that home is not the writer (a failed move leaves it on standby, without storage). A finished move
+ * reports in the project's home, through `cloud.feedback`; a move away from this machine reports on its target. Each
+ * tick reads `cloud.state` of the running local projects and submits a `sync.move` input with requestId
+ * `sync-move:<id>`, which Pi deduplicates across restarts.
  */
 export function createWatcher(
   deps: Pick<SyncDeps, 'homes' | 'fetch' | 'identity'>,
@@ -357,7 +367,7 @@ export function createWatcher(
           if (candidate && !seen.has(candidate.id)) seen.set(candidate.id, candidate)
         for (const moved of seen.values()) {
           if (submitted.has(moved.id) || !ended(moved)) continue
-          if (moved.target !== machine && moved.from !== machine) continue
+          if (moved.target !== machine || state.role === 'writer') continue
           const key = state.key ?? (await deps.identity(home.root))?.key ?? ''
           await submit({
             project: { key, name: home.name, root: home.root },
@@ -380,26 +390,71 @@ export const moveText = ({ project, machine, transition: moved }: MoveEnded) => 
       (step) => `- ${step.name}: ${step.state}${step.detail ? ` · ${step.detail}` : ''}`,
     ),
     ended(moved) === 'done'
-      ? 'Run the health check for this project, report it to its @ultimate, and summarize it for the user.'
+      ? 'Run the health check for this project and summarize it for the user here.'
       : 'Diagnose the failed step, fix what is safe, and tell the user what you found and propose.',
   ].join('\n')
 }
 
-/** Submit an ended move to @sync's conversation, once per transition. */
-export async function submitMove(host: ExtensionHost, input: MoveEnded) {
+/** Submit `entry` to this home's @sync once per `requestId`: an input that wakes it, or a note it reads next time. */
+async function toSync(
+  host: Pick<ExtensionHost, 'need' | 'harness'>,
+  requestId: string,
+  entry: { kind: string; data: object },
+  content: string,
+  wake: boolean,
+) {
   const id = await host.need(SubagentsApi).standing('sync', BACKGROUND_CONTEXT)
   const conversation = (await host.harness().conversation(id, BACKGROUND_CONTEXT))!
+  const data = entry.data as JsonObject
   await conversation.submit(
-    {
-      type: 'input',
-      requestId: `sync-move:${input.transition.id}`,
-      whenBusy: 'followUp',
-      entry: { kind: 'sync.move', data: input as unknown as JsonObject },
-      content: moveText(input),
-    },
+    wake
+      ? { type: 'input', requestId, whenBusy: 'followUp', entry: { ...entry, data }, content }
+      : {
+          type: 'write',
+          requestId,
+          entry: { ...entry, data, model: [{ role: 'user', content, timestamp: Date.now() }] },
+        },
     BACKGROUND_CONTEXT,
   )
 }
+
+/** Submit an ended move to @sync's conversation, once per transition. */
+export const submitMove = (host: Pick<ExtensionHost, 'need' | 'harness'>, input: MoveEnded) =>
+  toSync(
+    host,
+    `sync-move:${input.transition.id}`,
+    { kind: 'sync.move', data: input },
+    moveText(input),
+    true,
+  )
+
+export const backupText = ({ project, report }: BackupEnded) =>
+  report.ok
+    ? `Backup of ${project.name} (${project.key}) finished: snapshot ${report.id}, ${report.bytes} bytes in ${Math.round(report.ms / 1000)} s. No action needed.`
+    : `Backup of ${project.name} (${project.key}) failed: ${report.error}\nFind out why from \`fleet\` and this project's state, fix what is safe, and tell the user what you found and propose.`
+
+/** A finished backup is a note in @sync's conversation; a failed one wakes it. Once per backup. */
+export const submitBackup = (host: Pick<ExtensionHost, 'need' | 'harness'>, input: BackupEnded) =>
+  toSync(
+    host,
+    `sync-backup:${input.report.ok ? input.report.id : `failed-${input.report.at}`}`,
+    { kind: 'sync.backup', data: input },
+    backupText(input),
+    !input.report.ok,
+  )
+
+export const healthText = ({ provider, error }: HealthTurned) =>
+  `Model provider ${provider} turned failing on this machine${error ? `: ${error}` : ''}.\nCheck it with \`fleet\`; if the login is broken, ask the user to log in again here (⌘K → Log in to a provider).`
+
+/** A provider that turned failing wakes @sync, once per turn. */
+export const submitHealth = (host: Pick<ExtensionHost, 'need' | 'harness'>, input: HealthTurned) =>
+  toSync(
+    host,
+    `sync-health:${input.provider}:${input.at}`,
+    { kind: 'sync.health', data: input },
+    healthText(input),
+    true,
+  )
 
 const MINUTE = 60000
 const HOUR = 60 * MINUTE
@@ -525,7 +580,15 @@ export const demoFleet = (userHome: string, now = Date.now()): Fleet => ({
   ],
 })
 
-const json = (value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }]
+/** What a project home's `fleet` shows on a faux host: the demo's `ultimate` project as seen from its home. */
+export const demoProjectFleet = (userHome: string, now = Date.now()): Fleet => {
+  const all = demoFleet(userHome, now)
+  return {
+    ...all,
+    machines: all.machines.filter((machine) => machine.machine !== 'mac'),
+    projects: all.projects.filter((project) => project.name === 'ultimate'),
+  }
+}
 
 /** This machine's home while it runs: its URL, opening @sync's conversation when it has one. */
 export async function machineHome(
@@ -551,38 +614,133 @@ export const actions = {
     if (typeof project !== 'string') throw new Error('project is required')
     return transition(syncDeps(host), project)
   }),
-  /**
-   * Project homes: `{from, text}`, a one-way report from @sync to this project's @ultimate. Refused on standby, where
-   * the project's storage is closed.
-   */
-  async report(args: JsonValue, { host }: ActionContext) {
-    const { from, text } = (args ?? {}) as { from?: unknown; text?: unknown }
-    if (typeof from !== 'string' || !from.trim()) throw new Error('from is required')
-    if (typeof text !== 'string' || !text.trim()) throw new Error('text is required')
-    if (host.standby()) throw new Error('This project is on standby here; report on its writer')
-    if (isMachineHome(host.projectRoot, host.userHome))
-      throw new Error('The machine home takes no reports')
-    const id = await host.need(SubagentsApi).standing('ultimate', BACKGROUND_CONTEXT)
-    const conversation = (await host.harness().conversation(id, BACKGROUND_CONTEXT))!
-    const data: SyncReport = { from, text }
-    await conversation.submit(
-      {
-        type: 'input',
-        whenBusy: 'followUp',
-        entry: { kind: 'sync.report', data: data as unknown as JsonObject },
-        content: `Report from ${from} (one-way, no answer goes back):\n${text}`,
+}
+
+/**
+ * The fleet as this project home's @sync sees it: only this project, its own home first; the machines that run it
+ * keep their health. Moves, backups and cancels then name this project only.
+ */
+export async function projectFleet(deps: SyncDeps, root: string): Promise<Fleet> {
+  const all = await fleet(deps)
+  const projects = all.projects.filter((project) => project.local?.root === root)
+  const involved = new Set(
+    projects.flatMap((project) => [
+      ...(project.writer.machine ? [project.writer.machine] : []),
+      ...project.standbys.map((standby) => standby.machine),
+    ]),
+  )
+  if (all.machine) involved.add(all.machine)
+  return {
+    ...all,
+    machines: all.machines.filter((machine) => involved.has(machine.machine)),
+    projects,
+  }
+}
+
+/** This project home's deps: the fleet and its moves see only this project. */
+const scoped = (deps: SyncDeps, root: string): SyncDeps => ({
+  ...deps,
+  homes: async () => (await deps.homes()).filter((home) => home.root === root),
+})
+
+/**
+ * In a project home, feedback reaches this project's @sync: backups from the lease, a move that ended here, and a
+ * provider that turned failing. Nothing reaches it on standby, where storage is closed.
+ */
+function feedback(host: ExtensionHost) {
+  const project = async (key?: string) => ({
+    key: key ?? (await projectIdentity(host.projectRoot))?.key ?? host.projectRoot,
+    name: basename(host.projectRoot),
+  })
+  host.implement(Feedback, {
+    backup: async (report) => submitBackup(host, { project: await project(), report }),
+    moved: async ({ key, machine, transition: moved }) =>
+      submitMove(host, {
+        project: { ...(await project(key)), root: host.projectRoot },
+        machine,
+        transition: moved,
+      }),
+  })
+  host.implement(HealthFeedback, {
+    failing: async (input) => {
+      if (host.standby()) return
+      await submitHealth(host, input)
+    },
+  })
+}
+
+const json = (value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }]
+
+/** @sync's tools: across the fleet in the machine home, or for this project only in a project home. */
+function tools(host: ExtensionHost, deps: SyncDeps, read: () => Promise<Fleet>, here: string) {
+  return [
+    defineTool({
+      name: 'fleet',
+      deferred: true,
+      // Reads only: the directory, local cloud state, files and refs.
+      replay: 'safe',
+      description: `${here}: writer, standbys, the move in flight, last backup, each machine's provider health, and this machine’s local view (role, missing secrets, model login, stale databases, kept ultimate-moved refs).`,
+      parameters: Type.Object({}),
+      async execute() {
+        const value = await read()
+        return { output: json(value), details: value as unknown as JsonObject }
       },
-      BACKGROUND_CONTEXT,
-    )
-    return { id }
-  },
+    }),
+    defineTool({
+      name: 'move',
+      deferred: true,
+      description:
+        'Move a project (key or name) to machine `to`, or to this machine when `to` is absent. Returns the move id; the card follows it. Without force the writer holds the handover while it has running conversations or worktrees with uncommitted changes, and the card lists them. Pass force: true only after the user confirmed in this conversation: it continues past missing secrets and releases at once, interrupting those runs and leaving the uncommitted changes on the old machine.',
+      parameters: Type.Object({
+        project: Type.String({ minLength: 1 }),
+        to: Type.Optional(Type.String({ minLength: 1 })),
+        force: Type.Optional(
+          Type.Boolean({
+            description:
+              'Continue past missing secrets and release without waiting for running conversations or uncommitted worktrees; only on the user’s OK.',
+          }),
+        ),
+      }),
+      async execute(input) {
+        const result = await move(deps, input)
+        return { output: json(result), details: result }
+      },
+    }),
+    defineTool({
+      name: 'backup',
+      deferred: true,
+      description:
+        'Back up a project (key or name) now: its writer on this machine uploads an encrypted snapshot of its database and ultimate/* branches and keeps running it. Resolves once uploaded with the snapshot id, time and size. Refused when the project runs on another machine or a move is in flight.',
+      parameters: Type.Object({ project: Type.String({ minLength: 1 }) }),
+      async execute({ project }) {
+        const result = await backup(deps, project)
+        return { output: json(result), details: result }
+      },
+    }),
+    defineTool({
+      name: 'cancel',
+      deferred: true,
+      description: 'Cancel a project’s move until its claim is sent.',
+      parameters: Type.Object({ project: Type.String({ minLength: 1 }) }),
+      async execute({ project }) {
+        const result = await cancel(deps, project)
+        return { output: json(result), details: result }
+      },
+    }),
+  ]
 }
 
 export default function sync(host: ExtensionHost) {
   // Resolved where they are called; declared here so the catalogue lists them. Health is optional.
   host.want(HealthApi)
   host.need(SubagentsApi)
-  if (!isMachineHome(host.projectRoot, host.userHome)) return defineExtension({ name: 'sync' })
+  if (!isMachineHome(host.projectRoot, host.userHome)) {
+    feedback(host)
+    const deps = scoped(syncDeps(host), host.projectRoot)
+    const read = async () =>
+      host.faux ? demoProjectFleet(host.userHome) : projectFleet(deps, host.projectRoot)
+    return defineExtension({ name: 'sync', tools: tools(host, deps, read, 'This project') })
+  }
   const deps = syncDeps(host)
   const watcher = createWatcher(deps, (input) => submitMove(host, input))
   let timer: ReturnType<typeof setInterval> | undefined
@@ -605,84 +763,9 @@ export default function sync(host: ExtensionHost) {
   }
   host.onRelease(stop)
   host.onClose(stop)
+  const read = async () => (host.faux ? demoFleet(host.userHome) : fleet(deps))
   return defineExtension({
     name: 'sync',
-    tools: [
-      defineTool({
-        name: 'fleet',
-        deferred: true,
-        // Reads only: the directory, local cloud state, files and refs.
-        replay: 'safe',
-        description:
-          'Every machine and project: writer, standbys, the move in flight, and this machine’s local view of each project (role, missing secrets, model login, stale databases, kept ultimate-moved refs).',
-        parameters: Type.Object({}),
-        async execute() {
-          const value = host.faux ? demoFleet(host.userHome) : await fleet(deps)
-          return { output: json(value), details: value as unknown as JsonObject }
-        },
-      }),
-      defineTool({
-        name: 'move',
-        deferred: true,
-        description:
-          'Move a project (key or name) to machine `to`, or to this machine when `to` is absent. Returns the move id; the card follows it. Without force the writer holds the handover while it has running conversations or worktrees with uncommitted changes, and the card lists them. Pass force: true only after the user confirmed in this conversation: it continues past missing secrets and releases at once, interrupting those runs and leaving the uncommitted changes on the old machine.',
-        parameters: Type.Object({
-          project: Type.String({ minLength: 1 }),
-          to: Type.Optional(Type.String({ minLength: 1 })),
-          force: Type.Optional(
-            Type.Boolean({
-              description:
-                'Continue past missing secrets and release without waiting for running conversations or uncommitted worktrees; only on the user’s OK.',
-            }),
-          ),
-        }),
-        async execute(input) {
-          const result = await move(deps, input)
-          return { output: json(result), details: result }
-        },
-      }),
-      defineTool({
-        name: 'backup',
-        deferred: true,
-        description:
-          'Back up a project (key or name) now: its writer on this machine uploads an encrypted snapshot of its database and ultimate/* branches and keeps running it. Resolves once uploaded with the snapshot id, time and size. Refused when the project runs on another machine or a move is in flight.',
-        parameters: Type.Object({ project: Type.String({ minLength: 1 }) }),
-        async execute({ project }) {
-          const result = await backup(deps, project)
-          return { output: json(result), details: result }
-        },
-      }),
-      defineTool({
-        name: 'cancel',
-        deferred: true,
-        description: 'Cancel a project’s move until its claim is sent.',
-        parameters: Type.Object({ project: Type.String({ minLength: 1 }) }),
-        async execute({ project }) {
-          const result = await cancel(deps, project)
-          return { output: json(result), details: result }
-        },
-      }),
-      defineTool({
-        name: 'report',
-        deferred: true,
-        description:
-          'Send a one-way report to a local project’s @ultimate, from @sync on this machine. Refused while the project is on standby here.',
-        parameters: Type.Object({
-          project: Type.String({ minLength: 1 }),
-          text: Type.String({ minLength: 1 }),
-        }),
-        async execute({ project, text }) {
-          const current = await fleet(deps)
-          const found = find(current.projects, project)
-          if (!found.local?.url)
-            throw new Error(`${found.name} has no running project home on this machine`)
-          await localAction(deps, found.local.url, 'sync', 'report', {
-            from: `@sync on ${current.machine || 'this machine'}`,
-            text,
-          })
-          return { output: [{ type: 'text', text: `Reported to ${found.name}'s @ultimate.` }] }
-        },
-      }),
-    ],
+    tools: tools(host, deps, read, 'Every machine and project'),
   })
 }

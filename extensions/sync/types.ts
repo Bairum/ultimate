@@ -1,5 +1,5 @@
 import type { ProviderHealth, Transition } from '../../cloud/protocol.ts'
-import type { CloudState, ModelLogin } from '../cloud/types.ts'
+import type { BackupReport, CloudState, ModelLogin } from '../cloud/types.ts'
 
 /** A project home on this machine, as `fleet` sees it. */
 export interface LocalProject {
@@ -50,15 +50,22 @@ export interface Fleet {
   error?: string
 }
 
-/** A `sync.move` input: a move involving this machine ended. */
+/** A `sync.move` input: a move to this machine ended. */
 export interface MoveEnded {
   project: { key: string; name: string; root: string }
   machine: string
   transition: Transition
 }
 
-/** A `sync.report` input in a project's @ultimate. */
-export interface SyncReport {
-  from: string
-  text: string
+/** A `sync.backup` entry in a project's @sync: a backup there finished (a note) or failed (an input). */
+export interface BackupEnded {
+  project: { key: string; name: string }
+  report: BackupReport
+}
+
+/** A `sync.health` input in @sync: a model provider turned failing on this machine. */
+export interface HealthTurned {
+  provider: string
+  at: number
+  error?: string
 }

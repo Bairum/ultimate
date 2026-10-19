@@ -10,19 +10,24 @@ import subagents from '../extensions/subagents/server.ts'
 import type { SubagentsService } from '../extensions/subagents/api.ts'
 import { machineRoot, primaryAgent, residentHere } from '../lib/machine.ts'
 import { parseDefinition } from '../lib/agents.ts'
-import {
+import sync, {
   backup,
+  backupText,
   cancel,
   createWatcher,
   fleet,
   machineHome,
   move,
   moveText,
+  projectFleet,
   submitMove,
 } from '../extensions/sync/server.ts'
 import type { Home, SyncDeps } from '../extensions/sync/server.ts'
 import { polling } from '../extensions/sync/moves.ts'
-import type { MoveEnded } from '../extensions/sync/types.ts'
+import type { HealthTurned, MoveEnded } from '../extensions/sync/types.ts'
+import type { BackupReport, FeedbackService } from '../extensions/cloud/api.ts'
+import type { HealthFeedbackService } from '../extensions/health/api.ts'
+import { recordHealth } from '../extensions/health/server.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { MachineHealth, ProviderHealth, Transition } from '../cloud/protocol.ts'
 import type { Project } from '../cloud/directory.ts'
@@ -73,7 +78,7 @@ async function host(project: (userHome: string) => string) {
   return { open, service, userHome, projectRoot: prepared.projectRoot }
 }
 
-it('lists exactly @sync as a resident in the machine home, and @ultimate but not @sync in a project home', async () => {
+it('stands @sync in both homes: alone in the machine home, next to @ultimate in a project home', async () => {
   const machine = await host((home) => machineRoot(home))
   expect(primaryAgent(machine.projectRoot, machine.userHome)).toBe('sync')
   expect((await machine.service.residents(ctx)).map((agent) => agent.name)).toEqual(['sync'])
@@ -85,26 +90,28 @@ it('lists exactly @sync as a resident in the machine home, and @ultimate but not
   const project = await host((home) => join(home, 'Projects/app'))
   expect(primaryAgent(project.projectRoot, project.userHome)).toBe('ultimate')
   const names = (await project.service.residents(ctx)).map((agent) => agent.name)
-  expect(names).toContain('ultimate')
-  expect(names).not.toContain('sync')
-  await expect(project.service.standing('sync', ctx)).rejects.toThrow(
-    'Unknown standing agent @sync',
-  )
+  expect(names).toEqual(expect.arrayContaining(['ultimate', 'sync']))
+  const here = await project.service.standing('sync', ctx)
+  const agent = await (await project.open.harness.conversation(here, ctx))!.agent(ctx)
+  expect(agent.cwd).toBe(project.projectRoot)
 })
 
-it('parses resident: machine and scopes residency to the home', () => {
-  const sync = parseDefinition(
-    '---\nname: sync\ndescription: Sync\nresident: machine\n---\nMove projects.\n',
-    'sync',
-  )
-  expect(sync.resident).toBe('machine')
-  expect(() =>
-    parseDefinition('---\nname: x\ndescription: X\nresident: home\n---\nBody\n', 'x'),
-  ).toThrow('resident must be a boolean or machine')
-  expect(residentHere('machine', '/u/.ultimate/machine', '/u')).toBe(true)
-  expect(residentHere(true, '/u/.ultimate/machine', '/u')).toBe(false)
-  expect(residentHere('machine', '/u/Projects/app', '/u')).toBe(false)
-  expect(residentHere(true, '/u/Projects/app', '/u')).toBe(true)
+const parseResident = (resident: string) =>
+  parseDefinition(`---\nname: x\ndescription: X\nresident: ${resident}\n---\nBody\n`, 'x')
+
+it('parses resident: machine and everywhere, and scopes residency to the home', () => {
+  expect(parseResident('machine').resident).toBe('machine')
+  expect(parseResident('everywhere').resident).toBe('everywhere')
+  expect(() => parseResident('home')).toThrow('resident must be a boolean, machine or everywhere')
+  const machine = ['/u/.ultimate/machine', '/u'] as const
+  const project = ['/u/Projects/app', '/u'] as const
+  expect(residentHere('machine', ...machine)).toBe(true)
+  expect(residentHere(true, ...machine)).toBe(false)
+  expect(residentHere('machine', ...project)).toBe(false)
+  expect(residentHere(true, ...project)).toBe(true)
+  expect(residentHere('everywhere', ...machine)).toBe(true)
+  expect(residentHere('everywhere', ...project)).toBe(true)
+  expect(residentHere(undefined, ...project)).toBe(false)
 })
 
 const step = (
@@ -381,12 +388,28 @@ it('cancels a move this machine runs locally, and any other through the cloud', 
   )
 })
 
-it('wakes @sync once per ended transition involving this machine, also across restarts', async () => {
-  let moved: Transition | undefined = transition({
+const failedHere = (patch: Partial<Transition> = {}) =>
+  transition({
+    error: 'Missing secrets: OPENAI_API_KEY',
+    steps: [step('checks', 'failed'), step('claim', 'pending')],
+    ...patch,
+  })
+
+it('wakes the machine home’s @sync once per move here that failed, and leaves the rest to the projects', async () => {
+  let role = 'standby'
+  let moved: Transition | undefined = failedHere({
+    error: undefined,
     steps: [step('fetch', 'done'), step('claim', 'running')],
   })
   const { deps } = fake({
-    state: () => ({ status: 'on', machine: 'rog', free: false, missing: [], transition: moved }),
+    state: () => ({
+      status: 'on',
+      machine: 'rog',
+      role,
+      free: false,
+      missing: [],
+      transition: moved,
+    }),
   })
   const submitted: MoveEnded[] = []
   const watcher = createWatcher(deps, async (input) => {
@@ -394,26 +417,27 @@ it('wakes @sync once per ended transition involving this machine, also across re
   })
   await watcher.tick()
   expect(submitted).toEqual([])
+  // A move here that finished reports in the project's own home, which is the writer now.
+  role = 'writer'
   moved = transition()
+  await watcher.tick()
+  // A move away from this machine reports on its target, and one between two others is none of this machine's.
+  role = 'standby'
+  moved = transition({ id: 't2', target: 'haza-pc', from: 'rog' })
+  await watcher.tick()
+  moved = transition({ id: 't3', target: 'mac', from: 'haza-pc' })
+  await watcher.tick()
+  expect(submitted).toEqual([])
+  // A move here that failed left the project on standby here: only the machine home can report it.
+  moved = failedHere({ id: 't4' })
   await watcher.tick()
   await watcher.tick()
   expect(submitted).toHaveLength(1)
   expect(submitted[0]).toMatchObject({
     machine: 'rog',
     project: { key: 'github.com/hazat/ultimate', name: 'ultimate' },
-    transition: { id: 't1' },
+    transition: { id: 't4' },
   })
-  // A move between two other machines is not this machine's.
-  moved = transition({ id: 't2', target: 'mac', from: 'haza-pc' })
-  await watcher.tick()
-  // A failed one wakes it too.
-  moved = transition({
-    id: 't3',
-    error: 'Missing secrets: OPENAI_API_KEY',
-    steps: [step('checks', 'failed')],
-  })
-  await watcher.tick()
-  expect(submitted.map((input) => input.transition.id)).toEqual(['t1', 't3'])
 
   // A restart forgets the watcher's memory; Pi's requestId keeps @sync's input single.
   const machine = await host((home) => machineRoot(home))
@@ -421,22 +445,136 @@ it('wakes @sync once per ended transition involving this machine, also across re
     need: () => machine.service,
     harness: () => machine.open.harness,
   } as unknown as ExtensionHost
-  const restarted = createWatcher(deps, (input) => submitMove(extensionHost, input))
-  moved = transition()
-  await restarted.tick()
   await createWatcher(deps, (input) => submitMove(extensionHost, input)).tick()
-  const id = await machine.service.standing('sync', ctx)
-  expect(
-    await machine.open.harness.commit((tx) => tx.submissionByRequest(id, 'sync-move:t1'), ctx),
-  ).toBeDefined()
-  const entries = await machine.open.harness.commit(
-    async (tx) => (await tx.scanEntries({ conversationId: id }, 20)).items,
-    ctx,
-  )
+  await createWatcher(deps, (input) => submitMove(extensionHost, input)).tick()
+  const entries = await syncEntries(machine)
   expect(entries.filter((entry) => entry.kind === 'sync.move')).toHaveLength(1)
   expect(entries.find((entry) => entry.kind === 'sync.move')?.data).toMatchObject({
-    transition: { id: 't1' },
+    transition: { id: 't4' },
   })
+})
+
+/** The `sync.*` entries of `home`'s @sync conversation, oldest first. */
+async function syncEntries(home: Awaited<ReturnType<typeof host>>) {
+  const id = await home.service.standing('sync', ctx)
+  return home.open.harness.commit(
+    async (tx) =>
+      (await tx.scanEntries({ conversationId: id, order: 'ascending' }, 50)).items.filter((entry) =>
+        entry.kind.startsWith('sync.'),
+      ),
+    ctx,
+  )
+}
+/** How `requestId` reached `home`'s @sync: `input` woke it, `write` is a note it reads next time. */
+async function delivery(home: Awaited<ReturnType<typeof host>>, requestId: string) {
+  const id = await home.service.standing('sync', ctx)
+  return (await home.open.harness.commit((tx) => tx.submissionByRequest(id, requestId), ctx))?.type
+}
+
+/**
+ * A project home with the sync facet installed: its `cloud.feedback` and `health.feedback` points, as the lease and
+ * health find them through `want`, and whether the home is on standby.
+ */
+async function projectHome() {
+  const home = await host((userHome) => join(userHome, 'Projects/app'))
+  const points = new Map<string, unknown>()
+  let standby: object | undefined
+  sync({
+    projectRoot: home.projectRoot,
+    userHome: home.userHome,
+    harness: () => home.open.harness,
+    standby: () => standby,
+    need: () => home.service,
+    want: () => undefined,
+    implement: (api: { name: string }, value: unknown) => points.set(api.name, value),
+  } as unknown as ExtensionHost)
+  return {
+    ...home,
+    feedback: points.get('cloud.feedback') as FeedbackService,
+    health: points.get('health.feedback') as HealthFeedbackService,
+    setStandby: (value: object | undefined) => {
+      standby = value
+    },
+  }
+}
+
+it('reports a failed backup once to the project’s @sync, waking it, and a finished one as a note', async () => {
+  const home = await projectHome()
+  const failed: BackupReport = { ok: false, at: 5, error: 'PUT /sync/snapshots: 503' }
+  await home.feedback.backup(failed)
+  await home.feedback.backup(failed)
+  const done: BackupReport = { ok: true, id: 'b1', at: 9, bytes: 12_582_912, ms: 3200 }
+  await home.feedback.backup(done)
+  const entries = await syncEntries(home)
+  expect(entries.map((entry) => entry.kind)).toEqual(['sync.backup', 'sync.backup'])
+  expect(entries.map((entry) => (entry.data as { report: BackupReport }).report)).toEqual([
+    failed,
+    done,
+  ])
+  expect(await delivery(home, 'sync-backup:failed-5')).toBe('input')
+  expect(await delivery(home, 'sync-backup:b1')).toBe('write')
+  expect(backupText({ project: { key: 'k', name: 'app' }, report: failed })).toContain(
+    'failed: PUT /sync/snapshots: 503',
+  )
+})
+
+it('reports a move here once to the target project’s @sync, and nothing to @ultimate', async () => {
+  const home = await projectHome()
+  const moved = transition({ id: 'm1', by: 'sync' })
+  await home.feedback.moved({ key: 'github.com/hazat/app', machine: 'rog', transition: moved })
+  await home.feedback.moved({ key: 'github.com/hazat/app', machine: 'rog', transition: moved })
+  const entries = await syncEntries(home)
+  expect(entries.map((entry) => entry.kind)).toEqual(['sync.move'])
+  expect(entries[0].data).toMatchObject({
+    project: { key: 'github.com/hazat/app', name: 'app', root: home.projectRoot },
+    machine: 'rog',
+    transition: { id: 'm1' },
+  })
+  expect(await delivery(home, 'sync-move:m1')).toBe('input')
+  // @ultimate's conversation holds no sync entry: the report is @sync's alone.
+  const ultimate = await home.service.standing('ultimate', ctx)
+  const own = await home.open.harness.commit(
+    async (tx) => (await tx.scanEntries({ conversationId: ultimate }, 50)).items,
+    ctx,
+  )
+  expect(own.filter((entry) => entry.kind.startsWith('sync.'))).toEqual([])
+})
+
+it('wakes the project’s @sync once when a provider turns failing, not on its repeated failures', async () => {
+  const home = await projectHome()
+  const point = { failing: (input: HealthTurned) => home.health.failing(input) }
+  await recordHealth(home.userHome, 'anthropic', { lastOk: 1 }, point)
+  await recordHealth(home.userHome, 'anthropic', { lastFail: 2, error: 'invalid_grant' }, point)
+  await recordHealth(home.userHome, 'anthropic', { lastFail: 3, error: 'invalid_grant' }, point)
+  await recordHealth(home.userHome, 'anthropic', { lastFail: 4, error: '401 sk-live-abc' }, point)
+  expect((await syncEntries(home)).map((entry) => entry.data)).toEqual([
+    { provider: 'anthropic', at: 2, error: 'invalid_grant' },
+  ])
+  expect(await delivery(home, 'sync-health:anthropic:2')).toBe('input')
+  // Working again, then failing again, is a new turn; one never seen before turns failing at its first failure.
+  await recordHealth(home.userHome, 'anthropic', { lastOk: 5 }, point)
+  await recordHealth(home.userHome, 'anthropic', { lastFail: 6, error: '401 sk-live-abc' }, point)
+  await recordHealth(home.userHome, 'openai', { lastFail: 7 }, point)
+  expect((await syncEntries(home)).map((entry) => entry.data)).toEqual([
+    { provider: 'anthropic', at: 2, error: 'invalid_grant' },
+    { provider: 'anthropic', at: 6, error: '401' },
+    { provider: 'openai', at: 7 },
+  ])
+  // On standby the project's storage is closed: nothing is delivered.
+  home.setStandby({ reason: 'Runs on haza-pc' })
+  await recordHealth(home.userHome, 'openai', { lastOk: 8 }, point)
+  await recordHealth(home.userHome, 'openai', { lastFail: 9 }, point)
+  expect(await syncEntries(home)).toHaveLength(3)
+})
+
+it('scopes a project home’s fleet to its own project and the machines that run it', async () => {
+  const { deps } = fake({
+    state: () => ({ status: 'on', machine: 'rog', role: 'standby', free: false, missing: [] }),
+  })
+  const value = await projectFleet(deps, '/u/Projects/ultimate')
+  expect(value.projects.map((project) => project.key)).toEqual(['github.com/hazat/ultimate'])
+  expect(value.machines.map((machine) => machine.machine)).toEqual(['haza-pc', 'rog'])
+  expect(await projectFleet(deps, '/u/Projects/elsewhere')).toMatchObject({ projects: [] })
 })
 
 it('names who started a move in the input that wakes @sync', () => {
