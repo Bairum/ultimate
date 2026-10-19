@@ -150,6 +150,14 @@ it('merges events and calls newest first, calls by when they finished', async ()
   expect(head).toBe('5.3')
 })
 
+it('leaves a call without arguments at caller and callee, not a literal null', async () => {
+  const f = await fixture()
+  f.call('c.none', 1, { args: null })
+  f.call('c.some', 2, { args: { n: 1 } })
+  const { rows } = await f.stream()
+  expect(rows.map((row) => row.summary)).toEqual(['a → b  {"n":1}', 'a → b'])
+})
+
 it('pages back with before without gaps or repeats, across both sources', async () => {
   const events = Array.from({ length: 23 }, (_, index) =>
     event(index * 2 + 1, 'x.tick', index * 3 + 1, { index }),

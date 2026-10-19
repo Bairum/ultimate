@@ -38,7 +38,12 @@ function callRow(call: CallRow): SystemRow {
     ok: call.ok,
     ms: call.ms,
     ...(call.error === undefined ? {} : { error: call.error }),
-    summary: cut([`${call.caller} → ${call.callee}`, call.args].filter(Boolean).join('  ')),
+    // An action called without arguments stores `null`, which says nothing.
+    summary: cut(
+      [`${call.caller} → ${call.callee}`, call.args === 'null' ? undefined : call.args]
+        .filter(Boolean)
+        .join('  '),
+    ),
   }
 }
 
