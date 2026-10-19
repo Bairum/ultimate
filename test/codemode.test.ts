@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Type } from '@earendil-works/pi-ai'
@@ -53,6 +53,10 @@ async function fixture() {
     (await readFile(resolve('extensions/codemode/server.ts'), 'utf8'))
       .replace("'../../lib/agents.ts'", JSON.stringify(resolve('lib/agents.ts')))
       .replace("'../../lib/api-files.ts'", JSON.stringify(resolve('lib/api-files.ts'))),
+  )
+  await cp(
+    resolve('extensions/codemode/projects.ts'),
+    join(ultimateRoot, 'extensions/codemode/projects.ts'),
   )
   const options = {
     ultimateRoot,
@@ -491,6 +495,44 @@ it('composes read and bash with private nested results and final JSON details', 
   expect(failed.text).toContain('kept')
   expect(failed.data.details.error).toContain('missing-file')
   expect(failed.data.isError).toBe(true)
+})
+
+it("reads another running project's history through its API, and names a project that isn't running", async () => {
+  const { server, options } = await fixture()
+  const projects = join(options.userHome, '.ultimate/projects')
+  const otherRoot = join(options.userHome, 'poe2-rust')
+  await mkdir(otherRoot, { recursive: true })
+  const other = await createServer({
+    ...options,
+    projectRoot: otherRoot,
+    home: join(projects, 'poe2-rust-1'),
+  })
+  servers.push(other)
+  // The supervisor writes this lock; `ultimate.projects()` finds a running instance's URL in it.
+  await writeFile(
+    join(projects, 'poe2-rust-1/ultimate.lock'),
+    JSON.stringify({ pid: process.pid, port: Number(new URL(other.url).port) }),
+  )
+  await run(other, 'return 1', 'remote-needle-poe2')
+  const asked = await run(
+    server,
+    `const list = await ultimate.conversations({ project: 'poe2-rust' });
+    const needle = ['remote-needle', 'poe2'].join('-');
+    const found = await ultimate.search(needle, { project: 'poe2-rust', limit: 1 });
+    const tail = await ultimate.entries(list[0].id, { project: 'POE2-RUST', kinds: ['pi.user'], limit: 1 });
+    const own = await ultimate.search(needle);
+    return { found: found.length, tail: tail[0].kind, own: own.length };`,
+  )
+  expect(asked.data.details.value).toEqual({ found: 1, tail: 'pi.user', own: 0 })
+  await other.close()
+  servers.splice(servers.indexOf(other), 1)
+  await rm(join(projects, 'poe2-rust-1/ultimate.lock'))
+  const stopped = await run(server, `return await ultimate.entries(1, { project: 'poe2-rust' })`)
+  expect(stopped.data.isError).toBe(true)
+  expect(stopped.text).toContain('poe2-rust is not running on this machine; start it to query it')
+  const unknown = await run(server, `return await ultimate.entries(1, { project: 'nope' })`)
+  expect(unknown.text).toContain('Unknown project nope')
+  expect(unknown.text).toContain('poe2-rust')
 })
 
 it('reads stored history and documents from before a reset', async () => {

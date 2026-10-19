@@ -32,6 +32,9 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { apiSource, apiSummaries } from '../../lib/api-files.ts'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import type { ActionContext } from '../../server/actions.ts'
+import { READ_BYTES, READS, readProject } from './projects.ts'
+import type { Read } from './projects.ts'
 
 export const Store = defineDoc({
   kind: 'codemode.store',
@@ -71,11 +74,8 @@ const id = (value: unknown): ConversationId => {
     throw new Error('conversationId must be a positive integer')
   return value as ConversationId
 }
-function globals(
-  host: ExtensionHost,
-  conversationId: ConversationId,
-  context: Context,
-): CodemodeTool[] {
+/** The history reads codemode offers, on this project's storage; `codemode.read` serves them to other projects. */
+function localReads(host: ExtensionHost, context: Context) {
   const conversations = () =>
     host.harness().commit(async (tx) => {
       const items = []
@@ -115,6 +115,78 @@ function globals(
     } while (cursor)
     return items
   }
+  const search = async (
+    text: unknown,
+    options: { conversationId?: number; limit?: number } = {},
+  ) => {
+    if (typeof text !== 'string' || !text) throw new Error('search text must be nonempty')
+    const count = limit(options.limit)
+    const records =
+      options.conversationId === undefined
+        ? await conversations()
+        : [{ id: id(options.conversationId) }]
+    const matches: EntryRecord[] = []
+    for (const conversation of records) {
+      let cursor: Cursor | undefined
+      do {
+        const found = await host.harness().conversation(conversation.id, context)
+        if (!found) throw new Error('Unknown conversation')
+        const page = await found.entries({}, 100, cursor, context)
+        for (const entry of page.items) {
+          if (JSON.stringify(entry).includes(text)) matches.push(entry)
+          if (matches.length === count) return matches
+        }
+        cursor = page.next
+      } while (cursor)
+    }
+    return matches
+  }
+  return {
+    conversations: () => conversations(),
+    entries: ([conversation, options]) =>
+      entries(conversation, options as Parameters<typeof entries>[1]),
+    search: ([text, options]) =>
+      search(text, options as { conversationId?: number; limit?: number }),
+    trace: ([query]) => host.trace.query(query ?? {}),
+    traceTree: ([traceId]) => {
+      if (typeof traceId !== 'string' || !traceId) throw new Error('traceId must be nonempty')
+      return host.trace.tree(traceId)
+    },
+  } satisfies Record<Read, (args: unknown[]) => unknown>
+}
+
+function globals(
+  host: ExtensionHost,
+  conversationId: ConversationId,
+  context: Context,
+): CodemodeTool[] {
+  const reads = localReads(host, context)
+  /**
+   * Read `op` here, or in the project its last argument's `project` names (the option `options` at `at`), through
+   * that project's running instance.
+   */
+  const read =
+    (op: Read, at: number): CodemodeTool['execute'] =>
+    async (values) => {
+      const args = [...(values as unknown[])]
+      const options = args[at]
+      const project =
+        options && typeof options === 'object' && 'project' in options ? options.project : undefined
+      if (project !== undefined) {
+        if (typeof project !== 'string' || !project) throw new Error('project must be nonempty')
+        const { project: _project, ...rest } = options as Record<string, unknown>
+        args[at] = rest
+        const remote = await readProject(
+          host,
+          project,
+          op,
+          args as JsonValue[],
+          context.abortSignal,
+        )
+        if (remote) return remote.value
+      }
+      return reads[op](args)
+    }
   const helpers: {
     name: string
     description: string
@@ -175,19 +247,15 @@ function globals(
       description:
         'Recorded calls (service, action, reactor, tool), newest `limit` oldest first; filter by trace id, conversation or ISO `since`.',
       signature:
-        '(query?: { trace?: string; conversation?: number; since?: string; limit?: number }): Promise<{ id: string; parent?: string; trace: string; at: string; ms: number; caller: string; callee: string; kind: string; name: string; ok: boolean; error?: string; args?: string; result?: string; conversation?: number; task?: number; entry?: number }[]>',
-      execute: ([query]) =>
-        host.trace.query((query ?? {}) as Parameters<typeof host.trace.query>[0]),
+        '(query?: { trace?: string; conversation?: number; since?: string; limit?: number; project?: string }): Promise<{ id: string; parent?: string; trace: string; at: string; ms: number; caller: string; callee: string; kind: string; name: string; ok: boolean; error?: string; args?: string; result?: string; conversation?: number; task?: number; entry?: number }[]>',
+      execute: read('trace', 0),
     },
     {
       name: 'traceTree',
       description:
         'The calls of one trace nested under their parents (`children`), in start order.',
-      signature: '(traceId: string): Promise<unknown[]>',
-      execute: ([traceId]) => {
-        if (typeof traceId !== 'string' || !traceId) throw new Error('traceId must be nonempty')
-        return host.trace.tree(traceId)
-      },
+      signature: '(traceId: string, options?: { project?: string }): Promise<unknown[]>',
+      execute: read('traceTree', 1),
     },
     {
       name: 'action',
@@ -208,50 +276,24 @@ function globals(
     {
       name: 'conversations',
       description: 'All stored conversation identities and ownership edges.',
-      signature: '(): Promise<unknown[]>',
-      execute: conversations,
+      signature: '(options?: { project?: string }): Promise<unknown[]>',
+      execute: read('conversations', 0),
     },
     {
       name: 'entries',
       description:
         'Newest-first fork-aware stored history, including before resets and compactions. before is an exclusive entry ID.',
       signature:
-        '(conversationId: number, options?: { kinds?: string[]; limit?: number; before?: number }): Promise<unknown[]>',
-      execute: (args) => {
-        const [conversation, options] = args as [unknown, Parameters<typeof entries>[1]]
-        return entries(conversation, options)
-      },
+        '(conversationId: number, options?: { kinds?: string[]; limit?: number; before?: number; project?: string }): Promise<unknown[]>',
+      execute: read('entries', 1),
     },
     {
       name: 'search',
       description:
         'Case-sensitive substring search over all stored entry JSON, including history before resets and compactions.',
       signature:
-        '(text: string, options?: { conversationId?: number; limit?: number }): Promise<unknown[]>',
-      execute: async (args) => {
-        const [text, options = {}] = args as [string, { conversationId?: number; limit?: number }?]
-        if (typeof text !== 'string' || !text) throw new Error('search text must be nonempty')
-        const count = limit(options.limit)
-        const records =
-          options.conversationId === undefined
-            ? await conversations()
-            : [{ id: id(options.conversationId) }]
-        const matches: EntryRecord[] = []
-        for (const conversation of records) {
-          let cursor: Cursor | undefined
-          do {
-            const found = await host.harness().conversation(conversation.id, context)
-            if (!found) throw new Error('Unknown conversation')
-            const page = await found.entries({}, 100, cursor, context)
-            for (const entry of page.items) {
-              if (JSON.stringify(entry).includes(text)) matches.push(entry)
-              if (matches.length === count) return matches
-            }
-            cursor = page.next
-          } while (cursor)
-        }
-        return matches
-      },
+        '(text: string, options?: { conversationId?: number; limit?: number; project?: string }): Promise<unknown[]>',
+      execute: read('search', 1),
     },
     {
       name: 'taskGraph',
@@ -303,6 +345,25 @@ function globals(
     spread: true,
     outputSchema: {},
   }))
+}
+
+export const actions = {
+  /**
+   * `{ op, args }`: another project's codemode asks this one for `ultimate.<op>(...args)` (`conversations`, `entries`,
+   * `search`, `trace`, `traceTree`), read-only. Answers more than 1 MiB of JSON with an error asking for a smaller limit.
+   */
+  async read(input: JsonValue, { host, signal }: ActionContext) {
+    const { op, args } = (input ?? {}) as { op?: unknown; args?: unknown }
+    if (!READS.includes(op as Read)) throw new Error(`op must be one of ${READS.join(', ')}`)
+    if (args !== undefined && !Array.isArray(args)) throw new Error('args must be an array')
+    const value = await localReads(host, withAbortSignal(signal, BACKGROUND_CONTEXT))[op as Read](
+      args ?? [],
+    )
+    const result = JSON.parse(JSON.stringify(value ?? null)) as JsonValue
+    if (JSON.stringify(result).length > READ_BYTES)
+      throw new Error('The answer is larger than 1 MiB; ask for a smaller limit')
+    return result
+  },
 }
 
 export default function codemode(host: ExtensionHost) {
