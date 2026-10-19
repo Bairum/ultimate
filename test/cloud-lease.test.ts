@@ -601,8 +601,12 @@ it('scans again when a run came and went during the scan, holding for the worktr
   expect(await moving).toBe(false)
 })
 
-/** Runs due fake timers while a test polls with `until`. */
-const tick = () => vi.advanceTimersByTimeAsync(0)
+/**
+ * Runs due fake timers while a test polls with `until`. It advances 1 ms, not 0: a zero-delay timer created while the
+ * fake clock is mid-tick (a socket message arriving between its timers) is due 1 ms later, and a 0 ms advance never
+ * reaches it, so the move would stall at its handover.
+ */
+const tick = () => vi.advanceTimersByTimeAsync(1)
 
 it('holds a move for the runs it drains past the old ten-minute cap, naming their conversations', async () => {
   const project = cloud()
