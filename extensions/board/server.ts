@@ -17,6 +17,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type {
   ConversationId,
+  Cursor,
   EntryId,
   EntryRecord,
   GenerationResult,
@@ -138,6 +139,32 @@ async function answerByInput(host: ExtensionHost, from: number, at: number) {
     for (const m of (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages)
       if (asked(m)) m.state = 'answered'
   }, BACKGROUND_CONTEXT)
+}
+/** Input typed while no watcher listened, such as before a crash: each asker's newest user input answers its questions. */
+async function answerMissed(host: ExtensionHost) {
+  const log = await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)
+  const askers = new Set(
+    (log?.messages ?? []).flatMap((m) =>
+      openQuestion(m) && typeof m.from === 'number' ? [m.from] : [],
+    ),
+  )
+  for (const from of askers) {
+    let cursor: Cursor | undefined
+    do {
+      const page = await host
+        .harness()
+        .commit(
+          (tx) => tx.scanEntries({ conversationId: from as ConversationId }, 64, cursor),
+          BACKGROUND_CONTEXT,
+        )
+      const input = page.items.find((entry) => entry.kind === 'pi.user')
+      if (input) {
+        await answerByInput(host, from, input.model?.[0]?.timestamp ?? 0)
+        break
+      }
+      cursor = page.next
+    } while (cursor)
+  }
 }
 async function append(tx: Tx, input: Omit<BoardMessage, 'id' | 'at'>) {
   const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
@@ -889,6 +916,7 @@ export default function board(host: ExtensionHost) {
           answering.add(done)
         }
     })
+    await answerMissed(host).catch((error: unknown) => host.notice(`Board: ${String(error)}`))
   })
   host.onClose(async () => {
     stop?.()

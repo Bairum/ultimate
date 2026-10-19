@@ -61,6 +61,8 @@ shown in @ultimate's transcript; it starts no run.
 A reply-enabled message to `user` stays open, and its sender shows as awaiting reply, until the user answers it:
 an answer card or a plain input typed in the sender's conversation marks it answered. Answer cards commit the
 change with the reply; typed inputs close it through a commit subscription, only for questions asked before that input.
+On open, each asker's newest typed input closes what it would have, so an input committed while nothing listened
+(a crash) still answers.
 
 Reply-expected agent messages to `user` also request question extraction in the append transaction through the
 optional questions service. The sender's outgoing `message` card in its transcript shows extracted decisions

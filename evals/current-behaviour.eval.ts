@@ -49,13 +49,19 @@ test.for([
   {
     size: 'tiny',
     request: 'Fix the typo "teh" to "the" in README.md.',
-    expected: { direct: true, plan: false, workers: false, reviewer: false },
+    expected: { direct: true, plan: false, workers: false, reviewer: false, assess: false },
   },
   {
     size: 'feature',
     request:
-      'Build persistent multi-user notifications: database schema and migrations, server subscriptions, a notification inbox UI, and integration tests. Implement it, using the normal project workflow.',
+      'Build persistent multi-user notifications: database schema and migrations, server subscriptions, a notification inbox UI, and integration tests. I already know what I want, so skip the assessment and implement it now, using the normal project workflow.',
     expected: { plan: true, workers: true, review: true },
+  },
+  {
+    size: 'unassessed feature',
+    request:
+      'Add persistent multi-user notifications: database schema and migrations, server subscriptions, a notification inbox UI, and integration tests.',
+    expected: { assess: true },
   },
 ])('standing agent sizes a $size request before routing', async ({ request, expected }) => {
   const ultimate = await start({
@@ -265,6 +271,45 @@ test('coordinator submits once @ultimate relays preview approval', async () => {
       ),
       turn.text,
     )
+  } finally {
+    await ultimate.stop()
+  }
+})
+
+test('coordinator assesses a feature and builds nothing', async () => {
+  const coordinator = parseDefinition(
+    await readFile('agents/coordinator.md', 'utf8'),
+    'agents/coordinator.md',
+  )
+  const ultimate = await start({
+    project: {
+      files: {
+        'README.md': 'Notes app. Server in server.ts, UI in ui.ts.\n',
+        'server.ts':
+          'export const notes: string[] = []\nexport function add(note: string) { notes.push(note) }\n',
+        'ui.ts':
+          "import { notes } from './server.ts'\nexport const render = () => notes.join('\\n')\n",
+      },
+      git: true,
+    },
+    extensions: { enable: ['subagents', 'board', 'workspaces'], disable: ['codemode'] },
+    toolResults: { message: 'Message 7 sent.', subagent: 'Subagent 3 started.' },
+  })
+  try {
+    await standing(ultimate)
+    const c = await ultimate.conversation({ instructions: coordinator.instructions })
+    const turn = await c.run(
+      'Message from @ultimate:\nFeature, assess first. The user\'s words: "add tags to notes and a tag filter in the UI". Answer here; your answer is sent to @ultimate automatically. Do not use message to reply.',
+    )
+    const built = turn.toolCalls.filter(
+      ({ name, arguments: args }) =>
+        ['edit', 'write', 'subagent', 'plan'].includes(name) ||
+        (name === 'workspace' && args.action === 'submit'),
+    )
+    assert.lengthOf(built, 0, turn.text)
+    expect(turn.finalText).toMatch(/complex/i)
+    expect(turn.finalText).toMatch(/alternative|easier/i)
+    expect(turn.finalText).toMatch(/^\s*1[.)]/m)
   } finally {
     await ultimate.stop()
   }

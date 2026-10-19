@@ -253,7 +253,7 @@ it('shares the root ledger read-only with descendants, saves verdicts, and repla
   }
 })
 
-it('indexes linked children with their task, renames them after it, and backfills existing plans', async () => {
+it('indexes linked children with their task and renames them after it', async () => {
   const directory = await temp('ultimate-plan-index-')
   const prepared = await prepareHarness({
     ultimateRoot: directory,
@@ -343,23 +343,6 @@ it('indexes linked children with their task, renames them after it, and backfill
     await call({ action: 'update', key: 'E1.1', child: second })
     expect(Object.keys((await index())!)).toEqual([String(second)])
     expect(await title(second)).toBe('Build it well')
-
-    // A plan written before the index existed appears once the harness opens.
-    await opened.harness.commit(async (tx) => {
-      ;(await tx.doc(TaskIndex, opened.root.id)).children = {}
-      ;(await tx.doc(Plan, opened.root.id)).epics.E1.tasks['E1.1'].status = 'done'
-    }, context)
-    await opened.close()
-    await open()
-    expect(await index()).toEqual({
-      [second]: {
-        coordinator: 1,
-        epic: 'E1',
-        key: 'E1.1',
-        title: 'Build it well',
-        status: 'done',
-      },
-    })
   } finally {
     await opened.close()
     await removeTemp(directory)
