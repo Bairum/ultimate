@@ -142,6 +142,11 @@ export function Transcript({ dock }: { dock?: boolean }) {
     resize.observe(scroll)
     return () => resize.disconnect()
   }, [id])
+  // A sent message pins the view to the bottom and follows the run, even when the reader had scrolled up.
+  useEvent('ultimate:sent', (value) => {
+    if ((value as { conversationId?: number } | undefined)?.conversationId === id)
+      void stick.current?.scrollToBottom({ animation: 'instant' })
+  })
   // Keyed so a conversation never inherits the previous one's scroll position or follow state.
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
