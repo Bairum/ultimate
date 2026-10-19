@@ -1,7 +1,9 @@
 import { SearchIcon, XIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { api, cn, formatDuration, useUltimate } from '@/sdk'
+import { api, cn, errorMessage, formatDuration, useUltimate } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
+import { asking, empty, failed, followed, loaded, older } from './feed.ts'
+import type { Feed } from './feed.ts'
 import { StreamAction } from './refs.ts'
 import type { SystemFilter, SystemRow } from './refs.ts'
 import { clock, KindIcon, TraceTree } from './tree.tsx'
@@ -29,76 +31,63 @@ export const ownPoll = (row: SystemRow) =>
 
 const POLL = 2000
 const PAGE = 100
-const KEEP = 1000
 
 /**
- * Rows newest first: the first page, then the rows arriving since its `head` every 2 s while `live`, and older pages
- * on demand. A new filter starts over.
+ * Rows newest first: the newest page, then every 2 s while `live` the rows arriving since its `head` (or the newest
+ * page again while there is no head), and older pages on demand. A failure shows as `error`; the next tick or scroll
+ * asks again. A new filter starts over.
  */
 function useStream(filter: SystemFilter, live: boolean) {
   const key = JSON.stringify(filter)
-  const [state, setState] = useState<{
-    key: string
-    rows: SystemRow[]
-    next?: string
-    head?: string
-    loading: boolean
-  }>({ key, rows: [], loading: true })
+  const [state, setState] = useState<Feed & { key: string }>({ ...empty, key })
   const latest = useRef(state)
   latest.current = state
-  useEffect(() => {
+  const call = useRef<AbortController>(undefined)
+  /** Ask for a page with `args` and apply `step` to the feed, if the filter is still `key`. */
+  const request = (args: object, step: (feed: Feed, page: never) => Feed) => {
     const controller = new AbortController()
-    setState({ key, rows: [], loading: true })
+    call.current = controller
+    setState((previous) => ({ ...asking(previous), key }))
     void api
-      .action(StreamAction, { ...filter, limit: PAGE }, { signal: controller.signal })
-      .then((page) => setState({ key, ...page, loading: false }))
-      .catch((error: unknown) => {
-        // Aborted by a newer filter; the newer request owns the state.
-        if (!controller.signal.aborted) throw error
-      })
-    return () => controller.abort()
+      .action(StreamAction, { ...filter, ...args, limit: PAGE }, { signal: controller.signal })
+      .then(
+        (page) =>
+          setState((previous) =>
+            previous.key === key ? { ...step(previous, page as never), key } : previous,
+          ),
+        (error: unknown) => {
+          // Aborted by a newer filter or an unmount; the newer request owns the state.
+          if (controller.signal.aborted) return
+          setState((previous) =>
+            previous.key === key ? { ...failed(previous, errorMessage(error)), key } : previous,
+          )
+        },
+      )
+  }
+  useEffect(() => {
+    setState({ ...empty, key })
+    request({}, loaded)
+    return () => call.current?.abort()
     // `filter` is compared through `key`.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
   useEffect(() => {
     if (!live) return undefined
-    let busy = false
     const timer = setInterval(() => {
-      const head = latest.current.head
-      if (busy || !head || latest.current.key !== key) return
-      busy = true
-      void api
-        .action(StreamAction, { ...filter, after: head, limit: PAGE })
-        .then((page) =>
-          setState((previous) =>
-            previous.key === key && previous.head === head
-              ? {
-                  ...previous,
-                  head: page.head,
-                  rows: [...page.rows, ...previous.rows].slice(0, KEEP),
-                }
-              : previous,
-          ),
-        )
-        .finally(() => {
-          busy = false
-        })
+      const { head, loading } = latest.current
+      if (loading || latest.current.key !== key) return
+      if (head === undefined) request({}, loaded)
+      else request({ after: head }, (feed, page) => followed(feed, head, page))
     }, POLL)
     return () => clearInterval(timer)
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [key, live])
-  const older = async () => {
+  const more = () => {
     const { next, loading } = latest.current
-    if (!next || loading) return
-    setState((previous) => ({ ...previous, loading: true }))
-    const page = await api.action(StreamAction, { ...filter, before: next, limit: PAGE })
-    setState((previous) =>
-      previous.key === key && previous.next === next
-        ? { ...previous, rows: [...previous.rows, ...page.rows], next: page.next, loading: false }
-        : previous,
-    )
+    if (next === undefined || loading) return
+    request({ before: next }, (feed, page) => older(feed, next, page))
   }
-  return { ...state, older }
+  return { ...state, older: more }
 }
 
 /** One row as one quiet line, like the Activity feed: time, kind, name, conversation, duration, failure. */
@@ -246,15 +235,20 @@ export function Stream({
   }
   const stream = useStream(filter, live)
   const end = useRef<HTMLDivElement>(null)
-  const older = useRef(stream.older)
-  older.current = stream.older
+  const page = useRef(stream.older)
+  page.current = stream.older
+  // Observing again reports whether the end is in view, so a page that leaves it in view loads the next, and after a
+  // failure the end asks again 2 s later.
   useEffect(() => {
     const observer = new IntersectionObserver((seen) => {
-      if (seen.some((entry) => entry.isIntersecting)) void older.current()
+      if (seen.some((entry) => entry.isIntersecting)) page.current()
     })
-    observer.observe(end.current!)
-    return () => observer.disconnect()
-  }, [])
+    const timer = setTimeout(() => observer.observe(end.current!), stream.error ? POLL : 0)
+    return () => {
+      clearTimeout(timer)
+      observer.disconnect()
+    }
+  }, [stream.rows.length, stream.error])
   return (
     <>
       <Filters setView={setView} view={view} />
@@ -269,13 +263,21 @@ export function Stream({
         className="px-3 py-4 text-center font-mono text-[11px] text-muted-foreground/70"
         ref={end}
       >
-        {stream.loading
-          ? 'loading…'
-          : stream.rows.length === 0
-            ? 'nothing matches'
-            : stream.next
-              ? ''
-              : 'the start of the record'}
+        {stream.error ? (
+          <span className="text-error/90" data-stream-error>
+            couldn’t load: {stream.error} · retrying
+          </span>
+        ) : stream.rows.length === 0 ? (
+          stream.loading ? (
+            'loading…'
+          ) : (
+            'nothing matches'
+          )
+        ) : stream.next !== undefined ? (
+          ''
+        ) : (
+          'the start of the record'
+        )}
       </div>
     </>
   )

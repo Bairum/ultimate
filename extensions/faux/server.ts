@@ -16,7 +16,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { NoticeEvent } from '../../shared/events.ts'
 import { Branched, LineageApi, Rooted } from '../lineage/api.ts'
 import { SubmissionLanded } from '../workspaces/api.ts'
-import { seedLanes } from './lanes.ts'
+import { seedLanes, stopCalling } from './lanes.ts'
 
 const messageText = (content: unknown) =>
   typeof content === 'string'
@@ -33,6 +33,8 @@ export default async function fauxExtension(host: ExtensionHost) {
   // Core, always on; resolved where it is called, declared here so the catalogue lists it.
   host.need(LineageApi)
   const faux = host.faux
+  // `seedLanes` leaves a worker calling; it stops with this facet (a reload, a disable, the server closing).
+  host.onClose(async () => stopCalling())
   if (faux) {
     const scratch = join(host.home, 'demo.txt')
     const shellPath = "'" + scratch.replaceAll("'", "'\\''") + "'"
