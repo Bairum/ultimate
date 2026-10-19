@@ -294,18 +294,22 @@ it('posts exactly one Board reply atomically, wakes the sender, and rejects unkn
   await expect(f.answer(id)).rejects.toThrow('These questions are no longer open')
 })
 
-it('refuses answers after typed input and discards a stale in-flight extraction', async () => {
+it('keeps a card answerable across typed input and discards an extraction its message outlived', async () => {
   const f = await fixture()
   const id = await f.send()
   await f.settled()
   await f.type(f.opened.root.id, 'Typed reply')
+  await f.answer(id)
   await expect(f.answer(id)).rejects.toThrow('These questions are no longer open')
   await f.settled()
   const hold = gate()
   f.hold(hold)
   const stale = await f.send()
   await until(() => f.extract.mock.calls.length === 2)
-  await f.type(f.opened.root.id, 'A new input')
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find((m) => m.id === stale)!.state =
+      'answered'
+  }, context)
   hold.release()
   await f.settled()
   expect((await f.state())!.asked[String(stale)]).toBeUndefined()
@@ -539,7 +543,7 @@ it("answers @ultimate's current answer with one typed input and refuses stale or
   await expect(f.reply(third.answer!)).rejects.toThrow('These questions are no longer open')
 })
 
-it("closes @ultimate's open message to the user when the user types in its conversation", async () => {
+it("keeps @ultimate's open message to the user open until its card answers it", async () => {
   const f = await fixture()
   const id = await f.ultimate()
   await f.type(id, `SEND ${JSON.stringify({ to: 'user', text: 'Keep it running?' })}`)
@@ -554,10 +558,11 @@ it("closes @ultimate's open message to the user when the user types in its conve
   await f.settled()
   expect((await f.log())!.messages.find((m) => m.id === message.id)?.state).toBe('delivered')
   expect((await f.state())!.asked[String(message.id)]).toHaveLength(1)
-  await f.type(id, 'Yes, keep it')
-  await until(
-    async () => (await f.log())!.messages.find((m) => m.id === message.id)?.state === 'answered',
-  )
+  await f.type(id, 'Something else entirely')
+  await f.settled()
+  expect((await f.log())!.messages.find((m) => m.id === message.id)?.state).toBe('delivered')
+  await f.answer(message.id)
+  expect((await f.log())!.messages.find((m) => m.id === message.id)?.state).toBe('answered')
   await expect(f.answer(message.id)).rejects.toThrow('These questions are no longer open')
 })
 

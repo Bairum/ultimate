@@ -50,8 +50,8 @@ phones, one question shows at a time with Back/Next. On desktop, 1–9 and Enter
 still-open final-answer card even across newer messages, else its newest open message card, without intercepting
 input/textarea editing.
 
-A message card disappears once its message is answered: by the card, a Board Reply or new post to the sender, or
-typing in the sender's conversation. Unrelated agent messages do not answer it. A final-answer card disappears when
+A message card disappears once its message is answered: by its card or a Board Reply to that message. Typed input,
+answers to other messages and agent messages leave it open. A final-answer card disappears when
 typed user input or a reset follows the answer, or once its answer is claimed.
 
 ## Actions

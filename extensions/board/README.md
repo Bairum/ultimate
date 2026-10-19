@@ -58,18 +58,16 @@ The incoming row shows it after its kind: a spinner and `assessing…`, then `ac
 
 Sending to `user` writes a message
 shown in @ultimate's transcript; it starts no run.
-A reply-enabled message to `user` stays open, and its sender shows as awaiting reply, until the user answers it:
-an answer card or a plain input typed in the sender's conversation marks it answered. Answer cards commit the
-change with the reply; typed inputs close it through a commit subscription, only for questions asked before that input.
-On open, each asker's newest typed input closes what it would have, so an input committed while nothing listened
-(a crash) still answers.
+A reply-enabled message to `user` stays open, and its sender shows as awaiting reply, until the user answers that
+message: a user Reply with `re` (an answer card, or a typed Reply) marks only that message answered, in the reply's
+commit. Plain input, new posts and answers to other questions leave it open.
 
 Reply-expected agent messages to `user` also request question extraction in the append transaction through the
 optional questions service. The sender's outgoing `message` card in its transcript shows extracted decisions
 under the message body while it is open: Yes/No or choice buttons with a recommended marker, plus Something
 else. The user-only questions `answer` action posts
 a normal user Board reply with `re` and Q/A text, waking the sender. Its admission atomically checks that the
-original message is still open, preventing duplicate replies. Typing in the sender's conversation closes the card too.
+original message is still open, preventing duplicate replies.
 One-way messages and user replies never request extraction; see [Questions](../questions/README.md).
 
 In the sender's transcript a `message` call renders as an outgoing card: recipient, one-way or expects reply, and
