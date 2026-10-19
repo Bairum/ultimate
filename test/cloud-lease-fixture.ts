@@ -96,7 +96,6 @@ export function cloud({ aliases = {} }: { aliases?: Record<string, string> } = {
   }[] = []
   const replica = Object.assign(Object.create(SharedReplica.prototype) as SharedReplica, {
     store: new ReplicaStore(sql()),
-    streams: new Set(),
     ctx: { getWebSockets: () => sockets, waitUntil: () => {} },
     env: {
       DIRECTORY: {
@@ -163,7 +162,7 @@ export function cloud({ aliases = {} }: { aliases?: Record<string, string> } = {
         replica.webSocketClose(socket)
       }
   }
-  /** A request to the project's API, as the cloud UI sends it. */
+  /** A request to the replica's own routes, as the Worker's bearer routes send it. */
   const api = (path: string, body?: unknown) =>
     replica.fetch(
       new Request(`https://cloud.example${path}`, {

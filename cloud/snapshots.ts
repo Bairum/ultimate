@@ -1,5 +1,34 @@
 import type { R2Bucket } from '@cloudflare/workers-types'
-import { bounded } from './builds.ts'
+
+/** The body's bytes, or undefined once they exceed `limit`: Content-Length alone is untrusted, so reading stops there. */
+export async function bounded(request: Request, limit: number) {
+  const chunks: Uint8Array[] = []
+  let size = 0
+  const reader = request.body?.getReader()
+  if (reader) {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        size += value.byteLength
+        if (size > limit) {
+          await reader.cancel()
+          return undefined
+        }
+        chunks.push(value)
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  }
+  const bytes = new Uint8Array(size)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.length
+  }
+  return bytes
+}
 
 export const SNAPSHOT_ID = /^[a-z0-9-]{8,64}$/
 /** One encrypted chunk: 16 MiB of compressed bytes plus nonce and tag, with room to spare. */

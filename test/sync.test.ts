@@ -133,7 +133,6 @@ const directory: Project[] = [
       { machine: 'haza-pc', role: 'writer', connected: true, lastSeen: 1 },
       { machine: 'rog', role: 'standby', connected: true, lastSeen: 2 },
     ],
-    count: 10,
   },
 ]
 
