@@ -358,6 +358,12 @@ export async function lanes(
 const record = (args: unknown): Record<string, unknown> =>
   args && typeof args === 'object' && !Array.isArray(args) ? (args as Record<string, unknown>) : {}
 
+/**
+ * The surface polls these every few seconds with moving cursors, so no two calls repeat: the trace counts their
+ * successful calls instead of writing them (`polls()`); failures are written.
+ */
+export const pollActions = ['stream', 'lanes', 'tree', 'polls']
+
 export const actions = {
   stream: implementAction(StreamAction, (args, { host }) => stream(host, record(args))),
   lanes: implementAction(LanesAction, (args, { host }) => lanes(host, record(args))),

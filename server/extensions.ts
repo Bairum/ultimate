@@ -260,6 +260,8 @@ export async function loadExtensions(
   }
   const actions = new Map<string, Record<string, ExtensionAction>>()
   const userActions = new Map<string, string[]>()
+  /** Read-only actions a surface polls: the trace counts their successful calls instead of writing them. */
+  const pollActions = new Map<string, string[]>()
   const settingsReloads = new Set<string>()
   const records = new Map<string, ExtensionInfo>()
   const documents = new Map<string, ConversationDocToken<JsonObject>[]>()
@@ -290,7 +292,8 @@ export async function loadExtensions(
     )
       throw new Error('Invalid conversationId')
     const call = { caller, callee: name, name: `${name}/${action}`, args, conversationId }
-    return trace.run({ kind: 'action', ...call }, () =>
+    const poll = pollActions.get(name)?.includes(action)
+    return trace.run({ kind: 'action', ...call, ...(poll ? { poll } : {}) }, () =>
       fn(args, {
         host: facetHosts.get(name)!,
         conversationId,
@@ -526,6 +529,14 @@ export async function loadExtensions(
             )
           )
             throw new Error('userActions must contain registered action names')
+          const exportedPollActions: unknown = module.pollActions ?? []
+          if (
+            !Array.isArray(exportedPollActions) ||
+            exportedPollActions.some(
+              (action) => typeof action !== 'string' || !Object.hasOwn(exportedActions, action),
+            )
+          )
+            throw new Error('pollActions must contain registered action names')
           const secrets = validateSecrets(module.secrets ?? [])
           host.registry.install(trace.tools(extension))
           const previousHost = facetHosts.get(name)
@@ -536,6 +547,7 @@ export async function loadExtensions(
           if (open) await Promise.all([...facetOpeners.get(facetHost)!].map(runOpener))
           actions.set(name, exportedActions)
           userActions.set(name, exportedUserActions)
+          pollActions.set(name, exportedPollActions)
           if (module.reloadOnSettings === true) settingsReloads.add(name)
           else settingsReloads.delete(name)
           record.actions = Object.keys(exportedActions)
@@ -563,6 +575,7 @@ export async function loadExtensions(
         documents.delete(name)
         actions.delete(name)
         userActions.delete(name)
+        pollActions.delete(name)
         settingsReloads.delete(name)
         record.actions = []
         delete record.server
@@ -582,6 +595,7 @@ export async function loadExtensions(
         host.extensionSources.delete(name)
         actions.delete(name)
         userActions.delete(name)
+        pollActions.delete(name)
         settingsReloads.delete(name)
         host.builds.remove(name)
         documents.delete(name)

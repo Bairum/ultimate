@@ -613,6 +613,10 @@ export const userActions = ['decide']
 ```
 
 Codemode rejects these calls with `<extension>/<action> is a user-only action`; the HTTP path still calls them.
+
+Likewise `pollActions: string[]` names read-only actions a surface polls with changing arguments (cursors, windows):
+the call trace counts their successful calls in `host.trace.polls()` instead of writing them, with the plain action
+and service calls they make; a failure, a model call or a tool call under one is written with the chain above it.
 This is an explicit opt-out from agent action dispatch, not a security sandbox against arbitrary agent code.
 
 The HTTP endpoint remains browser-only: requests require `Sec-Fetch-Site: same-origin` or a loopback `Origin`

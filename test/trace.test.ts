@@ -5,8 +5,8 @@ import { afterAll, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
-import { guardToolArguments } from '../server/tool-arguments.ts'
-import { callTrace, summary } from '../server/trace.ts'
+import { classify, guardToolArguments } from '../server/tool-arguments.ts'
+import { callTrace, summary, traceContext } from '../server/trace.ts'
 import type { Call, CallTree } from '../server/trace.ts'
 import { fauxServer, linkDependencies, temp, until } from './helpers.ts'
 
@@ -261,24 +261,42 @@ it('records one model row per request with tokens and stop reason, never content
   expect(text).not.toContain('secret-answer-text')
 })
 
-it('records a failed model stream as a failed row with its error', async () => {
+it('records a failed model call by classification only, never the provider message; completeSimple too', async () => {
   const trace = callTrace(join(await temp(), 'trace.sqlite'))
   trace.open()
   const faux = fauxProvider()
   const collection = createModels()
   collection.setProvider(faux.provider)
   const models = guardToolArguments(collection, { begin: trace.begin, conversationOf: () => 7 })
-  faux.setResponses([
-    fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'overloaded_error' }),
-  ])
+  // Provider messages can echo the request: a prompt or a key must not reach the row.
+  const errorMessage =
+    '429 rate_limit_error: request "SENTINEL-PROMPT tell me the plan" with key sk-SENTINEL-SECRET'
+  faux.setResponses([fauxAssistantMessage('', { stopReason: 'error', errorMessage })])
   const model = collection.getModel('faux', 'faux-1')!
   await models.streamSimple(model, { messages: [] }, { sessionId: 's' }).result()
   await until(() => trace.reader.query().length === 1)
   expect(trace.reader.query()[0]).toMatchObject({
     kind: 'model',
     ok: false,
-    error: 'overloaded_error',
+    error: 'error 429 rate_limit_error',
     conversation: 7,
+  })
+  expect(JSON.stringify(trace.reader.query())).not.toContain('SENTINEL')
+  expect(classify('aborted')).toBe('aborted')
+  expect(classify('error', 'socket hang up: ECONNRESET at status: 503')).toBe(
+    'error 503 ECONNRESET',
+  )
+
+  // A direct completeSimple call (health's pings) is one model row as well.
+  faux.setResponses([fauxAssistantMessage('pong')])
+  const answer = await models.completeSimple(model, { messages: [] })
+  expect(answer.stopReason).toBe('stop')
+  await until(() => trace.reader.query().length === 2)
+  expect(trace.reader.query()[1]).toMatchObject({
+    kind: 'model',
+    caller: 'extension',
+    name: 'faux/faux-1',
+    ok: true,
   })
   trace.close()
 })
@@ -343,6 +361,61 @@ it('writes a repeated trace-starting action or service call once a minute and co
       { name: 'y.read', count: 1, since: new Date(1_000_000).toISOString() },
       { name: 'x/poll', count: 1, since: new Date(1_000_000).toISOString() },
     ])
+  } finally {
+    clock.mockRestore()
+    trace.close()
+  }
+})
+
+const service = (name: string) => ({ kind: 'service', caller: 'x', callee: 'y', name }) as const
+
+it('writes a repeated poll with its ancestors when a model or failing call is made under it', async () => {
+  const trace = callTrace(join(await temp(), 'trace.sqlite'))
+  trace.open()
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+  try {
+    /** A poll `x/poll` calling service `y.read`, which runs `inner`. */
+    const poll = (inner: () => void = () => {}) =>
+      trace.run({ kind: 'action', caller: 'ui', callee: 'x', name: 'x/poll' }, () =>
+        trace.run(service('y.read'), inner),
+      )
+    const rows = () => trace.reader.query({ limit: 1000 })
+    poll()
+    expect(rows()).toHaveLength(2)
+    // A plain repeat: neither the poll nor its service call is written.
+    poll()
+    expect(rows()).toHaveLength(2)
+    // A model call under a repeat is always written, and so is the chain above it.
+    poll(() => {
+      const { finish } = trace.begin(
+        { kind: 'model', caller: 'extension', callee: 'faux', name: 'faux/faux-1' },
+        traceContext()!,
+      )
+      finish(true, { stopReason: 'stop' })
+    })
+    const model = rows().find((row) => row.kind === 'model')!
+    const read = rows().find((row) => row.id === model.parent)!
+    expect(read).toMatchObject({ name: 'y.read', ok: true })
+    expect(rows().find((row) => row.id === read.parent)).toMatchObject({
+      name: 'x/poll',
+      ok: true,
+    })
+    // A failure under a repeat is written with its parents, so its tree stays whole.
+    poll(() => {
+      expect(() =>
+        trace.run(service('y.fail'), () => {
+          throw new Error('down')
+        }),
+      ).toThrow('down')
+    })
+    const failed = rows().find((row) => row.name === 'y.fail')!
+    expect(failed).toMatchObject({ ok: false, error: 'down' })
+    expect(trace.reader.tree(failed.trace).map((node) => node.name)).toEqual(['x/poll'])
+    expect(trace.reader.tree(failed.trace)[0].children[0].children[0].id).toBe(failed.id)
+    // A plain repeat after them is still skipped.
+    const before = rows().length
+    poll()
+    expect(rows()).toHaveLength(before)
   } finally {
     clock.mockRestore()
     trace.close()

@@ -433,4 +433,24 @@ export const actions = {
   expect(tree.events).toEqual([
     expect.objectContaining({ name: 'alpha.pinged', summary: '{"n":2}', conversation: 1 }),
   ])
+
+  // The surface's polls carry moving cursors, so they never repeat: successful ones are counted, not written.
+  const systemRows = () =>
+    server.extensions.trace.query({ limit: 1000 }).filter((row) => row.callee === 'system')
+  expect(systemRows()).toEqual([])
+  const first = (await invoke('system', 'stream', {})) as { head: string }
+  await invoke('alpha', 'ping', { n: 5 })
+  await invoke('system', 'stream', { after: first.head })
+  expect(systemRows()).toEqual([])
+  const { polls } = (await invoke('system', 'polls', null)) as {
+    polls: { name: string; count: number }[]
+  }
+  expect(polls).toEqual(
+    expect.arrayContaining([expect.objectContaining({ name: 'system/stream' })]),
+  )
+  // A failing one is written.
+  await expect(invoke('system', 'stream', { before: 'yesterday' })).rejects.toThrow(
+    'Invalid before cursor',
+  )
+  expect(systemRows()).toMatchObject([{ name: 'system/stream', ok: false }])
 })

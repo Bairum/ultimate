@@ -26,6 +26,8 @@ export interface Call {
   entryId?: number
   /** Record neither arguments nor result (a tool's live in the transcript). */
   sealed?: boolean
+  /** A read-only poll: on success, counted in `polls()` instead of written, with the plain calls it makes. */
+  poll?: boolean
 }
 export interface CallRow {
   id: string
@@ -121,8 +123,20 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
   const written = new Map<string, number>()
   /** Repeats not written since the trace opened, by call name. */
   const polls = new Map<string, { count: number; since: number }>()
-  /** Contexts of calls that repeat one written within `REPEAT_MS`; the calls they make repeat with them. */
+  /**
+   * Contexts of calls not written when they succeed: polls (`Call.poll`, or a repeat of one written within
+   * `REPEAT_MS`) and the successful action and service calls they make. Any row written below one unmarks it and its
+   * marked ancestors, so a written child always has its parents; children finish first.
+   */
   const repeats = new WeakSet<EventContext>()
+  /** The parent of each marked context, to unmark the chain. */
+  const marked = new WeakMap<EventContext, EventContext | null>()
+  const unmark = (context: EventContext | null) => {
+    while (context && repeats.has(context)) {
+      repeats.delete(context)
+      context = marked.get(context) ?? null
+    }
+  }
   const countRepeat = (name: string) => {
     const counted = polls.get(name)
     if (counted) counted.count++
@@ -190,16 +204,25 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
     const args = (!sealed && summary(call.args)) || undefined
     const repeat = repeatKey({ ...call, sealed }, parent, args)
     const last = repeat === undefined ? undefined : written.get(repeat)
-    if ((parent && repeats.has(parent)) || (last !== undefined && Date.now() - last < REPEAT_MS))
+    // Inside a poll, only plain action and service calls go with it: a tool, model or sealed call is always written.
+    const plain = (call.kind === 'action' || call.kind === 'service') && !sealed
+    if (
+      call.poll ||
+      (plain && parent && repeats.has(parent)) ||
+      (last !== undefined && Date.now() - last < REPEAT_MS)
+    ) {
       repeats.add(context)
+      marked.set(context, parent)
+    }
     const started = performance.now()
     // Epoch milliseconds with a fraction, so a parent sorts before the child it started in the same millisecond.
     const at = performance.timeOrigin + started
     const finish = (ok: boolean, value: unknown) => {
       if (!database) return
       try {
-        // A repeat that failed is news: it is written like any failure.
+        // A repeat that failed is news: it is written like any failure, with its marked ancestors.
         if (ok && repeats.has(context)) return countRepeat(call.name)
+        unmark(parent)
         if (ok && repeat !== undefined) {
           const now = Date.now()
           written.set(repeat, now)

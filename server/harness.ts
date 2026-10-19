@@ -81,7 +81,7 @@ export async function prepareHarness(options: HostOptions) {
   const home = options.home ?? process.env.ULTIMATE_HOME ?? projectHome(projectRoot, userHome)
   await mkdir(home, { recursive: true })
   const database = join(home, 'state.sqlite')
-  const modelRuntime = await ModelRuntime.create()
+  const runtime = await ModelRuntime.create()
   const settings = SettingsManager.create(projectRoot)
   applyHttpProxySettings(settings.getGlobalSettings().httpProxy)
   configureHttpDispatcher(settings.getHttpIdleTimeoutMs())
@@ -98,6 +98,12 @@ export async function prepareHarness(options: HostOptions) {
     return found
   }
   const fauxMode = options.faux ?? process.env.ULTIMATE_FAUX === '1'
+  // Here, not with the extensions: model calls are traced through the models the harness opens with, and through the
+  // runtime extensions call directly (health's pings), so `modelRuntime` below is the guarded one too.
+  const trace = callTrace(join(home, 'trace.sqlite'))
+  const modelCalls = modelTrace(trace)
+  registry.install(modelCalls.extension)
+  const modelRuntime = guardToolArguments(runtime, modelCalls)
   let fauxHandle: ReturnType<typeof fauxProvider> | undefined
   let models: Parameters<typeof Harness.open>[1]['models'] = modelRuntime
   if (fauxMode) {
@@ -105,13 +111,8 @@ export async function prepareHarness(options: HostOptions) {
     const faux = fauxProvider({ tokensPerSecond: 350 })
     fauxHandle = faux
     collection.setProvider(faux.provider)
-    models = collection
+    models = guardToolArguments(collection, modelCalls)
   }
-  // Here, not with the extensions: model calls are traced through the models the harness opens with.
-  const trace = callTrace(join(home, 'trace.sqlite'))
-  const modelCalls = modelTrace(trace)
-  registry.install(modelCalls.extension)
-  models = guardToolArguments(models, modelCalls)
   const available = fauxMode ? [] : await modelRuntime.getAvailable()
   const preferred =
     available.find(
