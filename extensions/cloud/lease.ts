@@ -180,6 +180,7 @@ const REASONS: [RegExp, string][] = [
   [/not connected|is offline/, 'cloud unreachable'],
   [/integrity|verification|does not match/, 'integrity check failed'],
   [/timeout|timed out|aborted/i, 'timed out'],
+  [/^interrupted$/, 'interrupted'],
   [/Releasing the lease failed/, 'release failed'],
 ]
 /** `reason` of a failed `cloud.backup` or `cloud.move`: a known cause, an HTTP status, or `failed`. */
@@ -1016,14 +1017,15 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
           step,
           reason: classify(error),
         })
+      // The transition as it ended, kept: a later move may replace the cloud's latest one before the hold notices.
+      let end: Transition | undefined
       const stopped = async () => {
         host.notice(`The move to ${by} stopped; this machine keeps the project`)
-        const transition = sync?.state().transition
-        if (transition?.id === id)
-          await failed(
-            transition.steps.find((step) => step.state === 'failed')?.name ?? transition.step,
-            transition.error ?? 'stopped',
-          )
+        end ??= sync?.state().transition
+        await failed(
+          end?.steps.find((step) => step.state === 'failed')?.name ?? end?.step ?? 'handover',
+          end?.error ?? 'stopped',
+        )
         return false
       }
       await record(MoveEvent, { phase: 'started', project, id, from: options.machine, to: by })
@@ -1048,6 +1050,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       })
       const watch = (state: SyncState) => {
         if (!ended(state)) return
+        end ??= state.transition
         cancelled = true
         wake.resolve()
       }
@@ -1073,7 +1076,11 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       try {
         for (;;) {
           wake = Promise.withResolvers<void>()
-          if (closed || mode !== 'serving') return false
+          if (closed || mode !== 'serving') {
+            // Recorded only while storage is still open; a reopened writer does not reconcile it.
+            await failed('handover', 'interrupted')
+            return false
+          }
           if (cancelled || ended(sync.state())) return stopped()
           let waiting: { tasks: number; runs?: string[]; dirty?: string[]; held?: boolean }
           let unchecked: string | undefined

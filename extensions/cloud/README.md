@@ -71,9 +71,15 @@ else `failed`), never the raw error, so no provider text or secret reaches the l
   `failed` `{ ms, reason }`.
 - `cloud.move` (`MoveEvent`) `{ project, id, from, to }`: the writer records `started` when the target asks it to
   release (the released snapshot carries it), and `failed` `{ step, reason }` with the target's failed step when the
-  move ends and it keeps the project, or `handover` when its release failed. The target records `done` `{ ms }` once
+  move ends and it keeps the project, `handover` when its release failed, or `interrupted` when the facet closed
+  mid-hold. The target records `done` `{ ms }` once
   it opened storage, also when a restart finishes a won claim. A standby has no storage, so a target's failure
   before the claim, and a move from a free lease until its `done`, show only in the move card.
+
+As with `cloud.lease`, a crash between the change and its event's commit drops that event; nothing reconciles it on
+the next start (a move's `done` is not recorded twice, and a `started` may stay without an outcome). The log is a
+record for the System stream, not the source of truth: `cloud-lease.json`, the claim intent and the cloud's
+transition are.
 
 The idle check runs every minute, or four times within a shorter `cloud.idleRelease` (fractions of a minute are allowed, for tests).
 

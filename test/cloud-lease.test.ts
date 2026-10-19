@@ -900,6 +900,15 @@ it('keeps the project when the move is cancelled while it scans for uncommitted 
   expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
   expect(desk.serving()).toBe(true)
   expect(desk.snapshots.uploadSnapshot).not.toHaveBeenCalled()
+  expect((await cloudEvents(desk.harness, MoveEvent)).at(-1)).toEqual({
+    phase: 'failed',
+    project: KEY,
+    id,
+    from: 'desk',
+    to: 'laptop',
+    step: 'handover',
+    reason: 'cancelled',
+  })
 })
 
 it('keeps the lease and keeps serving while busy, also when its connection drops', async () => {
