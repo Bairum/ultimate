@@ -71,15 +71,12 @@ export async function writeLeaseFile(home: string, lease: LeaseFile) {
 }
 
 /**
- * Record `<home>/state.sqlite` as the snapshot the last release uploaded, so the next claim of that snapshot opens it
+ * Record `database` as the snapshot the home's last release uploaded, so the next claim of that snapshot opens it
  * instead of downloading. Only for a home whose lease file names a released snapshot; false otherwise.
  */
-export async function adoptAsReleased(home: string) {
+export async function adoptAsReleased(home: string, database: string) {
   const lease = await readLeaseFile(home)
   if (!lease.snapshot) return false
-  await writeLeaseFile(home, {
-    ...lease,
-    snapshotHash: await databaseHash(join(home, 'state.sqlite')),
-  })
+  await writeLeaseFile(home, { ...lease, snapshotHash: await databaseHash(database) })
   return true
 }

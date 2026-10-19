@@ -1,32 +1,37 @@
 // Start a project's Ultimate from a fresh state: its conversation state moves into a backup folder, nothing is deleted.
 // Usage: pnpm reset [dir] [--machine] [--dry-run] [--yes]. See "Starting fresh" in docs/running.md.
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, realpath, rename, stat } from 'node:fs/promises'
+import { mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { parseArgs } from 'node:util'
 import { DatabaseSync } from 'node:sqlite'
-import {
-  adoptAsReleased,
-  databaseSuffixes,
-  moveDatabase,
-  readLeaseFile,
-} from '../lib/database-files.ts'
+import { adoptAsReleased, readLeaseFile } from '../lib/database-files.ts'
 import { git } from '../lib/git.ts'
-import { readJson } from '../lib/json-file.ts'
+import { readJson, writeJson } from '../lib/json-file.ts'
 import { machineRoot } from '../lib/machine.ts'
 import { acquireLock, readOwner } from '../server/lock.ts'
 import { projectHome } from '../server/project.ts'
 
-/** Databases that go, with their `-wal` and `-shm`: the state, the call trace, and states parked by moves. */
-const databases = (names: string[]) =>
-  names.filter((name) => /^(state|trace|state\.stale-.+)\.sqlite$/.test(name))
 /**
- * Files describing the old state; each is rebuilt when needed. The lease's own files (`cloud-lease.json`,
- * `standby.json`) stay: they say what this machine holds, not what it held in its conversations.
+ * Files that go: the state, the call trace and states parked by moves, each with its `-wal` and `-shm` (also one whose
+ * database already went, as an interrupted reset leaves it), and files describing the old state, rebuilt when needed.
+ * The lease's own files (`cloud-lease.json`, `standby.json`) stay: they say what this machine holds.
  */
-const STATE_FILES = ['conversations.json', 'previews.json', 'supervisor.log']
+const MOVES =
+  /^((state|trace|state\.stale-.+)\.sqlite(-wal|-shm)?|conversations\.json|previews\.json|supervisor\.log)$/
+/** The reset in progress, written before the first file moves: a rerun finishes it into the same backup. */
+const JOURNAL = 'reset.json'
+/** The fresh database of a cloud-synced home, recorded as the released snapshot before it is installed. */
+const FRESH = 'state.reset.sqlite'
+
+interface Journal {
+  backup: string
+  cloud: boolean
+  /** `moving` until every file is in the backup; then `installing` the fresh database. */
+  phase: 'moving' | 'installing'
+}
 
 export interface Plan {
   home: string
@@ -35,14 +40,16 @@ export interface Plan {
   moves: string[]
   /** The cloud lease file names a released snapshot: the fresh database is recorded as that snapshot. */
   cloud: boolean
+  /** An interrupted reset this one finishes. */
+  resumes: boolean
   /** The Ultimate running in this home; `apply` refuses while it runs. */
   running?: { pid: number; port?: number }
 }
 
-/** What a reset of `home` moves; it refuses (throws) while the cloud runs the project on another machine. */
-export async function plan(home: string, backups: string, now = new Date()): Promise<Plan> {
-  if (!existsSync(home)) throw new Error(`No Ultimate home at ${home}`)
+/** What a reset of `home` moves now; throws when the cloud forbids it. `apply` asks again under the home's lock. */
+async function inventory(home: string, running = false) {
   const names = await readdir(home)
+  const journal = await readJson<Journal | undefined>(join(home, JOURNAL), undefined)
   if (names.includes('cloud-claim.json'))
     throw new Error('A move to this machine is in flight: start Ultimate to finish it, then reset.')
   const standby = await readJson<{ writer?: unknown } | undefined>(
@@ -54,19 +61,34 @@ export async function plan(home: string, backups: string, now = new Date()): Pro
       'Another machine runs this project; this one is on standby. Reset it there, or Move here first.',
     )
   const lease = await readLeaseFile(home)
-  const moves = [
-    ...databases(names).flatMap((name) =>
-      databaseSuffixes.map((suffix) => name + suffix).filter((file) => names.includes(file)),
-    ),
-    ...STATE_FILES.filter((name) => names.includes(name)),
-  ]
+  // Without a released snapshot this machine still holds the lease at its epoch, and the cloud expects this state.
+  // A running writer releases when it stops cleanly, so only a stopped one is refused for it.
+  if (lease.key && !lease.snapshot && !journal && !running)
+    throw new Error(
+      'This machine still holds the cloud lease: Ultimate did not release it when it stopped. Start Ultimate, stop it\n' +
+        'cleanly once (it uploads a snapshot and releases), then reset. Without cloud sync, remove cloud-lease.json first.',
+    )
+  return {
+    journal,
+    moves:
+      journal?.phase === 'installing' ? [] : names.filter((name) => MOVES.test(name)).toSorted(),
+    cloud: journal?.cloud ?? (!!lease.key && !!lease.snapshot),
+  }
+}
+
+/** What a reset of `home` moves; it refuses (throws) while the cloud runs the project here or elsewhere. */
+export async function plan(home: string, backups: string, now = new Date()): Promise<Plan> {
+  if (!existsSync(home)) throw new Error(`No Ultimate home at ${home}`)
+  const owner = await holder(home)
+  const { journal, moves, cloud } = await inventory(home, !!owner.running)
   const stamp = now.toISOString().replace(/[:.]/g, '-')
   return {
     home,
-    backup: join(backups, `reset-${stamp}`, home.split('/').at(-1)!),
+    backup: journal?.backup ?? join(backups, `reset-${stamp}`, home.split('/').at(-1)!),
     moves,
-    cloud: !!lease.key && !!lease.snapshot,
-    ...(await holder(home)),
+    cloud,
+    resumes: !!journal,
+    ...owner,
   }
 }
 
@@ -90,24 +112,38 @@ export const refusal = (owner: { pid: number; port?: number }) =>
       `or Ctrl+C the terminal running it, then run pnpm reset again.`,
   )
 
-/** Move the plan's files into its backup folder, holding the home's lock so Ultimate cannot start meanwhile. */
+/**
+ * Move the files into the plan's backup folder, holding the home's lock so Ultimate cannot start meanwhile. Under the
+ * lock it checks the home again, so a move or standby that began after planning stops it before anything moves. Each
+ * step can be repeated: an interrupted reset leaves its journal, and running it again finishes it.
+ */
 export async function apply(p: Plan) {
-  const lock = await acquireLock(join(p.home, 'ultimate.lock'), { pid: process.pid }).catch(
-    async () => {
-      throw refusal((await readOwner(join(p.home, 'ultimate.lock'))) ?? { pid: 0 })
-    },
-  )
+  const lockPath = join(p.home, 'ultimate.lock')
+  const lock = await acquireLock(lockPath, { pid: process.pid }).catch(async () => {
+    throw refusal((await readOwner(lockPath)) ?? { pid: 0 })
+  })
   try {
-    await mkdir(p.backup, { recursive: true })
-    for (const file of p.moves.filter((name) => name.endsWith('.sqlite')))
-      await moveDatabase(join(p.home, file), join(p.backup, file))
-    for (const file of p.moves.filter((name) => !/\.sqlite(-wal|-shm)?$/.test(name)))
-      await rename(join(p.home, file), join(p.backup, file))
-    if (p.cloud) {
-      // An empty database, recorded as the snapshot the last release uploaded: the next claim opens it as it is.
-      new DatabaseSync(join(p.home, 'state.sqlite')).close()
-      await adoptAsReleased(p.home)
+    const { journal, moves, cloud } = await inventory(p.home)
+    const backup = journal?.backup ?? p.backup
+    const write = (phase: Journal['phase']) =>
+      writeJson(join(p.home, JOURNAL), { backup, cloud, phase } satisfies Journal)
+    await mkdir(backup, { recursive: true })
+    if (!journal) await write('moving')
+    const fresh = join(p.home, FRESH)
+    // Recorded first: from here a claim never installs the old snapshot over the fresh state.
+    if (cloud) {
+      new DatabaseSync(fresh).close()
+      await adoptAsReleased(p.home, fresh)
     }
+    for (const name of moves) {
+      const to = join(backup, name)
+      if (existsSync(to)) throw new Error(`${to} already exists; refusing to overwrite the backup`)
+      await rename(join(p.home, name), to)
+    }
+    await write('installing')
+    if (cloud && existsSync(fresh)) await rename(fresh, join(p.home, 'state.sqlite'))
+    await rm(join(p.home, JOURNAL))
+    return backup
   } finally {
     await lock.close()
   }
@@ -167,7 +203,8 @@ async function main() {
   const work = await unlanded(home, values.machine ? undefined : project)
 
   console.log(`Reset ${project}\n  home   ${home}\n  backup ${p.backup}\n`)
-  if (!p.moves.length) console.log('Nothing to move: the home is already fresh.')
+  if (p.resumes) console.log('Finishing an interrupted reset into the same backup.')
+  else if (!p.moves.length) console.log('Nothing to move: the home is already fresh.')
   for (const name of p.moves) console.log(`  move ${name} (${await size(join(home, name))})`)
   console.log(
     '\nKept: settings, secrets, logins, project.json, the lander checkout, worktrees and ultimate/* branches.',
@@ -180,7 +217,7 @@ async function main() {
     if (!values['dry-run']) throw refusal(p.running)
     console.log(`\n${refusal(p.running).message}`)
   }
-  if (values['dry-run'] || !p.moves.length) return
+  if (values['dry-run'] || (!p.moves.length && !p.resumes)) return
 
   if (!values.yes) {
     const prompt = createInterface({ input: process.stdin, output: process.stdout })
@@ -188,15 +225,15 @@ async function main() {
     prompt.close()
     if (!/^y(es)?$/i.test(answer.trim())) return console.log('Nothing changed.')
   }
-  await apply(p)
-  console.log(`\nMoved to ${p.backup}.`)
+  const backup = await apply(p)
+  console.log(`\nMoved to ${backup}.`)
   if (p.cloud)
     console.log(
       'Cloud sync: after you start Ultimate, click Move here once; it takes the project with this fresh state.\n' +
         'The old history now lives only in this backup folder and in older cloud backups until they are pruned.',
     )
   console.log(
-    `To restore: stop Ultimate, then\n  mv ${join(p.backup, '*')} ${home}/\n` +
+    `To restore: stop Ultimate, then\n  mv ${join(backup, '*')} ${home}/\n` +
       (p.cloud
         ? `  (cloud-lease.json then no longer matches; Move here downloads the last snapshot)\n`
         : ''),

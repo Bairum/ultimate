@@ -37,9 +37,8 @@ async function fixture() {
 const reset = (user: string, ...args: string[]) =>
   run(process.execPath, [script, ...args], { env: cleanEnv({ HOME: user }) })
 
-it('moves the state into a backup folder and keeps worktrees, project.json and the lease', async () => {
+it('moves the state into a backup folder and keeps worktrees and project.json', async () => {
   const { user, project, home } = await fixture()
-  await writeFile(join(home, 'cloud-lease.json'), JSON.stringify({ key: 'k', epoch: 3 }))
 
   const dry = await reset(user, project, '--dry-run')
   expect(dry.stdout).toContain('move state.sqlite')
@@ -60,13 +59,17 @@ it('moves the state into a backup folder and keeps worktrees, project.json and t
   ])
   expect(
     (await readdir(home)).filter((name) => !name.startsWith('ultimate.lock')).toSorted(),
-  ).toEqual(['cloud-lease.json', 'project.json', 'worktrees'])
+  ).toEqual(['project.json', 'worktrees'])
   expect(await readFile(join(home, 'worktrees', '7', 'keep.txt'), 'utf8')).toBe('work')
-  // Held, not released: no fresh database to adopt, and the lease file stays as it was.
-  expect(JSON.parse(await readFile(join(home, 'cloud-lease.json'), 'utf8'))).toEqual({
-    key: 'k',
-    epoch: 3,
-  })
+})
+
+it('refuses a home that still holds the cloud lease, released or not', async () => {
+  const { user, project, home } = await fixture()
+  await writeFile(join(home, 'cloud-lease.json'), JSON.stringify({ key: 'k', epoch: 3 }))
+  const refused = await reset(user, project, '--yes').catch((error: { stderr: string }) => error)
+  expect(refused).toMatchObject({ stderr: expect.stringContaining('still holds the cloud lease') })
+  expect(existsSync(join(home, 'state.sqlite'))).toBe(true)
+  expect(existsSync(join(user, '.ultimate', 'backups'))).toBe(false)
 })
 
 it('refuses while Ultimate runs in the home, and on standby behind another machine', async () => {
