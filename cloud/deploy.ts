@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { versionArgs } from './version.ts'
 
 const settings = JSON.parse(
   readFileSync(
@@ -17,6 +18,17 @@ if (!url) {
   console.error('Set cloud.url in ~/.ultimate/settings.json first; see cloud/README.md.')
   process.exit(1)
 }
+let version: string[]
+try {
+  version = versionArgs((...args) =>
+    spawnSync('git', args, { cwd: fileURLToPath(new URL('.', import.meta.url)), encoding: 'utf8' }),
+  )
+} catch (error) {
+  console.error(
+    `Cannot tag the deploy: ${(error as Error).message}. Run it from a git checkout of Ultimate.`,
+  )
+  process.exit(1)
+}
 const base = JSON.parse(readFileSync(new URL('./wrangler.json', import.meta.url), 'utf8')) as object
 // Wrangler resolves main and assets relative to the config, so the generated file sits beside the base one.
 const config = fileURLToPath(new URL('./wrangler.deploy.json', import.meta.url))
@@ -25,7 +37,7 @@ writeFileSync(
   JSON.stringify({ ...base, routes: [{ pattern: new URL(url).hostname, custom_domain: true }] }),
 )
 process.exit(
-  spawnSync('wrangler', ['deploy', '--config', config, ...process.argv.slice(2)], {
+  spawnSync('wrangler', ['deploy', '--config', config, ...version, ...process.argv.slice(2)], {
     stdio: 'inherit',
   }).status ?? 1,
 )

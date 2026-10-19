@@ -315,7 +315,7 @@ export function StandingRow({
 }: {
   /** Missing until @ultimate's conversation is first opened. */
   conversation?: ConversationSummary
-  /** The agent's name without `@`: `ultimate`, `lander`, `cloudflare`, … */
+  /** The agent's name without `@`: `ultimate`, `lander`, `sync`, … */
   name: string
   shown: boolean
   presence: Presence

@@ -131,7 +131,7 @@ describe('the @ultimate chat', () => {
     expect(ultimateChat(ultimate)).toBe(true)
   })
   it('excludes other standing agents, subagents and coordinators', () => {
-    expect(ultimateChat({ ...ultimate, title: '@cloudflare' })).toBe(false)
+    expect(ultimateChat({ ...ultimate, title: '@lander' })).toBe(false)
     expect(ultimateChat({ ...ultimate, parentConversationId: 4 })).toBe(false)
     expect(ultimateChat({ ...ultimate, ownerTaskId: 9 })).toBe(false)
     expect(ultimateChat({ ...ultimate, label: 'coordinator' })).toBe(false)
