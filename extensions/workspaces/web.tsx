@@ -92,6 +92,7 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
               className="text-muted-foreground"
               count={commits.length + more}
               href={github && rangeBase ? compareUrl(github, rangeBase, sha) : undefined}
+              range={rangeBase ? `${rangeBase}...${sha}` : undefined}
             />
           </span>
         }

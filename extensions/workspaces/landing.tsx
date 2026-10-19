@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MentionText } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
-import { api, Fold, useConversations, useUltimate } from '@/sdk'
+import { api, definePoint, Fold, Provided, useConversations, useUltimate } from '@/sdk'
 import { FeatureTag } from '../conversations/ui.tsx'
 import { GithubAction } from './refs.ts'
 import type { ConversationSubject } from '../conversations/types.ts'
@@ -66,32 +66,70 @@ export function useGithubRepo() {
   return url
 }
 
-/** "3 commits", linking to the landing's compare range on DiffsHub when there is one. */
+/**
+ * Opens a review of a spec (`<base>...<sha>`, `branch:<name>`) in the app, or undefined while nothing reviews
+ * (`review` provides it).
+ */
+export const Review = definePoint<string, (() => void) | undefined>('workspaces.review')
+
+const external = (href: string, children: ReactNode, className?: string) => (
+  <a
+    className={cn(
+      'inline-flex shrink-0 items-center gap-0.5 hover:text-foreground hover:underline',
+      className,
+    )}
+    href={href}
+    rel="noreferrer"
+    target="_blank"
+    title={`Compare on DiffsHub: ${href.replace(/^https:\/\/diffshub\.com\//, '')}`}
+  >
+    {children}
+    <ArrowUpRightIcon className="size-2.5 opacity-60" />
+  </a>
+)
+
+/**
+ * "3 commits": opens a review of `range` (`<base>...<sha>`) while something reviews, with the DiffsHub compare `href`
+ * as a small ↗ beside it; otherwise the count links to DiffsHub itself.
+ */
 export function CommitCount({
   count,
   href,
+  range,
   className,
 }: {
   count: number
   href?: string
+  range?: string
   className?: string
 }) {
   const label = `${count} commit${count === 1 ? '' : 's'}`
-  if (!href) return <span className={cn('shrink-0', className)}>{label}</span>
+  const plain = href ? (
+    external(href, label, className)
+  ) : (
+    <span className={cn('shrink-0', className)}>{label}</span>
+  )
+  if (!range) return plain
   return (
-    <a
-      className={cn(
-        'inline-flex shrink-0 items-center gap-0.5 hover:text-foreground hover:underline',
-        className,
-      )}
-      href={href}
-      rel="noreferrer"
-      target="_blank"
-      title={`Compare on GitHub: ${href.replace(/^https:\/\/github\.com\//, '')}`}
-    >
-      {label}
-      <ArrowUpRightIcon className="size-2.5 opacity-60" />
-    </a>
+    <Provided input={range} point={Review}>
+      {(open) =>
+        open ? (
+          <span className={cn('inline-flex shrink-0 items-center gap-1', className)}>
+            <button
+              className="cursor-pointer hover:text-foreground hover:underline"
+              onClick={open}
+              title={`Review ${range.replace(/\b([0-9a-f]{7})[0-9a-f]{33}\b/g, '$1')}`}
+              type="button"
+            >
+              {label}
+            </button>
+            {href && external(href, null)}
+          </span>
+        ) : (
+          plain
+        )
+      }
+    </Provided>
   )
 }
 

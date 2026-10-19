@@ -4,6 +4,7 @@ import {
   CircleHelpIcon,
   CircleXIcon,
   EllipsisIcon,
+  FileDiffIcon,
   FoldVerticalIcon,
   PencilIcon,
 } from 'lucide-react'
@@ -27,6 +28,7 @@ import {
   RenameAction,
 } from '../conversations/ui.tsx'
 import type { Presence } from '../conversations/ui.tsx'
+import { Review } from '../workspaces/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
 import type { OverviewRow } from '../conversations/types.ts'
 import type { ConversationState } from '../board/ui.tsx'
@@ -286,6 +288,21 @@ function PhasedRow({
                 <GitBranchIcon />
                 Workspace details
               </DropdownMenuItem>
+            )}
+            {conversation.workspace && conversation.workspace.state !== 'removed' && (
+              <Provided input={`branch:${conversation.workspace.branch}`} point={Review}>
+                {(open) =>
+                  open && (
+                    <DropdownMenuItem
+                      className="cursor-pointer text-[12.5px]"
+                      onSelect={() => (afterMenu.current = open)}
+                    >
+                      <FileDiffIcon />
+                      Review changes
+                    </DropdownMenuItem>
+                  )
+                }
+              </Provided>
             )}
             <DropdownMenuItem
               className="text-[12.5px]"

@@ -2,8 +2,9 @@ The right panel's Activity tab: what happened in the project, newest first, from
 
 Each event is one quiet line with an icon for its kind, what happened and its age:
 
-- **Landing** (`workspaces.landed`): the feature tag and title it shipped, and its commit count linking the compare
-  range on GitHub, as the root row's Landed lines do. Click opens the submitting conversation at the entry it submitted
+- **Landing** (`workspaces.landed`): the feature tag and title it shipped, and its commit count, which opens the
+  range in Review (with DiffsHub as a small ↗ beside it; without review the count links DiffsHub), as the root row's
+  Landed lines do. Click opens the submitting conversation at the entry it submitted
   from.
 - **Branch** (`lineage.branched`): the new branch as a conversation chip and the conversation it forked from.
 - **Root** (`lineage.rooted`): the new root by its title.

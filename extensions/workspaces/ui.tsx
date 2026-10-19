@@ -1,10 +1,11 @@
 /**
  * Workspaces for other extensions' browser code: each conversation's worktree and the lander queue, landing links,
- * the actions that inspect worktrees and the landing event.
+ * the actions that inspect worktrees and the landing event, and the point through which an optional extension
+ * reviews a landing or a branch.
  */
 export { stateLabel, useWorkspaceConversations, useWorkspaceIndex, useWorkspaces } from './data.tsx'
 export type { WorkspaceConversation } from './data.tsx'
-export { CommitCount, Open, useGithubRepo } from './landing.tsx'
+export { CommitCount, Open, Review, useGithubRepo } from './landing.tsx'
 export {
   CheckRan,
   InfoAction,

@@ -118,6 +118,7 @@ function Landing({ event, now }: Props<typeof SubmissionLanded>) {
           className="text-muted-foreground/80"
           count={landing.commitCount}
           href={github ? compareUrl(github, landing.base, landing.sha) : undefined}
+          range={`${landing.base}...${landing.sha}`}
         />
       }
     >

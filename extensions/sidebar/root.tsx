@@ -201,6 +201,7 @@ function LandingLine({ event, root, now }: { event: Landing; root: number; now: 
         className="text-muted-foreground/80"
         count={event.commits}
         href={event.compare}
+        range={event.base ? `${event.base}...${event.sha}` : undefined}
       />
       {event.at !== undefined && (
         <span className="w-6 shrink-0 text-right text-muted-foreground/60">
