@@ -3,8 +3,10 @@ import { CodeBlock } from '@/components/ai/code-block'
 import { Tool, ToolContent, ToolHeader, ToolImages, ToolSection } from '@/components/ai/tool'
 import { JsonTree } from '@/components/json-tree'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { cn, defineWebExtension, useToolDuration } from '@/sdk'
+import { cn, defineWebExtension, useDoc, useToolDuration } from '@/sdk'
 import type { DocumentProps, ToolCallView } from '@/sdk'
+import { SummariesDoc } from './refs.ts'
+import type { CallSummary } from './refs.ts'
 
 interface NestedCall {
   name: string
@@ -105,11 +107,49 @@ function outputOf(call: ToolCallView, details: Details) {
   return body.join('\n').trim()
 }
 
+/** The script's first line of code, the header until its summary arrives. */
+const firstLine = (code: string) =>
+  code
+    .split('\n')
+    .find((line) => line.trim() && !line.startsWith('// @options'))
+    ?.trim() ?? ''
+
+/** The one-line summary of call `id`, once the summary model or a fixed label wrote it. */
+function useSummary(id: string): CallSummary | undefined {
+  return useDoc(SummariesDoc)?.calls[id]
+}
+
+/** A summary as text: an effect leads with an accent marker. */
+function SummaryText({ summary }: { summary: CallSummary }) {
+  return (
+    <span className="text-foreground/90" title={summary.line}>
+      {summary.effect && (
+        <span aria-label="changed something" className="pr-1.5 text-brand">
+          ◆
+        </span>
+      )}
+      {summary.line}
+    </span>
+  )
+}
+
+/** A codemode call as one step line: its summary, else its first line of code. */
+function CodemodeLine({ call }: { call: ToolCallView }) {
+  const summary = useSummary(call.id)
+  if (summary) return <SummaryText summary={summary} />
+  const code = typeof call.args.code === 'string' ? call.args.code : ''
+  return (
+    <>
+      <span className="text-foreground/80">codemode</span> {firstLine(code)}
+    </>
+  )
+}
+
 function CodemodeCall({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
+  const summary = useSummary(call.id)
   const code = typeof call.args.code === 'string' ? call.args.code : ''
   const lines = code.split('\n')
-  const first = lines.find((line) => line.trim() && !line.startsWith('// @options')) ?? ''
   const details = (call.details ?? {}) as Details
   const finished = call.status === 'done' || call.status === 'error'
   const calls = details.calls ?? streamedCalls(call.output)
@@ -131,9 +171,18 @@ function CodemodeCall({ call }: { call: ToolCallView }) {
             {duration && <span>{duration}</span>}
           </>
         }
-        name="codemode"
+        name={summary ? '' : 'codemode'}
         state={call.status}
-        title={first.trim()}
+        title={
+          summary ? (
+            <>
+              <SummaryText summary={summary} />
+              <span className="pl-2 text-[11px] text-muted-foreground/60">codemode</span>
+            </>
+          ) : (
+            firstLine(code)
+          )
+        }
       />
       <ToolContent>
         {code && (
@@ -206,6 +255,7 @@ function StoreDocument({ value }: DocumentProps) {
 
 export default defineWebExtension({
   tools: { codemode: CodemodeCall },
+  toolLines: { codemode: CodemodeLine },
   documents: [
     { kind: 'codemode.store', title: 'Store', icon: DatabaseIcon, component: StoreDocument },
   ],

@@ -74,6 +74,8 @@ export interface ToolCallView {
 
 /** `core` is the rendering so far, starting with the generic tool card. */
 export type ToolRenderer = ComponentType<{ call: ToolCallView; core: ReactNode }>
+/** A tool call as one short line of plain text, for a folded run's step list; hooks are allowed. */
+export type ToolLineRenderer = ComponentType<{ call: ToolCallView }>
 /**
  * `core` is the core's rendering of the entry: return it for entries you leave alone, or wrap it. `blocks` are the
  * content blocks of an assistant message a chat row shows, when it shows only some.
@@ -222,6 +224,8 @@ export interface WebExtension {
   surfaces?: readonly SurfaceContribution[]
   /** Tool-call renderers by tool name. */
   tools?: Readonly<Record<string, ToolRenderer>>
+  /** One-line step texts by tool name, for the chat's folded work rows; the last facet providing a name wins. */
+  toolLines?: Readonly<Record<string, ToolLineRenderer>>
   /** Entry renderers by entry kind; they also replace the core renderer of a `pi.*` kind. */
   entries?: Readonly<Record<string, EntryRenderer>>
   inbox?: InboxRenderer

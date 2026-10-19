@@ -361,6 +361,38 @@ function Bash({ call }: { call: ToolCallView }) {
   )
 }
 
+/** A file tool as a step line: its verb and path. */
+const fileLine = (verb: string) =>
+  function FileLine({ call }: { call: ToolCallView }) {
+    return (
+      <>
+        <span className="text-foreground/80">{verb}</span> {usePath(text(call.args.path))}
+      </>
+    )
+  }
+
+/** A bash call as a step line: its programs, as its header shows them. */
+function BashLine({ call }: { call: ToolCallView }) {
+  const command = text(call.args.command)
+  const display = useMemo(() => formatBashCommand(command), [command])
+  return (
+    <>
+      <span className="text-foreground/80">$</span>{' '}
+      {display.steps.some((step) => step.programs.length > 0) ? (
+        <BashSummary steps={display.steps} />
+      ) : (
+        command.split('\n')[0]
+      )}
+    </>
+  )
+}
+
 export default defineWebExtension({
   tools: { read: Read, write: Write, edit: Edit, bash: Bash },
+  toolLines: {
+    read: fileLine('read'),
+    write: fileLine('write'),
+    edit: fileLine('edit'),
+    bash: BashLine,
+  },
 })

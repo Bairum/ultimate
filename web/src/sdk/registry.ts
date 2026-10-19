@@ -119,6 +119,7 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
     'an array of { id, title, icon, description?, order?, component }',
   ],
   tools: [objectOf(isComponent), 'an object of tool name → component'],
+  toolLines: [objectOf(isComponent), 'an object of tool name → line component'],
   entries: [objectOf(isComponent), 'an object of entry kind → component'],
   inbox: [isComponent, 'an inbox renderer component'],
   composer: [isComponent, 'a composer renderer component'],
@@ -498,6 +499,18 @@ export function toolRenderers(
     const component = record.extension?.tools?.[name]
     return component ? [{ extension: record.name, version: record.version, component }] : []
   })
+}
+
+/** The one-line renderer of tool `name`: the last facet providing it. */
+export function toolLine(records: readonly ExtensionRecord[], name: string) {
+  const record = records.findLast((candidate) => candidate.extension?.toolLines?.[name])
+  return (
+    record && {
+      extension: record.name,
+      version: record.version,
+      component: record.extension!.toolLines![name],
+    }
+  )
 }
 
 /** Every Markdown link renderer in discovery order: each receives the previous rendering as `core`. */

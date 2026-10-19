@@ -288,7 +288,7 @@ No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, entries, link, messageActions, messageDetails, answerLabels, chat, intro, documents, commands })`; every key is optional. Extensions load
+`defineWebExtension({ slots, panels, surfaces, tools, toolLines, entries, link, messageActions, messageDetails, answerLabels, chat, intro, documents, commands })`; every key is optional. Extensions load
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
 
 ### Slots
@@ -418,6 +418,11 @@ shows each message's context and cost there.
 rendered in discovery and contribution order, each behind an extension boundary. Return `null` when the entry has
 no relevant label. Keep labels brief and muted; the header wraps at narrow widths. Board uses it to show where an
 answer was sent, or that a one-way message's answer was not sent.
+
+`toolLines` maps tool names to components receiving `{ call: ToolCallView }` that render the call as one short line
+of plain text. A folded "worked · N steps" row lists its newest calls this way under its header (a status icon and the
+line, the tool name when no facet provides one); the last facet providing a name wins. Coding tools give their verb and
+path or programs, codemode its one-line summary.
 
 `chat` makes conversations read as a chat: `{ when(conversation), tools? }` decides from a conversation's summary
 (label, title, owner), and in a matching transcript each run of tool calls and thinking between inputs, messages and
