@@ -51,6 +51,37 @@ export const StreamAction = actionRef<
   { rows: SystemRow[]; next?: string; head: string }
 >('system', 'stream')
 
+/** One call inside a run: a tool call, or a model call (kind `model`). */
+export type LaneCall = { at: string; ms: number; kind: string; name: string; ok: boolean }
+/**
+ * A stretch of work in one conversation: calls with at most 20 s of quiet between them. `end` is absent while the run
+ * is open (its last call ended under 20 s ago, or the conversation has a live task). `more` counts calls past the 200
+ * kept, which are the newest.
+ */
+export type LaneRun = { start: string; end?: string; ok: boolean; calls: LaneCall[]; more?: number }
+/**
+ * One conversation's runs, oldest first; agent, model, kind and parent from its `subagents.started` event, if any.
+ * Titles are the browser's to resolve (`ConversationRef`).
+ */
+export type Lane = {
+  conversation: number
+  agent?: string
+  model?: string
+  kind?: 'standing' | 'branch' | 'child'
+  parent?: number
+  runs: LaneRun[]
+}
+
+/**
+ * `{ since?, until? }` (ISO; default the last 30 minutes up to now) → `{ now, lanes, more? }`: a lane for each
+ * conversation with tool or model calls in the window, most recently active first, at most 40; `more` counts the lanes
+ * left out.
+ */
+export const LanesAction = actionRef<
+  { since?: string; until?: string },
+  { now: string; lanes: Lane[]; more?: number }
+>('system', 'lanes')
+
 /** A traced call with the calls it made, in start order. */
 export type SystemCall = SystemRow & { parent?: string; children: SystemCall[] }
 

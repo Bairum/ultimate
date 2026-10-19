@@ -156,7 +156,7 @@ answering a login), keep neither, nor an error message, only the error's class. 
 services take or return credentials joins `SEALED` in `server/trace.ts`. Rows go to `<home>/trace.sqlite` in batches outside Pi commits, while
 the harness is open only; retention keeps 7 days and at most 200,000 rows. A trace failure is logged once and never
 fails the call. Read with `host.trace.query({ trace?, conversation?, since?, limit })` (the newest `limit`, oldest
-first), `host.trace.page({ before?, after?, kinds?, conversation?, errors?, text?, limit })` (calls by write
+first), `host.trace.page({ before?, after?, since?, until?, kinds?, conversation?, errors?, text?, limit })` (calls by write
 position `seq`, which is finish order, for paging; the `system` extension's stream uses it) and
 `host.trace.tree(traceId)` (calls nested under `children`), or codemode's `ultimate.trace(...)` and
 `ultimate.traceTree(traceId)`. The `system` extension merges the trace and the event log into one paged stream

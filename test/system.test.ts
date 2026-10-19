@@ -2,7 +2,7 @@ import { mkdir, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterAll, afterEach, expect, it, vi } from 'vitest'
 import type { JsonValue } from '@earendil-works/chord'
-import { actions } from '../extensions/system/server.ts'
+import { actions, lanes } from '../extensions/system/server.ts'
 import type { SystemRow } from '../extensions/system/refs.ts'
 import type { ActionContext } from '../server/actions.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
@@ -98,7 +98,23 @@ async function fixture(events: EventRecord[] = []) {
     }
   }
   const log = eventLog(events)
-  const host = { trace: trace.reader, eventLog: log } as unknown as ExtensionHost
+  /** Conversations with a live foreground task. */
+  const running = new Set<number>()
+  const harness = {
+    taskGraph: async () => ({
+      value: {
+        tasks: Object.fromEntries(
+          [...running].map((id) => [id, { conversationId: id, background: false }]),
+        ),
+      },
+      dispose: () => {},
+    }),
+  }
+  const host = {
+    trace: trace.reader,
+    eventLog: log,
+    harness: () => harness,
+  } as unknown as ExtensionHost
   const ctx = { host } as ActionContext
   const stream = (args: Record<string, unknown> = {}) =>
     actions.stream(args as JsonValue, ctx) as Promise<{
@@ -107,7 +123,10 @@ async function fixture(events: EventRecord[] = []) {
       head: string
     }>
   const tree = (traceId: string) => actions.tree({ trace: traceId }, ctx)
-  return { trace, call, events, stream, tree }
+  /** Lanes as of `seconds` after T0. */
+  const lanesAt = (seconds: number, args: Record<string, unknown> = {}) =>
+    lanes(host, args, T0 + seconds * 1000)
+  return { trace, call, events, stream, tree, running, lanesAt }
 }
 const names = (rows: SystemRow[]) => rows.map((row) => row.name)
 
@@ -231,6 +250,85 @@ it('filters by source, kind, conversation, text and errors', async () => {
   expect(third.next).toBeUndefined()
 })
 
+it("groups each conversation's tool and model calls into runs split by quiet, open while recent or busy", async () => {
+  const f = await fixture([
+    event(1, 'subagents.started', 0, {
+      id: 9,
+      agent: 'worker',
+      model: 'anthropic/opus',
+      kind: 'child',
+      parent: 7,
+    }),
+  ])
+  // Conversation 7: a run at 100–112 s, 30 s of quiet, then a run from 142 s that is still going at 150 s.
+  f.call('read', 100, { kind: 'tool', conversation: 7, ms: 2000 })
+  f.call('anthropic/opus', 105, { kind: 'model', conversation: 7, ms: 7000 })
+  f.call('bash', 142, { kind: 'tool', conversation: 7, fail: 'exit 1', ms: 1000 })
+  // Conversation 9 ended at 61 s; services and calls outside the window are not lanes.
+  f.call('edit', 60, { kind: 'tool', conversation: 9, ms: 1000 })
+  f.call('alpha/go', 140, { kind: 'action', conversation: 8 })
+  f.call('old', -2000, { kind: 'tool', conversation: 10 })
+  const result = await f.lanesAt(150)
+  expect(result.now).toBe(new Date(T0 + 150_000).toISOString())
+  expect(result.lanes.map((lane) => lane.conversation)).toEqual([7, 9])
+  const [seven, nine] = result.lanes
+  expect(seven.runs).toEqual([
+    {
+      start: new Date(T0 + 100_000).toISOString(),
+      end: new Date(T0 + 112_000).toISOString(),
+      ok: true,
+      calls: [
+        expect.objectContaining({ kind: 'tool', name: 'read', ms: 2000, ok: true }),
+        expect.objectContaining({ kind: 'model', name: 'anthropic/opus', ms: 7000 }),
+      ],
+    },
+    {
+      start: new Date(T0 + 142_000).toISOString(),
+      ok: false,
+      calls: [expect.objectContaining({ name: 'bash', ok: false })],
+    },
+  ])
+  expect(nine).toMatchObject({
+    conversation: 9,
+    agent: 'worker',
+    model: 'anthropic/opus',
+    kind: 'child',
+    parent: 7,
+    runs: [{ end: new Date(T0 + 61_000).toISOString() }],
+  })
+  // Later, 7's last run has ended, unless the conversation still has a live task.
+  expect((await f.lanesAt(400)).lanes[0].runs[1].end).toBe(new Date(T0 + 143_000).toISOString())
+  f.running.add(7)
+  expect((await f.lanesAt(400)).lanes[0].runs[1].end).toBeUndefined()
+  // A window in the past is never open, and takes only its calls.
+  const past = await f.lanesAt(400, {
+    since: new Date(T0 + 50_000).toISOString(),
+    until: new Date(T0 + 104_000).toISOString(),
+  })
+  expect(past.lanes.map((lane) => [lane.conversation, lane.runs.map((run) => run.end)])).toEqual([
+    [7, [new Date(T0 + 102_000).toISOString()]],
+    [9, [new Date(T0 + 61_000).toISOString()]],
+  ])
+  await expect(f.lanesAt(0, { since: 'soon' })).rejects.toThrow('since')
+})
+
+it('caps lanes at 40 and calls at 200 per run, counting the rest', async () => {
+  const f = await fixture()
+  for (let conversation = 1; conversation <= 43; conversation++)
+    f.call('read', conversation, { kind: 'tool', conversation })
+  for (let index = 0; index < 205; index++)
+    f.call(`t${index}`, 100 + index / 10, { kind: 'tool', conversation: 99 })
+  const result = await f.lanesAt(200)
+  expect(result.lanes).toHaveLength(40)
+  expect(result.more).toBe(4)
+  // Most recently active first.
+  expect(result.lanes.slice(0, 3).map((lane) => lane.conversation)).toEqual([99, 43, 42])
+  const [run] = result.lanes[0].runs
+  expect(run.calls).toHaveLength(200)
+  expect(run.more).toBe(5)
+  expect(run.calls[0].name).toBe('t0')
+})
+
 it('rejects malformed arguments', async () => {
   const f = await fixture()
   await expect(f.stream({ limit: 501 })).rejects.toThrow('limit')
@@ -299,6 +397,8 @@ export const actions = {
     rows: SystemRow[]
   }
   expect(live.rows.map((row) => row.summary)).toEqual(['{"n":4}'])
+  // Lanes read the real task graph; actions are not tool or model calls, so no lanes.
+  expect(await invoke('system', 'lanes', {})).toEqual({ now: expect.any(String), lanes: [] })
   const second = stream.rows.find((row) => row.source === 'event' && row.summary === '{"n":2}')!
   const tree = (await invoke('system', 'tree', { trace: second.trace! })) as {
     calls: { name: string; children: unknown[] }[]

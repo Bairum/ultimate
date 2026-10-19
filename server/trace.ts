@@ -335,11 +335,14 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls (at);`)
       /**
        * At most `limit` (1–1000) matching calls in write order, which is finish order: `seq` is a call's position,
        * `before` and `after` exclusive positions. Newest first, oldest first with `after`. `last` is the newest
-       * position written, so a reader can follow from it. `text` matches name, caller, callee, args or error.
+       * position written, so a reader can follow from it. `text` matches name, caller, callee, args or error;
+       * `since` and `until` (epoch milliseconds) bound when a call started.
        */
       page(query: {
         before?: number
         after?: number
+        since?: number
+        until?: number
         kinds?: string[]
         conversation?: number
         errors?: boolean
@@ -356,6 +359,8 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls (at);`)
         }
         if (query.before !== undefined) filter('rowid < ?', query.before)
         if (query.after !== undefined) filter('rowid > ?', query.after)
+        if (query.since !== undefined) filter('at >= ?', query.since)
+        if (query.until !== undefined) filter('at < ?', query.until)
         if (query.kinds)
           filter(`kind IN (${query.kinds.map(() => '?').join(', ')})`, ...query.kinds)
         if (query.conversation !== undefined) filter('conversation = ?', query.conversation)
