@@ -38,12 +38,7 @@ afterEach(async () => {
   for (const close of cleanups.splice(0)) await close()
 })
 
-async function launch({
-  interrupt = false,
-  long = false,
-  assessment = 'done',
-  initialIntent = false,
-} = {}) {
+async function launch({ interrupt = false, long = false, initialIntent = false } = {}) {
   const models = createModels()
   const main = fauxProvider({ tokensPerSecond: 100000 })
   const luna = fauxProvider({
@@ -58,7 +53,6 @@ async function launch({
       const answer = {
         ...fauxAssistantMessage(
           JSON.stringify({
-            assessment,
             activity: 'Implemented the change.',
             title: 'Implement the change',
             summary: long ? 'x'.repeat(3000) : 'Implemented the change.',
@@ -207,21 +201,18 @@ it('adds reported usage once, also on replay', async () => {
   expect(await f.titleChanges()).toEqual(changes)
 })
 
-it.each(['done', 'needs_input'])(
-  'generates a title and %s assessment with only current Codex Luna available',
-  async (assessment) => {
-    const f = await launch({ assessment })
-    await f.submit()
-    await until(async () => (await f.read())?.status === 'ready')
-    expect((await f.read())?.assessment?.value).toBe(assessment)
-    expect((await f.read())?.generatedTitle).toBe('Implement the change')
-    expect((await f.titleChanges()).map((entry) => entry.data.title)).toEqual([
-      'Implement the change',
-    ])
-    expect((await f.ledger())?.models[key]).toEqual(reported)
-    expect((await f.ledger())?.models['openai/gpt-6-luna']).toBeUndefined()
-  },
-)
+it('generates a title and reply summary with only current Codex Luna available', async () => {
+  const f = await launch()
+  await f.submit()
+  await until(async () => (await f.read())?.status === 'ready')
+  expect((await f.read())?.activity).toBe('Implemented the change.')
+  expect((await f.read())?.generatedTitle).toBe('Implement the change')
+  expect((await f.titleChanges()).map((entry) => entry.data.title)).toEqual([
+    'Implement the change',
+  ])
+  expect((await f.ledger())?.models[key]).toEqual(reported)
+  expect((await f.ledger())?.models['openai/gpt-6-luna']).toBeUndefined()
+})
 
 it('a response with usage after a long stream still counts', async () => {
   const f = await launch({ long: true })

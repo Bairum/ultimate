@@ -32,7 +32,7 @@ import {
   requestSummary,
   IntentSummarized,
   TitleChanged,
-  AssessmentAccepted,
+  ReplySummarized,
   SummaryDiscarded,
 } from '../extensions/conversations/summary.ts'
 
@@ -72,7 +72,6 @@ it.concurrent.each(['agent', 'lander'])(
     f.generated.mockImplementationOnce(async (_models, _input, signal) => {
       await held(gate, signal)
       return {
-        assessment: 'done' as const,
         activity: 'Implemented the sidebar.',
         title: 'A generated title',
         summary: 'A generated summary.',
@@ -97,8 +96,8 @@ it.concurrent.each(['agent', 'lander'])(
     expect(state).not.toHaveProperty('assessmentStatus')
     expect(state).not.toHaveProperty('summary')
     expect(state).not.toHaveProperty('feature')
-    expect(state).not.toHaveProperty('assessment')
-    expect((await f.entries()).filter((entry) => AssessmentAccepted.is(entry))).toEqual([])
+    expect(state).not.toHaveProperty('activity')
+    expect((await f.entries()).filter((entry) => ReplySummarized.is(entry))).toEqual([])
     expect(await f.titleChanges()).toEqual([])
     expect(await f.server.harness.snapshot(Metadata, f.server.root.id, context)).toMatchObject({
       title: `@${label}`,
@@ -173,7 +172,6 @@ async function launch(subagents = false, initialIntent = false, root = false, br
       context,
     )
   const generated = vi.fn<typeof generateSummary>(async () => ({
-    assessment: 'done',
     activity: 'Added concise summaries to the sidebar.',
     title: 'Improve the conversation sidebar',
     summary: 'Added concise summaries to the sidebar.',
@@ -291,11 +289,11 @@ async function launch(subagents = false, initialIntent = false, root = false, br
   }
 }
 
-it('does not request question extraction after an accepted needs_input assessment', async () => {
+it('does not request question extraction after an accepted reply summary', async () => {
   const f = await launch()
-  f.generated.mockResolvedValue({ assessment: 'needs_input', activity: 'Waiting for a decision.' })
+  f.generated.mockResolvedValue({ activity: 'Waiting for a decision.' })
   await f.exchange()
-  expect((await f.read())?.assessment?.value).toBe('needs_input')
+  expect((await f.read())?.activity).toBe('Waiting for a decision.')
   expect(f.questionsRequested).not.toHaveBeenCalled()
 })
 
@@ -395,7 +393,6 @@ it.concurrent.each([false, true])(
       expect((await server.harness.snapshot(LiveDoc, server.root.id, context))?.run).toBeDefined()
       expect((await submission.status(context)).status).toBe('placed')
       expect((await fixture.read())?.exchanges).toBe(0)
-      expect((await fixture.read())?.assessment).toBeUndefined()
       expect((await fixture.read())?.activity).toBeUndefined()
       expect((await fixture.read())?.summaryOwed).toBeUndefined()
       expect((await fixture.read())?.summary).toBe('Added concise summaries to the sidebar.')
@@ -461,7 +458,6 @@ it.concurrent.each(['rename', 'newer'] as const)(
     fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
       await held(gate, signal)
       return {
-        assessment: 'needs_input',
         activity: 'Must not publish',
         title: 'Old spawn title',
         summary: 'Old spawn summary',
@@ -495,7 +491,7 @@ it.concurrent.each(['rename', 'newer'] as const)(
 )
 
 it.concurrent.each([2, 3])(
-  'settles a held spawn superseded by assessment-only exchange %s without changing cadence',
+  'settles a held spawn superseded by reply-only exchange %s without changing cadence',
   async (exchange) => {
     const fixture = await launch()
     for (let count = 1; count < exchange; count++) await fixture.exchange()
@@ -506,7 +502,7 @@ it.concurrent.each([2, 3])(
     })
     fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
       await held(gate, signal)
-      return { assessment: 'done', activity: 'Old spawn', title: 'Old spawn', summary: 'Old spawn' }
+      return { activity: 'Old spawn', title: 'Old spawn', summary: 'Old spawn' }
     })
     await fixture.spawn(before.lastAnswer!)
     await until(() => fixture.generated.mock.calls.length === exchange)
@@ -553,7 +549,6 @@ it.concurrent('summarizes the first, fourth and seventh completed exchanges, not
   const { server } = fixture
   let generation = 0
   fixture.generated.mockImplementation(async () => ({
-    assessment: 'done',
     activity: 'Added concise summaries to the sidebar.',
     title: 'Improve the conversation sidebar',
     summary: `Sidebar summary ${++generation}.`,
@@ -629,7 +624,6 @@ it.concurrent('logs each accepted title change once, but not a manual rename to 
   const started = Date.now()
   await fixture.exchange()
   fixture.generated.mockResolvedValue({
-    assessment: 'done',
     activity: 'Refined the sidebar.',
     title: 'Refine the sidebar',
     summary: 'Refined the sidebar.',
@@ -652,7 +646,6 @@ it.concurrent('logs each accepted title change once, but not a manual rename to 
   }
   await fixture.action('rename', 'Refine the sidebar')
   fixture.generated.mockResolvedValue({
-    assessment: 'done',
     activity: 'Done.',
     title: 'Not accepted',
     summary: 'Done.',
@@ -702,7 +695,6 @@ it.concurrent('protects preexisting and in-flight manual titles, and blank renam
   fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
     await held(gate, signal)
     return {
-      assessment: 'done' as const,
       activity: 'Implemented the requested sidebar changes.',
       title: 'An automatically updated title',
       summary: 'Updated summary.',
@@ -907,7 +899,6 @@ it.concurrent('rejects an older response after a newer scheduled summary has com
   fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
     await held(gate, signal)
     return {
-      assessment: 'done' as const,
       activity: 'Implemented the requested sidebar changes.',
       title: 'An older stale title',
       summary: 'Older stale summary.',
@@ -1035,7 +1026,6 @@ it.concurrent.each([
     'intent',
   )
   expect(result).toEqual({
-    assessment: 'neutral',
     activity: '',
     title: 'Title',
     summary: 'Summary',
@@ -1072,7 +1062,6 @@ it.concurrent('asks a root for the feature its whole tree builds', async () => {
 it.concurrent('stores and exposes a feature and keeps it when omitted', async () => {
   const fixture = await launch()
   fixture.generated.mockResolvedValueOnce({
-    assessment: 'done',
     activity: 'Added labels.',
     title: 'Feature labels',
     summary: 'Added labels.',
@@ -1095,9 +1084,8 @@ it.concurrent('stores and exposes a feature and keeps it when omitted', async ()
   ).toBe('Improve the conversation sidebar')
 })
 
-it.concurrent('validates assessment-only JSON and rejects unapproved or malformed outcome states', async () => {
+it.concurrent('validates reply-only JSON and rejects a malformed activity', async () => {
   let output: unknown = {
-    assessment: 'needs_input',
     activity: 'Asked the coordinator to choose a deployment target.',
   }
   const stream = vi.fn<Models['streamSimple']>(() => {
@@ -1122,7 +1110,7 @@ it.concurrent('validates assessment-only JSON and rejects unapproved or malforme
   expect(getModel).toHaveBeenCalledWith('openai-codex', 'gpt-6-luna')
   expect(stream.mock.calls.at(-1)![1].systemPrompt).not.toContain('"feature"')
   expect(stream.mock.calls.at(-1)![1].systemPrompt).not.toContain('"abstract"')
-  output = { assessment: 'done', activity: 'Done.', abstract: `  ${'x'.repeat(1300)}  ` }
+  output = { activity: 'Done.', abstract: `  ${'x'.repeat(1300)}  ` }
   const abstractResult = await generateSummary(
     models,
     'Reply',
@@ -1136,7 +1124,7 @@ it.concurrent('validates assessment-only JSON and rejects unapproved or malforme
   expect(abstractResult.abstract).toBe('x'.repeat(1200))
   expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('"abstract"')
   expect(stream.mock.calls.at(-1)![2]?.maxTokens).toBe(2048)
-  output = { assessment: 'done', activity: 'Done.' }
+  output = { activity: 'Done.' }
   await expect(
     generateSummary(
       models,
@@ -1150,7 +1138,6 @@ it.concurrent('validates assessment-only JSON and rejects unapproved or malforme
     ),
   ).rejects.toThrow('Invalid abstract response')
   output = {
-    assessment: 'done',
     activity: 'Done.',
     title: 'Title',
     summary: 'Summary',
@@ -1185,12 +1172,11 @@ it.concurrent('validates assessment-only JSON and rejects unapproved or malforme
     ),
   ).toEqual({
     ...(output as object),
-    assessment: 'neutral',
     activity: '',
   })
   expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('work now starting')
   expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('Also include "feature"')
-  expect(stream.mock.calls.at(-1)![1].systemPrompt).not.toContain('Assess the latest final reply')
+  expect(stream.mock.calls.at(-1)![1].systemPrompt).not.toContain('Describe the latest final reply')
   await generateSummary(
     models,
     'Initial input',
@@ -1201,11 +1187,11 @@ it.concurrent('validates assessment-only JSON and rejects unapproved or malforme
   )
   expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('initial intent')
   expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('Also include "feature"')
-  for (const value of ['blocked', 'unfinished', ['done'], null]) {
-    output = { assessment: value, activity: 'Some work was discussed.' }
+  for (const malformed of [{}, { activity: null }, { activity: ['Done.'] }, null]) {
+    output = malformed
     await expect(
       generateSummary(models, 'Reply', new AbortController().signal, false, { model: luna }),
-    ).rejects.toThrow('Invalid assessment')
+    ).rejects.toThrow('Invalid reply summary response')
   }
 })
 
@@ -1258,7 +1244,7 @@ it.concurrent('publishes initial intent while the main model request is blocked,
     await until(async () => (await intents()).length === 1)
     expect((await submission.status(context)).status).toBe('placed')
     expect((await fixture.read())?.exchanges).toBe(0)
-    expect((await fixture.read())?.assessment).toBeUndefined()
+    expect((await fixture.read())?.activity).toBeUndefined()
     expect(fixture.generated.mock.calls.map((call) => call[5])).toEqual(['intent'])
     expect(fixture.generated.mock.calls[0][1]).toContain('Build a sidebar.')
     const entries = await intents()
@@ -1297,7 +1283,7 @@ it.concurrent.each(['newer', 'spawn'] as const)(
     })
     fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
       await held(gate, signal)
-      return { assessment: 'neutral', activity: '', title: 'Stale intent', summary: 'Stale intent' }
+      return { activity: '', title: 'Stale intent', summary: 'Stale intent' }
     })
     // Hold the main request too, so the intent starts before any reply can supersede it.
     let resume!: () => void
@@ -1413,15 +1399,21 @@ it.concurrent('keeps an exchange answered across a mid-run compaction and reopen
     (await fixture.server.harness.snapshot(Overview, fixture.server.root.id, context))
       ?.conversations[fixture.server.root.id]
   await until(async () => (await row())?.runState === 'answered')
-  expect((await row())?.assessment?.value).toBe('done')
+  expect(await row()).toMatchObject({
+    activity: 'Added concise summaries to the sidebar.',
+    assessmentStatus: 'ready',
+  })
   await fixture.reopen()
   await until(async () => (await row())?.runState === 'answered')
-  expect((await row())?.assessment?.value).toBe('done')
+  expect(await row()).toMatchObject({
+    activity: 'Added concise summaries to the sidebar.',
+    assessmentStatus: 'ready',
+  })
   // A raw reset, like a tool handoff, ends the exchange even without a summary revision bump.
   await fixture.server.root.reset(undefined, context)
   await until(async () => (await row())?.runState === 'idle')
-  expect((await row())?.assessment).toBeUndefined()
   expect((await row())?.inputId).toBeUndefined()
+  expect((await row())?.answerId).toBeUndefined()
 })
 
 it.concurrent('derives the same overview rows live and from a fresh open, with no summary model available', async () => {
@@ -1551,14 +1543,22 @@ it.concurrent('derives the same overview rows live and from a fresh open, with n
   expect(await rows()).toEqual(built)
 })
 
-it.concurrent('records an accepted assessment as an entry traced to its summary and generation tasks', async () => {
+it.concurrent('records an accepted reply summary as an entry traced to its summary and generation tasks', async () => {
   const fixture = await launch()
   await fixture.exchange()
   const state = (await fixture.read())!
-  const entries = (await fixture.entries()).filter((entry) => AssessmentAccepted.is(entry))
+  await until(
+    async () =>
+      (await fixture.server.harness.snapshot(Overview, fixture.server.root.id, context))
+        ?.conversations[fixture.server.root.id]?.runState === 'answered',
+  )
+  const row = (await fixture.server.harness.snapshot(Overview, fixture.server.root.id, context))!
+    .conversations[fixture.server.root.id]
+  const entries = (await fixture.entries()).filter((entry) => ReplySummarized.is(entry))
   expect(entries.map((entry) => entry.data)).toEqual([
     {
-      ...state.assessment,
+      inputId: row.inputId,
+      answerId: state.lastAnswer,
       activity: 'Added concise summaries to the sidebar.',
       model: 'openai-codex/gpt-6-luna',
       at: expect.any(Number),
@@ -1571,7 +1571,7 @@ it.concurrent('records an accepted assessment as an entry traced to its summary 
   const run = await fixture.server.harness.getTask(generation, context)
   expect(run?.kind).toBe(GenerationTask.definition.name)
   expect(run?.state).toMatchObject({
-    outcome: { status: 'completed', result: { entryId: state.assessment!.answerId } },
+    outcome: { status: 'completed', result: { entryId: entries[0].data.answerId } },
   })
   expect((await fixture.entries()).filter((entry) => SummaryDiscarded.is(entry))).toEqual([])
   const view = await fixture.server.root.context(context)
@@ -1638,7 +1638,8 @@ it.concurrent.each(['answers', 'fails'] as const)(
             runState: 'answered',
             inputId: later.entry,
             answerId: later.answer,
-            assessment: { inputId: later.entry, answerId: later.answer, value: 'done' },
+            activity: 'Added concise summaries to the sidebar.',
+            assessmentStatus: 'ready',
           }
         : { runState: 'error', inputId: later.entry }
     const expected = async () => {
