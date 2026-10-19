@@ -1,5 +1,6 @@
 /** Review in the browser: the local diff of a spec, and the specs worth choosing from. Browser-safe. */
 import { actionRef } from '../../shared/extension-api.ts'
+import type { ReviewComment } from './types.ts'
 
 /**
  * What to review, as text: `uncommitted` (the work tree against `HEAD`, untracked files included), a commit (`<sha>`
@@ -50,6 +51,8 @@ export type ReviewRange = {
   label: string
   /** Quiet meta: a short sha, an age. */
   detail?: string
+  /** The conversation behind it: a branch's owner, a landing's submitter. */
+  conversation?: number
 }
 
 /**
@@ -62,3 +65,19 @@ export const DiffAction = actionRef<{ spec: string; conversation?: number }, Rev
 )
 /** No arguments → recent specs to choose from: uncommitted, open `ultimate/*` branches, landings and commits. */
 export const RangesAction = actionRef<null, ReviewRange[]>('review', 'ranges')
+/**
+ * `{ spec }` → the conversation a review of `spec` goes to by default: a branch's owner, a landing's submitter, the
+ * conversation a commit's `Ultimate-Conversation` trailer names, else the primary agent's.
+ */
+export const RecipientAction = actionRef<{ spec: string }, { conversation: number }>(
+  'review',
+  'recipient',
+)
+/**
+ * User only: `{ conversation, spec, comments, note? }` → one `review.comments` input into `conversation`, which wakes
+ * or steers it like a typed message. Throws on an unknown conversation or a review over the limits in comments.ts.
+ */
+export const SendAction = actionRef<
+  { conversation: number; spec: string; comments: ReviewComment[]; note?: string },
+  { conversation: number }
+>('review', 'send')

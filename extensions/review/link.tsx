@@ -4,8 +4,11 @@ import { useExtensionUiState, useUltimate } from '@/sdk'
 /** The spec on screen, in durable UI state: it survives reloads and follows every tab, as the surface does. */
 export const useSpec = () => useExtensionUiState<string>('spec', 'uncommitted')
 
-// A review someone asked for and the link has not shown yet: the page's `?review=` first, then `openReview` calls.
-let requested = new URL(location.href).searchParams.get('review') || undefined
+/** A line to scroll to and mark: `line` of `file`, on the new side unless `side` says old. */
+export type ReviewTarget = { file: string; line: number; side?: 'old' | 'new' }
+
+type Request = { spec: string; at?: ReviewTarget }
+
 const listeners = new Set<() => void>()
 const subscribe = (listener: () => void) => {
   listeners.add(listener)
@@ -13,11 +16,46 @@ const subscribe = (listener: () => void) => {
     listeners.delete(listener)
   }
 }
-
-/** Show the Review surface at `spec` (see `ReviewKind` in refs.ts). */
-export function openReview(spec: string) {
-  requested = spec
+const notify = () => {
   for (const listener of listeners) listener()
+}
+
+function fromAddress(): Request | undefined {
+  const params = new URL(location.href).searchParams
+  const spec = params.get('review')
+  if (!spec) return undefined
+  const file = params.get('file')
+  const line = Number(params.get('line'))
+  const side = params.get('side') === 'old' ? 'old' : undefined
+  return {
+    spec,
+    ...(file && Number.isSafeInteger(line) && line > 0
+      ? { at: { file, line, ...(side && { side }) } }
+      : {}),
+  }
+}
+
+// A review someone asked for and the link has not shown yet: the page's `?review=` first, then `openReview` calls.
+let requested = fromAddress()
+// The line the surface should scroll to, until it has.
+let target: ReviewTarget | undefined
+
+/** Show the Review surface at `spec` (see `ReviewKind` in refs.ts), scrolled to `at` when given. */
+export function openReview(spec: string, at?: ReviewTarget) {
+  requested = { spec, ...(at && { at }) }
+  notify()
+}
+
+/** The line the surface was asked to show; `done` once it has scrolled there. */
+export function useTarget() {
+  const at = useSyncExternalStore(subscribe, () => target)
+  return [
+    at,
+    () => {
+      target = undefined
+      notify()
+    },
+  ] as const
 }
 
 /**
@@ -31,8 +69,10 @@ export function ReviewLink() {
   useEffect(() => {
     if (wanted === undefined) return
     requested = undefined
-    setSpec(wanted)
+    target = wanted.at
+    setSpec(wanted.spec)
     showSurface('review')
+    notify()
   }, [wanted, setSpec, showSurface])
   useEffect(() => {
     if (requested !== undefined) return
@@ -41,6 +81,8 @@ export function ReviewLink() {
     if (url.searchParams.get('review') === shown) return
     if (shown === null) url.searchParams.delete('review')
     else url.searchParams.set('review', shown)
+    // A line belongs to the review it was asked with: a new spec or another surface drops it.
+    for (const name of ['file', 'line', 'side']) url.searchParams.delete(name)
     history.replaceState(history.state, '', url)
   }, [surface, spec])
   return null

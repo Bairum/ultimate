@@ -11,8 +11,19 @@ The header picks the spec (recent choices from `ranges`, or any spec typed in), 
 unified, and links the range to DiffsHub when `origin` is on GitHub. On a phone the file list is a dropdown and the
 diff is unified. The diff stack is virtualized; the viewer loads with the surface, not with the app.
 
-Links: `/?review=<spec>` opens Review at that spec, and the address carries `?review=` while Review is on screen.
-`openReview(spec)` from `ui.tsx` does the same from code. Review provides the `workspaces.review` point, so the
+**Comments.** Click a line number (shift-click or drag for a range, on either side) or the gutter `+` to open an
+inline composer; **Add to review** keeps it as a draft under its lines, which can be edited or deleted. Drafts are kept
+per project and spec in this browser's local storage (`drafts.ts`), so a reload keeps them. While any are pending, a
+footer reads `N comments pending · + note · Discard · Send review (N)` and the header has a **to** picker (standing
+agents and recent conversations). Its default comes from `recipient`. Sending posts one `review.comments` input into
+that conversation; the drafts clear and the footer links to it (`Sent to #id`). The recipient's transcript shows a
+review card on the user's side (`card.tsx`), each comment's `file:line` chip opening Review there. The model reads
+`reviewText` (`comments.ts`): `Review of \`<spec>\` (N comments)`, the note, then per comment
+`` `path:start-end` (old|new) ``, a fenced excerpt (language from the extension) and the text.
+
+Links: `/?review=<spec>` opens Review at that spec, and the address carries `?review=` while Review is on screen;
+`&file=<path>&line=<n>` (and `&side=old`) scrolls to that line and marks it.
+`openReview(spec, at?)` from `ui.tsx` does the same from code. Review provides the `workspaces.review` point, so the
 landing card, the Activity feed and a root's landed list open a landing's commit count here (DiffsHub stays as a small
 ↗ beside it), and a branch row's menu has **Review changes**. Without review those stay plain DiffsHub links.
 
@@ -26,4 +37,9 @@ Actions (`refs.ts`):
   multi-line target is listed as `symlink`, without hunks); a file that became a symlink or stopped
   being one is listed as `typeChanged`, without hunks.
 - `ranges` → recent specs: uncommitted, open `ultimate/*` branches with their conversation, the last ten landings
-  (`workspaces.landed` events) and the last fifteen commits.
+  (`workspaces.landed` events) and the last fifteen commits; branches and landings carry their `conversation`.
+- `recipient { spec }` → `{ conversation }`: a `branch:` spec's worktree owner, a landing range's submitter (by its
+  tip in `workspaces.landed`), a commit's `Ultimate-Conversation` trailer, else the primary agent.
+- `send { conversation, spec, comments, note? }` (user only) → `{ conversation }`. At most 50 comments, each text up
+  to 4,000 characters and excerpt up to 40 lines and 8 KB, to an existing conversation; it steers a busy one.
+  Under faux the agent answers a review by listing the places it names.
