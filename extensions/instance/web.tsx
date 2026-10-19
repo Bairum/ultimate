@@ -22,7 +22,7 @@ import {
   useToolDuration,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
-import { at } from './links.ts'
+import { at, label } from './links.ts'
 import { ListAction } from './refs.ts'
 import type { Preview } from './refs.ts'
 
@@ -66,7 +66,9 @@ function Card({ instance, status }: { instance: Instance; status: string }) {
             rel="noreferrer"
             target={target?.kind === 'tailnet' ? '_blank' : undefined}
           >
-            {instance.url}
+            {target?.kind === 'tailnet'
+              ? label(instance.url, instance.url, target.href)
+              : instance.url}
             {target?.kind === 'tailnet' && <ExternalLinkIcon className="size-3" />}
           </a>
         )}
@@ -273,7 +275,9 @@ function PreviewLink({
       type="button"
     >
       <span className="size-1.5 shrink-0 rounded-full bg-brand" />
-      {children}
+      {target.kind === 'tailnet' && typeof children === 'string'
+        ? label(children, href, target.href)
+        : children}
     </button>
   )
 }

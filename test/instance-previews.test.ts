@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { previewEnv, remember, stopped } from '../extensions/instance/server.ts'
-import { at } from '../extensions/instance/links.ts'
+import { at, label } from '../extensions/instance/links.ts'
 
 const homes: string[] = []
 afterEach(async () => {
@@ -99,4 +99,19 @@ it('keeps a link on the preview origin even when its path starts with //', () =>
     'http://127.0.0.1:45939//evil.example/x?conversation=1#top',
   )
   expect(new URL(at('https://host.ts.net:4747', link)).host).toBe('host.ts.net:4747')
+})
+
+it('labels a preview chip with the URL it opens when its text is that link', () => {
+  const tailnet = 'https://rog.tail3a3a66.ts.net:46335/'
+  expect(label('http://127.0.0.1:46335', 'http://127.0.0.1:46335/', tailnet)).toBe(
+    'https://rog.tail3a3a66.ts.net:46335',
+  )
+  expect(
+    label(
+      'http://127.0.0.1:46335/?conversation=3',
+      'http://127.0.0.1:46335/?conversation=3',
+      'https://rog.tail3a3a66.ts.net:46335/?conversation=3',
+    ),
+  ).toBe('https://rog.tail3a3a66.ts.net:46335/?conversation=3')
+  expect(label('the preview', 'http://127.0.0.1:46335/', tailnet)).toBe('the preview')
 })
