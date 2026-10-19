@@ -1,20 +1,25 @@
-import { ArrowRightIcon, MessageSquareIcon } from 'lucide-react'
+import { ArrowRightIcon, CircleAlertIcon, MessageSquareIcon } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/sdk'
 import { commentCount, limits } from './comments.ts'
 import type { Drafts } from './drafts.ts'
 
-/** The pending review under the diff: its count, an optional overall note, Discard and Send review (N). */
+/**
+ * The pending review under the diff: its count, an optional overall note, Discard and Send review (N), and why the last
+ * send failed.
+ */
 export function Footer({
   drafts,
   update,
   sending,
+  error,
   onSend,
 }: {
   drafts: Drafts
   update: (change: (drafts: Drafts) => Drafts) => void
   sending: boolean
+  error?: string
   onSend: () => void
 }) {
   const [noting, setNoting] = useState(false)
@@ -34,6 +39,16 @@ export function Footer({
           placeholder="An overall note for the review (optional)"
           value={drafts.note}
         />
+      )}
+      {error && (
+        <p
+          className="mb-2 flex items-start gap-1.5 font-mono text-[11.5px] text-error"
+          data-review-error=""
+          role="alert"
+        >
+          <CircleAlertIcon className="mt-px size-3.5 shrink-0" />
+          <span className="min-w-0 break-words">Not sent: {error}</span>
+        </p>
       )}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <span className="flex items-center gap-1.5 font-mono text-[11.5px] text-muted-foreground">

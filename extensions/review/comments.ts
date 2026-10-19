@@ -10,9 +10,43 @@ export const limits = {
   excerptBytes: 8 * 1024,
 } as const
 
-/** The first `limits.excerptLines` of `lines`, joined: what a comment quotes. */
-export const excerptOf = (lines: readonly string[]) =>
-  lines.slice(0, limits.excerptLines).join('\n')
+const bytes = (text: string) => new TextEncoder().encode(text).length
+
+/**
+ * What a comment quotes of `lines`: whole lines while they fit in `limits.excerptLines` and `limits.excerptBytes`, and
+ * of a first line too large alone, the characters that fit. Always within the limits `checkReview` enforces.
+ */
+export function excerptOf(lines: readonly string[]) {
+  const kept: string[] = []
+  let size = 0
+  for (const line of lines.slice(0, limits.excerptLines)) {
+    const next = size + (kept.length ? 1 : 0) + bytes(line)
+    if (next > limits.excerptBytes) {
+      if (kept.length) break
+      let cut = ''
+      let used = 0
+      for (const char of line) {
+        used += bytes(char)
+        if (used > limits.excerptBytes) break
+        cut += char
+      }
+      return cut
+    }
+    kept.push(line)
+    size = next
+  }
+  return kept.join('\n')
+}
+
+/** Where drafts of `spec` are kept: per spec, and per the conversation whose worktree the diff came from. */
+export function draftsKey(spec: string, conversation?: number) {
+  // UI state keys allow `[A-Za-z0-9_.:-]`, 200 characters: escape the rest (and `_`) as `_<hex>_`, one to one.
+  const safe = spec.replace(/[^A-Za-z0-9.]/g, (char) => `_${char.codePointAt(0)!.toString(16)}_`)
+  let hash = 0
+  for (const char of spec) hash = (Math.imul(hash, 31) + char.codePointAt(0)!) | 0
+  const name = safe.length <= 140 ? safe : `${safe.slice(0, 100)}-${(hash >>> 0).toString(16)}`
+  return `drafts:${conversation ?? 'project'}:${name}`
+}
 
 const record = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
@@ -89,6 +123,19 @@ export function languageOf(path: string) {
   return dot > 0 ? (languages[name.slice(dot + 1).toLowerCase()] ?? '') : ''
 }
 
+/**
+ * `value` as Markdown inline code: control characters (a newline in a file name) written as JSON escapes, between a
+ * backtick run longer than any inside it, so no file name or spec can end the span or the line.
+ */
+export function code(value: string) {
+  const plain = value.replace(/\p{Cc}/gu, (char) => JSON.stringify(char).slice(1, -1))
+  const ticks = '`'.repeat(
+    Math.max(0, ...[...plain.matchAll(/`+/g)].map((run) => run[0].length)) + 1,
+  )
+  const pad = plain.startsWith('`') || plain.endsWith('`') ? ' ' : ''
+  return `${ticks}${pad}${plain}${pad}${ticks}`
+}
+
 /** `path:start-end`, or `path:start` for one line. */
 export const location = (comment: Pick<ReviewComment, 'file' | 'start' | 'end'>) =>
   `${comment.file}:${comment.start}${comment.end === comment.start ? '' : `-${comment.end}`}`
@@ -101,13 +148,13 @@ const plural = (count: number) => `${count} comment${count === 1 ? '' : 's'}`
 
 /** The review as the model reads it: a header, the overall note, then each comment's place, excerpt and text. */
 export function reviewText({ spec, comments, note }: ReviewComments) {
-  const parts = [`Review of \`${spec}\` (${plural(comments.length)})`]
+  const parts = [`Review of ${code(spec)} (${plural(comments.length)})`]
   if (note) parts.push(note)
   for (const comment of comments) {
     const quote = fence(comment.excerpt)
     parts.push(
       [
-        `\`${location(comment)}\` (${comment.side})`,
+        `${code(location(comment))} (${comment.side})`,
         ...(comment.excerpt ? [`${quote}${languageOf(comment.file)}`, comment.excerpt, quote] : []),
         comment.text.trim(),
       ].join('\n'),

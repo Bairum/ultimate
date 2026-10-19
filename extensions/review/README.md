@@ -12,14 +12,18 @@ unified, and links the range to DiffsHub when `origin` is on GitHub. On a phone 
 diff is unified. The diff stack is virtualized; the viewer loads with the surface, not with the app.
 
 **Comments.** Click a line number (shift-click or drag for a range, on either side) or the gutter `+` to open an
-inline composer; **Add to review** keeps it as a draft under its lines, which can be edited or deleted. Drafts are kept
-per project and spec in this browser's local storage (`drafts.ts`), so a reload keeps them. While any are pending, a
-footer reads `N comments pending · + note · Discard · Send review (N)` and the header has a **to** picker (standing
-agents and recent conversations). Its default comes from `recipient`. Sending posts one `review.comments` input into
-that conversation; the drafts clear and the footer links to it (`Sent to #id`). The recipient's transcript shows a
-review card on the user's side (`card.tsx`), each comment's `file:line` chip opening Review there. The model reads
-`reviewText` (`comments.ts`): `Review of \`<spec>\` (N comments)`, the note, then per comment
-`` `path:start-end` (old|new) ``, a fenced excerpt (language from the extension) and the text.
+inline composer; the range highlights as it grows, with a bar down its line numbers. **Add to review** keeps it as a
+draft under its lines, which can be edited or deleted. An excerpt quotes at most 40 lines and 8 KB. Drafts are durable
+UI state (`drafts.ts`) keyed by spec and by the conversation whose worktree the diff came from (`draftsKey`), so a
+reload and other tabs keep them. While any are pending, a footer reads
+`N comments pending · + note · Discard · Send review (N)` and the header has a **to** picker (standing agents and
+recent conversations). Its default comes from `recipient`. Sending posts one `review.comments` input into that
+conversation; the drafts it sent clear (ones added meanwhile stay), and the footer links to it (`Sent to #id`), or
+says why it was not sent. The recipient's transcript shows a review card on the user's side (`card.tsx`), each
+comment's `file:line` chip opening Review there. The model reads `reviewText` (`comments.ts`):
+`Review of \`<spec>\` (N comments)`, the note, then per comment `` `path:start-end`(old|new) ``, a fenced excerpt
+(language from the extension) and the text. Paths and specs are inline code delimited by a backtick run longer than any
+in them, with control characters such as a newline written as`\n`.
 
 Links: `/?review=<spec>` opens Review at that spec, and the address carries `?review=` while Review is on screen;
 `&file=<path>&line=<n>` (and `&side=old`) scrolls to that line and marks it.

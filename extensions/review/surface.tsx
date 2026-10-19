@@ -14,7 +14,7 @@ import {
   Rows3Icon,
   XIcon,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   DropdownMenu,
@@ -29,7 +29,6 @@ import {
   useAction,
   useExtensionUiState,
   useStore,
-  useSystem,
   useUltimate,
   useViewport,
 } from '@/sdk'
@@ -38,11 +37,12 @@ import { compareUrl } from '../../lib/compare.ts'
 import { useGithubRepo } from '../workspaces/ui.tsx'
 import { Composer, DraftCard } from './comment.tsx'
 import type { ReviewComment } from './comments.ts'
-import { draftsKey, useDrafts } from './drafts.ts'
+import { draftsKey } from './comments.ts'
+import { useDrafts } from './drafts.ts'
 import type { Draft, Drafts } from './drafts.ts'
 import { Footer } from './footer.tsx'
 import { commentRange } from './lines.ts'
-import { useSpec, useTarget } from './link.tsx'
+import { reachedTarget, useSpec, useTarget } from './link.tsx'
 import type { ReviewTarget } from './link.tsx'
 import { Frame, Loading, Notice } from './parts.tsx'
 import { Recipient } from './recipient.tsx'
@@ -68,9 +68,11 @@ const themeCss = `
   --diffs-fg-number-override: color-mix(in oklab, var(--muted-foreground) 70%, transparent);
   --diffs-bg-separator-override: var(--muted);
   --diffs-bg-context-override: var(--card);
-  --diffs-bg-selection-override: color-mix(in oklab, var(--brand) 14%, transparent);
-  --diffs-bg-selection-number-override: color-mix(in oklab, var(--brand) 28%, transparent);
+  --diffs-bg-selection-override: color-mix(in oklab, var(--brand) 22%, transparent);
+  --diffs-bg-selection-number-override: color-mix(in oklab, var(--brand) 40%, transparent);
 }
+/* One continuous bar down the selected line numbers, while dragging and after. */
+[data-gutter] [data-selected-line] { box-shadow: inset 3px 0 0 var(--brand); color: var(--foreground); }
 [data-diffs-header] { border-bottom: 1px solid var(--border); font-size: 12.5px; }
 [data-annotation-content] { background: var(--background); }
 [data-utility-button] { background: var(--brand); color: var(--background); border-radius: 4px; }
@@ -237,30 +239,28 @@ function CommentedDiff({
       lineNumber: lastLine(mine.range),
       metadata: { composer: true },
     })
-  const selected: SelectedLineRange | null = mine
-    ? mine.range
-    : marked
-      ? { start: marked.line, end: marked.line, side: sideOf(marked.side ?? 'new') }
-      : null
-  // The viewer reports the selection it is given back as selected: only a new one is the user's.
-  const given = useRef(selected)
-  given.current = selected
+  // The range under the pointer while the user drags or shift-clicks: the viewer only proposes a controlled selection,
+  // so it shows as it grows only once it comes back in `selectedLines`.
+  const [dragging, setDragging] = useState<SelectedLineRange | null>(null)
+  const selected: SelectedLineRange | null =
+    dragging ??
+    (mine
+      ? mine.range
+      : marked
+        ? { start: marked.line, end: marked.line, side: sideOf(marked.side ?? 'new') }
+        : null)
   const fileOptions = useMemo<FileDiffOptions<Note, undefined>>(
     () => ({
       ...options,
       enableLineSelection: true,
       enableGutterUtility: true,
-      onLineSelected: (range) => {
-        const was = given.current
-        const echo =
-          !!range &&
-          !!was &&
-          range.start === was.start &&
-          range.end === was.end &&
-          (range.endSide ?? range.side) === (was.endSide ?? was.side)
-        if (range && !echo) onWrite({ file: meta.name, range })
+      onLineSelectionStart: setDragging,
+      onLineSelectionChange: setDragging,
+      onLineSelectionEnd: (range) => {
+        setDragging(null)
+        // Clicking the one selected line again unselects it: the composer closes.
+        onWrite(range ? { file: meta.name, range } : undefined)
       },
-      onGutterUtilityClick: (range) => onWrite({ file: meta.name, range }),
     }),
     [options, meta.name, onWrite],
   )
@@ -335,7 +335,7 @@ function Diffs({
 }) {
   const theme = useStore((state) => state.ui.theme)
   const [writing, setWriting] = useState<Writing>()
-  const [target, reached] = useTarget()
+  const target = useTarget()
   const [marked, setMarked] = useState<ReviewTarget>()
   const parsed = useMemo(() => {
     const byPath = new Map<string, FileDiffMetadata>()
@@ -359,10 +359,13 @@ function Diffs({
   const pick = (path: string) =>
     document.getElementById(anchor(path))?.scrollIntoView({ block: 'start' })
   // A link to a line scrolls to its file, then to the line once the file has rendered it.
+  // It stays the target until the line is on screen (or never renders): only then is it consumed.
   useEffect(() => {
     if (!target) return undefined
-    reached()
-    if (!diff.files.some((file) => file.path === target.file)) return undefined
+    if (!diff.files.some((file) => file.path === target.file)) {
+      reachedTarget()
+      return undefined
+    }
     setMarked(target)
     pick(target.file)
     let tries = 0
@@ -372,11 +375,13 @@ function Diffs({
       const line =
         host?.shadowRoot?.querySelector(`[data-${side}] [data-line="${target.line}"]`) ??
         host?.shadowRoot?.querySelector(`[data-line="${target.line}"]`)
-      if (line || ++tries > 40) clearInterval(timer)
+      if (!line && ++tries <= 40) return
+      clearInterval(timer)
       line?.scrollIntoView({ block: 'center' })
+      reachedTarget()
     }, 50)
     return () => clearInterval(timer)
-  }, [target, reached, diff])
+  }, [target, diff])
   const byFile = Map.groupBy(drafts.comments, (draft) => draft.file)
   return (
     <>
@@ -470,10 +475,11 @@ export default function ReviewSurface() {
   const [stored, setLayout] = useExtensionUiState('layout', 'split')
   const layout = stored === 'unified' ? 'unified' : 'split'
   const phone = useViewport() === 'phone'
-  const diff = useAction(DiffAction, { spec }, { onError: () => undefined })
+  // The diff runs in the project checkout: no conversation's worktree, so drafts are the project's for this spec.
+  const args: { spec: string; conversation?: number } = { spec }
+  const diff = useAction(DiffAction, args, { onError: () => undefined })
   const github = useGithubRepo()
-  const project = useSystem()?.project.root ?? ''
-  const [drafts, update] = useDrafts(draftsKey(project, spec))
+  const [drafts, update] = useDrafts(draftsKey(spec, args.conversation))
   const suggested = useAction(RecipientAction, { spec }, { onError: () => undefined })
   const to = drafts.to ?? suggested.data?.conversation
   const [sending, setSending] = useState(false)
@@ -482,14 +488,22 @@ export default function ReviewSurface() {
   const send = async () => {
     if (to === undefined) return
     setSending(true)
+    setSent(undefined)
+    // What goes out: drafts added or a note changed while it is on its way stay pending.
+    const ids = new Set(drafts.comments.map((draft) => draft.id))
+    const note = drafts.note
     try {
       const result = await api.action(SendAction, {
         conversation: to,
         spec,
         comments: drafts.comments.map(({ id: _id, ...comment }) => comment),
-        ...(drafts.note.trim() && { note: drafts.note }),
+        ...(note.trim() && { note }),
       })
-      update(() => ({ comments: [], note: '' }))
+      update((all) => ({
+        ...all,
+        comments: all.comments.filter((draft) => !ids.has(draft.id)),
+        note: all.note === note ? '' : all.note,
+      }))
       setSent(result)
     } catch (failure) {
       setSent({ error: errorMessage(failure) })
@@ -499,7 +513,13 @@ export default function ReviewSurface() {
   }
   const footer =
     drafts.comments.length > 0 ? (
-      <Footer drafts={drafts} onSend={() => void send()} sending={sending} update={update} />
+      <Footer
+        drafts={drafts}
+        error={sent && 'error' in sent ? sent.error : undefined}
+        onSend={() => void send()}
+        sending={sending}
+        update={update}
+      />
     ) : sent ? (
       <Sent
         onClose={() => setSent(undefined)}

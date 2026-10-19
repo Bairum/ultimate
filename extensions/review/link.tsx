@@ -46,16 +46,13 @@ export function openReview(spec: string, at?: ReviewTarget) {
   notify()
 }
 
-/** The line the surface was asked to show; `done` once it has scrolled there. */
-export function useTarget() {
-  const at = useSyncExternalStore(subscribe, () => target)
-  return [
-    at,
-    () => {
-      target = undefined
-      notify()
-    },
-  ] as const
+/** The line the surface was asked to show, until `reachedTarget`. */
+export const useTarget = () => useSyncExternalStore(subscribe, () => target)
+
+/** The surface scrolled to the target line, or found it cannot. */
+export function reachedTarget() {
+  target = undefined
+  notify()
 }
 
 /**
