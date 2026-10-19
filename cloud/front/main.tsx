@@ -98,10 +98,11 @@ function useDirectory() {
 
 /** `12m`, `3h`: `ago()` without its suffix, for the compact provider row. */
 const age = (at: number, now: number) => ago(at, now).replace(' ago', '')
-/** A machine is online while a project lists it connected, or it reported within two hours. */
-const ONLINE = 2 * 60 * 60 * 1000
-/** A report older than this says when it came. */
-const STALE = 90 * 60 * 1000
+/**
+ * A machine runs Ultimate while a project lists it connected, or while its machine home's hourly health report is
+ * fresh. Only running machines are listed.
+ */
+const RUNNING = 90 * 60 * 1000
 
 function Provider({ health, now }: { health: ProviderHealth; now: number }) {
   const at =
@@ -128,16 +129,8 @@ function Provider({ health, now }: { health: ProviderHealth; now: number }) {
   )
 }
 
-/** One line per machine: its online dot and name, then each provider's state, age and short error. */
-function Machines({
-  health,
-  connected,
-  now,
-}: {
-  health: MachineHealth[]
-  connected: Set<string>
-  now: number
-}) {
+/** One line per running machine: its name, then each provider's state, age and short error. */
+function Machines({ health, now }: { health: MachineHealth[]; now: number }) {
   return (
     <section className="flex flex-col gap-2">
       <h2 className="text-[10.5px] font-normal tracking-wider text-muted-foreground uppercase">
@@ -145,19 +138,13 @@ function Machines({
       </h2>
       <ul className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70 bg-card/40">
         {health.map((machine) => {
-          const online = connected.has(machine.machine) || now - machine.at < ONLINE
           return (
             <li
               className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-3 py-2 font-mono text-[11px]"
               key={machine.machine}
             >
               <span className="flex shrink-0 items-center gap-2">
-                <span
-                  className={cn(
-                    'size-1.5 shrink-0 self-center rounded-full',
-                    online ? 'bg-success' : 'bg-muted-foreground/40',
-                  )}
-                />
+                <span className="size-1.5 shrink-0 self-center rounded-full bg-success" />
                 <span className="font-sans text-[13px] font-medium text-foreground">
                   {machine.machine}
                 </span>
@@ -177,14 +164,6 @@ function Machines({
                   <span className="text-muted-foreground/70">no providers</span>
                 )}
               </span>
-              {now - machine.at > STALE && (
-                <span
-                  className="shrink-0 text-[10.5px] text-muted-foreground/60 max-sm:ml-auto"
-                  title={new Date(machine.at).toLocaleString()}
-                >
-                  reported {ago(machine.at, now)}
-                </span>
-              )}
             </li>
           )
         })}
@@ -232,42 +211,20 @@ function moving(transition: Transition | undefined) {
   return `→ ${transition.target} · ${steps[transition.step]}${detail}`
 }
 
-/** The writer with its online dot: `rog`, `haza-pc · offline since 3h`, or `free` while no machine holds the lease. */
-function Writer({ writer, now }: { writer: Project['writer']; now: number }) {
-  const { machine, online, lastSeen } = writer
+/** The machine running the project, with its dot. Only projects whose writer runs are listed. */
+function Writer({ machine }: { machine: string }) {
   return (
-    <span
-      className="flex min-w-0 shrink-0 items-center gap-1.5"
-      title={
-        machine === null
-          ? 'Free: any standby machine may take it over'
-          : online || lastSeen === undefined
-            ? `Runs on ${machine}`
-            : `Last seen ${new Date(lastSeen).toLocaleString()}`
-      }
-    >
-      <span
-        className={cn(
-          'size-1.5 shrink-0 rounded-full',
-          online ? 'bg-success' : 'bg-muted-foreground/40',
-        )}
-      />
-      {machine === null ? (
-        <span className="text-muted-foreground">free</span>
-      ) : (
-        <span className="truncate text-foreground/85">{machine}</span>
-      )}
-      {machine !== null && !online && (
-        <span className="truncate text-muted-foreground/70">
-          · offline{lastSeen === undefined ? '' : ` since ${age(lastSeen, now)}`}
-        </span>
-      )}
+    <span className="flex min-w-0 shrink-0 items-center gap-1.5" title={`Runs on ${machine}`}>
+      <span className="size-1.5 shrink-0 rounded-full bg-success" />
+      <span className="truncate text-foreground/85">{machine}</span>
     </span>
   )
 }
 
-function Row({ project, now }: { project: Project; now: number }) {
-  const standbys = project.machines.filter((machine) => machine.role === 'standby')
+function Row({ project }: { project: Project }) {
+  const standbys = project.machines.filter(
+    (machine) => machine.role === 'standby' && machine.connected,
+  )
   const step = moving(project.transition)
   return (
     <li className="flex flex-col gap-1.5 px-3 py-2.5 pointer-coarse:py-3">
@@ -284,12 +241,12 @@ function Row({ project, now }: { project: Project; now: number }) {
         <Tailnet project={project} />
       </span>
       <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px]">
-        <Writer now={now} writer={project.writer} />
+        <Writer machine={project.writer.machine!} />
         {standbys.map((machine) => (
           <span
             className="shrink-0 rounded-sm border border-border/60 px-1 text-[10px] leading-4 text-muted-foreground/70"
             key={machine.machine}
-            title={`Standby, ${machine.connected ? 'connected' : `last seen ${ago(machine.lastSeen, now)}`}`}
+            title="Standby"
           >
             {machine.machine}
           </span>
@@ -316,12 +273,17 @@ function Message({ children }: { children: ReactNode }) {
 function Front() {
   const { directory, health, failing } = useDirectory()
   const now = Date.now()
-  const connected = new Set(
+  const rows =
     directory.state === 'loaded'
-      ? directory.rows.flatMap((row) =>
-          row.machines.filter((machine) => machine.connected).map((machine) => machine.machine),
-        )
-      : [],
+      ? directory.rows.filter((row) => row.writer.machine !== null && row.writer.online)
+      : []
+  const connected = new Set(
+    rows.flatMap((row) =>
+      row.machines.filter((machine) => machine.connected).map((machine) => machine.machine),
+    ),
+  )
+  const running = health.filter(
+    (machine) => connected.has(machine.machine) || now - machine.at < RUNNING,
   )
   return (
     <div className="flex min-h-dvh flex-col">
@@ -355,7 +317,7 @@ function Front() {
         <header>
           <h1 className="text-[15px] font-medium text-foreground">Projects</h1>
           <p className="mt-1 text-[13px] text-muted-foreground">
-            Every project that syncs here and the machine it runs on. Open one on the tailnet to
+            Every project running on one of your machines right now. Open one on the tailnet to
             continue where it left off.
           </p>
         </header>
@@ -375,23 +337,23 @@ function Front() {
             </div>
           </Message>
         )}
-        {directory.state === 'loaded' && !directory.rows.length && (
+        {directory.state === 'loaded' && !rows.length && (
           <Message>
-            No projects yet: set up cloud sync on a machine (see New machine in{' '}
+            No project is running: start Ultimate on a machine with cloud sync (see New machine in{' '}
             <code className="rounded-sm bg-muted px-1 font-mono text-[12px] text-foreground/85">
               cloud/README.md
             </code>
             )
           </Message>
         )}
-        {directory.state === 'loaded' && directory.rows.length > 0 && (
+        {rows.length > 0 && (
           <ul className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70 bg-card/40">
-            {directory.rows.map((row) => (
-              <Row key={row.slug} now={now} project={row} />
+            {rows.map((row) => (
+              <Row key={row.slug} project={row} />
             ))}
           </ul>
         )}
-        {health.length > 0 && <Machines connected={connected} health={health} now={now} />}
+        {running.length > 0 && <Machines health={running} now={now} />}
       </main>
     </div>
   )
