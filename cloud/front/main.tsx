@@ -1,19 +1,12 @@
 import './front.css'
 import { cn } from 'cn'
-import { ChevronDownIcon, KeyRoundIcon, LoaderCircleIcon, NetworkIcon } from 'lucide-react'
+import { LoaderCircleIcon, NetworkIcon } from 'lucide-react'
 import { StrictMode, useEffect, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
-import type { CloudInfo, MachineHealth, ProviderHealth, Transition } from '../protocol.ts'
+import type { MachineHealth, ProviderHealth, Transition } from '../protocol.ts'
 
 /** A row of `/api/directory` (`Project` in cloud/directory.ts, which runs in the Worker). */
 interface Project {
@@ -28,7 +21,6 @@ interface Project {
     lastSeen: number
     tailnet?: string
   }[]
-  count: number
   transition?: Transition
 }
 
@@ -201,10 +193,10 @@ function Machines({
   )
 }
 
-/** Up and down move between rows, as in a list; Tab still walks them in order. */
+/** Up and down move between tailnet links, as in a list; Tab still walks them in order. */
 function moveFocus(event: KeyboardEvent<HTMLElement>) {
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
-  const rows = [...event.currentTarget.querySelectorAll<HTMLAnchorElement>('a[data-row]')]
+  const rows = [...event.currentTarget.querySelectorAll<HTMLAnchorElement>('a[data-tailnet]')]
   const index = rows.indexOf(document.activeElement as HTMLAnchorElement)
   const next = rows[event.key === 'ArrowDown' ? index + 1 : index < 0 ? rows.length - 1 : index - 1]
   if (!next) return
@@ -240,110 +232,14 @@ function moving(transition: Transition | undefined) {
   return `→ ${transition.target} · ${steps[transition.step]}${detail}`
 }
 
-/**
- * "Run on ▾": the project's machines, the connected standbys movable to. It asks the project's `/api/cloud` on open for
- * the secrets each lacks, and moves with `POST /p/<slug>/api/cloud/move`.
- */
-function RunOn({ project, onError }: { project: Project; onError: (error?: string) => void }) {
-  const [info, setInfo] = useState<CloudInfo>()
-  const missing = (machine: string) =>
-    info?.machines.find((candidate) => candidate.machine === machine)?.missingSecrets ?? []
-  const load = async () => {
-    try {
-      const response = await fetch(`/p/${project.slug}/api/cloud`)
-      if (response.ok) setInfo((await response.json()) as CloudInfo)
-    } catch {
-      // The list from the directory still shows; only the missing secrets are unknown.
-    }
-  }
-  const move = async (machine: string) => {
-    onError(undefined)
-    try {
-      const response = await fetch(`/p/${project.slug}/api/cloud/move`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ machine }),
-      })
-      if (!response.ok) {
-        const data = (await response.json().catch(() => ({}))) as { error?: string }
-        onError(`${machine}: ${data.error ?? response.status}`)
-      }
-    } catch {
-      onError(`${machine}: the cloud did not answer`)
-    }
-  }
-  const busy = !!moving(project.transition)
-  return (
-    <DropdownMenu onOpenChange={(open) => open && void load()}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          className="mr-2 h-6 shrink-0 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
-          size="xs"
-          variant="ghost"
-        >
-          Run on
-          <ChevronDownIcon className="size-3 opacity-60" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64 font-mono">
-        <DropdownMenuLabel className="text-[10.5px] font-normal tracking-wider text-muted-foreground uppercase">
-          Run {project.name} on
-        </DropdownMenuLabel>
-        {project.machines.map((machine) => {
-          const lacks = missing(machine.machine)
-          return (
-            <DropdownMenuItem
-              className="items-start text-[12px]"
-              disabled={busy || machine.role === 'writer' || !machine.connected}
-              key={machine.machine}
-              onSelect={() => void move(machine.machine)}
-            >
-              <span
-                className={cn(
-                  'mt-1.5 size-1.5 shrink-0 rounded-full',
-                  machine.connected ? 'bg-success' : 'bg-muted-foreground/40',
-                )}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate">{machine.machine}</span>
-                <span className="block truncate text-[11px] text-muted-foreground">
-                  {machine.role === 'writer'
-                    ? project.writer.online
-                      ? 'running'
-                      : 'holds the project · offline'
-                    : machine.connected
-                      ? 'standby · checkout ready'
-                      : 'not connected'}
-                </span>
-                {lacks.length > 0 && (
-                  <span className="flex items-center gap-1 text-[11px] text-warning">
-                    <KeyRoundIcon className="size-3" />
-                    <span className="truncate">missing {lacks.join(', ')}</span>
-                  </span>
-                )}
-              </span>
-            </DropdownMenuItem>
-          )
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
 function Row({ project, now }: { project: Project; now: number }) {
   const { writer } = project
   const { lastSeen } = writer
   const standbys = project.machines.filter((machine) => machine.role === 'standby')
-  const conversations = `${project.count} conversation${project.count === 1 ? '' : 's'}`
   const step = moving(project.transition)
-  const [error, setError] = useState<string>()
   return (
     <li className="flex items-center">
-      <a
-        className="flex min-w-0 flex-1 flex-col gap-1 px-3 py-2.5 transition-colors pointer-coarse:py-3 outline-none hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
-        data-row
-        href={`/p/${project.slug}/`}
-      >
+      <div className="flex min-w-0 flex-1 flex-col gap-1 px-3 py-2.5 pointer-coarse:py-3">
         <span className="flex min-w-0 items-center gap-2">
           <span
             className={cn(
@@ -384,7 +280,6 @@ function Row({ project, now }: { project: Project; now: number }) {
               {machine.machine}
             </span>
           ))}
-          <span className="shrink-0">{conversations}</span>
         </span>
         {step && (
           <span className="flex min-w-0 items-center gap-1.5 pl-3.5 font-mono text-[11px] text-brand">
@@ -392,10 +287,8 @@ function Row({ project, now }: { project: Project; now: number }) {
             <span className="truncate">{step}</span>
           </span>
         )}
-        {error && <span className="truncate pl-3.5 font-mono text-[11px] text-error">{error}</span>}
-      </a>
+      </div>
       <Tailnet project={project} />
-      <RunOn onError={setError} project={project} />
     </li>
   )
 }
@@ -450,8 +343,8 @@ function Front() {
         <header>
           <h1 className="text-[15px] font-medium text-foreground">Projects</h1>
           <p className="mt-1 text-[13px] text-muted-foreground">
-            Every project that syncs here, and the machine it runs on. Open one to continue where it
-            left off.
+            Every project that syncs here, and the machine it runs on. Open one on the tailnet to
+            continue where it left off.
           </p>
         </header>
         {directory.state === 'loading' && (

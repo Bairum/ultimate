@@ -34,9 +34,15 @@ const directoryBeforeHealth =
       return new Response(null, { status: 204 })
     }
     if (url.pathname === '/list') return Response.json(store.list())
-    const value = store.resolve(url.searchParams.get('slug') ?? '')
+    // `store.resolve(slug)`, which the store has since lost with the project pages.
+    const value = [
+      ...store.sql.exec<{ value: string | null }>(
+        'SELECT value FROM projects WHERE slug=?',
+        url.searchParams.get('slug') ?? '',
+      ),
+    ][0]?.value
     return value
-      ? Response.json(value)
+      ? Response.json(JSON.parse(value))
       : Response.json({ error: 'Unknown project' }, { status: 404 })
   }
 

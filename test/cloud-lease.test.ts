@@ -764,7 +764,7 @@ it('cancels a move mid-download, removing the download and keeping the lease fre
   expect(() => laptop.lease.cancel()).toThrow('No move to cancel')
 })
 
-it('moves from the cloud UI: the online writer drains, and every step reaches its socket', async () => {
+it('moves from @sync: the online writer drains, and every step reaches its socket', async () => {
   snapshotFetch()
   const project = cloud()
   const { root } = await checkout()
@@ -773,7 +773,7 @@ it('moves from the cloud UI: the online writer drains, and every step reaches it
   const task = await sleep(desk.harness(), false)
   const laptop = await machine('laptop', project, root)
   await standbyOn(laptop)
-  const response = await project.api('/api/cloud/move', { machine: 'laptop' })
+  const response = await project.api('/sync/move', { machine: 'laptop' })
   expect(response.status).toBe(202)
   const { id } = (await response.json()) as { id: string }
   const waiting = 'Move to laptop waits for 1 running task'
@@ -794,7 +794,7 @@ it('moves from the cloud UI: the online writer drains, and every step reaches it
   await desk.harness().abortTask(task, context)
   await writer(laptop)
   expect(project.replica.store.lease()).toMatchObject({ machine: 'laptop', epoch: 2 })
-  expect(project.replica.store.transition()).toMatchObject({ id, by: 'cloud' })
+  expect(project.replica.store.transition()).toMatchObject({ id, by: 'sync' })
   expect(desk.host.standby()).toMatchObject({ reason: 'Moved to laptop', explained: true })
   expect(states(project.replica.store.transition())).toMatchObject({
     handover: 'done',
