@@ -20,7 +20,7 @@ import type { OpenHost } from '../server/harness.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { ActionContext } from '../server/actions.ts'
 import { Metadata } from '../server/metadata.ts'
-import { emit } from '../server/events.ts'
+import { emit, EventFeed } from '../server/events.ts'
 import board, { actions } from '../extensions/board/server.ts'
 import { Board, MessageSent } from '../extensions/board/api.ts'
 import type { BoardService } from '../extensions/board/api.ts'
@@ -67,6 +67,8 @@ async function fixture(
     entered: boolean
     taskId?: TaskId
   },
+  /** Triage's verdict for messages to @ultimate; without one there is no summary model, so nothing is gated. */
+  triage?: (text: string) => string | Promise<string>,
 ) {
   const home = await temp('ultimate-board-')
   homes.push(home)
@@ -92,14 +94,26 @@ async function fixture(
             return recipient.id
           },
         }
-      : name === 'workspaces'
-        ? { doc: Workspaces, git: async () => '' }
-        : name === 'lineage'
-          ? {
-              rootOf: (id: number, ctx: Context) => rootOf(host, id, ctx),
-              branch: (input: BranchInput, ctx: Context) => startBranch(host, input, ctx),
-            }
-          : undefined
+      : name === 'conversations'
+        ? {
+            summaryModel: async () =>
+              triage ? { provider: 'test', id: 'triage', thinking: 'off' } : undefined,
+            askSummaryModel: async (_models: unknown, _system: string, input: string) => ({
+              provider: 'test',
+              model: 'triage',
+              text: await triage!(JSON.parse(input).untrustedMessage as string),
+              stopReason: 'stop',
+            }),
+            accountResponse: async () => undefined,
+          }
+        : name === 'workspaces'
+          ? { doc: Workspaces, git: async () => '' }
+          : name === 'lineage'
+            ? {
+                rootOf: (id: number, ctx: Context) => rootOf(host, id, ctx),
+                branch: (input: BranchInput, ctx: Context) => startBranch(host, input, ctx),
+              }
+            : undefined
   const host = {
     ...prepared,
     metadata: Metadata,
@@ -1068,7 +1082,8 @@ it('forwards tool-result images, finds latest past a page, and checks every imag
       await tx.appendEntry(ROOT_CONVERSATION_ID, { kind: 'test.filler' })
   }, context)
   await f.send(to, 'Screenshot', { images: 'latest' })
-  await until(async () => (await f.log())?.messages[0]?.state === 'answered')
+  // The reply reaches the sender before the next send, so it does not steer into that send's run.
+  await until(async () => (await f.log())?.messages[1]?.state === 'delivered')
   const message = (await f.log())!.messages[0]
   expect(message.images).toEqual({ entry: shot, count: 1 })
   expect(imagesIn(await placed(f, f.recipient.id, message.id))).toEqual([png(7)])
@@ -1247,4 +1262,103 @@ it('recovers once after the answer is recorded but before reply submission', asy
   g.release()
   await until(async () => (await replies(f)).length === 1)
   expect((await f.log())!.messages.filter((m) => m.re === 1)).toHaveLength(1)
+})
+
+/** What the root (standing as @ultimate) holds after #recipient messages it, once that message's triage settled. */
+async function triaged(f: Awaited<ReturnType<typeof fixture>>, text: string) {
+  const recipient = await f.opened.harness.conversation(f.recipient.id, context)
+  await (
+    await recipient!.submit(
+      { type: 'input', content: `SEND ${JSON.stringify({ to: '#1', text, reply: false })}` },
+      context,
+    )
+  ).wait(context)
+  await until(async () => {
+    const m = (await f.log())!.messages.findLast((item) => item.from === f.recipient.id)
+    return m?.triage !== undefined && m.triage.verdict !== 'assessing'
+  })
+  await f.opened.root.waitForIdle(context)
+  const message = (await f.log())!.messages.findLast((item) => item.from === f.recipient.id)!
+  const view = await f.opened.root.viewState(context)
+  const entries = view.value.entries.filter((e) => e.id > (message.entry ?? 0))
+  view.dispose()
+  return { message, runs: entries.filter((e) => e.kind === 'pi.assistant').length, entries }
+}
+it('leaves an FYI message to @ultimate as context, without starting a run', async () => {
+  const f = await fixture(undefined, undefined, () =>
+    JSON.stringify({ verdict: 'fyi', reason: 'progress only' }),
+  )
+  const { message, runs } = await triaged(f, 'Still waiting on the reviewer.')
+  expect(message.triage).toEqual({ verdict: 'fyi', reason: 'progress only' })
+  expect(message.state).toBe('delivered')
+  expect(runs).toBe(0)
+  // The model reads it with its next input.
+  await (await f.opened.root.submit({ type: 'input', content: 'Next' }, context)).wait(context)
+  expect(f.transcripts.at(-1)).toContain('Still waiting on the reviewer.')
+})
+it('wakes @ultimate once when triage says act, and records the event', async () => {
+  const f = await fixture(undefined, undefined, () =>
+    JSON.stringify({ verdict: 'act', reason: 'a landing to report' }),
+  )
+  const { message, runs, entries } = await triaged(f, 'Landed abc on main.')
+  expect(message.triage).toEqual({ verdict: 'act', reason: 'a landing to report' })
+  expect(runs).toBe(1)
+  expect(entries.filter((e) => e.kind === 'board.wake')).toHaveLength(1)
+  // The wake's answer is the message's answer, recorded once its run ends.
+  await until(async () => (await f.log())!.messages.at(-1)?.answer !== undefined)
+  const feed = await f.opened.harness.snapshot(EventFeed, ROOT_CONVERSATION_ID, context)
+  expect(feed!.events.filter((e) => e.name === 'board.triaged').map((e) => e.data)).toEqual([
+    {
+      message: message.id,
+      from: f.recipient.id,
+      to: 1,
+      verdict: 'act',
+      reason: 'a landing to report',
+    },
+  ])
+})
+it('acts without asking the model when the sender asks for a decision', async () => {
+  let asked = 0
+  const f = await fixture(undefined, undefined, () => {
+    asked++
+    return JSON.stringify({ verdict: 'fyi', reason: 'wrong' })
+  })
+  const { message, runs } = await triaged(f, 'Which layout?\n1. Compact\n2. Spacious')
+  expect(message.triage).toEqual({ verdict: 'act', reason: 'asks for a decision' })
+  expect(asked).toBe(0)
+  expect(runs).toBe(1)
+})
+it('wakes as without triage when the assessment fails', async () => {
+  const f = await fixture(undefined, undefined, () => 'not json')
+  const { message, runs } = await triaged(f, 'Merged the worker.')
+  expect(message.triage).toEqual({ verdict: 'act', reason: 'assessment failed; woke as usual' })
+  expect(runs).toBe(1)
+})
+it('acts on a reply to an @ultimate question without asking the model', async () => {
+  let asked = 0
+  const f = await fixture(undefined, undefined, () => {
+    asked++
+    return JSON.stringify({ verdict: 'fyi', reason: 'wrong' })
+  })
+  await f.send(`#${f.recipient.id}`, 'Ship it?\n1. Yes\n2. No')
+  await until(async () => (await f.log())!.messages[1]?.triage?.verdict === 'act')
+  expect((await f.log())!.messages[1].triage).toEqual({
+    verdict: 'act',
+    reason: 'answers your question',
+  })
+  expect(asked).toBe(0)
+})
+it('leaves an FYI reply to @ultimate as context', async () => {
+  const f = await fixture(undefined, undefined, () =>
+    JSON.stringify({ verdict: 'fyi', reason: 'status only' }),
+  )
+  await f.send(`#${f.recipient.id}`, 'How is it going')
+  await until(async () => (await f.log())!.messages[1]?.triage?.verdict === 'fyi')
+  await f.opened.root.waitForIdle(context)
+  const [reply] = await replies(f)
+  const view = await f.opened.root.viewState(context)
+  expect(
+    view.value.entries.filter((e) => e.id > reply.id && e.kind === 'pi.assistant'),
+  ).toHaveLength(0)
+  view.dispose()
 })

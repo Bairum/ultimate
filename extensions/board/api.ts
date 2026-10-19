@@ -7,6 +7,7 @@ import { defineDoc } from '@earendil-works/pi-durable'
 import type { EntryId } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
 import { BoardDoc } from './refs.ts'
+import type { Triage } from './refs.ts'
 
 /** One Board message as the `board` document stores it. */
 export type BoardMessage = {
@@ -25,6 +26,8 @@ export type BoardMessage = {
   call?: string
   /** Images forwarded with it: the sender's entry that holds them, attached to the recipient's input on delivery. */
   images?: { entry: EntryId; count: number }
+  /** Whether a message to the primary agent woke it: assessing, then act or fyi with a one-line reason. */
+  triage?: Triage
 }
 /** Every message between conversations and the user, on the root conversation. */
 export const Board = defineDoc<{ messages: BoardMessage[]; next: number }>({
@@ -47,7 +50,7 @@ export type BoardService = {
     ctx: Context,
   ): Promise<number>
 }
-export { Asked, MessageSent } from './refs.ts'
+export { Asked, MessageSent, Triaged } from './refs.ts'
 /** Messages between conversations; core, so `need` it. */
 export const BoardApi = defineApi<BoardService>()('board')
 export const tier = 'core'

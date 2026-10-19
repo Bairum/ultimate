@@ -40,7 +40,13 @@ function BoardNavigation() {
 
 export default defineWebExtension({
   slots: { overlay: [BoardNavigation] },
-  entries: { 'board.message': BoardInput, 'board.reply': BoardInput, 'pi.assistant': ChatAnswer },
+  entries: {
+    'board.message': BoardInput,
+    'board.reply': BoardInput,
+    // The message's row already says it woke the agent: `action`.
+    'board.wake': () => null,
+    'pi.assistant': ChatAnswer,
+  },
   tools: { message: MessageCall, branch: BranchCall },
   chat: {
     when: ultimateChat,

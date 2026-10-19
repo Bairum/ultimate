@@ -47,6 +47,24 @@ export default async function fauxExtension(host: ExtensionHost) {
       const system = transcript.messages[0]
       const asked = transcript.messages.findLastIndex((message) => message.role === 'user')
       if (system?.role === 'system' && typeof system.content === 'string') {
+        // Board triage: a landing, failure or question acts, anything else is an update. `(slow)` holds the verdict
+        // for a few seconds, so a preview can show the row assessing.
+        if (system.content.startsWith('Triage a message')) {
+          const text = messageText(last?.content)
+          const act = /landed|failed|\?/i.test(text)
+          const answer = fauxAssistantMessage([
+            fauxText(
+              JSON.stringify(
+                act
+                  ? { verdict: 'act', reason: 'reports a result the user should hear' }
+                  : { verdict: 'fyi', reason: 'progress only; nothing to do yet' },
+              ),
+            ),
+          ])
+          return text.includes('(slow)')
+            ? new Promise((done) => setTimeout(() => done(answer), 6000))
+            : answer
+        }
         if (system.content.startsWith("List the decisions a coding agent's final reply"))
           return fauxAssistantMessage([
             fauxText(
@@ -418,6 +436,16 @@ export default async function fauxExtension(host: ExtensionHost) {
       }
       if (last?.role === 'user' && messageText(last.content).startsWith('Reply from #'))
         return fauxAssistantMessage([fauxText('Noted; nothing else is needed from it.')])
+      // A one-way message with the given text, to preview how its recipient's row shows triage.
+      const tell =
+        last?.role === 'user'
+          ? /^tell (#\d+|@[\w-]+) ([\s\S]+)$/.exec(messageText(last.content).trim())
+          : null
+      if (tell)
+        return fauxAssistantMessage(
+          [fauxToolCall('message', { to: tell[1], text: tell[2], reply: false })],
+          { stopReason: 'toolUse' },
+        )
       const target =
         last?.role === 'user'
           ? /^message (#\d+|@[\w-]+)( one-way)?$/.exec(messageText(last.content).trim())
