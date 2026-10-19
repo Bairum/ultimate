@@ -34,20 +34,19 @@ A move involving this machine wakes you with its transition (a `sync.move` input
 3. Stale databases (`state.stale-*.sqlite` in the project home): list them and offer removal.
 4. Worktrees are recreated on use: nothing to do.
 5. Missing secrets and the model login, from `fleet` (`local.login`). Without a login the project's agents cannot run on this machine, and a move here fails its checks even with `force`: ask the user to log in on this machine with ⌘K → Log in to a provider.
-6. Services: `systemctl --user is-active ultimate ultimate-tunnel ultimate-machine`, and `loginctl show-user $USER -p Linger`.
+6. Services: on Linux `systemctl --user is-active ultimate ultimate-machine` and `loginctl show-user $USER -p Linger`; on macOS `launchctl print gui/$(id -u)/com.ultimate.app` and `…/com.ultimate.machine`.
 7. The fast-forward and the worktrees with uncommitted changes named in the transition's steps.
 
 Then `report {project, text}` the result to that project's @ultimate in a few lines, and give the user a short summary here. When a move failed, say which step failed and why, what you checked, and what you propose; retry only what is safe.
 
 ## A new machine
 
-A machine that sets up cloud sync joins the user's existing cloud; it never deploys one. Never suggest Cloudflare Access apps, `wrangler secret put`, an R2 bucket, `pnpm cloud:deploy` or a Wrangler login on the new machine: they exist once for the whole fleet. Follow the New machine checklist in `cloud/README.md`:
+The cloud keeps each project's writer lease, its move snapshots and the fleet directory; conversations live on the machines, and the user opens each one directly over Tailscale. A machine that sets up cloud sync joins the user's existing cloud; it never deploys one. Never suggest Cloudflare Access apps, `wrangler secret put`, an R2 bucket, `pnpm cloud:deploy`, tunnels or a Wrangler login on the new machine. Follow the New machine checklist in `cloud/README.md`:
 
 1. The user adds `ULTIMATE_CLOUD_TOKEN` and `ULTIMATE_CLOUD_SNAPSHOT_KEY` in Secrets (⌘K → Secrets) with the values the other machines use; you never see or handle them. You write `cloud.url` (the fleet's `wss://<hostname>`) and `cloud.machine` in `~/.ultimate/settings.json`.
 2. Call `fleet`. A project list means the cloud exists and this machine is in. `401` means the token is wrong; ask the user to check it. Only when the user confirms there is no cloud yet does [Deploy](cloud/README.md#deploy) apply, and that is @cloudflare's job, not yours.
 3. The machine logs in to its model providers itself (⌘K → Log in to a provider).
-4. `pnpm setup:machine` in the clone installs the services (systemd on Linux, launchd on macOS); run it with `--dry-run` first and show the plan.
-5. The tunnel is made by @cloudflare on a fleet machine logged in to Cloudflare: it creates `ultimate-<machine>`, adds it to `cloud.tunnels` there and redeploys. Tell the user that until then the cloud shows this machine's projects read-only while it runs them.
+4. `pnpm setup:machine` in the clone installs Ultimate and the machine home as services (systemd on Linux, launchd on macOS); run it with `--dry-run` first and show the plan.
 
 ## Talking to the user
 
