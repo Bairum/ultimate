@@ -33,6 +33,8 @@ import { createServer } from 'node:http'
 const generation = Number(process.env.ULTIMATE_GENERATION)
 const send = (message: unknown) => process.send?.(message as import('node:child_process').Serializable)
 const server = createServer((req, res) => {
+  // A kept-alive socket stays piped to the core that served it; the test's next fetch must reach the new core.
+  res.setHeader('connection', 'close')
   res.end('ok')
   if (req.url === '/swap') send({ type: 'swap', requestId: 'test-swap' })
   if (req.url === '/crash') setTimeout(() => process.exit(1), 50)

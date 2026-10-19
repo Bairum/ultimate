@@ -114,11 +114,14 @@ it('traces an action through a service, its event and a reactor into another ser
   const result = await server.extensions.invoke(
     'alpha',
     'go',
-    { token: 'abc', nested: { secret: 's', value: 1 } },
+    { token: 'sentinel-token', nested: { secret: 's', value: 1 } },
     signal,
     conversation,
   )
-  expect(result).toEqual({ done: true, args: { token: 'abc', nested: { secret: 's', value: 1 } } })
+  expect(result).toEqual({
+    done: true,
+    args: { token: 'sentinel-token', nested: { secret: 's', value: 1 } },
+  })
   const action = server.extensions.trace.query().find((row) => row.name === 'alpha/go')!
   await until(() =>
     server.extensions.trace.query({ trace: action.trace }).some((row) => row.name === 'delta.note'),
@@ -153,7 +156,8 @@ it('traces an action through a service, its event and a reactor into another ser
   expect(work.result).toBe(
     '{"done":true,"args":{"token":"[redacted]","nested":{"secret":"[redacted]","value":1}}}',
   )
-  expect(JSON.stringify(rows)).not.toContain('abc')
+  // Not hex, so it can't match the rows' random ids by chance.
+  expect(JSON.stringify(rows)).not.toContain('sentinel-token')
   expect(note.args).toBe('[{"from":"beta.worked"}]')
 })
 
