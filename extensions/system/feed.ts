@@ -17,6 +17,8 @@ export type Feed = {
   loading: boolean
   /** Whether the user loaded older pages: then nothing is trimmed, since trimmed rows could not be paged to again. */
   paged: boolean
+  /** The end of the list asked for older rows; kept while another request runs, so it is not lost. */
+  wanted?: boolean
   error?: string
 }
 type Page = { rows: SystemRow[]; next?: string; head: string }
@@ -25,6 +27,13 @@ export const empty: Feed = { rows: [], loading: true, paged: false }
 
 /** Asking for a page: refused while another is on its way. */
 export const asking = (feed: Feed): Feed => ({ ...feed, loading: true })
+
+/** The end of the list came into view: older rows are wanted, now or once the request on its way ends. */
+export const wantOlder = (feed: Feed): Feed => ({ ...feed, wanted: true })
+
+/** Whether to ask for the older page now: it is wanted, there is one, and no request is on its way. */
+export const pagesOlder = (feed: Feed) =>
+  feed.wanted === true && !feed.loading && feed.next !== undefined
 
 /** The newest page replaces everything. */
 export const loaded = (_feed: Feed, page: Page): Feed => ({
@@ -52,7 +61,7 @@ export function followed(feed: Feed, from: string, page: Page): Feed {
 
 /** An older page goes at the end, if the feed still pages from `from`. */
 export function older(feed: Feed, from: string, page: Omit<Page, 'head'>): Feed {
-  if (feed.next !== from) return { ...feed, loading: false }
+  if (feed.next !== from) return { ...feed, loading: false, wanted: false }
   const { next: _, error: _error, ...rest } = feed
   return {
     ...rest,
@@ -60,8 +69,17 @@ export function older(feed: Feed, from: string, page: Omit<Page, 'head'>): Feed 
     ...(page.next === undefined ? {} : { next: page.next }),
     loading: false,
     paged: true,
+    wanted: false,
   }
 }
 
-/** A request failed: the rows stay, loading ends, and the next tick or scroll asks again. */
-export const failed = (feed: Feed, error: string): Feed => ({ ...feed, loading: false, error })
+/**
+ * A request failed: the rows stay, loading ends, and the next tick or scroll asks again; a wanted older page waits for
+ * the end of the list to ask again rather than retrying at once.
+ */
+export const failed = (feed: Feed, error: string): Feed => ({
+  ...feed,
+  loading: false,
+  wanted: false,
+  error,
+})

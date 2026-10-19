@@ -2,7 +2,7 @@ import { SearchIcon, XIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { api, cn, errorMessage, formatDuration, useUltimate } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
-import { asking, empty, failed, followed, loaded, older } from './feed.ts'
+import { asking, empty, failed, followed, loaded, older, pagesOlder, wantOlder } from './feed.ts'
 import type { Feed } from './feed.ts'
 import { StreamAction } from './refs.ts'
 import type { SystemFilter, SystemRow } from './refs.ts'
@@ -82,11 +82,14 @@ function useStream(filter: SystemFilter, live: boolean) {
     return () => clearInterval(timer)
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [key, live])
-  const more = () => {
-    const { next, loading } = latest.current
-    if (next === undefined || loading) return
+  // Older rows are asked for once wanted and nothing else is on its way, also when a live refresh ends.
+  useEffect(() => {
+    if (!pagesOlder(state)) return
+    const next = state.next!
     request({ before: next }, (feed, page) => older(feed, next, page))
-  }
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.wanted, state.loading, state.next])
+  const more = () => setState((previous) => ({ ...previous, ...wantOlder(previous) }))
   return { ...state, older: more }
 }
 

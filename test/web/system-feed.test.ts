@@ -7,6 +7,8 @@ import {
   KEEP,
   loaded,
   older,
+  pagesOlder,
+  wantOlder,
 } from '../../extensions/system/feed.ts'
 import type { SystemRow } from '../../extensions/system/refs.ts'
 
@@ -64,6 +66,27 @@ it('starts over from the newest page once live rows alone pass KEEP', () => {
   const fresh = loaded(over, { rows: rows(6000, 100), next: 'n9', head: 'h3' })
   expect(fresh).toMatchObject({ head: 'h3', next: 'n9', paged: false })
   expect(fresh.rows).toHaveLength(100)
+})
+
+it('asks for the older page the end wanted during a live refresh once it returns empty', () => {
+  const feed = loaded(empty, { rows: rows(100, 3), next: 'n1', head: 'h1' })
+  // A live refresh is on its way when the end of the list comes into view.
+  const refreshing = wantOlder(asking(feed))
+  expect(pagesOlder(refreshing)).toBe(false)
+  // It returns nothing new: the row count stays, yet the wanted page is asked for now.
+  const settled = followed(refreshing, 'h1', { rows: [], head: 'h1' })
+  expect(settled.rows).toHaveLength(3)
+  expect(pagesOlder(settled)).toBe(true)
+  // Once asked and answered, it is not wanted again until the end asks.
+  const paged = older(asking(settled), 'n1', { rows: rows(97, 2), next: 'n2' })
+  expect(pagesOlder(paged)).toBe(false)
+  // Nothing older left: wanting it asks for nothing.
+  expect(pagesOlder(wantOlder(older(paged, 'n2', { rows: [] })))).toBe(false)
+})
+
+it('drops a wanted page on failure, leaving the retry to the end of the list', () => {
+  const feed = wantOlder(asking(loaded(empty, { rows: rows(10, 2), next: 'n1', head: 'h1' })))
+  expect(pagesOlder(failed(feed, 'boom'))).toBe(false)
 })
 
 it('ignores a follow from a head the feed has moved past', () => {
