@@ -4,7 +4,7 @@ export function routingInstructions(prompt: string) {
   const clauses = prompt
     .replaceAll('’', "'")
     .split(
-      /[.;!\n]|\bbut\b|,\s*(?=(?:(?:and|then)\s+)*(?:fix|implement|correct|edit|handle|make|use|create|write|start|plan|delegate|ask|have|run|require|assess|send)\b)/i,
+      /[.;!\n]|\bbut\b|\band\s+(?=(?:use|plan|implement)\b)|,\s*(?=(?:(?:and|then)\s+)*(?:fix|implement|correct|edit|handle|make|use|create|write|start|plan|delegate|ask|have|run|require|assess|send)\b)/i,
     )
     .map((clause) => clause.split(/\b(?:no|not|don't|without|skip|avoid|neither)\b/i)[0])
   const affirmative = clauses.join('\n')

@@ -39,6 +39,7 @@ test.each([
   'Plan the feature, delegate to workers and get a reviewer before submitting.',
   'Create an epic. Use workers for implementation and review the result.',
   'No need to implement directly; plan the feature, use workers and require review.',
+  "Skip assessment and use the project's normal workflow (plan, workers, verify, review, workspace submit).",
 ])('feature instructions require affirmative plan, workers and review: %s', (prompt) => {
   expect(routingInstructions(prompt)).toMatchObject({ plan: true, workers: true, review: true })
 })
