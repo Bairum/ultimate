@@ -42,7 +42,7 @@ import type { ResponseReceipt } from '../conversations/summary.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
 import { Summarized } from './refs.ts'
 import type { CallSummary } from './refs.ts'
-import { SummaryDoc } from './api.ts'
+import { PendingDoc, SummaryDoc } from './api.ts'
 import { fixedLine, parseSummary, SUMMARY_SYSTEM, summaryInput } from './summary.ts'
 import type { Call } from './summary.ts'
 
@@ -57,7 +57,7 @@ export const Store = defineDoc({
 /** The summaries a conversation keeps: older calls fall back to their script header. */
 const KEPT = 1000
 export { SummaryDoc }
-export const docs = [Store, SummaryDoc]
+export const docs = [Store, SummaryDoc, PendingDoc]
 const terminal = { status: 'terminal', outcome: { status: 'completed', result: null } } as const
 
 type StructuredTool = ToolRegistration & { outputSchema?: CodemodeJsonSchema }
@@ -627,10 +627,11 @@ export default function codemode(host: ExtensionHost) {
   const summarize = (api: ToolExecutionApi, context: Context, calls: Call[], error?: string) =>
     api.commit(async (tx) => {
       const doc = await tx.doc(SummaryDoc, api.conversationId)
-      if (doc.calls[api.callId] || doc.pending?.includes(api.callId)) return
+      const pending = await tx.doc(PendingDoc, api.conversationId)
+      if (doc.calls[api.callId] || pending.calls.includes(api.callId)) return
       const fixed = fixedLine(calls, error)
       if (fixed) return keep(tx, api.conversationId, api.callId, fixed)
-      doc.pending = [...(doc.pending ?? []), api.callId]
+      pending.calls.push(api.callId)
       await tx.createTask(
         Summary,
         { call: api.callId, input: summaryInput(calls, error) },
@@ -691,9 +692,8 @@ export default function codemode(host: ExtensionHost) {
   })
   /** End call `call`'s summary task in `tx`: keep its line when there is one, and drop it from the pending ones. */
   async function settle(tx: Tx, conversation: ConversationId, call: string, summary?: CallSummary) {
-    const doc = await tx.doc(SummaryDoc, conversation)
-    doc.pending = doc.pending?.filter((pending) => pending !== call)
-    if (!doc.pending?.length) delete doc.pending
+    const pending = await tx.doc(PendingDoc, conversation)
+    pending.calls = pending.calls.filter((open) => open !== call)
     if (summary) await keep(tx, conversation, call, summary)
   }
   /** Store call `call`'s line and record it as an event, in `tx`. */

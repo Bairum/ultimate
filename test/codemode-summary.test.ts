@@ -23,7 +23,7 @@ it('labels a failed read-only or empty script without the model, and asks it whe
     line: 'Failed: SyntaxError: unexpected token',
   })
   expect(fixedLine([], 'Error: token=abc123 rejected')).toEqual({
-    line: 'Failed: Error: token=[redacted] rejected',
+    line: 'Failed: Error: […] rejected',
   })
   const write = { name: 'write', args: { path: 'a' }, status: 'ok' }
   expect(fixedLine([write], 'Error: later step failed')).toBeUndefined()
@@ -75,7 +75,45 @@ it('removes credentials from arguments and errors before they reach the summary 
   )
   for (const secret of ['sk-live-1', 'ghp_abcdef123', 's3cr3t', 'hunter2', 'A'.repeat(40)])
     expect(input).not.toContain(secret)
-  expect(scrub('see notes.md line 4')).toBe('see notes.md line 4')
+})
+
+it('drops quoted, JSON and unnamed credentials, since only plain words leave', () => {
+  const leaks = [
+    `export API_KEY="q9Zr7vLm"`,
+    `curl -d '{"client_secret":"q9Zr7vLm"}' https://x`,
+    `--header='X-Api: q9Zr7vLm=='`,
+    `set pass 'q9Zr7vLm'`,
+    `token: "q9Zr7vLm"`,
+    `Authorization: Bearer q9Zr7vLm`,
+    `git clone https://user:q9Zr7vLm@github.com/o/r`,
+    `AKIAIOSFODNN7EXAMPLE`,
+    `sk-ant-api03-q9Zr7vLm`,
+  ]
+  for (const text of leaks)
+    expect({ text, scrubbed: scrub(text) }).not.toMatchObject({
+      scrubbed: expect.stringContaining('q9Zr7vLm'),
+    })
+  expect(scrub('AKIAIOSFODNN7EXAMPLE')).not.toContain('AKIA')
+  // Arguments are cleaned before serializing, so a value inside a JSON string can't escape as escaped text.
+  const input = summaryInput([
+    {
+      name: 'bash',
+      args: { command: 'curl -d \'{"password":"q9Zr7vLm"}\' x', env: { GITHUB_TOKEN: 'q9Zr7vLm' } },
+      status: 'ok',
+    },
+  ])
+  expect(input).not.toContain('q9Zr7vLm')
+})
+
+it('keeps ordinary prose, ids and paths as they are', () => {
+  for (const text of [
+    'basic checks passed for #190416',
+    'extensions/conversations/README.md',
+    'pnpm test -- test/codemode.test.ts',
+    'Concluded conversation #201645 (owned, not top-level)',
+    'rg -n step12 src',
+  ])
+    expect({ text, scrubbed: scrub(text) }).toEqual({ text, scrubbed: text })
 })
 
 it('parses the line and effect, and rejects anything else', () => {

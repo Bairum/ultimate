@@ -184,6 +184,7 @@ export const cases: {
     result:
       'Script completed\nOutput:\n{"value":"openai-codex/gpt-6-luna:medium","source":"default"}\n',
     effect: false,
-    says: /summary model|openai/,
+    // Quoted command text never reaches the model, so the grep pattern is not named.
+    says: /summary ?model|settings/,
   },
 ]

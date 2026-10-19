@@ -15,3 +15,15 @@ export const SummaryDoc = defineDoc<Summaries>({
   fork: 'current',
   initial: () => ({ calls: {} }),
 })
+/**
+ * The calls whose summary task still runs in this conversation, so none gets two. A fork starts empty: the task belongs
+ * to the source conversation and settles there.
+ */
+export const PendingDoc = defineDoc<{ calls: string[] }>({
+  kind: 'codemode.summaries-pending',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({ calls: [] }),
+})

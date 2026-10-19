@@ -73,33 +73,48 @@ const clip = (text: string, size: number) =>
   text.length <= size ? text : `${text.slice(0, size)}… [${text.length - size} more characters]`
 
 /** Keys whose values never leave: the trace's rule. */
-const SECRET_KEY = /secret|token|password|key|auth|cookie|credential/i
-/** Values that look like credentials wherever they appear: bearer and basic headers, assignments, long opaque runs. */
-const SECRET_TEXT = [
-  /\b(bearer|basic)\s+[\w\-.~+/=]+/gi,
-  /\b([\w-]*(?:secret|token|password|passwd|api[_-]?key|auth)[\w-]*)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s"',;&]+)/gi,
-  /\b[\w\-+/=]{32,}\b/g,
-]
-/** `text` with credential-looking values replaced by `[redacted]`. */
+const SECRET_KEY = /secret|token|password|passwd|key|auth|cookie|credential/i
+/** A word that may leave: names, ids, paths and plain prose, with no `=`, quotes, braces or other punctuation. */
+const SAFE_WORD = /^[\w.,:;!?()#@/~+-]{1,60}$/
+/** A path segment or word that looks like a credential: a known token prefix, or a long opaque run. */
+const OPAQUE =
+  /^(?:(?:ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox[abps]-|AKIA|eyJ)[\w+/=-]{4,}|[\w+/=-]{32,}|(?=[\w+/=-]*\d)(?=[\w+/=-]*[a-z])[\w+/=-]{20,})$/i
+
+/**
+ * `text` with every word that is not plainly safe replaced by `[…]`: an allowlist, so a credential in a format no rule
+ * names still never leaves. A word after "bearer" goes too.
+ */
 export function scrub(text: string) {
-  return SECRET_TEXT.reduce(
-    (scrubbed, pattern) =>
-      scrubbed.replace(pattern, (match: string, name?: string) =>
-        name && match.startsWith(name) ? `${name}=[redacted]` : '[redacted]',
-      ),
-    text,
-  )
+  let bearer = false
+  return text
+    .split(/(\s+)/)
+    .map((word) => {
+      if (!word.trim()) return word
+      const safe =
+        !bearer &&
+        SAFE_WORD.test(word) &&
+        // A URL with credentials before its host (`https://user:pass@host`).
+        !/:\/\/[^/]*@/.test(word) &&
+        !word.split(/[/:]/).some((part) => OPAQUE.test(part.replace(/[.,;!?()]+$/, '')))
+      bearer = /^bearer$/i.test(word)
+      return safe ? word : '[…]'
+    })
+    .join('')
 }
-/** A call's arguments as text for the model: values under secret-looking keys and credential-looking text removed. */
-const argsText = (args: unknown) =>
-  clip(
-    scrub(
-      JSON.stringify(args, (key, value: unknown) =>
-        key && SECRET_KEY.test(key) ? '[redacted]' : value,
-      ) ?? '',
-    ),
-    300,
-  )
+/** A call's arguments with values under secret-looking keys removed and every string scrubbed, before serializing. */
+function cleanArgs(value: unknown): unknown {
+  if (typeof value === 'string') return scrub(value)
+  if (Array.isArray(value)) return value.map(cleanArgs)
+  if (value && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        SECRET_KEY.test(key) ? '[redacted]' : cleanArgs(item),
+      ]),
+    )
+  return value
+}
+const argsText = (args: unknown) => clip(JSON.stringify(cleanArgs(args)) ?? '', 300)
 
 /**
  * The model's input: each call's name, status and scrubbed, clipped arguments, and a failed script's error. Neither the
