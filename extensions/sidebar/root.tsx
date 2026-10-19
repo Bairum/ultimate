@@ -7,12 +7,19 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { api, cn, events, formatTokens, Provided, useAction, useDocOf, useUltimate } from '@/sdk'
-import { BoardDoc, emptyBoard, isOpen } from '../board/ui.tsx'
+import { BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
+import { StandingDoc } from '../subagents/ui.tsx'
 import { CompactAction, RecentAction, TallyDoc } from '../lineage/ui.tsx'
 import type { RootEvent } from '../lineage/types.ts'
 import { CommitCount, useWorkspaceIndex } from '../workspaces/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
-import { AgentMark, ConversationPhase, FeatureTag, useOverview } from '../conversations/ui.tsx'
+import {
+  AgentMark,
+  ConversationPhase,
+  FeatureTag,
+  useOverview,
+  usePrimaryAgent,
+} from '../conversations/ui.tsx'
 import { ago } from './lander.tsx'
 import { useSidebarState } from './state.tsx'
 
@@ -57,22 +64,29 @@ function useBranchState(
 ) {
   const index = useWorkspaceIndex()
   const board = useDocOf(1, BoardDoc) ?? emptyBoard
+  const runState = useOverview()[conversation.id]?.runState
+  const name = usePrimaryAgent()
+  const primary = useDocOf(1, StandingDoc)?.[name]
   const queued = index.queue.find((item) => item.conversationId === conversation.id)
   if (queued?.state === 'landing') return { label: 'landing', tone: 'success' } as const
   if (queued) return { label: 'submitted', tone: 'success' } as const
-  if (working)
+  // The sidebar's one conversation state; `working` also counts its subagents' runs.
+  const state = working
+    ? 'working'
+    : conversationState({ id: conversation.id, kind: 'other', runState, primary }, board)
+  if (state === 'working')
     return {
       label: phase && !phase.waiting ? phase.word : 'working',
       tone: 'brand',
     } as const
-  // A branch's decisions reach you through @ultimate: an open question it asked (an approval, a choice) waits on an
-  // answer from @ultimate or you.
-  if (board.messages.some((message) => message.from === conversation.id && isOpen(message)))
-    return { label: 'awaiting reply', tone: 'waiting' } as const
+  // A branch's decisions reach you through @ultimate: an open question it asked (an approval, a choice).
+  if (state === 'awaiting') return { label: 'awaiting @ultimate', tone: 'waiting' } as const
+  if (state === 'failed') return { label: 'failed', tone: 'failed' } as const
   return { label: 'idle', tone: 'quiet' } as const
 }
 
 const tones = {
+  failed: 'text-error',
   success: 'text-success',
   brand: 'text-brand',
   waiting: 'text-amber-700 dark:text-amber-300',
@@ -130,7 +144,9 @@ function PhasedFlightRow({
                   ? 'bg-amber-400'
                   : state.tone === 'success'
                     ? 'bg-success'
-                    : 'bg-muted-foreground/40',
+                    : state.tone === 'failed'
+                      ? 'bg-error'
+                      : 'bg-muted-foreground/40',
             )}
           />
           <span

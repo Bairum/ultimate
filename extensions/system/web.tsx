@@ -15,7 +15,6 @@ import {
   useUltimate,
 } from '@/sdk'
 import { AnswerWaits, BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
-import type { ConversationState } from '../board/ui.tsx'
 import { useOverview, usePrimaryAgent } from '../conversations/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { LaneTree } from './hierarchy.tsx'
@@ -44,18 +43,21 @@ function useStates() {
   const conversations = useConversations()
   const name = usePrimaryAgent()
   const primary = useDocOf(1, StandingDoc)?.[name]
-  return ({ conversation: id }: Lane, answerWaits: boolean): ConversationState => {
+  return (lane: Lane, answerWaits: boolean) => {
+    const id = lane.conversation
     const own = conversations.find((item) => item.id === id)
-    return conversationState(
+    const state = conversationState(
       {
         id,
         kind: id === primary ? 'primary' : own?.ownerTaskId !== undefined ? 'subagent' : 'other',
         runState: overview[id]?.runState,
+        busy: own?.busy,
         primary,
       },
       board,
       answerWaits,
     )
+    return laneState(lane, state, overview[id] !== undefined)
   }
 }
 
@@ -120,9 +122,7 @@ function Lanes({ answerWaits }: { answerWaits: boolean }) {
   const lanes = useLanes(range, live)
   const stateOf = useStates()
   const list = lanes.data?.lanes ?? []
-  const states = new Map(
-    list.map((lane) => [lane.conversation, laneState(lane, stateOf(lane, answerWaits))]),
-  )
+  const states = new Map(list.map((lane) => [lane.conversation, stateOf(lane, answerWaits)]))
   // A parent listed only to hold its children's place did not work in the window: it is no agent at work.
   const worked = list.filter((lane) => lane.runs.length > 0)
   const running = worked.filter((lane) => states.get(lane.conversation) === 'running').length

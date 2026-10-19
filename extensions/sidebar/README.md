@@ -15,7 +15,7 @@ waits on you). Then a fixed display name (`Ultimate`, `Lander`, `Sync`, else the
 answer when that asks you questions), and the age of its latest
 message. Clicking it opens @ultimate on the Agent surface through `subagents.standing {name: 'ultimate'}`, also before
 its conversation exists. Below it, an Agents group lists the lander first, then the other ownerless top-level standing
-agents (label `agent`) by ID. These rows are never concluded or hidden and show no summary, feature or assessment:
+agents (label `agent`) by ID. These rows are never concluded or hidden and show no summary or feature:
 @lander shows its state (`landing`, `fixing`, `diagnosing`, `working` or `idle`), `queue N` while submissions wait,
 its latest landing's short sha (green) and feature tag (truncated, title on hover), and its age; other agents show `working` or `idle` and the age. Their menu only
 compacts the context; they are never renamed, cleared or concluded.
@@ -30,14 +30,14 @@ on hover, since it described the root's history before it held a context) and th
 
 - **In flight · N**: the tree's open branches, newest input first. A branch is open until it is concluded or it landed
   after its latest input (a landed branch that gets new work is open again). Each shows its title, its feature tag,
-  a state (`submitted` or `landing` while the lander has it, the working phase while it works, amber `awaiting reply`
-  while a reply-enabled message it sent is open, else `idle`) and its age; clicking opens it.
+  a state (`submitted` or `landing` while the lander has it, the working phase while it works, amber `awaiting @ultimate`
+  while a reply-enabled message it sent @ultimate is open, red `failed`, else `idle`) and its age; clicking opens it.
 - **Landed**: the last three landings from lineage's `recent {id, types: ['landed']}`, as the shipped feature's tag
   (its title when it has none, the full title on hover) and a commit count linking the GitHub compare range
   (`CommitCount` from workspaces; no link without a GitHub `origin`), with the age. Clicking the feature opens the root
   at that landing note. `N more` unfolds up to ten; the fold state is kept in `ext.conversations.landingsOpen`.
 
-Notes, new branches and compactions stay on the root's page. The row shows no feature, summary or assessment, and the
+Notes, new branches and compactions stay on the root's page. The row shows no feature or summary, and the
 summary below the tree is not shown for it. Its menu offers Compact context (lineage `compact {id}`, only for a root
 that has a context) and Talk to @ultimate; a root is never renamed, cleared or concluded here. Landings refetch
 whenever the root's token count changes, which every new entry does. The full branch tree folds under
@@ -55,14 +55,16 @@ A solid purple dot means an unread reply, not ongoing work; only the pulsing dot
 
 Every row reads one state from board's `conversationState`, the same the System surface shows: working;
 **waits on you** (only the primary agent, @ultimate or @sync in the machine home: an open question to the user);
-**awaiting @ultimate** (amber question mark: an open reply-expected message the conversation sent another agent);
-**done** (green check, subagents only: it answered, and its answer went to its parent); **failed** (red cross: its
-latest input ended unanswered); else idle. Nothing here is a model's opinion of a reply.
+**awaiting @ultimate** (amber question mark, never on a subagent: an open reply-expected message the conversation sent
+the primary agent); **done** (green check, subagents only: it answered, and its answer went to its parent);
+**failed** (red cross: its latest input ended unanswered); else idle. Working includes queued input. Standing rows,
+the root's In flight list (after the lander's submitted/landing) and the System lanes show the same state. Nothing
+here is a model's opinion of a reply.
 
 A conversation with genuinely owned children has an expandable Sub-agents group; a listed root shows none, since a
 root runs no turns and its children predate its tally (they stay reachable by link and search). Rows show the recorded agent role/name,
-actual Working/Queued/Idle/Replied/Run failed state, and a brief what-it-did description from its latest assessed reply.
-Replied means a run answered, not that its goal is fulfilled. During new work, an old activity is labeled Last reply.
+its state (Working, Done, Failed or Idle, as above), and a brief what-it-did description of its latest reply.
+During new work, an old activity is labeled Last reply.
 A child linked to a plan task leads with the plan's `TaskChip` and shows the task title instead of its activity.
 A row switches to its child, highlights selection and keeps the top-level summary visible. History forks are not
 invented delegation edges. Expansion is persisted in `ext.conversations.expanded`; buttons support keyboard access.

@@ -212,12 +212,30 @@ function Tree({ waiting }: { waiting: number }) {
         : (Object.entries(standingIds ?? {}).find(([, id]) => id === conversation.id)?.[0] ??
           conversation.title?.replace(/^@/, '') ??
           `#${conversation.id}`)
+    const state = conversation
+      ? conversationState(
+          {
+            id: conversation.id,
+            kind: isUltimate ? 'primary' : 'other',
+            runState: overview[conversation.id]?.runState,
+            busy,
+            primary: ultimateId,
+          },
+          board,
+          // `waiting` already counts the open questions; it waits on you exactly when that count is above zero.
+          waiting > 0,
+        )
+      : waiting > 0
+        ? 'waits'
+        : 'idle'
     return (
       <StandingRow
         conversation={conversation}
         key={conversation?.id ?? 'ultimate'}
         name={name}
-        presence={busy || landing ? 'working' : isUltimate && waiting > 0 ? 'waiting' : 'idle'}
+        presence={
+          state === 'working' || landing ? 'working' : state === 'waits' ? 'waiting' : 'idle'
+        }
         onOpen={() =>
           conversation && !isUltimate
             ? actions.switchConversation(conversation.id)
@@ -229,12 +247,14 @@ function Tree({ waiting }: { waiting: number }) {
           <LanderState id={conversation.id} index={workspaceIndex} now={now} working={busy} />
         ) : (
           <>
-            {busy ? (
+            {state === 'working' && conversation ? (
               <StandingPhase id={conversation.id} />
-            ) : isUltimate && waiting > 0 ? (
+            ) : state === 'waits' ? (
               <span className="shrink-0 text-amber-700 dark:text-amber-300">
                 {waiting} waiting on you
               </span>
+            ) : state === 'failed' ? (
+              <span className="shrink-0 text-error">failed</span>
             ) : (
               <span className="shrink-0">idle</span>
             )}
@@ -269,19 +289,22 @@ function Tree({ waiting }: { waiting: number }) {
         />
       )
     const recorded = seen[conversation.id]
-    const state = working.get(conversation.id)
+    const derived = conversationState(
+      {
+        id: conversation.id,
+        kind: 'other',
+        runState: overview[conversation.id]?.runState,
+        busy: conversation.busy,
+        primary: ultimateId,
+      },
+      board,
+    )
+    // Queued input counts as working too; subagents working below it say so.
+    const state = working.get(conversation.id) ?? (derived === 'working' ? 'self' : undefined)
     return (
       <Row
         activity={overview[conversation.id]?.activity}
-        state={conversationState(
-          {
-            id: conversation.id,
-            kind: 'other',
-            runState: overview[conversation.id]?.runState,
-            primary: ultimateId,
-          },
-          board,
-        )}
+        state={derived}
         concluded={hiddenIds.has(conversation.id)}
         conversation={conversation}
         draft={conversation.inputAt === undefined}

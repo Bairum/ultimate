@@ -11,10 +11,15 @@ import type { TreeRow, WindowName } from './layout.ts'
 import type { Lane, LaneRun } from './refs.ts'
 import { clock, KindIcon, TraceTree } from './tree.tsx'
 
-/** Where a lane stands: running by its own open run, else its conversation's settled state. */
+/**
+ * Where a lane stands: its conversation's state, the one the sidebar shows; `known` is false while the conversation has
+ * no overview row yet, when only an open run on the timeline says it runs.
+ */
 export type LaneState = 'running' | Exclude<ConversationState, 'working'>
-export const laneState = (lane: Lane, state: ConversationState): LaneState =>
-  lane.runs.at(-1)?.end === undefined || state === 'working' ? 'running' : state
+export const laneState = (lane: Lane, state: ConversationState, known: boolean): LaneState =>
+  state === 'working' || (!known && lane.runs.length > 0 && lane.runs.at(-1)!.end === undefined)
+    ? 'running'
+    : state
 
 /** A standing agent's name (`ultimate`, `lander`) for its mark and title; undefined for other conversations. */
 export function standingName(lane: Lane, summary: ConversationSummary | undefined) {

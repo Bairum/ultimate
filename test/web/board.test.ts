@@ -240,6 +240,10 @@ describe('conversation state', () => {
     expect(conversationState(branch, board({ from: 5, to: 3, reply: false }))).toBe('idle')
     // A coordinator's question to its own worker waits on no one the user watches.
     expect(conversationState(branch, board({ from: 5, to: 9 }))).toBe('idle')
+    // A subagent's question goes to its parent, which answers it in its own run: it never shows as awaiting.
+    expect(conversationState({ ...branch, kind: 'subagent' }, board({ from: 5, to: 3 }))).toBe(
+      'done',
+    )
   })
 
   it('failed when its latest input ended without an answer', () => {
