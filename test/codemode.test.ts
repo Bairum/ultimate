@@ -561,6 +561,29 @@ it("reads another running project's history through its API, and names a project
   expect(unknown.text).toContain('poe2-rust')
 })
 
+it('lists conversations with their title and cwd, since the prompt no longer does', async () => {
+  const { server } = await fixture()
+  const create = async (title: string) =>
+    ((await post(server, '/api/conversations', { title })).data as { id: number }).id
+  const open = await create('Parser work')
+  const done = await create('Old work')
+  // The conversations extension owns concluding; this fixture loads only codemode, so write its UI state directly.
+  await post(server, '/api/ui', { set: { 'ext.conversations.concluded': [done] } })
+  const result = await run(server, `return await ultimate.conversations()`)
+  expect(result.data.isError).toBe(false)
+  const listed = result.data.details.value as { id: number }[]
+  expect(listed.find((item) => item.id === open)).toMatchObject({
+    title: 'Parser work',
+    cwd: expect.any(String),
+    busy: false,
+  })
+  expect(listed.find((item) => item.id === open)).not.toHaveProperty('concluded')
+  expect(listed.find((item) => item.id === done)).toMatchObject({
+    title: 'Old work',
+    concluded: true,
+  })
+})
+
 it('reads stored history and documents from before a reset', async () => {
   const { server } = await fixture()
   await run(server, `store('saved', 7); return 1;`, 'history-needle')

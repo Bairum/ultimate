@@ -18,7 +18,6 @@ existing extension and change it:
 | A status-line action, an entry renderer over core | `self`                                              |
 | An extension document in the UI (`useDoc`)        | `plan`, `codemode` (renderers), `models` (`useDoc`) |
 | A renderer for your document (Documents tab)      | `plan` (see [Documents](#documents))                |
-| A prompt section from durable UI state            | `surfaces`                                          |
 | Toasts or other global overlays                   | `notices`                                           |
 
 An optional `inbox` renderer wraps each queued composer input with `{ item, core, cancel }`. Return `core` for inputs you do not own; when replacing it, include `cancel` to retain core cancellation. Like entry renderers, the last facet in discovery order wins and runs behind an extension boundary with core fallback. Keep provenance and domain-specific UI in the extension.
@@ -631,8 +630,7 @@ matching the server's port. A plain agent `curl` receives 403; use `ultimate.act
 
 The window shows one surface at a time. **Agent** is the built-in home surface (`extensions/agent`): the conversation
 with the sidebar and the right panel. An app surface puts its own UI first and keeps the agent one keystroke away,
-usually docked beside it. The `surfaces` extension adds the agent's surface-awareness prompt; the UI itself
-works without it. The `documents` extension provides the Documents tab.
+usually docked beside it. The `documents` extension provides the Documents tab.
 
 - **Switching**: the title bar lists the surfaces (Agent first, then by `order`, then title); on phones the brand
   opens them as a menu. ⌘K has "Switch to …"; `mod+1…9` select the first nine (Ctrl+1…9 off macOS, which Chrome lets
@@ -642,12 +640,9 @@ works without it. The `documents` extension provides the Documents tab.
 - **Durable**: the choice is UI state `shell.surface`; it survives reloads and restarts and follows every tab. Until the
   user picks one, a project's `.ultimate/settings.json` (`{ "defaultSurface": "commits" }`) chooses, if that surface
   is installed.
-- **The agent knows**: each top-level conversation's system prompt names the surface ("The user is looking at the
-  Commits surface (commits).", from `extensions/surfaces`), so "this list" in a message means yours. The line changes
-  only when the surface does.
 - **Failure**: if the chosen surface is not installed, or its component throws, Agent shows instead, with a notice; a
   fixed version comes back on its own. If even Agent fails, a bare header, conversation, and status line remain. The
-  prompt, the window title, and `surface` below name what is on screen, so Agent while it stands in.
+  window title and `surface` below name what is on screen, so Agent while it stands in.
 - `useUltimate().surface` and `context.surface` give the id of the surface on screen.
 
 The contribution:

@@ -29,12 +29,11 @@ keeping existing history usable. Typed inputs count without an extension kind li
 such as lineage notes do not.
 
 The `conversations` prompt section goes to every top-level conversation (not a subagent). It names the
-conversation's own id and lists the other top-level conversations that have a message and are not concluded (the web
-reads server-owned concluded ids from UI state `ext.conversations.concluded`): at most the 10 most recently active, listed by id,
-each as `#<id> <title or "untitled">` with its cwd when that differs. It holds no busy state or times, so it changes
-only when that list, a title, or a cwd does, and prompt caches stay warm. It reminds the agent that the others share the
-checkout unless a cwd says otherwise, and how to look at them with codemode's `ultimate.entries(id)` and
-`ultimate.taskGraph()`. Without other conversations there is no section.
+conversation's own id, says other conversations may share the checkout (check `git status`, never revert others'
+changes), and points to codemode's `ultimate.conversations()` (title, cwd, busy, concluded), `ultimate.entries(id)` and
+`ultimate.projects()`. It lists no conversations: its text never changes, because every system prompt change costs the
+prompt cache (on the Claude Code path a full rewrite of the context), and a list changed with every branch start,
+conclude and retitle. Concluded ids live in UI state `ext.conversations.concluded`.
 
 Actions are callable from the browser with `api.action` or by agents with
 `await ultimate.action('conversations', 'conclude', {ids: [N]})` in codemode. The browser never rewrites the concluded
