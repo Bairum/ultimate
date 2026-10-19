@@ -13,6 +13,8 @@ export const READS = ['conversations', 'entries', 'search', 'trace', 'traceTree'
 export type Read = (typeof READS)[number]
 /** At most this much JSON comes back from another project; a larger answer asks for a smaller `limit`. */
 export const READ_BYTES = 1024 * 1024
+/** `codemode.read`'s error on an instance serving standby, which has no storage open. */
+export const STANDBY = 'standby: this instance serves without storage'
 
 type LocalProject = { name: string; root?: string; current: boolean; running?: { url: string } }
 type Target = { current: true } | { url: string; label: string }
@@ -109,6 +111,27 @@ export async function readProject(
     : await fleetDirectory(host, signal)
   const target = resolveProject(project, local, directory)
   if ('current' in target) return undefined
+  let answer = await post(target, op, args, signal)
+  const fleet = answer.standby && directory === undefined && (await fleetDirectory(host, signal))
+  if (fleet) {
+    // A local instance on standby serves no history: the fleet names the machine that writes the project.
+    const parked = local.map((item) =>
+      naming(project)(item) ? { ...item, running: undefined } : item,
+    )
+    const writer = resolveProject(project, parked, fleet)
+    if (!('current' in writer)) answer = await post(writer, op, args, signal)
+  }
+  if (answer.standby) throw new Error(`${project} is on standby here and its writer is unknown`)
+  return { value: answer.value }
+}
+
+/** Ask `target`'s `codemode.read`; `standby` when that instance serves without storage. */
+async function post(
+  target: { url: string; label: string },
+  op: Read,
+  args: JsonValue[],
+  signal?: AbortSignal,
+): Promise<{ value?: unknown; standby?: true }> {
   const response = await fetch(`${target.url}/api/extensions/codemode/actions/read`, {
     method: 'POST',
     // The instance admits its own origin; on the tailnet, Serve's identity header names who asks.
@@ -119,7 +142,7 @@ export async function readProject(
     throw new Error(`${target.label} did not answer at ${target.url}: ${String(error)}`)
   })
   const text = await response.text()
-  if (text.length > READ_BYTES)
+  if (Buffer.byteLength(text) > READ_BYTES)
     throw new Error(`${target.label} answered more than 1 MiB; ask for a smaller limit`)
   const body = (() => {
     try {
@@ -132,6 +155,7 @@ export async function readProject(
     throw new Error(
       `${target.label} refused the read (403): your tailnet login is not in its tailscale.allow`,
     )
+  if (!response.ok && body.error === STANDBY) return { standby: true }
   if (!response.ok) throw new Error(`${target.label}: ${body.error ?? response.status}`)
   return { value: body.result }
 }

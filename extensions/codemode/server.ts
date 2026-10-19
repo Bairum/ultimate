@@ -33,7 +33,7 @@ import { discoverAgents } from '../../lib/agents.ts'
 import { apiSource, apiSummaries } from '../../lib/api-files.ts'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { ActionContext } from '../../server/actions.ts'
-import { READ_BYTES, READS, readProject } from './projects.ts'
+import { READ_BYTES, READS, readProject, STANDBY } from './projects.ts'
 import type { Read } from './projects.ts'
 
 export const Store = defineDoc({
@@ -167,7 +167,7 @@ function globals(
    */
   const read =
     (op: Read, at: number): CodemodeTool['execute'] =>
-    async (values) => {
+    async (values, { signal }) => {
       const args = [...(values as unknown[])]
       const options = args[at]
       const project =
@@ -176,13 +176,8 @@ function globals(
         if (typeof project !== 'string' || !project) throw new Error('project must be nonempty')
         const { project: _project, ...rest } = options as Record<string, unknown>
         args[at] = rest
-        const remote = await readProject(
-          host,
-          project,
-          op,
-          args as JsonValue[],
-          context.abortSignal,
-        )
+        // The call's own signal ends with the script, its timeout or the conversation's abort.
+        const remote = await readProject(host, project, op, args as JsonValue[], signal)
         if (remote) return remote.value
       }
       return reads[op](args)
@@ -356,11 +351,12 @@ export const actions = {
     const { op, args } = (input ?? {}) as { op?: unknown; args?: unknown }
     if (!READS.includes(op as Read)) throw new Error(`op must be one of ${READS.join(', ')}`)
     if (args !== undefined && !Array.isArray(args)) throw new Error('args must be an array')
+    if (host.standby()) throw new Error(STANDBY)
     const value = await localReads(host, withAbortSignal(signal, BACKGROUND_CONTEXT))[op as Read](
       args ?? [],
     )
     const result = JSON.parse(JSON.stringify(value ?? null)) as JsonValue
-    if (JSON.stringify(result).length > READ_BYTES)
+    if (Buffer.byteLength(JSON.stringify(result)) > READ_BYTES)
       throw new Error('The answer is larger than 1 MiB; ask for a smaller limit')
     return result
   },
