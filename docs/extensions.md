@@ -28,7 +28,8 @@ browser code). Then:
   `tx` (files, processes, network) are at least once. A throw rolls back the handler and the cursor, records the
   failure, and retries the event on the next matching commit or harness open. Reactors run while the harness is open
   and stop with their facet; a reloaded facet registering the same name continues from the cursor.
-- `host.eventLog.recent({ events?, since?, limit })` reads the newest first as plain copies; `host.eventLog.reactors()`
+- `host.eventLog.recent({ events?, since?, before?, order?, limit })` reads the newest first (oldest first with
+  `order: 'ascending'`) as plain copies, `since` and `before` exclusive event ids; `host.eventLog.reactors()`
   shows each reactor's cursor, lag and last failure. In the browser, `useEvents({ events?, limit })` from `@/sdk` streams
   the root's feed of the latest 100 events.
 
@@ -155,8 +156,11 @@ answering a login), keep neither, nor an error message, only the error's class. 
 services take or return credentials joins `SEALED` in `server/trace.ts`. Rows go to `<home>/trace.sqlite` in batches outside Pi commits, while
 the harness is open only; retention keeps 7 days and at most 200,000 rows. A trace failure is logged once and never
 fails the call. Read with `host.trace.query({ trace?, conversation?, since?, limit })` (the newest `limit`, oldest
-first) and `host.trace.tree(traceId)` (calls nested under `children`), or codemode's `ultimate.trace(...)` and
-`ultimate.traceTree(traceId)`.
+first), `host.trace.page({ before?, after?, kinds?, conversation?, errors?, text?, limit })` (calls by write
+position `seq`, which is finish order, for paging; the `system` extension's stream uses it) and
+`host.trace.tree(traceId)` (calls nested under `children`), or codemode's `ultimate.trace(...)` and
+`ultimate.traceTree(traceId)`. The `system` extension merges the trace and the event log into one paged stream
+(`extensions/system/README.md`).
 
 ## Inspecting yourself
 

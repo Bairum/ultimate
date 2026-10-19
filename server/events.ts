@@ -62,10 +62,12 @@ export interface EventHost {
     handler: Reactor<EventData<T>>,
   ): void
   eventLog: {
-    /** Newest first, plain copies; `since` is an exclusive event id. */
+    /** Newest first (oldest first with `order: 'ascending'`), plain copies; `since` and `before` are exclusive event ids. */
     recent<T extends EventToken = EventToken>(options?: {
       events?: readonly T[]
       since?: number
+      before?: number
+      order?: 'ascending' | 'descending'
       limit?: number
     }): Promise<EventRecord<EventData<T>>[]>
     reactors(): Promise<ReactorStatus[]>
@@ -256,7 +258,13 @@ export function eventLog(harness: () => Harness, trace: CallTrace['run']) {
   }
 
   async function recent<T extends EventToken = EventToken>(
-    options: { events?: readonly T[]; since?: number; limit?: number } = {},
+    options: {
+      events?: readonly T[]
+      since?: number
+      before?: number
+      order?: 'ascending' | 'descending'
+      limit?: number
+    } = {},
   ) {
     type D = EventData<T>
     const log = (await harness().snapshot(EventLog, ROOT_CONVERSATION_ID, context))?.conversation
@@ -271,6 +279,10 @@ export function eventLog(harness: () => Harness, trace: CallTrace['run']) {
           {
             conversationId: log as ConversationId,
             ...(options.since === undefined ? {} : { minEntryId: (options.since + 1) as EntryId }),
+            ...(options.before === undefined
+              ? {}
+              : { maxEntryId: (options.before - 1) as EntryId }),
+            order: options.order ?? 'descending',
           },
           256,
           cursor,
