@@ -31,9 +31,9 @@ function Tailnet({ project }: { project: Project }) {
   return (
     <Button
       asChild
-      className="h-6 shrink-0 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
+      className="shrink-0 font-normal text-foreground/85 pointer-coarse:h-8"
       size="xs"
-      variant="ghost"
+      variant="outline"
     >
       <a
         aria-label={`Open ${project.name} on ${machine} over the tailnet`}
@@ -41,8 +41,8 @@ function Tailnet({ project }: { project: Project }) {
         href={tailnet}
         title={`Open ${project.name} directly on ${machine}: ${tailnet}`}
       >
-        <NetworkIcon className="size-3 opacity-70" />
-        <span className="max-sm:hidden">Open on tailnet</span>
+        <NetworkIcon className="opacity-70" />
+        Open on tailnet
       </a>
     </Button>
   )
@@ -162,7 +162,7 @@ function Machines({
                   {machine.machine}
                 </span>
               </span>
-              <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 gap-y-1 pl-3.5 sm:pl-1">
+              <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 gap-y-1 max-sm:order-last max-sm:basis-full max-sm:pl-3.5 sm:pl-1">
                 {machine.providers.length ? (
                   machine.providers.map((provider, index) => (
                     <span
@@ -179,7 +179,7 @@ function Machines({
               </span>
               {now - machine.at > STALE && (
                 <span
-                  className="shrink-0 text-[10.5px] text-muted-foreground/60"
+                  className="shrink-0 text-[10.5px] text-muted-foreground/60 max-sm:ml-auto"
                   title={new Date(machine.at).toLocaleString()}
                 >
                   reported {ago(machine.at, now)}
@@ -232,63 +232,75 @@ function moving(transition: Transition | undefined) {
   return `→ ${transition.target} · ${steps[transition.step]}${detail}`
 }
 
+/** The writer with its online dot: `rog`, `haza-pc · offline since 3h`, or `free` while no machine holds the lease. */
+function Writer({ writer, now }: { writer: Project['writer']; now: number }) {
+  const { machine, online, lastSeen } = writer
+  return (
+    <span
+      className="flex min-w-0 shrink-0 items-center gap-1.5"
+      title={
+        machine === null
+          ? 'Free: any standby machine may take it over'
+          : online || lastSeen === undefined
+            ? `Runs on ${machine}`
+            : `Last seen ${new Date(lastSeen).toLocaleString()}`
+      }
+    >
+      <span
+        className={cn(
+          'size-1.5 shrink-0 rounded-full',
+          online ? 'bg-success' : 'bg-muted-foreground/40',
+        )}
+      />
+      {machine === null ? (
+        <span className="text-muted-foreground">free</span>
+      ) : (
+        <span className="truncate text-foreground/85">{machine}</span>
+      )}
+      {machine !== null && !online && (
+        <span className="truncate text-muted-foreground/70">
+          · offline{lastSeen === undefined ? '' : ` since ${age(lastSeen, now)}`}
+        </span>
+      )}
+    </span>
+  )
+}
+
 function Row({ project, now }: { project: Project; now: number }) {
-  const { writer } = project
-  const { lastSeen } = writer
   const standbys = project.machines.filter((machine) => machine.role === 'standby')
   const step = moving(project.transition)
   return (
-    <li className="flex items-center">
-      <div className="flex min-w-0 flex-1 flex-col gap-1 px-3 py-2.5 pointer-coarse:py-3">
-        <span className="flex min-w-0 items-center gap-2">
+    <li className="flex flex-col gap-1.5 px-3 py-2.5 pointer-coarse:py-3">
+      <span className="flex min-w-0 items-center gap-3">
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-[13px] font-medium text-foreground">{project.name}</span>
           <span
-            className={cn(
-              'size-1.5 shrink-0 rounded-full',
-              writer.online ? 'bg-success' : 'bg-muted-foreground/40',
-            )}
-          />
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
-            {project.name}
-          </span>
-          <span
-            className="min-w-0 shrink truncate font-mono text-[11px] text-muted-foreground"
-            title={
-              writer.machine === null
-                ? 'Free: any standby machine may take it over'
-                : writer.online || lastSeen === undefined
-                  ? undefined
-                  : `Last seen ${new Date(lastSeen).toLocaleString()}`
-            }
+            className="truncate font-mono text-[10.5px] text-muted-foreground/70"
+            title={project.key}
           >
-            {writer.machine === null
-              ? 'free'
-              : writer.online
-                ? `runs on ${writer.machine}`
-                : `${writer.machine} · offline${lastSeen === undefined ? '' : ` since ${ago(lastSeen, now)}`}`}
-          </span>
-        </span>
-        <span className="flex min-w-0 items-center gap-3 pl-3.5 font-mono text-[10.5px] text-muted-foreground/70">
-          <span className="min-w-0 flex-1 truncate" title={project.key}>
             {project.key}
           </span>
-          {standbys.map((machine) => (
-            <span
-              className="shrink-0 rounded-sm border border-border/60 px-1 text-[10px] leading-4 text-muted-foreground/70"
-              key={machine.machine}
-              title={`Standby, ${machine.connected ? 'connected' : `last seen ${ago(machine.lastSeen, now)}`}`}
-            >
-              {machine.machine}
-            </span>
-          ))}
         </span>
-        {step && (
-          <span className="flex min-w-0 items-center gap-1.5 pl-3.5 font-mono text-[11px] text-brand">
-            <LoaderCircleIcon className="size-3 shrink-0 animate-spin" />
-            <span className="truncate">{step}</span>
+        <Tailnet project={project} />
+      </span>
+      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px]">
+        <Writer now={now} writer={project.writer} />
+        {standbys.map((machine) => (
+          <span
+            className="shrink-0 rounded-sm border border-border/60 px-1 text-[10px] leading-4 text-muted-foreground/70"
+            key={machine.machine}
+            title={`Standby, ${machine.connected ? 'connected' : `last seen ${ago(machine.lastSeen, now)}`}`}
+          >
+            {machine.machine}
           </span>
-        )}
-      </div>
-      <Tailnet project={project} />
+        ))}
+      </span>
+      {step && (
+        <span className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-brand">
+          <LoaderCircleIcon className="size-3 shrink-0 animate-spin" />
+          <span className="truncate">{step}</span>
+        </span>
+      )}
     </li>
   )
 }
@@ -343,7 +355,7 @@ function Front() {
         <header>
           <h1 className="text-[15px] font-medium text-foreground">Projects</h1>
           <p className="mt-1 text-[13px] text-muted-foreground">
-            Every project that syncs here, and the machine it runs on. Open one on the tailnet to
+            Every project that syncs here and the machine it runs on. Open one on the tailnet to
             continue where it left off.
           </p>
         </header>
@@ -365,11 +377,11 @@ function Front() {
         )}
         {directory.state === 'loaded' && !directory.rows.length && (
           <Message>
-            No projects yet. Configure{' '}
+            No projects yet: set up cloud sync on a machine (see New machine in{' '}
             <code className="rounded-sm bg-muted px-1 font-mono text-[12px] text-foreground/85">
-              cloud.url
-            </code>{' '}
-            and start Ultimate in a checkout with a GitHub origin.
+              cloud/README.md
+            </code>
+            )
           </Message>
         )}
         {directory.state === 'loaded' && directory.rows.length > 0 && (
