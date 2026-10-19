@@ -39,11 +39,14 @@ The note's delivery decision is saved in the task input for replay.
 A one-way message or a reply from a conversation to the primary agent (@ultimate, or @sync in the machine home)
 is triaged, so pure status updates cost no turn. The log records `triage: { verdict, reason? }` on the message:
 
-- **act at once, no model:** a reply-enabled message; text whose last line is a question or numbered options; a
-  failed reply; a reply to the agent's own message that ended with a question or options.
+- **act at once, no model:** a reply-enabled message; text whose last line is a question or numbered options; text
+  longer than `TRIAGE_MAX` (24,000 characters), which is never cut for the model; a failed reply; a reply to the
+  agent's own message that ended with a question or options (read from the task input, so the log's bound never
+  drops it).
 - **otherwise:** the message is written into the conversation as context (a `board.message` or `board.reply` write
   with the model text, no run) with verdict `assessing`. The delivery task asks `summaryModel` with
-  `TRIAGE_SYSTEM` (`triage.ts`), memoizing the model and response so a resumed task asks once. `act` (a decision,
+  `TRIAGE_SYSTEM` (`triage.ts`), memoizing the model, the response and the verdict (a failed assessment too), so a
+  resumed task asks once, decides the same, and accounts the usage once. `act` (a decision,
   question, landing or result to relay, failure, blocker or request) submits one short `board.wake` input that
   points at the message; `fyi` (progress, queued, still waiting) starts nothing, and the agent reads it with its
   next input. A failed or timed-out (30 s) assessment acts, so the agent wakes as without triage; without a

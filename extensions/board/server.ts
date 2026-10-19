@@ -237,17 +237,32 @@ async function settleTriage(
   model: SummaryModel,
   ctx: Context,
 ) {
-  const { verdict, response } = await assess(
-    host,
-    runtime,
-    model,
-    { kind: input.kind, from: input.fromLabel, text: input.text },
-    ctx,
-  )
+  // The verdict is a memo, so a replay after a failed or timed-out assessment wakes as decided, never reassesses.
+  let verdict = await runtime.memo<Verdict>('triage-verdict', ctx)
+  if (!verdict) {
+    const assessed = await assess(
+      host,
+      runtime,
+      model,
+      { kind: input.kind, from: input.fromLabel, text: input.text },
+      ctx,
+    )
+    verdict = await runtime.memo('triage-verdict', assessed.verdict, ctx)
+    // Usage commits with the verdict's record, once: `recordTriage` writes only while the message is assessing.
+    const response = assessed.response
+    await runtime.commit(async (tx) => {
+      const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+        (m) => m.id === input.id,
+      )
+      if (stored?.triage?.verdict === 'assessing')
+        await host.need(ConversationsApi).accountResponse(tx, recipient.id, response)
+      return undefined
+    }, ctx)
+  }
   // The verdict commits before the wake, so the row shows it while the run starts.
+  const decided = verdict
   await runtime.commit(async (tx) => {
-    await host.need(ConversationsApi).accountResponse(tx, recipient.id, response)
-    await recordTriage(host, tx, input.id, verdict)
+    await recordTriage(host, tx, input.id, decided)
     return undefined
   }, ctx)
   if (verdict.verdict === 'fyi') return undefined
@@ -472,16 +487,13 @@ function delivery(host: ExtensionHost) {
           // question acts at once; another reply goes in as context and wakes it only when the summary model says act.
           const triaged = m.to === (await primaryConversation(host, ctx))
           let sure: Verdict | undefined
-          if (triaged) {
-            const asked = (
-              await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, ctx)
-            )?.messages.find((item) => item.id === m.re)?.text
+          if (triaged)
+            // The task input keeps the message this replies to, so the log's bound never drops it.
             sure =
               declared(m.text, failed) ??
-              (asked !== undefined && needsDecision(asked)
+              (needsDecision(task.input.message.text)
                 ? { verdict: 'act', reason: 'answers your question' }
                 : undefined)
-          }
           const triager = triaged && !sure ? await triageModel(host, runtime, ctx) : undefined
           if (triaged)
             await runtime.commit(async (tx) => {

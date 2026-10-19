@@ -16,10 +16,14 @@ export function needsDecision(text: string) {
 
 export type Verdict = { verdict: 'act' | 'fyi'; reason: string }
 
-/** What the sender already declared, without asking a model: a decision or a failure always acts. */
+/** The longest message triage assesses whole; a longer one acts, since a cut could hide its conclusion. */
+export const TRIAGE_MAX = 24_000
+
+/** What the sender already declared, without asking a model: a decision, a failure or a very long message acts. */
 export function declared(text: string, failed = false): Verdict | undefined {
   if (failed) return { verdict: 'act', reason: 'the delivery failed' }
   if (needsDecision(text)) return { verdict: 'act', reason: 'asks for a decision' }
+  if (text.length > TRIAGE_MAX) return { verdict: 'act', reason: 'too long to assess' }
   return undefined
 }
 
@@ -47,5 +51,5 @@ export function parseVerdict(text: string): Verdict {
 
 /** The triage request: who sent what kind of message, all of it data. */
 export function triageInput(kind: 'message' | 'reply' | 'note', from: string, text: string) {
-  return JSON.stringify({ kind, from, untrustedMessage: text.slice(0, 6000) })
+  return JSON.stringify({ kind, from, untrustedMessage: text })
 }

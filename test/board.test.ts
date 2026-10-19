@@ -1362,3 +1362,70 @@ it('leaves an FYI reply to @ultimate as context', async () => {
   ).toHaveLength(0)
   view.dispose()
 })
+it('keeps a failed assessment across a restart: it wakes once and never reassesses', async () => {
+  let asked = 0
+  const held = gate()
+  const f = await fixture(undefined, undefined, async () => {
+    asked++
+    // The first assessment fails after the verdict could be memoized; a reassessment would say fyi.
+    if (asked === 1) {
+      await held.promise
+      return 'not json'
+    }
+    return JSON.stringify({ verdict: 'fyi', reason: 'reassessed' })
+  })
+  const recipient = await f.opened.harness.conversation(f.recipient.id, context)
+  await (
+    await recipient!.submit(
+      {
+        type: 'input',
+        content: `SEND ${JSON.stringify({ to: '#1', text: 'Merged it.', reply: false })}`,
+      },
+      context,
+    )
+  ).wait(context)
+  await until(async () => asked === 1)
+  held.release()
+  await until(async () => (await f.log())!.messages[0]?.triage?.verdict === 'act')
+  await f.opened.close()
+  await f.open()
+  await f.opened.root.waitForIdle(context)
+  const view = await f.opened.root.viewState(context)
+  expect(view.value.entries.filter((e) => e.kind === 'board.wake')).toHaveLength(1)
+  view.dispose()
+  expect(asked).toBe(1)
+  expect((await f.log())!.messages[0].triage).toEqual({
+    verdict: 'act',
+    reason: 'assessment failed; woke as usual',
+  })
+})
+it('acts on a reply to a question even after the log dropped the question', async () => {
+  let asked = 0
+  const g = gate()
+  const held = await fixture(g, undefined, () => {
+    asked++
+    return JSON.stringify({ verdict: 'fyi', reason: 'wrong' })
+  })
+  await held.send(`#${held.recipient.id}`, 'Ship it?\n1. Yes\n2. No')
+  await until(async () => (await held.log())!.messages.length === 2)
+  // The bounded log drops the question before the reply is delivered.
+  await held.opened.harness.commit(async (tx) => {
+    const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
+    log.messages = log.messages.filter((m) => m.re !== undefined)
+  }, context)
+  g.release()
+  await until(async () => (await held.log())!.messages[0]?.triage?.verdict === 'act')
+  expect((await held.log())!.messages[0].triage?.reason).toBe('answers your question')
+  expect(asked).toBe(0)
+})
+it('acts on a message too long to assess whole, without asking the model', async () => {
+  let asked = 0
+  const f = await fixture(undefined, undefined, () => {
+    asked++
+    return JSON.stringify({ verdict: 'fyi', reason: 'wrong' })
+  })
+  const { message, runs } = await triaged(f, `${'Status. '.repeat(3100)}Blocked on the lander.`)
+  expect(message.triage).toEqual({ verdict: 'act', reason: 'too long to assess' })
+  expect(asked).toBe(0)
+  expect(runs).toBe(1)
+})
