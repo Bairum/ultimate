@@ -87,6 +87,27 @@ export function chatRows(
   return rows
 }
 
+/**
+ * Ranges `[after, before)` of stored history a fresh window starting at `older` does not cover, with `loaded` the rows
+ * already shown below it:
+ * - after a head marker, the window skips superseded markers newer than `older`; it is not in id order, the marker
+ *   coming first, so the range reaches past its newest entry;
+ * - rows kept from before a resync can end well below the new window.
+ */
+export function windowGaps(
+  window: readonly EntryRecord[],
+  older: number,
+  loaded: readonly EntryRecord[],
+): [number, number][] {
+  const gaps: [number, number][] = []
+  if (window[0]?.head !== undefined)
+    gaps.push([older, Math.max(...window.map((entry) => entry.id)) + 1])
+  let below = 0
+  for (const entry of loaded) if (entry.id < older) below = Math.max(below, entry.id)
+  if (below && below + 1 < older) gaps.push([below + 1, older])
+  return gaps
+}
+
 /** The folded run where `entry` first shows, if it starts in one: revealing the entry opens it. */
 export function runOf(rows: readonly (ChatPart | WorkRun)[], entry: number) {
   const first = rows.find((row) =>

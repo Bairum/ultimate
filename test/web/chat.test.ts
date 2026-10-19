@@ -1,6 +1,6 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
-import { chatRows, runOf } from '../../web/src/app/chat.ts'
+import { chatRows, runOf, windowGaps } from '../../web/src/app/chat.ts'
 import type { ChatPart, WorkRun } from '../../web/src/app/chat.ts'
 
 let nextId = 1
@@ -137,5 +137,26 @@ describe('revealing a chat entry', () => {
     )
     expect(shape(rows)).toEqual(['1', '[2:0] ×1', '2:1'])
     expect(runOf(rows, 2)).toBe(rows[1])
+  })
+})
+
+const at = (id: number, head?: number) => ({ id, head }) as unknown as EntryRecord
+
+describe('windowGaps', () => {
+  it('reads past the window head to the newest kept entry after consecutive compactions', () => {
+    // The second compaction (500) heads the window; the first (450) was superseded, newer than `older` and left out.
+    const window = [at(500, 300), at(400), at(401), at(499)]
+    const [range] = windowGaps(window, 400, [])
+    expect(range).toEqual([400, 501])
+    expect(range[0] <= 450 && 450 < range[1]).toBe(true)
+  })
+
+  it('bridges rows kept from before a resync to the new window', () => {
+    expect(windowGaps([at(900), at(901)], 900, [at(700), at(705)])).toEqual([[706, 900]])
+  })
+
+  it('leaves a contiguous window without a head marker alone', () => {
+    expect(windowGaps([at(900), at(901)], 900, [at(899)])).toEqual([])
+    expect(windowGaps([at(900), at(901)], 900, [])).toEqual([])
   })
 })

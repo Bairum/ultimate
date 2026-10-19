@@ -59,7 +59,7 @@ import {
 import { entryRenderers, messageItems } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary } from './boundary.tsx'
-import { chatRows, runOf } from './chat.ts'
+import { chatRows, runOf, windowGaps } from './chat.ts'
 import { useFold } from './fold.tsx'
 import type { ChatPart, WorkRun } from './chat.ts'
 import { column } from './layout.ts'
@@ -166,6 +166,7 @@ function TranscriptEntries() {
   const { id, entries: active, older, live, busy, loading } = useConversation()
   const [history, setHistory] = useState<EntryRecord[]>([])
   const previousActive = useRef(active)
+  const previousOlder = useRef<number>(undefined)
   const [tailSpace, setTailSpace] = useState(0)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
@@ -185,9 +186,10 @@ function TranscriptEntries() {
     toolCallId?: string
     top: number
   } | null>(null)
-  // Ranges of stored history the window does not cover: discarded markers after a head marker, and what arrived while a
-  // reconnect was away. Filled once per range, by its `after:before` key.
+  // Ranges of stored history a fresh window does not cover: discarded markers after a head marker, and what arrived
+  // while a reconnect was away. Filled once per range, by its `after:before` key; failed ones wait for Retry.
   const filled = useRef(new Set<string>())
+  const failed = useRef<[number, number][]>([])
   const [filling, setFilling] = useState(0)
   const sentinel = useRef<HTMLDivElement>(null)
   const { contentRef, scrollRef, stopScroll } = useStickToBottomContext()
@@ -219,19 +221,19 @@ function TranscriptEntries() {
         })
       } catch (failure) {
         filled.current.delete(key)
+        failed.current.push([after, upTo])
         setError(failure instanceof Error ? failure.message : String(failure))
       } finally {
         setFilling((count) => count - 1)
       }
     })()
   })
-  /** The newest loaded entry older than the window, from paged history or rows a resync dropped. */
-  const newestBelow = useEffectEvent((bound: number, dropped: readonly EntryRecord[]) => {
-    let newest = 0
-    for (const entry of [...history, ...dropped])
-      if (entry.id < bound) newest = Math.max(newest, entry.id)
-    return newest
-  })
+  // Retry clears the error; failed fills then run again, and the sentinel pages on.
+  const retry = () => setError('')
+  useEffect(() => {
+    if (!error) for (const [after, upTo] of failed.current.splice(0)) fill(after, upTo)
+  }, [error])
+  const loadedBelow = useEffectEvent((dropped: readonly EntryRecord[]) => [...history, ...dropped])
   useLayoutEffect(() => {
     const current = new Set(active.map((entry) => entry.id))
     const dropped = previousActive.current.filter((entry) => !current.has(entry.id))
@@ -256,22 +258,21 @@ function TranscriptEntries() {
         for (const entry of dropped) rows.set(entry.id, entry)
         return [...rows.values()]
       })
-    if (older !== undefined && active.length) {
-      // After a head marker, the window skips superseded markers newer than `older`: read that range as stored.
-      if (active[0].head !== undefined) fill(older, active.at(-1)!.id + 1)
-      // Rows kept from before a resync can end well below the new window: read what lies between.
-      const below = newestBelow(older, dropped)
-      if (below) fill(below + 1, older)
-    }
+    // A fresh window (a new `older`; appends keep it) can leave stored history uncovered.
+    if (older !== undefined && older !== previousOlder.current && active.length)
+      for (const [after, upTo] of windowGaps(active, older, loadedBelow(dropped))) fill(after, upTo)
+    previousOlder.current = older
     previousActive.current = active
   }, [active, older])
   useEffect(() => () => request.current?.abort(), [])
   useLayoutEffect(() => {
     if (anchor.current && scrollRef.current) {
       const { entryId, last, toolCallId: callId, top } = anchor.current
+      // A folded run's row is found by its last entry: a page that reaches into the run gives it an earlier first one.
       const entry =
-        contentRef.current?.querySelector(`[data-entry-id="${entryId}"]`) ??
-        (last === undefined ? null : contentRef.current?.querySelector(`[data-run-last="${last}"]`))
+        last === undefined
+          ? contentRef.current?.querySelector(`[data-entry-id="${entryId}"]`)
+          : contentRef.current?.querySelector(`[data-run-last="${last}"]`)
       const tool =
         callId === undefined
           ? undefined
@@ -318,8 +319,9 @@ function TranscriptEntries() {
           )
           .map((entry) => entry.id),
       )
+      // Top-level rows only: a row inside an opened run shares its id with the run's own row.
       const candidates = [
-        ...(contentRef.current?.querySelectorAll('[data-entry-id]') ?? []),
+        ...(contentRef.current?.querySelectorAll(':scope > [data-entry-id]') ?? []),
       ].filter(
         (row) =>
           row.getBoundingClientRect().bottom >
@@ -508,7 +510,7 @@ function TranscriptEntries() {
                 <span className="text-error">Could not load earlier messages</span>
                 <Button
                   className="h-6 cursor-pointer px-2 font-mono text-[11px]"
-                  onClick={() => setError('')}
+                  onClick={retry}
                   size="sm"
                   variant="ghost"
                 >
