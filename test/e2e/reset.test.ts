@@ -63,6 +63,22 @@ it('moves the state into a backup folder and keeps worktrees and project.json', 
   expect(await readFile(join(home, 'worktrees', '7', 'keep.txt'), 'utf8')).toBe('work')
 })
 
+it('keeps Ultimate from starting on a home an interrupted reset left half moved', async () => {
+  const { user, project, home } = await fixture()
+  await writeFile(
+    join(home, 'reset.json'),
+    JSON.stringify({ backup: '/b', cloud: false, phase: 'moving' }),
+  )
+  const started = await run(process.execPath, [resolve('bin/ultimate.ts'), project, '--no-open'], {
+    env: cleanEnv({ HOME: user }),
+  }).catch((error: { code: number; stderr: string }) => error)
+  expect(started).toMatchObject({
+    code: 1,
+    stderr: expect.stringContaining(`A reset of ${home} was interrupted`),
+  })
+  expect(existsSync(join(home, 'storage.lock'))).toBe(false)
+})
+
 it('refuses a home that still holds the cloud lease, released or not', async () => {
   const { user, project, home } = await fixture()
   await writeFile(join(home, 'cloud-lease.json'), JSON.stringify({ key: 'k', epoch: 3 }))

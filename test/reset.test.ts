@@ -48,7 +48,7 @@ it('finishes an interrupted reset into the same backup, then installs the record
   const again = await plan(path, backups, new Date(Date.now() + 60_000))
   expect(again).toMatchObject({ resumes: true, backup: first.backup, cloud: true })
   expect(again.moves.toSorted()).toEqual(['conversations.json', 'state.sqlite-wal'])
-  expect(await apply(again)).toBe(first.backup)
+  expect(await apply(again)).toEqual({ backup: first.backup, cloud: true })
 
   expect((await readdir(first.backup)).toSorted()).toEqual([
     'conversations.json',

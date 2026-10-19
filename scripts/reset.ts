@@ -143,7 +143,7 @@ export async function apply(p: Plan) {
     await write('installing')
     if (cloud && existsSync(fresh)) await rename(fresh, join(p.home, 'state.sqlite'))
     await rm(join(p.home, JOURNAL))
-    return backup
+    return { backup, cloud }
   } finally {
     await lock.close()
   }
@@ -225,16 +225,16 @@ async function main() {
     prompt.close()
     if (!/^y(es)?$/i.test(answer.trim())) return console.log('Nothing changed.')
   }
-  const backup = await apply(p)
+  const { backup, cloud } = await apply(p)
   console.log(`\nMoved to ${backup}.`)
-  if (p.cloud)
+  if (cloud)
     console.log(
       'Cloud sync: after you start Ultimate, click Move here once; it takes the project with this fresh state.\n' +
         'The old history now lives only in this backup folder and in older cloud backups until they are pruned.',
     )
   console.log(
     `To restore: stop Ultimate, then\n  mv ${join(backup, '*')} ${home}/\n` +
-      (p.cloud
+      (cloud
         ? `  (cloud-lease.json then no longer matches; Move here downloads the last snapshot)\n`
         : ''),
   )
