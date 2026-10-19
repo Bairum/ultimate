@@ -60,6 +60,7 @@ import { entryRenderers, messageItems } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary } from './boundary.tsx'
 import { chatRows, runOf } from './chat.ts'
+import { useFold } from './fold.tsx'
 import type { ChatPart, WorkRun } from './chat.ts'
 import { column } from './layout.ts'
 import { indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
@@ -177,7 +178,17 @@ function TranscriptEntries() {
     ? undefined
     : (before ?? older ?? (active[0]?.head === undefined ? undefined : active.at(-1)?.id))
   const request = useRef<AbortController | null>(null)
-  const anchor = useRef<{ entryId: number; toolCallId?: string; top: number } | null>(null)
+  const anchor = useRef<{
+    entryId: number
+    /** The last entry of a folded run: its row keeps that id when a page brings earlier entries into the run. */
+    last?: number
+    toolCallId?: string
+    top: number
+  } | null>(null)
+  // Ranges of stored history the window does not cover: discarded markers after a head marker, and what arrived while a
+  // reconnect was away. Filled once per range, by its `after:before` key.
+  const filled = useRef(new Set<string>())
+  const [filling, setFilling] = useState(0)
   const sentinel = useRef<HTMLDivElement>(null)
   const { contentRef, scrollRef, stopScroll } = useStickToBottomContext()
   // Retain already displayed rows when a live compaction replaces the active context, or a fresh window moves past them.
@@ -187,9 +198,43 @@ function TranscriptEntries() {
     for (const entry of active) rows.set(entry.id, entry)
     return [...rows.values()].toSorted((a, b) => a.id - b.id)
   }, [history, active])
+  /** Read every stored entry from `after` up to `upTo`, once per range, into the loaded history. */
+  const fill = useEffectEvent((after: number, upTo: number) => {
+    const key = `${after}:${upTo}`
+    if (id === undefined || after >= upTo || filled.current.has(key)) return
+    filled.current.add(key)
+    setFilling((count) => count + 1)
+    void (async () => {
+      try {
+        const rows: EntryRecord[] = []
+        for (let next: number | undefined = upTo; next !== undefined;) {
+          const page = await api.history(id, next, undefined, after)
+          rows.push(...page.entries)
+          next = page.before
+        }
+        setHistory((previous) => {
+          const merged = new Map(previous.map((entry) => [entry.id, entry]))
+          for (const entry of rows) merged.set(entry.id, entry)
+          return [...merged.values()]
+        })
+      } catch (failure) {
+        filled.current.delete(key)
+        setError(failure instanceof Error ? failure.message : String(failure))
+      } finally {
+        setFilling((count) => count - 1)
+      }
+    })()
+  })
+  /** The newest loaded entry older than the window, from paged history or rows a resync dropped. */
+  const newestBelow = useEffectEvent((bound: number, dropped: readonly EntryRecord[]) => {
+    let newest = 0
+    for (const entry of [...history, ...dropped])
+      if (entry.id < bound) newest = Math.max(newest, entry.id)
+    return newest
+  })
   useLayoutEffect(() => {
-    const kept = new Set(active.map((entry) => entry.id))
-    const dropped = previousActive.current.filter((entry) => !kept.has(entry.id))
+    const current = new Set(active.map((entry) => entry.id))
+    const dropped = previousActive.current.filter((entry) => !current.has(entry.id))
     if (
       active.some(
         (entry) =>
@@ -211,13 +256,22 @@ function TranscriptEntries() {
         for (const entry of dropped) rows.set(entry.id, entry)
         return [...rows.values()]
       })
+    if (older !== undefined && active.length) {
+      // After a head marker, the window skips superseded markers newer than `older`: read that range as stored.
+      if (active[0].head !== undefined) fill(older, active.at(-1)!.id + 1)
+      // Rows kept from before a resync can end well below the new window: read what lies between.
+      const below = newestBelow(older, dropped)
+      if (below) fill(below + 1, older)
+    }
     previousActive.current = active
   }, [active, older])
   useEffect(() => () => request.current?.abort(), [])
   useLayoutEffect(() => {
     if (anchor.current && scrollRef.current) {
-      const { entryId, toolCallId: callId, top } = anchor.current
-      const entry = contentRef.current?.querySelector(`[data-entry-id="${entryId}"]`)
+      const { entryId, last, toolCallId: callId, top } = anchor.current
+      const entry =
+        contentRef.current?.querySelector(`[data-entry-id="${entryId}"]`) ??
+        (last === undefined ? null : contentRef.current?.querySelector(`[data-run-last="${last}"]`))
       const tool =
         callId === undefined
           ? undefined
@@ -253,10 +307,13 @@ function TranscriptEntries() {
       const page = await api.history(id, cursor, controller.signal)
       if (controller.signal.aborted) return
       const { calls: mergedCalls } = indexTools([...entries, ...page.entries])
+      // Rows older than the page, such as a head marker shown first, stay above it: anchor a row the page goes above.
+      const newest = Math.max(0, ...page.entries.map((entry) => entry.id))
       const survivors = new Set<number>(
         entries
           .filter(
             (entry) =>
+              entry.id > newest &&
               !(entry.kind === 'pi.tool-result' && mergedCalls.has(toolCallId(entry) ?? '')),
           )
           .map((entry) => entry.id),
@@ -276,6 +333,7 @@ function TranscriptEntries() {
       if (element) {
         anchor.current = {
           entryId: Number(element.getAttribute('data-entry-id')),
+          last: Number(element.getAttribute('data-run-last')) || undefined,
           top: element.getBoundingClientRect().top,
         }
       } else if (candidates[0]) {
@@ -385,13 +443,17 @@ function TranscriptEntries() {
   const rows: (ChatPart | WorkRun)[] = chat
     ? chatRows(visible, keeps)
     : visible.map((entry) => ({ entry }))
-  // Folded runs the reader or a reveal opened, by the key of their first part.
+  // Folded runs the reader or a reveal opened, by the keys of all their parts: a run that gains earlier entries from a
+  // page, or later ones live, stays open.
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set())
-  const open = (key: string, value: boolean) =>
+  const isOpen = (run: WorkRun) => run.work.some((part) => opened.has(partKey(part)))
+  const open = (run: WorkRun, value: boolean) =>
     setOpened((keys) => {
       const next = new Set(keys)
-      if (value) next.add(key)
-      else next.delete(key)
+      for (const part of run.work) {
+        if (value) next.add(partKey(part))
+        else next.delete(partKey(part))
+      }
       return next
     })
   // Reveal a stored row without the auto-follow animation overriding the jump; a row older than those loaded needs the
@@ -409,14 +471,18 @@ function TranscriptEntries() {
       setReveal(undefined)
       return
     }
-    if (cursor !== undefined && reveal < cursor && reveal < (entries[0]?.id ?? Infinity)) {
-      void loadDown(reveal)
-      return
+    if (!entries.some((entry) => entry.id === reveal)) {
+      if (cursor !== undefined && reveal < cursor) {
+        void loadDown(reveal)
+        return
+      }
+      // Inside the window's range: a fill still reading it brings it.
+      if (filling) return
     }
     // Open its folded run first; the next commit scrolls.
     const run = chat && runOf(rows, reveal)
-    if (run && !opened.has(partKey(run.work[0]))) {
-      open(partKey(run.work[0]), true)
+    if (run && !isOpen(run)) {
+      open(run, true)
       return
     }
     const element = contentRef.current?.querySelector(`[data-entry-id="${reveal}"]`)
@@ -426,7 +492,7 @@ function TranscriptEntries() {
     }
     setReveal(undefined)
   })
-  useLayoutEffect(() => revealStep(), [reveal, loading, pending, error, history, opened])
+  useLayoutEffect(() => revealStep(), [reveal, loading, pending, error, history, opened, filling])
   return (
     <TranscriptContext value={entries}>
       {!loading && entries.length > 0 && cursor !== undefined && (
@@ -460,12 +526,13 @@ function TranscriptEntries() {
             className="empty:hidden"
             data-conversation-id={id}
             data-entry-id={row.work[0].entry.id}
+            data-run-last={row.work.at(-1)!.entry.id}
             key={partKey(row.work[0])}
           >
             <WorkRow
               busy={busy}
-              onOpenChange={(value) => open(partKey(row.work[0]), value)}
-              open={opened.has(partKey(row.work[0]))}
+              onOpenChange={(value) => open(row, value)}
+              open={isOpen(row)}
               results={results}
               run={row}
               slots={slots}
@@ -688,7 +755,9 @@ function coreEntry(
         />
       ) : null
     case 'pi.system':
-      return message?.role === 'system' ? <SystemDivider message={message} /> : null
+      return message?.role === 'system' ? (
+        <SystemDivider entry={entry.id} message={message} />
+      ) : null
     case 'pi.compaction':
       return <CompactionView entry={entry} />
     case 'pi.reset':
@@ -954,7 +1023,9 @@ function Divider({ children, className }: { children: ReactNode; className?: str
   )
 }
 
-function SystemDivider({ message }: { message: SystemMessage }) {
+function SystemDivider({ entry, message }: { entry: number; message: SystemMessage }) {
+  // In a chat its open state is kept like a card's; elsewhere it opens and closes on its own.
+  const fold = useFold(entry)
   const sections = Object.entries(message.sections ?? {})
   const added = message.toolsAdded?.map((tool) => tool.name) ?? []
   const removed = message.toolsRemoved?.map((tool) => tool.name) ?? []
@@ -964,7 +1035,10 @@ function SystemDivider({ message }: { message: SystemMessage }) {
     removed.length ? `−${removed.length} tool${removed.length > 1 ? 's' : ''}` : '',
   ].filter(Boolean)
   return (
-    <Collapsible className="group/system">
+    <Collapsible
+      className="group/system"
+      {...(fold.folds && { open: fold.open, onOpenChange: fold.setOpen })}
+    >
       <CollapsibleTrigger className="w-full">
         <Divider className="hover:text-muted-foreground">
           <span className="flex items-center gap-1">
