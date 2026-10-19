@@ -1,5 +1,5 @@
 /** Local Git diffs for review: a spec's two sides, its patch split per file with counts and status, capped in size. */
-import { stat } from 'node:fs/promises'
+import { lstat, readlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { exec } from '../../lib/exec.ts'
 import { git } from '../../lib/git.ts'
@@ -103,7 +103,13 @@ function listFiles(names: string, numbers: string): ReviewFile[] {
       })
     } else {
       const status = letter === 'A' ? 'added' : letter === 'D' ? 'deleted' : 'modified'
-      files.push({ path: fields[index++], status, additions: 0, deletions: 0 })
+      files.push({
+        path: fields[index++],
+        status,
+        additions: 0,
+        deletions: 0,
+        ...(letter === 'T' ? { typeChanged: true } : {}),
+      })
     }
   }
   // `<add>\t<del>\t<path>\0`, or `<add>\t<del>\t\0<old>\0<new>\0` for a rename; `-` counts for a binary file.
@@ -123,10 +129,21 @@ function listFiles(names: string, numbers: string): ReviewFile[] {
   return files
 }
 
-/** A patch split at each file's `diff --git` header; hunk lines never start with it. */
+/**
+ * A patch split at each file's `diff --git` header (hunk lines never start with it), one chunk per file: a type change
+ * (a file replaced by a symlink, or back) is one name-status entry but two sections with the same header, joined.
+ */
 function chunks(patch: string) {
   if (!patch) return []
-  return patch.split(/^(?=diff --git )/m)
+  const joined: string[] = []
+  let header: string | undefined
+  for (const section of patch.split(/^(?=diff --git )/m)) {
+    const first = section.slice(0, section.indexOf('\n'))
+    if (first === header) joined[joined.length - 1] += section
+    else joined.push(section)
+    header = first
+  }
+  return joined
 }
 
 /** The diff's files with their patches (undefined: known to be over the file cap), past the caps without hunks. */
@@ -136,16 +153,19 @@ function fit(files: ReviewFile[], patches: (string | undefined)[]) {
   const kept: string[] = []
   files.forEach((file, index) => {
     const patch = patches[index]
-    if (patch === undefined || patch.length > FILE_CAP) {
+    // A type change is a deleted and a new file under one name, which one diff view cannot show: listed, no hunks.
+    if (file.typeChanged) return
+    const bytes = patch === undefined ? 0 : Buffer.byteLength(patch)
+    if (patch === undefined || bytes > FILE_CAP) {
       file.tooLarge = true
       return
     }
-    if (total + patch.length > TOTAL_CAP) {
+    if (total + bytes > TOTAL_CAP) {
       file.tooLarge = true
       truncated = true
       return
     }
-    total += patch.length
+    total += bytes
     kept.push(patch)
   })
   return { patch: kept.join(''), truncated }
@@ -192,7 +212,14 @@ async function untrackedDiff(top: string, path: string, args: string[], signal?:
   return result.stdout
 }
 
-/** Files Git does not track and does not ignore, each as an added file with its patch. */
+/**
+ * Git's patch of a new symlink: its target as the one line, as `git diff` prints it. Built here because
+ * `--no-index` follows a link to a directory and fails on it.
+ */
+const linkPatch = (path: string, target: string) =>
+  `diff --git a/${path} b/${path}\nnew file mode 120000\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+${target}\n\\ No newline at end of file\n`
+
+/** Files Git does not track and does not ignore, each as an added file with its patch; a symlink as its target. */
 async function untracked(top: string, signal?: AbortSignal) {
   const list = await exec('git', ['ls-files', '--others', '--exclude-standard', '-z'], {
     cwd: top,
@@ -203,7 +230,13 @@ async function untracked(top: string, signal?: AbortSignal) {
   const files: ReviewFile[] = []
   const patches: (string | undefined)[] = []
   for (const path of list.stdout.split('\0').filter(Boolean)) {
-    const size = (await stat(join(top, path))).size
+    const info = await lstat(join(top, path))
+    if (info.isSymbolicLink()) {
+      files.push({ path, status: 'added', additions: 1, deletions: 0 })
+      patches.push(linkPatch(path, await readlink(join(top, path))))
+      continue
+    }
+    const size = info.size
     const [added] = (await untrackedDiff(top, path, ['--numstat'], signal)).split('\t')
     const file: ReviewFile = { path, status: 'added', additions: 0, deletions: 0 }
     if (added === '-') file.binary = true

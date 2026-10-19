@@ -1,10 +1,10 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parsePatchFiles } from '@pierre/diffs'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { git } from '../lib/git.ts'
-import { FILE_CAP, reviewDiff } from '../extensions/review/diff.ts'
-import { temp } from './helpers.ts'
+import { git } from '../../lib/git.ts'
+import { FILE_CAP, reviewDiff } from '../../extensions/review/diff.ts'
+import { temp } from '../helpers.ts'
 
 let repo: string
 const sha: Record<string, string> = {}
@@ -101,5 +101,83 @@ describe('review diffs', () => {
     await expect(diff('a...b...c')).rejects.toThrow('Invalid spec')
     await expect(diff('HEAD HEAD')).rejects.toThrow('Invalid spec')
     await expect(diff('')).rejects.toThrow('Expected a spec')
+  })
+})
+
+describe('review diffs of symlinks and multibyte text', () => {
+  let dir: string
+  const at = (spec: string) => reviewDiff(dir, spec, options)
+  beforeAll(async () => {
+    dir = await temp('ultimate-review-links-')
+    await git(dir, 'init', '-q', '-b', 'main')
+    await git(dir, 'config', 'user.email', 'test@example.com')
+    await git(dir, 'config', 'user.name', 'Test')
+    await writeFile(join(dir, 'target.txt'), 'target\n')
+    await writeFile(join(dir, 'swap'), 'a file\n')
+    await mkdir(join(dir, 'folder'))
+    await writeFile(join(dir, 'folder/inside.txt'), 'inside\n')
+    await git(dir, 'add', '-A')
+    await git(dir, 'commit', '-q', '-m', 'first')
+  })
+
+  it('lists untracked symlinks, dangling or to a directory, as their target', async () => {
+    await symlink('nowhere', join(dir, 'dangling'))
+    await symlink('folder', join(dir, 'dirlink'))
+    const result = await at('uncommitted')
+    expect(result.files).toEqual([
+      { path: 'dangling', status: 'added', additions: 1, deletions: 0 },
+      { path: 'dirlink', status: 'added', additions: 1, deletions: 0 },
+    ])
+    const files = parsePatchFiles(result.patch)[0].files
+    expect(files.map((file) => [file.name, file.type, file.mode])).toEqual([
+      ['dangling', 'new', '120000'],
+      ['dirlink', 'new', '120000'],
+    ])
+    expect(result.patch).toContain('+nowhere\n')
+    expect(result.patch).toContain('+folder\n')
+    await rm(join(dir, 'dangling'))
+    await rm(join(dir, 'dirlink'))
+  })
+
+  it('lists a file replaced by a symlink once, without hunks, beside the other changes', async () => {
+    await rm(join(dir, 'swap'))
+    await symlink('target.txt', join(dir, 'swap'))
+    await writeFile(join(dir, 'target.txt'), 'target changed\n')
+    await git(dir, 'add', '-A')
+    await git(dir, 'commit', '-q', '-m', 'swap a file for a link')
+    const result = await at('HEAD')
+    expect(result.files).toEqual([
+      { path: 'swap', status: 'modified', additions: 1, deletions: 1, typeChanged: true },
+      { path: 'target.txt', status: 'modified', additions: 1, deletions: 1 },
+    ])
+    expect(parsePatchFiles(result.patch)[0].files.map((file) => file.name)).toEqual(['target.txt'])
+  })
+
+  it('caps each file and the whole diff by bytes, not characters', async () => {
+    // '€' is three bytes: every file here is far under the caps in characters.
+    const line = `${'€'.repeat(99)}\n`
+    await writeFile(join(dir, 'euro.txt'), line.repeat(Math.ceil(FILE_CAP / 3 / line.length) + 10))
+    await writeFile(join(dir, 'small.txt'), `${'é'.repeat(10)}\n`)
+    await git(dir, 'add', '-A')
+    await git(dir, 'commit', '-q', '-m', 'one file over the cap in bytes')
+    const one = await at('HEAD')
+    expect(one.files.map((file) => [file.path, file.tooLarge ?? false])).toEqual([
+      ['euro.txt', true],
+      ['small.txt', false],
+    ])
+    expect(parsePatchFiles(one.patch)[0].files.map((file) => file.name)).toEqual(['small.txt'])
+    expect(one.truncated).toBeUndefined()
+
+    // 22 files of about 386 KB each: under the file cap, over the total cap in bytes (not in characters).
+    for (let index = 10; index < 32; index++)
+      await writeFile(join(dir, `part-${index}.txt`), line.repeat(1290))
+    await git(dir, 'add', '-A')
+    await git(dir, 'commit', '-q', '-m', 'many files over the total cap in bytes')
+    const many = await at('HEAD')
+    expect(many.truncated).toBe(true)
+    const kept = many.files.filter((file) => !file.tooLarge).length
+    expect(kept).toBe(21)
+    expect(many.files.at(-1)).toMatchObject({ path: 'part-31.txt', tooLarge: true })
+    expect(Buffer.byteLength(many.patch)).toBeLessThanOrEqual(8 * 1024 * 1024)
   })
 })

@@ -21,6 +21,8 @@ Actions (`refs.ts`):
 - `diff { spec, conversation? }` → `{ spec, kind, title, base?, head?, patch, files, truncated? }`. Runs in
   `conversation`'s worktree while it has one, else the project checkout. Every ref is checked with
   `git rev-parse --verify` as a commit, and any part starting with `-` is refused. A file's patch over 400 KB is listed
-  as `tooLarge` without hunks; past 8 MB in all, later files are too and the diff is `truncated`.
+  as `tooLarge` without hunks; past 8 MB in all, later files are too and the diff is `truncated` (caps count bytes).
+  An untracked symlink shows as a new file whose one line is its target; a file that became a symlink or stopped
+  being one is listed as `typeChanged`, without hunks.
 - `ranges` → recent specs: uncommitted, open `ultimate/*` branches with their conversation, the last ten landings
   (`workspaces.landed` events) and the last fifteen commits.
