@@ -38,15 +38,21 @@ import type { BoardMessage } from './api.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 export const docs = [Board]
 
-/** Which images to forward: `latest`, the newest input in the sender's conversation with images, or that entry's id. */
+/**
+ * Which images to forward: `latest`, the newest entry in the sender's conversation with images (a pasted input or a
+ * tool result such as a screenshot), or that entry's id.
+ */
 export type ImagesRef = 'latest' | number
-const LATEST_SCAN = 500
+const SCAN_PAGE = 200
 function imagesOf(entry: EntryRecord | undefined) {
-  const message = entry?.model?.[0]
-  if (message?.role !== 'user' || typeof message.content === 'string') return []
-  return message.content.flatMap((block) =>
-    block.type === 'image'
-      ? [{ type: 'image' as const, data: block.data, mimeType: block.mimeType }]
+  return (entry?.model ?? []).flatMap((message) =>
+    (message.role === 'user' || message.role === 'toolResult') &&
+    typeof message.content !== 'string'
+      ? message.content.flatMap((block) =>
+          block.type === 'image'
+            ? [{ type: 'image' as const, data: block.data, mimeType: block.mimeType }]
+            : [],
+        )
       : [],
   )
 }
@@ -54,9 +60,13 @@ function imagesOf(entry: EntryRecord | undefined) {
 async function resolveImages(tx: Tx, from: ConversationId, ref: ImagesRef) {
   let entry: EntryRecord | undefined
   if (ref === 'latest') {
-    const page = await tx.scanEntries({ conversationId: from }, LATEST_SCAN)
-    entry = page.items.find((item) => imagesOf(item).length > 0)
-    if (!entry) throw new Error('images: "latest" found no input with images in this conversation')
+    let cursor: Parameters<Tx['scanEntries']>[2]
+    do {
+      const page = await tx.scanEntries({ conversationId: from }, SCAN_PAGE, cursor)
+      entry = page.items.find((item) => imagesOf(item).length > 0)
+      cursor = page.next
+    } while (!entry && cursor !== undefined)
+    if (!entry) throw new Error('images: "latest" found no entry with images in this conversation')
   } else {
     if (!Number.isInteger(ref) || ref < 1)
       throw new Error('images must be "latest" or the id of an entry with images')
@@ -606,7 +616,7 @@ export const actions = {
 }
 const imagesParameter = Type.Union([Type.Literal('latest'), Type.Integer({ minimum: 1 })], {
   description:
-    'Forward images from your conversation: "latest" for the newest input with images, or that entry\'s id.',
+    'Forward images from your conversation: "latest" for the newest input or tool result (screenshot) with images, or that entry\'s id.',
 })
 export default function board(host: ExtensionHost) {
   // Core, always on; resolved where they are called, declared here so the catalogue lists them.

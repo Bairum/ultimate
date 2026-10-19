@@ -1016,7 +1016,7 @@ it('refuses image references that do not resolve or exceed the limits', async ()
   const f = await fixture()
   const to = `#${f.recipient.id}`
   await f.send(to, 'None yet', { images: 'latest' })
-  expect(f.observed.join('\n')).toContain('found no input with images')
+  expect(f.observed.join('\n')).toContain('found no entry with images')
   await f.send(to, 'Missing', { images: 99999 })
   expect(f.observed.join('\n')).toContain('entry 99999 is not in this conversation')
   const plain = await submitWithImages(f, 'plain', 0)
@@ -1031,6 +1031,60 @@ it('refuses image references that do not resolve or exceed the limits', async ()
   )
   expect(f.observed.join('\n')).toContain('images go along only to conversations and agents')
   expect((await f.log())?.messages ?? []).toHaveLength(0)
+})
+it('forwards tool-result images, finds latest past a page, and checks every image', async () => {
+  const f = await fixture()
+  const to = `#${f.recipient.id}`
+  const write = (model: object[]) =>
+    f.opened.harness.commit(
+      async (tx) =>
+        (await tx.appendEntry(ROOT_CONVERSATION_ID, { kind: 'test.entry', model } as never)).id,
+      context,
+    )
+  const result = (images: object[]) => [
+    {
+      role: 'toolResult',
+      toolCallId: 'shot',
+      toolName: 'screenshot',
+      content: [{ type: 'text', text: 'PNG' }, ...images],
+      isError: false,
+      timestamp: Date.now(),
+    },
+  ]
+  const shot = await write(result([png(7)]))
+  // More plain entries than one scan page: latest still reaches the screenshot.
+  await f.opened.harness.commit(async (tx) => {
+    for (let i = 0; i < 250; i++)
+      await tx.appendEntry(ROOT_CONVERSATION_ID, { kind: 'test.filler' })
+  }, context)
+  await f.send(to, 'Screenshot', { images: 'latest' })
+  await until(async () => (await f.log())?.messages[0]?.state === 'answered')
+  const message = (await f.log())!.messages[0]
+  expect(message.images).toEqual({ entry: shot, count: 1 })
+  expect(imagesIn(await placed(f, f.recipient.id, message.id))).toEqual([png(7)])
+  const big = 'A'.repeat(Math.ceil(((2 * 1024 * 1024 + 3) / 3) * 4))
+  const oversized = await write(result([{ type: 'image', mimeType: 'image/png', data: big }]))
+  await f.send(to, 'Big', { images: oversized })
+  const svg = await write(result([{ type: 'image', mimeType: 'image/svg+xml', data: 'AAAA' }]))
+  await f.send(to, 'Svg', { images: svg })
+  expect(f.observed.join('\n')).toContain(
+    `entry ${oversized} has an unsupported image or one over 2 MiB`,
+  )
+  expect(f.observed.join('\n')).toContain(`entry ${svg} has an unsupported image or one over 2 MiB`)
+  // Another conversation's entry is not this sender's to forward.
+  const elsewhere = await f.opened.harness.commit(
+    async (tx) =>
+      (
+        await tx.appendEntry(f.recipient.id, {
+          kind: 'test.entry',
+          model: result([png(1)]),
+        } as never)
+      ).id,
+    context,
+  )
+  await f.send(to, 'Elsewhere', { images: elsewhere })
+  expect(f.observed.join('\n')).toContain(`entry ${elsewhere} is not in this conversation`)
+  expect((await f.log())!.messages.filter((m) => m.from === 1)).toHaveLength(1)
 })
 async function branched(f: Awaited<ReturnType<typeof fixture>>) {
   const tool = (await f.opened.root.agent(context)).deferred.find(
