@@ -59,7 +59,7 @@ import {
 import { entryRenderers, messageItems } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary } from './boundary.tsx'
-import { chatRows, runOf, windowGaps } from './chat.ts'
+import { chatRows, runOf, windowGaps, windowKey } from './chat.ts'
 import { useFold } from './fold.tsx'
 import type { ChatPart, WorkRun } from './chat.ts'
 import { column } from './layout.ts'
@@ -166,7 +166,7 @@ function TranscriptEntries() {
   const { id, entries: active, older, live, busy, loading } = useConversation()
   const [history, setHistory] = useState<EntryRecord[]>([])
   const previousActive = useRef(active)
-  const previousOlder = useRef<number>(undefined)
+  const previousWindow = useRef('')
   const [tailSpace, setTailSpace] = useState(0)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
@@ -183,6 +183,8 @@ function TranscriptEntries() {
     entryId: number
     /** The last entry of a folded run: its row keeps that id when a page brings earlier entries into the run. */
     last?: number
+    /** A row inside an opened run. */
+    inner?: boolean
     toolCallId?: string
     top: number
   } | null>(null)
@@ -259,20 +261,25 @@ function TranscriptEntries() {
         return [...rows.values()]
       })
     // A fresh window (a new `older`; appends keep it) can leave stored history uncovered.
-    if (older !== undefined && older !== previousOlder.current && active.length)
+    const window = windowKey(active, older)
+    const fresh = window !== previousWindow.current
+    previousWindow.current = window
+    if (older !== undefined && fresh && active.length)
       for (const [after, upTo] of windowGaps(active, older, loadedBelow(dropped))) fill(after, upTo)
-    previousOlder.current = older
     previousActive.current = active
   }, [active, older])
   useEffect(() => () => request.current?.abort(), [])
   useLayoutEffect(() => {
     if (anchor.current && scrollRef.current) {
-      const { entryId, last, toolCallId: callId, top } = anchor.current
+      const { entryId, last, inner, toolCallId: callId, top } = anchor.current
       // A folded run's row is found by its last entry: a page that reaches into the run gives it an earlier first one.
+      // A row inside an opened run is found below its run's row, which can carry the same id.
       const entry =
-        last === undefined
-          ? contentRef.current?.querySelector(`[data-entry-id="${entryId}"]`)
-          : contentRef.current?.querySelector(`[data-run-last="${last}"]`)
+        last !== undefined
+          ? contentRef.current?.querySelector(`:scope > [data-run-last="${last}"]`)
+          : inner
+            ? contentRef.current?.querySelector(`[data-run-last] [data-entry-id="${entryId}"]`)
+            : contentRef.current?.querySelector(`[data-entry-id="${entryId}"]`)
       const tool =
         callId === undefined
           ? undefined
@@ -319,14 +326,22 @@ function TranscriptEntries() {
           )
           .map((entry) => entry.id),
       )
-      // Top-level rows only: a row inside an opened run shares its id with the run's own row.
-      const candidates = [
-        ...(contentRef.current?.querySelectorAll(':scope > [data-entry-id]') ?? []),
-      ].filter(
-        (row) =>
-          row.getBoundingClientRect().bottom >
-          (scrollRef.current?.getBoundingClientRect().top ?? 0),
-      )
+      // Rows the reader sees: top-level rows, and the rows inside an opened run instead of the run itself, whose top stays
+      // put while a page reaches into it and grows it above them. Inner rows skip the one sharing the run's id.
+      const shown = (contentRef.current?.querySelectorAll(':scope > [data-entry-id]') ??
+        []) as Iterable<Element>
+      const candidates = [...shown]
+        .flatMap((row) => {
+          const inside = [...row.querySelectorAll('[data-entry-id]')].filter(
+            (part) => part.getAttribute('data-entry-id') !== row.getAttribute('data-entry-id'),
+          )
+          return inside.length ? inside : [row]
+        })
+        .filter(
+          (row) =>
+            row.getBoundingClientRect().bottom >
+            (scrollRef.current?.getBoundingClientRect().top ?? 0),
+        )
       // A result row disappears when this page brings its assistant call. Anchor a surviving
       // row, or its matching replacement tool when no existing displayed row survives.
       const element = candidates.find((row) =>
@@ -336,6 +351,7 @@ function TranscriptEntries() {
         anchor.current = {
           entryId: Number(element.getAttribute('data-entry-id')),
           last: Number(element.getAttribute('data-run-last')) || undefined,
+          inner: !element.parentElement?.isSameNode(contentRef.current),
           top: element.getBoundingClientRect().top,
         }
       } else if (candidates[0]) {

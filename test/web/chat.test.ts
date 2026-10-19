@@ -1,6 +1,6 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
-import { chatRows, runOf, windowGaps } from '../../web/src/app/chat.ts'
+import { chatRows, runOf, windowGaps, windowKey } from '../../web/src/app/chat.ts'
 import type { ChatPart, WorkRun } from '../../web/src/app/chat.ts'
 
 let nextId = 1
@@ -153,6 +153,16 @@ describe('windowGaps', () => {
 
   it('bridges rows kept from before a resync to the new window', () => {
     expect(windowGaps([at(900), at(901)], 900, [at(700), at(705)])).toEqual([[706, 900]])
+  })
+
+  it('sees a reconnect after consecutive compactions as a fresh window though older stays', () => {
+    const before = [at(500, 300), at(400), at(499)]
+    const after = [at(600, 300), at(400), at(499), at(601)]
+    expect(windowKey(after, 400)).not.toBe(windowKey(before, 400))
+    // Appends keep the window: no refill.
+    expect(windowKey([...before, at(502)], 400)).toBe(windowKey(before, 400))
+    // The new head reaches past both superseded markers.
+    expect(windowGaps(after, 400, [])).toEqual([[400, 602]])
   })
 
   it('leaves a contiguous window without a head marker alone', () => {

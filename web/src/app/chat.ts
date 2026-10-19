@@ -88,6 +88,13 @@ export function chatRows(
 }
 
 /**
+ * What makes a streamed window fresh: its `older` and its head marker. Appends keep both; a resync after consecutive
+ * compactions can keep `older` but brings a new head marker.
+ */
+export const windowKey = (window: readonly EntryRecord[], older: number | undefined) =>
+  `${older}:${window[0]?.head === undefined ? '' : window[0].id}`
+
+/**
  * Ranges `[after, before)` of stored history a fresh window starting at `older` does not cover, with `loaded` the rows
  * already shown below it:
  * - after a head marker, the window skips superseded markers newer than `older`; it is not in id order, the marker
