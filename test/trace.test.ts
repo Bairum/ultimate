@@ -2,7 +2,9 @@ import { mkdir, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { afterAll, expect, it, vi } from 'vitest'
-import { context } from '../server/harness.ts'
+import { context, prepareHarness } from '../server/harness.ts'
+import { eventLog } from '../server/events.ts'
+import { defineEvent } from '../shared/events.ts'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { classify, guardToolArguments } from '../server/tool-arguments.ts'
@@ -419,6 +421,68 @@ it('writes a repeated poll with its ancestors when a model or failing call is ma
   } finally {
     clock.mockRestore()
     trace.close()
+  }
+})
+
+it('writes a repeated poll that emits an event, with its chain, so its reactors keep their parents', async () => {
+  const home = await temp()
+  const prepared = await prepareHarness({ ultimateRoot: home, userHome: home, home, faux: true })
+  const opened = await prepared.open()
+  const trace = prepared.callTrace
+  trace.open()
+  // Real time: every poll here runs well within the minute a written one stands for its repeats.
+  try {
+    const log = eventLog(() => opened.harness, trace.run, trace.keep)
+    const Pinged = defineEvent<{ fail: boolean }>('test.pinged')
+    // A reactor reached through the event's copied context: one passes, one throws.
+    const reactor = log.reactor('test/on-pinged', [Pinged], (_tx, event) => {
+      if (event.data.fail) throw new Error('reactor down')
+    })
+    await reactor.start()
+    const rows = () => trace.reader.query({ limit: 1000 })
+    const action = { kind: 'action', caller: 'ui', callee: 'x', name: 'x/poll' } as const
+    /** The poll `x/poll` calling service `y.read`, which emits when `fail` is given. */
+    const poll = (fail?: boolean) =>
+      trace.run(
+        action,
+        () =>
+          trace.run(service('y.read'), async () => {
+            if (fail !== undefined)
+              await opened.harness.commit((tx) => log.emit(tx, Pinged, { fail }), context)
+          }),
+        null,
+      )
+    await poll()
+    expect(rows().map((row) => row.name)).toEqual(['x/poll', 'y.read'])
+    // A plain repeat: skipped.
+    await poll()
+    expect(rows()).toHaveLength(2)
+    // Repeats that emit are written with their chain, and each reactor run sits under its emitting call.
+    await poll(false)
+    await poll(true)
+    // The failing event stays pending and is retried on later commits, so it may run more than once.
+    await until(() => rows().some((row) => row.kind === 'reactor' && !row.ok))
+    const reactors = rows().filter((row) => row.kind === 'reactor')
+    expect(reactors[0]).toMatchObject({ ok: true })
+    expect(reactors.slice(1).map((row) => [row.ok, row.error])).toEqual(
+      reactors.slice(1).map(() => [false, 'reactor down']),
+    )
+    // Both emitting repeats were written, with the call that emitted.
+    expect(rows().filter((row) => row.name === 'x/poll')).toHaveLength(3)
+    for (const run of reactors) {
+      const read = rows().find((row) => row.id === run.parent)!
+      expect(read).toMatchObject({ name: 'y.read', ok: true })
+      expect(rows().find((row) => row.id === read.parent)).toMatchObject({ name: 'x/poll' })
+      expect(trace.reader.tree(run.trace).map((node) => node.name)).toEqual(['x/poll'])
+    }
+    // A plain repeat after them is still skipped.
+    const before = rows().length
+    await poll()
+    expect(rows()).toHaveLength(before)
+    await reactor.stop()
+  } finally {
+    trace.close()
+    await opened.close()
   }
 })
 

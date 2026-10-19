@@ -168,7 +168,9 @@ UI polls would otherwise fill the trace: a successful action or service call tha
 written within the last minute (same name, same argument summary), or an action an extension lists in `pollActions`,
 is not written, nor the plain action and service calls it makes; it is counted instead, and `host.trace.polls()`
 lists the counts since the trace opened (`{ name, count, since }`, most first). Failures, model, tool and sealed calls
-are always written, and one written under a poll writes the chain above it too, so its tree stays whole. On this host
+are always written, and one written under a poll writes the chain above it too, so its tree stays whole. A poll that
+emits a durable event is written as well (`emit` calls the trace's `keep`): its reactors run later under the event's
+copy of its context and need it as their parent. Marks are kept by call id, so such copies match. On this host
 it cuts writes by ~89 %.
 
 Arguments and results are stored as JSON summaries of about 300 characters with values under keys matching

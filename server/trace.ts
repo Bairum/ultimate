@@ -128,13 +128,14 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
    * `REPEAT_MS`) and the successful action and service calls they make. Any row written below one unmarks it and its
    * marked ancestors, so a written child always has its parents; children finish first.
    */
-  const repeats = new WeakSet<EventContext>()
-  /** The parent of each marked context, to unmark the chain. */
-  const marked = new WeakMap<EventContext, EventContext | null>()
-  const unmark = (context: EventContext | null) => {
-    while (context && repeats.has(context)) {
-      repeats.delete(context)
-      context = marked.get(context) ?? null
+  // By call id, not context object: an event carries a copy of its emitter's context, which a reactor runs under.
+  const repeats = new Set<string>()
+  /** The parent call of each marked call, to unmark the chain; dropped when the call finishes. */
+  const marked = new Map<string, string | undefined>()
+  const unmark = (call: string | undefined) => {
+    while (call !== undefined && repeats.has(call)) {
+      repeats.delete(call)
+      call = marked.get(call)
     }
   }
   const countRepeat = (name: string) => {
@@ -208,11 +209,11 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
     const plain = (call.kind === 'action' || call.kind === 'service') && !sealed
     if (
       call.poll ||
-      (plain && parent && repeats.has(parent)) ||
+      (plain && parent?.parentCall !== undefined && repeats.has(parent.parentCall)) ||
       (last !== undefined && Date.now() - last < REPEAT_MS)
     ) {
-      repeats.add(context)
-      marked.set(context, parent)
+      repeats.add(id)
+      marked.set(id, parent?.parentCall)
     }
     const started = performance.now()
     // Epoch milliseconds with a fraction, so a parent sorts before the child it started in the same millisecond.
@@ -220,9 +221,12 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
     const finish = (ok: boolean, value: unknown) => {
       if (!database) return
       try {
+        const skipped = ok && repeats.has(id)
+        repeats.delete(id)
+        marked.delete(id)
         // A repeat that failed is news: it is written like any failure, with its marked ancestors.
-        if (ok && repeats.has(context)) return countRepeat(call.name)
-        unmark(parent)
+        if (skipped) return countRepeat(call.name)
+        unmark(parent?.parentCall)
         if (ok && repeat !== undefined) {
           const now = Date.now()
           written.set(repeat, now)
@@ -293,6 +297,11 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
   return {
     run,
     begin,
+    /**
+     * Write the call running in `context` and its marked ancestors, even when they repeat: it emitted a durable event,
+     * whose reactors continue its trace later and need it as their parent. Called by `emit`, inside the call.
+     */
+    keep: (context: EventContext | undefined) => unmark(context?.parentCall),
     /** Open `<home>/trace.sqlite` and apply retention, then hourly; a failure leaves tracing off. */
     open() {
       if (database) return
