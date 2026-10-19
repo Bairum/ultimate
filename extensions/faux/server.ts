@@ -20,6 +20,7 @@ import { seedLanes, stopCalling } from './lanes.ts'
 import { codemodeSteps } from './codemode.ts'
 import { SummaryDoc as CodemodeSummaries } from '../codemode/api.ts'
 import type { CallSummary } from '../codemode/refs.ts'
+import { BackupEvent, MoveEvent } from '../cloud/api.ts'
 
 const messageText = (content: unknown) =>
   typeof content === 'string'
@@ -892,8 +893,23 @@ export const actions = {
           pushed: 'origin/main',
         })
       }
+      const project = 'github.com/HazAT/ultimate'
+      await host.emit(tx, BackupEvent, { phase: 'started', project })
+      await host.emit(tx, BackupEvent, { phase: 'done', project, bytes: 48_213_504, ms: 75_120 })
+      await host.emit(tx, BackupEvent, { phase: 'started', project })
+      await host.emit(tx, BackupEvent, { phase: 'failed', project, ms: 4210, reason: 'HTTP 503' })
+      const move = { project, id: 'faux-move', from: 'rog', to: 'haza-pc' }
+      await host.emit(tx, MoveEvent, { phase: 'started', ...move })
+      await host.emit(tx, MoveEvent, {
+        phase: 'failed',
+        ...move,
+        step: 'handover',
+        reason: 'cancelled',
+      })
+      await host.emit(tx, MoveEvent, { phase: 'started', ...move, id: 'faux-move-2' })
+      await host.emit(tx, MoveEvent, { phase: 'done', ...move, id: 'faux-move-2', ms: 41_800 })
     }, BACKGROUND_CONTEXT)
-    return { seeded: 2 + demoLandings.length + notices.length }
+    return { seeded: 10 + demoLandings.length + notices.length }
   },
   /**
    * Faux only: a coordinator branch and two workers next to @ultimate and the lander, with half an hour of their tool

@@ -7,6 +7,7 @@ import { defineApi } from '../../shared/extension-api.ts'
 import type { BackupReport } from './types.ts'
 
 export type { BackupReport }
+export { BackupEvent, LeaseChanged, MoveEvent } from './refs.ts'
 
 /** What the lease reports; each call is one event, made once and outside any socket handler. */
 export interface FeedbackService {
