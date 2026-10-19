@@ -1,12 +1,18 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineExtension, LiveDoc, UsageDoc } from '@earendil-works/pi-durable'
-import type { Cursor, LiveState, UsageState } from '@earendil-works/pi-durable'
+import type {
+  ConversationId,
+  Cursor,
+  EntryId,
+  LiveState,
+  UsageState,
+} from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { createRateSampler, keys, zero, type Rates, type RateSample } from './rates.ts'
-import { usageTotals } from './context.ts'
+import { estimateAfterHead, usageTotals } from './context.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { RatesAction } from './refs.ts'
+import { EstimateAction, RatesAction } from './refs.ts'
 
 type Totals = ReturnType<typeof usageTotals>
 const snapshots = new WeakMap<object, () => (RateSample & { totals: Totals }) | null>()
@@ -14,6 +20,31 @@ export const actions = {
   rates: implementAction(RatesAction, (_args, { host }: Pick<ActionContext, 'host'>) => {
     return snapshots.get(host)?.() ?? null
   }),
+  estimate: implementAction(
+    EstimateAction,
+    async (args, { host, conversationId }: Pick<ActionContext, 'host' | 'conversationId'>) => {
+      const marker = args && typeof args === 'object' && 'marker' in args ? args.marker : undefined
+      if (conversationId === undefined || typeof marker !== 'number') return null
+      const conversation = await host
+        .harness()
+        .conversation(conversationId as ConversationId, context)
+      const now = await conversation?.context(context)
+      if (!conversation || !now?.head || now.head.id !== marker) return null
+      // The prompt and tools in effect before the marker: generation restates them as its first request's baseline.
+      const before = (
+        await conversation.entries(
+          { maxEntryId: (now.head.id - 1) as EntryId },
+          1,
+          undefined,
+          context,
+        )
+      ).items[0]
+      const previous = before
+        ? (await conversation.context(context, { at: before.id })).messages
+        : []
+      return estimateAfterHead(previous, now.messages)
+    },
+  ),
 }
 
 const settled = (usage: UsageState | null | undefined) => {
