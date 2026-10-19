@@ -22,6 +22,7 @@ import type {
   GenerationResult,
   SubmissionId,
   TaskId,
+  TaskRuntime,
   Tx,
 } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
@@ -33,8 +34,14 @@ import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import { primaryAgent } from '../../lib/machine.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { LineageApi, Roots } from '../lineage/api.ts'
-import { Asked, Board, BoardApi, MessageSent } from './api.ts'
+import { ConversationsApi } from '../conversations/api.ts'
+import type { ResponseReceipt } from '../conversations/summary.ts'
+import type { SummaryModel } from '../conversations/summary-model.ts'
+import { Asked, Board, BoardApi, MessageSent, Triaged } from './api.ts'
 import type { BoardMessage } from './api.ts'
+import type { Triage } from './refs.ts'
+import { declared, needsDecision, parseVerdict, TRIAGE_SYSTEM, triageInput } from './triage.ts'
+import type { Verdict } from './triage.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 export const docs = [Board]
 
@@ -120,16 +127,6 @@ const Started = defineDoc<{ by?: number; yielded?: number }>({
   fork: 'initial',
   initial: () => ({}),
 })
-/** An answer that asks for a decision wakes the starter: it ends with a question or numbered options. */
-function needsDecision(text: string) {
-  const last = text
-    .trim()
-    .split('\n')
-    .at(-1)!
-    .trim()
-    .replace(/[*_`]+$/, '')
-  return last.endsWith('?') || /^\d+[.)]\s/.test(last)
-}
 /** A reply-enabled message to the user that the user has not answered yet. */
 const openQuestion = (m: BoardMessage) => m.to === 'user' && m.reply && m.state === 'delivered'
 /** Typing in a conversation answers the questions it asked the user before that input. */
@@ -148,6 +145,138 @@ async function append(tx: Tx, input: Omit<BoardMessage, 'id' | 'at'>) {
   log.messages.push(message)
   if (log.messages.length > 300) log.messages.splice(0, log.messages.length - 300)
   return message
+}
+type Recipient = NonNullable<
+  Awaited<ReturnType<ReturnType<ExtensionHost['harness']>['conversation']>>
+>
+/**
+ * Triage for the primary agent: whether message `m` needs it to act now. A model failure or timeout acts, so the agent
+ * wakes as it would without triage. The model and response are memos, so a resumed task asks once.
+ */
+async function assess(
+  host: ExtensionHost,
+  runtime: Pick<TaskRuntime<unknown, unknown, unknown, object>, 'memo' | 'models' | 'signal'>,
+  model: SummaryModel,
+  input: { kind: 'message' | 'reply'; from: string; text: string },
+  ctx: Context,
+): Promise<{ verdict: Verdict; response?: ResponseReceipt }> {
+  const conversations = host.need(ConversationsApi)
+  let response = await runtime.memo<ResponseReceipt>('triage-response', ctx)
+  try {
+    response = await conversations.askSummaryModel(
+      runtime.models,
+      TRIAGE_SYSTEM,
+      triageInput(input.kind, input.from, input.text),
+      AbortSignal.any([runtime.signal, AbortSignal.timeout(30_000)]),
+      { model, response, save: (received) => runtime.memo('triage-response', received, ctx) },
+    )
+    if (response.stopReason !== 'stop') throw new Error(`Triage stopped: ${response.stopReason}`)
+    return { verdict: parseVerdict(response.text), response }
+  } catch (error) {
+    if (runtime.signal.aborted) throw error
+    // Triage only saves a turn: when it cannot decide, the agent wakes as it would without triage.
+    return { verdict: { verdict: 'act', reason: 'assessment failed; woke as usual' }, response }
+  }
+}
+/** The primary agent's conversation, whose incoming messages are triaged. */
+async function primaryConversation(host: ExtensionHost, ctx: Context) {
+  const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
+  return standing?.[primaryAgent(host.projectRoot, host.userHome)]
+}
+/**
+ * The summary model a triage asks, chosen once per task. Without one, nothing is gated: the message wakes the agent as
+ * it would without triage.
+ */
+async function triageModel(
+  host: ExtensionHost,
+  runtime: Pick<TaskRuntime<unknown, unknown, unknown, object>, 'memo'>,
+  ctx: Context,
+) {
+  const kept = await runtime.memo<SummaryModel | false>('triage-model', ctx)
+  if (kept !== undefined) return kept || undefined
+  const chosen = await host.need(ConversationsApi).summaryModel()
+  return (await runtime.memo('triage-model', chosen ?? false, ctx)) || undefined
+}
+/** Record message `id`'s verdict, emitting `board.triaged` once, when the log still holds it. */
+async function recordTriage(host: ExtensionHost, tx: Tx, id: number, triage: Triage) {
+  const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find((m) => m.id === id)
+  if (!stored || (stored.triage && stored.triage.verdict !== 'assessing')) return
+  stored.triage = triage
+  if (
+    triage.verdict !== 'assessing' &&
+    typeof stored.from === 'number' &&
+    typeof stored.to === 'number'
+  )
+    await host.emit(tx, Triaged, {
+      message: id,
+      from: stored.from,
+      to: stored.to,
+      verdict: triage.verdict,
+      reason: triage.reason ?? '',
+    })
+}
+type TriageRuntime = Pick<
+  TaskRuntime<unknown, unknown, unknown, object>,
+  'memo' | 'models' | 'signal' | 'commit'
+>
+/**
+ * After a triaged message was written as context (no run), assess it and record the verdict: `act` wakes the agent with
+ * one short input that points at it, `fyi` leaves it for the next input. Returns the wake's answer, if one ran.
+ */
+async function settleTriage(
+  host: ExtensionHost,
+  runtime: TriageRuntime,
+  recipient: Recipient,
+  input: {
+    id: number
+    kind: 'message' | 'reply'
+    fromLabel: string
+    text: string
+    whenBusy: 'steer' | 'followUp'
+  },
+  model: SummaryModel,
+  ctx: Context,
+) {
+  // The verdict is a memo, so a replay after a failed or timed-out assessment wakes as decided, never reassesses.
+  let verdict = await runtime.memo<Verdict>('triage-verdict', ctx)
+  if (!verdict) {
+    const assessed = await assess(
+      host,
+      runtime,
+      model,
+      { kind: input.kind, from: input.fromLabel, text: input.text },
+      ctx,
+    )
+    verdict = await runtime.memo('triage-verdict', assessed.verdict, ctx)
+  }
+  // The memoized response's usage commits with the verdict's record, once: only while the message still assesses,
+  // so a replay after either memo or this commit neither drops nor repeats it.
+  const response = await runtime.memo<ResponseReceipt>('triage-response', ctx)
+  const decided = verdict
+  // The verdict commits before the wake, so the row shows it while the run starts.
+  await runtime.commit(async (tx) => {
+    const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+      (m) => m.id === input.id,
+    )
+    if (stored?.triage?.verdict === 'assessing')
+      await host.need(ConversationsApi).accountResponse(tx, recipient.id, response)
+    await recordTriage(host, tx, input.id, decided)
+    return undefined
+  }, ctx)
+  if (verdict.verdict === 'fyi') return undefined
+  const wake = await recipient.submit(
+    {
+      type: 'input',
+      requestId: `board-wake:${input.id}`,
+      whenBusy: input.whenBusy,
+      entry: { kind: 'board.wake', data: { id: input.id, reason: verdict.reason } },
+      content: `The ${input.kind} from ${input.fromLabel} above needs you now${verdict.reason ? `: ${verdict.reason}` : ''}.`,
+    },
+    ctx,
+  )
+  if (input.kind === 'reply') return undefined
+  const settled = await wake.wait(ctx)
+  return settled.status === 'done' && settled.type === 'input' ? settled.answer : undefined
 }
 function delivery(host: ExtensionHost) {
   const refresh = async (id: number, ctx: Context) => {
@@ -194,25 +323,40 @@ function delivery(host: ExtensionHost) {
           : `Message from ${task.input.fromLabel}:\n${m.text}${m.reply ? `\nAnswer here; your answer is sent to ${task.input.fromLabel} automatically. Do not use message to reply.` : `\nOne-way message: ${task.input.fromLabel} expects no answer, and your answer here is not sent to it. If it needs to hear from you, message it.`}`
         const content = images.length ? [{ type: 'text' as const, text: body }, ...images] : body
         const requestId = `board:${m.id}`
-        const receipt = task.input.note
-          ? await recipient.submit(
-              {
-                type: 'write',
-                requestId,
-                entry: { ...entry, model: [{ role: 'user', content, timestamp: Date.now() }] },
-              },
-              ctx,
-            )
-          : await recipient.submit(
-              {
-                type: 'input',
-                requestId,
-                whenBusy: task.input.steer ? 'steer' : 'followUp',
-                entry,
-                content,
-              },
-              ctx,
-            )
+        // A conversation's message to the primary agent is triaged. One that expects a reply or asks for a decision
+        // acts at once; another one-way message goes in as context and wakes the agent only when the summary model
+        // says act. Notes never wake; without a summary model nothing is gated.
+        const triaged =
+          typeof m.from === 'number' &&
+          !task.input.note &&
+          m.to === (await primaryConversation(host, ctx))
+        const sure: Verdict | undefined = !triaged
+          ? undefined
+          : m.reply
+            ? { verdict: 'act', reason: 'expects a reply' }
+            : declared(m.text)
+        const triager = triaged && !sure ? await triageModel(host, runtime, ctx) : undefined
+        const gated = triager !== undefined
+        const receipt =
+          task.input.note || gated
+            ? await recipient.submit(
+                {
+                  type: 'write',
+                  requestId,
+                  entry: { ...entry, model: [{ role: 'user', content, timestamp: Date.now() }] },
+                },
+                ctx,
+              )
+            : await recipient.submit(
+                {
+                  type: 'input',
+                  requestId,
+                  whenBusy: task.input.steer ? 'steer' : 'followUp',
+                  entry,
+                  content,
+                },
+                ctx,
+              )
         {
           // Admission can precede placement while a recipient is busy. Watch its durable queue,
           // not a timer, so messages become delivered only after leaving the queue.
@@ -245,10 +389,45 @@ function delivery(host: ExtensionHost) {
               if ('entry' in placement && placement.entry !== undefined)
                 stored.entry = placement.entry
             }
-            if (task.input.note)
-              return { status: 'terminal', outcome: { status: 'completed', result: null } }
+            if (triaged && placement.status !== 'unanswered')
+              await recordTriage(
+                host,
+                tx,
+                m.id,
+                triager
+                  ? { verdict: 'assessing' }
+                  : (sure ?? { verdict: 'act', reason: 'no summary model to assess it' }),
+              )
+            if (task.input.note) return terminal
             return undefined
           }, ctx)
+          if (triager) {
+            const answer =
+              placement.status === 'unanswered'
+                ? undefined
+                : await settleTriage(
+                    host,
+                    runtime,
+                    recipient,
+                    {
+                      id: m.id,
+                      kind: 'message',
+                      fromLabel: task.input.fromLabel,
+                      text: m.text,
+                      whenBusy: task.input.steer ? 'steer' : 'followUp',
+                    },
+                    triager,
+                    ctx,
+                  )
+            await runtime.commit(async (tx) => {
+              const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+                (item) => item.id === m.id,
+              )
+              if (stored && answer !== undefined) stored.answer = answer
+              return terminal
+            }, ctx)
+            return
+          }
           if (task.input.note) return
         }
         const settled = await receipt.wait(ctx)
@@ -302,19 +481,64 @@ function delivery(host: ExtensionHost) {
         const { message: m, failed } = task.state.checkpoint
         if (m.to !== 'user') {
           await refresh(m.to, ctx)
-          const sender = await runtime.conversation(m.to as ConversationId, ctx)
-          if (sender)
+          // A reply to the primary agent is triaged like a message: a failure, a decision or an answer to its own
+          // question acts at once; another reply goes in as context and wakes it only when the summary model says act.
+          const triaged = m.to === (await primaryConversation(host, ctx))
+          let sure: Verdict | undefined
+          if (triaged)
+            // The task input keeps the message this replies to, so the log's bound never drops it.
+            sure =
+              declared(m.text, failed) ??
+              (needsDecision(task.input.message.text)
+                ? { verdict: 'act', reason: 'answers your question' }
+                : undefined)
+          const triager = triaged && !sure ? await triageModel(host, runtime, ctx) : undefined
+          if (triaged)
+            await runtime.commit(async (tx) => {
+              await recordTriage(
+                host,
+                tx,
+                m.id,
+                triager
+                  ? { verdict: 'assessing' }
+                  : (sure ?? { verdict: 'act', reason: 'no summary model to assess it' }),
+              )
+              return undefined
+            }, ctx)
+          // The harness handle, not the task runtime's: triage writes context first, which only it accepts.
+          const sender = await host.harness().conversation(m.to as ConversationId, ctx)
+          const entry = {
+            kind: 'board.reply',
+            data: { id: m.id, re: m.re!, from: m.from, text: m.text, failed },
+          }
+          const content = `Reply from ${task.input.toLabel} to your message ${m.re}${failed ? ' (failed)' : ''}:\n${m.text}`
+          const requestId = `board-reply:${m.id}`
+          if (sender && triager) {
             await sender.submit(
               {
-                type: 'input',
-                requestId: `board-reply:${m.id}`,
-                whenBusy: 'steer',
-                entry: {
-                  kind: 'board.reply',
-                  data: { id: m.id, re: m.re!, from: m.from, text: m.text, failed },
-                },
-                content: `Reply from ${task.input.toLabel} to your message ${m.re}${failed ? ' (failed)' : ''}:\n${m.text}`,
+                type: 'write',
+                requestId,
+                entry: { ...entry, model: [{ role: 'user', content, timestamp: Date.now() }] },
               },
+              ctx,
+            )
+            await settleTriage(
+              host,
+              runtime,
+              sender,
+              {
+                id: m.id,
+                kind: 'reply',
+                fromLabel: task.input.toLabel,
+                text: m.text,
+                whenBusy: 'steer',
+              },
+              triager,
+              ctx,
+            )
+          } else if (sender)
+            await sender.submit(
+              { type: 'input', requestId, whenBusy: 'steer', entry, content },
               ctx,
             )
         }

@@ -32,7 +32,31 @@ message any agent; only @ultimate may message the user.
 answer is not sent. The log records its answering assistant entry in `answer` while keeping state `delivered`;
 no reply is appended. A subagent's one-way update to its parent is instead a `board.message` write with
 `delivery: 'note'` and no `input` flag. It starts no run; the parent reads it with its next model request.
-The note's delivery decision is saved in the task input for replay. Sending to `user` writes a message
+The note's delivery decision is saved in the task input for replay.
+
+### Triage for the primary agent
+
+A one-way message or a reply from a conversation to the primary agent (@ultimate, or @sync in the machine home)
+is triaged, so pure status updates cost no turn. The log records `triage: { verdict, reason? }` on the message:
+
+- **act at once, no model:** a reply-enabled message; text whose last line is a question or numbered options; text
+  longer than `TRIAGE_MAX` (24,000 characters), which is never cut for the model; a failed reply; a reply to the
+  agent's own message that ended with a question or options (read from the task input, so the log's bound never
+  drops it).
+- **otherwise:** the message is written into the conversation as context (a `board.message` or `board.reply` write
+  with the model text, no run) with verdict `assessing`. The delivery task asks `summaryModel` with
+  `TRIAGE_SYSTEM` (`triage.ts`), memoizing the model, the response and the verdict (a failed assessment too), so a
+  resumed task asks once, decides the same, and accounts the usage once. `act` (a decision,
+  question, landing or result to relay, failure, blocker or request) submits one short `board.wake` input that
+  points at the message; `fyi` (progress, queued, still waiting) starts nothing, and the agent reads it with its
+  next input. A failed or timed-out (30 s) assessment acts, so the agent wakes as without triage; without a
+  summary model nothing is gated. The verdict commits before the wake and emits `board.triaged`
+  `{ message, from, to, verdict, reason }` (`Triaged`). Notes and messages from the user are never triaged.
+
+The incoming row shows it after its kind: a spinner and `assessing…`, then `action` in the accent or a muted
+`FYI · no action`, with the reason on hover and in the open card. `board.wake` renders nothing.
+
+Sending to `user` writes a message
 shown in @ultimate's transcript; it starts no run.
 A reply-enabled message to `user` stays open, and its sender shows as awaiting reply, until the user answers it:
 an answer card or a plain input typed in the sender's conversation marks it answered. Answer cards commit the
