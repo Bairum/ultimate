@@ -397,6 +397,25 @@ it("keeps @ultimate's open message to the user open until its card answers it", 
   expect((await f.entries(id)).filter((entry) => entry.kind === 'board.open')).toHaveLength(count)
 })
 
+it('answers an open question as free text with a reply to that message, even without extracted questions', async () => {
+  const f = await fixture()
+  f.result({ questions: [] })
+  const id = await f.send({ text: 'What should the tab be called?' })
+  await f.settled()
+  expect((await f.state())!.asked[String(id)]).toBeUndefined()
+  await expect(actions.answer({ messageId: id, text: '  ' }, f.action())).rejects.toThrow(
+    'Invalid answers',
+  )
+  const { id: reply } = await actions.answer({ messageId: id, text: ' Questions ' }, f.action())
+  await f.settled()
+  const log = (await f.log())!.messages
+  expect(log.find((m) => m.id === id)?.state).toBe('answered')
+  expect(log.find((m) => m.id === reply)).toMatchObject({ from: 'user', re: id, text: 'Questions' })
+  await expect(actions.answer({ messageId: id, text: 'Again' }, f.action())).rejects.toThrow(
+    'These questions are no longer open',
+  )
+})
+
 it('dismisses one open question with a one-way note that starts no run, leaving the others open', async () => {
   const f = await fixture()
   const id = await f.ultimate()

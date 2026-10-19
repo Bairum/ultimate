@@ -29,15 +29,16 @@ memoized response or creating duplicate cards.
 Under the outgoing `message` card in @ultimate's transcript, through board's `MessageAnswers` point, and in the
 Questions panel. Confirmations offer Yes/No; choices show the extracted options and their recommended marker. Both
 offer “Something else…” with an inline field. Send answers is enabled after at least one answer; omitted questions stay
-out. Dismiss closes the message without an answer. A message without extracted questions shows only Dismiss and a
-hint to reply in the composer. On phones, one question shows at a time with Back/Next. On desktop, 1–9 and Enter act
-on the shown conversation's newest open card, without intercepting input/textarea editing; cards in the panel take no
-keys.
+out. Dismiss closes the message without an answer. A message without extracted questions gets a one-line answer field
+(sent as a Reply to that message) and Dismiss. On phones, one question shows at a time with Back/Next. On desktop, 1–9
+and Enter act on the shown conversation's newest open card; they leave alone input/textarea editing and keys pressed
+in another card, on another control or in the panel, whose cards take no global keys.
 
 ## Questions panel
 
 A right-panel tab listing every message that waits on the user, newest first: the asker, how long ago, the message,
-its card and Dismiss, and a Show in chat link. It lists only what is open, so a question leaves it once answered or
+its card and Dismiss, and an Open chat link to the asker's conversation. With extracted questions, the message folds
+under Full message. It lists only what is open, so a question leaves it once answered or
 dismissed. The amber count next to the top-bar @ultimate button opens it from any surface; ⌘K “Show open questions”
 does too.
 
@@ -47,7 +48,8 @@ Both are user-only.
 
 - `answer { messageId, answers: [{ question, answer }] }` validates the extracted questions, refusing unknown or
   duplicate answers, and posts a normal user Board reply to the sender with `re: messageId` and `Q: …\nA: …` blocks,
-  returning `{ id }`. Board admission atomically verifies that the original remains open, so concurrent answers produce
+  returning `{ id }`. `answer { messageId, text }` posts `text` instead, for a message with or without extracted
+  questions. Board admission atomically verifies that the original remains open, so concurrent answers produce
   exactly one reply; normal Board delivery wakes the sender.
 - `dismiss { messageId }` marks the message `dismissed` and posts a one-way user note to the sender with `re`, in one
   commit, returning `{ id }`. The note reaches the sender as a note: it reads it with its next input, and no run

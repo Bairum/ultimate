@@ -1,5 +1,5 @@
 import { CheckIcon, MessageCircleQuestionIcon } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api, cn, errorMessage, useConversation, useDocOf, useViewport } from '@/sdk'
 import { BoardDoc } from '../board/ui.tsx'
@@ -49,6 +49,7 @@ export function MessageQuestions({
       questions={questions}
       keys={questions.length > 0 && (keys ?? shown)}
       submit={(answers) => api.action(AnswerAction, { messageId: message.id, answers })}
+      reply={(text) => api.action(AnswerAction, { messageId: message.id, text })}
       dismiss={() => api.action(DismissAction, { messageId: message.id })}
       {...(className === undefined ? {} : { className })}
     />
@@ -60,6 +61,7 @@ function Card({
   questions,
   keys,
   submit,
+  reply,
   dismiss,
   className = 'border-t border-border/60',
 }: {
@@ -67,9 +69,12 @@ function Card({
   questions: Question[]
   keys: boolean
   submit: (answers: Answer[]) => Promise<unknown>
+  reply: (text: string) => Promise<unknown>
   dismiss: () => Promise<unknown>
   className?: string
 }) {
+  const [text, setText] = useState('')
+  const root = useRef<HTMLDivElement>(null)
   const [answers, setAnswers] = useState<Record<number, string>>({})
   const [custom, setCustom] = useState<Record<number, boolean>>({})
   const [current, setCurrent] = useState(0)
@@ -109,7 +114,10 @@ function Card({
         event.metaKey ||
         event.ctrlKey ||
         event.altKey ||
-        target?.closest('input, textarea, select, [contenteditable="true"]')
+        target?.closest('input, textarea, select, [contenteditable="true"]') ||
+        // Outside this card, another card, a control or the Questions panel keeps its own keys.
+        (!root.current?.contains(target) &&
+          target?.closest('[data-questions-card], [data-open-questions], button, a'))
       )
         return
       if (/^[1-9]$/.test(event.key)) {
@@ -124,37 +132,48 @@ function Card({
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
   })
-  // Nothing extracted to answer with buttons: one quiet line with Dismiss.
+  // Nothing extracted to answer with buttons: a reply field for this message, and Dismiss.
   if (!questions.length)
     return (
-      <div
-        className={cn(
-          className,
-          'flex items-center gap-2 px-3 py-1.5 font-mono text-[11px] text-muted-foreground',
-        )}
+      <form
+        className={cn(className, 'flex flex-wrap items-center gap-2 px-3 py-2')}
         data-questions-card={card}
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (text.trim()) void run(() => reply(text.trim()))
+        }}
       >
-        <MessageCircleQuestionIcon className="size-3.5 text-brand" />
-        <span className="min-w-0">Answer in the composer</span>
+        <MessageCircleQuestionIcon className="size-3.5 shrink-0 text-brand" />
+        <input
+          aria-label="Your answer"
+          placeholder="Your answer…"
+          value={text}
+          disabled={sending}
+          onChange={(event) => setText(event.target.value)}
+          className="min-h-8 min-w-0 flex-1 basis-40 rounded border border-border bg-background px-2 py-1 text-sm outline-none focus:border-brand/60"
+        />
         <Button
-          className="ml-auto"
           variant="ghost"
           size="xs"
+          type="button"
           disabled={sending}
           onClick={() => void run(dismiss)}
           title="Close it without an answer; the agent gets a note"
         >
           Dismiss
         </Button>
+        <Button size="xs" type="submit" disabled={!text.trim() || sending}>
+          {sending ? 'Sending…' : 'Send'}
+        </Button>
         {error && (
-          <span role="alert" className="text-error">
+          <p role="alert" className="w-full text-xs text-error">
             {error}
-          </span>
+          </p>
         )}
-      </div>
+      </form>
     )
   return (
-    <div className={className} data-questions-card={card}>
+    <div className={className} data-questions-card={card} ref={root}>
       <div className="flex items-center gap-2 px-3 pt-2 font-mono text-[11px] text-muted-foreground">
         <MessageCircleQuestionIcon className="size-3.5 text-brand" />
         <span className="text-foreground">

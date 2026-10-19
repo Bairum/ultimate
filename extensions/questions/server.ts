@@ -163,22 +163,37 @@ export function parseQuestions(text: string): Question[] {
 
 export const userActions = ['answer', 'dismiss']
 export const actions = {
-  /** Answer the questions of an open Board message: a user Board reply to its sender. */
+  /** Answer an open Board message, from its extracted questions or as free text: a user Board reply to its sender. */
   answer: implementAction(AnswerAction, async (args, { host, signal }) => {
-    const data = args as { messageId: number; answers: { question: string; answer: string }[] }
-    if (!data || !Number.isSafeInteger(data.messageId) || !validAnswers(data.answers))
+    const data = args as {
+      messageId: number
+      answers?: { question: string; answer: string }[]
+      text?: unknown
+    }
+    const text = typeof data?.text === 'string' ? data.text.trim() : undefined
+    if (
+      !data ||
+      !Number.isSafeInteger(data.messageId) ||
+      (text === undefined ? !validAnswers(data.answers) : !text || data.answers !== undefined)
+    )
       throw new Error('Invalid answers')
     await host.harness().commit(async (tx) => {
       const { log, state } = await stateFor(tx)
       const message = log.messages.find((m) => m.id === data.messageId)
+      if (!message || !open(message)) throw new Error(NOT_OPEN)
+      if (text !== undefined) return
       const questions = state.asked[String(data.messageId)]
-      if (!message || !open(message) || !questions?.length) throw new Error(NOT_OPEN)
-      checkAnswers(data.answers, questions)
+      if (!questions?.length) throw new Error(NOT_OPEN)
+      checkAnswers(data.answers!, questions)
     }, context)
     return {
       id: await host
         .need(BoardApi)
-        .answer(data.messageId, answerText(data.answers), withAbortSignal(signal, context)),
+        .answer(
+          data.messageId,
+          text ?? answerText(data.answers!),
+          withAbortSignal(signal, context),
+        ),
     }
   }),
   /** Close an open Board message to the user unanswered; its sender gets a one-way note. */

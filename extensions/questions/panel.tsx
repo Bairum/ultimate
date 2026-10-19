@@ -1,5 +1,5 @@
-import { CheckIcon } from 'lucide-react'
-import { cn, events, useDocOf, useNow, useUltimate } from '@/sdk'
+import { CheckIcon, ChevronRightIcon } from 'lucide-react'
+import { cn, useDocOf, useNow, useUltimate } from '@/sdk'
 import { accentOf, Address, BoardDoc, emptyBoard, MessageBody, relativeTime } from '../board/ui.tsx'
 import { MessageQuestions } from './card.tsx'
 import { openQuestions, waiting } from './open.tsx'
@@ -52,26 +52,30 @@ export function OpenQuestions() {
                   asked {relativeTime(message.at, now)}
                   {relativeTime(message.at, now) === 'now' ? '' : ' ago'}
                 </time>
-                {typeof message.from === 'number' && message.entry !== undefined && (
+                {typeof message.from === 'number' && (
                   <button
                     className="ml-auto cursor-pointer hover:text-foreground"
                     onClick={() => {
                       showSurface('agent')
                       switchConversation(message.from as number)
-                      events.emit('board:open', {
-                        conversation: message.from,
-                        entry: message.entry,
-                      })
                     }}
                     type="button"
                   >
-                    Show in chat
+                    Open chat
                   </button>
                 )}
               </header>
-              {/* Extracted questions read on their own; the full message stays one click away in the chat. */}
-              {openQuestions(extracted, message).length === 0 && (
+              {/* Extracted questions read on their own; the full message stays one click away. */}
+              {openQuestions(extracted, message).length === 0 ? (
                 <MessageBody text={message.text} />
+              ) : (
+                <details className="group/full border-b border-border/60">
+                  <summary className="flex cursor-pointer list-none items-center gap-1 px-3 py-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground">
+                    <ChevronRightIcon className="size-3 transition-transform group-open/full:rotate-90" />
+                    Full message
+                  </summary>
+                  <MessageBody text={message.text} />
+                </details>
               )}
               <MessageQuestions
                 message={message}
