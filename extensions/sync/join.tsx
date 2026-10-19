@@ -11,7 +11,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { api, cn, errorMessage, useAction, useDialog } from '@/sdk'
+import { api, cn, errorMessage, useAction, useDialog, useRestart } from '@/sdk'
 import { JoinAction, JoinStateAction } from './refs.ts'
 import type { JoinResult, JoinState, JoinStep } from './refs.ts'
 
@@ -170,6 +170,7 @@ function Secret({
 
 /** After a join: run setup:machine, restart, and the projects the cloud lists. */
 function Next({ result }: { result: Extract<JoinResult, { ok: true }> }) {
+  const restart = useRestart()
   return (
     <div className="space-y-2 border-t border-border/60 px-3 py-2" data-sync-join-next>
       <div className="text-foreground/85">Next</div>
@@ -179,10 +180,23 @@ function Next({ result }: { result: Extract<JoinResult, { ok: true }> }) {
         </p>
         <Command value="pnpm setup:machine" />
       </div>
-      <p className="font-sans text-[12px] text-muted-foreground">
-        Restart Ultimate and the machine home: cloud sync reads <code>cloud.url</code> and the
-        secrets when it starts.
-      </p>
+      <div className="flex items-start gap-3">
+        <p className="flex-1 font-sans text-[12px] text-muted-foreground">
+          Cloud sync reads <code>cloud.url</code> and the secrets when it starts. Restart this
+          Ultimate now, and the other one (the machine home or a running project) from its own page.
+        </p>
+        <Button
+          className="h-7 shrink-0 text-[12px]"
+          data-sync-join-restart
+          disabled={restart.busy}
+          onClick={restart.run}
+          size="sm"
+          variant="outline"
+        >
+          {restart.busy ? 'Restarting…' : 'Restart now'}
+        </Button>
+      </div>
+      {restart.error && <p className="font-sans text-[12px] text-error">{restart.error}</p>}
       <div className="space-y-0.5">
         <div className="text-muted-foreground">
           {result.projects.length
