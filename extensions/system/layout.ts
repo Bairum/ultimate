@@ -1,5 +1,8 @@
-/** The Agent Lanes geometry: where a window's ticks and a run's block sit, as fractions of the timeline's width. */
-import type { LaneCall, LaneRun } from './refs.ts'
+/**
+ * The Agent Lanes geometry: where a window's ticks and a run's block sit, as fractions of the timeline's width; the
+ * lanes as a tree; and the dotted links between them.
+ */
+import type { Lane, LaneCall, LaneLink, LaneRun } from './refs.ts'
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
@@ -69,3 +72,136 @@ export function label(calls: readonly LaneCall[], more = 0) {
 /** A run's length in milliseconds, up to now while it is open. */
 export const duration = (run: LaneRun, now: number) =>
   (run.end === undefined ? now : Date.parse(run.end)) - Date.parse(run.start)
+
+/**
+ * One row of the lane tree: a lane, or the fold of a parent's finished children. `depth` 0 is a root; `last` whether
+ * it is its parent's last row, and `through[i]` whether the guide of depth `i + 1` passes on below it (an ancestor at
+ * that depth has later siblings).
+ */
+export type TreeRow =
+  | { kind: 'lane'; lane: Lane; depth: number; last: boolean; through: boolean[] }
+  | { kind: 'fold'; parent: number; count: number; depth: number; last: true; through: boolean[] }
+
+/** Children folded behind a "+N finished" row once a parent has more than this many finished ones. */
+export const FOLD = 3
+
+const startOf = (lane: Lane) =>
+  lane.spawn ? Date.parse(lane.spawn.at) : lane.runs[0] ? Date.parse(lane.runs[0].start) : 0
+
+/**
+ * The lanes as a tree, depth first: roots (lanes whose parent is not listed) in the given order, children in the
+ * order they started. A parent with more than `FOLD` finished children (no open run anywhere in their subtree) shows
+ * the others and folds the finished ones into one row, unless it is in `expanded`.
+ */
+export function tree(lanes: readonly Lane[], expanded: ReadonlySet<number> = new Set()) {
+  const listed = new Set(lanes.map((lane) => lane.conversation))
+  const children = new Map<number, Lane[]>()
+  const roots: Lane[] = []
+  for (const lane of lanes) {
+    if (lane.parent === undefined || !listed.has(lane.parent)) roots.push(lane)
+    else children.set(lane.parent, [...(children.get(lane.parent) ?? []), lane])
+  }
+  for (const list of children.values()) list.sort((a, b) => startOf(a) - startOf(b))
+  const open = (lane: Lane): boolean =>
+    lane.runs.at(-1)?.end === undefined && lane.runs.length > 0
+      ? true
+      : (children.get(lane.conversation) ?? []).some(open)
+  const rows: TreeRow[] = []
+  const visit = (lane: Lane, depth: number, last: boolean, through: boolean[]) => {
+    rows.push({ kind: 'lane', lane, depth, last, through })
+    const below = depth === 0 ? [] : [...through, !last]
+    const all = children.get(lane.conversation) ?? []
+    const finished = all.filter((child) => !open(child))
+    const fold = finished.length > FOLD && !expanded.has(lane.conversation)
+    const shown = fold ? all.filter(open) : all
+    shown.forEach((child, index) =>
+      visit(child, depth + 1, !fold && index === shown.length - 1, below),
+    )
+    if (fold)
+      rows.push({
+        kind: 'fold',
+        parent: lane.conversation,
+        count: finished.length,
+        depth: depth + 1,
+        last: true,
+        through: below,
+      })
+  }
+  for (const root of roots) visit(root, 0, true, [])
+  return rows
+}
+
+/** Each conversation with the conversations above and below it in the tree: whose chain a hovered lane lights up. */
+export function chain(lanes: readonly Lane[], conversation: number) {
+  const parents = new Map(lanes.map((lane) => [lane.conversation, lane.parent]))
+  const found = new Set([conversation])
+  for (let up = parents.get(conversation); up !== undefined && !found.has(up); up = parents.get(up))
+    found.add(up)
+  const below = [conversation]
+  for (let id = below.pop(); id !== undefined; id = below.pop())
+    for (const lane of lanes)
+      if (lane.parent === id && !found.has(lane.conversation)) {
+        found.add(lane.conversation)
+        below.push(lane.conversation)
+      }
+  return found
+}
+
+/** A dotted link in pixels: its SVG path and the dot at its start. */
+export type LinkPath = { from: number; to: number; d: string; dot: [number, number] }
+
+/** Where things sit on the timeline overlay: a row's vertical centre by conversation, and the overlay's width. */
+export type Frame = { y: ReadonlyMap<number, number>; width: number; since: number; now: number }
+
+const round = (value: number) => Math.round(value * 10) / 10
+
+/** From `(x1, y1)` down (or up) to `y2`, then across to `x2` round a soft corner; straight down when `x2` is left of it. */
+export function elbow(x1: number, y1: number, x2: number, y2: number) {
+  const r = Math.min(6, Math.abs(y2 - y1) / 2, Math.max(0, x2 - x1))
+  if (r <= 0) return `M${round(x1)} ${round(y1)}V${round(y2)}`
+  const down = y2 > y1 ? 1 : -1
+  return `M${round(x1)} ${round(y1)}V${round(y2 - down * r)}Q${round(x1)} ${round(y2)} ${round(x1 + r)} ${round(y2)}H${round(x2)}`
+}
+
+/**
+ * Spawn links: from the spawning call's moment on the parent's row to the start of the child's first block in the
+ * window, for each lane with a spawn whose rows are both shown.
+ */
+export function links(lanes: readonly Lane[], frame: Frame) {
+  const found: (LinkPath & { inferred: boolean })[] = []
+  for (const lane of lanes) {
+    if (!lane.spawn || lane.parent === undefined) continue
+    const y1 = frame.y.get(lane.parent)
+    const y2 = frame.y.get(lane.conversation)
+    const first = lane.runs.map((run) => block(run, frame.since, frame.now)).find(Boolean)
+    if (y1 === undefined || y2 === undefined || !first) continue
+    const x1 = position(Date.parse(lane.spawn.at), frame.since, frame.now) * frame.width
+    found.push({
+      from: lane.parent,
+      to: lane.conversation,
+      d: elbow(x1, y1, first.left * frame.width, y2),
+      dot: [round(x1), round(y1)],
+      inferred: lane.spawn.inferred === true,
+    })
+  }
+  return found
+}
+
+/** Message links: a vertical dotted line at the moment of sending, from the sender's row to the recipient's. */
+export function messageLinks(list: readonly LaneLink[], frame: Frame) {
+  const found: LinkPath[] = []
+  for (const link of list) {
+    const y1 = frame.y.get(link.from)
+    const y2 = frame.y.get(link.to)
+    const at = Date.parse(link.at)
+    if (y1 === undefined || y2 === undefined || at < frame.since || at > frame.now) continue
+    const x = round(position(at, frame.since, frame.now) * frame.width)
+    found.push({
+      from: link.from,
+      to: link.to,
+      d: `M${x} ${round(y1)}V${round(y2)}`,
+      dot: [x, round(y1)],
+    })
+  }
+  return found
+}

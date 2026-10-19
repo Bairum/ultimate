@@ -14,11 +14,12 @@ import {
 } from '@/sdk'
 import { BoardDoc } from '../board/ui.tsx'
 import { useOverview } from '../conversations/ui.tsx'
-import { Axis, LaneRow, laneState } from './lanes.tsx'
+import { LaneTree } from './hierarchy.tsx'
+import { Axis, laneState } from './lanes.tsx'
 import { windows } from './layout.ts'
 import type { WindowName } from './layout.ts'
 import { LanesAction } from './refs.ts'
-import type { Lane } from './refs.ts'
+import type { Lane, LaneLink } from './refs.ts'
 import { Stream } from './stream.tsx'
 import type { StreamView } from './stream.tsx'
 
@@ -91,7 +92,7 @@ function useLanes(range: number, live: boolean) {
   return { data: state.range === range ? state.data : undefined, error: state.error }
 }
 
-type LanesResult = { now: string; lanes: Lane[]; more?: number }
+type LanesResult = { now: string; lanes: Lane[]; links: LaneLink[]; more?: number }
 
 const dot = 'inline-block size-1.5 rounded-full'
 
@@ -111,9 +112,13 @@ function System() {
   const lanes = useLanes(range, live)
   const waiting = useWaiting()
   const list = lanes.data?.lanes ?? []
-  const states = list.map((lane) => laneState(lane, waiting.has(lane.conversation)))
-  const running = states.filter((state) => state === 'running').length
-  const needYou = states.filter((state) => state === 'waiting').length
+  // A parent listed only to hold its children's place did not work in the window: it is no agent at work.
+  const states = new Map(
+    list.map((lane) => [lane.conversation, laneState(lane, waiting.has(lane.conversation))]),
+  )
+  const worked = list.filter((lane) => lane.runs.length > 0)
+  const running = worked.filter((lane) => states.get(lane.conversation) === 'running').length
+  const needYou = worked.filter((lane) => states.get(lane.conversation) === 'waiting').length
   const since = now - range
   return (
     <>
@@ -174,22 +179,18 @@ function System() {
                       : `quiet · no agent worked in the last ${window}`}
                 </p>
               ) : (
-                <ul>
-                  {list.map((lane, index) => (
-                    <LaneRow
-                      key={lane.conversation}
-                      lane={lane}
-                      now={now}
-                      onFilter={() => {
-                        setView({ ...view, conversation: lane.conversation })
-                        setStreamOpen(true)
-                      }}
-                      since={since}
-                      state={states[index]}
-                      window={window}
-                    />
-                  ))}
-                </ul>
+                <LaneTree
+                  lanes={list}
+                  links={lanes.data?.links ?? []}
+                  now={now}
+                  onFilter={(conversation) => {
+                    setView({ ...view, conversation })
+                    setStreamOpen(true)
+                  }}
+                  since={since}
+                  states={states}
+                  window={window}
+                />
               )}
             </div>
           </div>

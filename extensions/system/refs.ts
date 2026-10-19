@@ -67,8 +67,15 @@ export type LaneCall = {
  */
 export type LaneRun = { start: string; end?: string; ok: boolean; calls: LaneCall[]; more?: number }
 /**
- * One conversation's runs, oldest first; agent, model, kind and parent from its `subagents.started` event, if any.
- * Titles are the browser's to resolve (`ConversationRef`).
+ * Where a lane was started: the tool call in its parent's lane that did it (`call`, its trace id) and when it started.
+ * `inferred` when no event names the call and it is the parent's last `subagent`, `branch` or `message` call before
+ * the lane's first call.
+ */
+export type LaneSpawn = { call?: string; at: string; inferred?: true }
+/**
+ * One conversation's runs, oldest first; agent, model and kind from its `subagents.started` event, if any. `parent` is
+ * the conversation that started it: the one whose tool call emitted that event, else the event's parent, else its
+ * owner or the conversation it branched from. Titles are the browser's to resolve (`ConversationRef`).
  */
 export type Lane = {
   conversation: number
@@ -76,17 +83,22 @@ export type Lane = {
   model?: string
   kind?: 'standing' | 'branch' | 'child'
   parent?: number
+  /** Present when the parent is among the lanes. */
+  spawn?: LaneSpawn
   runs: LaneRun[]
 }
+/** A Board message from one lane's conversation to another's, sent at `at` by tool call `call`. */
+export type LaneLink = { from: number; to: number; call?: string; at: string; kind: 'message' }
 
 /**
- * `{ since?, until? }` (ISO; default the last 30 minutes up to now) → `{ now, lanes, more? }`: a lane for each
- * conversation with tool or model calls in the window, most recently active first, at most 40; `more` counts the lanes
- * left out.
+ * `{ since?, until? }` (ISO; default the last 30 minutes up to now) → `{ now, lanes, links, more? }`: a lane for each
+ * conversation with tool or model calls in the window, most recently active first, at most 40 together with the
+ * parents they need (a parent without calls in the window has no runs); `more` counts the lanes left out. `links` are
+ * the messages between listed lanes sent in the window, oldest first.
  */
 export const LanesAction = actionRef<
   { since?: string; until?: string },
-  { now: string; lanes: Lane[]; more?: number }
+  { now: string; lanes: Lane[]; links: LaneLink[]; more?: number }
 >('system', 'lanes')
 
 /**

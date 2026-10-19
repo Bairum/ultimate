@@ -1,11 +1,12 @@
 import { ListFilterIcon } from 'lucide-react'
 import { useState } from 'react'
+import type { CSSProperties } from 'react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn, formatDuration, useConversations, useUltimate } from '@/sdk'
 import type { ConversationSummary } from '@/sdk'
 import { AgentMark, agentTitle, ConversationRef } from '../conversations/ui.tsx'
 import { block, duration, label, ticks } from './layout.ts'
-import type { WindowName } from './layout.ts'
+import type { TreeRow, WindowName } from './layout.ts'
 import type { Lane, LaneRun } from './refs.ts'
 import { clock, KindIcon, TraceTree } from './tree.tsx'
 
@@ -168,6 +169,56 @@ function Calls({ run }: { run: LaneRun }) {
   )
 }
 
+/** Indentation per tree level, in pixels; the guide of level `i` runs down the middle of its column. */
+export const INDENT = 14
+/** Where a lane's head row is centred, from the top of its row: the elbow meets it, links start and end there. */
+export const ROW_CENTRE = 24
+
+const dotted = 'absolute border-dotted border-muted-foreground/35'
+
+/**
+ * The tree guide in front of a row: a dotted line down each ancestor column that has more rows below, and an elbow from
+ * the parent's column into the row (running on down unless the row is its parent's last).
+ */
+export function Guide({
+  row,
+  centre = ROW_CENTRE,
+}: {
+  row: Pick<TreeRow, 'depth' | 'last' | 'through'>
+  centre?: number
+}) {
+  if (row.depth === 0) return null
+  const x = (level: number) => (level - 1) * INDENT + INDENT / 2
+  return (
+    <span aria-hidden className="pointer-events-none">
+      {row.through.map(
+        (on, index) =>
+          on && (
+            <span
+              className={cn(dotted, 'inset-y-0 border-l')}
+              key={index}
+              style={{ left: x(index + 1) }}
+            />
+          ),
+      )}
+      <span
+        className={cn(dotted, 'top-0 rounded-bl-[5px] border-b border-l')}
+        style={{
+          left: x(row.depth),
+          height: centre,
+          width: INDENT / 2 + 2,
+        }}
+      />
+      {!row.last && (
+        <span
+          className={cn(dotted, 'bottom-0 border-l')}
+          style={{ left: x(row.depth), top: centre }}
+        />
+      )}
+    </span>
+  )
+}
+
 const stateWords: Record<LaneState, string> = {
   running: 'running',
   waiting: 'needs you',
@@ -179,20 +230,29 @@ const stateWords: Record<LaneState, string> = {
  * right; on a phone the name sits above a full-width timeline. A click on the name opens the conversation.
  */
 export function LaneRow({
-  lane,
+  row,
   state,
   window,
   since,
   now,
+  dimmed,
   onFilter,
+  onHover,
+  onPick,
 }: {
-  lane: Lane
+  row: Extract<TreeRow, { kind: 'lane' }>
   state: LaneState
   window: WindowName
   since: number
   now: number
+  /** Outside the hovered or picked lane's chain. */
+  dimmed: boolean
   onFilter: () => void
+  onHover: (hovered: boolean) => void
+  /** A run was opened (true) or closed (false): the lane stays highlighted while one is open. */
+  onPick: (picked: boolean) => void
 }) {
+  const { lane } = row
   const actions = useUltimate()
   const summary = useConversations().find((item) => item.id === lane.conversation)
   const standing = standingName(lane, summary)
@@ -203,9 +263,20 @@ export function LaneRow({
     actions.switchConversation(lane.conversation)
   }
   return (
-    <li className="border-b border-border/50 last:border-b-0" data-lane={lane.conversation}>
+    <li
+      className={cn(
+        'relative border-b border-border/50 pl-(--indent) transition-opacity last:border-b-0 md:pl-0',
+        dimmed && 'opacity-40',
+      )}
+      data-depth={row.depth}
+      data-lane={lane.conversation}
+      onMouseEnter={() => onHover(true)}
+      onMouseLeave={() => onHover(false)}
+      style={{ '--indent': `${row.depth * INDENT}px` } as CSSProperties}
+    >
+      <Guide row={row} />
       <div className="flex flex-col gap-1 py-1.5 md:flex-row md:items-center md:gap-3">
-        <div className="group flex min-w-0 items-center gap-2 md:w-56 md:shrink-0">
+        <div className="group flex min-w-0 items-center gap-2 md:w-56 md:shrink-0 md:pl-(--indent)">
           <button
             className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md text-left outline-none focus-visible:ring-1 focus-visible:ring-ring"
             onClick={open}
@@ -255,13 +326,16 @@ export function LaneRow({
             <ListFilterIcon className="size-3" />
           </button>
         </div>
-        <div className="relative h-7 min-w-0 md:flex-1">
+        <div className="relative h-7 min-w-0 md:flex-1" data-timeline>
           <Grid window={window} />
           {lane.runs.map((item, index) => (
             <Block
               key={item.start}
               now={now}
-              onSelect={() => setSelected(selected === item.start ? undefined : item.start)}
+              onSelect={() => {
+                setSelected(selected === item.start ? undefined : item.start)
+                onPick(selected !== item.start)
+              }}
               run={item}
               selected={item.start === selected}
               since={since}

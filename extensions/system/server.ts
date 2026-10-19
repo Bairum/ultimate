@@ -6,7 +6,7 @@ import type { EventRecord } from '../../shared/events.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { CallRow, CallTree } from '../../server/trace.ts'
 import { LanesAction, PollsAction, StreamAction, TreeAction } from './refs.ts'
-import type { Lane, SystemCall, SystemFilter, SystemRow } from './refs.ts'
+import type { Lane, LaneLink, LaneSpawn, SystemCall, SystemFilter, SystemRow } from './refs.ts'
 
 const SUMMARY = 200
 const cut = (text: string) => (text.length > SUMMARY ? `${text.slice(0, SUMMARY - 1)}…` : text)
@@ -242,10 +242,20 @@ const QUIET = 20_000
 const LANES = 40
 const CALLS = 200
 
-/** Agent facts by conversation, from `subagents.started` events (newest wins). */
+/** What a `subagents.started` event says about a conversation, and the work that emitted it. */
+type Fact = Omit<Lane, 'conversation' | 'runs' | 'spawn'> & {
+  at: string
+  context?: EventRecord['context']
+}
+
+/**
+ * Agent facts by conversation, from `subagents.started` events (newest wins). The parent is the conversation whose
+ * work emitted the event (the `subagent` or `branch` call that started it), else the event's own: a branch names the
+ * root it forked from, not who asked for it. A standing agent has none.
+ */
 async function started(host: ExtensionHost) {
   const Started = defineEvent<Record<string, JsonValue>>('subagents.started')
-  const facts = new Map<number, Omit<Lane, 'conversation' | 'runs'>>()
+  const facts = new Map<number, Fact>()
   let before: number | undefined
   for (;;) {
     const page = await host.eventLog.recent({
@@ -253,19 +263,81 @@ async function started(host: ExtensionHost) {
       ...(before === undefined ? {} : { before }),
       limit: 500,
     })
-    for (const { data } of page) {
+    for (const { data, at, context } of page) {
       if (typeof data.id !== 'number' || facts.has(data.id)) continue
       const kind = data.kind
+      const caller = context?.conversationId
+      const parent =
+        kind === 'standing'
+          ? undefined
+          : caller !== undefined && caller !== data.id
+            ? caller
+            : typeof data.parent === 'number'
+              ? data.parent
+              : undefined
       facts.set(data.id, {
+        at,
+        ...(context ? { context } : {}),
         ...(typeof data.agent === 'string' ? { agent: data.agent } : {}),
         ...(typeof data.model === 'string' ? { model: data.model } : {}),
         ...(kind === 'standing' || kind === 'branch' || kind === 'child' ? { kind } : {}),
-        ...(typeof data.parent === 'number' ? { parent: data.parent } : {}),
+        ...(parent === undefined ? {} : { parent }),
       })
     }
     if (page.length < 500) return facts
     before = page.at(-1)!.id
   }
+}
+
+type Sent = { from: number; to: number }
+/** `board.sent` events between two conversations emitted in `[since, until)`, oldest first. */
+async function messages(host: ExtensionHost, since: number, until: number) {
+  const Sent = defineEvent<Record<string, JsonValue>>('board.sent')
+  const found: EventRecord<Sent>[] = []
+  let before: number | undefined
+  for (;;) {
+    const page = await host.eventLog.recent({
+      events: [Sent],
+      ...(before === undefined ? {} : { before }),
+      limit: 500,
+    })
+    for (const event of page) {
+      const at = Date.parse(event.at)
+      if (at < since) return found.toReversed()
+      if (at < until && typeof event.data.from === 'number' && typeof event.data.to === 'number')
+        found.push(event as EventRecord<Sent>)
+    }
+    if (page.length < 500) return found.toReversed()
+    before = page.at(-1)!.id
+  }
+}
+
+/** Tool calls that start others: the nearest one before a child's start stands for its spawn when no event says. */
+const SPAWNING = new Set(['subagent', 'branch', 'message'])
+
+/**
+ * The tool call of conversation `conversation` that call `id` of trace `trace` ran in: the call itself or its nearest
+ * tool ancestor. `calls` are the window's tool and model calls by id; the rest of a trace is read once into `trees`.
+ */
+function ownToolCall(
+  host: ExtensionHost,
+  byId: Map<string, CallRow>,
+  trees: Map<string, Map<string, CallRow>>,
+  conversation: number,
+  id: string,
+  trace: string | undefined,
+) {
+  const own = (call: CallRow | undefined) =>
+    call?.kind === 'tool' && call.conversation === conversation ? call : undefined
+  if (own(byId.get(id)) || trace === undefined) return own(byId.get(id))
+  let tree = trees.get(trace)
+  if (!tree) {
+    tree = new Map(host.trace.query({ trace, limit: 1000 }).map((call) => [call.id, call]))
+    trees.set(trace, tree)
+  }
+  for (let call = tree.get(id); call; call = call.parent ? tree.get(call.parent) : undefined)
+    if (own(call)) return call
+  return undefined
 }
 
 /** Conversations with a live foreground task. */
@@ -313,7 +385,16 @@ export async function lanes(
     after = rows.at(-1)!.seq
   }
   const live = until >= clock ? await busy(host) : new Set<number>()
-  const facts = byConversation.size ? await started(host) : new Map()
+  const facts = byConversation.size ? await started(host) : new Map<number, Fact>()
+  // Conversations without an event fall back to their owner or the conversation they branched from.
+  const owners = new Map<number, number>()
+  if (byConversation.size)
+    for (const summary of host.conversations()) {
+      const owner = summary.parentConversationId ?? summary.branchOf?.conversationId
+      if (owner !== undefined) owners.set(summary.id, owner)
+    }
+  const parentOf = (conversation: number) =>
+    facts.get(conversation)?.parent ?? owners.get(conversation)
   const all = [...byConversation].map(([conversation, found]) => {
     found.sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
     const runs: { start: number; end: number; calls: CallRow[] }[] = []
@@ -329,7 +410,6 @@ export async function lanes(
     const open = until >= clock && (clock - last.end < QUIET || live.has(conversation))
     const lane: Lane = {
       conversation,
-      ...facts.get(conversation),
       runs: runs.map((run) => ({
         start: new Date(run.start).toISOString(),
         ...(open && run === last ? {} : { end: new Date(run.end).toISOString() }),
@@ -348,10 +428,86 @@ export async function lanes(
     return { lane, active: open ? Number.POSITIVE_INFINITY : last.end }
   })
   all.sort((a, b) => b.active - a.active || b.lane.conversation - a.lane.conversation)
+  // The most recently active lanes, each with its parent so its subtree hangs where it belongs: a parent that worked
+  // brings its lane along, one that did not is a lane without runs. One hop up, never the whole ancestry.
+  const worked = new Map(all.map((item) => [item.lane.conversation, item.lane]))
+  const listed = new Map<number, Lane>()
+  for (const { lane } of all) {
+    if (listed.has(lane.conversation)) continue
+    const parent = parentOf(lane.conversation)
+    const add = [lane]
+    if (parent !== undefined && !listed.has(parent))
+      add.push(worked.get(parent) ?? { conversation: parent, runs: [] })
+    if (listed.size + add.length <= LANES)
+      for (const item of add) listed.set(item.conversation, item)
+  }
+  const more = all.filter((item) => !listed.has(item.lane.conversation)).length
+  const byId = new Map<string, CallRow>()
+  for (const found of byConversation.values()) for (const call of found) byId.set(call.id, call)
+  const trees = new Map<string, Map<string, CallRow>>()
+  const toolCall = (conversation: number, id: string, trace: string | undefined) =>
+    ownToolCall(host, byId, trees, conversation, id, trace)
+  const lanesOut = [...listed.values()].map((lane): Lane => {
+    const fact = facts.get(lane.conversation)
+    const parent = parentOf(lane.conversation)
+    const spawn =
+      parent !== undefined && listed.has(parent) ? spawnOf(lane, parent, fact) : undefined
+    return {
+      conversation: lane.conversation,
+      ...(fact?.agent === undefined ? {} : { agent: fact.agent }),
+      ...(fact?.model === undefined ? {} : { model: fact.model }),
+      ...(fact?.kind === undefined ? {} : { kind: fact.kind }),
+      ...(parent !== undefined && listed.has(parent) ? { parent } : {}),
+      ...(spawn ? { spawn } : {}),
+      runs: lane.runs,
+    }
+  })
+  const links: LaneLink[] = []
+  if (listed.size)
+    for (const event of await messages(host, since, until)) {
+      const { from, to } = event.data
+      if (!listed.has(from) || !listed.has(to) || from === to) continue
+      const call =
+        event.context?.parentCall === undefined
+          ? undefined
+          : toolCall(from, event.context.parentCall, event.context.traceId)
+      links.push({
+        from,
+        to,
+        ...(call ? { call: call.id } : {}),
+        at: call?.at ?? event.at,
+        kind: 'message',
+      })
+    }
   return {
     now: new Date(clock).toISOString(),
-    lanes: all.slice(0, LANES).map((item) => item.lane),
-    ...(all.length > LANES ? { more: all.length - LANES } : {}),
+    lanes: lanesOut,
+    links,
+    ...(more ? { more } : {}),
+  }
+
+  /**
+   * Where `lane` started in `parent`'s lane: the call its event names, else the parent's last spawning tool call before
+   * the lane was created (its event) or first worked.
+   */
+  function spawnOf(lane: Lane, parent: number, fact: Fact | undefined): LaneSpawn | undefined {
+    const context = fact?.context
+    if (context?.parentCall !== undefined && context.conversationId === parent) {
+      const call = toolCall(parent, context.parentCall, context.traceId)
+      if (call) return { call: call.id, at: call.at }
+    }
+    const first = lane.runs[0]
+    const bound = fact ? Date.parse(fact.at) : first && Date.parse(first.start)
+    if (bound === undefined) return undefined
+    const call = byConversation
+      .get(parent)
+      ?.findLast(
+        (candidate) =>
+          candidate.kind === 'tool' &&
+          SPAWNING.has(candidate.name) &&
+          Date.parse(candidate.at) <= bound,
+      )
+    return call && { call: call.id, at: call.at, inferred: true }
   }
 }
 

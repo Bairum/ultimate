@@ -1,6 +1,19 @@
 import { expect, it } from 'vitest'
-import { ago, block, duration, label, position, ticks } from '../../extensions/system/layout.ts'
-import type { LaneCall, LaneRun } from '../../extensions/system/refs.ts'
+import {
+  ago,
+  block,
+  chain,
+  duration,
+  elbow,
+  label,
+  links,
+  messageLinks,
+  position,
+  ticks,
+  tree,
+} from '../../extensions/system/layout.ts'
+import type { Frame } from '../../extensions/system/layout.ts'
+import type { Lane, LaneCall, LaneRun } from '../../extensions/system/refs.ts'
 
 const now = Date.parse('2026-10-19T12:00:00Z')
 const since = now - 30 * 60_000
@@ -73,4 +86,142 @@ it('labels a block by its main tool, ignoring model calls, else by its call coun
 it('measures an open run up to now', () => {
   expect(duration(run(15, 12), now)).toBe(3 * 60_000)
   expect(duration(run(2), now)).toBe(2 * 60_000)
+})
+
+/** Lane `conversation` under `parent`, spawned `spawned` minutes ago, with runs from `start` to `end` minutes ago. */
+const lane = (
+  conversation: number,
+  parent: number | undefined,
+  spawned: number | undefined,
+  ...runs: LaneRun[]
+): Lane => ({
+  conversation,
+  ...(parent === undefined ? {} : { parent }),
+  ...(spawned === undefined ? {} : { spawn: { call: `c${conversation}`, at: at(spawned) } }),
+  runs,
+})
+
+const shape = (rows: ReturnType<typeof tree>) =>
+  rows.map((row) =>
+    row.kind === 'lane'
+      ? `${'  '.repeat(row.depth)}${row.lane.conversation}${row.last ? '.' : ''} ${row.through.map(Number).join('')}`
+      : `${'  '.repeat(row.depth)}+${row.count} ${row.through.map(Number).join('')}`,
+  )
+
+it('orders lanes depth first, roots as given and children by when they started', () => {
+  const lanes = [
+    lane(1, undefined, undefined, run(20)),
+    // Listed before its earlier sibling: children sort by spawn time, not by the list.
+    lane(3, 1, 10, run(9)),
+    lane(2, 1, 20, run(19, 15)),
+    lane(4, 2, 18, run(17, 16)),
+    // Its parent is not listed: a root.
+    lane(5, 99, 5, run(4, 2)),
+  ]
+  expect(shape(tree(lanes))).toEqual(['1. ', '  2 ', '    4. 1', '  3. ', '5. '])
+})
+
+it('folds more than three finished children behind one row, unless expanded', () => {
+  const lanes = [
+    lane(1, undefined, undefined, run(25)),
+    ...[2, 3, 4, 5].map((id) => lane(id, 1, 30 - id, run(29 - id, 20 - id))),
+    // Open: shown; and a finished child with an open grandchild counts as open.
+    lane(6, 1, 15, run(14)),
+    lane(7, 1, 12, run(11, 10)),
+    lane(8, 7, 10, run(9)),
+  ]
+  expect(shape(tree(lanes))).toEqual(['1. ', '  6 ', '  7 ', '    8. 1', '  +4 '])
+  expect(tree(lanes).at(-1)).toMatchObject({ kind: 'fold', parent: 1, count: 4, last: true })
+  // Three finished are not enough to fold; expanded shows all in start order.
+  expect(shape(tree(lanes.filter((item) => item.conversation !== 5)))).toHaveLength(7)
+  expect(shape(tree(lanes, new Set([1])))).toEqual([
+    '1. ',
+    '  2 ',
+    '  3 ',
+    '  4 ',
+    '  5 ',
+    '  6 ',
+    '  7. ',
+    '    8. 0',
+  ])
+})
+
+it("lights a lane's ancestors and descendants, not its siblings", () => {
+  const lanes = [
+    lane(1, undefined, undefined),
+    lane(2, 1, 10),
+    lane(3, 1, 9),
+    lane(4, 2, 8),
+    lane(5, 4, 7),
+  ]
+  expect([...chain(lanes, 2)].toSorted((a, b) => a - b)).toEqual([1, 2, 4, 5])
+  expect([...chain(lanes, 3)].toSorted((a, b) => a - b)).toEqual([1, 3])
+  expect([...chain(lanes, 5)].toSorted((a, b) => a - b)).toEqual([1, 2, 4, 5])
+})
+
+it('draws a spawn link from the spawning moment on the parent row to the first block on the child row', () => {
+  const frame: Frame = {
+    y: new Map([
+      [1, 24],
+      [2, 72],
+      [3, 120],
+    ]),
+    width: 600,
+    since,
+    now,
+  }
+  const lanes = [
+    lane(1, undefined, undefined, run(25)),
+    // Spawned at -15m (x 300), first block at -12m (x 360), one row down.
+    lane(2, 1, 15, run(12, 10)),
+    // Its first run lies before the window: the link goes to the first one inside it.
+    { ...lane(3, 1, 40, run(40, 35), run(6, 3)), spawn: { at: at(40), inferred: true as const } },
+  ]
+  const [two, three] = links(lanes, frame)
+  expect(two).toMatchObject({ from: 1, to: 2, dot: [300, 24], inferred: false })
+  expect(two.d).toBe('M300 24V66Q300 72 306 72H360')
+  // A spawn before the window starts at its left edge.
+  expect(three).toMatchObject({ from: 1, to: 3, dot: [0, 24], inferred: true })
+  expect(three.d).toBe('M0 24V114Q0 120 6 120H480')
+  // A child without a shown row, or without a block in the window, gets no link.
+  expect(links(lanes, { ...frame, y: new Map([[1, 24]]) })).toEqual([])
+  expect(
+    links([lanes[0], lane(4, 1, 20, run(50, 45))], {
+      ...frame,
+      y: new Map([
+        [1, 24],
+        [4, 72],
+      ]),
+    }),
+  ).toEqual([])
+})
+
+it('bends an elbow only where there is room, else drops straight down', () => {
+  expect(elbow(10, 0, 10, 40)).toBe('M10 0V40')
+  expect(elbow(10, 0, 5, 40)).toBe('M10 0V40')
+  expect(elbow(10, 0, 13, 40)).toBe('M10 0V37Q10 40 13 40H13')
+  // Upwards, for a child row above its parent's.
+  expect(elbow(0, 40, 100, 0)).toBe('M0 40V6Q0 0 6 0H100')
+})
+
+it('draws a message as a vertical line at its moment between the two rows, inside the window only', () => {
+  const frame: Frame = {
+    y: new Map([
+      [1, 24],
+      [2, 72],
+    ]),
+    width: 600,
+    since,
+    now,
+  }
+  expect(
+    messageLinks(
+      [
+        { from: 2, to: 1, at: at(6), kind: 'message', call: 'c' },
+        { from: 1, to: 2, at: at(40), kind: 'message' },
+        { from: 1, to: 9, at: at(5), kind: 'message' },
+      ],
+      frame,
+    ),
+  ).toEqual([{ from: 2, to: 1, d: 'M480 72V24', dot: [480, 72] }])
 })

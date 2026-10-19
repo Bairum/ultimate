@@ -8,6 +8,7 @@ import type { ActionContext } from '../server/actions.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { callTrace } from '../server/trace.ts'
 import type { EventRecord } from '../shared/events.ts'
+import type { ConversationSummary } from '../shared/protocol.ts'
 import { fauxServer, linkDependencies, temp } from './helpers.ts'
 
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
@@ -57,8 +58,11 @@ const event = (
   ...(context ? { context } : {}),
 })
 
-/** A trace with calls at chosen seconds after T0, an event log, and the stream action over both. */
-async function fixture(events: EventRecord[] = []) {
+/**
+ * A trace with calls at chosen seconds after T0, an event log, conversation summaries, and the stream action over
+ * them.
+ */
+async function fixture(events: EventRecord[] = [], summaries: ConversationSummary[] = []) {
   const trace = callTrace(join(await temp(), 'trace.sqlite'))
   trace.open()
   const clock = vi.spyOn(performance, 'now')
@@ -114,6 +118,7 @@ async function fixture(events: EventRecord[] = []) {
     trace: trace.reader,
     eventLog: log,
     harness: () => harness,
+    conversations: () => summaries,
   } as unknown as ExtensionHost
   const ctx = { host } as ActionContext
   const stream = (args: Record<string, unknown> = {}) =>
@@ -126,7 +131,10 @@ async function fixture(events: EventRecord[] = []) {
   /** Lanes as of `seconds` after T0. */
   const lanesAt = (seconds: number, args: Record<string, unknown> = {}) =>
     lanes(host, args, T0 + seconds * 1000)
-  return { trace, call, events, stream, tree, running, lanesAt, ctx }
+  /** The id of the call named `name` (the first, or the `nth`). */
+  const idOf = (name: string, nth = 0) =>
+    trace.reader.query({ limit: 1000 }).filter((row) => row.name === name)[nth].id
+  return { trace, call, events, stream, tree, running, lanesAt, idOf, ctx }
 }
 const names = (rows: SystemRow[]) => rows.map((row) => row.name)
 
@@ -278,7 +286,9 @@ it("groups each conversation's tool and model calls into runs split by quiet, op
   f.call('old', -2000, { kind: 'tool', conversation: 10 })
   const result = await f.lanesAt(150)
   expect(result.now).toBe(new Date(T0 + 150_000).toISOString())
+  // 9 is 7's child (its event says so), listed after it as the window's lanes are; no spawn call to point at.
   expect(result.lanes.map((lane) => lane.conversation)).toEqual([7, 9])
+  expect(result.links).toEqual([])
   const [seven, nine] = result.lanes
   expect(seven.runs).toEqual([
     {
@@ -324,6 +334,135 @@ it("groups each conversation's tool and model calls into runs split by quiet, op
     [9, [new Date(T0 + 61_000).toISOString()]],
   ])
   await expect(f.lanesAt(0, { since: 'soon' })).rejects.toThrow('since')
+})
+
+it('links each lane to its parent and the call that spawned it, exact or inferred', async () => {
+  const iso = (seconds: number) => new Date(T0 + seconds * 1000).toISOString()
+  const events: EventRecord[] = []
+  const f = await fixture(events, [
+    // 30 has no event: its owner, 3, is its parent, though 3 did nothing in the window.
+    { id: 30, parentConversationId: 3, busy: false },
+    // 40 branched from 99, which never worked either.
+    { id: 40, branchOf: { conversationId: 99, at: 1 }, busy: false },
+    // 99 has a parent too, but only one hop above a working lane is listed.
+    { id: 99, parentConversationId: 98, busy: false },
+  ])
+  // 7 spawns 8 by `subagent` at 100 s, then 9 at 120 s; a message call at 130 s.
+  f.call('subagent', 100, { kind: 'tool', conversation: 7, ms: 1000 })
+  f.call('subagent', 120, { kind: 'tool', conversation: 7, ms: 1000 })
+  f.call('message', 130, { kind: 'tool', conversation: 7, ms: 500 })
+  f.call('read', 103, { kind: 'tool', conversation: 8 })
+  f.call('read', 125, { kind: 'tool', conversation: 9 })
+  f.call('message', 140, { kind: 'tool', conversation: 9 })
+  f.call('read', 110, { kind: 'tool', conversation: 30 })
+  f.call('read', 115, { kind: 'tool', conversation: 40 })
+  // A message sent by an action the tool call ran: its context names the action, the link names the tool call.
+  const start = T0 + 150_000 - performance.timeOrigin
+  vi.spyOn(performance, 'now')
+    .mockReturnValueOnce(start)
+    .mockReturnValueOnce(start + 1)
+    .mockReturnValueOnce(start + 2)
+    .mockReturnValueOnce(start + 3)
+  f.trace.run(
+    { kind: 'tool', caller: 'agent', callee: 'codemode', name: 'codemode', conversationId: 8 },
+    () =>
+      f.trace.run(
+        { kind: 'action', caller: 'codemode', callee: 'board', name: 'board/send' },
+        () => 1,
+      ),
+    null,
+  )
+  const action = f.trace.reader.query({ limit: 1000 }).find((row) => row.name === 'board/send')!
+  events.push(
+    // From before the window (ids follow time): no link.
+    event(0, 'board.sent', -5000, { message: 5, from: 7, to: 8, reply: false, steer: false }),
+    // 8's event names the call that started it.
+    event(
+      1,
+      'subagents.started',
+      100.5,
+      { id: 8, agent: 'worker', kind: 'child', parent: 7 },
+      {
+        conversationId: 7,
+        traceId: f.idOf('subagent'),
+        parentCall: f.idOf('subagent'),
+      },
+    ),
+    // 9's names none: the last spawning call before the event, 7's second `subagent`, stands for it.
+    event(2, 'subagents.started', 121, { id: 9, agent: 'reviewer', kind: 'child', parent: 7 }),
+    event(
+      3,
+      'board.sent',
+      130.2,
+      { message: 1, from: 7, to: 9, reply: true, steer: false },
+      {
+        conversationId: 7,
+        traceId: f.idOf('message'),
+        parentCall: f.idOf('message'),
+      },
+    ),
+    event(4, 'board.sent', 140.1, { message: 2, from: 9, to: 7, reply: false, steer: false }),
+    event(
+      5,
+      'board.sent',
+      150,
+      { message: 3, from: 8, to: 7, reply: false, steer: false },
+      {
+        conversationId: 8,
+        traceId: action.trace,
+        parentCall: action.id,
+      },
+    ),
+    // To the user: no link.
+    event(6, 'board.sent', 141, { message: 4, from: 9, to: 'user', reply: true, steer: false }),
+  )
+  const result = await f.lanesAt(200)
+  const byId = new Map(result.lanes.map((lane) => [lane.conversation, lane]))
+  expect([...byId.keys()].toSorted((a, b) => a - b)).toEqual([3, 7, 8, 9, 30, 40, 99])
+  expect(byId.get(3)).toEqual({ conversation: 3, runs: [] })
+  expect(byId.get(99)).toEqual({ conversation: 99, runs: [] })
+  expect(byId.get(8)).toMatchObject({
+    parent: 7,
+    spawn: { call: f.idOf('subagent'), at: iso(100) },
+  })
+  expect(byId.get(8)!.spawn!.inferred).toBeUndefined()
+  expect(byId.get(9)).toMatchObject({
+    parent: 7,
+    agent: 'reviewer',
+    spawn: { call: f.idOf('subagent', 1), at: iso(120), inferred: true },
+  })
+  // 3 and 99 have no calls, so nothing to infer 30's or 40's spawn from.
+  expect(byId.get(30)).toMatchObject({ parent: 3 })
+  expect(byId.get(30)!.spawn).toBeUndefined()
+  expect(byId.get(40)).toMatchObject({ parent: 99 })
+  expect(byId.get(40)!.spawn).toBeUndefined()
+  expect(result.links).toEqual([
+    { from: 7, to: 9, call: f.idOf('message'), at: iso(130), kind: 'message' },
+    { from: 9, to: 7, at: iso(140.1), kind: 'message' },
+    {
+      from: 8,
+      to: 7,
+      call: f.idOf('codemode'),
+      at: f.trace.reader.query({ limit: 1000 }).find((row) => row.name === 'codemode')!.at,
+      kind: 'message',
+    },
+  ])
+})
+
+it('keeps a parent with its child under the cap', async () => {
+  const f = await fixture([], [{ id: 500, parentConversationId: 600, busy: false }])
+  for (let conversation = 1; conversation <= 39; conversation++)
+    f.call('read', 100 + conversation, { kind: 'tool', conversation })
+  // 500 is the least recently active; its parent would make 41, so both stay out.
+  f.call('read', 50, { kind: 'tool', conversation: 500 })
+  const result = await f.lanesAt(200)
+  expect(result.lanes).toHaveLength(39)
+  expect(result.more).toBe(1)
+  f.call('read', 51, { kind: 'tool', conversation: 501 })
+  const capped = await f.lanesAt(200)
+  // 501 needs no parent and fits; 500 still does not.
+  expect(capped.lanes.map((lane) => lane.conversation)).toContain(501)
+  expect(capped.more).toBe(1)
 })
 
 it('caps lanes at 40 and calls at 200 per run, counting the rest', async () => {
@@ -426,7 +565,11 @@ export const actions = {
   }
   expect(live.rows.map((row) => row.summary)).toEqual(['{"n":4}'])
   // Lanes read the real task graph; actions are not tool or model calls, so no lanes.
-  expect(await invoke('system', 'lanes', {})).toEqual({ now: expect.any(String), lanes: [] })
+  expect(await invoke('system', 'lanes', {})).toEqual({
+    now: expect.any(String),
+    lanes: [],
+    links: [],
+  })
   const second = stream.rows.find((row) => row.source === 'event' && row.summary === '{"n":2}')!
   const tree = (await invoke('system', 'tree', { trace: second.trace! })) as {
     calls: { name: string; children: unknown[] }[]
