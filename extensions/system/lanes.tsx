@@ -1,0 +1,286 @@
+import { ListFilterIcon } from 'lucide-react'
+import { useState } from 'react'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { cn, formatDuration, useConversations, useUltimate } from '@/sdk'
+import type { ConversationSummary } from '@/sdk'
+import { AgentMark, agentTitle, ConversationRef } from '../conversations/ui.tsx'
+import { block, duration, label, ticks } from './layout.ts'
+import type { WindowName } from './layout.ts'
+import type { Lane, LaneRun } from './refs.ts'
+import { clock, KindIcon, TraceTree } from './tree.tsx'
+
+/** Where a lane stands: working now, waiting on the user's answer, or idle. */
+export type LaneState = 'running' | 'waiting' | 'idle'
+export const laneState = (lane: Lane, waiting: boolean): LaneState =>
+  lane.runs.at(-1)?.end === undefined ? 'running' : waiting ? 'waiting' : 'idle'
+
+/** A standing agent's name (`ultimate`, `lander`) for its mark and title; undefined for other conversations. */
+function standingName(lane: Lane, summary: ConversationSummary | undefined) {
+  if (summary?.label === 'lander') return 'lander'
+  if (lane.kind === 'standing' && lane.agent) return lane.agent
+  if (summary?.label === 'agent' && summary.title?.startsWith('@')) return summary.title.slice(1)
+  return undefined
+}
+
+/** `openai/gpt-5.1-codex` → `gpt-5.1-codex`: the model as the composer names it. */
+const modelName = (model: string) => model.slice(model.indexOf('/') + 1)
+
+/** The window's time axis: faint grid lines at each tick, labelled underneath, `now` at the right edge. */
+export function Axis({ window }: { window: WindowName }) {
+  return (
+    <div className="relative h-5 font-mono text-[10px] text-muted-foreground/70 tabular-nums">
+      {ticks(window).map((tick) => (
+        <span
+          className={cn(
+            'absolute top-1 -translate-x-1/2',
+            tick.at === 1 && 'translate-x-[-100%] rounded-sm bg-brand/15 px-1 text-brand',
+          )}
+          key={tick.label}
+          style={{ left: `${tick.at * 100}%` }}
+        >
+          {tick.label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/** The vertical grid lines behind a lane's timeline. */
+function Grid({ window }: { window: WindowName }) {
+  return (
+    <>
+      {ticks(window).map((tick) => (
+        <span
+          aria-hidden
+          className={cn('absolute inset-y-0 w-px', tick.at === 1 ? 'bg-brand/40' : 'bg-border/50')}
+          key={tick.label}
+          style={{ left: `calc(${tick.at * 100}% - ${tick.at === 1 ? 1 : 0}px)` }}
+        />
+      ))}
+    </>
+  )
+}
+
+/** One run as a rounded block: accent while open, amber when its lane waits on you, else muted; calls as ticks. */
+function Block({
+  run,
+  since,
+  now,
+  tone,
+  selected,
+  onSelect,
+}: {
+  run: LaneRun
+  since: number
+  now: number
+  tone: 'running' | 'waiting' | 'done'
+  selected: boolean
+  onSelect: () => void
+}) {
+  const place = block(run, since, now)
+  if (!place) return null
+  const start = Date.parse(run.start)
+  const end = run.end === undefined ? now : Date.parse(run.end)
+  const failed = run.calls.filter((call) => !call.ok).length
+  const calls = run.calls.length + (run.more ?? 0)
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          className={cn(
+            '@container absolute inset-y-1 min-w-[3px] cursor-pointer overflow-hidden rounded-[4px] text-left ring-1 outline-none ring-inset focus-visible:ring-ring',
+            tone === 'running' && 'border-r-2 border-brand bg-brand/20 ring-brand/30',
+            tone === 'waiting' && 'bg-amber-400/20 ring-amber-400/40',
+            tone === 'done' && 'bg-muted-foreground/15 ring-border hover:bg-muted-foreground/25',
+            selected && 'ring-foreground/50',
+          )}
+          data-run={run.start}
+          onClick={onSelect}
+          style={{ left: `${place.left * 100}%`, width: `${place.width * 100}%` }}
+          type="button"
+        >
+          {run.calls.map((call, index) => (
+            <span
+              aria-hidden
+              className={cn(
+                'absolute bottom-0 h-1.5 w-px',
+                call.ok ? 'bg-foreground/25' : 'h-full w-0.5 bg-error',
+              )}
+              key={index}
+              style={{
+                left: `${(end > start ? (Date.parse(call.at) - start) / (end - start) : 0) * 100}%`,
+              }}
+            />
+          ))}
+          <span
+            className={cn(
+              // A label shows only where the block has room for a few letters of it.
+              'relative hidden truncate px-1.5 font-mono text-[10px] leading-[20px] @[2.75rem]:block',
+              tone === 'running' ? 'text-brand' : 'text-foreground/70',
+            )}
+          >
+            {label(run.calls, run.more)}
+          </span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="font-mono text-[11px]" side="top">
+        {calls} {calls === 1 ? 'call' : 'calls'} · {formatDuration(duration(run, now))}
+        {run.end === undefined && ' · running'}
+        {failed > 0 && ` · ${failed} failed`}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+/** The calls of one run, one line each; a click opens a call's trace tree beneath it. */
+function Calls({ run }: { run: LaneRun }) {
+  const [open, setOpen] = useState<number>()
+  return (
+    <ul className="my-1 max-h-72 overflow-y-auto rounded-md border border-border/70 bg-muted/20 py-1 font-mono text-[10.5px] leading-[18px] text-muted-foreground">
+      {run.calls.map((call, index) => (
+        <li key={index}>
+          <button
+            className="flex w-full min-w-0 cursor-pointer items-start gap-1.5 px-2 py-px text-left hover:bg-muted/50"
+            onClick={() => setOpen(open === index ? undefined : index)}
+            type="button"
+          >
+            <span className="w-14 shrink-0 tabular-nums text-muted-foreground/60">
+              {clock(call.at)}
+            </span>
+            <KindIcon kind={call.kind} ok={call.ok} />
+            <span
+              className={cn(
+                'min-w-0 flex-1 truncate',
+                call.ok ? 'text-foreground/85' : 'text-error',
+              )}
+            >
+              {call.name}
+            </span>
+            <span className="shrink-0 tabular-nums">{formatDuration(call.ms)}</span>
+          </button>
+          {open === index && <TraceTree trace={call.trace} />}
+        </li>
+      ))}
+      {run.more !== undefined && (
+        <li className="px-2 text-muted-foreground/60">+{run.more} newer calls not shown</li>
+      )}
+    </ul>
+  )
+}
+
+const stateWords: Record<LaneState, string> = {
+  running: 'running',
+  waiting: 'needs you',
+  idle: 'idle',
+}
+
+/**
+ * One agent's lane: who it is (its mark and name, its model, its state) on the left, its runs on the timeline on the
+ * right; on a phone the name sits above a full-width timeline. A click on the name opens the conversation.
+ */
+export function LaneRow({
+  lane,
+  state,
+  window,
+  since,
+  now,
+  onFilter,
+}: {
+  lane: Lane
+  state: LaneState
+  window: WindowName
+  since: number
+  now: number
+  onFilter: () => void
+}) {
+  const actions = useUltimate()
+  const summary = useConversations().find((item) => item.id === lane.conversation)
+  const standing = standingName(lane, summary)
+  const [selected, setSelected] = useState<string>()
+  const run = lane.runs.find((item) => item.start === selected)
+  const open = () => {
+    actions.showSurface('agent')
+    actions.switchConversation(lane.conversation)
+  }
+  return (
+    <li className="border-b border-border/50 last:border-b-0" data-lane={lane.conversation}>
+      <div className="flex flex-col gap-1 py-1.5 md:flex-row md:items-center md:gap-3">
+        <div className="group flex min-w-0 items-center gap-2 md:w-56 md:shrink-0">
+          <button
+            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md text-left outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            onClick={open}
+            title={`Open #${lane.conversation}`}
+            type="button"
+          >
+            <AgentMark
+              name={standing ?? lane.agent ?? 'agent'}
+              presence={state === 'running' ? 'working' : state === 'waiting' ? 'waiting' : 'idle'}
+            />
+            <span className="flex min-w-0 flex-1 flex-col">
+              {standing ? (
+                <span className="truncate text-[12.5px] leading-5 font-semibold text-foreground">
+                  {agentTitle(standing)}
+                  <span className="ml-1.5 font-mono text-[10px] font-normal text-muted-foreground/70">
+                    #{lane.conversation}
+                  </span>
+                </span>
+              ) : (
+                <ConversationRef
+                  className="text-[12.5px] leading-5 text-foreground"
+                  id={lane.conversation}
+                />
+              )}
+              <span className="flex min-w-0 items-center gap-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
+                <span
+                  className={cn(
+                    'shrink-0',
+                    state === 'running' && 'text-brand',
+                    state === 'waiting' && 'text-amber-700 dark:text-amber-300',
+                  )}
+                >
+                  {stateWords[state]}
+                </span>
+                {lane.agent && !standing && <span className="shrink-0">· {lane.agent}</span>}
+                {lane.model && <span className="truncate">· {modelName(lane.model)}</span>}
+              </span>
+            </span>
+          </button>
+          <button
+            aria-label={`Show only #${lane.conversation} in the stream`}
+            className="shrink-0 cursor-pointer rounded-sm p-1 text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100 pointer-coarse:opacity-100"
+            onClick={onFilter}
+            title="Show only this conversation in the stream"
+            type="button"
+          >
+            <ListFilterIcon className="size-3" />
+          </button>
+        </div>
+        <div className="relative h-7 min-w-0 md:flex-1">
+          <Grid window={window} />
+          {lane.runs.map((item, index) => (
+            <Block
+              key={item.start}
+              now={now}
+              onSelect={() => setSelected(selected === item.start ? undefined : item.start)}
+              run={item}
+              selected={item.start === selected}
+              since={since}
+              tone={
+                item.end === undefined
+                  ? 'running'
+                  : state === 'waiting' && index === lane.runs.length - 1
+                    ? 'waiting'
+                    : 'done'
+              }
+            />
+          ))}
+        </div>
+      </div>
+      {run && (
+        <div className="pb-2 md:pl-[15.75rem]">
+          <Calls run={run} />
+        </div>
+      )}
+    </li>
+  )
+}

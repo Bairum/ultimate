@@ -17,6 +17,15 @@ export const MoveHereAction = actionRef<{ force?: boolean; by?: 'local' | 'sync'
   'cloud',
   'moveHere',
 )
+/**
+ * No arguments → the finished backup `{ id, at, bytes }`: upload an encrypted snapshot of the database and the
+ * `ultimate/*` branches while this machine keeps the lease. Only on the serving writer, one at a time, never during a
+ * move or release.
+ */
+export const BackupAction = actionRef<null, { id: string; at: number; bytes: number }>(
+  'cloud',
+  'backup',
+)
 /** No arguments → `{ ok }`: stop the preparing move, until its claim is sent. */
 export const CancelAction = actionRef<null, { ok: boolean }>('cloud', 'cancel')
 /**

@@ -144,18 +144,10 @@ export async function readHealth(userHome: string): Promise<ProviderHealth[]> {
 
 const writes = new Map<string, Promise<unknown>>()
 
-/** A provider's state before and after one write, and its error after. */
-export type Flip = {
-  provider: string
-  from: ProviderHealth['state']
-  to: ProviderHealth['state']
-  error?: string
-}
-
 /**
  * Merge `update` into `provider`'s entry: read, merge by max timestamp, then write through a same-directory temporary
  * file and an atomic rename. Writes from this process run one at a time; another home's concurrent write can at worst
- * lose one event. Resolves the provider's state before and after.
+ * lose one event. Resolves the provider's state before and after, and its error when it is failing.
  */
 export async function record(
   userHome: string,
@@ -163,14 +155,28 @@ export async function record(
   update: HealthEntry,
 ): Promise<Flip> {
   const clean = update.error === undefined ? update : { ...update, error: sanitize(update.error) }
-  let from: ProviderHealth['state'] = 'unknown'
-  const written = await write(userHome, (file) => {
-    from = state(file.providers[provider] ?? {})
-    file.providers[provider] = merge(file.providers[provider] ?? {}, clean)
+  let flip: Flip = { provider, from: 'unknown', to: 'unknown' }
+  await write(userHome, (file) => {
+    const before = file.providers[provider] ?? {}
+    const after = merge(before, clean)
+    file.providers[provider] = after
+    const to = state(after)
+    flip = {
+      provider,
+      from: state(before),
+      to,
+      ...(to === 'failing' && after.error ? { error: after.error } : {}),
+    }
   })
-  const entry = written.providers[provider]
-  const to = state(entry)
-  return { provider, from, to, ...(to === 'failing' && entry.error ? { error: entry.error } : {}) }
+  return flip
+}
+
+/** A provider's state before and after one write, and its error after. */
+export type Flip = {
+  provider: string
+  from: ProviderHealth['state']
+  to: ProviderHealth['state']
+  error?: string
 }
 
 /**

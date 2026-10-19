@@ -5,31 +5,28 @@ import type {
   Fetcher,
   WebSocket as MachineSocket,
   WebSocketPair as MachineSocketPair,
+  WebSocketRequestResponsePair as MachinePingPair,
 } from '@cloudflare/workers-types'
-import { ReplicaStore, proxyRequest, admitsRequest } from './replica.ts'
+import { ReplicaStore } from './replica.ts'
 import { admitsAccess } from './access.ts'
 import type { AccessConfig } from './access.ts'
 
 import type { Sql } from './replica.ts'
 import { bounded, HELLO_LIMITS, PROJECT_KEY, PROJECT_MISMATCH, validTailnet } from './protocol.ts'
 import type { CloudMessage, Hello, MachineMessage } from './protocol.ts'
-import { BUILD_ID, buildKey, contentType, uploadBuild, validName } from './builds.ts'
 import { DirectoryStore } from './directory.ts'
 import { snapshotObject } from './snapshots.ts'
-import type { Presence, Project } from './directory.ts'
+import type { Presence } from './directory.ts'
 
 // Workers provides this constructor; Node-side request tests do not use WebSocket upgrades.
 declare const WebSocketPair: typeof MachineSocketPair
+declare const WebSocketRequestResponsePair: typeof MachinePingPair
 
 interface Env extends AccessConfig {
   BUILDS: R2Bucket
-  VERSION?: WorkerVersionMetadata
   REPLICA: DurableObjectNamespace
   ASSETS: Fetcher
   DIRECTORY: DurableObjectNamespace
-  TUNNELS?: string
-  [binding: `TUNNEL_${number}`]: Fetcher | undefined
-  MACHINE_ORIGIN?: string
   SYNC_TOKEN: string
 }
 
@@ -85,54 +82,19 @@ function matchesSyncToken(authorization: string | null, token: string): boolean 
   )
 }
 
-export default {
-  async fetch(request: Request, env: Env) {
-    const response = await route(request, env)
-    // Open tabs compare this with the version they loaded to offer a reload after a deploy (web/src/sdk/store.ts).
-    // A WebSocket upgrade keeps its own response.
-    if (!env.VERSION || response.webSocket) return response
-    const versioned = new Response(response.body, response)
-    versioned.headers.set(
-      'x-ultimate-cloud-version',
-      response.headers.get('x-ultimate-cloud-version') ?? env.VERSION.id,
-    )
-    return versioned
-  },
-}
+export default { fetch: route }
 
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url)
-  const prefix = /^\/p\/([^/]+)(?=\/|$)/.exec(url.pathname)
-  const path = prefix ? url.pathname.slice(prefix[0].length) : url.pathname
-  const api = path === '/api' || path.startsWith('/api/')
-  if ((api || prefix || url.pathname.startsWith('/b/')) && !(await admitsAccess(request, env)))
+  const api = url.pathname === '/api' || url.pathname.startsWith('/api/')
+  if (api && !(await admitsAccess(request, env)))
     return Response.json({ error: 'Unauthorized' }, { status: 401 })
-  if (url.pathname.startsWith('/sync/builds/') || url.pathname.startsWith('/sync/snapshots/')) {
+  if (url.pathname.startsWith('/sync/snapshots/')) {
     if (!env.SYNC_TOKEN || !matchesSyncToken(request.headers.get('Authorization'), env.SYNC_TOKEN))
       return Response.json({ error: 'Unauthorized' }, { status: 401 })
-    if (url.pathname.startsWith('/sync/snapshots/')) {
-      const [, project = '', id = '', name = ''] =
-        /^\/sync\/snapshots\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(url.pathname) ?? []
-      return snapshotObject(request, env.BUILDS, project, id, name)
-    }
-    const [, id, name] = /^\/sync\/builds\/([^/]+)(?:\/(.+))?$/.exec(url.pathname) ?? []
-    return uploadBuild(request, env.BUILDS, id ?? '', name)
-  }
-  if (url.pathname.startsWith('/b/')) {
-    const [, id, name = 'index.html'] = /^\/b\/([^/]+)\/(.*)?$/.exec(url.pathname) ?? []
-    if (!id || (id !== 'shared' && !BUILD_ID.test(id)))
-      return new Response('Not found', { status: 404 })
-    if (!validName(name)) return new Response('Not found', { status: 404 })
-    const object = await env.BUILDS.get(buildKey(id, name))
-    return object
-      ? new Response(object.body, {
-          headers: {
-            'content-type': contentType(name),
-            'cache-control':
-              name === 'index.html' ? 'no-cache' : 'private, max-age=31536000, immutable',
-          },
-        })
-      : new Response('Not found', { status: 404 })
+    const [, project = '', id = '', name = ''] =
+      /^\/sync\/snapshots\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(url.pathname) ?? []
+    return snapshotObject(request, env.BUILDS, project, id, name)
   }
   // The front page is a static shell built by cloud/build.ts; its data comes from /api/directory behind Access.
   if (url.pathname === '/') return env.ASSETS.fetch(new Request(new URL('/front/', url), request))
@@ -218,45 +180,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
   if (url.pathname === '/sync' || url.pathname.startsWith('/sync/'))
     return Response.json({ error: 'Unknown sync endpoint' }, { status: 404 })
-  if (api || prefix) {
-    if (!prefix) return Response.json({ error: 'Unknown project' }, { status: 404 })
-    const resolve = (slug: string) =>
-      directory(env).fetch(`https://directory/resolve?slug=${encodeURIComponent(slug)}`)
-    const resolved = await resolve(prefix[1])
-    if (!resolved.ok) {
-      // URLs were /p/<machine>/<project>/ before projects had one replica each.
-      const [, name, rest] = /^\/([^/]+)(.*)$/.exec(path) ?? []
-      if (!name || !(await resolve(name)).ok) return resolved
-      return new Response(null, {
-        status: 308,
-        headers: { Location: `/p/${name}${rest}${url.search}` },
-      })
-    }
-    const project: Project = await resolved.json()
-    const version = env.VERSION
-      ? `${env.VERSION.id}${project.uiBuild ? ':' + project.uiBuild : ''}`
-      : undefined
-    let response: Response
-    if (!api) {
-      const object =
-        project.uiBuild && (await env.BUILDS.get(buildKey(project.uiBuild, 'index.html')))
-      response = object
-        ? new Response(object.body, {
-            headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' },
-          })
-        : await env.ASSETS.fetch(request)
-    } else {
-      url.pathname = path
-      response = await env.REPLICA.get(env.REPLICA.idFromName(project.key)).fetch(
-        new Request(url, request),
-      )
-    }
-    if (version) {
-      response = new Response(response.body, response)
-      response.headers.set('x-ultimate-cloud-version', version)
-    }
-    return response
-  }
+  if (api) return Response.json({ error: 'Not found' }, { status: 404 })
   return env.ASSETS.fetch(request)
 }
 
@@ -272,23 +196,16 @@ async function resolveKey(env: Env, key: string) {
   return target
 }
 
-/** Bearer-authenticated twins of the cloud UI's routes, by path: the method and the replica route that answers. */
+/**
+ * @sync's bearer routes, by path: the method and the replica route that answers. The replica paths are the ones its
+ * deployed code already answers, so a Worker deployed ahead of its objects keeps working.
+ */
 const AGENT_ROUTES: Record<string, { method: 'GET' | 'POST'; path: string }> = {
   '/sync/directory': { method: 'GET', path: '' },
   '/sync/cloud': { method: 'GET', path: '/api/cloud' },
-  // The replica's own path for an agent's move, which no browser request reaches: the move is recorded as @sync's.
   '/sync/move': { method: 'POST', path: '/sync/move' },
   '/sync/cancel': { method: 'POST', path: '/api/cloud/cancel' },
 }
-
-// Retired classes stay exported until a later deploy deletes them; nothing binds them (README "Deploy").
-class Retired {
-  fetch() {
-    return new Response('Gone', { status: 410 })
-  }
-}
-export class Directory extends Retired {}
-export class ProjectReplica extends Retired {}
 
 export class ProjectDirectory {
   readonly store: DirectoryStore
@@ -332,10 +249,7 @@ export class ProjectDirectory {
       return new Response(null, { status: 204 })
     }
     if (url.pathname === '/list') return Response.json(this.store.list())
-    const value = this.store.resolve(url.searchParams.get('slug') ?? '')
-    return value
-      ? Response.json(value)
-      : Response.json({ error: 'Unknown project' }, { status: 404 })
+    return Response.json({ error: 'Unknown directory route' }, { status: 404 })
   }
 }
 
@@ -353,6 +267,9 @@ interface Attachment {
 }
 const attachment = (socket: MachineSocket) =>
   socket.deserializeAttachment() as Attachment | null | undefined
+
+/** A machine's epoch-millisecond timestamp. */
+const validTime = (value: unknown) => Number.isSafeInteger(value) && (value as number) > 0
 
 /** Secret names as hello carries them: bounded, names only. */
 const validSecrets = ({ secrets, secretsComplete }: Pick<Hello, 'secrets' | 'secretsComplete'>) =>
@@ -375,11 +292,11 @@ function validHello(hello: Hello, { key, alias }: Attachment) {
     Number.isInteger(hello.port) &&
     hello.port >= 1 &&
     hello.port <= 65535 &&
-    (hello.uiBuild === undefined || BUILD_ID.test(hello.uiBuild)) &&
     (hello.epoch === undefined || (Number.isSafeInteger(hello.epoch) && hello.epoch >= 1)) &&
     typeof hello.history === 'boolean' &&
     validSecrets(hello) &&
     (hello.tailnet === undefined || validTailnet(hello.tailnet)) &&
+    (hello.lastBackupAt === undefined || validTime(hello.lastBackupAt)) &&
     (hello.transition === undefined ||
       (typeof hello.transition === 'string' && /^[\w-]{1,64}$/.test(hello.transition)))
   )
@@ -389,11 +306,6 @@ export class SharedReplica {
   readonly ctx: DurableObjectState
   readonly env: Env
   readonly store: ReplicaStore
-  readonly streams = new Set<{
-    id: number
-    send(name: string, value: unknown): void
-    close(): void
-  }>()
   constructor(ctx: DurableObjectState, env: Env) {
     this.ctx = ctx
     this.env = env
@@ -401,14 +313,8 @@ export class SharedReplica {
       exec: (query, ...bindings) => ctx.storage.sql.exec(query, ...bindings),
       transaction: (run) => ctx.storage.transactionSync(run),
     } as Sql)
-    // Constructed with sockets still attached means the object was evicted while they stayed open:
-    // the only observable sign of hibernation. It logs in the waking event's trace, so that event's
-    // outcome shows whether admission survived. Counts and an object-id prefix only, no content.
-    const attached = ctx.getWebSockets()
-    if (attached.length)
-      console.log(
-        `Replica woke: object=${ctx.id.toString().slice(0, 8)} sockets=${attached.length} admitted=${attached.filter((socket) => attachment(socket)?.role).length}`,
-      )
+    // Machines check their socket is alive with `ping`; the runtime answers without waking the object.
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'))
   }
   /** Open sockets whose hello was answered, writer and standbys. */
   admitted() {
@@ -470,19 +376,14 @@ export class SharedReplica {
         ...(this.store.tailnet() ? { tailnet: this.store.tailnet() } : {}),
       },
       machines,
-      count: this.store.summaryCount(),
-      uiBuild: lease.uiBuild,
       ...(this.store.transition() ? { transition: this.store.transition() } : {}),
-      hasEntries: this.store.hasEntries(),
+      ...(this.store.lastBackupAt() ? { lastBackupAt: this.store.lastBackupAt() } : {}),
     }
     this.ctx.waitUntil(
       directory(this.env)
         .fetch('https://directory/update', { method: 'POST', body: JSON.stringify(presence) })
         .then(() => {}),
     )
-  }
-  refresh() {
-    for (const stream of this.streams) stream.send('view', this.store.view(stream.id))
   }
   webSocketMessage(socket: MachineSocket, raw: string | ArrayBuffer) {
     let type = 'unknown'
@@ -495,12 +396,6 @@ export class SharedReplica {
       if (
         [
           'hello',
-          'uiBuild',
-          'batch',
-          'summaries',
-          'system',
-          'models',
-          'delivered',
           'release',
           'claim',
           'request-release',
@@ -508,6 +403,7 @@ export class SharedReplica {
           'transition',
           'secrets',
           'tailnet',
+          'backup',
         ].includes(message?.type)
       )
         type = message.type
@@ -539,11 +435,9 @@ export class SharedReplica {
             secretsComplete: message.secretsComplete,
           },
         })
-        if (role === 'writer') {
+        if (role === 'writer')
           for (const previous of this.sockets())
             if (previous !== socket) previous.close(1000, 'Replaced by new machine connection')
-          for (const stream of this.streams) stream.close()
-        }
         for (const reply of replies) socket.send(JSON.stringify(reply))
         if (abandoned) this.broadcast()
         else if (role === 'writer') this.announce()
@@ -564,7 +458,6 @@ export class SharedReplica {
           return
         }
         socket.serializeAttachment({ ...held, role: 'writer' })
-        for (const stream of this.streams) stream.close()
         for (const reply of replies) socket.send(JSON.stringify(reply))
         this.announce()
         this.presence()
@@ -614,8 +507,13 @@ export class SharedReplica {
         }
         return
       }
-      // Only the writer's data is applied: a standby is fenced off.
+      // Only the writer's messages count from here: a standby is fenced off.
       if (held?.role !== 'writer') return
+      // A backup leaves the lease as it is; the fleet shows when the writer last made one.
+      if (message.type === 'backup') {
+        if (validTime(message.at) && this.store.backedUp(held.machine!, message.at)) this.presence()
+        return
+      }
       if (message.type === 'release-waiting') {
         const { by, tasks, dirty, runs, unchecked } = message
         if (
@@ -653,18 +551,7 @@ export class SharedReplica {
         socket.serializeAttachment({ ...held, role: 'standby' })
         this.announce()
         this.presence()
-        return
       }
-      const hasEntries = this.store.hasEntries()
-      const count = message.type === 'summaries' ? this.store.summaryCount() : undefined
-      for (const reply of this.store.receive(message)) socket.send(JSON.stringify(reply))
-      if (
-        message.type === 'uiBuild' ||
-        (count !== undefined && count !== this.store.summaryCount()) ||
-        (message.type === 'batch' && hasEntries !== this.store.hasEntries())
-      )
-        this.presence()
-      if (message.type === 'delivered') this.refresh()
     } catch (error) {
       const bytes =
         typeof raw === 'string' ? new TextEncoder().encode(raw).byteLength : raw.byteLength
@@ -711,110 +598,20 @@ export class SharedReplica {
       const upgrade = { status: 101, webSocket: client }
       return new Response(null, upgrade)
     }
-    if (!admitsRequest(request)) {
-      await discardBody(request)
-      return Response.json({ error: 'Forbidden' }, { status: 403 })
-    }
-    // Only the Worker's bearer route `/sync/move` reaches this path: browser requests reach `/api/*` alone.
-    if (url.pathname === '/sync/move')
-      return this.cloud(request, new URL('/api/cloud/move', url), 'sync')
-    // The replica answers its own API before any request goes to the machine.
-    if (url.pathname === '/api/cloud' || url.pathname.startsWith('/api/cloud/'))
-      return this.cloud(request, url)
-    const writer = this.store.lease()
-    const bindings = JSON.parse(this.env.TUNNELS ?? '{}') as Record<string, `TUNNEL_${number}`>
-    const binding = writer?.machine && this.env[bindings[writer.machine]]
-    if (
-      this.sockets().length &&
-      writer &&
-      Number.isInteger(writer.port) &&
-      writer.port >= 1 &&
-      writer.port <= 65535 &&
-      (binding || this.env.MACHINE_ORIGIN)
-    ) {
-      try {
-        const origin = new URL(binding ? 'http://127.0.0.1' : this.env.MACHINE_ORIGIN!)
-        origin.port = String(writer.port)
-        const forwarded = proxyRequest(request.clone(), origin.origin)
-        if (binding) return await binding.fetch(forwarded)
-        return await fetch(forwarded)
-      } catch {
-        // A lost response may follow a committed write. Only reads can safely fall back to the replica.
-        if (request.method !== 'GET') {
-          await discardBody(request)
-          return Response.json(
-            { error: 'The machine did not answer; check before retrying' },
-            { status: 502 },
-          )
-        }
-      }
-    }
-    if (request.method === 'GET' && url.pathname === '/api/events') return this.events(request, url)
-    if (request.method === 'GET' && url.pathname === '/api/models')
-      return Response.json(this.store.metadata(3) ?? { providers: [], models: [] })
-    const history = /^\/api\/conversations\/(\d+)\/history$/.exec(url.pathname)
-    if (request.method === 'GET' && history) {
-      const id = Number(history[1]),
-        before = Number(url.searchParams.get('before'))
-      if (!Number.isSafeInteger(before) || before < 1)
-        return Response.json(
-          { error: 'Invalid history cursor or conversation id' },
-          { status: 400 },
-        )
-      if (!this.store.conversation(id))
-        return Response.json({ error: 'Unknown conversation' }, { status: 404 })
-      return Response.json(this.store.history(id, before))
-    }
-    const submit = /^\/api\/conversations\/(\d+)\/submit$/.exec(url.pathname)
-    if (request.method === 'POST' && submit) {
-      let data: Record<string, unknown>
-      try {
-        data = await request.json()
-      } catch {
-        return Response.json({ error: 'Expected JSON' }, { status: 400 })
-      }
-      if (!data || typeof data !== 'object' || Array.isArray(data))
-        return Response.json({ error: 'Expected JSON object' }, { status: 400 })
-      if (data.images !== undefined && (!Array.isArray(data.images) || data.images.length))
-        return Response.json(
-          { error: 'Images are unavailable while the machine is offline' },
-          { status: 503 },
-        )
-      if (
-        typeof data.text !== 'string' ||
-        !data.text.trim() ||
-        (data.whenBusy !== undefined && data.whenBusy !== 'steer' && data.whenBusy !== 'followUp')
-      )
-        return Response.json({ error: 'Expected text and valid whenBusy' }, { status: 400 })
-      const { submissionId } = this.store.enqueue(Number(submit[1]), data.text, data.whenBusy)
-      for (const socket of this.sockets())
-        socket.send(JSON.stringify({ type: 'outbox', items: this.store.outbox() }))
-      this.refresh()
-      return Response.json({ submissionId }, { status: 202 })
-    }
-    // Drain unsupported request bodies before replying across the Worker/DO boundary. Cancelling leaves
-    // Wrangler's forwarding stream reading after the response, which can turn an expected 503 into a 500.
-    await discardBody(request)
-    return Response.json({ error: 'The machine is offline', offline: true }, { status: 503 })
-  }
-  /**
-   * `GET /api/cloud` lists machines, lease and transition; `POST /api/cloud/move {machine, force?}` asks that standby
-   * to prepare and take the lease, started `by` the cloud UI or @sync, `POST /api/cloud/cancel` stops the running
-   * transition.
-   */
-  async cloud(request: Request, url: URL, by: 'cloud' | 'sync' = 'cloud') {
+    // Only the Worker's bearer routes reach these paths (`AGENT_ROUTES`).
     const connected = new Set(this.admitted().map((socket) => attachment(socket)!.machine!))
     if (request.method === 'GET' && url.pathname === '/api/cloud')
       return Response.json(this.store.cloud(connected, this.sockets().length > 0))
     if (request.method !== 'POST') {
       await discardBody(request)
-      return Response.json({ error: 'Unknown cloud route' }, { status: 404 })
+      return Response.json({ error: 'Unknown replica route' }, { status: 404 })
     }
     const body = (await request.json().catch(() => ({}))) as {
       machine?: unknown
       force?: unknown
     }
-    if (url.pathname === '/api/cloud/move') {
+    // `POST /sync/move {machine, force?}` asks that standby to prepare and take the lease, started by @sync.
+    if (url.pathname === '/sync/move') {
       if (typeof body.machine !== 'string')
         return Response.json({ error: 'Expected {machine}' }, { status: 400 })
       if (body.machine === this.store.lease()?.machine)
@@ -826,12 +623,13 @@ export class SharedReplica {
         JSON.stringify({
           type: 'move-to',
           id,
-          by,
+          by: 'sync',
           ...(body.force === true ? { force: true } : {}),
         } satisfies CloudMessage),
       )
       return Response.json({ id }, { status: 202 })
     }
+    // `POST /api/cloud/cancel` stops the running transition.
     if (url.pathname === '/api/cloud/cancel') {
       const transition = this.store.transition()
       if (!transition?.cancellable || transition.error)
@@ -841,75 +639,6 @@ export class SharedReplica {
       target.send(JSON.stringify({ type: 'cancel', id: transition.id }))
       return Response.json({ id: transition.id }, { status: 202 })
     }
-    return Response.json({ error: 'Unknown cloud route' }, { status: 404 })
-  }
-  events(request: Request, url: URL) {
-    const id = Number(url.searchParams.get('conversation') ?? this.store.root())
-    const encoder = new TextEncoder()
-    let stop: (() => void) | undefined
-    let cancelled = false
-    const body = new ReadableStream<Uint8Array>({
-      start: (controller) => {
-        const send = (name: string, value: unknown) =>
-          controller.enqueue(encoder.encode(`event: ${name}\ndata: ${JSON.stringify(value)}\n\n`))
-        controller.enqueue(encoder.encode('retry: 500\n\n'))
-        const system = this.store.metadata(2)
-        if (!system) {
-          send('notice', { level: 'warning', message: 'No machine has synced yet' })
-        } else {
-          send('system', { ...system, offline: true })
-          send(
-            'conversations',
-            this.store.summaries().map((summary) => ({
-              ...summary,
-              busy: false,
-            })),
-          )
-          send('view', this.store.view(id))
-          send('ui', { value: this.store.doc(this.store.root(), 'ultimate.ui') ?? {} })
-          send('tasks', { tasks: {} })
-          for (const kind of new Set(
-            (url.searchParams.get('docs') ?? '').split(',').filter(Boolean),
-          ))
-            send('doc', { kind, value: this.store.doc(id, kind) })
-          send('notice', {
-            level: 'warning',
-            message: 'The machine is offline. This is the last synced state.',
-          })
-        }
-        const timer = setInterval(
-          () => controller.enqueue(encoder.encode(': heartbeat\n\n')),
-          15000,
-        )
-        let closed = false
-        const stream = {
-          id,
-          send,
-          close: () => {
-            if (closed) return
-            closed = true
-            clearInterval(timer)
-            this.streams.delete(stream)
-            request.signal.removeEventListener('abort', stream.close)
-            if (!cancelled) controller.close()
-          },
-        }
-        stop = stream.close
-        this.streams.add(stream)
-        request.signal.addEventListener('abort', stop, { once: true })
-        if (request.signal.aborted) stream.close()
-      },
-      cancel: () => {
-        cancelled = true
-        stop?.()
-      },
-    })
-    return new Response(body, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'X-Accel-Buffering': 'no',
-      },
-    })
+    return Response.json({ error: 'Unknown replica route' }, { status: 404 })
   }
 }

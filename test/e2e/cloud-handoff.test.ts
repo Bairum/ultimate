@@ -12,6 +12,7 @@ import {
   counts,
   git,
   host,
+  ids,
   projectApi,
   repository,
   secretValue,
@@ -61,7 +62,7 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
     cloud = await worker(root, token)
     // B reaches the Worker through a proxy that can hold its snapshot downloads.
     proxy = await slowProxy(cloud.port)
-    project = projectApi(cloud.url, 'e2e-handoff')
+    project = projectApi(cloud.url, KEY, token)
   }, 180_000)
   afterAll(stopAll, 60_000)
 
@@ -161,13 +162,19 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
     ])
     // Plus A's `cloud.lease` releasing event, recorded just before it closed storage, so the snapshot carries it.
     expect(counts(join(a.home, 'state.sqlite'))).toEqual({ ...before, entries: before.entries + 1 })
-    // B has that history, event log included, then its own events once its storage opened: `ultimate.started`,
-    // `cloud.lease` acquired and its notice from the refused move ("Move here failed: Missing secrets"), raised on
-    // standby.
-    expect(counts(join(b.home, 'state.sqlite'))).toEqual({
-      conversations: before.conversations,
-      entries: before.entries + 4,
-    })
+    // B holds all of A's history, and its own `ultimate.started` and `cloud.lease` acquired. On top of it: B's own notice from the refused move ("Move here failed: Missing
+    // secrets"), raised on standby and recorded once B's storage opened, and the finished move reported once to B's
+    // own @sync, whose standing conversation it creates and whose faux run then answers.
+    const history = ids(join(a.home, 'state.sqlite'))
+    await until(() => ids(join(b.home, 'state.sqlite')).moves.length === 1)
+    const onB = ids(join(b.home, 'state.sqlite'))
+    expect(onB.conversations).toEqual(expect.arrayContaining(history.conversations))
+    expect(onB.entries).toEqual(expect.arrayContaining(history.entries))
+    expect(onB.kinds).toContain('event.ultimate.notice')
+    expect(onB.moves).toEqual([moved.transition.id])
+    expect(onB.kinds).toEqual(
+      expect.arrayContaining(['event.ultimate.started', 'event.cloud.lease']),
+    )
     expect(git(repo.clones.b, 'rev-parse', 'refs/heads/ultimate/e2e-from-a')).toBe(
       git(repo.project, 'rev-parse', 'HEAD'),
     )

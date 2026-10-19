@@ -86,7 +86,11 @@ async function fixture(
     name === 'subagents'
       ? {
           residents: async () => [{ name: 'scout', description: 'Search' }],
-          standing: async () => recipient.id,
+          // Like the real service: only resident names resolve.
+          standing: async (agent: string) => {
+            if (agent !== 'scout') throw new Error(`Unknown standing agent @${agent}`)
+            return recipient.id
+          },
         }
       : name === 'workspaces'
         ? { doc: Workspaces, git: async () => '' }
@@ -526,6 +530,18 @@ it('resolves a standing address and returns unanswered inputs as failure replies
   }, context)
   expect(await actions.addresses({}, f.action())).toMatchObject({
     agents: [{ name: 'scout', description: 'Search', id: f.recipient.id }],
+  })
+})
+it('delivers to a retired standing agent by id without refreshing it', async () => {
+  const f = await fixture()
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).retired = f.recipient.id
+  }, context)
+  await f.send(`#${f.recipient.id}`, 'Still there?', { reply: false })
+  await until(async () => (await f.log())!.messages.at(-1)?.state !== 'sent')
+  expect((await f.log())!.messages.at(-1)).toMatchObject({
+    to: f.recipient.id,
+    state: 'delivered',
   })
 })
 it('answers questions to the user through answer cards or input in the sender conversation', async () => {

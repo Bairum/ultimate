@@ -15,7 +15,7 @@
     ],
     "push": "origin",
     "deploy": {
-      "agent": "cloudflare",
+      "agent": "sync",
       "paths": ["cloud/", "web/", "package.json", "pnpm-lock.yaml"]
     }
   }

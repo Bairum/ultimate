@@ -31,6 +31,17 @@ Only inside codemode (not standalone model tools):
 - `ultimate.entries(conversationId, { kinds?, limit?, before? })` — newest-first fork-aware history, including entries before resets/compactions; `before` is an exclusive entry ID.
 - `ultimate.search(text, { conversationId?, limit? })` — case-sensitive substring over stored entry JSON, including pre-reset/pre-compaction history.
 - `ultimate.taskGraph()` — live tasks and ownership graph.
+
+### Other projects
+
+`conversations`, `entries`, `search`, `trace` and `traceTree` take `{ project }` in their options object (`ultimate.conversations({ project })`, `ultimate.traceTree(id, { project })`) and then read that project instead, read-only. `project` is a name (`poe2-rust`) or a key (`github.com/hazat/poe2-rust`), case-insensitive. Only a running instance answers:
+
+- this project reads its own storage;
+- another running project on this machine answers over loopback (`ultimate.projects()`'s URL);
+- otherwise the fleet directory (`/sync/directory`, with the cloud token) names the writer machine, and its tailnet address answers.
+
+The call is the target's `codemode.read {op, args}` action, sent with the target's own `Origin`; on the tailnet, Tailscale Serve's identity header and `tailscale.allow` admit it, the same rule as the UI. Nothing falls back to a copy: a project on standby, a writer that is offline or without a tailnet address, and an unknown name each fail with a sentence that names the machine or lists the known projects. Answers are capped at 1 MiB of JSON (ask for a smaller `limit`).
+
 - `ultimate.models()` — model metadata, without credentials or provider headers.
 - `ultimate.agents()` — agent definitions, the profiles subagents and automations run with: each one's source (builtin, user, project), path, fields, and instructions, plus files that failed to parse. To change one, edit its file; for a built-in, write an override with the same name to `<project>/.ultimate/agents/` or `~/.ultimate/agents/`.
 - `ultimate.doc(kind, conversationId?)` — exported conversation document or `pi.agent`/`pi.inbox`/`pi.live`/`pi.usage`; defaults to the calling conversation.

@@ -10,8 +10,9 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { cloudConfig, httpBase } from '../../lib/cloud.ts'
 import { isMachineHome } from '../../lib/machine.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { readFileHealth, readHealth, record, reset, toHealth } from './store.ts'
-import { HealthApi } from './api.ts'
+import { readFileHealth, readHealth, record, reset, sanitize, toHealth } from './store.ts'
+import { HealthApi, HealthFeedback } from './api.ts'
+import type { HealthFeedbackService } from './api.ts'
 import { LoginChanged } from '../models/api.ts'
 import type { Flip, HealthEntry } from './store.ts'
 import { implementAction } from '../../lib/actions.ts'
@@ -151,24 +152,38 @@ export async function announce(host: Pick<ExtensionHost, 'harness' | 'emit'>, fl
     .catch((error: unknown) => console.error('health: announcing a change failed:', error))
 }
 
+/**
+ * Record `entry` in this machine's health file, hand the flip to `flipped`, and tell `feedback` when it turned the
+ * provider failing. The file is shared by every home, so only the home whose write turned it reports, once per turn.
+ */
+export async function recordHealth(
+  userHome: string,
+  provider: string,
+  entry: HealthEntry,
+  feedback: HealthFeedbackService | undefined,
+  flipped: (flips: Flip[]) => Promise<void> = async () => {},
+) {
+  const flip = await record(userHome, provider, entry)
+  await flipped([flip])
+  if (flip.from === 'failing' || flip.to !== 'failing' || !feedback) return
+  await feedback.failing({
+    provider,
+    at: entry.lastFail ?? Date.now(),
+    ...(entry.error ? { error: sanitize(entry.error) } : {}),
+  })
+}
+
 /** Heartbeat dependencies on the host's model runtime and this machine's health file; `flipped` hears each write. */
 export const hostDeps = (
-  host: Pick<ExtensionHost, 'modelRuntime' | 'userHome'>,
+  host: Pick<ExtensionHost, 'modelRuntime' | 'userHome' | 'want'>,
   flipped: (flips: Flip[]) => Promise<void> = async () => {},
 ): HeartbeatDeps => ({
   now: Date.now,
   models: host.modelRuntime,
   read: async () => (await readFileHealth(host.userHome)).providers,
-  record: async (provider, entry) => {
-    const flip = await record(host.userHome, provider, entry)
-    await flipped([flip])
-    return flip
-  },
-  forget: async (providers) => {
-    const flips = await reset(host.userHome, providers)
-    await flipped(flips)
-    return flips
-  },
+  record: (provider, entry) =>
+    recordHealth(host.userHome, provider, entry, host.want(HealthFeedback), flipped),
+  forget: async (providers) => flipped(await reset(host.userHome, providers)),
 })
 
 /** Pi's credential store, shared with `pi`: one entry per logged-in provider. */
@@ -293,6 +308,8 @@ async function report(host: ExtensionHost) {
 }
 
 export default function health(host: ExtensionHost) {
+  // Resolved where it is called; declared here so the catalogue lists it.
+  host.want(HealthFeedback)
   // A login added, replaced or removed through Ultimate makes the provider's record meaningless: start it over.
   // Each write that flips a provider's state is announced as `health.changed`.
   const flipped = (flips: Flip[]) => announce(host, flips)
@@ -314,12 +331,16 @@ export default function health(host: ExtensionHost) {
             // Only providers with a login here: a stray model reference to another fails, which is not its health.
             if (!entry || !host.modelRuntime.getProviderAuthStatus(message.provider).configured)
               return
-            record(host.userHome, message.provider, entry)
-              .then((flip) => flipped([flip]))
-              .catch((error: unknown) => {
-                // Health is advisory: a failed write must never fail or delay the agent's generation.
-                console.error('health: recording a response failed:', error)
-              })
+            recordHealth(
+              host.userHome,
+              message.provider,
+              entry,
+              host.want(HealthFeedback),
+              flipped,
+            ).catch((error: unknown) => {
+              // Health is advisory: a failed write must never fail or delay the agent's generation.
+              console.error('health: recording a response failed:', error)
+            })
           },
         }),
       ]

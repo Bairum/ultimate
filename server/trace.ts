@@ -381,6 +381,58 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls (at);`)
           ...where.map((filter) => filter.value),
         ).toReversed()
       },
+      /**
+       * At most `limit` (1–1000) matching calls in write order, which is finish order: `seq` is a call's position,
+       * `before` and `after` exclusive positions. Newest first, oldest first with `after`. `last` is the newest
+       * position written, so a reader can follow from it. `text` matches name, caller, callee, args or error;
+       * `since` and `until` (epoch milliseconds) bound when a call started.
+       */
+      page(query: {
+        before?: number
+        after?: number
+        since?: number
+        until?: number
+        kinds?: string[]
+        conversation?: number
+        errors?: boolean
+        text?: string
+        limit: number
+      }): { rows: (CallRow & { seq: number })[]; last: number } {
+        flush()
+        if (!database) return { rows: [], last: 0 }
+        const where: string[] = []
+        const values: (string | number)[] = []
+        const filter = (sql: string, ...given: (string | number)[]) => {
+          where.push(sql)
+          values.push(...given)
+        }
+        if (query.before !== undefined) filter('rowid < ?', query.before)
+        if (query.after !== undefined) filter('rowid > ?', query.after)
+        if (query.since !== undefined) filter('at >= ?', query.since)
+        if (query.until !== undefined) filter('at < ?', query.until)
+        if (query.kinds)
+          filter(`kind IN (${query.kinds.map(() => '?').join(', ')})`, ...query.kinds)
+        if (query.conversation !== undefined) filter('conversation = ?', query.conversation)
+        if (query.errors) filter('ok = 0')
+        if (query.text) {
+          const like = `%${query.text.replace(/[\\%_]/g, '\\$&')}%`
+          filter(
+            `(${['name', 'caller', 'callee', 'args', 'error'].map((column) => `${column} LIKE ? ESCAPE '\\'`).join(' OR ')})`,
+            ...Array<string>(5).fill(like),
+          )
+        }
+        const limit = Math.min(Math.max(1, Math.trunc(query.limit)), 1000)
+        const rows = database
+          .prepare(
+            `SELECT rowid AS seq, ${COLUMNS.join(', ')} FROM calls ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY rowid ${query.after === undefined ? 'DESC' : 'ASC'} LIMIT ${limit}`,
+          )
+          .all(...values)
+          .map((value) => row(value as Record<string, unknown>) as CallRow & { seq: number })
+        const last = database.prepare('SELECT max(rowid) AS last FROM calls').get() as {
+          last: number | null
+        }
+        return { rows, last: last.last ?? 0 }
+      },
       /** The first 5000 calls of trace `traceId` nested under their parents, in start order. */
       tree(traceId: string): CallTree[] {
         const nodes = select('WHERE trace = ?', 'at, rowid LIMIT 5000', traceId).map(

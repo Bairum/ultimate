@@ -1212,6 +1212,31 @@ it.concurrent('hands matching landings to the deploy agent exactly once', async 
   expect(report).toContain('deploy → @deploy-test')
   expect((await landerLog(f)).log.some((line) => line.step === 'deploy → @deploy-test')).toBe(true)
 })
+it.concurrent("hands this repository's cloud/ landings to its deploy agent, the built-in @sync", async () => {
+  const repo = join(import.meta.dirname, '../..')
+  const settings = JSON.parse(await readFile(join(repo, '.ultimate/settings.json'), 'utf8'))
+  const f = await lander({ deploy: settings.lander.deploy }, undefined, true)
+  await mkdir(join(f.directory, '.ultimate/agents'), { recursive: true })
+  await cp(join(repo, 'agents/sync.md'), join(f.directory, '.ultimate/agents/sync.md'))
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  await mkdir(join(workspace.path, 'cloud'), { recursive: true })
+  await commit(workspace.path, 'cloud/change.txt')
+  await f.service.submit(id, 'None', context)
+  const [report] = await submitted(f, id)
+  const deploy = (await boardMessages(f)).filter((message) =>
+    message.text.includes('Please deploy'),
+  )
+  expect(deploy).toHaveLength(1)
+  const recipient = await f.opened.harness.snapshot(
+    Metadata,
+    deploy[0].to as ConversationId,
+    context,
+  )
+  expect(recipient?.title).toBe('@sync')
+  expect(report).toContain('deploy → @sync')
+})
 it.concurrent('reports a landing with a deploy warning when the handoff itself fails', async () => {
   const f = await lander({ deploy: { agent: 'deploy-test', paths: ['cloud/'] } }, undefined, true)
   await mkdir(join(f.directory, '.ultimate/agents'), { recursive: true })

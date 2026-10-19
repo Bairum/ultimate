@@ -14,7 +14,6 @@
     "issue_detection": { "enabled": true }
   },
   "r2_buckets": [{ "binding": "BUILDS", "bucket_name": "ultimate-builds" }],
-  "version_metadata": { "binding": "VERSION" },
   "durable_objects": {
     "bindings": [
       { "name": "REPLICA", "class_name": "SharedReplica" },
@@ -26,12 +25,12 @@
     { "tag": "v2", "new_sqlite_classes": ["Directory"] },
     { "tag": "v3", "new_sqlite_classes": ["ProjectReplica"] },
     { "tag": "v4", "deleted_classes": ["Replica"] },
-    { "tag": "v5", "new_sqlite_classes": ["SharedReplica", "ProjectDirectory"] }
+    { "tag": "v5", "new_sqlite_classes": ["SharedReplica", "ProjectDirectory"] },
+    { "tag": "v6", "deleted_classes": ["Directory", "ProjectReplica"] }
   ],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/", "/api", "/api/*", "/p/*", "/b/*", "/sync", "/sync/*"]
+    "run_worker_first": ["/", "/api", "/api/*", "/sync", "/sync/*"]
   }
 }

@@ -21,11 +21,12 @@ import type { JsonObject } from '@earendil-works/pi-durable'
 import { exec as run } from '../../lib/exec.ts'
 import { applyWaiting, handoverDetail, LEFT_LIMITS } from '../../cloud/protocol.ts'
 import type { MoveBy, Transition, TransitionStep } from '../../cloud/protocol.ts'
-import type { projectBuilds } from '../../cloud/ui-build.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- a stop release holds storage's lock, which a swapped-in core owns
 import { acquireLock } from '../../server/lock.ts'
 import { AutomationsApi } from '../automations/api.ts'
+import { Feedback } from './api.ts'
+import type { BackupReport, FeedbackService } from './api.ts'
 import { readSecret, secretMetadata } from '../../lib/secrets.ts'
 import { modelLogin, noLogin } from './login.ts'
 import { LeaseChanged } from './refs.ts'
@@ -53,7 +54,6 @@ export interface LeaseDeps {
     downloadSnapshot: typeof downloadSnapshot
     databaseHash: typeof databaseHash
   }
-  builds?: ReturnType<typeof projectBuilds>
   /** The snapshot key, read from Secrets unless injected. */
   secret?: () => Promise<string | undefined>
   /** Runs git and pnpm for the prepare steps. */
@@ -80,7 +80,17 @@ export interface LeaseState {
   key?: string
   /** The model login this machine's agents run with; a move here fails its checks without one. */
   login: ModelLogin
+  /** The last backup this machine finished (`cloud-backup.json`). */
+  lastBackup?: Backup
+  /** The running backup's upload. */
+  backup?: { done: number; total: number }
   lastError?: string
+}
+/** A backup: a snapshot uploaded by the writer without releasing; `bytes` is the database and bundle before compression. */
+export interface Backup {
+  id: string
+  at: number
+  bytes: number
 }
 
 const SECRET = 'ULTIMATE_CLOUD_SNAPSHOT_KEY'
@@ -119,7 +129,21 @@ interface ClaimIntent {
   snapshot: { id: string; epoch: number }
   download?: string
   hash: string
+  /** The move that wrote the intent, reported once it opens after a restart. */
+  transition?: Transition
 }
+
+/** `transition` as it ends once its claim won at `epoch`: the claim step done, nothing left to cancel. */
+const finished = (transition: Transition, epoch: number): Transition => ({
+  ...structuredClone(transition),
+  step: 'claim',
+  cancellable: false,
+  steps: transition.steps.map((step) =>
+    step.name === 'claim'
+      ? { ...step, state: 'done', detail: `Runs here from epoch ${epoch}` }
+      : { ...step },
+  ),
+})
 
 /** Move a SQLite database with its `-wal` and `-shm`; never deletes one. */
 async function moveDatabase(from: string, to: string) {
@@ -178,6 +202,12 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   let autoClaim = options.autoClaim
   let progress: LeaseState['progress']
   let lastError: string | undefined
+  /** `<home>/cloud-backup.json`: the last backup, kept apart from the lease file, which a backup never touches. */
+  const backupPath = join(host.home, 'cloud-backup.json')
+  let lastBackup: Backup | undefined
+  let backingUp: { done: number; total: number } | undefined
+  /** Settles when the running backup ended; a release waits for it. */
+  let backupRun: Promise<void> | undefined
   let idleSince: number | undefined
   let idleTimer: ReturnType<typeof setInterval> | undefined
   let pendingRelease:
@@ -228,6 +258,19 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       )
       .catch(report)
   }
+  /** Feedback goes to whoever provides `cloud.feedback` (@sync); a failure to deliver it never fails the lease. */
+  const feedback = (send: (point: FeedbackService) => Promise<void>) =>
+    Promise.resolve()
+      .then(() => {
+        const point = host.want(Feedback)
+        return point && send(point)
+      })
+      .catch((error: unknown) => host.notice(`Cloud feedback: ${String(error)}`))
+  const tell = (backup: BackupReport) => feedback((point) => point.backup(backup))
+  const reportMoved = (moved: Transition) =>
+    feedback((point) =>
+      point.moved({ key: snapshotKey(), machine: options.machine, transition: moved }),
+    )
   const serving = () => {
     try {
       host.harness()
@@ -260,6 +303,15 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     if (intent.download) await rm(intent.download, { force: true })
     await rm(claimPath, { force: true })
   }
+  const loaded = readFile(backupPath, 'utf8').then(
+    (text) => {
+      const saved = JSON.parse(text) as Backup & { key?: string }
+      if (saved.key === identity.key)
+        lastBackup ??= { id: saved.id, at: saved.at, bytes: saved.bytes }
+    },
+    // No backup yet.
+    () => undefined,
+  )
   // A previous process may have died mid-snapshot or mid-download: only a claim in flight keeps its download.
   const tidy = (async () => {
     const intent = await readIntent()
@@ -331,6 +383,8 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     if (!download && !(await holds(database, intent.hash)))
       download = (await fetchSnapshot(intent.snapshot.id)).database
     await openAsWriter(state.epoch, download)
+    // The move a crash interrupted after its claim won: report it as done, once (the feedback keys it by its id).
+    if (intent.transition) await reportMoved(finished(intent.transition, state.epoch))
     return true
   }
   /** The local database is the snapshot `snapshot`: the last release recorded it and its content is unchanged. */
@@ -361,47 +415,42 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   const connect = (next: 'serving' | 'standby') => {
     sync?.()
     mode = next
-    const current = deps.sync(
-      host,
-      options,
-      deps.dial,
-      next === 'serving' ? deps.builds : undefined,
-      {
-        serving: next === 'serving',
-        // A replaced connection's last roles no longer apply.
-        role: (state) => setTimeout(() => sync === current && onRole(state, current), 0),
-        releaseRequested: (by, id, force) =>
-          setTimeout(() => void moveTo(by, id, force).catch(report), 0),
-        releaseWaiting: (waiting) => {
-          const { by, tasks, dirty, held = false, unchecked } = waiting
-          if (tasks > 0) host.notice(`Move to ${by} waits for ${runs(tasks)}`)
-          else if (held && dirty?.length) host.notice(`Move to ${by} waits for ${changes(dirty)}`)
-          else if (unchecked)
-            host.notice(`Move to ${by} waits: could not check worktrees: ${unchecked}`)
-          if (!moving) return
-          applyWaiting(moving.transition, waiting)
-          const handover = moving.transition.steps.find((step) => step.name === 'handover')
-          if (handover && moving.transition.from) {
-            handover.detail = handoverDetail(
-              moving.transition.from,
-              tasks,
-              moving.transition.left?.length,
-              held,
-              unchecked,
-            )
-            publish()
-          }
-        },
-        moveTo: (id, force, by) => setTimeout(() => void move({ id, force, by }).catch(report), 0),
-        cancel: (id) => {
-          if (moving?.transition.id === id) cancel()
-        },
-        transition: () => moving?.transition.id ?? releasingFor,
-        hello: () => {
-          if (pendingClaim) pendingClaim.reconnected = true
-        },
+    const current = deps.sync(host, options, deps.dial, {
+      serving: next === 'serving',
+      // A replaced connection's last roles no longer apply.
+      role: (state) => setTimeout(() => sync === current && onRole(state, current), 0),
+      releaseRequested: (by, id, force) =>
+        setTimeout(() => void moveTo(by, id, force).catch(report), 0),
+      releaseWaiting: (waiting) => {
+        const { by, tasks, dirty, held = false, unchecked } = waiting
+        if (tasks > 0) host.notice(`Move to ${by} waits for ${runs(tasks)}`)
+        else if (held && dirty?.length) host.notice(`Move to ${by} waits for ${changes(dirty)}`)
+        else if (unchecked)
+          host.notice(`Move to ${by} waits: could not check worktrees: ${unchecked}`)
+        if (!moving) return
+        applyWaiting(moving.transition, waiting)
+        const handover = moving.transition.steps.find((step) => step.name === 'handover')
+        if (handover && moving.transition.from) {
+          handover.detail = handoverDetail(
+            moving.transition.from,
+            tasks,
+            moving.transition.left?.length,
+            held,
+            unchecked,
+          )
+          publish()
+        }
       },
-    )
+      moveTo: (id, force, by) => setTimeout(() => void move({ id, force, by }).catch(report), 0),
+      cancel: (id) => {
+        if (moving?.transition.id === id) cancel()
+      },
+      transition: () => moving?.transition.id ?? releasingFor,
+      lastBackupAt: () => lastBackup?.at,
+      hello: () => {
+        if (pendingClaim) pendingClaim.reconnected = true
+      },
+    })
     sync = current
     clearInterval(idleTimer)
     idleSince = undefined
@@ -754,6 +803,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         snapshot,
         ...(downloaded ? { download: downloaded } : {}),
         hash,
+        transition: finished(transition, state.epoch! + 1),
       } satisfies ClaimIntent)
       const done = Promise.withResolvers<boolean>()
       pendingClaim = { epoch: state.epoch!, done, reconnected: false }
@@ -784,6 +834,8 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     // The claim won. A failure from here keeps the download and the intent: the next start finishes opening storage.
     try {
       await openAsWriter(claimed, downloaded)
+      // Storage is open: the project's @sync hears it here, once, and checks this machine's health.
+      await reportMoved(structuredClone(transition))
       return true
     } catch (error) {
       fail(
@@ -850,8 +902,12 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     }
   }
 
-  /** Release from a serving writer: storage closes, the snapshot goes up, the lease is freed. */
+  /**
+   * Release from a serving writer: storage closes, the snapshot goes up, the lease is freed. A running backup finishes
+   * first, so storage never closes under its upload.
+   */
   const release = async (info: JsonObject) => {
+    await backupRun
     const state = sync?.state()
     if (mode !== 'serving' || state?.role !== 'writer' || state.epoch === undefined) return false
     const key = await secret()
@@ -957,6 +1013,19 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       // Each hold is reported once per change.
       let reported = ''
       let dirty: string[] = []
+      /**
+       * Whether no backup uploads now. Otherwise it waits for the upload to end, or for a cancel or a task change, with
+       * every watcher still active, and the loop checks everything again before it releases.
+       */
+      const noBackup = async () => {
+        if (!backupRun) return true
+        if (reported !== 'backup') {
+          reported = 'backup'
+          host.notice(`Move to ${by} waits for a backup to finish`)
+        }
+        await Promise.race([backupRun, wake.promise])
+        return false
+      }
       try {
         for (;;) {
           wake = Promise.withResolvers<void>()
@@ -972,12 +1041,17 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
             ;({ dirty, unchecked } = await scan())
             // The move may have ended while the scan ran.
             if (cancelled || ended(sync.state())) return stopped()
-            if (force) break
-            // A run that started during the scan holds the move again.
+            if (force) {
+              if (await noBackup()) break
+              continue
+            }
             // A run that started during the scan holds the move again; one that also ended may have changed a
             // worktree the scan had already passed, so the scan runs again.
             if (foreground(graph) > 0 || changed !== before) continue
-            if (!dirty.length && !unchecked) break
+            if (!dirty.length && !unchecked) {
+              if (await noBackup()) break
+              continue
+            }
             waiting = { tasks: 0, dirty, held: true, ...(unchecked ? { unchecked } : {}) }
           }
           const key = JSON.stringify(waiting)
@@ -1012,11 +1086,82 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       }
     })
 
-  /** The process stops: release within the supervisor's shutdown, or keep the lease and open normally next time. */
+  /**
+   * Upload a backup: a snapshot of the open database and the `ultimate/*` branches, as a release uploads, while this
+   * machine keeps serving and keeps the lease. It never touches the lease, its epoch or `cloud-lease.json`. Refused
+   * unless this machine serves as the writer with nothing else in flight; resolves once it is uploaded.
+   */
+  const backup = async () => {
+    const state = sync?.state()
+    if (backingUp) throw new Error('a backup is already running')
+    if (mode !== 'serving' || !serving() || state?.role !== 'writer' || state.epoch === undefined)
+      throw new Error('This machine does not run the project; back it up on its writer')
+    if (moving || holding || releasingFor || pendingRelease || progress)
+      throw new Error('A move or release is in flight')
+    // Set before the first await, so a second call refuses at once.
+    backingUp = { done: 0, total: 0 }
+    const uploading = upload(state.epoch)
+    // A release waits for it, whatever its outcome; the caller gets the outcome.
+    backupRun = uploading.then(
+      () => undefined,
+      () => undefined,
+    )
+    return uploading
+  }
+  const upload = async (epoch: number) => {
+    const started = Date.now()
+    try {
+      const key = await secret()
+      if (!key) throw new Error(missingKey)
+      await loaded
+      const manifest = await deps.snapshots.uploadSnapshot({
+        url: options.url,
+        token: options.token,
+        secret: key,
+        key: snapshotKey(),
+        epoch,
+        machine: options.machine,
+        database,
+        repo: host.projectRoot,
+        signal: AbortSignal.timeout(MOVE_CAP),
+        progress: (done, total) => {
+          backingUp = { done, total }
+        },
+      })
+      const done: Backup = {
+        id: manifest.id,
+        at: Date.now(),
+        bytes: manifest.database.bytes + (manifest.bundle?.bytes ?? 0),
+      }
+      await writeJson(backupPath, { key: identity.key, ...done })
+      lastBackup = done
+      sync?.send({ type: 'backup', at: done.at })
+      lastError = undefined
+      await tell({ ok: true, ...done, ms: done.at - started })
+      return done
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      fail(`Backup failed: ${message}`)
+      await tell({ ok: false, at: Date.now(), error: message })
+      throw error
+    } finally {
+      backingUp = undefined
+      backupRun = undefined
+    }
+  }
+
+  /**
+   * The process stops: release within the supervisor's shutdown, or keep the lease and open normally next time. A
+   * backup still uploading keeps it too: its upload outlasts the stop budget, and storage must not close under it.
+   */
   const stopRelease = async () => {
     const state = sync?.state()
     disconnect()
     if (state?.role !== 'writer' || state.epoch === undefined || host.standby()) return
+    if (backingUp) {
+      host.notice('Kept the lease on stop: a backup was still uploading.')
+      return
+    }
     const key = await secret()
     if (!key) {
       host.notice(`Kept the lease on stop: ${SECRET} is missing.`)
@@ -1083,9 +1228,12 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         ...(ran ? { ran: structuredClone(ran) } : {}),
         ...(state?.project ? { key: state.project.key } : {}),
         login: await loginHere(),
+        ...(lastBackup ? { lastBackup: { ...lastBackup } } : {}),
+        ...(backingUp ? { backup: { ...backingUp } } : {}),
         lastError,
       }
     },
+    backup,
     /**
      * Start taking the project here: prepare, then claim a free lease or have the online writer release it first.
      * `force` continues although secrets are missing; `by` says who started it, this machine's page unless @sync.

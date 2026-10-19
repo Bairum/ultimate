@@ -222,7 +222,7 @@ interface Draft {
   model: ModelRef | null
   thinking: string | null
   tools: string[] | null
-  resident: boolean | 'machine'
+  resident: boolean | 'machine' | 'everywhere'
   isolate: 'none' | 'worktree'
   onFailure: 'diagnose' | 'fix' | null
   instructions: string

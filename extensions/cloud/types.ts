@@ -8,19 +8,10 @@ export interface ModelLogin {
   error?: string
 }
 
-/** The sync connection as operators watch it: catch-up and the acknowledgement window. */
-export interface SyncProgress {
-  /** The sync socket is open and admitted. */
-  connected: boolean
-  /** The writer is sending the replica what it lacks after connecting. */
-  catchingUp: boolean
-  /** Unacknowledged batches plus conversations catch-up has not reached yet. */
-  backlog: number
-  /** When the replica last acknowledged a batch. */
-  lastAckAt?: number
-  /** Catch-up's conversations: fully queued, of all the host lists. */
-  conversations?: { synced: number; total: number }
-}
+/** A backup that finished (`ok`, with the snapshot, its bytes and how long it took) or failed with its reason. */
+export type BackupReport =
+  | { ok: true; id: string; at: number; bytes: number; ms: number }
+  | { ok: false; at: number; error: string }
 
 /** `cloud.state`: whether sync runs, this machine's name and its place in the lease, for the cloud UI. */
 export interface CloudState {
@@ -42,9 +33,11 @@ export interface CloudState {
   ran?: Transition
   /** The replica's project key the cloud admitted this machine under; a relinked checkout's differs from its origin's. */
   key?: string
-  /** The sync connection's catch-up and backlog. */
-  sync?: SyncProgress
   /** While sync runs: the model login this machine's agents run with; a move here fails its checks without one. */
   login?: ModelLogin
+  /** The last backup this machine finished: snapshot id, when, and the bytes before compression. */
+  lastBackup?: { id: string; at: number; bytes: number }
+  /** The running backup's upload, in bytes. */
+  backup?: { done: number; total: number }
   lastError?: string
 }

@@ -147,7 +147,7 @@ lander's sidebar row shows the feature it lands or landed last.
    disable only the hook. No setting or no matching paths means no deploy step.
 
 Settings (`.ultimate/settings.json`): `"lander": { "checks": ["pnpm check", [{ "command": "pnpm test", "timeout": 180 }, "pnpm test:e2e"]], "push": "origin" }`;
-both are optional. Optional `"deploy": { "agent": "cloudflare", "paths": ["cloud/", "web/", "package.json", "pnpm-lock.yaml"] }`
+both are optional. Optional `"deploy": { "agent": "sync", "paths": ["cloud/", "web/", "package.json", "pnpm-lock.yaml"] }`
 inside `lander` enables the deploy handoff. `paths` is a non-empty list of non-empty path prefixes (not globs),
 and `agent` must name a resident agent. The board must be enabled.
 

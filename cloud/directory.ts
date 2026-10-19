@@ -5,6 +5,7 @@ import type { Sql } from './replica.ts'
 export interface Project {
   key: string
   name: string
+  /** The lowercased repository name, unique across projects and kept while the project is gone. */
   slug: string
   /**
    * `machine` is null while the lease is free; `lastSeen` is when the writer last connected or left; `tailnet` is where
@@ -18,12 +19,12 @@ export interface Project {
     lastSeen: number
     tailnet?: string
   }[]
-  count: number
-  uiBuild?: string
   /** The latest move, running or ended. */
   transition?: Transition
+  /** When a writer last finished a backup ("Back up now"), as that machine reported it. */
+  lastBackupAt?: number
 }
-export type Presence = Omit<Project, 'slug'> & { hasEntries: boolean }
+export type Presence = Omit<Project, 'slug'>
 /** What a machine may report: its name, at most 16 providers, names and errors bounded. */
 export const HEALTH_LIMITS = { machine: 64, providers: 16, provider: 64, error: 200 }
 const STATES: readonly unknown[] = ['ok', 'failing', 'unknown'] satisfies ProviderHealth['state'][]
@@ -75,7 +76,7 @@ const safeSlug = (value: string) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '') || 'project'
 
-/** Stable reservations survive forgetting, so a returning project keeps its URL. */
+/** Slug reservations survive forgetting, so a returning project keeps its slug. */
 export class DirectoryStore {
   readonly sql: Sql
   constructor(sql: Sql) {
@@ -132,14 +133,8 @@ export class DirectoryStore {
       ),
     ].map((row) => JSON.parse(row.value) as Project)
   }
-  resolve(slug: string): Project | undefined {
-    const row = [
-      ...this.sql.exec<{ value: string | null }>('SELECT value FROM projects WHERE slug=?', slug),
-    ][0]
-    return row?.value ? (JSON.parse(row.value) as Project) : undefined
-  }
-  /** Projects with a connected machine always appear; an offline one with zero synced entries is forgotten. */
-  update({ hasEntries, ...value }: Presence) {
+  /** A project stays listed while a machine holds its lease or is connected; a free one nobody connects to is gone. */
+  update(value: Presence) {
     this.sql.transaction(() => {
       // A relinked key's own replica may still report as its last sockets close.
       if (this.target(value.key)) return
@@ -157,7 +152,7 @@ export class DirectoryStore {
       const connected = value.machines.some((machine) => machine.connected)
       this.sql.exec(
         'UPDATE projects SET value=? WHERE key=?',
-        !connected && !hasEntries ? null : JSON.stringify({ ...value, slug }),
+        !connected && value.writer.machine === null ? null : JSON.stringify({ ...value, slug }),
         value.key,
       )
     })

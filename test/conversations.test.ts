@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
@@ -424,6 +424,22 @@ it.concurrent('refuses to conclude a root or a standing agent', async () => {
   // The refusal is the whole call's: the ordinary conversation named with it was not concluded either.
   expect((await server.host.uiState(context))['ext.conversations.concluded']).toBeUndefined()
   expect(await action('conclude', { ids: [branch] })).toMatchObject({ status: 200 })
+})
+
+it.concurrent('concludes a retired standing agent once its definition is gone', async () => {
+  const { server, home, action } = await launch()
+  const file = join(home, 'project/.ultimate/agents/x.md')
+  await mkdir(join(home, 'project/.ultimate/agents'))
+  await writeFile(file, '---\nname: x\ndescription: Test\nresident: true\n---\nX')
+  const standing = (args: unknown) =>
+    post(server, '/api/extensions/subagents/actions/standing', { args })
+  const id = (await standing({ name: 'x' })).data.result as number
+  expect(await action('conclude', { ids: [id] })).toMatchObject({ status: 500 })
+  await rm(file)
+  // Asking for the retired name prunes it, as the next open would.
+  expect(await standing({ name: 'x' })).toMatchObject({ status: 500 })
+  expect(await action('conclude', { ids: [id] })).toMatchObject({ status: 200 })
+  expect((await server.host.uiState(context))['ext.conversations.concluded']).toEqual([id])
 })
 
 it.concurrent('resume removes concluded ancestors and leaves unrelated ids alone', async () => {

@@ -46,7 +46,7 @@ export { Fold, useFold } from '../app/fold.tsx'
 /** Renders with the value another extension provides for your point; see `definePoint`. */
 export { Provided } from '../app/boundary.tsx'
 export { api } from './client.ts'
-export { ActionError, projectBase } from './api.ts'
+export { ActionError } from './api.ts'
 export type { ActionOptions, Api } from './api.ts'
 export type { UseActionOptions } from './hooks.ts'
 /** Typed refs for a project extension's own documents and actions; built-ins keep theirs in `refs.ts`. */

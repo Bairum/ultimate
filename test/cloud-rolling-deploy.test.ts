@@ -34,9 +34,15 @@ const directoryBeforeHealth =
       return new Response(null, { status: 204 })
     }
     if (url.pathname === '/list') return Response.json(store.list())
-    const value = store.resolve(url.searchParams.get('slug') ?? '')
+    // `store.resolve(slug)`, which the store has since lost with the project pages.
+    const value = [
+      ...store.sql.exec<{ value: string | null }>(
+        'SELECT value FROM projects WHERE slug=?',
+        url.searchParams.get('slug') ?? '',
+      ),
+    ][0]?.value
     return value
-      ? Response.json(value)
+      ? Response.json(JSON.parse(value))
       : Response.json({ error: 'Unknown project' }, { status: 404 })
   }
 
@@ -90,6 +96,23 @@ async function againstOld(old: Handler, request: Request) {
     return Response.json({ thrown: String(error) }, { status: 500 })
   }
 }
+
+it('a presence naming the last backup reaches a directory on older code, which lists it unchanged', async () => {
+  // Replicas on new code add `lastBackupAt` to the presence they POST; the old handler stores the value as sent.
+  const presence: Presence = {
+    key: 'github.com/o/app',
+    name: 'app',
+    writer: { machine: 'desk', online: true },
+    machines: [{ machine: 'desk', role: 'writer', connected: true, lastSeen: 1 }],
+    lastBackupAt: 5,
+  }
+  const old = directoryBeforeHealth(store)
+  const response = await old(
+    new Request('https://directory/update', { method: 'POST', body: JSON.stringify(presence) }),
+  )
+  expect(response.status).toBe(204)
+  expect(store.list()).toEqual([{ ...presence, slug: 'app' }])
+})
 
 it('health reported to a directory still on code from before the route gets a 404 the reporter retries', async () => {
   const health: MachineHealth = { machine: 'desk', at: 1, providers: [] }

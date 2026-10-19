@@ -194,9 +194,30 @@ it('finishes a claim that crashed after the reply, before storage opened', async
   await laptop.crash()
   expect(await laptop.leaseFile()).toEqual({ key: KEY, epoch: 2 })
   expect(intent(laptop)).toBe(true)
-  const restarted = await machine('laptop', project, repo.root, { home: laptop.home })
+  const moved: unknown[] = []
+  const feedback = {
+    backup: async () => {},
+    moved: async (input: unknown) => void moved.push(input),
+  }
+  const restarted = await machine('laptop', project, repo.root, { home: laptop.home, feedback })
   await recovered(project, restarted, before)
   expect(restarted.snapshots.downloadSnapshot).not.toHaveBeenCalled()
+  // The move the crash interrupted reports once, as done, with its own id; the intent that carried it is gone.
+  const id = project.replica.store.transition()!.id
+  expect(moved).toEqual([
+    {
+      key: KEY,
+      machine: 'laptop',
+      transition: expect.objectContaining({
+        id,
+        target: 'laptop',
+        steps: expect.arrayContaining([
+          { name: 'claim', state: 'done', detail: 'Runs here from epoch 2' },
+        ]),
+      }),
+    },
+  ])
+  expect(intent(restarted)).toBe(false)
 })
 
 it('keeps writing after a crash right after the claim opened storage', async () => {

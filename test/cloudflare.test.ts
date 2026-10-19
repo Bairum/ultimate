@@ -217,28 +217,12 @@ it('names the failing step, HTTP status and Cloudflare error codes', async () =>
     'Cloudflare telemetry query failed with HTTP 403 (10000: Authentication error)',
   )
 })
-it('parses the resident definition and enables its deferred tool', async () => {
-  const path = '.ultimate/agents/cloudflare.md'
+it("enables the deferred tool for @sync, which keeps the user's Worker deployed", async () => {
+  const path = 'agents/sync.md'
   const definition = parseDefinition(await readFile(path, 'utf8'), path)
-  expect(definition).toMatchObject({
-    name: 'cloudflare',
-    resident: true,
-    model: 'openai-codex/gpt-6.1-sol',
-    thinking: 'high',
-  })
-  expect(definition.tools).toEqual([
-    'read',
-    'bash',
-    'codemode',
-    'message',
-    'note',
-    'web_search',
-    'web_fetch',
-    'edit',
-    'write',
-    'automation',
-    'cloudflare_observability',
-  ])
+  expect(definition).toMatchObject({ name: 'sync', resident: 'everywhere' })
+  expect(definition.model).toBeUndefined()
+  expect(definition.tools).toContain('cloudflare_observability')
   const { tool } = await fixture(false)
   const configured = definitionAgent(
     { ...definition, model: undefined },

@@ -270,32 +270,28 @@ test('coordinator submits once @ultimate relays preview approval', async () => {
   }
 })
 
-test('cloudflare sends one final verification report only to the requester', async () => {
+test('sync sends one final deploy verification report only to the requester', async () => {
+  // @sync is built in (`agents/sync.md`, resident everywhere), so it stands in the eval project too.
   const ultimate = await start({
-    project: {
-      files: {
-        '.ultimate/agents/cloudflare.md': await readFile('.ultimate/agents/cloudflare.md', 'utf8'),
-      },
-    },
     extensions: {
       enable: ['subagents', 'board', 'cloudflare'],
       disable: ['codemode'],
     },
     toolResults: {
-      bash: 'Version v2 is live. / returns 302; /sync returns 401; x-ultimate-cloud-version: v2',
+      bash: 'Version v2 is live. / returns 302; /sync/directory returns 401',
       cloudflare_observability: JSON.stringify({ invocations: 100, errors: 0, version: 'v2' }),
       message: 'Message sent.',
     },
   })
   try {
     const c = await ultimate.conversation({
-      id: await standing(ultimate, 'cloudflare'),
+      id: await standing(ultimate, 'sync'),
       history: [
         user(
-          'Message from @lander: Deploy landed SHA abc1234; report to submitter #42, not to me.',
+          'Message from @lander: Please deploy landed commit abc1234; report to submitter #42, not to me.',
         ),
         assistant(
-          'Checked the clean checkout at abc1234 and deploy docs. Deployed as v2. Baseline: 100 invocations, zero errors. Routes passed: / returns 302 to Access, /sync returns 401, version header v2. The observation window has ended; running the final checks.',
+          'Checked the clean checkout at abc1234 and deploy docs. Previous version v1. Baseline: 100 invocations, zero errors. Deployed as v2, tagged abc1234. Routes passed: / returns 302 to Access, /sync/directory returns 401. The observation window has ended; running the final checks.',
           [
             {
               type: 'toolCall',

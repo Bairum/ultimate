@@ -142,6 +142,11 @@ export function Transcript({ dock }: { dock?: boolean }) {
     resize.observe(scroll)
     return () => resize.disconnect()
   }, [id])
+  // A sent message pins the view to the bottom and follows the run, even when the reader had scrolled up.
+  useEvent('ultimate:sent', (value) => {
+    if ((value as { conversationId?: number } | undefined)?.conversationId === id)
+      void stick.current?.scrollToBottom({ animation: 'instant' })
+  })
   // Keyed so a conversation never inherits the previous one's scroll position or follow state.
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -669,6 +674,7 @@ function EmptyState() {
         : '…',
     ],
   ]
+  const Card = intro?.card
   return (
     <ConversationEmptyState className="min-h-[55vh]">
       <div className="w-full max-w-md font-mono text-[12px]">
@@ -690,6 +696,13 @@ function EmptyState() {
             </Fragment>
           ))}
         </div>
+        {Card && intro && (
+          <div className="mt-5 text-left">
+            <ExtensionBoundary extension={intro.extension} version={intro.version}>
+              <Card />
+            </ExtensionBoundary>
+          </div>
+        )}
       </div>
     </ConversationEmptyState>
   )

@@ -16,6 +16,7 @@ import cloudExtension, {
 import type { SyncSocket } from '../extensions/cloud/server.ts'
 import { modelLogin } from '../extensions/cloud/login.ts'
 import * as snapshot from '../extensions/cloud/snapshot.ts'
+import type { FeedbackService } from '../extensions/cloud/api.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
 import { git } from '../lib/git.ts'
 import type { ActionContext } from '../server/actions.ts'
@@ -23,6 +24,7 @@ import type { ExtensionHost } from '../server/extensions.ts'
 import { context, prepareHarness } from '../server/harness.ts'
 import {
   author,
+  bucket,
   checkout,
   cloud,
   idleRelease,
@@ -215,10 +217,7 @@ it('waits on standby with no database while the cloud is unreachable, however lo
           : undefined,
       activate,
     } as unknown as ExtensionHost
-    await cloudExtension(host, {
-      dial: unanswered,
-      builds: { connect: () => {}, stop: async () => {}, current: () => undefined },
-    })
+    await cloudExtension(host, { dial: unanswered })
     expect(host.standby()).toEqual(joining)
     await vi.advanceTimersByTimeAsync(10 * MINUTE)
     expect(activate).not.toHaveBeenCalled()
@@ -611,8 +610,12 @@ it('scans again when a run came and went during the scan, holding for the worktr
   expect(await moving).toBe(false)
 })
 
-/** Runs due fake timers while a test polls with `until`. */
-const tick = () => vi.advanceTimersByTimeAsync(0)
+/**
+ * Runs due fake timers while a test polls with `until`. It advances 1 ms, not 0: a zero-delay timer created while the
+ * fake clock is mid-tick (a socket message arriving between its timers) is due 1 ms later, and a 0 ms advance never
+ * reaches it, so the move would stall at its handover.
+ */
+const tick = () => vi.advanceTimersByTimeAsync(1)
 
 it('holds a move for the runs it drains past the old ten-minute cap, naming their conversations', async () => {
   const project = cloud()
@@ -775,7 +778,7 @@ it('cancels a move mid-download, removing the download and keeping the lease fre
   expect(() => laptop.lease.cancel()).toThrow('No move to cancel')
 })
 
-it('moves from the cloud UI: the online writer drains, and every step reaches its socket', async () => {
+it('moves from @sync: the online writer drains, and every step reaches its socket', async () => {
   snapshotFetch()
   const project = cloud()
   const { root } = await checkout()
@@ -784,7 +787,7 @@ it('moves from the cloud UI: the online writer drains, and every step reaches it
   const task = await sleep(desk.harness(), false)
   const laptop = await machine('laptop', project, root)
   await standbyOn(laptop)
-  const response = await project.api('/api/cloud/move', { machine: 'laptop' })
+  const response = await project.api('/sync/move', { machine: 'laptop' })
   expect(response.status).toBe(202)
   const { id } = (await response.json()) as { id: string }
   const waiting = 'Move to laptop waits for 1 running task'
@@ -805,7 +808,7 @@ it('moves from the cloud UI: the online writer drains, and every step reaches it
   await desk.harness().abortTask(task, context)
   await writer(laptop)
   expect(project.replica.store.lease()).toMatchObject({ machine: 'laptop', epoch: 2 })
-  expect(project.replica.store.transition()).toMatchObject({ id, by: 'cloud' })
+  expect(project.replica.store.transition()).toMatchObject({ id, by: 'sync' })
   expect(desk.host.standby()).toMatchObject({ reason: 'Moved to laptop', explained: true })
   expect(states(project.replica.store.transition())).toMatchObject({
     handover: 'done',
@@ -1018,6 +1021,363 @@ it('refuses to claim when the writer runs the project at another root', async ()
   expect(() => laptop.lease.moveHere()).toThrow(reason)
   expect(laptop.snapshots.downloadSnapshot).not.toHaveBeenCalled()
   expect(project.replica.store.lease()).toMatchObject({ machine: null, epoch: 1 })
+})
+
+it('backs up while serving: a manifest, the database and the bundle go up, and the lease stays as it was', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  await git(root, 'branch', 'ultimate/feature')
+  const desk = await machine('desk', project, root)
+  await writer(desk)
+  const laptop = await machine('laptop', project, root, { autoClaim: false })
+  await standbyOn(laptop)
+  await desk
+    .harness()
+    .commit(
+      (tx) => tx.appendEntry(ROOT_CONVERSATION_ID, { kind: 'lease-test.entry', data: {} }),
+      context,
+    )
+  const leaseBefore = readFileSync(join(desk.home, 'cloud-lease.json'), 'utf8')
+  const replicaBefore = structuredClone(project.replica.store.lease())
+  expect((await desk.lease.state()).lastBackup).toBeUndefined()
+
+  const done = await desk.lease.backup()
+  expect(done).toEqual({
+    id: expect.any(String),
+    at: expect.any(Number),
+    bytes: expect.any(Number),
+  })
+  // Every part of the snapshot is in R2 under its id: the manifest, the database and the branch bundle.
+  const parts = bucket
+    .keys()
+    .filter((name) => name.includes(`/${done.id}/`))
+    .map((name) => name.split('/').at(-1)!)
+    .toSorted((a, b) => a.localeCompare(b))
+  expect(parts).toEqual(['bundle-0', 'db-0', 'manifest'])
+  // It restores like a move's snapshot, with the entry written before it.
+  const restored = await snapshot.downloadSnapshot({
+    url: 'ws://127.0.0.1:8787',
+    token: 'dev',
+    secret: 'snapshot secret',
+    key: KEY,
+    id: done.id,
+    dir: await temp('ultimate-backup-restore-'),
+    repo: root,
+  })
+  expect(restored.manifest).toMatchObject({ machine: 'desk', epoch: 1, bundle: { chunks: 1 } })
+  expect(restored.manifest.database.bytes + restored.manifest.bundle!.bytes).toBe(done.bytes)
+
+  // The lease, its holder, its epoch and the lease file are untouched; the writer kept serving throughout.
+  expect(readFileSync(join(desk.home, 'cloud-lease.json'), 'utf8')).toBe(leaseBefore)
+  expect(project.replica.store.lease()).toEqual(replicaBefore)
+  expect(project.replica.store.transition()).toBeUndefined()
+  expect(desk.serving()).toBe(true)
+  expect(desk.role()).toMatchObject({ role: 'writer', epoch: 1 })
+  expect(laptop.role()).toMatchObject({ role: 'standby', free: false })
+  // The cloud records the backup for the fleet, apart from the lease.
+  await until(() => project.replica.store.lastBackupAt() === done.at)
+  expect(await desk.lease.state()).toMatchObject({ lastBackup: done })
+  expect((await desk.lease.state()).backup).toBeUndefined()
+})
+
+it('prunes backups like any snapshot: the Worker keeps the three newest complete ones', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const desk = await machine('desk', project, root, { key: 'github.com/o/backups' })
+  await writer(desk)
+  const ids: string[] = []
+  for (let count = 0; count < 5; count++) ids.push((await desk.lease.backup()).id)
+  const kept = new Set(
+    bucket
+      .keys()
+      .filter((name) => name.endsWith('/manifest') && ids.some((id) => name.includes(`/${id}/`)))
+      .map((name) => name.split('/').at(-2)),
+  )
+  // Ordering by upload time, ties included, is `cloud-snapshot.test.ts`'s retention test; here: three, the latest kept.
+  expect(kept.size).toBe(3)
+  expect(kept.has(ids.at(-1))).toBe(true)
+  // Nothing but the kept snapshots' parts is left.
+  expect(
+    bucket.keys().filter((name) => ids.some((id) => name.includes(`/${id}/`) && !kept.has(id))),
+  ).toEqual([])
+})
+
+/** A `cloud.feedback` point that records what machine `name`'s lease reports. */
+const heard = (name: string) => {
+  const events: { machine: string; kind: string; value: unknown }[] = []
+  const feedback: FeedbackService = {
+    backup: async (report) => void events.push({ machine: name, kind: 'backup', value: report }),
+    moved: async (input) => void events.push({ machine: name, kind: 'moved', value: input }),
+  }
+  return { events, feedback }
+}
+
+it('reports each backup and a move that ended here once, to the feedback point of the machine it happened on', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const deskHeard = heard('desk')
+  let failing = false
+  const flaky = {
+    ...snapshot,
+    uploadSnapshot: vi.fn<typeof snapshot.uploadSnapshot>(async (o) => {
+      if (failing) throw new Error('PUT /sync/snapshots: 503')
+      return snapshot.uploadSnapshot(o)
+    }),
+  }
+  const desk = await machine('desk', project, root, {
+    snapshots: flaky,
+    feedback: deskHeard.feedback,
+  })
+  await writer(desk)
+  const done = await desk.lease.backup()
+  failing = true
+  await expect(desk.lease.backup()).rejects.toThrow('503')
+  failing = false
+  expect(deskHeard.events).toEqual([
+    {
+      machine: 'desk',
+      kind: 'backup',
+      value: { ok: true, ...done, ms: expect.any(Number) },
+    },
+    {
+      machine: 'desk',
+      kind: 'backup',
+      value: { ok: false, at: expect.any(Number), error: 'PUT /sync/snapshots: 503' },
+    },
+  ])
+
+  await sleep(desk.harness(), true)
+  const laptopHeard = heard('laptop')
+  const laptop = await machine('laptop', project, root, {
+    autoClaim: false,
+    feedback: laptopHeard.feedback,
+  })
+  await standbyOn(laptop)
+  expect(await laptop.lease.move()).toBe(true)
+  // The target hears the move once, with storage open; the source machine hears nothing of it.
+  expect(laptopHeard.events).toEqual([
+    {
+      machine: 'laptop',
+      kind: 'moved',
+      value: {
+        key: KEY,
+        machine: 'laptop',
+        transition: expect.objectContaining({ target: 'laptop', from: 'desk', by: 'local' }),
+      },
+    },
+  ])
+  expect(laptop.serving()).toBe(true)
+  expect(deskHeard.events).toHaveLength(2)
+})
+
+it('lets an idle release that falls due mid-backup wait for the upload, then release coherently', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const gate = Promise.withResolvers<void>()
+  const started = Promise.withResolvers<void>()
+  const order: string[] = []
+  const deferred = {
+    ...snapshot,
+    uploadSnapshot: vi.fn<typeof snapshot.uploadSnapshot>(async (o) => {
+      // The first upload is the backup, held open; the next is the release's.
+      if (order.length === 0) {
+        order.push('backup start')
+        started.resolve()
+        await gate.promise
+        const manifest = await snapshot.uploadSnapshot(o)
+        order.push('backup end')
+        return manifest
+      }
+      order.push('release')
+      return snapshot.uploadSnapshot(o)
+    }),
+  }
+  const desk = await machine('desk', project, root, { snapshots: deferred })
+  await writer(desk)
+  const backingUp = desk.lease.backup()
+  await started.promise
+  // The idle deadline passes while the backup uploads: the release queues behind it, storage stays open.
+  const start = Date.now()
+  expect(await desk.lease.checkIdle(start)).toBe(false)
+  const releasing = desk.lease.checkIdle(start + 10 * MINUTE)
+  await new Promise((resolve) => setImmediate(resolve))
+  expect(desk.serving()).toBe(true)
+  expect(desk.host.standby()).toBeUndefined()
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+  gate.resolve()
+  const done = await backingUp
+  expect(await releasing).toBe(true)
+  // The backup finished on open storage before the release closed it and uploaded its own snapshot.
+  expect(order).toEqual(['backup start', 'backup end', 'release'])
+  const lease = project.replica.store.lease()!
+  expect(lease).toMatchObject({ machine: null, epoch: 1 })
+  expect(lease.snapshot?.id).not.toBe(done.id)
+  expect(desk.host.standby()).toMatchObject({ reason: 'Released · resume here' })
+})
+
+/** Desk as the writer with a backup held open mid-upload, and laptop on standby; `finish` lets the upload end. */
+async function heldBackup() {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const gate = Promise.withResolvers<void>()
+  const started = Promise.withResolvers<void>()
+  let backups = 0
+  const deferred = {
+    ...snapshot,
+    uploadSnapshot: vi.fn<typeof snapshot.uploadSnapshot>(async (o) => {
+      // The first upload is the backup, held open; any later one is a release's.
+      if (backups++ === 0) {
+        started.resolve()
+        await gate.promise
+      }
+      return snapshot.uploadSnapshot(o)
+    }),
+  }
+  const desk = await machine('desk', project, root, { snapshots: deferred })
+  await writer(desk)
+  const laptop = await machine('laptop', project, root, { autoClaim: false })
+  await standbyOn(laptop)
+  const backup = desk.lease.backup()
+  await started.promise
+  return { project, desk, laptop, deferred, backup, finish: () => gate.resolve() }
+}
+
+it('keeps the project when a move is cancelled while it waits for a backup, and releases nothing', async () => {
+  const { project, desk, laptop, deferred, backup, finish } = await heldBackup()
+  const moving = laptop.lease.move()
+  // The writer found nothing to hold for and waits for the backup's upload, its watchers still active.
+  await until(() => desk.notices.includes('Move to laptop waits for a backup to finish'))
+  laptop.lease.cancel()
+  expect(await moving).toBe(false)
+  await until(() =>
+    desk.notices.includes('The move to laptop stopped; this machine keeps the project'),
+  )
+  finish()
+  await backup
+  await desk.lease.settled()
+  // Only the backup uploaded: no release followed it.
+  expect(deferred.uploadSnapshot).toHaveBeenCalledOnce()
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+  expect(desk.serving()).toBe(true)
+})
+
+it('holds a move again for a run that starts while it waits for a backup', async () => {
+  const { project, desk, laptop, deferred, backup, finish } = await heldBackup()
+  const moving = laptop.lease.move()
+  await until(() => desk.notices.includes('Move to laptop waits for a backup to finish'))
+  const task = await sleep(desk.harness(), false)
+  await until(() => desk.notices.includes('Move to laptop waits for 1 running task'))
+  finish()
+  await backup
+  // The backup is done, but the run holds the release.
+  await until(() => !!project.replica.store.transition()?.waiting)
+  expect(deferred.uploadSnapshot).toHaveBeenCalledOnce()
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+  expect(desk.serving()).toBe(true)
+  // Once it ends, the move releases and the laptop takes the project.
+  await desk.harness().abortTask(task, context)
+  expect(await moving).toBe(true)
+  expect(deferred.uploadSnapshot).toHaveBeenCalledTimes(2)
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'laptop', epoch: 2 })
+})
+
+it('keeps the lease on stop while a backup still uploads', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const gate = Promise.withResolvers<void>()
+  const started = Promise.withResolvers<void>()
+  const deferred = {
+    ...snapshot,
+    uploadSnapshot: vi.fn<typeof snapshot.uploadSnapshot>(async (o) => {
+      started.resolve()
+      await gate.promise
+      return snapshot.uploadSnapshot(o)
+    }),
+  }
+  const desk = await machine('desk', project, root, { snapshots: deferred })
+  await writer(desk)
+  const backingUp = desk.lease.backup()
+  await started.promise
+  await desk.lease.stopRelease()
+  expect(desk.notices).toContain('Kept the lease on stop: a backup was still uploading.')
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+  expect(desk.serving()).toBe(true)
+  gate.resolve()
+  await backingUp
+  expect(deferred.uploadSnapshot).toHaveBeenCalledOnce()
+})
+
+it('refuses a second backup while one runs, during a release, and on a standby', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const gate = Promise.withResolvers<void>()
+  const started = Promise.withResolvers<void>()
+  const slow = {
+    ...snapshot,
+    uploadSnapshot: vi.fn<typeof snapshot.uploadSnapshot>(async (o) => {
+      o.progress?.(5, 10)
+      started.resolve()
+      await gate.promise
+      return snapshot.uploadSnapshot(o)
+    }),
+  }
+  const desk = await machine('desk', project, root, { snapshots: slow })
+  await writer(desk)
+  const laptop = await machine('laptop', project, root, { autoClaim: false })
+  await standbyOn(laptop)
+
+  const first = desk.lease.backup()
+  await started.promise
+  expect((await desk.lease.state()).backup).toEqual({ done: 5, total: 10 })
+  await expect(desk.lease.backup()).rejects.toThrow('a backup is already running')
+  gate.resolve()
+  await first
+  expect(slow.uploadSnapshot).toHaveBeenCalledOnce()
+
+  await expect(laptop.lease.backup()).rejects.toThrow(
+    'This machine does not run the project; back it up on its writer',
+  )
+  // Not a writer either once it released: the snapshot it uploads is the release's, not a backup.
+  await idleRelease(desk)
+  await expect(desk.lease.backup()).rejects.toThrow('does not run the project')
+  expect(slow.uploadSnapshot).toHaveBeenCalledTimes(2)
+})
+
+it('refuses a backup while a move holds the writer, and keeps the last backup across restarts', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const desk = await machine('desk', project, root)
+  await writer(desk)
+  const done = await desk.lease.backup()
+  expect(JSON.parse(readFileSync(join(desk.home, 'cloud-backup.json'), 'utf8'))).toEqual({
+    key: KEY,
+    ...done,
+  })
+  await desk.close()
+
+  const restarted = await machine('desk', project, root, { home: desk.home })
+  await writer(restarted)
+  await until(async () => (await restarted.lease.state()).lastBackup?.id === done.id)
+  // A restarted writer names its last backup in hello, so the fleet keeps showing it.
+  expect(project.replica.store.lastBackupAt()).toBe(done.at)
+
+  // A move drains a running task on the writer; a backup waits for nothing and is refused meanwhile.
+  await sleep(restarted.harness(), false)
+  const laptop = await machine('laptop', project, root, { autoClaim: false })
+  await standbyOn(laptop)
+  void laptop.lease.move()
+  await until(async () => (await laptop.transition())?.step === 'handover')
+  await until(() => restarted.notices.some((notice) => notice.includes('waits for 1 running')))
+  await expect(restarted.lease.backup()).rejects.toThrow('A move or release is in flight')
+  laptop.lease.cancel()
 })
 
 it('relinks a renamed repository to its old replica and forgets the lease epoch', async () => {
