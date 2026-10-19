@@ -28,6 +28,14 @@ import { AutomationsApi } from '../automations/api.ts'
 import { Feedback } from './api.ts'
 import type { BackupReport, FeedbackService } from './api.ts'
 import { readSecret, secretMetadata } from '../../lib/secrets.ts'
+import {
+  databaseSuffixes as suffixes,
+  moveDatabase,
+  readLeaseFile as readLease,
+  staleName,
+  writeLeaseFile,
+} from '../../lib/database-files.ts'
+import type { LeaseFile } from '../../lib/database-files.ts'
 import { fetchOrigin } from './fetch.ts'
 import { modelLogin, noLogin } from './login.ts'
 import { LeaseChanged } from './refs.ts'
@@ -100,7 +108,6 @@ const STOP_BUDGET = 8000
 const MOVE_CAP = 10 * 60_000
 /** A held move rechecks its worktrees this often, besides on every task graph change. */
 export const HOLD_RECHECK = 30_000
-const suffixes = ['', '-wal', '-shm']
 const STEPS: TransitionStep['name'][] = [
   'fetch',
   'install',
@@ -113,13 +120,6 @@ const STEPS: TransitionStep['name'][] = [
 const exec: Exec = (command, args, options) =>
   run(command, args, { ...options, maxBuffer: 16 * 1024 * 1024 })
 
-/** What `cloud-lease.json` holds beyond the epoch: the snapshot the last release uploaded and its database hash. */
-interface LeaseFile {
-  key?: string
-  epoch?: number
-  snapshot?: string
-  snapshotHash?: string
-}
 /**
  * `cloud-claim.json`, written before `claim` is sent: the lease epoch claimed, the snapshot it takes over, its download
  * (absent when the local database is that snapshot) and the hash of the database it opens as the writer.
@@ -146,17 +146,10 @@ const finished = (transition: Transition, epoch: number): Transition => ({
   ),
 })
 
-/** Move a SQLite database with its `-wal` and `-shm`; never deletes one. */
-async function moveDatabase(from: string, to: string) {
-  for (const suffix of suffixes)
-    if (existsSync(from + suffix)) await rename(from + suffix, to + suffix)
-}
 async function writeJson(path: string, value: unknown) {
   await writeFile(`${path}.tmp`, JSON.stringify(value))
   await rename(`${path}.tmp`, path)
 }
-const staleName = (database: string) =>
-  database.replace(/state\.sqlite$/, `state.stale-${new Date().toISOString()}.sqlite`)
 /** The last lines of a failed command's output. */
 function tail(error: unknown) {
   const { stdout = '', stderr = '' } = error as { stdout?: string; stderr?: string }
@@ -188,7 +181,6 @@ const missingSecrets = (state: SyncState | undefined, local: Set<string>) => {
 
 export function startLease(host: ExtensionHost, options: LeaseOptions, deps: LeaseDeps) {
   const { identity } = options
-  const leasePath = join(host.home, 'cloud-lease.json')
   const claimPath = join(host.home, 'cloud-claim.json')
   /** An install the checkout owes: its lockfile changed and no install succeeded since. */
   const owed = join(host.home, 'cloud-install-pending')
@@ -282,14 +274,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     }
   }
 
-  const readLeaseFile = async (): Promise<LeaseFile> => {
-    try {
-      return JSON.parse(await readFile(leasePath, 'utf8')) as LeaseFile
-    } catch {
-      // No lease file yet: nothing is known about the local database.
-      return {}
-    }
-  }
+  const readLeaseFile = () => readLease(host.home)
   const readIntent = async (): Promise<ClaimIntent | undefined> => {
     try {
       const intent = JSON.parse(await readFile(claimPath, 'utf8')) as ClaimIntent
@@ -327,7 +312,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   const snapshotKey = () => sync?.state().project?.key ?? identity.key
   /** Open storage as the writer at `epoch`, installing `download` in place of any local database. */
   const openAsWriter = async (epoch: number, download?: string) => {
-    await writeJson(leasePath, { key: identity.key, epoch } satisfies LeaseFile)
+    await writeLeaseFile(host.home, { key: identity.key, epoch })
     await host.activate(async (path) => {
       if (!download) return
       if (suffixes.some((suffix) => existsSync(path + suffix)))
@@ -883,7 +868,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         snapshot: manifest.id,
         snapshotHash: manifest.database.sha256,
       }
-      await writeJson(leasePath, lease)
+      await writeLeaseFile(host.home, lease)
       const done = Promise.withResolvers<void>()
       pending = { epoch, id: manifest.id, sent: false, done }
       pendingRelease = pending

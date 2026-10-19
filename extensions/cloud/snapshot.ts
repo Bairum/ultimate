@@ -9,6 +9,7 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { createZstdCompress, createZstdDecompress } from 'node:zlib'
+import { databaseHash, vacuum } from '../../lib/database-files.ts'
 import { git as gitIn } from '../../lib/git.ts'
 
 export interface SnapshotManifest {
@@ -131,29 +132,7 @@ export async function downloadSnapshot(o: {
   }
 }
 
-/** sha256 of the logical content (e.g. of a VACUUM INTO copy), used to detect "unchanged since release" */
-export async function databaseHash(path: string): Promise<string> {
-  const temp = await mkdtemp(join(dirname(path), '.snapshot-'))
-  try {
-    const copy = join(temp, 'database.sqlite')
-    vacuum(path, copy)
-    const hash = createHash('sha256')
-    for await (const bytes of createReadStream(copy)) hash.update(bytes)
-    return hash.digest('hex')
-  } finally {
-    await rm(temp, { recursive: true, force: true })
-  }
-}
-
-/** A fresh, compact copy of the logical content, including committed WAL frames; the same content gives the same bytes. */
-function vacuum(database: string, copy: string) {
-  const db = new DatabaseSync(database, { readOnly: true })
-  try {
-    db.prepare('VACUUM INTO ?').run(copy)
-  } finally {
-    db.close()
-  }
-}
+export { databaseHash }
 
 const json = (value: unknown) => Buffer.from(JSON.stringify(value))
 

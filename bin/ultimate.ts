@@ -119,6 +119,14 @@ const lock = await acquireLock(lockPath, {
   console.error(String(error))
   process.exit(1)
 })
+// An interrupted `pnpm reset` left the home half moved; storage must not open until it is finished.
+if (existsSync(join(home, 'reset.json'))) {
+  await lock.close()
+  console.error(
+    `A reset of ${home} was interrupted. Finish it with \`pnpm reset ${projectRoot}\`, then start Ultimate.`,
+  )
+  process.exit(1)
+}
 if (lock.stale) {
   try {
     await retireStorageOwner(join(home, 'storage.lock'))
