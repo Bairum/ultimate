@@ -416,16 +416,20 @@ export default async function fauxExtension(host: ExtensionHost) {
       if (last?.role === 'user' && messageText(last.content).startsWith('Reply from #'))
         return fauxAssistantMessage([fauxText('Noted; nothing else is needed from it.')])
       const target =
-        last?.role === 'user' && typeof last.content === 'string'
-          ? /^message (#\d+|@[\w-]+)( one-way)?$/.exec(last.content)
+        last?.role === 'user'
+          ? /^message (#\d+|@[\w-]+)( one-way)?$/.exec(messageText(last.content).trim())
           : null
       if (target) {
+        // Pasted with images, the message forwards them.
+        const pasted =
+          typeof last!.content !== 'string' && last!.content.some((p) => p.type === 'image')
         return fauxAssistantMessage(
           [
             fauxToolCall('message', {
               to: target[1],
               text: 'Can you check whether the status card renders on narrow screens?',
               reply: !target[2],
+              ...(pasted ? { images: 'latest' } : {}),
             }),
           ],
           { stopReason: 'toolUse' },

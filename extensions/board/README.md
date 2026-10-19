@@ -4,7 +4,13 @@ Durable messages between conversations, standing agents and the user. Built in a
 
 ## Messaging
 
-`message { to, text, reply?: true, steer? }` returns the message id immediately. Address a conversation
+`message { to, text, reply?: true, steer?, images? }` returns the message id immediately. `images` forwards
+images from the sender's own conversation, since a model cannot produce image bytes: `'latest'` takes the newest
+entry with images, a number names that entry. The reference resolves when the message is admitted (at most
+`maxImages`, each at most `maxImageBytes`; unknown entries or entries without images are refused); the log records
+`images: { entry, count }`, and delivery attaches that entry's images to the recipient's input, so a replay attaches
+the same ones. `branch` takes the same `images` for its first message. Messages to the user carry none.
+Address a conversation
 as `#123` or `123`, a standing agent as `@name`, or the project's existing lander as `@lander`.
 Only the `ultimate` resident's standing conversation may message `user`; other senders must send @ultimate a one-way update to relay.
 Self-messages, unknown conversations and tallies are refused; use `note` for a tally. Unknown standing names list
@@ -113,7 +119,7 @@ type BoardMessage = {
 }
 ```
 
-`board.message` data: `{ id, from, text, reply, delivery: 'steer' | 'followUp' | 'note' }`.
+`board.message` data: `{ id, from, text, reply, delivery: 'steer' | 'followUp' | 'note', images? }`, where `images` counts the forwarded images in its model content; the card shows them as thumbnails.
 `board.reply` data: `{ id, re, from, text, failed }`. A reply has its own id and `re` points to the original message.
 The reply's `answer` links to the recipient's assistant entry; the original also stores its input `entry`.
 

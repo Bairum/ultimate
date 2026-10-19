@@ -958,6 +958,80 @@ it.each([false, true])(
     ).toHaveLength(1)
   },
 )
+const png = (n: number) => ({
+  type: 'image' as const,
+  mimeType: 'image/png',
+  data: `iVBORw0KGgo${n}AAAA`,
+})
+async function submitWithImages(
+  f: Awaited<ReturnType<typeof fixture>>,
+  text: string,
+  count: number,
+) {
+  const submission = await f.opened.root.submit(
+    {
+      type: 'input',
+      content: [{ type: 'text', text }, ...Array.from({ length: count }, (_, i) => png(i))],
+    },
+    context,
+  )
+  await submission.wait(context)
+  return (await submission.status(context)).entry!
+}
+async function placed(f: Awaited<ReturnType<typeof fixture>>, id: number, message: number) {
+  const view = await (await f.opened.harness.conversation(
+    id as ConversationId,
+    context,
+  ))!.viewState(context)
+  const entry = view.value.entries.find(
+    (e) => e.kind === 'board.message' && (e.data as { id: number }).id === message,
+  )
+  view.dispose()
+  return entry
+}
+const imagesIn = (entry: { model?: readonly { content: unknown }[] } | undefined) => {
+  const content = entry?.model?.[0]?.content
+  return Array.isArray(content) ? content.filter((p) => p.type === 'image') : []
+}
+it('forwards images from the sender to a message recipient, by latest or entry id', async () => {
+  const f = await fixture()
+  const to = `#${f.recipient.id}`
+  await submitWithImages(f, `SEND ${JSON.stringify({ to, text: 'See this', images: 'latest' })}`, 2)
+  await until(async () => (await f.log())!.messages[0]?.state === 'answered')
+  const first = (await f.log())!.messages[0]
+  expect(first.images).toMatchObject({ count: 2 })
+  const entry = await placed(f, f.recipient.id, first.id)
+  expect(entry?.data).toMatchObject({ images: 2 })
+  expect(imagesIn(entry)).toEqual([png(0), png(1)])
+  // A later input without images: `latest` still finds the one that has them, and an id names it exactly.
+  await f.send(to, 'Again', { images: 'latest' })
+  await f.send(to, 'By id', { images: first.images!.entry })
+  await until(async () => (await f.log())!.messages.filter((m) => m.images).length === 3)
+  for (const sent of (await f.log())!.messages.filter((m) => m.images && m.id !== first.id)) {
+    await until(async () => (await placed(f, f.recipient.id, sent.id)) !== undefined)
+    expect(imagesIn(await placed(f, f.recipient.id, sent.id))).toEqual([png(0), png(1)])
+  }
+})
+it('refuses image references that do not resolve or exceed the limits', async () => {
+  const f = await fixture()
+  const to = `#${f.recipient.id}`
+  await f.send(to, 'None yet', { images: 'latest' })
+  expect(f.observed.join('\n')).toContain('found no input with images')
+  await f.send(to, 'Missing', { images: 99999 })
+  expect(f.observed.join('\n')).toContain('entry 99999 is not in this conversation')
+  const plain = await submitWithImages(f, 'plain', 0)
+  await f.send(to, 'Plain', { images: plain })
+  expect(f.observed.join('\n')).toContain(`entry ${plain} has no images`)
+  await submitWithImages(f, `SEND ${JSON.stringify({ to, text: 'Too many', images: 'latest' })}`, 5)
+  expect(f.observed.join('\n')).toContain('has 5 images; at most 4 go along')
+  await submitWithImages(
+    f,
+    `SEND ${JSON.stringify({ to: 'user', text: 'Look', images: 'latest' })}`,
+    1,
+  )
+  expect(f.observed.join('\n')).toContain('images go along only to conversations and agents')
+  expect((await f.log())?.messages ?? []).toHaveLength(0)
+})
 async function branched(f: Awaited<ReturnType<typeof fixture>>) {
   const tool = (await f.opened.root.agent(context)).deferred.find(
     (candidate) => candidate.name === 'branch',
@@ -992,6 +1066,24 @@ async function branched(f: Awaited<ReturnType<typeof fixture>>) {
   await settled()
   return { id, branch, from, later, settled }
 }
+it('forwards images into a new branch with its prompt', async () => {
+  const f = await fixture()
+  const tool = (await f.opened.root.agent(context)).deferred.find((t) => t.name === 'branch')!
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1]
+    await configure(tx, f.opened.root.id, { modelTools: { add: [tool] } })
+  }, context)
+  await submitWithImages(
+    f,
+    'BRANCH ' + JSON.stringify({ prompt: 'Fix this card', isolated: false, images: 'latest' }),
+    1,
+  )
+  await until(async () => (await replies(f)).length === 1)
+  const message = (await f.log())!.messages[0]
+  expect(message.images?.count).toBe(1)
+  const entry = await placed(f, message.to as number, message.id)
+  expect(imagesIn(entry)).toEqual([png(0)])
+})
 it("routes a branch's later final answer to its starter once: a note, or a wake for a decision", async () => {
   const f = await fixture()
   const b = await branched(f)

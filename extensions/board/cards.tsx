@@ -11,6 +11,7 @@ import {
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
+import { ToolImage } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   cn,
@@ -251,6 +252,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
           <span>
             {(message?.reply ?? reply ?? true) ? 'expects reply' : 'one-way'}
             {steer && ' · steer'}
+            {message?.images && ` · ${imageCount(message.images.count)}`}
           </span>
           {state && <span className={state === 'failed' ? 'text-destructive' : ''}>· {state}</span>}
           {message && typeof message.to === 'number' && message.entry !== undefined && (
@@ -344,6 +346,7 @@ export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode
           <span className="shrink-0 max-sm:hidden">
             {root !== undefined && `from #${root} · `}
             {(isolated ?? true) ? 'isolated' : 'shared'}
+            {message?.images && ` · ${imageCount(message.images.count)}`}
           </span>
           <span className={`shrink-0 ${state === 'failed' ? 'text-destructive' : ''}`}>
             · {state}
@@ -445,8 +448,28 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
           )}
         </header>
         <Body text={origin.text} />
+        <InputImages entry={entry} />
       </section>
     </Fold>
+  )
+}
+
+const imageCount = (count: number) => `${count} image${count === 1 ? '' : 's'}`
+
+/** Images forwarded with a message, from its input's model content, as thumbnails that open full size. */
+function InputImages({ entry }: { entry: EntryRecord }) {
+  const message = entry.model?.[0]
+  const images =
+    message?.role === 'user' && typeof message.content !== 'string'
+      ? message.content.flatMap((block) => (block.type === 'image' ? [block] : []))
+      : []
+  if (!images.length) return null
+  return (
+    <div className="flex flex-wrap gap-2 border-t border-border/60 px-3 py-2">
+      {images.map((image, index) => (
+        <ToolImage alt={`Forwarded image ${index + 1}`} image={image} key={index} />
+      ))}
+    </div>
   )
 }
 

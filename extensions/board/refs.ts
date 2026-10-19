@@ -20,6 +20,8 @@ export type BoardMessage = {
   error?: string
   /** The tool call that sent it: `message`'s own id, or `<script>/<n>` for a nested codemode call. */
   call?: string
+  /** Images forwarded with it: the sender's entry that holds them, attached to the recipient's input on delivery. */
+  images?: { entry: number; count: number }
 }
 export type BoardData = { messages: BoardMessage[]; next: number }
 
