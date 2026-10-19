@@ -50,6 +50,7 @@ function useStates() {
         id,
         kind: id === primary ? 'primary' : own?.ownerTaskId !== undefined ? 'subagent' : 'other',
         runState: overview[id]?.runState,
+        primary,
       },
       board,
       answerWaits,

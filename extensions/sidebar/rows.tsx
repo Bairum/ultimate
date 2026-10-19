@@ -394,7 +394,13 @@ function CompactItem({ conversation }: { conversation: ConversationSummary }) {
   )
 }
 
-type ChildRowProps = { conversation: ConversationSummary; row?: OverviewRow; shown: boolean }
+type ChildRowProps = {
+  conversation: ConversationSummary
+  row?: OverviewRow
+  shown: boolean
+  /** The primary agent's conversation. */
+  primary?: number
+}
 
 /** A subagent under its conversation; one working on a plan task leads with its chip and shows the task's title. */
 export function ChildRow(props: ChildRowProps) {
@@ -409,12 +415,19 @@ function TaskedChildRow({
   conversation,
   row,
   shown,
+  primary,
   task,
 }: ChildRowProps & { task?: { chip: ReactNode; title: string } }) {
   const actions = useUltimate()
   const board = useDocOf(1, BoardDoc) ?? emptyBoard
   const state = conversationState(
-    { id: conversation.id, kind: 'subagent', runState: row?.runState, busy: conversation.busy },
+    {
+      id: conversation.id,
+      kind: 'subagent',
+      runState: row?.runState,
+      busy: conversation.busy,
+      primary,
+    },
     board,
   )
   const working = state === 'working'

@@ -274,7 +274,12 @@ function Tree({ waiting }: { waiting: number }) {
       <Row
         activity={overview[conversation.id]?.activity}
         state={conversationState(
-          { id: conversation.id, kind: 'other', runState: overview[conversation.id]?.runState },
+          {
+            id: conversation.id,
+            kind: 'other',
+            runState: overview[conversation.id]?.runState,
+            primary: ultimateId,
+          },
           board,
         )}
         concluded={hiddenIds.has(conversation.id)}
@@ -347,6 +352,7 @@ function Tree({ waiting }: { waiting: number }) {
       <div key={conversation.id}>
         {nested ? (
           <ChildRow
+            primary={ultimateId}
             conversation={conversation}
             row={overview[conversation.id]}
             shown={shownId === conversation.id}

@@ -20,7 +20,7 @@ export const waitingOnUser = (board: BoardData, answerWaits = false) =>
  * - `working`: it runs, or has input queued;
  * - `waits`: the primary agent (@ultimate, @sync in the machine home) has a question open with the user, the only
  *   state that asks the user to act;
- * - `awaiting`: it asked another agent (a branch asking @ultimate) and waits for the answer;
+ * - `awaiting`: it asked the primary agent (a branch asking @ultimate) and waits for the answer;
  * - `done`: a subagent answered, and its answer went to its parent;
  * - `failed`: its latest input ended without an answer;
  * - `idle`: everything else.
@@ -34,6 +34,8 @@ export function conversationState(
     kind: 'primary' | 'subagent' | 'other'
     runState?: 'working' | 'queued' | 'idle' | 'answered' | 'error'
     busy?: boolean
+    /** The primary agent's conversation, which a branch's open question waits on. */
+    primary?: number
   },
   board: BoardData,
   answerWaits = false,
@@ -43,7 +45,7 @@ export function conversationState(
   if (kind === 'primary' && waitingOnUser(board, answerWaits) > 0) return 'waits'
   if (
     board.messages.some(
-      (message) => message.from === id && message.to !== 'user' && isOpen(message),
+      (message) => message.from === id && message.to === conversation.primary && isOpen(message),
     )
   )
     return 'awaiting'
