@@ -128,7 +128,7 @@ export async function loadExtensions(
   notice: (message: string) => void = () => {},
 ) {
   const trace = host.callTrace
-  const log = eventLog(runtime.harness, trace.run)
+  const log = eventLog(runtime.harness, trace.run, trace.keep)
   const roots = discoveryRoots(host.ultimateRoot, host.projectRoot, host.userHome)
   const directories = roots.map((root) => join(root.path, 'extensions'))
   const provided = new Map<ExtensionHost, Map<string, unknown>>()

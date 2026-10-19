@@ -140,8 +140,15 @@ async function scan(
   } while (cursor)
 }
 
-/** Events, reactors and recorded notices of one extension host. */
-export function eventLog(harness: () => Harness, trace: CallTrace['run']) {
+/**
+ * Events, reactors and recorded notices of one extension host. `keep` tells the call trace to write the call that emits
+ * (`CallTrace['keep']`): its reactors continue its trace and need it as their parent, even when it repeats a poll.
+ */
+export function eventLog(
+  harness: () => Harness,
+  trace: CallTrace['run'],
+  keep: CallTrace['keep'] = () => {},
+) {
   type Active = { kinds: Set<string>; handler: Reactor<JsonValue> }
   const reactors = new Map<
     string,
@@ -205,7 +212,10 @@ export function eventLog(harness: () => Harness, trace: CallTrace['run']) {
   }
 
   return {
-    emit,
+    emit: <D extends JsonValue>(tx: Tx, event: EventToken<D>, data: D) => {
+      keep(traceContext())
+      return emit(tx, event, data)
+    },
     /** Record a notice of `extension` as an event; failures only log, so they cannot raise more notices. */
     notice(extension: string, message: string) {
       Promise.resolve()
