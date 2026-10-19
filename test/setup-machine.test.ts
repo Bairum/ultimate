@@ -1,5 +1,12 @@
 import { expect, it } from 'vitest'
-import { loginPath, renderUnits, selfUnits } from '../scripts/setup-machine.ts'
+import {
+  type AgentState,
+  loadAgents,
+  loginPath,
+  renderAgents,
+  renderUnits,
+  selfUnits,
+} from '../scripts/setup-machine.ts'
 
 const options = {
   clone: '/home/u/ultimate',
@@ -102,6 +109,139 @@ it('refuses paths systemd would read differently, naming the path', () => {
     )
   // Ordinary punctuation in paths stays allowed.
   expect(() => renderUnits({ ...options, project: '/home/u/work/my-app_2.0+x@y' })).not.toThrow()
+})
+
+/** The text of each top-level <key> in a rendered plist, keyed by name; the value is the raw XML after it. */
+function plist(content: string) {
+  const body = content.slice(content.indexOf('<dict>') + 6, content.lastIndexOf('</dict>'))
+  const entries: Record<string, string> = {}
+  for (const part of body.split(/\n  <key>/).slice(1)) {
+    const [key, ...rest] = part.split('\n')
+    entries[key.replace('</key>', '')] = rest.join('\n').trim()
+  }
+  return entries
+}
+
+const strings = (xml: string) =>
+  [...xml.matchAll(/<string>(.*?)<\/string>/g)].map(([, value]) => value)
+
+it('renders the darwin agents with the systemd arguments, PATH, logs and on-failure restarts', () => {
+  const agents = renderAgents({ ...options, home: '/Users/u' })
+  expect(agents.map(({ name }) => name)).toEqual([
+    'com.ultimate.app.plist',
+    'com.ultimate.machine.plist',
+    'com.ultimate.tunnel.plist',
+  ])
+  const [app, machine, tunnel] = agents.map(({ content }) => plist(content))
+  expect(strings(app.ProgramArguments)).toEqual([
+    '/opt/node/bin/node',
+    '/home/u/ultimate/bin/ultimate.ts',
+  ])
+  expect(strings(app.WorkingDirectory)).toEqual(['/home/u/work/app'])
+  expect(app.EnvironmentVariables).toContain('<key>ULTIMATE_NO_OPEN</key>\n    <string>1</string>')
+  expect(strings(machine.ProgramArguments)).toEqual([
+    '/opt/node/bin/node',
+    '/home/u/ultimate/bin/ultimate.ts',
+    '--port',
+    '4700',
+    '--no-open',
+    '/Users/u/.ultimate/machine',
+  ])
+  expect(strings(tunnel.ProgramArguments)).toEqual([
+    '/opt/node/bin/node',
+    '/home/u/ultimate/node_modules/wrangler/bin/wrangler.js',
+    'tunnel',
+    'run',
+    'ultimate-rog',
+  ])
+  expect(tunnel.EnvironmentVariables).not.toContain('ULTIMATE_NO_OPEN')
+  for (const [index, agent] of [app, machine, tunnel].entries()) {
+    const label = agents[index].label
+    expect(strings(agent.Label)).toEqual([label])
+    expect(strings(agent.EnvironmentVariables)[0]).toBe(
+      '/opt/node/bin:/opt/mise/shims:/home/u/.local/bin:/usr/bin:/usr/local/bin:/bin',
+    )
+    expect(agent.RunAtLoad).toBe('<true/>')
+    expect(agent.KeepAlive).toContain('<key>SuccessfulExit</key>\n    <false/>')
+    expect(strings(agent.StandardOutPath)).toEqual([`/Users/u/Library/Logs/ultimate/${label}.log`])
+    expect(agent.StandardErrorPath).toBe(agent.StandardOutPath)
+  }
+})
+
+it('escapes plist values instead of refusing paths, and leaves the tunnel out when unknown', () => {
+  const agents = renderAgents({
+    ...options,
+    project: `/Users/u/R&D <"x"> it's`,
+    path: '/Users/u/My Tools/bin:/opt/a&b',
+    tunnel: false,
+  })
+  expect(agents.map(({ label }) => label)).toEqual(['com.ultimate.app', 'com.ultimate.machine'])
+  const app = plist(agents[0].content)
+  expect(app.WorkingDirectory).toBe(
+    '<string>/Users/u/R&amp;D &lt;&quot;x&quot;&gt; it&apos;s</string>',
+  )
+  // Whitespace is fine in a plist, so PATH keeps that entry.
+  expect(strings(app.EnvironmentVariables)[0]).toBe(
+    '/opt/node/bin:/Users/u/My Tools/bin:/opt/a&amp;b:/usr/local/bin:/usr/bin:/bin',
+  )
+})
+
+it('reloads new and changed agents, loads unloaded unchanged ones and never restarts itself', () => {
+  const agents: AgentState[] = [
+    { label: 'com.ultimate.app', file: '/L/app.plist', state: 'replaced' },
+    { label: 'com.ultimate.machine', file: '/L/machine.plist', state: 'unchanged' },
+    { label: 'com.ultimate.tunnel', file: '/L/tunnel.plist', state: 'new' },
+  ]
+  const plan = (env: Record<string, string>, loaded: string[] = []) => {
+    const calls: string[] = []
+    const log: string[] = []
+    loadAgents(
+      agents,
+      501,
+      env,
+      (args) => {
+        calls.push(args.join(' '))
+        if (args[0] === 'print') return loaded.includes(args[1]) ? 0 : 113
+        // bootout of an agent that is not loaded fails, and must not stop the plan.
+        return args[0] === 'bootout' ? 3 : 0
+      },
+      (message) => log.push(message),
+    )
+    return { calls, log }
+  }
+  expect(plan({}).calls).toEqual([
+    'bootout gui/501/com.ultimate.app',
+    'bootstrap gui/501 /L/app.plist',
+    'print gui/501/com.ultimate.machine',
+    'bootstrap gui/501 /L/machine.plist',
+    'bootout gui/501/com.ultimate.tunnel',
+    'bootstrap gui/501 /L/tunnel.plist',
+  ])
+  // A loaded unchanged agent is left running.
+  expect(plan({}, ['gui/501/com.ultimate.machine']).calls).not.toContain(
+    'bootstrap gui/501 /L/machine.plist',
+  )
+  // Inside the changed app agent, found by the label launchd puts in XPC_SERVICE_NAME.
+  const self = plan({ XPC_SERVICE_NAME: 'com.ultimate.app' }, ['gui/501/com.ultimate.machine'])
+  expect(self.calls).toEqual([
+    'print gui/501/com.ultimate.machine',
+    'bootout gui/501/com.ultimate.tunnel',
+    'bootstrap gui/501 /L/tunnel.plist',
+  ])
+  expect(self.log).toEqual(['com.ultimate.app changed: restart it yourself.'])
+  // Under Ultimate's supervisor both Ultimate agents are left alone; the tunnel still reloads.
+  const supervised = plan({ ULTIMATE_SUPERVISED: '1' }, ['gui/501/com.ultimate.machine'])
+  expect(supervised.calls).toEqual(self.calls)
+  // A failing bootstrap stops the setup.
+  expect(() =>
+    loadAgents(
+      agents,
+      501,
+      {},
+      () => 1,
+      () => {},
+    ),
+  ).toThrow('launchctl bootstrap gui/501 /L/app.plist failed.')
 })
 
 it('never restarts the unit it runs inside: by InvocationID, and both Ultimate units when supervised', () => {
