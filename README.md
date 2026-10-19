@@ -53,6 +53,7 @@ pnpm install
 pnpm start          # Ultimate on its own repository; opens http://127.0.0.1:4747
 pnpm link --global  # once, in this clone, to get the `ultimate` command
 cd ~/Projects/app && ultimate
+pnpm cli            # emergency terminal agent when the UI, server or database is broken
 ```
 
 - No `pi` login yet? Open the command palette (`Ctrl+K`, `⌘K` on macOS) → "Log in to a provider". Logins are shared
@@ -66,6 +67,9 @@ cd ~/Projects/app && ultimate
   live, for this project or everywhere, and can change the project choice.
 - On another machine: `ssh -L 4747:127.0.0.1:4747 <host>`, then open `http://127.0.0.1:4747`. Ultimate only listens on
   loopback.
+- **When everything is broken:** `pnpm cli` in the clone (or `ultimate --cli` in a project) opens Pi's terminal agent
+  with Ultimate's instructions, skills, your default model and the Claude Code provider. It starts no server and opens
+  no database; further arguments go to Pi, e.g. `pnpm cli --model claude-code/claude-opus-5-5 "why won't it boot"`.
 - **Several machines, one project:** set up cloud sync on each, and a project runs on one of them at a time and moves
   between them; see [New machine](cloud/README.md#new-machine).
 
