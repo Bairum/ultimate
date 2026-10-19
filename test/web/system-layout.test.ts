@@ -135,6 +135,25 @@ it('shows every lane of a parent cycle once instead of dropping it', () => {
   expect(shape(tree(lanes))).toEqual(['1. ', '2. ', '3. ', '  4. ', '    5. 0'])
 })
 
+it('handles finished and empty cycles without recursing forever, folding them like any lane', () => {
+  const lanes = [
+    lane(1, 1, 30, run(29, 28)),
+    lane(2, 3, 25, run(24, 23)),
+    lane(3, 2, 20, run(19, 18)),
+    lane(4, 5, undefined),
+    lane(5, 4, undefined),
+  ]
+  const shown = tree(lanes).flatMap((row) => (row.kind === 'lane' ? [row.lane.conversation] : []))
+  expect(shown.toSorted((a, b) => a - b)).toEqual([1, 2, 3, 4, 5])
+  // A finished parent cycle with more than three finished children still folds.
+  const many = [
+    lane(10, 11, 30, run(29, 28)),
+    lane(11, 10, 25, run(24, 23)),
+    ...[12, 13, 14, 15].map((id) => lane(id, 10, 30 - id, run(29 - id, 20 - id))),
+  ]
+  expect(tree(many).find((row) => row.kind === 'fold')).toMatchObject({ parent: 10, count: 5 })
+})
+
 it('leads with the pinned lane and its subtree, the rest in their given order', () => {
   const lanes = [
     lane(7, undefined, undefined, run(5)),

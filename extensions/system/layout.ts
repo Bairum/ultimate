@@ -109,10 +109,17 @@ export function tree(
   for (const list of children.values()) list.sort((a, b) => startOf(a) - startOf(b))
   const first = roots.findIndex((lane) => lane.conversation === pinned)
   if (first > 0) roots.unshift(...roots.splice(first, 1))
-  const open = (lane: Lane): boolean =>
-    lane.runs.at(-1)?.end === undefined && lane.runs.length > 0
-      ? true
-      : (children.get(lane.conversation) ?? []).some(open)
+  /** Whether `lane` or anything below it has an open run; a parent cycle is walked once. */
+  const open = (lane: Lane) => {
+    const walked = new Set<number>()
+    const below = (item: Lane): boolean => {
+      if (item.runs.length > 0 && item.runs.at(-1)?.end === undefined) return true
+      if (walked.has(item.conversation)) return false
+      walked.add(item.conversation)
+      return (children.get(item.conversation) ?? []).some(below)
+    }
+    return below(lane)
+  }
   const rows: TreeRow[] = []
   const seen = new Set<number>()
   /** `lane` and everything below it as placed. */
