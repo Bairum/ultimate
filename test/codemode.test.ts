@@ -16,6 +16,9 @@ import {
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { Store } from '../extensions/codemode/server.ts'
+import planExtension from '../extensions/plan/server.ts'
+import type { ExtensionHost } from '../server/extensions.ts'
+import { Metadata } from '../server/metadata.ts'
 import type { CallTree } from '../server/trace.ts'
 
 const servers: Awaited<ReturnType<typeof createServer>>[] = []
@@ -423,6 +426,28 @@ it('composes read and bash with private nested results and final JSON details', 
       ],
     }),
   )
+  server.host.registry.install(
+    planExtension({
+      metadata: Metadata,
+      onOpen: () => {},
+    } as unknown as ExtensionHost),
+  )
+  // #159728 extended task descriptions from a script; a text result made `shown.description` undefined and wiped them.
+  const extended = await run(
+    server,
+    `const epic = await tools.plan({action:'create', title:'E', body:'b'});
+     const task = await tools.plan({action:'add', epic: epic.key, title:'T', role:'worker', description:'draft'});
+     const shown = await tools.plan({action:'show', key: task.key});
+     await tools.plan({action:'update', key: task.key, description: shown.description + '\\nmore'});
+     await tools.plan({action:'update', key: task.key, status:'todo', child: 7});
+     return await tools.plan({action:'show', key: task.key});`,
+  )
+  expect(extended.data.details.value).toMatchObject({
+    description: 'draft\nmore',
+    status: 'todo',
+    child: 7,
+    title: 'T',
+  })
   const structured = await run(server, `return await tools.structured({answer:42});`)
   expect(structured.data.details.value).toEqual({ answer: 42 })
   const invalid = await run(server, `await tools.structured({answer:'wrong'});`)
