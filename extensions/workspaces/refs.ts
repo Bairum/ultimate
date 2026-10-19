@@ -26,7 +26,7 @@ export const DiskAction = actionRef<null, WorkspaceDisk>('workspaces', 'disk')
  * if it has none.
  */
 export const IsolationAction = actionRef<null, Isolation>('workspaces', 'isolation')
-/** No arguments → `https://github.com/<owner>/<repo>` of the project's `origin`, or null off GitHub. */
+/** No arguments → `github.com/<owner>/<repo>` of the project's `origin`, or null off GitHub. */
 export const GithubAction = actionRef<null, string | null>('workspaces', 'github')
 
 export type LandedData = {

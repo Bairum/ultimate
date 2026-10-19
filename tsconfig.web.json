@@ -44,6 +44,7 @@
     "extensions/sync/types.ts",
     "extensions/sync/moves.ts",
     "lib/machine.ts",
+    "lib/compare.ts",
     "extensions/subagents/message-types.ts",
     "test/web"
   ]
