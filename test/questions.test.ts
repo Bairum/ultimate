@@ -382,7 +382,7 @@ it("keeps @ultimate's open message to the user open until its card answers it", 
   expect(note.data).toEqual({ ids: [message.id] })
   expect(note.model?.[0]?.content).toMatch(
     new RegExp(
-      `^Open questions to the user.*\\n- message ${message.id}: Keep it running\\? \\(asked \\d+m ago\\)$`,
+      `^Open questions to the user.*\\n- message ${message.id}: Keep it running\\? \\(asked just now\\)$`,
       's',
     ),
   )

@@ -30,7 +30,15 @@ function useKeys(card: string) {
  * The answer card of a message that waits on the user: its extracted questions, or only Dismiss while none were
  * extracted. `keys` (default: the shown conversation decides) whether it takes the desktop 1–9 and Enter keys.
  */
-export function MessageQuestions({ message, keys }: { message: Message; keys?: boolean }) {
+export function MessageQuestions({
+  message,
+  keys,
+  className,
+}: {
+  message: Message
+  keys?: boolean
+  className?: string
+}) {
   const questions = openQuestions(useDocOf(1, QuestionsDoc), message)
   const card = `message:${message.id}`
   const shown = useKeys(card)
@@ -42,6 +50,7 @@ export function MessageQuestions({ message, keys }: { message: Message; keys?: b
       keys={questions.length > 0 && (keys ?? shown)}
       submit={(answers) => api.action(AnswerAction, { messageId: message.id, answers })}
       dismiss={() => api.action(DismissAction, { messageId: message.id })}
+      {...(className === undefined ? {} : { className })}
     />
   )
 }
@@ -115,20 +124,43 @@ function Card({
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
   })
+  // Nothing extracted to answer with buttons: one quiet line with Dismiss.
+  if (!questions.length)
+    return (
+      <div
+        className={cn(
+          className,
+          'flex items-center gap-2 px-3 py-1.5 font-mono text-[11px] text-muted-foreground',
+        )}
+        data-questions-card={card}
+      >
+        <MessageCircleQuestionIcon className="size-3.5 text-brand" />
+        <span className="min-w-0">Answer in the composer</span>
+        <Button
+          className="ml-auto"
+          variant="ghost"
+          size="xs"
+          disabled={sending}
+          onClick={() => void run(dismiss)}
+          title="Close it without an answer; the agent gets a note"
+        >
+          Dismiss
+        </Button>
+        {error && (
+          <span role="alert" className="text-error">
+            {error}
+          </span>
+        )}
+      </div>
+    )
   return (
     <div className={className} data-questions-card={card}>
       <div className="flex items-center gap-2 px-3 pt-2 font-mono text-[11px] text-muted-foreground">
         <MessageCircleQuestionIcon className="size-3.5 text-brand" />
-        {questions.length > 0 ? (
-          <>
-            <span className="text-foreground">
-              {questions.length} {questions.length === 1 ? 'question' : 'questions'}
-            </span>
-            <span>· Answer what you can</span>
-          </>
-        ) : (
-          <span>Reply in the composer, or dismiss it</span>
-        )}
+        <span className="text-foreground">
+          {questions.length} {questions.length === 1 ? 'question' : 'questions'}
+        </span>
+        <span>· Answer what you can</span>
       </div>
       <div className="space-y-3 px-3 pt-2 pb-3">
         {questions.map(
@@ -198,13 +230,8 @@ function Card({
               </fieldset>
             ),
         )}
-        <div
-          className={cn(
-            'flex items-center gap-2',
-            questions.length > 0 && 'border-t border-border/60 pt-2',
-          )}
-        >
-          {questions.length === 0 ? null : phone ? (
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border/60 pt-2">
+          {phone ? (
             <>
               <Button
                 variant="ghost"
@@ -214,8 +241,8 @@ function Card({
               >
                 Back
               </Button>
-              <span className="font-mono text-[10px] text-muted-foreground">
-                {current + 1} of {questions.length}
+              <span className="font-mono text-[10px] whitespace-nowrap text-muted-foreground">
+                {current + 1}/{questions.length}
               </span>
               {current < questions.length - 1 && (
                 <Button variant="ghost" size="xs" onClick={() => setCurrent(current + 1)}>
@@ -233,18 +260,16 @@ function Card({
           <Button
             className="ml-auto"
             variant="ghost"
-            size="sm"
+            size={phone ? 'xs' : 'sm'}
             disabled={sending}
             onClick={() => void run(dismiss)}
             title="Close it without an answer; the agent gets a note"
           >
             Dismiss
           </Button>
-          {questions.length > 0 && (
-            <Button size="sm" disabled={!answered.length || sending} onClick={() => void send()}>
-              {sending ? 'Sending…' : 'Send answers'}
-            </Button>
-          )}
+          <Button size="sm" disabled={!answered.length || sending} onClick={() => void send()}>
+            {sending ? 'Sending…' : 'Send answers'}
+          </Button>
         </div>
         {error && (
           <p role="alert" className="text-xs text-error">

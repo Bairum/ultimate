@@ -109,6 +109,7 @@ export const isOpen = (message: BoardMessage) =>
 export function messageStatus(message: BoardMessage) {
   if (message.state === 'failed') return 'failed'
   if (message.state === 'answered') return 'answered'
+  if (message.state === 'dismissed') return 'dismissed'
   if (isOpen(message)) return message.to === 'user' ? 'yours' : 'waiting'
   if (message.state === 'sent') return 'sending'
   return message.re === undefined ? 'one-way' : 'reply'
@@ -130,6 +131,7 @@ export function outgoingState(
   if (!message) return running ? 'sending' : undefined
   if (message.state === 'failed') return 'failed'
   if (message.state === 'answered') return 'answered'
+  if (message.state === 'dismissed') return 'dismissed'
   if (message.state === 'sent') return 'sending'
   if (!message.reply) return 'delivered'
   return toUser ? 'awaiting your reply' : 'awaiting reply'

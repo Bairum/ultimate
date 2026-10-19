@@ -2,7 +2,8 @@ import { CheckIcon } from 'lucide-react'
 import { cn, events, useDocOf, useNow, useUltimate } from '@/sdk'
 import { accentOf, Address, BoardDoc, emptyBoard, MessageBody, relativeTime } from '../board/ui.tsx'
 import { MessageQuestions } from './card.tsx'
-import { waiting } from './open.tsx'
+import { openQuestions, waiting } from './open.tsx'
+import { QuestionsDoc } from './refs.ts'
 
 /**
  * Every question that waits on you, newest first, wherever you are: the asker, when it asked, its message and its answer
@@ -10,6 +11,7 @@ import { waiting } from './open.tsx'
  */
 export function OpenQuestions() {
   const messages = waiting((useDocOf(1, BoardDoc) ?? emptyBoard).messages)
+  const extracted = useDocOf(1, QuestionsDoc)
   const now = useNow(60_000)
   const { switchConversation, showSurface } = useUltimate()
   return (
@@ -67,8 +69,15 @@ export function OpenQuestions() {
                   </button>
                 )}
               </header>
-              <MessageBody text={message.text} />
-              <MessageQuestions message={message} keys={false} />
+              {/* Extracted questions read on their own; the full message stays one click away in the chat. */}
+              {openQuestions(extracted, message).length === 0 && (
+                <MessageBody text={message.text} />
+              )}
+              <MessageQuestions
+                message={message}
+                keys={false}
+                {...(openQuestions(extracted, message).length ? { className: '' } : {})}
+              />
             </section>
           )
         })}

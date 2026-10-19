@@ -129,9 +129,13 @@ const Started = defineDoc<{ by?: number; yielded?: number }>({
 })
 /** A reply-enabled message to the user that the user has neither answered nor dismissed yet. */
 const openQuestion = (m: BoardMessage) => m.to === 'user' && m.reply && m.state === 'delivered'
-/** A message's first line, clipped, to name it in one line. */
-const gist = (text: string) => {
-  const line = text.trim().split('\n')[0].replace(/\*\*/g, '')
+/** A question in one line: its first line that asks something, else its first line, clipped. */
+export const gist = (text: string) => {
+  const lines = text
+    .split('\n')
+    .map((line) => line.replace(/\*\*/g, '').trim())
+    .filter(Boolean)
+  const line = lines.find((candidate) => candidate.includes('?')) ?? lines[0] ?? ''
   return line.length > 100 ? `${line.slice(0, 99)}…` : line
 }
 /**
@@ -145,10 +149,14 @@ export async function openQuestionsNote(tx: Tx, conversationId: ConversationId, 
   if (!open.length) return undefined
   const ago = (at: number) => {
     const minutes = Math.max(0, Math.round((now - at) / 60_000))
-    return minutes < 60 ? `${minutes}m` : `${Math.round(minutes / 60)}h`
+    return minutes < 1
+      ? 'just now'
+      : minutes < 60
+        ? `${minutes}m ago`
+        : `${Math.round(minutes / 60)}h ago`
   }
   const text = `Open questions to the user, unanswered until they answer or dismiss them:\n${open
-    .map((m) => `- message ${m.id}: ${gist(m.text)} (asked ${ago(m.at)} ago)`)
+    .map((m) => `- message ${m.id}: ${gist(m.text)} (asked ${ago(m.at)})`)
     .join('\n')}`
   return {
     entries: [
