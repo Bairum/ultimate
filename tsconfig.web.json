@@ -47,6 +47,7 @@
     "extensions/review/types.ts",
     "extensions/review/drafts.ts",
     "extensions/review/lines.ts",
+    "extensions/review/sha256.ts",
     "lib/machine.ts",
     "lib/compare.ts",
     "extensions/subagents/message-types.ts",

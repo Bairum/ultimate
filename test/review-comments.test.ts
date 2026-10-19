@@ -4,10 +4,12 @@ import {
   code,
   draftsKey,
   excerptOf,
+  fitsDraftBudget,
   languageOf,
   limits,
   reviewText,
 } from '../extensions/review/comments.ts'
+import { sha256 } from '../extensions/review/sha256.ts'
 
 const bytes = (text: string) => new TextEncoder().encode(text).length
 
@@ -96,4 +98,47 @@ it('keeps drafts apart per spec and per worktree, in keys UI state accepts', () 
   expect(new Set(keys).size).toBe(keys.length)
   for (const key of [...keys, draftsKey('x'.repeat(500)), draftsKey('ü / weird`spec')])
     expect(valid(key)).toBe(true)
+  // Long specs that differ only at the end are named by a hash of the whole spec.
+  const [a, b] = [
+    draftsKey(`branch:${'a'.repeat(141)}Aa`),
+    draftsKey(`branch:${'a'.repeat(141)}BB`),
+  ]
+  expect(a).not.toBe(b)
+  expect(a).toBe(`drafts:project:sha256-${sha256(`branch:${'a'.repeat(141)}Aa`)}`)
+  expect(valid(a)).toBe(true)
+})
+
+it('hashes with SHA-256', () => {
+  expect(sha256('')).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
+  expect(sha256('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
+  // Two blocks, and multibyte text hashed as UTF-8.
+  expect(sha256('abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq')).toBe(
+    '248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1',
+  )
+  // Digests from node:crypto.
+  expect(sha256('ü')).toBe('607474ca475a9724d7360aba71a56d5df77e61350e3f724cfa1f46e857e2d85f')
+  expect(sha256('x'.repeat(1000) + '€'.repeat(300))).toBe(
+    '4d187d7b71f3089a91068af7f5db8b8dd21d29f9fce7162b646a57b34443d2ad',
+  )
+})
+
+/** `count` drafts of `text`, as drafts.ts stores them: without excerpts. */
+const drafts = (count: number, text: string) => ({
+  note: '',
+  comments: Array.from({ length: count }, (_, index) => ({
+    id: String(index),
+    file: 'src/app.ts',
+    side: 'new',
+    start: 1,
+    end: 1,
+    text,
+  })),
+})
+
+it('keeps drafts within their budget, but always lets them shrink', () => {
+  // 50 comments of 1,000 characters fit; 50 of 4,000 do not.
+  expect(fitsDraftBudget(drafts(50, 'x'.repeat(1000)), drafts(49, 'x'.repeat(1000)))).toBe(true)
+  const full = drafts(30, 'x'.repeat(4000))
+  expect(fitsDraftBudget(full, drafts(29, 'x'.repeat(4000)))).toBe(false)
+  expect(fitsDraftBudget(drafts(29, 'x'.repeat(4000)), full)).toBe(true)
 })

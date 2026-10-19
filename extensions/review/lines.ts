@@ -29,22 +29,30 @@ export function linesOf(diff: FileDiffMetadata) {
   return { old, new: next }
 }
 
+/** The lines a comment covers, without its text or excerpt. */
+export type CommentLines = Pick<ReviewComment, 'file' | 'side' | 'start' | 'end'>
+
 /**
  * A selection as the lines a comment covers: on the side the selection ends on (a range dragged across both sides of a
- * unified diff keeps its numbers, read on that side), with the shown lines between as its excerpt.
+ * unified diff keeps its numbers, read on that side).
  */
-export function commentRange(
-  diff: FileDiffMetadata,
-  range: SelectedLineRange,
-): Omit<ReviewComment, 'text'> {
-  const side = (range.endSide ?? range.side) === 'deletions' ? 'old' : 'new'
-  const start = Math.min(range.start, range.end)
-  const end = Math.max(range.start, range.end)
-  const lines = linesOf(diff)[side]
+export function commentRange(diff: FileDiffMetadata, range: SelectedLineRange): CommentLines {
+  return {
+    file: diff.name,
+    side: (range.endSide ?? range.side) === 'deletions' ? 'old' : 'new',
+    start: Math.min(range.start, range.end),
+    end: Math.max(range.start, range.end),
+  }
+}
+
+/** What a comment quotes: the lines the diff shows between its start and end, capped by `excerptOf`. */
+export function excerptFor(diff: FileDiffMetadata | undefined, comment: CommentLines) {
+  if (!diff) return ''
+  const lines = linesOf(diff)[comment.side]
   const shown: string[] = []
-  for (let line = start; line <= end; line++) {
+  for (let line = comment.start; line <= comment.end; line++) {
     const text = lines.get(line)
     if (text !== undefined) shown.push(text)
   }
-  return { file: diff.name, side, start, end, excerpt: excerptOf(shown) }
+  return excerptOf(shown)
 }

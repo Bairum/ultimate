@@ -36,12 +36,12 @@ import { Address } from '../board/ui.tsx'
 import { compareUrl } from '../../lib/compare.ts'
 import { useGithubRepo } from '../workspaces/ui.tsx'
 import { Composer, DraftCard } from './comment.tsx'
-import type { ReviewComment } from './comments.ts'
 import { draftsKey } from './comments.ts'
 import { useDrafts } from './drafts.ts'
 import type { Draft, Drafts } from './drafts.ts'
 import { Footer } from './footer.tsx'
-import { commentRange } from './lines.ts'
+import { commentRange, excerptFor } from './lines.ts'
+import type { CommentLines } from './lines.ts'
 import { reachedTarget, useSpec, useTarget } from './link.tsx'
 import type { ReviewTarget } from './link.tsx'
 import { Frame, Loading, Notice } from './parts.tsx'
@@ -85,7 +85,7 @@ type Note = { composer: true } | { draft: Draft }
 
 const sideOf = (side: 'old' | 'new') => (side === 'old' ? 'deletions' : 'additions')
 const lastLine = (range: SelectedLineRange) => Math.max(range.start, range.end)
-const rangeOf = (draft: ReviewComment): SelectedLineRange => ({
+const rangeOf = (draft: CommentLines): SelectedLineRange => ({
   start: draft.start,
   end: draft.end,
   side: sideOf(draft.side),
@@ -227,7 +227,7 @@ function CommentedDiff({
   writing?: Writing
   marked?: ReviewTarget
   onWrite: (writing: Writing | undefined) => void
-  update: (change: (drafts: Drafts) => Drafts) => void
+  update: (change: (drafts: Drafts) => Drafts) => boolean
 }) {
   const mine = writing?.file === meta.name ? writing : undefined
   const annotations: DiffLineAnnotation<Note>[] = drafts
@@ -261,6 +261,8 @@ function CommentedDiff({
         // Clicking the one selected line again unselects it: the composer closes.
         onWrite(range ? { file: meta.name, range } : undefined)
       },
+      // The gutter `+` is not a line selection to the viewer: it reports its line (or a range dragged from it) here.
+      onGutterUtilityClick: (range) => onWrite({ file: meta.name, range }),
     }),
     [options, meta.name, onWrite],
   )
@@ -296,7 +298,7 @@ function CommentedDiff({
             key={`${mine.id ?? 'new'}:${mine.range.start}:${mine.range.end}`}
             onCancel={() => onWrite(undefined)}
             onSubmit={(text) => {
-              update((all) => ({
+              const kept = update((all) => ({
                 ...all,
                 comments: editing
                   ? all.comments.map((draft) =>
@@ -307,7 +309,8 @@ function CommentedDiff({
                       { ...commentRange(meta, mine.range), text, id: crypto.randomUUID() },
                     ],
               }))
-              onWrite(undefined)
+              if (kept) onWrite(undefined)
+              return kept
             }}
             submit={editing ? 'Save' : 'Add to review'}
           />
@@ -318,8 +321,17 @@ function CommentedDiff({
   )
 }
 
+/** Each file's parsed diff, by path: what the viewer renders and what a sent comment quotes. */
+function parse(diff: ReviewDiff) {
+  const byPath = new Map<string, FileDiffMetadata>()
+  for (const patch of parsePatchFiles(diff.patch, `${diff.base}:${diff.head ?? 'work'}`))
+    for (const file of patch.files) byPath.set(file.name, file)
+  return byPath
+}
+
 function Diffs({
   diff,
+  parsed,
   layout,
   phone,
   drafts,
@@ -327,22 +339,17 @@ function Diffs({
   footer,
 }: {
   diff: ReviewDiff
+  parsed: Map<string, FileDiffMetadata>
   layout: 'split' | 'unified'
   phone: boolean
   drafts: Drafts
-  update: (change: (drafts: Drafts) => Drafts) => void
+  update: (change: (drafts: Drafts) => Drafts) => boolean
   footer: ReactNode
 }) {
   const theme = useStore((state) => state.ui.theme)
   const [writing, setWriting] = useState<Writing>()
   const target = useTarget()
   const [marked, setMarked] = useState<ReviewTarget>()
-  const parsed = useMemo(() => {
-    const byPath = new Map<string, FileDiffMetadata>()
-    for (const patch of parsePatchFiles(diff.patch, `${diff.base}:${diff.head ?? 'work'}`))
-      for (const file of patch.files) byPath.set(file.name, file)
-    return byPath
-  }, [diff])
   const options = useMemo<FileDiffOptions<Note, undefined>>(
     () => ({
       theme: { dark: 'vitesse-dark', light: 'vitesse-light' },
@@ -485,6 +492,8 @@ export default function ReviewSurface() {
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState<{ conversation: number } | { error: string }>()
   const { switchConversation, showSurface } = useUltimate()
+  const data = diff.data?.spec === spec ? diff.data : undefined
+  const parsed = useMemo(() => (data ? parse(data) : new Map<string, FileDiffMetadata>()), [data])
   const send = async () => {
     if (to === undefined) return
     setSending(true)
@@ -496,7 +505,11 @@ export default function ReviewSurface() {
       const result = await api.action(SendAction, {
         conversation: to,
         spec,
-        comments: drafts.comments.map(({ id: _id, ...comment }) => comment),
+        // Drafts keep no excerpt: it is read now from the diff on screen.
+        comments: drafts.comments.map(({ id: _id, ...comment }) => ({
+          ...comment,
+          excerpt: excerptFor(parsed.get(comment.file), comment),
+        })),
         ...(note.trim() && { note }),
       })
       update((all) => ({
@@ -530,7 +543,6 @@ export default function ReviewSurface() {
         sent={sent}
       />
     ) : null
-  const data = diff.data?.spec === spec ? diff.data : undefined
   const totals = data?.files.reduce(
     (sum, file) => ({
       additions: sum.additions + file.additions,
@@ -615,6 +627,7 @@ export default function ReviewSurface() {
         ) : (
           <Diffs
             diff={data}
+            parsed={parsed}
             drafts={drafts}
             footer={footer}
             layout={layout}

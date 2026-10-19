@@ -1,4 +1,5 @@
 /** Review comments: their limits, their check, and the Markdown the model reads. Pure and browser-safe. */
+import { sha256 } from './sha256.ts'
 import type { ReviewComment, ReviewComments } from './types.ts'
 
 export type { ReviewComment, ReviewComments } from './types.ts'
@@ -8,9 +9,23 @@ export const limits = {
   text: 4000,
   excerptLines: 40,
   excerptBytes: 8 * 1024,
+  /**
+   * How large one spec's drafts may grow, as JSON bytes. All of durable UI state shares one 256 KiB document
+   * (server/api.ts), so drafts stay well under it; 50 comments of 1,000 characters fit.
+   */
+  drafts: 96 * 1024,
 } as const
 
 const bytes = (text: string) => new TextEncoder().encode(text).length
+
+/**
+ * Whether drafts may change from `before` to `next`: they fit `limits.drafts`, or the change does not grow them, so a
+ * deletion or a shorter text is always kept.
+ */
+export function fitsDraftBudget(next: unknown, before: unknown) {
+  const size = bytes(JSON.stringify(next))
+  return size <= limits.drafts || size <= bytes(JSON.stringify(before))
+}
 
 /**
  * What a comment quotes of `lines`: whole lines while they fit in `limits.excerptLines` and `limits.excerptBytes`, and
@@ -40,11 +55,10 @@ export function excerptOf(lines: readonly string[]) {
 
 /** Where drafts of `spec` are kept: per spec, and per the conversation whose worktree the diff came from. */
 export function draftsKey(spec: string, conversation?: number) {
-  // UI state keys allow `[A-Za-z0-9_.:-]`, 200 characters: escape the rest (and `_`) as `_<hex>_`, one to one.
+  // UI state keys allow `[A-Za-z0-9_.:-]`, 200 characters: escape the rest (and `_`) as `_<hex>_`, one to one. A spec
+  // too long for that is named by the SHA-256 of all of it, as `sha256-<hex>`: the escaped form never holds a `-`.
   const safe = spec.replace(/[^A-Za-z0-9.]/g, (char) => `_${char.codePointAt(0)!.toString(16)}_`)
-  let hash = 0
-  for (const char of spec) hash = (Math.imul(hash, 31) + char.codePointAt(0)!) | 0
-  const name = safe.length <= 140 ? safe : `${safe.slice(0, 100)}-${(hash >>> 0).toString(16)}`
+  const name = safe.length <= 140 ? safe : `sha256-${sha256(spec)}`
   return `drafts:${conversation ?? 'project'}:${name}`
 }
 
